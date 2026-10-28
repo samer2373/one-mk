@@ -20,7 +20,7 @@ pub const INK: Color32 = Color32::from_rgb(0xED, 0xEF, 0xF2);
 pub const INK2: Color32 = Color32::from_rgb(0x9D, 0xA6, 0xB1);
 pub const SIGNAL_INK: Color32 = Color32::from_rgb(0x1E, 0x15, 0x05);
 const TOP_H: f32 = 56.0;
-const PANEL_H: f32 = 132.0;
+const PANEL_H: f32 = 140.0;
 const GHOST: &str = "\u{0}pairing";
 const WALLS: [[u32; 2]; 4] = [[0x3D3127, 0x1A1511], [0x22302A, 0x0F1613], [0x2E2638, 0x141019], [0x3A2A2A, 0x170F0F]];
 
@@ -83,6 +83,8 @@ pub struct App {
     active: String,
     headline: (String, f64),
     busy: Vec<Job>,
+    /// The computer the panel describes (an id, or "me").
+    selected: Option<String>,
     ctx: egui::Context,
 }
 
@@ -153,6 +155,7 @@ impl App {
             active: "me".into(),
             headline: (String::new(), 0.0),
             busy: vec![],
+            selected: None,
             ctx: cc.egui_ctx.clone(),
         })
     }
@@ -272,6 +275,7 @@ impl App {
         if let Some(s) = &status {
             me.name = s.name.clone();
         }
+        me.subtitle = if status.is_some() { "This computer".into() } else { "This computer · one·mk is off".into() };
         for (n, p) in peers.iter().enumerate() {
             let i = match self.scene.index(&p.id) {
                 Some(i) => i,
@@ -289,6 +293,7 @@ impl App {
             let d = &mut self.scene.devices[i];
             d.name = p.name.clone();
             d.online = p.online;
+            d.subtitle = if p.online { os_name(p.os).into() } else { "Offline".into() };
             d.kind = if p.os == os::MACOS { Kind::Laptop } else if p.os == 0 { d.kind } else { Kind::Monitor };
             d.leaving = false;
             d.alpha_to = 1.0;
@@ -334,6 +339,7 @@ impl App {
         let (step, since) = step;
         if self.scene.index(GHOST).is_none() && !matches!(step, Step::Ended(_)) {
             let mut g = Device::new(GHOST, "Looking…", Kind::Monitor, false, WALLS[1]);
+            g.subtitle = "Pairing".into();
             g.alpha = 0.0;
             g.alpha_to = 0.0;
             g.wire = 0.0;
@@ -471,6 +477,24 @@ fn para(ui: &Ui, pos: Pos2, width: f32, text: &str, font: FontId, col: Color32) 
 }
 
 impl App {
+    /// The chosen computer, or the one that matters most right now.
+    fn selected_id(&self) -> Option<String> {
+        let s = self.running()?;
+        if let Some(id) = &self.selected
+            && (id == "me" || s.peers.iter().any(|p| &p.id == id))
+        {
+            return Some(id.clone());
+        }
+        let busy = s.controlling.as_ref().or(s.controlled_by.as_ref());
+        s.peers
+            .iter()
+            .find(|p| Some(&p.name) == busy)
+            .or_else(|| s.peers.iter().find(|p| p.online))
+            .or(s.peers.first())
+            .map(|p| p.id.clone())
+            .or(Some("me".into()))
+    }
+
     fn draggable(&self, i: usize) -> bool {
         let d = &self.scene.devices[i];
         i != 0 && d.id != GHOST && !d.leaving
@@ -585,11 +609,23 @@ impl App {
             None if self.scene.hover.is_some() => ui.ctx().set_cursor_icon(egui::CursorIcon::Grab),
             None => {}
         }
-        if resp.clicked()
-            && let Some(i) = under.filter(|&i| self.draggable(i) && self.scene.devices[i].online)
-        {
-            let id = self.scene.devices[i].id.clone();
-            self.measure(&id);
+        let slot = self.scene.slot_rect(rect);
+        self.scene.slot_hover = self.drag.is_none() && slot.zip(pointer).is_some_and(|(r, p)| r.contains(p));
+        if self.scene.slot_hover {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            if self.scene.slot_hover {
+                self.start_pairing(now);
+            } else if let Some(i) = under.filter(|&i| i == 0 || self.draggable(i)) {
+                let d = &self.scene.devices[i];
+                let id = if i == 0 { "me".to_owned() } else { d.id.clone() };
+                let measure = i != 0 && d.online && !self.latency.contains_key(&id);
+                self.selected = Some(id.clone());
+                if measure {
+                    self.measure(&id);
+                }
+            }
         }
         if resp.secondary_clicked() {
             self.menu_for = under.filter(|&i| self.draggable(i));
@@ -615,6 +651,13 @@ impl App {
             _ => None,
         };
         self.scene.raise_to = if self.pairing.is_some() { 1.0 } else { 0.0 };
+        let several = self.scene.devices.iter().filter(|d| !d.leaving).count() > 1;
+        self.scene.selected = match self.selected_id().as_deref().filter(|_| several) {
+            Some("me") => Some(0),
+            Some(id) => self.scene.index(id),
+            None => None,
+        };
+        self.scene.empty_slot = self.pairing.is_none() && self.running().is_some_and(|s| s.peers.is_empty());
         let moving = self.scene.step(now, dragging);
         let painter = ui.painter_at(rect);
         self.scene.paint(&painter, rect, now);
@@ -740,15 +783,14 @@ impl App {
         p.rect_filled(rect, 0.0, PANEL);
         p.hline(rect.x_range(), rect.top(), Stroke::new(1.0, LINE));
         let w = rect.width();
-        let cols = [0.0, w * 0.4, w * 0.7, w];
+        let cols = [0.0, w * 0.4, w * 0.71, w];
         // The keyboard tab uses the last two cells as one.
         let seps = if self.tab == Tab::Keyboard { &cols[1..2] } else { &cols[1..3] };
         for x in seps {
-            p.vline(rect.left() + x, rect.y_range(), Stroke::new(1.0, LINE));
+            p.vline(rect.left() + x, rect.top() + 1.0..=rect.bottom(), Stroke::new(1.0, LINE));
         }
-        let cell = |k: usize| Rect::from_min_max(pos2(rect.left() + cols[k] + 18.0, rect.top() + 16.0), pos2(rect.left() + cols[k + 1] - 18.0, rect.bottom() - 14.0));
+        let cell = |k: usize| Rect::from_min_max(pos2(rect.left() + cols[k] + 20.0, rect.top() + 18.0), pos2(rect.left() + cols[k + 1] - 20.0, rect.bottom() - 16.0));
 
-        // Content slides in a few pixels when it changes.
         let (title, sub) = match self.tab {
             Tab::Desk => self.headline_text(),
             Tab::Files => (
@@ -760,98 +802,144 @@ impl App {
                 "Swap them for keys sent to another computer, so shortcuts like copy and paste use the same keys everywhere. Auto swaps only between a Mac and a PC.".into(),
             ),
         };
+        // New words slide in a few pixels.
         if self.headline.0 != title {
             self.headline = (title.clone(), now);
         }
-        let k = scene::ease_out(((now - self.headline.1) / 0.35) as f32);
+        let k = scene::ease_out(((now - self.headline.1) / 0.3) as f32);
         if k < 1.0 {
             ui.ctx().request_repaint();
         }
         let c1 = cell(0);
-        let alpha = |c: Color32| c.gamma_multiply(k);
-        p.text(c1.left_top() + vec2(0.0, 6.0 * (1.0 - k)), Align2::LEFT_TOP, &title, semibold(14.5), alpha(INK));
-        let h = para(ui, c1.left_top() + vec2(0.0, 24.0 + 6.0 * (1.0 - k)), c1.width(), &sub, regular(12.5), alpha(INK2));
+        let off = vec2(0.0, 5.0 * (1.0 - k));
+        let th = para(ui, c1.left_top() + off, c1.width(), &title, semibold(15.0), INK.gamma_multiply(k));
+        let h = para(ui, c1.left_top() + off + vec2(0.0, th + 6.0), c1.width(), &sub, regular(12.5), INK2.gamma_multiply(k));
 
         match self.tab {
             Tab::Desk => {
                 // Starting one·mk is the top bar's button; taking back lives here.
                 if self.running().is_some_and(|s| s.controlled_by.is_some()) {
                     let label = "Take back";
-                    let r = Rect::from_min_size(pos2(c1.left(), (c1.top() + 30.0 + h).min(c1.bottom() - 30.0)), vec2(button_width(ui, label), 30.0));
+                    let r = Rect::from_min_size(pos2(c1.left(), (c1.top() + th + h + 18.0).min(c1.bottom() - 30.0)), vec2(button_width(ui, label), 30.0));
                     if button(ui, r, Id::unique("panel-action"), label, true).clicked() {
                         self.link.take_back();
                     }
                 }
-                self.metrics(ui, cell(1));
-                self.switches(ui, cell(2));
+                self.inspector(ui, cell(1));
+                self.settings(ui, cell(2));
             }
             Tab::Files => {
                 let c = cell(1);
-                p.text(c.left_top(), Align2::LEFT_TOP, "Clipboard", semibold(13.5), INK);
-                para(ui, c.left_top() + vec2(0.0, 22.0), c.width(), "Copy on one computer, paste on another. It follows the pointer.", regular(12.5), INK2);
-                let c = cell(2);
-                p.text(c.left_top(), Align2::LEFT_TOP, "Received files", semibold(13.5), INK);
-                if link(ui, c.left_top() + vec2(0.0, 24.0), Id::unique("open-dl"), "Open the folder").clicked() {
-                    self.link.open_downloads();
-                }
-                if let Some(Job::Send { to, count }) = self.busy.iter().find(|j| matches!(j, Job::Send { .. })) {
-                    let what = if *count == 1 { "1 item".to_owned() } else { format!("{count} items") };
-                    p.text(c.left_top() + vec2(0.0, 52.0), Align2::LEFT_TOP, format!("Sending {what} to {to}…"), regular(12.5), SIGNAL);
-                }
+                let th = para(ui, c.left_top(), c.width(), "Clipboard", semibold(13.5), INK);
+                para(ui, c.left_top() + vec2(0.0, th + 6.0), c.width(), "Copy on one computer, paste on another. It follows the pointer.", regular(12.5), INK2);
+                self.settings(ui, cell(2));
             }
             Tab::Keyboard => self.swaps(ui, Rect::from_min_max(cell(1).min, cell(2).max)),
         }
     }
 
-    fn metrics(&mut self, ui: &mut Ui, c: Rect) {
-        let p = ui.painter();
-        let target = self.running().and_then(|s| {
-            let online: Vec<_> = s.peers.iter().filter(|p| p.online).collect();
-            online.iter().find(|p| Some(&p.id) == self.measuring.as_ref() || self.latency.contains_key(&p.id)).or(online.first()).map(|p| (p.id.clone(), p.name.clone()))
-        });
-        let Some((id, name)) = target else {
-            p.text(c.left_top(), Align2::LEFT_TOP, "Connection", semibold(13.5), INK);
-            para(ui, c.left_top() + vec2(0.0, 22.0), c.width(), "Speed shows here once a computer is connected.", regular(12.5), INK2);
+    /// The selected computer: what it is, where it is, how fast it answers.
+    fn inspector(&mut self, ui: &mut Ui, c: Rect) {
+        let Some(status) = self.running().cloned() else {
+            para(ui, c.left_top(), c.width(), "Details of the selected computer show here once one·mk is running.", regular(12.5), INK2);
             return;
         };
-        // Measure each computer once when it first shows up.
-        if !self.latency.contains_key(&id) && self.measuring.is_none() && !self.busy.contains(&Job::Measure) {
-            self.busy.push(Job::Measure);
-            self.measure(&id);
-        }
-        p.text(c.left_top(), Align2::LEFT_TOP, format!("To {name}"), semibold(13.5), INK);
-        let row = |i: usize, k: &str, val: String| {
-            let y = c.top() + 26.0 + i as f32 * 20.0;
-            p.text(pos2(c.left(), y), Align2::LEFT_TOP, k, regular(12.5), INK2);
-            p.text(pos2(c.right(), y), Align2::RIGHT_TOP, val, mono(12.5), INK);
+        let sel = self.selected_id();
+        let p = ui.painter().clone();
+        let chip = |label: &str, dot: Color32| {
+            let tw = text_width(ui, label, regular(12.0));
+            p.text(pos2(c.right(), c.top() + 9.0), Align2::RIGHT_CENTER, label, regular(12.0), INK2);
+            p.circle_filled(pos2(c.right() - tw - 9.0, c.top() + 9.5), 3.0, dot);
+            tw + 20.0
         };
-        match self.latency.get(&id) {
-            Some(l) => {
-                row(0, "Handoff, typical", format!("{:.2} ms", l.p50_us / 2000.0));
-                row(1, "Slowest 1%", format!("{:.2} ms", l.p99_us / 2000.0));
-                row(2, "Lost", format!("{} of {}", l.lost, l.count));
+        let row = |i: usize, key: &str, val: &str, mono_val: bool| {
+            let y = c.top() + 32.0 + i as f32 * 22.0;
+            p.text(pos2(c.left(), y), Align2::LEFT_TOP, key, regular(12.5), INK2);
+            p.text(pos2(c.right(), y), Align2::RIGHT_TOP, val, if mono_val { mono(12.5) } else { regular(12.5) }, INK);
+        };
+        let title = |name: &str, room: f32| {
+            let g = ui.painter().layout_no_wrap(name.into(), semibold(14.0), INK);
+            let fits = g.size().x <= c.width() - room;
+            let text = if fits { name.to_owned() } else { format!("{}…", name.chars().take(18).collect::<String>()) };
+            p.text(c.left_top(), Align2::LEFT_TOP, text, semibold(14.0), INK);
+        };
+        let Some(peer) = status.peers.iter().find(|p| Some(&p.id) == sel.as_ref()) else {
+            let room = chip("This computer", INK2);
+            title(&status.name, room);
+            let online = status.peers.iter().filter(|p| p.online).count();
+            row(0, "ID", &status.id, true);
+            row(1, "Paired", &match status.peers.len() {
+                0 => "None yet".to_owned(),
+                n => format!("{n}, {online} connected"),
+            }, false);
+            row(2, "System", os_name(match () {
+                _ if cfg!(target_os = "macos") => os::MACOS,
+                _ if cfg!(windows) => os::WINDOWS,
+                _ => os::LINUX,
+            }), false);
+            return;
+        };
+        let room = if peer.online { chip("Connected", SIGNAL) } else { chip("Offline", Color32::from_rgb(0x5A, 0x62, 0x6D)) };
+        title(&peer.name, room);
+        let side = *self.pending_side.get(&peer.id).unwrap_or(&peer.side);
+        let place = match side {
+            Side::Left => "Left of this one",
+            Side::Right => "Right of this one",
+            Side::Top => "Above this one",
+            Side::Bottom => "Below this one",
+        };
+        row(0, "Position", place, false);
+        match (self.latency.get(&peer.id), peer.online) {
+            (Some(l), true) => {
+                row(1, "Handoff", &format!("{:.2} ms", l.p50_us / 2000.0), true);
+                row(2, "Slowest 1%", &format!("{:.2} ms", l.p99_us / 2000.0), true);
             }
-            None => row(0, "Measuring…", String::new()),
+            (None, true) => {
+                row(1, "Handoff", "Measuring…", false);
+                // Measure each computer once, the first time it is shown.
+                if self.measuring.is_none() && !self.busy.contains(&Job::Measure) {
+                    let id = peer.id.clone();
+                    self.busy.push(Job::Measure);
+                    self.measure(&id);
+                }
+            }
+            (_, false) => row(1, "System", os_name(peer.os), false),
         }
-        if self.latency.contains_key(&id)
-            && self.measuring.is_none()
-            && link(ui, pos2(c.left(), c.bottom() - 16.0), Id::unique("measure"), "Measure again").clicked()
-        {
-            self.measure(&id);
+        if peer.online && self.latency.contains_key(&peer.id) && self.measuring.is_none() {
+            let label = "Measure again";
+            let lw = text_width(ui, label, regular(12.5));
+            if link(ui, pos2(c.right() - lw, c.top() + 32.0 + 3.0 * 22.0), Id::unique("measure"), label).clicked() {
+                let id = peer.id.clone();
+                self.measure(&id);
+            }
         }
     }
 
-    fn switches(&mut self, ui: &mut Ui, c: Rect) {
+    /// Settings that apply to this computer, as a short list of rows.
+    fn settings(&mut self, ui: &mut Ui, c: Rect) {
+        let row_h = 34.0;
+        let rows = [c.top() - 7.0, c.top() - 7.0 + row_h];
         let on = self.autostart.unwrap_or(false);
         let busy = self.busy.contains(&Job::Autostart);
-        let row = Rect::from_min_size(c.left_top(), vec2(c.width(), 24.0));
-        if switch(ui, row, Id::unique("autostart"), "Start at login", on, self.autostart.is_some() && !busy) {
+        let r0 = Rect::from_min_size(pos2(c.left(), rows[0]), vec2(c.width(), row_h));
+        if switch(ui, r0, Id::unique("autostart"), "Start at login", on, self.autostart.is_some() && !busy) {
             self.busy.push(Job::Autostart);
             self.autostart = Some(!on);
             self.link.set_autostart(!on);
         }
-        if link(ui, c.left_top() + vec2(0.0, 40.0), Id::unique("open-dl2"), "Open received files").clicked() {
+        ui.painter().hline(c.x_range(), rows[1], Stroke::new(1.0, LINE));
+        let r1 = Rect::from_min_size(pos2(c.left(), rows[1]), vec2(c.width(), row_h));
+        ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(13.0), INK);
+        let label = "Open";
+        let bw = button_width(ui, label) - 6.0;
+        let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 13.0), vec2(bw, 26.0));
+        if button(ui, b, Id::unique("open-dl"), label, false).clicked() {
             self.link.open_downloads();
+        }
+        if let Some(Job::Send { to, count }) = self.busy.iter().find(|j| matches!(j, Job::Send { .. })) {
+            let what = if *count == 1 { "1 item".to_owned() } else { format!("{count} items") };
+            ui.painter().hline(c.x_range(), rows[1] + row_h, Stroke::new(1.0, LINE));
+            ui.painter().text(pos2(c.left(), rows[1] + row_h + 17.0), Align2::LEFT_CENTER, format!("Sending {what} to {to}…"), regular(12.5), SIGNAL);
         }
     }
 

@@ -186,6 +186,8 @@ pub struct Device {
     pub wire: f32,
     pub wire_to: f32,
     pub wall: [u32; 2],
+    /// The second line on its screen: "This computer", "Linux", "Offline"…
+    pub subtitle: String,
     /// Removed once it has faded out.
     pub leaving: bool,
 }
@@ -208,6 +210,7 @@ impl Device {
             wire: 1.0,
             wire_to: 1.0,
             wall,
+            subtitle: String::new(),
             leaving: false,
         }
     }
@@ -297,6 +300,11 @@ fn faces_of(cam: &Camera, b: &Box3, owner: usize, first_box: bool, laptop: bool,
             deck: laptop && first_box && ln.y > 0.5,
         });
     }
+}
+
+fn centroid(q: &[Pos2]) -> Pos2 {
+    let n = q.len() as f32;
+    Pos2::new(q.iter().map(|p| p.x).sum::<f32>() / n, q.iter().map(|p| p.y).sum::<f32>() / n)
 }
 
 fn inside(p: Pos2, q: &[Pos2]) -> bool {
@@ -428,6 +436,10 @@ pub struct Scene {
     /// A pairing code shown on screens: (device ids, code, when it started).
     pub code: Option<(Vec<String>, String, f64)>,
     pub hover: Option<usize>,
+    pub selected: Option<usize>,
+    /// An outlined place beside this computer that invites pairing.
+    pub empty_slot: bool,
+    pub slot_hover: bool,
     /// Devices outlined as places to drop files.
     pub drop_targets: bool,
     /// Opening animation, 0..1.
@@ -457,6 +469,9 @@ impl Default for Scene {
             latency_label: None,
             code: None,
             hover: None,
+            selected: None,
+            empty_slot: false,
+            slot_hover: false,
             drop_targets: false,
             intro: 0.0,
             raise: 0.0,
@@ -498,6 +513,8 @@ impl Scene {
             .iter()
             .filter(|d| !d.leaving)
             .fold((f32::MAX, f32::MIN), |(lo, hi), d| (lo.min(d.target.x), hi.max(d.target.x)));
+        // The empty slot beside this computer counts as part of the scene.
+        let hi = if self.empty_slot { hi.max(self.slot_device().pos.x) } else { hi };
         let (fx, span) = if lo <= hi { ((lo + hi) / 2.0, hi - lo) } else { (0.0, 0.0) };
         go(&mut self.focus_x, fx, 0.06);
         go(&mut self.dist, 132.0 + span * 0.5, 0.06);
@@ -599,8 +616,18 @@ impl Scene {
             }
             if f.screen {
                 self.screen(painter, &cam, f.owner, &geo, time);
-                if self.hover == Some(f.owner) || (self.drop_targets && d.online && !d.me) {
-                    painter.add(Shape::closed_line(f.pts.to_vec(), Stroke::new(1.5, fade(SIGNAL, 0.6))));
+                // Amber means "goes there": drop targets. Selection stays quiet.
+                let outline = if self.drop_targets && d.online && !d.me {
+                    Some(Stroke::new(1.5, fade(SIGNAL, 0.9 * d.alpha)))
+                } else if self.selected == Some(f.owner) {
+                    Some(Stroke::new(1.5, Color32::from_white_alpha((150.0 * d.alpha) as u8)))
+                } else if self.hover == Some(f.owner) {
+                    Some(Stroke::new(1.0, Color32::from_white_alpha(60)))
+                } else {
+                    None
+                };
+                if let Some(st) = outline {
+                    painter.add(Shape::closed_line(f.pts.iter().map(|p| *p + (*p - centroid(&f.pts)).normalized() * 2.5).collect(), st));
                 }
             }
             if f.deck
@@ -615,41 +642,97 @@ impl Scene {
         }
         self.faces = faces;
         self.ribbon(painter, &cam, &geo);
-        // Names sit on the desk in front of each device.
-        for (d, g) in self.devices.iter().zip(&geo) {
-            let [fx, fz, _, rz] = g.foot;
-            let p = cam.pt(v(fx, d.pos.y.min(0.0), fz + rz + 7.0));
-            let a = d.visible() * if d.online { 1.0 } else { 0.55 };
-            let label = if d.online || d.me { d.name.clone() } else { format!("{} · offline", d.name) };
-            let col = if d.me { rgba([0xED, 0xEF, 0xF2], 1.0, a) } else { rgba(INK2, 1.0, a) };
-            painter.text(p, egui::Align2::CENTER_CENTER, label, FontId::new(12.0, FontFamily::Proportional), col);
+        if self.empty_slot {
+            self.slot(painter, &cam);
         }
     }
 
-    fn room(&self, painter: &Painter, cam: &Camera, geo: &[Geo], rect: Rect) {
-        quad_colors(
-            painter,
-            [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()],
-            [Color32::from_rgb(0x0B, 0x0E, 0x12), Color32::from_rgb(0x0B, 0x0E, 0x12), Color32::from_rgb(0x14, 0x18, 0x1E), Color32::from_rgb(0x14, 0x18, 0x1E)],
-        );
-        let (x0, x1) = (self.focus_x - 160.0, self.focus_x + 160.0);
-        let (z0, z1) = (-60.0, 46.0);
-        let top = [v(x0, 0.0, z0), v(x1, 0.0, z0), v(x1, 0.0, z1), v(x0, 0.0, z1)].map(|p| cam.pt(p));
-        let lip = [v(x0, 0.0, z1), v(x1, 0.0, z1), v(x1, -3.2, z1), v(x0, -3.2, z1)].map(|p| cam.pt(p));
-        quad(painter, lip, Color32::from_rgb(0x0A, 0x0C, 0x0F));
-        let (back, front) = (Color32::from_rgb(0x19, 0x1D, 0x23), Color32::from_rgb(0x26, 0x2B, 0x33));
-        quad_colors(painter, top, [back, back, front, front]);
-        pool(painter, cam, v(self.focus_x - 12.0, 0.0, 2.0), 90.0, 50.0, Color32::from_rgba_unmultiplied(255, 244, 228, 18));
-        // A faint 10 cm grid, the room's measuring tape.
-        let grid = Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 9));
-        let gx0 = (x0 / 10.0).ceil() as i32;
-        for i in gx0..=(x1 / 10.0) as i32 {
-            let x = i as f32 * 10.0;
-            painter.line_segment([cam.pt(v(x, 0.0, z0)), cam.pt(v(x, 0.0, z1))], grid);
+    /// Where the empty slot's screen is, for clicks.
+    pub fn slot_rect(&self, rect: Rect) -> Option<Rect> {
+        if !self.empty_slot {
+            return None;
         }
-        for i in -6..=4 {
-            let z = i as f32 * 10.0;
-            painter.line_segment([cam.pt(v(x0, 0.0, z)), cam.pt(v(x1, 0.0, z))], grid);
+        let cam = self.camera(rect);
+        let g = self.slot_device().geometry();
+        Some(Rect::from_two_pos(cam.pt(g.screen.at(0.0, 0.0)), cam.pt(g.screen.at(1.0, 1.0))))
+    }
+
+    fn slot_device(&self) -> Device {
+        let mut d = Device::new("", "", Kind::Monitor, false, [0, 0]);
+        d.pos = self.devices.first().map_or(V3::default(), |m| m.pos) + v(29.0 + 26.0 + 29.0 * 0.86, 0.0, 0.0);
+        d.scale = 0.86;
+        d
+    }
+
+    /// A dashed outline beside this computer: the place a second one goes.
+    fn slot(&self, painter: &Painter, cam: &Camera) {
+        let g = self.slot_device().geometry();
+        let k = if self.slot_hover { 1.0 } else { 0.55 };
+        let pts: Vec<Pos2> = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)].iter().map(|(u, w)| cam.pt(g.screen.at(*u, *w))).collect();
+        let st = Stroke::new(1.2, if self.slot_hover { fade(SIGNAL, 0.9) } else { Color32::from_white_alpha(60) });
+        painter.extend(Shape::dashed_line(&pts, st, 6.0, 5.0));
+        let h = pts[0].distance(pts[3]);
+        let c = cam.pt(g.screen.at(0.5, 0.5));
+        let col = if self.slot_hover { SIGNAL } else { rgba([0xC4, 0xCA, 0xD2], 1.0, k) };
+        painter.text(c - egui::vec2(0.0, 2.0), egui::Align2::CENTER_BOTTOM, "Add a computer", FontId::new((h * 0.1).clamp(10.0, 16.0), FontFamily::Name("semibold".into())), col);
+        painter.text(c + egui::vec2(0.0, 4.0), egui::Align2::CENTER_TOP, "Pair it to share this mouse and keyboard", FontId::new((h * 0.065).clamp(8.0, 12.0), FontFamily::Proportional), rgba(INK2, 1.0, k));
+    }
+
+    fn room(&self, painter: &Painter, cam: &Camera, geo: &[Geo], rect: Rect) {
+        let (sky_top, sky_low) = (Color32::from_rgb(0x0B, 0x0E, 0x12), Color32::from_rgb(0x10, 0x13, 0x18));
+        quad_colors(painter, [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()], [sky_top, sky_top, sky_low, sky_low]);
+        // The desk is lit around the computers and falls off into the room:
+        // no edges, nothing to suggest a box the computers sit in.
+        let (cx, cz) = (self.focus_x, -4.0);
+        let (rx, rz) = (150.0 + self.dist * 0.4, 70.0);
+        let light = |x: f32, z: f32| {
+            let d = (((x - cx) / rx).powi(2) + ((z - cz) / rz).powi(2)).sqrt();
+            (1.0 - d).clamp(0.0, 1.0).powf(1.4)
+        };
+        let lit = Color32::from_rgb(0x24, 0x29, 0x31);
+        let shade = |k: f32| {
+            let f = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * k) as u8;
+            Color32::from_rgb(f(sky_low.r(), lit.r()), f(sky_low.g(), lit.g()), f(sky_low.b(), lit.b()))
+        };
+        const NX: usize = 18;
+        const NZ: usize = 10;
+        let xs: Vec<f32> = (0..=NX).map(|i| cx - rx + 2.0 * rx * i as f32 / NX as f32).collect();
+        let zs: Vec<f32> = (0..=NZ).map(|j| cz - rz + 2.0 * rz * j as f32 / NZ as f32).collect();
+        let mut m = Mesh::default();
+        for &z in &zs {
+            for &x in &xs {
+                m.colored_vertex(cam.pt(v(x, 0.0, z)), shade(light(x, z)));
+            }
+        }
+        let w = (NX + 1) as u32;
+        for j in 0..NZ as u32 {
+            for i in 0..NX as u32 {
+                let k = j * w + i;
+                m.add_triangle(k, k + 1, k + w + 1);
+                m.add_triangle(k, k + w + 1, k + w);
+            }
+        }
+        painter.add(Shape::mesh(m));
+        // A 10 cm grid, the room's measuring tape, fading with the light.
+        let seg = |a: V3, b: V3| {
+            let k = light((a.x + b.x) / 2.0, (a.z + b.z) / 2.0);
+            if k > 0.02 {
+                painter.line_segment([cam.pt(a), cam.pt(b)], Stroke::new(1.0, Color32::from_white_alpha((14.0 * k) as u8)));
+            }
+        };
+        let (x0, x1) = (((cx - rx) / 10.0).ceil() as i32, ((cx + rx) / 10.0) as i32);
+        let (z0, z1) = (((cz - rz) / 10.0).ceil() as i32, ((cz + rz) / 10.0) as i32);
+        for i in x0..=x1 {
+            for j in z0..z1 {
+                let (x, z) = (i as f32 * 10.0, j as f32 * 10.0);
+                seg(v(x, 0.0, z), v(x, 0.0, z + 10.0));
+            }
+        }
+        for j in z0..=z1 {
+            for i in x0..x1 {
+                let (x, z) = (i as f32 * 10.0, j as f32 * 10.0);
+                seg(v(x, 0.0, z), v(x + 10.0, 0.0, z));
+            }
         }
         // Light from each screen on the desk, and contact shadows.
         for (d, g) in self.devices.iter().zip(geo) {
@@ -755,7 +838,14 @@ impl Scene {
         let d = &self.devices[i];
         let pl = &geo[i].screen;
         let a = d.alpha.max(d.wire * 0.9);
-        if !d.online || a < 0.02 {
+        if a < 0.02 {
+            return;
+        }
+        if !d.online {
+            let at = |u: f32, w: f32| cam.pt(pl.at(u, w));
+            let h = at(0.5, 0.0).distance(at(0.5, 1.0));
+            painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, &d.name, FontId::new((h * 0.105).clamp(9.0, 22.0), FontFamily::Name("semibold".into())), rgba(INK2, 1.0, 0.7 * a));
+            painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, &d.subtitle, FontId::new((h * 0.07).clamp(8.0, 14.0), FontFamily::Proportional), rgba(INK2, 1.0, 0.5 * a));
             return;
         }
         let at = |u: f32, w: f32| cam.pt(pl.at(u, w));
@@ -780,31 +870,13 @@ impl Scene {
             return;
         }
 
-        // Two app windows, so it reads as a working screen.
-        let wins: [(f32, f32, f32, f32, u32); 2] = if d.kind == Kind::Laptop {
-            [(0.08, 0.1, 0.5, 0.62, 0xF3F4F6), (0.46, 0.26, 0.46, 0.5, 0xE7EAEE)]
-        } else {
-            [(0.06, 0.12, 0.42, 0.66, 0xEEF0F3), (0.4, 0.2, 0.52, 0.6, 0xF5F6F8)]
-        };
-        let lum = if d.me { 1.0 } else { 0.93 };
-        for (x, y, w, h, c) in wins {
-            quad(painter, rect(x + 0.006, y + 0.02, x + w + 0.006, y + h + 0.02), fade(Color32::BLACK, 0.28 * a));
-            quad(painter, rect(x, y, x + w, y + h), fade(rgba(hex(c), lum, 1.0), a));
-            quad(painter, rect(x, y + 0.055, x + w, y + 0.058), fade(Color32::from_rgb(0xD9, 0xDD, 0xE3), a));
-            for k in 0..4 {
-                let yy = y + 0.11 + k as f32 * 0.07;
-                if yy + 0.025 > y + h {
-                    break;
-                }
-                let ww = w * (0.75 - (k % 3) as f32 * 0.14);
-                quad(painter, rect(x + 0.025, yy, x + 0.025 + ww - 0.05, yy + 0.025), fade(Color32::from_rgb(0xC5, 0xCB, 0xD3), a));
-            }
-        }
-        if d.kind == Kind::Laptop {
-            quad(painter, rect(0.3, 0.92, 0.7, 0.98), fade(Color32::WHITE, 0.18 * a));
-        } else {
-            quad(painter, rect(0.0, 0.94, 1.0, 1.0), fade(Color32::from_rgb(10, 14, 20), 0.6 * a));
-        }
+        // A menu bar for scale, then the computer's own name, as the
+        // system's display arrangement shows it.
+        quad(painter, rect(0.0, 0.0, 1.0, 0.045), fade(Color32::BLACK, 0.22 * a));
+        let h = at(0.5, 0.0).distance(at(0.5, 1.0));
+        let ink = rgba([0xED, 0xEF, 0xF2], 1.0, a);
+        painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, &d.name, FontId::new((h * 0.105).clamp(9.0, 22.0), FontFamily::Name("semibold".into())), ink);
+        painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, &d.subtitle, FontId::new((h * 0.07).clamp(8.0, 14.0), FontFamily::Proportional), rgba([0xC4, 0xCA, 0xD2], 1.0, 0.85 * a));
 
         // The edges toward online neighbours, lit while the pointer is near.
         for (j, o) in self.devices.iter().enumerate() {
