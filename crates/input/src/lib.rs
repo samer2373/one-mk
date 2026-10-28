@@ -6,8 +6,12 @@
 //! Key and button codes are Linux evdev codes on all platforms.
 
 mod null;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "linux")]
 mod portal;
+#[cfg(windows)]
+mod windows;
 
 pub use null::NullHandles;
 
@@ -93,9 +97,19 @@ async fn native(state_dir: PathBuf) -> Result<Backend> {
     portal::open(state_dir).await
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+async fn native(state_dir: PathBuf) -> Result<Backend> {
+    windows::open(state_dir).await
+}
+
+#[cfg(target_os = "macos")]
+async fn native(state_dir: PathBuf) -> Result<Backend> {
+    macos::open(state_dir).await
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 async fn native(_state_dir: PathBuf) -> Result<Backend> {
-    anyhow::bail!("no native input backend for this OS yet (Windows and macOS are next)")
+    anyhow::bail!("no native input backend for this OS")
 }
 
 /// A backend for tests: the returned handles feed fake capture events in
