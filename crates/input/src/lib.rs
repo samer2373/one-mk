@@ -8,10 +8,14 @@
 mod null;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod macos_logic;
 #[cfg(target_os = "linux")]
 mod portal;
 #[cfg(windows)]
 mod windows;
+#[cfg(any(windows, test))]
+mod win_logic;
 
 pub use null::NullHandles;
 
