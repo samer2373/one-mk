@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>one·mk · Spatial desk prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--ground:#0F1216;--ink:#EDEFF2;--ink2:#9DA6B1;--line:#252B34;--signal:#FFB547;--signal-ink:#1E1505;--panel:#13171C}
+body{margin:0}
+.app{position:relative;border-radius:16px;overflow:hidden;background:var(--ground);color:var(--ink);font-family:Geist,var(--font-sans),system-ui,sans-serif;font-size:13px;box-shadow:0 24px 60px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);user-select:none}
+.top{position:absolute;left:0;right:0;top:0;height:56px;display:flex;align-items:center;gap:14px;padding:0 16px;z-index:2;background:linear-gradient(#0F1216 35%,rgba(15,18,22,0));pointer-events:none}
+.top>*{pointer-events:auto}
+.mark{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;letter-spacing:-.02em}
+.mark svg{display:block}
+.tabs{display:flex;gap:2px;margin:0 auto;background:#171B21;border:1px solid var(--line);border-radius:10px;padding:3px;position:relative}
+.tab{padding:6px 12px;border-radius:7px;color:var(--ink2);cursor:pointer;position:relative;z-index:1;transition:color .25s}
+.tab.on{color:var(--ink)}
+.tabind{position:absolute;top:3px;bottom:3px;border-radius:7px;background:#262C36;transition:left .45s cubic-bezier(.2,.9,.15,1),width .45s cubic-bezier(.2,.9,.15,1)}
+.btn{border:0;font:inherit;font-weight:600;padding:8px 14px;border-radius:9px;background:var(--signal);color:var(--signal-ink);cursor:pointer;transition:transform .18s cubic-bezier(.3,1.6,.5,1),background .2s}
+.btn:hover{background:#FFC266}
+.btn:active{transform:scale(.95)}
+.btn:focus-visible,.tab:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+.btn.quiet{background:#222831;color:var(--ink)}
+.btn.quiet:hover{background:#2A313B}
+canvas{display:block;width:100%;height:430px;cursor:grab;touch-action:none}
+canvas.drag{cursor:grabbing}
+.panel{display:grid;grid-template-columns:1.25fr 1fr 1fr;border-top:1px solid var(--line);background:var(--panel)}
+.cell{padding:14px 16px;border-right:1px solid var(--line)}
+.cell:last-child{border:0}
+.h{font-weight:600;font-size:14px;letter-spacing:-.01em;transition:opacity .25s,transform .35s cubic-bezier(.2,.9,.15,1)}
+.h.swap{opacity:0;transform:translateY(-6px)}
+.s{color:var(--ink2);font-size:12px;margin-top:4px;line-height:1.45}
+.num{font-family:'Geist Mono',var(--font-mono),ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.metric{display:flex;justify-content:space-between;font-size:12px;color:var(--ink2);padding:2px 0}
+.metric span:last-child{color:var(--ink)}
+.tg{display:flex;justify-content:space-between;align-items:center;padding:3px 0;cursor:pointer}
+.sw{width:34px;height:20px;border-radius:99px;background:#2A303A;position:relative;transition:background .3s}
+.sw i{position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#C9CED6;transition:transform .42s cubic-bezier(.3,1.55,.45,1),background .3s}
+.tg.on .sw{background:var(--signal)}
+.tg.on .sw i{transform:translateX(14px);background:var(--signal-ink)}
+.sheet{position:absolute;left:50%;top:300px;transform:translate(-50%,16px) scale(.98);opacity:0;pointer-events:none;background:#171B21;border:1px solid var(--line);border-radius:14px;padding:14px 16px;width:340px;box-shadow:0 18px 40px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.3);transition:opacity .3s,transform .5s cubic-bezier(.2,.9,.15,1);z-index:3}
+.sheet.on{opacity:1;transform:translate(-50%,0) scale(1);pointer-events:auto}
+.code{font-size:28px;letter-spacing:.14em;margin:8px 0 12px;display:flex;gap:2px}
+.code span{display:inline-block;opacity:0;transform:translateY(10px);filter:blur(5px);transition:opacity .45s,transform .55s cubic-bezier(.2,.9,.15,1),filter .45s}
+.code span.gap{width:12px}
+.sheet.on .code span{opacity:1;transform:none;filter:none}
+.row{display:flex;gap:8px}
+::selection{background:var(--signal);color:var(--signal-ink)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="top">
+    <div class="mark">
+      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5" width="11" height="8" rx="2" fill="none" stroke="#EDEFF2" stroke-width="1.8"/><rect x="10.5" y="11" width="11" height="8" rx="2" fill="#FFB547"/></svg>
+      <span>one·mk</span>
+    </div>
+    <div class="tabs" id="tabs" role="tablist">
+      <div class="tabind" id="ind"></div>
+      <div class="tab on" role="tab" tabindex="0">Devices</div>
+      <div class="tab" role="tab" tabindex="0">Clipboard &amp; files</div>
+      <div class="tab" role="tab" tabindex="0">Keyboard</div>
+    </div>
+    <button class="btn" id="pairBtn">Pair a device</button>
+  </div>
+
+  <canvas id="c" aria-label="Your desk: drag a device to rearrange, drag the room to look around"></canvas>
+
+  <div class="sheet" id="sheet" role="dialog" aria-labelledby="sheetTitle">
+    <div class="h" id="sheetTitle">Found “Studio PC”</div>
+    <div class="s">Check that its screen shows the same code, then confirm.</div>
+    <div class="code num" id="code"></div>
+    <div class="row"><button class="btn quiet" id="noBtn">They don't match</button><button class="btn" id="yesBtn">Codes match, pair</button></div>
+  </div>
+
+  <div class="panel">
+    <div class="cell"><div class="h" id="layoutH">MacBook Air is on your left</div><div class="s">Drag a device to rearrange it. Drag the empty desk to look around.</div></div>
+    <div class="cell">
+      <div class="metric"><span>Handoff</span><span class="num" id="mHand">0.18 ms</span></div>
+      <div class="metric"><span>Slowest 1%</span><span class="num">0.41 ms</span></div>
+      <div class="metric"><span>Packets lost</span><span class="num">0</span></div>
+    </div>
+    <div class="cell">
+      <div class="tg on" tabindex="0"><span>Swap Ctrl and Cmd</span><div class="sw"><i></i></div></div>
+      <div class="tg on" tabindex="0"><span>Start at login</span><div class="sw"><i></i></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let W = 0, H = 0, DPR = 1;
+function resize() { DPR = Math.min(2, devicePixelRatio || 1); W = cv.clientWidth; H = cv.clientHeight; cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); }
+resize(); addEventListener('resize', resize);
+
+// ---------- vector math ----------
+const v = (x, y, z) => ({ x, y, z });
+const add = (a, b) => v(a.x + b.x, a.y + b.y, a.z + b.z);
+const sub = (a, b) => v(a.x - b.x, a.y - b.y, a.z - b.z);
+const mul = (a, s) => v(a.x * s, a.y * s, a.z * s);
+const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+const cross = (a, b) => v(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+const norm = a => mul(a, 1 / Math.hypot(a.x, a.y, a.z));
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const easeOut = t => 1 - Math.pow(1 - t, 4);
+
+// ---------- camera ----------
+const cam = { yaw: -0.2, pitch: 0.43, tyaw: -0.2, tpitch: 0.43, vy: 0, vp: 0, dist: 152, tx: 0, ttx: 0 };
+let C, R, U, F, FOC;
+function setupCam() {
+  const cp = Math.cos(cam.pitch), target = v(cam.tx, 15, -2);
+  C = add(target, v(Math.sin(cam.yaw) * cp * cam.dist, Math.sin(cam.pitch) * cam.dist, Math.cos(cam.yaw) * cp * cam.dist));
+  F = norm(sub(target, C)); R = norm(cross(F, v(0, 1, 0))); U = cross(R, F);
+  FOC = Math.min(W * .98, H * 1.68);
+}
+function P(p) { const d = sub(p, C), z = dot(d, F); return { x: W / 2 + FOC * dot(d, R) / z, y: H * .61 - FOC * dot(d, U) / z, z }; }
+
+// ---------- scene ----------
+const LIGHT = norm(v(-.45, .85, .55));
+const frame = (o, ex, ey, ez) => ({ o, ex, ey, ez, at(a, b, c) { return add(add(add(o, mul(ex, a)), mul(ey, b)), mul(ez, c)); } });
+const X = v(1, 0, 0), Y = v(0, 1, 0), Z = v(0, 0, 1);
+const LID_UP = v(0, Math.cos(.26), -Math.sin(.26)), LID_N = v(0, Math.sin(.26), Math.cos(.26));
+
+const devs = {
+  pc:     { name: 'This PC',     kind: 'monitor', x: 24,  tx: 24,  alpha: 1, wire: 1, sw: 1600, sh: 900,  wall: ['#1D2D3C', '#0D151E'] },
+  mac:    { name: 'MacBook Air', kind: 'laptop',  x: -40, tx: -40, alpha: 1, wire: 1, sw: 1470, sh: 956,  wall: ['#3D3127', '#1A1511'] },
+  studio: { name: 'Studio PC',   kind: 'monitor', x: 70,  tx: 70,  alpha: 0, wire: 0, sw: 1600, sh: 900,  wall: ['#22302A', '#0F1613'], small: true, hidden: true },
+};
+
+// Boxes: [frame, a0,a1, b0,b1, c0,c1, color, frontColor?]
+function geometry(d) {
+  const x = d.x, s = d.small ? .86 : 1;
+  if (d.kind === 'monitor') {
+    const hw = 29 * s, hh = 16.5 * s, cy = 13 + hh;
+    const scr = frame(v(x, cy, -14), X, Y, Z);
+    return {
+      boxes: [
+        [frame(v(x, 0, -12), X, Y, Z), -11 * s, 11 * s, 0, .8, -8 * s, 8 * s, '#3A404A'],
+        [frame(v(x, 0, -15.6), X, Y, Z), -3, 3, 0, cy, -1.1, 1.1, '#3A404A'],
+        [scr, -hw, hw, -hh, hh, -2.2, 0, '#30353E', '#0B0D10'],
+      ],
+      screen: (u, w) => scr.at(lerp(-hw + .9, hw - .9, u), lerp(hh - .9, -hh + .9, w), .02),
+      foot: [x, -12, 12 * s, 8 * s],
+    };
+  }
+  const lid = frame(v(x, 1.4, -6.5), X, LID_UP, LID_N);
+  return {
+    boxes: [
+      [frame(v(x, 0, 4), X, Y, Z), -15.5, 15.5, 0, 1.4, -10.5, 10.5, '#AEB3BB'],
+      [lid, -15.5, 15.5, 0, 20.4, -.6, 0, '#AEB3BB', '#0B0D10'],
+    ],
+    screen: (u, w) => lid.at(lerp(-14.4, 14.4, u), lerp(19.5, 1.3, w), .02),
+    deck: frame(v(x, 1.41, 4), X, Y, Z),
+    foot: [x, 2, 17, 12],
+  };
+}
+
+const FACES = [
+  [v(0, 0, 1), [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]], 'front'],
+  [v(0, 0, -1), [[1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]], 'back'],
+  [v(1, 0, 0), [[1, 0, 1], [1, 0, 0], [1, 1, 0], [1, 1, 1]], 'right'],
+  [v(-1, 0, 0), [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]], 'left'],
+  [v(0, 1, 0), [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]], 'top'],
+  [v(0, -1, 0), [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], 'bottom'],
+];
+
+function hex(c) { const n = parseInt(c.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
+function shade(c, k, a = 1) { const [r, g, b] = hex(c); return `rgba(${r * k | 0},${g * k | 0},${b * k | 0},${a})`; }
+
+function boxFaces(box, owner, out) {
+  const [fr, a0, a1, b0, b1, c0, c1, col, front] = box;
+  for (const [ln, idx, name] of FACES) {
+    const n = norm(add(add(mul(fr.ex, ln.x), mul(fr.ey, ln.y)), mul(fr.ez, ln.z)));
+    const pts = idx.map(([i, j, k]) => fr.at(i ? a1 : a0, j ? b1 : b0, k ? c1 : c0));
+    const ctr = mul(pts.reduce(add, v(0, 0, 0)), .25);
+    if (dot(n, sub(C, ctr)) <= 0) continue;
+    const proj = pts.map(P);
+    const lit = .32 + .78 * Math.max(0, dot(n, LIGHT));
+    out.push({ proj, depth: proj.reduce((s, p) => s + p.z, 0) / 4, fill: shade(name === 'front' && front ? front : col, lit), owner, name, box });
+  }
+}
+
+// ---------- drawing helpers ----------
+function poly(pts) { ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y); ctx.closePath(); }
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+
+// Draws in a device's screen plane: local units are screen pixels (sw × sh).
+function onScreen(d, g, fn) {
+  const p00 = P(g.screen(0, 0)), p10 = P(g.screen(1, 0)), p01 = P(g.screen(0, 1)), p11 = P(g.screen(1, 1));
+  ctx.save(); poly([p00, p10, p11, p01]); ctx.clip();
+  ctx.transform((p10.x - p00.x) / d.sw, (p10.y - p00.y) / d.sw, (p01.x - p00.x) / d.sh, (p01.y - p00.y) / d.sh, p00.x, p00.y);
+  fn(d.sw, d.sh); ctx.restore();
+}
+
+function drawScreen(d, g, t) {
+  onScreen(d, g, (w, h) => {
+    const gr = ctx.createLinearGradient(0, 0, w * .6, h);
+    gr.addColorStop(0, d.wall[0]); gr.addColorStop(1, d.wall[1]);
+    ctx.fillStyle = gr; ctx.fillRect(0, 0, w, h);
+    // ambient shape on the wallpaper, drifting very slowly
+    const drift = reduce ? 0 : Math.sin(t * .00015 + d.x) * 40;
+    const rg = ctx.createRadialGradient(w * .72 + drift, h * .3, 10, w * .72 + drift, h * .3, w * .55);
+    rg.addColorStop(0, 'rgba(255,255,255,.08)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = rg; ctx.fillRect(0, 0, w, h);
+    if (pairing.active && (d === devs.pc || d === devs.studio) && d.wire > .3) { drawCode(d, w, h); return; }
+    // app windows
+    const wins = d.kind === 'laptop'
+      ? [[.08, .1, .5, .62, '#F3F4F6'], [.46, .26, .46, .5, '#E7EAEE']]
+      : [[.06, .12, .42, .66, '#EEF0F3'], [.4, .2, .52, .6, '#F5F6F8']];
+    for (const [x, y, ww, hh, c] of wins) {
+      ctx.fillStyle = 'rgba(0,0,0,.28)'; rr(x * w + 6, y * h + 14, ww * w, hh * h, 18); ctx.fill();
+      ctx.fillStyle = c; rr(x * w, y * h, ww * w, hh * h, 18); ctx.fill();
+      ctx.fillStyle = '#D9DDE3'; ctx.fillRect(x * w, y * h + 52, ww * w, 2);
+      ctx.fillStyle = '#C5CBD3';
+      for (let i = 0; i < 5; i++) { rr(x * w + 40, y * h + 100 + i * 62, ww * w * (.75 - (i % 3) * .14), 22, 8); ctx.fill(); }
+    }
+    ctx.fillStyle = d.kind === 'laptop' ? 'rgba(255,255,255,.18)' : 'rgba(10,14,20,.6)';
+    if (d.kind === 'laptop') { rr(w * .3, h - 74, w * .4, 56, 18); ctx.fill(); } else ctx.fillRect(0, h - 56, w, 56);
+    // the crossing edge, lit while the pointer is near it
+    const e = edgeOf(d);
+    if (e !== null) {
+      const near = cursor.on === d ? clamp(1 - Math.abs(cursor.u - e) * 5, 0, 1) : 0;
+      const a = .18 + .82 * Math.max(near, ribbon.flash * (ribbon.from === d || ribbon.to === d ? 1 : 0));
+      ctx.fillStyle = `rgba(255,181,71,${a})`;
+      ctx.fillRect(e ? w - 10 : 0, h * .08, 10, h * .84);
+    }
+  });
+}
+
+function drawCode(d, w, h) {
+  ctx.fillStyle = 'rgba(14,17,21,.86)'; rr(w * .22, h * .26, w * .56, h * .48, 36); ctx.fill();
+  ctx.fillStyle = '#9DA6B1'; ctx.font = '500 54px Geist, system-ui'; ctx.textAlign = 'center';
+  ctx.fillText(d === devs.pc ? 'Pairing with Studio PC' : 'Pairing with This PC', w / 2, h * .38);
+  ctx.fillStyle = '#EDEFF2'; ctx.font = '500 150px "Geist Mono", ui-monospace, monospace';
+  const shown = Math.floor(clamp((performance.now() - pairing.t0 - 700) / 110, 0, 6));
+  ctx.fillText(('482913'.slice(0, shown) + '······'.slice(shown)).replace(/^(...)/, '$1 '), w / 2, h * .62);
+}
+
+// ---------- pointer choreography ----------
+// The facing edge of a device (u = 0 left, 1 right), toward the other one.
+function edgeOf(d) {
+  if (d === devs.pc) return devs.mac.x < devs.pc.x ? 0 : 1;
+  if (d === devs.mac) return devs.mac.x < devs.pc.x ? 1 : 0;
+  return null;
+}
+const cursor = { on: devs.pc, u: .7, w: .55, clickAt: -1 };
+const ribbon = { t: -1, from: null, to: null, w: .5, flash: 0 };
+// Waypoints expressed as distance from the facing edge (0) inward (1).
+const PLAN = [
+  { dev: 'pc', path: [[.6, .58], [.42, .34], [.18, .4], [0, .42]], dur: 2100 },
+  { cross: 'pc>mac', dur: 560 },
+  { dev: 'mac', path: [[0, .42], [.35, .56], [.52, .6], [.5, .3], [0, .36]], dur: 2600, click: [.42, .52, .6] },
+  { cross: 'mac>pc', dur: 560 },
+  { dev: 'pc', path: [[0, .36], [.3, .5], [.6, .58]], dur: 1500 },
+];
+const PLAN_LEN = PLAN.reduce((s, p) => s + p.dur, 0);
+function along(path, t) {
+  const n = path.length - 1, f = clamp(t, 0, .9999) * n, i = Math.floor(f), k = ease(f - i);
+  return [lerp(path[i][0], path[i + 1][0], k), lerp(path[i][1], path[i + 1][1], k)];
+}
+function runCursor(t) {
+  let local = t % PLAN_LEN;
+  for (const step of PLAN) {
+    if (local < step.dur) {
+      const k = local / step.dur;
+      if (step.dev) {
+        const d = devs[step.dev], e = edgeOf(d), [inn, w] = along(step.path, k);
+        cursor.on = d; cursor.u = e ? 1 - inn : inn; cursor.w = w; ribbon.t = -1;
+        cursor.clickAt = step.click && Math.abs(k - step.click[2]) < .08 ? (k - step.click[2] + .08) / .16 : -1;
+      } else {
+        const [a, b] = step.cross.split('>');
+        ribbon.from = devs[a]; ribbon.to = devs[b]; ribbon.t = reduce ? 1 : k; ribbon.w = cursor.w; cursor.on = null;
+      }
+      return;
+    }
+    local -= step.dur;
+  }
+}
+
+function drawCursor(d, g) {
+  onScreen(d, g, (w, h) => {
+    const x = cursor.u * w, y = cursor.w * h, s = w / 1600 * 2.3;
+    if (cursor.clickAt >= 0) {
+      const r = easeOut(cursor.clickAt) * 70;
+      ctx.strokeStyle = `rgba(255,181,71,${1 - cursor.clickAt})`; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke();
+    }
+    ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 17); ctx.lineTo(4.2, 13.2); ctx.lineTo(7.2, 19.6); ctx.lineTo(9.8, 18.4); ctx.lineTo(6.9, 12.2); ctx.lineTo(12.2, 11.8); ctx.closePath();
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#111'; ctx.lineWidth = 1.2; ctx.fill(); ctx.stroke();
+    ctx.restore();
+  });
+}
+
+// The crossing: the pointer leaves as a ribbon of light along an arc and lands on the other screen.
+function bez(p0, p1, p2, p3, t) { const s = 1 - t; return add(add(mul(p0, s * s * s), mul(p1, 3 * s * s * t)), add(mul(p2, 3 * s * t * t), mul(p3, t * t * t))); }
+function drawRibbon(geo) {
+  if (ribbon.t < 0) { ribbon.flash = Math.max(0, ribbon.flash - .05); return; }
+  ribbon.flash = 1;
+  const A = geo.get(ribbon.from), B = geo.get(ribbon.to);
+  const p0 = A.screen(edgeOf(ribbon.from), ribbon.w), p3 = B.screen(edgeOf(ribbon.to), ribbon.w);
+  const mid = mul(add(p0, p3), .5), lift = v(0, 24 + Math.abs(p3.x - p0.x) * .2, 22);
+  const p1 = add(add(p0, mul(sub(mid, p0), .5)), lift), p2 = add(add(p3, mul(sub(mid, p3), .5)), lift);
+  const head = ease(ribbon.t), tail = Math.max(0, head - .42), N = 36;
+  let prev = P(bez(p0, p1, p2, p3, tail));
+  for (let i = 1; i <= N; i++) {
+    const tt = lerp(tail, head, i / N), q = P(bez(p0, p1, p2, p3, tt)), k = i / N;
+    ctx.strokeStyle = `rgba(255,${200 + 40 * k | 0},${140 + 100 * k | 0},${.15 + .85 * k})`;
+    ctx.lineWidth = .8 + 5.6 * k; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(q.x, q.y); ctx.stroke(); prev = q;
+  }
+  const hp = bez(p0, p1, p2, p3, head), H2 = P(hp);
+  ctx.fillStyle = '#FFF8EC'; ctx.beginPath(); ctx.arc(H2.x, H2.y, 4.2, 0, 7); ctx.fill();
+  // handoff time, shown at the apex while the pointer is in flight
+  const a = Math.sin(Math.PI * ribbon.t), ap = P(bez(p0, p1, p2, p3, .5));
+  ctx.globalAlpha = a; ctx.fillStyle = '#EDEFF2'; ctx.font = '500 12px "Geist Mono", ui-monospace, monospace'; ctx.textAlign = 'center';
+  ctx.fillText('0.18 ms', ap.x, ap.y - 14); ctx.globalAlpha = 1;
+  ribbon.spill = hp;
+}
+
+// ---------- desk ----------
+function drawRoom(t, geo) {
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0B0E12'); bg.addColorStop(1, '#14181E');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  const k = [v(-100, 0, -42), v(100, 0, -42), v(100, 0, 40), v(-100, 0, 40)].map(P);
+  const lip = [v(-100, 0, 40), v(100, 0, 40), v(100, -3.2, 40), v(-100, -3.2, 40)].map(P);
+  ctx.fillStyle = '#0A0C0F'; poly(lip); ctx.fill();
+  const g = ctx.createLinearGradient(0, k[0].y, 0, k[2].y);
+  g.addColorStop(0, '#191D23'); g.addColorStop(1, '#262B33');
+  ctx.fillStyle = g; poly(k); ctx.fill();
+  ctx.save(); poly(k); ctx.clip();
+  // key light pool
+  const c0 = P(v(-12, 0, 2)), r = Math.hypot(k[2].x - k[3].x, 0) * .45;
+  const pool = ctx.createRadialGradient(c0.x, c0.y, 0, c0.x, c0.y, r);
+  pool.addColorStop(0, 'rgba(255,244,228,.07)'); pool.addColorStop(1, 'rgba(255,244,228,0)');
+  ctx.fillStyle = pool; ctx.fillRect(0, 0, W, H);
+  // faint 10 cm grid, the room's measuring tape
+  ctx.strokeStyle = 'rgba(255,255,255,.035)'; ctx.lineWidth = 1;
+  for (let x = -100; x <= 100; x += 10) { const a = P(v(x, 0, -42)), b = P(v(x, 0, 40)); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  for (let z = -40; z <= 40; z += 10) { const a = P(v(-100, 0, z)), b = P(v(100, 0, z)); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  // light from each screen falling on the desk, and contact shadows
+  for (const d of Object.values(devs)) {
+    if (d.hidden) continue;
+    const gg = geo.get(d), [fx, fz, rx, rz] = gg.foot;
+    const sc = P(v(fx, 0, fz + 16)), sr = Math.abs(P(v(fx + 30, 0, fz + 16)).x - sc.x);
+    const spill = ctx.createRadialGradient(sc.x, sc.y, 0, sc.x, sc.y, sr);
+    const [cr, cg, cb] = hex(d.wall[0]);
+    spill.addColorStop(0, `rgba(${cr + 40},${cg + 40},${cb + 40},${.16 * d.alpha})`); spill.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = spill; ctx.fillRect(0, 0, W, H);
+    ctx.filter = 'blur(9px)'; ctx.fillStyle = `rgba(0,0,0,${.55 * d.alpha})`;
+    poly([v(fx - rx, 0, fz - rz), v(fx + rx, 0, fz - rz), v(fx + rx, 0, fz + rz), v(fx - rx, 0, fz + rz)].map(P)); ctx.fill();
+    ctx.filter = 'none';
+  }
+  // the ribbon lights the desk under it
+  if (ribbon.t >= 0 && ribbon.spill) {
+    const s = P(v(ribbon.spill.x, 0, ribbon.spill.z)), sr = 70 * Math.sin(Math.PI * ribbon.t);
+    const lg = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, Math.max(1, sr));
+    lg.addColorStop(0, 'rgba(255,190,110,.22)'); lg.addColorStop(1, 'rgba(255,190,110,0)');
+    ctx.fillStyle = lg; ctx.fillRect(0, 0, W, H);
+  }
+  ctx.restore();
+}
+
+// ---------- interaction ----------
+let hover = null, drag = null, lastInput = -1e9;
+const pt = e => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+function inside(p, q) { let c = false; for (let i = 0, j = q.length - 1; i < q.length; j = i++) { if (((q[i].y > p.y) !== (q[j].y > p.y)) && (p.x < (q[j].x - q[i].x) * (p.y - q[i].y) / (q[j].y - q[i].y) + q[i].x)) c = !c; } return c; }
+let lastFaces = [];
+function hit(p) { for (let i = lastFaces.length - 1; i >= 0; i--) { const f = lastFaces[i]; if (f.owner && !f.owner.hidden && f.owner.alpha > .5 && inside(p, f.proj)) return f.owner; } return null; }
+cv.addEventListener('pointerdown', e => {
+  cv.setPointerCapture(e.pointerId); const p = pt(e); lastInput = performance.now();
+  const d = hit(p); drag = d ? { dev: d, x0: p.x, y0: p.y, dx0: d.x } : { orbit: true, x: p.x, y: p.y };
+  cv.classList.add('drag');
+});
+cv.addEventListener('pointermove', e => {
+  const p = pt(e);
+  if (!drag) { hover = hit(p); return; }
+  lastInput = performance.now();
+  if (drag.dev) {
+    const a = P(v(drag.dev.x, 0, 0)), b = P(v(drag.dev.x + 1, 0, 0)), ax = b.x - a.x, ay = b.y - a.y;
+    drag.dev.tx = drag.dev.x = clamp(drag.dx0 + ((p.x - drag.x0) * ax + (p.y - drag.y0) * ay) / (ax * ax + ay * ay), -78, 78);
+  } else {
+    cam.vy = (p.x - drag.x) * .006; cam.vp = (p.y - drag.y) * .004;
+    cam.tyaw = clamp(cam.tyaw - cam.vy, -.75, .75); cam.tpitch = clamp(cam.tpitch + cam.vp, .2, .78);
+    drag.x = p.x; drag.y = p.y;
+  }
+});
+addEventListener('pointerup', () => {
+  if (drag && drag.dev && drag.dev !== devs.studio) settle(drag.dev);
+  drag = null; cv.classList.remove('drag');
+});
+// After a drag, devices settle side by side on whichever side the user chose.
+function settle(moved) {
+  const other = moved === devs.mac ? devs.pc : devs.mac;
+  const left = moved.x < other.x;
+  moved.tx = clamp(other.x + (left ? -62 : 62), -78, 78);
+  if (Math.abs(moved.tx - other.x) < 50) { other.tx = clamp(moved.tx + (left ? 62 : -62), -78, 78); }
+  updateLayoutText();
+}
+let shownSide = 'left';
+function updateLayoutText() {
+  const side = devs.mac.tx < devs.pc.tx ? 'left' : 'right';
+  if (side === shownSide) return;
+  shownSide = side;
+  const h = document.getElementById('layoutH');
+  h.classList.add('swap');
+  setTimeout(() => { h.textContent = `MacBook Air is on your ${side}`; h.classList.remove('swap'); }, 220);
+}
+
+// ---------- pairing ----------
+const pairing = { active: false, t0: 0 };
+const sheet = document.getElementById('sheet'), codeEl = document.getElementById('code');
+'482 913'.split('').forEach((ch, i) => { const s = document.createElement('span'); if (ch === ' ') s.className = 'gap'; else s.textContent = ch; s.style.transitionDelay = (300 + i * 70) + 'ms'; codeEl.appendChild(s); });
+document.getElementById('pairBtn').onclick = () => {
+  if (pairing.active) return;
+  Object.assign(pairing, { active: true, t0: performance.now() });
+  const s = devs.studio; s.hidden = false; s.wire = 0; s.alpha = 0; s.wireTarget = 1;
+  cam.ttx = 24; setTimeout(() => sheet.classList.add('on'), reduce ? 0 : 900);
+};
+function endPairing(ok) {
+  sheet.classList.remove('on'); pairing.active = false; cam.ttx = ok ? 16 : 0;
+  const s = devs.studio;
+  if (ok) { s.alphaTarget = 1; document.getElementById('pairBtn').textContent = 'Pair another'; }
+  else { s.wireTarget = 0; setTimeout(() => { s.hidden = true; }, 900); }
+}
+document.getElementById('yesBtn').onclick = () => endPairing(true);
+document.getElementById('noBtn').onclick = () => endPairing(false);
+
+// ---------- chrome ----------
+const tabs = [...document.querySelectorAll('.tab')], ind = document.getElementById('ind');
+function placeInd(t) { ind.style.left = t.offsetLeft + 'px'; ind.style.width = t.offsetWidth + 'px'; }
+tabs.forEach(t => t.onclick = () => { tabs.forEach(x => x.classList.toggle('on', x === t)); placeInd(t); });
+requestAnimationFrame(() => placeInd(tabs[0]));
+document.querySelectorAll('.tg').forEach(t => t.onclick = () => t.classList.toggle('on'));
+
+// ---------- loop ----------
+let t0 = performance.now();
+function tick(now) {
+  const t = window.__FIXED_T ?? now - t0; // __FIXED_T freezes a frame for reviews
+  // camera: spring toward target, then a slow idle drift
+  if (!drag && now - lastInput > 3500 && !reduce) cam.tyaw = lerp(cam.tyaw, -.2 + Math.sin(t * .00012) * .16, .01);
+  cam.yaw = lerp(cam.yaw, cam.tyaw, .12); cam.pitch = lerp(cam.pitch, cam.tpitch, .12); cam.tx = lerp(cam.tx, (devs.mac.x + devs.pc.x) / 2 + cam.ttx, .06);
+  for (const d of Object.values(devs)) {
+    d.x = drag && drag.dev === d ? d.x : lerp(d.x, d.tx, .14);
+    if (d.wireTarget !== undefined) d.wire = lerp(d.wire, d.wireTarget, .05);
+    if (d.alphaTarget !== undefined) d.alpha = lerp(d.alpha, d.alphaTarget, .06);
+  }
+  setupCam(); runCursor(t);
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const geo = new Map(Object.values(devs).map(d => [d, geometry(d)]));
+  drawRoom(t, geo);
+
+  const faces = [];
+  for (const d of Object.values(devs)) { if (d.hidden) continue; for (const b of geo.get(d).boxes) boxFaces(b, d, faces); }
+  faces.sort((a, b) => b.depth - a.depth);
+  lastFaces = faces;
+  for (const f of faces) {
+    const d = f.owner, g = geo.get(d);
+    if (d.alpha < .99) { // a device being paired draws in as a wireframe first
+      ctx.globalAlpha = d.alpha; poly(f.proj); ctx.fillStyle = f.fill; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.setLineDash([400]); ctx.lineDashOffset = 400 * (1 - d.wire);
+      ctx.strokeStyle = `rgba(255,181,71,${.85 * d.wire * (1 - d.alpha)})`; ctx.lineWidth = 1; poly(f.proj); ctx.stroke(); ctx.setLineDash([]);
+    } else { poly(f.proj); ctx.fillStyle = f.fill; ctx.fill(); }
+    if (f.name === 'front' && f.box[8]) {
+      if (d.alpha > .02 || d.wire > .3) { ctx.globalAlpha = Math.max(d.alpha, d.wire * .9); drawScreen(d, g, t); ctx.globalAlpha = 1; }
+      if (cursor.on === d) drawCursor(d, g);
+      if (hover === d && !drag) { ctx.strokeStyle = 'rgba(255,181,71,.55)'; ctx.lineWidth = 1.5; poly(f.proj); ctx.stroke(); }
+    }
+    if (f.name === 'top' && d.kind === 'laptop' && f.box === g.boxes[0]) { // keyboard well and trackpad
+      const k = g.deck;
+      ctx.fillStyle = 'rgba(20,22,26,.85)'; poly([k.at(-13, 0, -9.5), k.at(13, 0, -9.5), k.at(13, 0, 1), k.at(-13, 0, 1)].map(P)); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.12)'; poly([k.at(-5.5, 0, 3), k.at(5.5, 0, 3), k.at(5.5, 0, 9), k.at(-5.5, 0, 9)].map(P)); ctx.fill();
+    }
+  }
+  drawRibbon(geo);
+  // device labels sit on the desk in front of each device
+  ctx.font = '500 11.5px Geist, system-ui'; ctx.textAlign = 'center';
+  for (const d of Object.values(devs)) {
+    if (d.hidden) continue;
+    const f = geo.get(d).foot, p = P(v(f[0], 0, f[1] + f[3] + 7));
+    ctx.fillStyle = `rgba(157,166,177,${Math.max(d.alpha, d.wire * .6)})`; ctx.fillText(d.name, p.x, p.y);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
