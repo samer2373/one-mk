@@ -67,6 +67,7 @@ soon as they connect.
 | `one-mk forget <pc>` | Unpair |
 | `one-mk run` | Run in the foreground (`-v` for detailed logs) |
 | `one-mk id` | This computer's name and id |
+| `one-mk doctor` | Find out why computers aren't connecting, with a fix for each problem (`--json` for programs) |
 | `one-mk bench` | Measure latency and CPU cost |
 
 Plain `one-mk run` prints short messages such as "Connected to desk (on your
@@ -266,6 +267,12 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
 
 ## Troubleshooting
 
+Start with `one-mk doctor`. It checks that one-mk is running and paired,
+the port, discovery, the firewall, the desktop permission (Linux) and the
+network, and prints a plain fix for each problem. It only reads: it never
+changes your firewall or settings, needs no root, and exits with status 1 if
+something failed.
+
 - **Computers don't find each other.** Both must be on the same network
   (not a guest or "client isolation" Wi-Fi). Allow one-mk through the
   firewall: **UDP port 24900** (and mDNS, UDP 5353, for discovery). On
@@ -324,5 +331,6 @@ background apps, so there it goes through XWayland.
 5. Done: a small tray icon (status, sides, take back, start at login).
    **Next:** a drag-and-drop layout editor and "push toward it" layout learning
 6. Done: gaming mode (relative motion), switching without an edge, edge
-   rules, lock sync. **Next:** global keyboard shortcuts (on Linux through
-   the GlobalShortcuts portal), connection doctor, auto-update
+   rules, lock sync, connection doctor (`one-mk doctor`). **Next:** global
+   keyboard shortcuts (on Linux through the GlobalShortcuts portal),
+   auto-update

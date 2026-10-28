@@ -21,6 +21,8 @@ mod win_logic;
 
 pub use null::NullHandles;
 pub use system::{FocusProbe, ScreenLocker};
+#[cfg(target_os = "linux")]
+pub use portal::{PortalProbe, probe_portals};
 
 use anyhow::Result;
 use one_mk_proto::{Desktop, Mods, Pos, Side};

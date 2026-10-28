@@ -539,6 +539,40 @@ async fn inject(tx: mpsc::UnboundedSender<Event>, mut rx: mpsc::UnboundedReceive
     }
 }
 
+/// What the desktop portals offer, for `one-mk doctor`. Only reads portal
+/// properties: it never creates a session, so no permission prompt appears.
+pub struct PortalProbe {
+    pub remote_desktop: Result<(), String>,
+    pub input_capture: Result<(), String>,
+}
+
+pub async fn probe_portals() -> PortalProbe {
+    let (remote_desktop, input_capture) = tokio::join!(probe_remote_desktop(), probe_input_capture());
+    PortalProbe { remote_desktop, input_capture }
+}
+
+async fn probe_remote_desktop() -> Result<(), String> {
+    let portal = RemoteDesktop::new().await.map_err(|e| e.to_string())?;
+    let types = portal.available_device_types().await.map_err(|e| e.to_string())?;
+    if types.contains(DeviceType::Keyboard | DeviceType::Pointer) {
+        Ok(())
+    } else {
+        Err("it cannot control a keyboard and pointer".to_owned())
+    }
+}
+
+async fn probe_input_capture() -> Result<(), String> {
+    let portal = InputCapture::new().await.map_err(|e| e.to_string())?;
+    // GNOME reports capability bits ashpd does not know and fails to decode
+    // them; the portal answered, which is what matters then.
+    match portal.supported_capabilities().await {
+        Ok(caps) if !caps.contains(Capabilities::Keyboard | Capabilities::Pointer) => {
+            Err("it cannot capture a keyboard and pointer".to_owned())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// One RemoteDesktop session. `Ok` means the daemon is gone.
 async fn inject_session(rx: &mut mpsc::UnboundedReceiver<Inject>, state_dir: &Path, retry: &mut Retry) -> Result<()> {
     let portal = RemoteDesktop::new().await.context("RemoteDesktop portal not available")?;

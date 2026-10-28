@@ -9,7 +9,7 @@ mod stream;
 mod tls;
 mod trust;
 
-pub use discovery::{Discovery, Found};
+pub use discovery::{Discovery, Found, is_virtual as is_virtual_interface};
 pub use identity::{Fingerprint, Identity};
 pub use node::{Node, Peer};
 pub use pairing::{Pairing, Sas};

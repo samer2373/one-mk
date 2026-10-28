@@ -3139,6 +3139,7 @@ dependencies = [
  "clap",
  "directories",
  "fs4",
+ "if-addrs",
  "libc",
  "one-mk-clipboard",
  "one-mk-ctl",

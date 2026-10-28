@@ -4,6 +4,7 @@ mod app;
 mod bench;
 mod clip;
 mod control;
+mod doctor;
 mod install;
 mod link;
 mod manage;
@@ -151,6 +152,12 @@ enum Cmd {
     },
     /// Show this computer's name and id.
     Id,
+    /// Find out why computers are not connecting, and how to fix it.
+    Doctor {
+        /// Machine-readable output for a program to read.
+        #[arg(long)]
+        json: bool,
+    },
     /// Measure latency and CPU cost.
     Bench {
         /// Number of mouse events to send.
@@ -272,6 +279,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!("fingerprint {}", id.fingerprint);
                 Ok(())
             }
+            Cmd::Doctor { json } => doctor::run(&dir, json).await,
             Cmd::Bench { count, rate, serve, connect, peer } => {
                 bench::run(&dir, bench::Options { count, rate: rate.max(1), serve, connect, peer }).await
             }
