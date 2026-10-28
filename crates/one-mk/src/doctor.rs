@@ -1,0 +1,1300 @@
+//! `one-mk doctor`: finds out why computers aren't connecting and says what
+//! to do about it, in plain language.
+//!
+//! The decisions are pure functions from plain facts to a [`Check`], so they
+//! are unit-tested with fake inputs. The probes at the bottom gather the
+//! facts: they are read-only (no firewall rule, config file or permission is
+//! ever changed), need no root, run concurrently with short timeouts, and
+//! only run when the command is invoked.
+
+use crate::control::{self, Request};
+use anyhow::Result;
+use one_mk_net::{Discovery, Found, Identity, TrustStore, is_virtual_interface};
+use one_mk_proto::{DEFAULT_PORT, sanitize_name};
+use std::net::{Ipv4Addr, UdpSocket};
+use std::path::Path;
+use std::time::Duration;
+
+use crate::manage::Status as DaemonStatus;
+
+/// How the daemon is asked, and how long mDNS gets to answer.
+const DAEMON_TIMEOUT: Duration = Duration::from_millis(1500);
+const MDNS_WINDOW: Duration = Duration::from_millis(1500);
+const PORTAL_TIMEOUT: Duration = Duration::from_millis(2500);
+const COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
+const MDNS_PORT: u16 = 5353;
+const MDNS_GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
+
+// ---------------------------------------------------------------- model --
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Status {
+    Pass,
+    /// Not applicable here (another OS), or not something a probe can know.
+    Skip,
+    Warn,
+    Fail,
+}
+
+impl Status {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Skip => "skip",
+            Self::Warn => "warn",
+            Self::Fail => "fail",
+        }
+    }
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Pass => "[ ok ]",
+            Self::Skip => "[skip]",
+            Self::Warn => "[warn]",
+            Self::Fail => "[FAIL]",
+        }
+    }
+}
+
+/// What a check found: how bad it is, what was seen, and the fix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Outcome {
+    pub status: Status,
+    pub detail: String,
+    pub fix: Option<String>,
+}
+
+impl Outcome {
+    fn new(status: Status, detail: impl Into<String>, fix: Option<&str>) -> Self {
+        Self { status, detail: detail.into(), fix: fix.map(str::to_owned) }
+    }
+    fn pass(detail: impl Into<String>) -> Self {
+        Self::new(Status::Pass, detail, None)
+    }
+    fn skip(detail: impl Into<String>) -> Self {
+        Self::new(Status::Skip, detail, None)
+    }
+    fn warn(detail: impl Into<String>, fix: &str) -> Self {
+        Self::new(Status::Warn, detail, Some(fix))
+    }
+    fn fail(detail: impl Into<String>, fix: &str) -> Self {
+        Self::new(Status::Fail, detail, Some(fix))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Check {
+    /// Stable name for programs (the window will read `--json`).
+    pub id: String,
+    pub title: String,
+    pub outcome: Outcome,
+}
+
+fn check(id: &str, title: &str, outcome: Outcome) -> Check {
+    Check { id: id.to_owned(), title: title.to_owned(), outcome }
+}
+
+// ---------------------------------------------------------------- facts --
+
+/// The daemon, as the control channel answered.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Daemon {
+    Running(DaemonStatus),
+    NotRunning,
+    /// Something is there but did not answer sensibly.
+    Broken(String),
+}
+
+impl Daemon {
+    /// Reads the reply of `request(dir, Request::Status)`.
+    fn from_reply(reply: Result<Option<String>, String>) -> Self {
+        match reply {
+            Ok(None) => Self::NotRunning,
+            Ok(Some(text)) => match DaemonStatus::decode(&text) {
+                Some(s) => Self::Running(s),
+                None => Self::Broken("it gave an answer we could not read".into()),
+            },
+            Err(e) => Self::Broken(e),
+        }
+    }
+
+    fn status(&self) -> Option<&DaemonStatus> {
+        match self {
+            Self::Running(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Paired {
+    pub id: String,
+    pub name: String,
+    pub addrs: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub dir_exists: bool,
+    pub has_identity: bool,
+    /// The paired computers, or why `devices.toml` could not be read.
+    pub paired: Result<Vec<Paired>, String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Bind {
+    Free,
+    InUse,
+    Error(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct PortFacts {
+    pub port: u16,
+    pub bind: Bind,
+    /// Which program holds it, when we could find out.
+    pub holder: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MdnsFacts {
+    pub join: Result<(), String>,
+    /// What browsing for one-mk computers saw, or why it could not start.
+    pub seen: Result<Vec<Seen>, String>,
+}
+
+/// A one-mk computer seen on the network (short id as in `one-mk devices`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Seen {
+    pub id: String,
+    pub addrs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Firewall {
+    /// `Some(true)`: ufw is switched on. `None`: could not tell.
+    pub ufw_active: Option<bool>,
+    /// `/etc/ufw/user.rules`, when this user may read it (usually not).
+    pub ufw_rules: Option<String>,
+    pub firewalld: Option<Firewalld>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Firewalld {
+    pub ports: String,
+    pub services: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Portals {
+    pub wayland: bool,
+    /// `None`: the portals did not answer in time.
+    pub remote_desktop: Option<Result<(), String>>,
+    pub input_capture: Option<Result<(), String>>,
+    pub token: bool,
+}
+
+/// An address on an up network interface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Addr {
+    pub iface: String,
+    pub ip: Ipv4Addr,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Os {
+    Linux,
+    Windows,
+    Mac,
+    Other,
+}
+
+const fn this_os() -> Os {
+    if cfg!(target_os = "linux") {
+        Os::Linux
+    } else if cfg!(windows) {
+        Os::Windows
+    } else if cfg!(target_os = "macos") {
+        Os::Mac
+    } else {
+        Os::Other
+    }
+}
+
+// ------------------------------------------------------------ decisions --
+
+pub fn daemon_check(d: &Daemon) -> Check {
+    let out = match d {
+        Daemon::Running(s) => Outcome::pass(format!("one-mk is running on {} (listening on UDP {}).", s.name, s.port)),
+        Daemon::NotRunning => Outcome::fail(
+            "one-mk is not running on this computer.",
+            "Start it with `one-mk run`, or run `one-mk install` so it starts when you log in.",
+        ),
+        Daemon::Broken(why) => Outcome::fail(
+            format!("one-mk seems to be running but does not answer ({why})."),
+            "Stop it (end the one-mk process) and start it again with `one-mk run`.",
+        ),
+    };
+    check("daemon", "Program", out)
+}
+
+pub fn config_checks(c: &Config, dir: &Path) -> Vec<Check> {
+    let folder = if c.dir_exists {
+        Outcome::pass(format!("Found at {}.", dir.display()))
+    } else {
+        Outcome::warn(
+            format!("There is no settings folder yet ({}).", dir.display()),
+            "This computer has not been set up: run `one-mk pair` on it and on the other computer.",
+        )
+    };
+    let identity = match (c.dir_exists, c.has_identity) {
+        (_, true) => Outcome::pass("This computer has its identity (key and certificate)."),
+        (false, false) => Outcome::skip("No identity yet; it is created the first time one-mk starts."),
+        (true, false) => Outcome::warn(
+            "This computer has no identity yet.",
+            "It is created automatically the first time you run `one-mk run` or `one-mk pair`.",
+        ),
+    };
+    let pairing = match &c.paired {
+        Ok(p) if p.is_empty() => Outcome::fail(
+            "This computer is not paired with any other.",
+            "Run `one-mk pair` on both computers and confirm the same code on each.",
+        ),
+        Ok(p) => Outcome::pass(format!("Paired with {} computer{}.", p.len(), if p.len() == 1 { "" } else { "s" })),
+        Err(e) => Outcome::fail(
+            format!("The list of paired computers could not be read ({e})."),
+            "Fix or delete `devices.toml` in the settings folder, then pair again with `one-mk pair`.",
+        ),
+    };
+    vec![
+        check("config", "Settings", folder),
+        check("identity", "Identity", identity),
+        check("pairing", "Paired computers", pairing),
+    ]
+}
+
+pub fn port_check(d: &Daemon, p: &PortFacts) -> Check {
+    let port = p.port;
+    let out = match (d.status().is_some(), &p.bind) {
+        (true, Bind::InUse) => Outcome::pass(format!("UDP port {port} is open, held by one-mk itself.")),
+        (true, Bind::Free) => Outcome::fail(
+            format!("one-mk is running but is not listening on UDP port {port}."),
+            "Restart one-mk (`one-mk run`) and watch for an error about the port.",
+        ),
+        (false, Bind::Free) => Outcome::pass(format!("UDP port {port} is free for one-mk.")),
+        (false, Bind::InUse) => {
+            let who = p.holder.as_deref().map_or("another program".to_owned(), |h| format!("{h:?}"));
+            Outcome::fail(
+                format!("UDP port {port} is already used by {who}."),
+                &format!(
+                    "Close that program, or use another port on both computers: `one-mk run --port {}`.",
+                    port.wrapping_add(10).max(1024)
+                ),
+            )
+        }
+        (_, Bind::Error(e)) => Outcome::warn(
+            format!("Could not test UDP port {port} ({e})."),
+            "Not necessarily a problem; if connecting fails, check that nothing else uses this port.",
+        ),
+    };
+    check("port", "Port", out)
+}
+
+pub fn mdns_check(d: &Daemon, m: &MdnsFacts) -> Check {
+    let title = "Discovery";
+    const BLOCKED: &str = "Check that no firewall or VPN blocks UDP 5353 (mDNS) and that you are not on a guest Wi-Fi. \
+                           Without discovery, connect directly: `one-mk run --connect <ip>:24900`.";
+    if let Err(e) = &m.join {
+        let out =
+            Outcome::fail(format!("This computer cannot join the mDNS group {MDNS_GROUP}:{MDNS_PORT} ({e})."), BLOCKED);
+        return check("mdns", title, out);
+    }
+    let seen = match &m.seen {
+        Ok(s) => s,
+        Err(e) => {
+            let out = Outcome::fail(format!("Looking for computers failed ({e})."), BLOCKED);
+            return check("mdns", title, out);
+        }
+    };
+    let out = match d {
+        Daemon::Running(s) if seen.iter().any(|f| f.id == s.id) => {
+            Outcome::pass("Discovery works: this computer's own announcement came back over the network.")
+        }
+        Daemon::Running(_) => Outcome::warn(
+            "one-mk is running but its announcement was not seen on the network.",
+            "Was it started with `--no-discovery`? Otherwise something drops mDNS (UDP 5353): a firewall, VPN or guest Wi-Fi. \
+             Connecting with `--connect <ip>:24900` still works.",
+        ),
+        _ => Outcome::pass(format!(
+            "This computer can use mDNS; {} one-mk computer{} announced {}.",
+            seen.len(),
+            if seen.len() == 1 { "" } else { "s" },
+            if seen.len() == 1 { "itself" } else { "themselves" },
+        )),
+    };
+    check("mdns", title, out)
+}
+
+/// Whether `list` (like `24900/udp 8000-9000/tcp`) allows UDP `port`.
+fn port_listed(list: &str, port: u16) -> bool {
+    list.split_whitespace().any(|item| {
+        let Some((range, proto)) = item.split_once('/') else { return false };
+        if proto != "udp" {
+            return false;
+        }
+        match range.split_once('-') {
+            Some((a, b)) => matches!((a.parse::<u16>(), b.parse::<u16>()), (Ok(a), Ok(b)) if a <= port && port <= b),
+            None => range.parse() == Ok(port),
+        }
+    })
+}
+
+/// Whether ufw's `user.rules` accepts UDP `port` (single, or a range like `24000:25000`).
+fn ufw_allows(rules: &str, port: u16) -> bool {
+    rules.lines().any(|l| {
+        let l = l.trim();
+        if !l.starts_with("-A ufw-user-input") || !l.ends_with("-j ACCEPT") || !l.contains("-p udp") {
+            return false;
+        }
+        let mut words = l.split_whitespace();
+        while let Some(w) = words.next() {
+            if w == "--dport" || w == "--dports" {
+                return words.next().is_some_and(|spec| {
+                    spec.split(',').any(|s| match s.split_once(':') {
+                        Some((a, b)) => {
+                            matches!((a.parse::<u16>(), b.parse::<u16>()), (Ok(a), Ok(b)) if a <= port && port <= b)
+                        }
+                        None => s.parse() == Ok(port),
+                    })
+                });
+            }
+        }
+        false
+    })
+}
+
+pub fn firewall_check(os: Os, f: &Firewall, port: u16) -> Check {
+    let title = "Firewall";
+    let out = match os {
+        Os::Windows => Outcome::skip(
+            "Not checked on Windows. If Windows Defender Firewall asked about one-mk, choose Allow (at least on Private networks); \
+             otherwise allow one-mk.exe under Windows Security > Firewall & network protection > Allow an app.",
+        ),
+        Os::Mac => Outcome::skip(
+            "Not checked on macOS. If it asked \"accept incoming network connections?\", choose Allow; \
+             otherwise allow one-mk under System Settings > Network > Firewall > Options.",
+        ),
+        Os::Other => Outcome::skip("Not checked on this system."),
+        Os::Linux => linux_firewall(f, port),
+    };
+    check("firewall", title, out)
+}
+
+fn linux_firewall(f: &Firewall, port: u16) -> Outcome {
+    let mut active = false;
+    let mut blocked: Vec<String> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    if f.ufw_active == Some(true) {
+        active = true;
+        // ufw's own rules already let mDNS multicast in; only our port matters.
+        match &f.ufw_rules {
+            Some(r) if ufw_allows(r, port) => {}
+            Some(_) => blocked.push(format!("ufw blocks UDP {port}: `sudo ufw allow {port}/udp`")),
+            None => unknown.push(format!(
+                "ufw is on and its rules need root to read: if connecting fails, run `sudo ufw allow {port}/udp`"
+            )),
+        }
+    }
+    if let Some(fw) = &f.firewalld {
+        active = true;
+        let mdns = fw.services.split_whitespace().any(|s| s == "mdns") || port_listed(&fw.ports, MDNS_PORT);
+        let mut missing = Vec::new();
+        let mut fix = Vec::new();
+        if !port_listed(&fw.ports, port) {
+            missing.push(format!("UDP {port}"));
+            fix.push(format!("`sudo firewall-cmd --permanent --add-port={port}/udp`"));
+        }
+        if !mdns {
+            missing.push(format!("mDNS (UDP {MDNS_PORT})"));
+            fix.push("`sudo firewall-cmd --permanent --add-service=mdns`".to_owned());
+        }
+        if !missing.is_empty() {
+            blocked.push(format!(
+                "firewalld does not allow {} in its default zone: {} then `sudo firewall-cmd --reload`",
+                missing.join(" and "),
+                fix.join(" and "),
+            ));
+        }
+    }
+    if !blocked.is_empty() {
+        return Outcome::new(Status::Fail, "The firewall blocks one-mk.", Some(&blocked.join("; ")));
+    }
+    if !unknown.is_empty() {
+        return Outcome::new(
+            Status::Warn,
+            "Could not tell whether the firewall allows one-mk.",
+            Some(&unknown.join("; ")),
+        );
+    }
+    if active {
+        Outcome::pass(format!("The firewall allows UDP {port} and mDNS."))
+    } else if f.ufw_active.is_none() {
+        Outcome::warn(
+            "Could not tell whether a firewall is on (ufw and firewalld could not be queried without root).",
+            &format!("If connecting fails, allow UDP {port} and UDP {MDNS_PORT} (mDNS) in your firewall."),
+        )
+    } else {
+        Outcome::pass(
+            "No ufw or firewalld firewall is on. (Other filters, such as a router's, cannot be checked from here.)",
+        )
+    }
+}
+
+pub fn portal_check(os: Os, p: Option<&Portals>) -> Check {
+    let title = "Permissions";
+    let out = match (os, p) {
+        (Os::Linux, Some(p)) => linux_portals(p),
+        (Os::Mac, _) => Outcome::skip(
+            "Not checked on macOS. Allow one-mk under System Settings > Privacy & Security > Accessibility and Input Monitoring.",
+        ),
+        _ => Outcome::skip("Nothing to check on this system."),
+    };
+    check("input", title, out)
+}
+
+fn linux_portals(p: &Portals) -> Outcome {
+    const INSTALL: &str = "Use GNOME 45+ or KDE Plasma 6.1+ on Wayland, with xdg-desktop-portal and your desktop's portal \
+                           (xdg-desktop-portal-gnome or -kde) installed, then log in again.";
+    match &p.remote_desktop {
+        None => {
+            return Outcome::warn(
+                "The desktop portal did not answer in time.",
+                "Log out and in again; if it persists, restart xdg-desktop-portal.",
+            );
+        }
+        Some(Err(e)) => {
+            return Outcome::fail(
+                format!("This desktop cannot let one-mk control the mouse and keyboard ({e})."),
+                INSTALL,
+            );
+        }
+        Some(Ok(())) => (),
+    }
+    match &p.input_capture {
+        None => {
+            return Outcome::warn(
+                "The desktop portal did not answer in time.",
+                "Log out and in again; if it persists, restart xdg-desktop-portal.",
+            );
+        }
+        Some(Err(e)) => {
+            return Outcome::fail(
+                format!("This desktop cannot let one-mk take the mouse and keyboard to other computers ({e})."),
+                INSTALL,
+            );
+        }
+        Some(Ok(())) => (),
+    }
+    if !p.wayland {
+        return Outcome::warn(
+            "This is not a Wayland session; one-mk's Linux support is built for Wayland.",
+            "Log in with the Wayland session (the gear menu on the login screen).",
+        );
+    }
+    if p.token {
+        Outcome::pass("The desktop offers the needed portals and you already allowed one-mk.")
+    } else {
+        Outcome::warn(
+            "The desktop offers the needed portals, but you have not allowed one-mk yet.",
+            "Run `one-mk run` and choose Allow in the dialog your desktop shows. (If you dismissed it, run it again.)",
+        )
+    }
+}
+
+pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
+    paired
+        .iter()
+        .map(|p| {
+            let name = sanitize_name(&p.name);
+            let id = format!("peer:{}", p.id);
+            let title = format!("Computer \"{name}\"");
+            let online = d.status().is_some_and(|s| s.peers.iter().any(|x| x.id == p.id && x.online));
+            let found = seen.iter().find(|s| s.id == p.id);
+            let out = match (online, found, d.status().is_some()) {
+                (true, ..) => Outcome::pass("Connected."),
+                (false, Some(f), true) => Outcome::warn(
+                    format!("It is on the network ({}) but not connected to this computer.", f.addrs.join(", ")),
+                    &format!(
+                        "On \"{name}\" run `one-mk doctor` (its firewall may block one-mk's UDP port); \
+                         or wait a few seconds: connecting is automatic. You can also try `one-mk run --connect {}`.",
+                        f.addrs.first().map_or("<ip>:24900".to_owned(), |a| a.clone()),
+                    ),
+                ),
+                (false, Some(f), false) => Outcome::warn(
+                    format!("It is on the network ({}), but one-mk is not running here.", f.addrs.join(", ")),
+                    "Start one-mk here with `one-mk run`.",
+                ),
+                (false, None, running) => Outcome::warn(
+                    if running {
+                        "It is not connected and was not found on the network.".to_owned()
+                    } else {
+                        "It was not found on the network.".to_owned()
+                    },
+                    &format!(
+                        "Is \"{name}\" switched on, running one-mk and on the same network (not a guest Wi-Fi)? {}",
+                        match p.addrs.first() {
+                            Some(a) => format!("It was last at {a}: try `one-mk run --connect {a}`."),
+                            None => "Connect directly with `one-mk run --connect <ip>:24900`.".to_owned(),
+                        }
+                    ),
+                ),
+            };
+            Check { id, title, outcome: out }
+        })
+        .collect()
+}
+
+/// Private IPv4 ranges (RFC 1918): what a home or office LAN uses.
+pub fn network_check(addrs: &[Addr]) -> Check {
+    let title = "Network";
+    let out = if let Some(a) = addrs.iter().find(|a| a.ip.is_private()) {
+        Outcome::pass(format!("Connected to a private network ({} on {}).", a.ip, a.iface))
+    } else if addrs.is_empty() {
+        Outcome::fail(
+            "This computer has no IPv4 address on any active network.",
+            "Connect to your Wi-Fi or plug in a network cable.",
+        )
+    } else {
+        let list: Vec<String> = addrs.iter().map(|a| format!("{} on {}", a.ip, a.iface)).collect();
+        Outcome::warn(
+            format!(
+                "No private (home or office) network address, only {}. This is typical of a guest or public network.",
+                list.join(", ")
+            ),
+            "Join the same normal Wi-Fi or cable network on both computers (not a guest network); \
+             on a VPN or 169.254.x.x address, check the router's DHCP.",
+        )
+    };
+    check("network", title, out)
+}
+
+// ------------------------------------------------------------- renderer --
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Summary {
+    pub pass: usize,
+    pub skip: usize,
+    pub warn: usize,
+    pub fail: usize,
+}
+
+pub fn summarize(checks: &[Check]) -> Summary {
+    let mut s = Summary::default();
+    for c in checks {
+        match c.outcome.status {
+            Status::Pass => s.pass += 1,
+            Status::Skip => s.skip += 1,
+            Status::Warn => s.warn += 1,
+            Status::Fail => s.fail += 1,
+        }
+    }
+    s
+}
+
+pub fn render_text(checks: &[Check]) -> String {
+    let mut out = String::new();
+    for c in checks {
+        out += &format!("{} {}: {}\n", c.outcome.status.tag(), c.title, c.outcome.detail);
+        if let Some(fix) = &c.outcome.fix {
+            out += &format!("       Fix: {fix}\n");
+        }
+    }
+    let s = summarize(checks);
+    out += &match (s.fail, s.warn) {
+        (0, 0) => "\nEverything looks fine. If computers still do not connect, run `one-mk run -v` and read the log.\n"
+            .to_owned(),
+        (0, w) => format!("\nNo problems found, but {w} thing{} worth a look.\n", if w == 1 { " is" } else { "s are" }),
+        (f, _) => format!("\n{f} problem{} found. Fix the [FAIL] lines first.\n", if f == 1 { "" } else { "s" }),
+    };
+    out
+}
+
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `{"ok":bool,"summary":{...},"checks":[{"id","title","status","detail","fix"}]}`
+/// where status is `pass`, `skip`, `warn` or `fail` and `fix` may be null.
+pub fn render_json(checks: &[Check]) -> String {
+    let s = summarize(checks);
+    let items: Vec<String> = checks
+        .iter()
+        .map(|c| {
+            format!(
+                "{{\"id\":{},\"title\":{},\"status\":\"{}\",\"detail\":{},\"fix\":{}}}",
+                json_str(&c.id),
+                json_str(&c.title),
+                c.outcome.status.word(),
+                json_str(&c.outcome.detail),
+                c.outcome.fix.as_deref().map_or("null".to_owned(), json_str),
+            )
+        })
+        .collect();
+    format!(
+        "{{\"ok\":{},\"summary\":{{\"pass\":{},\"skip\":{},\"warn\":{},\"fail\":{}}},\"checks\":[{}]}}\n",
+        s.fail == 0,
+        s.pass,
+        s.skip,
+        s.warn,
+        s.fail,
+        items.join(","),
+    )
+}
+
+// --------------------------------------------------------------- probes --
+
+/// `one-mk doctor`. Exits with status 1 if any check fails.
+pub async fn run(dir: &Path, json: bool) -> Result<()> {
+    let checks = diagnose(dir).await;
+    let text = if json { render_json(&checks) } else { render_text(&checks) };
+    {
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = out.write_all(text.as_bytes());
+        let _ = out.flush();
+    }
+    if summarize(&checks).fail > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+pub async fn diagnose(dir: &Path) -> Vec<Check> {
+    let os = this_os();
+    // The daemon and the config tell the other probes what to look for.
+    let (daemon, config) = tokio::join!(
+        probe_daemon(dir),
+        blocking(
+            {
+                let dir = dir.to_owned();
+                move || probe_config(&dir)
+            },
+            Config { dir_exists: false, has_identity: false, paired: Err("probe failed".into()) },
+        )
+    );
+    let paired = config.paired.clone().unwrap_or_default();
+    let port = daemon.status().map_or(DEFAULT_PORT, |s| s.port);
+
+    // Whose announcements we wait for: this computer's own, and every
+    // paired computer that is not connected.
+    let mut wanted: Vec<String> = Vec::new();
+    if let Some(s) = daemon.status() {
+        wanted.push(s.id.clone());
+    }
+    wanted.extend(
+        paired
+            .iter()
+            .filter(|p| !daemon.status().is_some_and(|s| s.peers.iter().any(|x| x.id == p.id && x.online)))
+            .map(|p| p.id.clone()),
+    );
+
+    let (port_facts, mdns, firewall, portals, addrs) = tokio::join!(
+        blocking(move || probe_port(port), PortFacts { port, bind: Bind::Error("probe failed".into()), holder: None },),
+        probe_mdns(wanted),
+        probe_firewall(os),
+        probe_portals(os, dir.to_owned()),
+        blocking(probe_addrs, Vec::new()),
+    );
+
+    let mut checks = vec![daemon_check(&daemon)];
+    checks.extend(config_checks(&config, dir));
+    checks.push(port_check(&daemon, &port_facts));
+    checks.push(mdns_check(&daemon, &mdns));
+    checks.push(firewall_check(os, &firewall, port));
+    checks.push(portal_check(os, portals.as_ref()));
+    checks.push(network_check(&addrs));
+    let seen = mdns.seen.as_deref().unwrap_or_default();
+    checks.extend(peer_checks(&daemon, &paired, seen));
+    checks
+}
+
+/// Runs a blocking probe off the async thread.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static, fallback: T) -> T {
+    tokio::task::spawn_blocking(f).await.unwrap_or(fallback)
+}
+
+async fn probe_daemon(dir: &Path) -> Daemon {
+    let reply = match tokio::time::timeout(DAEMON_TIMEOUT, control::request(dir, Request::Status)).await {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(e)) => Err(format!("{e:#}")),
+        Err(_) => Err("it did not answer in time".to_owned()),
+    };
+    Daemon::from_reply(reply)
+}
+
+fn probe_config(dir: &Path) -> Config {
+    let paired = TrustStore::load(dir).map_err(|e| format!("{e:#}")).map(|t| {
+        t.devices().iter().map(|d| Paired { id: d.short_id(), name: d.name.clone(), addrs: d.addrs.clone() }).collect()
+    });
+    Config {
+        dir_exists: dir.is_dir(),
+        has_identity: dir.join("identity.key.der").is_file() && dir.join("identity.cert.der").is_file(),
+        paired,
+    }
+}
+
+fn probe_port(port: u16) -> PortFacts {
+    let mut bind = Bind::Free;
+    // The daemon binds dual-stack, so either address family collides with it.
+    for addr in [format!("0.0.0.0:{port}"), format!("[::]:{port}")] {
+        match UdpSocket::bind(&addr) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                bind = Bind::InUse;
+                break;
+            }
+            // No IPv6 on this machine is fine.
+            Err(e) if e.kind() == std::io::ErrorKind::AddrNotAvailable || addr.starts_with('[') => {}
+            Err(e) => {
+                bind = Bind::Error(e.to_string());
+                break;
+            }
+        }
+    }
+    let holder = if bind == Bind::InUse { udp_holder(port) } else { None };
+    PortFacts { port, bind, holder }
+}
+
+/// The program holding a UDP port, found via /proc (Linux, own processes only).
+fn udp_holder(port: u16) -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let inode = ["/proc/net/udp", "/proc/net/udp6"]
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .find_map(|t| udp_inode_for_port(&t, port))?;
+    let want = format!("socket:[{inode}]");
+    for pid in std::fs::read_dir("/proc").ok()?.flatten() {
+        let Ok(fds) = std::fs::read_dir(pid.path().join("fd")) else {
+            continue;
+        };
+        if fds.flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|l| l.to_string_lossy() == want)) {
+            return std::fs::read_to_string(pid.path().join("comm")).ok().map(|c| c.trim().to_owned());
+        }
+    }
+    None
+}
+
+/// The socket inode in a `/proc/net/udp` table for a local `port`.
+fn udp_inode_for_port(table: &str, port: u16) -> Option<u64> {
+    table.lines().skip(1).find_map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        let local_port = u16::from_str_radix(f.get(1)?.rsplit_once(':')?.1, 16).ok()?;
+        (local_port == port).then(|| f.get(9)?.parse().ok()).flatten()
+    })
+}
+
+async fn probe_mdns(wanted: Vec<String>) -> MdnsFacts {
+    let join = blocking(
+        || -> Result<(), String> {
+            let s = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
+            s.join_multicast_v4(&MDNS_GROUP, &Ipv4Addr::UNSPECIFIED).map_err(|e| e.to_string())
+        },
+        Err("probe failed".to_owned()),
+    );
+    // A throwaway identity: browsing never advertises, and this way our own
+    // daemon's announcement is not filtered out as "ourselves".
+    let seen = async {
+        let id = Identity::ephemeral().map_err(|e| format!("{e:#}"))?;
+        let (_discovery, mut rx) = Discovery::browse(&id).map_err(|e| format!("{e:#}"))?;
+        let mut seen: Vec<Seen> = Vec::new();
+        let done = |seen: &[Seen]| wanted.iter().all(|w| seen.iter().any(|s| &s.id == w));
+        let _ = tokio::time::timeout(MDNS_WINDOW, async {
+            while !done(&seen) {
+                let Some(Found { fingerprint, addrs, .. }) = rx.recv().await else {
+                    break;
+                };
+                if addrs.is_empty() {
+                    continue; // nothing to connect to yet; a later answer has addresses
+                }
+                let id = fingerprint.short();
+                let addrs = addrs.iter().map(|a| a.to_string());
+                match seen.iter_mut().find(|s| s.id == id) {
+                    Some(s) => s.addrs.extend(addrs),
+                    None => seen.push(Seen { id, addrs: addrs.collect() }),
+                }
+            }
+        })
+        .await;
+        Ok::<_, String>(seen)
+    };
+    let (join, seen) = tokio::join!(join, seen);
+    MdnsFacts { join, seen }
+}
+
+async fn probe_firewall(os: Os) -> Firewall {
+    if os != Os::Linux {
+        return Firewall::default();
+    }
+    blocking(
+        || {
+            let ufw_active = match std::fs::read_to_string("/etc/ufw/ufw.conf") {
+                Ok(c) => Some(c.lines().any(|l| l.trim().eq_ignore_ascii_case("ENABLED=yes"))),
+                // No such file: ufw is not installed, so it is not on. Anything
+                // else (permissions): ask systemd, which anyone may.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+                Err(_) => run_with_timeout("systemctl", &["is-active", "ufw"]).map(|o| o.trim() == "active"),
+            };
+            let ufw_rules =
+                (ufw_active == Some(true)).then(|| std::fs::read_to_string("/etc/ufw/user.rules").ok()).flatten();
+            let firewalld = run_with_timeout("firewall-cmd", &["--state"])
+                .filter(|s| s.trim() == "running")
+                .and_then(|_| run_with_timeout("firewall-cmd", &["--list-all"]))
+                .map(|all| Firewalld { ports: field(&all, "ports:"), services: field(&all, "services:") });
+            Firewall { ufw_active, ufw_rules, firewalld }
+        },
+        Firewall::default(),
+    )
+    .await
+}
+
+/// The value of a `key: value` line in `firewall-cmd --list-all` output.
+fn field(all: &str, key: &str) -> String {
+    all.lines().find_map(|l| l.trim().strip_prefix(key)).unwrap_or_default().trim().to_owned()
+}
+
+/// Output of a command, or `None` if it is missing, fails or takes too long.
+fn run_with_timeout(program: &str, args: &[&str]) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait().ok()? {
+            Some(st) if st.success() => break,
+            Some(_) => return None,
+            None if start.elapsed() > COMMAND_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    Some(out)
+}
+
+#[cfg(target_os = "linux")]
+async fn probe_portals(os: Os, dir: std::path::PathBuf) -> Option<Portals> {
+    if os != Os::Linux {
+        return None;
+    }
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    let wayland = session == "wayland" || (session.is_empty() && std::env::var_os("WAYLAND_DISPLAY").is_some());
+    let probe = tokio::time::timeout(PORTAL_TIMEOUT, one_mk_input::probe_portals()).await;
+    let (remote_desktop, input_capture) = match probe {
+        Ok(p) => (Some(p.remote_desktop), Some(p.input_capture)),
+        Err(_) => (None, None),
+    };
+    Some(Portals { wayland, remote_desktop, input_capture, token: dir.join("remote-desktop.token").is_file() })
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn probe_portals(_os: Os, _dir: std::path::PathBuf) -> Option<Portals> {
+    None
+}
+
+fn probe_addrs() -> Vec<Addr> {
+    let all = if_addrs::get_if_addrs().unwrap_or_default();
+    usable_addrs(all.iter().filter(|i| i.is_oper_up()).filter_map(|i| match &i.addr {
+        if_addrs::IfAddr::V4(a) => Some((i.name.as_str(), a.ip)),
+        _ => None,
+    }))
+}
+
+/// Addresses that could reach another computer: not loopback, not a
+/// container or VM bridge.
+fn usable_addrs<'a>(all: impl Iterator<Item = (&'a str, Ipv4Addr)>) -> Vec<Addr> {
+    all.filter(|(name, ip)| !ip.is_loopback() && !ip.is_unspecified() && !is_virtual_interface(name))
+        .map(|(name, ip)| Addr { iface: name.to_owned(), ip })
+        .collect()
+}
+
+// ---------------------------------------------------------------- tests --
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use one_mk_proto::Side;
+
+    fn status(id: &str, port: u16, peers: &[(&str, bool)]) -> DaemonStatus {
+        DaemonStatus {
+            name: "desk".into(),
+            id: id.into(),
+            port,
+            controlling: None,
+            controlled_by: None,
+            peers: peers
+                .iter()
+                .map(|(pid, online)| crate::manage::PeerStatus {
+                    id: (*pid).into(),
+                    name: "laptop".into(),
+                    side: Side::Right,
+                    os: 0,
+                    online: *online,
+                    swap: "auto".into(),
+                })
+                .collect(),
+        }
+    }
+
+    fn running() -> Daemon {
+        Daemon::Running(status("aaaa-aaaa", 24900, &[]))
+    }
+
+    fn st(c: &Check) -> Status {
+        c.outcome.status
+    }
+
+    #[test]
+    fn daemon_states() {
+        assert_eq!(st(&daemon_check(&running())), Status::Pass);
+        let down = daemon_check(&Daemon::NotRunning);
+        assert_eq!(st(&down), Status::Fail);
+        assert!(down.outcome.fix.unwrap().contains("one-mk run"));
+        assert_eq!(st(&daemon_check(&Daemon::Broken("x".into()))), Status::Fail);
+    }
+
+    #[test]
+    fn daemon_from_reply() {
+        assert_eq!(Daemon::from_reply(Ok(None)), Daemon::NotRunning);
+        assert!(matches!(Daemon::from_reply(Err("boom".into())), Daemon::Broken(_)));
+        assert!(matches!(Daemon::from_reply(Ok(Some("garbage".into()))), Daemon::Broken(_)));
+        let s = status("aaaa-aaaa", 24900, &[("bbbb-bbbb", true)]);
+        assert_eq!(Daemon::from_reply(Ok(Some(s.encode()))), Daemon::Running(s));
+    }
+
+    fn cfg(dir: bool, id: bool, paired: Result<Vec<Paired>, String>) -> Vec<Check> {
+        config_checks(&Config { dir_exists: dir, has_identity: id, paired }, Path::new("/x/one-mk"))
+    }
+
+    fn paired(id: &str) -> Paired {
+        Paired { id: id.into(), name: "laptop".into(), addrs: vec![] }
+    }
+
+    #[test]
+    fn config_fresh_machine_is_not_paired() {
+        let c = cfg(false, false, Ok(vec![]));
+        assert_eq!(c.iter().map(st).collect::<Vec<_>>(), [Status::Warn, Status::Skip, Status::Fail]);
+        assert!(c[2].outcome.fix.as_ref().unwrap().contains("one-mk pair"));
+    }
+
+    #[test]
+    fn config_identity_without_peers() {
+        let c = cfg(true, true, Ok(vec![]));
+        assert_eq!(c.iter().map(st).collect::<Vec<_>>(), [Status::Pass, Status::Pass, Status::Fail]);
+        let c = cfg(true, false, Ok(vec![]));
+        assert_eq!(st(&c[1]), Status::Warn);
+    }
+
+    #[test]
+    fn config_paired_and_corrupt() {
+        let c = cfg(true, true, Ok(vec![paired("bbbb-bbbb"), paired("cccc-cccc")]));
+        assert_eq!(st(&c[2]), Status::Pass);
+        assert!(c[2].outcome.detail.contains("2 computers"));
+        assert_eq!(st(&cfg(true, true, Err("bad toml".into()))[2]), Status::Fail);
+    }
+
+    fn pf(bind: Bind, holder: Option<&str>) -> PortFacts {
+        PortFacts { port: 24900, bind, holder: holder.map(str::to_owned) }
+    }
+
+    #[test]
+    fn port_decisions() {
+        assert_eq!(st(&port_check(&running(), &pf(Bind::InUse, None))), Status::Pass);
+        assert_eq!(st(&port_check(&running(), &pf(Bind::Free, None))), Status::Fail);
+        assert_eq!(st(&port_check(&Daemon::NotRunning, &pf(Bind::Free, None))), Status::Pass);
+        let other = port_check(&Daemon::NotRunning, &pf(Bind::InUse, Some("deskflow")));
+        assert_eq!(st(&other), Status::Fail);
+        assert!(other.outcome.detail.contains("deskflow"));
+        assert!(other.outcome.fix.unwrap().contains("--port"));
+        assert_eq!(st(&port_check(&Daemon::NotRunning, &pf(Bind::InUse, None))), Status::Fail);
+        assert_eq!(st(&port_check(&running(), &pf(Bind::Error("denied".into()), None))), Status::Warn);
+    }
+
+    #[test]
+    fn port_holder_from_proc_table() {
+        let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n\
+                     1234: 00000000:6144 00000000:0000 07 00000000:00000000 00:00000000 00000000  1000        0 987654 2 0000000000000000 0\n\
+                     1235: 0100007F:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000   101        0 111 2 0000000000000000 0\n";
+        assert_eq!(udp_inode_for_port(table, 24900), Some(987654));
+        assert_eq!(udp_inode_for_port(table, 53), Some(111));
+        assert_eq!(udp_inode_for_port(table, 80), None);
+    }
+
+    fn mdns(join: Result<(), &str>, seen: Result<Vec<Seen>, &str>) -> MdnsFacts {
+        MdnsFacts { join: join.map_err(str::to_owned), seen: seen.map_err(str::to_owned) }
+    }
+
+    fn seen(id: &str) -> Seen {
+        Seen { id: id.into(), addrs: vec!["192.168.1.5:24900".into()] }
+    }
+
+    #[test]
+    fn mdns_decisions() {
+        let m = mdns(Err("no route"), Ok(vec![]));
+        assert_eq!(st(&mdns_check(&running(), &m)), Status::Fail);
+        let m = mdns(Ok(()), Err("no socket"));
+        assert_eq!(st(&mdns_check(&running(), &m)), Status::Fail);
+        // Daemon up and its own announcement seen.
+        let m = mdns(Ok(()), Ok(vec![seen("aaaa-aaaa")]));
+        assert_eq!(st(&mdns_check(&running(), &m)), Status::Pass);
+        // Daemon up, nothing seen: no discovery or blocked multicast.
+        let m = mdns(Ok(()), Ok(vec![seen("bbbb-bbbb")]));
+        let c = mdns_check(&running(), &m);
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.fix.unwrap().contains("--no-discovery"));
+        // No daemon: multicast working is enough.
+        let m = mdns(Ok(()), Ok(vec![]));
+        assert_eq!(st(&mdns_check(&Daemon::NotRunning, &m)), Status::Pass);
+    }
+
+    #[test]
+    fn port_lists() {
+        assert!(port_listed("24900/udp", 24900));
+        assert!(port_listed("80/tcp 24000-25000/udp", 24900));
+        assert!(!port_listed("24900/tcp", 24900));
+        assert!(!port_listed("24901/udp 5353/udp", 24900));
+        assert!(!port_listed("", 24900));
+        assert!(!port_listed("junk 1-x/udp", 24900));
+    }
+
+    #[test]
+    fn ufw_rule_parsing() {
+        let rules = "-A ufw-user-input -p tcp --dport 22 -j ACCEPT\n\
+                     -A ufw-user-input -p udp --dport 24900 -j ACCEPT\n";
+        assert!(ufw_allows(rules, 24900));
+        assert!(!ufw_allows(rules, 22));
+        assert!(!ufw_allows("-A ufw-user-input -p udp --dport 24900 -j DROP\n", 24900));
+        assert!(ufw_allows("-A ufw-user-input -p udp -m multiport --dports 5000:25000,30000 -j ACCEPT\n", 24900));
+        assert!(!ufw_allows("", 24900));
+    }
+
+    fn fw(ufw: Option<bool>, rules: Option<&str>, firewalld: Option<(&str, &str)>) -> Firewall {
+        Firewall {
+            ufw_active: ufw,
+            ufw_rules: rules.map(str::to_owned),
+            firewalld: firewalld.map(|(p, s)| Firewalld { ports: p.into(), services: s.into() }),
+        }
+    }
+
+    #[test]
+    fn firewall_none_active_passes() {
+        assert_eq!(st(&firewall_check(Os::Linux, &fw(Some(false), None, None), 24900)), Status::Pass);
+    }
+
+    #[test]
+    fn firewall_unknown_degrades_to_warn() {
+        let c = firewall_check(Os::Linux, &fw(None, None, None), 24900);
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.fix.unwrap().contains("24900"));
+        // ufw on but rules unreadable (no root): "couldn't tell", never a failure.
+        let c = firewall_check(Os::Linux, &fw(Some(true), None, None), 24900);
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.fix.unwrap().contains("sudo ufw allow 24900/udp"));
+    }
+
+    #[test]
+    fn firewall_ufw_rules_known() {
+        let allow = "-A ufw-user-input -p udp --dport 24900 -j ACCEPT\n";
+        assert_eq!(st(&firewall_check(Os::Linux, &fw(Some(true), Some(allow), None), 24900)), Status::Pass);
+        let c = firewall_check(
+            Os::Linux,
+            &fw(Some(true), Some("-A ufw-user-input -p tcp --dport 22 -j ACCEPT\n"), None),
+            24900,
+        );
+        assert_eq!(st(&c), Status::Fail);
+        assert!(c.outcome.fix.unwrap().contains("ufw allow 24900/udp"));
+    }
+
+    #[test]
+    fn firewall_firewalld() {
+        let ok = firewall_check(Os::Linux, &fw(Some(false), None, Some(("24900/udp", "ssh mdns"))), 24900);
+        assert_eq!(st(&ok), Status::Pass);
+        let no_port = firewall_check(Os::Linux, &fw(Some(false), None, Some(("", "ssh mdns"))), 24900);
+        assert_eq!(st(&no_port), Status::Fail);
+        let fix = no_port.outcome.fix.unwrap();
+        assert!(fix.contains("--add-port=24900/udp") && !fix.contains("mdns"));
+        let no_mdns = firewall_check(Os::Linux, &fw(Some(false), None, Some(("1025-65535/udp", "ssh"))), 24900);
+        assert_eq!(st(&no_mdns), Status::Pass); // 5353 is inside the range
+        let nothing = firewall_check(Os::Linux, &fw(Some(false), None, Some(("", ""))), 24900);
+        let fix = nothing.outcome.fix.unwrap();
+        assert!(fix.contains("--add-port=24900/udp") && fix.contains("--add-service=mdns"));
+    }
+
+    #[test]
+    fn firewall_other_os_is_a_hint() {
+        for os in [Os::Windows, Os::Mac, Os::Other] {
+            let c = firewall_check(os, &Firewall::default(), 24900);
+            assert_eq!(st(&c), Status::Skip);
+            assert!(c.outcome.fix.is_none());
+        }
+        assert!(firewall_check(Os::Windows, &Firewall::default(), 24900).outcome.detail.contains("Windows"));
+    }
+
+    #[test]
+    fn firewalld_list_all_fields() {
+        let all = "public (default, active)\n  target: default\n  services: dhcpv6-client ssh\n  ports: 24900/udp 80/tcp\n  protocols:\n";
+        assert_eq!(field(all, "ports:"), "24900/udp 80/tcp");
+        assert_eq!(field(all, "services:"), "dhcpv6-client ssh");
+        assert_eq!(field(all, "missing:"), "");
+    }
+
+    fn portals(rd: Option<Result<(), &str>>, ic: Option<Result<(), &str>>, wayland: bool, token: bool) -> Portals {
+        Portals {
+            wayland,
+            remote_desktop: rd.map(|r| r.map_err(str::to_owned)),
+            input_capture: ic.map(|r| r.map_err(str::to_owned)),
+            token,
+        }
+    }
+
+    #[test]
+    fn portal_decisions() {
+        let ok = Some(Ok(()));
+        let c = portal_check(Os::Linux, Some(&portals(ok, ok, true, true)));
+        assert_eq!(st(&c), Status::Pass);
+        let c = portal_check(Os::Linux, Some(&portals(ok, ok, true, false)));
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.fix.unwrap().contains("one-mk run"));
+        let c = portal_check(Os::Linux, Some(&portals(Some(Err("not found")), ok, true, true)));
+        assert_eq!(st(&c), Status::Fail);
+        let c = portal_check(Os::Linux, Some(&portals(ok, Some(Err("no")), true, true)));
+        assert_eq!(st(&c), Status::Fail);
+        let c = portal_check(Os::Linux, Some(&portals(None, None, true, true)));
+        assert_eq!(st(&c), Status::Warn);
+        let c = portal_check(Os::Linux, Some(&portals(ok, ok, false, true)));
+        assert_eq!(st(&c), Status::Warn);
+        assert_eq!(st(&portal_check(Os::Windows, None)), Status::Skip);
+        assert_eq!(st(&portal_check(Os::Mac, None)), Status::Skip);
+    }
+
+    #[test]
+    fn peer_decisions() {
+        let paired = vec![paired("bbbb-bbbb")];
+        let up = Daemon::Running(status("aaaa-aaaa", 24900, &[("bbbb-bbbb", true)]));
+        let c = peer_checks(&up, &paired, &[]);
+        assert_eq!(st(&c[0]), Status::Pass);
+        assert_eq!(c[0].id, "peer:bbbb-bbbb");
+
+        let down = Daemon::Running(status("aaaa-aaaa", 24900, &[("bbbb-bbbb", false)]));
+        let c = peer_checks(&down, &paired, &[seen("bbbb-bbbb")]);
+        assert_eq!(st(&c[0]), Status::Warn);
+        assert!(c[0].outcome.detail.contains("192.168.1.5:24900"));
+        assert!(c[0].outcome.fix.as_ref().unwrap().contains("firewall"));
+
+        let c = peer_checks(&down, &paired, &[]);
+        assert_eq!(st(&c[0]), Status::Warn);
+        assert!(c[0].outcome.detail.contains("not found"));
+
+        let c = peer_checks(&Daemon::NotRunning, &paired, &[seen("bbbb-bbbb")]);
+        assert!(c[0].outcome.fix.as_ref().unwrap().contains("one-mk run"));
+
+        let mut with_addr = paired.clone();
+        with_addr[0].addrs = vec!["10.0.0.7:24900".into()];
+        let c = peer_checks(&down, &with_addr, &[]);
+        assert!(c[0].outcome.fix.as_ref().unwrap().contains("--connect 10.0.0.7:24900"));
+        assert!(peer_checks(&down, &[], &[]).is_empty());
+    }
+
+    fn addr(iface: &str, ip: [u8; 4]) -> Addr {
+        Addr { iface: iface.into(), ip: Ipv4Addr::from(ip) }
+    }
+
+    #[test]
+    fn network_decisions() {
+        let c = network_check(&[addr("wlan0", [192, 168, 1, 20])]);
+        assert_eq!(st(&c), Status::Pass);
+        assert_eq!(st(&network_check(&[addr("eth0", [10, 1, 2, 3])])), Status::Pass);
+        assert_eq!(st(&network_check(&[addr("eth0", [172, 16, 0, 9])])), Status::Pass);
+        let guest = network_check(&[addr("wlan0", [100, 64, 3, 3])]);
+        assert_eq!(st(&guest), Status::Warn);
+        assert!(guest.outcome.detail.contains("100.64.3.3"));
+        assert_eq!(st(&network_check(&[addr("wlan0", [169, 254, 1, 1])])), Status::Warn);
+        assert_eq!(st(&network_check(&[])), Status::Fail);
+    }
+
+    #[test]
+    fn usable_addrs_skip_loopback_and_bridges() {
+        let all = [
+            ("lo", Ipv4Addr::LOCALHOST),
+            ("docker0", Ipv4Addr::new(172, 17, 0, 1)),
+            ("wlan0", Ipv4Addr::new(192, 168, 1, 4)),
+        ];
+        assert_eq!(usable_addrs(all.into_iter()), [addr("wlan0", [192, 168, 1, 4])]);
+    }
+
+    #[test]
+    fn render_text_lists_fixes_and_summary() {
+        let checks = vec![
+            check("a", "Fine", Outcome::pass("all good")),
+            check("b", "Broken", Outcome::fail("it broke", "turn it on")),
+        ];
+        let t = render_text(&checks);
+        assert!(t.contains("[ ok ] Fine: all good"));
+        assert!(t.contains("[FAIL] Broken: it broke\n       Fix: turn it on\n"));
+        assert!(t.contains("1 problem found"));
+        let fine = render_text(&checks[..1]);
+        assert!(fine.contains("Everything looks fine"));
+        let warn = render_text(&[check("w", "W", Outcome::warn("hm", "look"))]);
+        assert!(warn.contains("No problems found, but 1 thing is worth a look"));
+    }
+
+    #[test]
+    fn render_json_escapes_and_reports() {
+        let checks = vec![
+            check("a", "Say \"hi\"", Outcome::pass("line\nbreak\\ \u{1}")),
+            check("b", "B", Outcome::fail("d", "fix it")),
+        ];
+        let j = render_json(&checks);
+        assert!(j.starts_with("{\"ok\":false,\"summary\":{\"pass\":1,\"skip\":0,\"warn\":0,\"fail\":1},\"checks\":["));
+        assert!(j.contains(r#""title":"Say \"hi\"""#));
+        assert!(j.contains(r#""detail":"line\nbreak\\ \u0001""#));
+        assert!(j.contains(r#""status":"pass","detail":"line\nbreak\\ \u0001","fix":null"#));
+        assert!(j.contains(r#""status":"fail","detail":"d","fix":"fix it""#));
+        assert!(render_json(&checks[..1]).starts_with("{\"ok\":true"));
+    }
+
+    #[test]
+    fn summary_counts() {
+        let checks = vec![
+            check("a", "", Outcome::pass("")),
+            check("b", "", Outcome::skip("")),
+            check("c", "", Outcome::warn("", "")),
+            check("d", "", Outcome::fail("", "")),
+        ];
+        assert_eq!(summarize(&checks), Summary { pass: 1, skip: 1, warn: 1, fail: 1 });
+    }
+}

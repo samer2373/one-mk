@@ -114,7 +114,7 @@ fn host_name(fp: &Fingerprint) -> String {
 /// Interfaces that only lead to containers, VMs or this machine itself.
 /// Advertising their addresses made peers dial e.g. Docker's 172.17.0.1,
 /// which on their side is their own Docker bridge.
-fn is_virtual(name: &str) -> bool {
+pub fn is_virtual(name: &str) -> bool {
     const PREFIXES: [&str; 15] = [
         "docker", "br-", "veth", "virbr", "vnet", "vmnet", "vboxnet", "lxcbr", "lxdbr", "incusbr", "podman",
         "cni", "flannel", "cali", "vEthernet",
