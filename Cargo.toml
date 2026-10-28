@@ -13,3 +13,9 @@ codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = 3
+
+# For measuring only: the fat-LTO release profile can run out of memory.
+[profile.bench-opt]
+inherits = "release"
+lto = false
+codegen-units = 16

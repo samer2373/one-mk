@@ -15,6 +15,9 @@ pub enum StreamKind {
     Clipboard = 3,
     /// A sequence of files; see [`FileMsg`](crate::FileMsg).
     File = 4,
+    /// A paired device measuring latency: the peer echoes its `Probe`
+    /// datagrams on this connection. Never a link, never replaces one.
+    Probe = 5,
 }
 
 impl StreamKind {
@@ -24,6 +27,7 @@ impl StreamKind {
             2 => Some(Self::Pairing),
             3 => Some(Self::Clipboard),
             4 => Some(Self::File),
+            5 => Some(Self::Probe),
             _ => None,
         }
     }
@@ -487,13 +491,13 @@ mod tests {
 
     #[test]
     fn stream_kind_round_trip() {
-        for k in [StreamKind::Control, StreamKind::Pairing, StreamKind::Clipboard, StreamKind::File] {
+        for k in [StreamKind::Control, StreamKind::Pairing, StreamKind::Clipboard, StreamKind::File, StreamKind::Probe] {
             assert_eq!(StreamKind::from_u8(k as u8), Some(k));
         }
         assert_eq!(StreamKind::Clipboard as u8, 3);
         assert_eq!(StreamKind::File as u8, 4);
         assert_eq!(StreamKind::from_u8(0), None);
-        assert_eq!(StreamKind::from_u8(5), None);
+        assert_eq!(StreamKind::from_u8(6), None);
     }
 
     #[test]

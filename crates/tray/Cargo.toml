@@ -1,0 +1,20 @@
+[package]
+name = "one-mk-tray"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "one-mk-tray"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+one-mk-ctl = { version = "0.1.0", path = "../ctl" }
+one-mk-proto = { version = "0.1.0", path = "../proto" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tao = { version = "0.37.2", default-features = false }
+tray-icon = { version = "0.26.1", default-features = false }

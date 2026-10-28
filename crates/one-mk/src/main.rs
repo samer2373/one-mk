@@ -129,6 +129,9 @@ enum Cmd {
         /// Measure against `one-mk bench --serve` on another machine, e.g. 192.168.1.20:24901.
         #[arg(long, value_name = "IP:PORT")]
         connect: Option<SocketAddr>,
+        /// Measure against the running `one-mk run` on a paired computer (name or id).
+        #[arg(long, value_name = "DEVICE", conflicts_with_all = ["serve", "connect"])]
+        peer: Option<String>,
     },
 }
 
@@ -224,8 +227,8 @@ fn run(cli: Cli) -> Result<()> {
                 println!("fingerprint {}", id.fingerprint);
                 Ok(())
             }
-            Cmd::Bench { count, rate, serve, connect } => {
-                bench::run(bench::Options { count, rate: rate.max(1), serve, connect }).await
+            Cmd::Bench { count, rate, serve, connect, peer } => {
+                bench::run(&dir, bench::Options { count, rate: rate.max(1), serve, connect, peer }).await
             }
         }
     })

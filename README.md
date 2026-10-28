@@ -117,6 +117,41 @@ you can take it back:
 - **Easy.** No server/client roles, no IP addresses (mDNS discovery), no
   certificates to copy, no root and no udev rules on Linux.
 
+## Tray icon (optional)
+
+`one-mk-tray` is a small separate program that puts a one-mk icon in the
+system tray (menu bar on macOS). one-mk works the same without it; it only
+saves you typing commands. Start it by running `one-mk-tray` (or turn on
+"Start at login" in its menu). It must sit in the same folder as `one-mk`.
+The menu shows:
+
+- whether one-mk is running and who it is connected to ("Connected to desk
+  (on your right)");
+- each paired computer, with a submenu to move it left, right, above or
+  below (applied at once, like `one-mk layout`);
+- **Take back control**, **Start one-mk** (when it is not running) and
+  **Start at login**;
+- **Quit tray**, which closes only the tray, not one-mk.
+
+On Windows `one-mk install` then starts the tray at login and the tray
+starts one-mk hidden, so no console window appears (without the tray, the
+login entry runs `one-mk run` and shows one). On Linux and macOS
+`one-mk install` also starts the tray at login if it is installed. Use
+`one-mk-tray --home <dir>` for a non-default settings folder.
+
+It is light: no window, no web view, and it never polls. It sleeps until
+the system wakes it, and the cost is a few MB of memory.
+
+- **Linux** uses the StatusNotifierItem protocol directly (no GTK). KDE
+  Plasma shows it natively; GNOME needs the "AppIndicator and KStatusNotifierItem
+  Support" extension (preinstalled on Ubuntu). The menu is refreshed each time
+  you open it. The icon colour (pink connected, grey not) updates at those
+  moments too.
+- **Windows** refreshes when the pointer reaches the icon.
+- **macOS** cannot tell us when the menu opens, so while one-mk is running
+  the tray looks at it every 5 seconds (one tiny local request); it does
+  nothing when one-mk is not running.
+
 ## Security
 
 - Mutual TLS 1.3 over QUIC. Computers are pinned by certificate fingerprint
@@ -170,13 +205,15 @@ crates/proto      wire format + pure pointer/edge/key logic (no I/O, unit-tested
 crates/net        identity, QUIC, pairing, trusted devices, mDNS discovery
 crates/input      platform input: Linux (XDG portals + libei), Windows, macOS
 crates/clipboard  system clipboard on its own thread (arboard)
+crates/ctl        client for the daemon's control channel, status format, login settings
+crates/tray       one-mk-tray: the optional tray icon
 crates/one-mk     the daemon and CLI
 ```
 
 ## Building
 
 ```bash
-cargo build --release      # target/release/one-mk
+cargo build --release      # target/release/one-mk and one-mk-tray
 cargo test
 ```
 
@@ -193,6 +230,6 @@ background apps, so there it goes through XWayland.
 3. macOS backend: written and unit-tested; needs testing on real machines
 4. Done: clipboard (text, HTML, images), file transfer, live layout sync,
    Ctrl/Cmd swapping, start at login
-5. **Next: a tray app** with a drag-and-drop layout editor and
-   "push toward it" layout learning
+5. Done: a small tray icon (status, sides, take back, start at login).
+   **Next:** a drag-and-drop layout editor and "push toward it" layout learning
 6. Gaming mode (relative motion), connection doctor, auto-update

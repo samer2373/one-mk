@@ -5,11 +5,12 @@
 //!   running `one-mk bench --serve`
 //! - CPU: process CPU time while streaming events at mouse rates
 
-use anyhow::Result;
-use one_mk_net::{Identity, Node};
-use one_mk_proto::{Datagram, Desktop, MotionReceiver, Rect, RemoteCursor, Side, Step};
+use anyhow::{Context, Result};
+use one_mk_net::{Identity, Node, TrustStore};
+use one_mk_proto::{Datagram, StreamKind, Desktop, MotionReceiver, Rect, RemoteCursor, Side, Step};
 use std::hint::black_box;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,27 +21,45 @@ pub struct Options {
     pub rate: u32,
     pub serve: Option<u16>,
     pub connect: Option<SocketAddr>,
+    /// A paired device running the daemon.
+    pub peer: Option<String>,
 }
 
-pub async fn run(opts: Options) -> Result<()> {
+pub async fn run(dir: &Path, opts: Options) -> Result<()> {
     if let Some(port) = opts.serve {
         return serve(port).await;
     }
 
     let ns = protocol_cost();
 
-    let client = Node::bind_any(Arc::new(Identity::ephemeral()?), 0)?;
-    let (target, label) = match opts.connect {
-        Some(addr) => (addr, format!("to {addr}")),
-        None => {
-            let server = Node::bind(Arc::new(Identity::ephemeral()?), "127.0.0.1:0".parse()?)?;
-            let addr = server.local_addr()?;
-            tokio::spawn(echo(server));
-            (addr, "loopback".to_owned())
-        }
+    let (client, conn, label) = if let Some(query) = &opts.peer {
+        let identity = Arc::new(Identity::load_or_create(dir)?);
+        let trust = TrustStore::load(dir)?;
+        let device = trust
+            .find(query)
+            .with_context(|| format!("no paired computer called {query:?} (see `one-mk devices`)"))?
+            .clone();
+        let fp = device.fingerprint().context("corrupt fingerprint in devices.toml")?;
+        let node = Node::bind_any(identity.clone(), 0)?;
+        let peer = crate::send::find(&node, &identity, &device, fp, Vec::new()).await?;
+        // Tells the daemon this connection only echoes probes.
+        peer.open_stream(StreamKind::Probe).await?;
+        let label = format!("to {} ({})", device.name, peer.conn.remote_address());
+        (node, peer.conn, label)
+    } else {
+        let client = Node::bind_any(Arc::new(Identity::ephemeral()?), 0)?;
+        let (target, label) = match opts.connect {
+            Some(addr) => (addr, format!("to {addr}")),
+            None => {
+                let server = Node::bind(Arc::new(Identity::ephemeral()?), "127.0.0.1:0".parse()?)?;
+                let addr = server.local_addr()?;
+                tokio::spawn(echo(server));
+                (addr, "loopback".to_owned())
+            }
+        };
+        let peer = client.connect_timeout(target, DIAL_TIMEOUT).await?;
+        (client, peer.conn, label)
     };
-    let peer = client.connect_timeout(target, DIAL_TIMEOUT).await?;
-    let conn = peer.conn;
 
     println!("one-mk bench ({label}, {} events at {} Hz)", opts.count, opts.rate);
     println!("  protocol cost   {ns:.0} ns per mouse event (move, encode, decode, filter)");
@@ -97,7 +116,7 @@ pub async fn run(opts: Options) -> Result<()> {
     println!("  one-way         ~{:.0} µs typical (half the round trip)", q(0.5) / 2.0);
     println!("  lost            {} of {}", opts.count as usize - rtts.len(), opts.count);
     if let Some(cpu) = cpu {
-        let who = if opts.connect.is_some() { "this end" } else { "both ends" };
+        let who = if opts.connect.is_some() || opts.peer.is_some() { "this end" } else { "both ends" };
         println!(
             "  CPU             {:.2}% of one core ({who}) at {} events/s",
             cpu.as_secs_f64() / wall.as_secs_f64() * 100.0,

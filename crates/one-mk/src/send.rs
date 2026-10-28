@@ -103,7 +103,7 @@ fn pick<'a>(trust: &'a TrustStore, to: Option<&str>) -> Result<&'a Device> {
 /// Dials the device at its saved addresses, `--connect` addresses, and
 /// wherever mDNS finds it; the first connection with the right
 /// certificate wins.
-async fn find(node: &Node, identity: &Identity, device: &Device, fp: Fingerprint, connect: Vec<SocketAddr>) -> Result<Peer> {
+pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, fp: Fingerprint, connect: Vec<SocketAddr>) -> Result<Peer> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Peer>();
     let mut dialed = HashSet::new();
     let mut dial = |addr: SocketAddr| {

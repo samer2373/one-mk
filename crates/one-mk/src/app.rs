@@ -571,6 +571,19 @@ async fn establish(
                 serve_streams(peer.conn, peer.fingerprint, device_name, services, (kind, send, recv)).await;
                 return;
             }
+            Ok(Ok((StreamKind::Probe, _send, _recv))) => {
+                // `one-mk bench --peer`: echo its probes on this connection
+                // only; the link (and its rank) is not involved.
+                tracing::debug!(peer = %device_name, %addr, "probe connection");
+                drop(permit);
+                while let Ok(b) = peer.conn.read_datagram().await {
+                    if let Ok(Datagram::Probe { id, sent_ns }) = Datagram::decode(&b) {
+                        let (e, n) = Datagram::ProbeEcho { id, sent_ns }.encode();
+                        let _ = peer.conn.send_datagram(bytes::Bytes::copy_from_slice(&e[..n]));
+                    }
+                }
+                return;
+            }
             Ok(Ok((kind, ..))) => Err(anyhow::anyhow!("unexpected first stream {kind:?}")),
             Ok(Err(e)) => Err(e),
             Err(_) => Err(anyhow::anyhow!("peer opened no stream")),

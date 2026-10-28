@@ -10,6 +10,7 @@ bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 directories = "6.0.0"
 fs4 = "1.1.0"
+one-mk-ctl = { version = "0.1.0", path = "../ctl" }
 one-mk-clipboard = { version = "0.1.0", path = "../clipboard" }
 one-mk-input = { version = "0.1.0", path = "../input" }
 one-mk-net = { version = "0.1.0", path = "../net" }

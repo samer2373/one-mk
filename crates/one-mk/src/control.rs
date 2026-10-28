@@ -15,30 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Request {
-    /// Who we are, who is paired and online, and who controls whom.
-    Status,
-    /// `devices.toml` changed: apply it now.
-    Reload,
-    /// End the control of whichever peer controls this machine, as if
-    /// this machine's own mouse or keyboard had been used.
-    TakeBack,
-}
-
-impl Request {
-    fn name(self) -> &'static str {
-        match self {
-            Request::Status => "status",
-            Request::Reload => "reload",
-            Request::TakeBack => "takeback",
-        }
-    }
-
-    fn parse(s: &str) -> Option<Self> {
-        [Request::Status, Request::Reload, Request::TakeBack].into_iter().find(|r| r.name() == s)
-    }
-}
+pub use one_mk_ctl::client::Request;
 
 /// A request and where to send the reply text.
 pub type Pending = (Request, oneshot::Sender<String>);
@@ -153,7 +130,7 @@ mod unix {
     pub struct Listener(UnixListener);
 
     pub fn path(dir: &Path) -> PathBuf {
-        dir.join("control.sock")
+        one_mk_ctl::client::unix_socket_path(dir)
     }
 
     pub fn bind(dir: &Path) -> anyhow::Result<Listener> {
@@ -195,7 +172,7 @@ mod tcp {
     }
 
     pub fn path(dir: &Path) -> PathBuf {
-        dir.join("control.port")
+        one_mk_ctl::client::tcp_port_path(dir)
     }
 
     pub fn bind(dir: &Path) -> anyhow::Result<Listener> {
@@ -222,9 +199,7 @@ mod tcp {
     }
 
     pub async fn connect(dir: &Path) -> io::Result<TcpStream> {
-        let text = std::fs::read_to_string(path(dir))?;
-        let (port, token) = text.trim().split_once(' ').ok_or_else(|| io::Error::other("bad control file"))?;
-        let port: u16 = port.parse().map_err(io::Error::other)?;
+        let (port, token) = one_mk_ctl::client::parse_port_file(&std::fs::read_to_string(path(dir))?)?;
         let mut s = TcpStream::connect(("127.0.0.1", port)).await?;
         s.write_all(format!("auth {token}\n").as_bytes()).await?;
         Ok(s)
