@@ -1,0 +1,54 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14,        target: aarch64-apple-darwin }
+          - { os: macos-13,        target: x86_64-apple-darwin }
+          - { os: ubuntu-22.04,    target: x86_64-unknown-linux-gnu }
+          - { os: windows-latest,  target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+      - run: cargo build --release --locked --target ${{ matrix.target }} -p one-mk -p one-mk-tray -p one-mk-app
+      - name: Package
+        shell: bash
+        run: |
+          d=target/${{ matrix.target }}/release
+          name=one-mk-${{ matrix.target }}
+          mkdir "$name"
+          if [ "${{ runner.os }}" = Windows ]; then
+            cp $d/one-mk.exe $d/one-mk-tray.exe $d/one-mk-app.exe "$name"/
+            7z a "$name.zip" "$name" >/dev/null
+          else
+            cp $d/one-mk $d/one-mk-tray $d/one-mk-app "$name"/
+            tar czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: one-mk-*.*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - run: cd dist && sha256sum one-mk-* > SHA256SUMS
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY"
+          --title "$GITHUB_REF_NAME" --generate-notes

@@ -13,6 +13,16 @@ clipboard and files follow. Setup takes about a minute.
 
 ## Quick start
 
+Get it first. On macOS and Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh
+```
+
+On Windows, download the `.zip` from the
+[latest release](https://github.com/samer2373/one-mk/releases/latest) and
+unzip it. Or build it yourself (see Building).
+
 Install once, pair once, done. On **each** computer:
 
 ```bash
