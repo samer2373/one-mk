@@ -1,7 +1,7 @@
 //! Compact little-endian binary encoding. Positions are fixed-point with
 //! 1/256 px precision.
 
-use crate::{PROTOCOL_VERSION, Pos, Rect};
+use crate::{PROTOCOL_VERSION, Pos, Rect, Side};
 use std::fmt;
 
 /// First byte of every QUIC stream, saying what the stream carries.
@@ -135,6 +135,9 @@ pub enum Control {
     /// The receiver ended visit `epoch` (someone used its own mouse or
     /// keyboard, or the sender went silent); the sender takes its pointer back.
     Revoked { epoch: u16 },
+    /// Layout sync: the sender sits on `side_of_you` of the receiver. The
+    /// receiver adopts it if `version` is newer than the one it has stored.
+    Layout { side_of_you: Side, version: u64 },
 }
 
 impl Control {
@@ -201,6 +204,11 @@ impl Control {
                 w.u8(12);
                 w.u16(*epoch);
             }
+            Control::Layout { side_of_you, version } => {
+                w.u8(13);
+                w.u8(Side::ALL.iter().position(|s| s == side_of_you).unwrap_or(0) as u8);
+                w.u64(*version);
+            }
         }
     }
 
@@ -237,6 +245,10 @@ impl Control {
             10 => Control::EnterAck { epoch: r.u16()? },
             11 => Control::Busy { epoch: r.u16()? },
             12 => Control::Revoked { epoch: r.u16()? },
+            13 => Control::Layout {
+                side_of_you: *Side::ALL.get(usize::from(r.u8()?)).ok_or(DecodeError::Invalid("side"))?,
+                version: r.u64()?,
+            },
             t => return Err(DecodeError::UnknownTag(t)),
         };
         Ok(c)
@@ -458,6 +470,7 @@ mod tests {
             Control::EnterAck { epoch: 1 },
             Control::Busy { epoch: 2 },
             Control::Revoked { epoch: u16::MAX },
+            Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123 },
         ];
         let mut buf = Vec::new();
         for m in &msgs {
@@ -481,6 +494,13 @@ mod tests {
         assert_eq!(StreamKind::File as u8, 4);
         assert_eq!(StreamKind::from_u8(0), None);
         assert_eq!(StreamKind::from_u8(5), None);
+    }
+
+    #[test]
+    fn layout_rejects_unknown_side() {
+        let mut body = vec![13, 9];
+        body.extend_from_slice(&1u64.to_le_bytes());
+        assert_eq!(Control::decode(&body), Err(DecodeError::Invalid("side")));
     }
 
     #[test]

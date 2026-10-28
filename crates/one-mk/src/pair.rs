@@ -191,7 +191,7 @@ async fn exchange(peer: &Peer, identity: &Identity, trust: &mut TrustStore, answ
 
     // Opposite defaults on each side, so the layout agrees out of the box.
     let side = if peer.initiator { Side::Right } else { Side::Left };
-    trust.upsert(Device { name: name.clone(), fingerprint: fingerprint.to_string(), side: side.to_string(), addrs: vec![addr.to_string()] });
+    trust.upsert(Device { name: name.clone(), fingerprint: fingerprint.to_string(), side: side.to_string(), addrs: vec![addr.to_string()], ..Device::default() });
     trust.save()?;
     let side = trust.get(&fingerprint).map_or(side, |d| d.side());
     println!();

@@ -11,7 +11,7 @@ mod transfer;
 
 pub use codec::{Control, Datagram, DecodeError, MAX_SCREENS, StreamKind, os};
 pub use geometry::{Desktop, Pos, Rect, Side};
-pub use keys::HeldKeys;
+pub use keys::{HeldKeys, swap_ctrl_meta};
 pub use motion::{MotionReceiver, Received, RemoteCursor, Step};
 pub use transfer::{ClipFormat, ClipHeader, FileMsg};
 

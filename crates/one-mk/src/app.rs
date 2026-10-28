@@ -9,14 +9,18 @@
 //!   uses this machine's own mouse or keyboard.
 
 use crate::clip::ClipSync;
+use crate::control::{self, Request};
 use crate::link::{self, Link, LinkEvent, Rank};
+use crate::manage::{PeerStatus, Status, on_your};
 use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
 use one_mk_input::{Backend, CaptureCmd, Event, Inject};
-use one_mk_net::{ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, TrustStore, read_stream_kind};
+use one_mk_net::{
+    ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, Swap, TrustStore, read_stream_kind,
+};
 use one_mk_proto::{
     Control, Datagram, Desktop, HeldKeys, MotionReceiver, Pos, Received, Rect, RemoteCursor, Side, Step, StreamKind,
-    sanitize_name,
+    os, sanitize_name, swap_ctrl_meta,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -137,6 +141,8 @@ enum AppEvent {
 struct Connected {
     id: usize,
     name: String,
+    /// The peer's OS (see [`one_mk_proto::os`]).
+    os: u8,
     rank: Rank,
     side: Side,
     conn: quinn::Connection,
@@ -152,7 +158,11 @@ struct Remote {
     /// Our edge the pointer left through.
     side: Side,
     cursor: RemoteCursor,
+    /// What we hold, by the codes we read locally.
     held: HeldKeys,
+    /// Swap Ctrl and Cmd in keys sent. Fixed for the whole visit, so a key
+    /// pressed as one code is always released as the same code.
+    swap: bool,
     /// The peer accepted the visit. Until then motion only updates
     /// `cursor` (the latest position is sent with the ack), and other input
     /// waits in `queued`.
@@ -261,19 +271,22 @@ pub async fn serve(
 ) -> Result<()> {
     let identity = Arc::new(Identity::load_or_create(&dir)?);
     let trust = TrustStore::load(&dir)?;
-    if trust.devices().is_empty() {
-        tracing::warn!("no paired computers yet; run `one-mk pair` on this and the other computer");
-    }
     let node = bind(identity.clone(), opts.port)?;
     let port = node.local_addr()?.port();
-    tracing::info!(name = %identity.name, id = %identity.fingerprint.short(), port, "one-mk running");
+    let mut ipc = control::Server::start(&dir).await?;
+    println!("one-mk is running on {}.", sanitize_name(&identity.name));
+    println!("Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.");
+    if trust.devices().is_empty() {
+        println!("No computers are paired yet. Run `one-mk pair` on this computer and on the other one.");
+    }
+    tracing::debug!(id = %identity.fingerprint.short(), port, "listening");
 
     let Backend { mut events, capture, inject } = backend;
     let services = Services {
         clip: opts.clipboard.map(|cb| ClipSync::new(cb, node.clone())),
         inbox: Inbox::new(opts.downloads.clone()),
     };
-    tracing::info!(
+    tracing::debug!(
         clipboard = services.clip.is_some(),
         downloads = %opts.downloads.display(),
         "sharing"
@@ -342,6 +355,7 @@ pub async fn serve(
             Some((fp, id, ev)) = link_rx.recv() => app.on_link(fp, id, ev),
             _ = tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => app.on_timer(),
             Some(ev) = rx.recv() => app.on_app(ev, &screens_rx),
+            Some((req, reply)) = ipc.recv() => app.on_request(req, reply),
             _ = dial_tick.tick() => app.dial_missing(&screens_rx),
             _ = &mut shutdown => break,
         }
@@ -500,7 +514,7 @@ impl App {
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
         match ev {
             Event::Desktop(d) => {
-                tracing::info!(screens = ?d.screens, "local screens");
+                tracing::debug!(screens = ?d.screens, "local screens");
                 for p in self.peers.values() {
                     p.ctl.send(Control::Screens(d.screens.clone()));
                 }
@@ -529,8 +543,9 @@ impl App {
                     self.go_home(t);
                     return;
                 }
+                let wire = if r.swap { swap_ctrl_meta(code) } else { code };
                 if r.held.update(code, down) {
-                    self.send_input(Control::Key { code, down });
+                    self.send_input(Control::Key { code: wire, down });
                 }
             }
             Event::Scroll { dx, dy } => self.send_input(Control::Scroll { dx: dx as f32, dy: dy as f32 }),
@@ -580,6 +595,8 @@ impl App {
         let t = local.edge_fraction(side, pos);
         let cursor = RemoteCursor::enter(desktop, side.opposite(), t, self.epoch);
         let peer = &self.peers[&fp];
+        let setting = self.trust.get(&fp).map_or(Swap::Auto, |d| d.swap_ctrl_cmd);
+        let swap = swap_applies(setting, os::local(), peer.os);
         peer.ctl.send(Control::Enter { epoch: self.epoch, pos: cursor.pos() });
         tracing::debug!(peer = %peer.name, %side, "pointer moved to peer");
         let now = Instant::now();
@@ -589,6 +606,7 @@ impl App {
             side,
             cursor,
             held: HeldKeys::new(),
+            swap,
             acked: false,
             queued: Vec::new(),
             entered_at: now,
@@ -771,25 +789,29 @@ impl App {
                 self.end_owner(false);
             }
         }
-        if let Ok(t) = TrustStore::load(&self.dir) {
-            self.trust = t;
-        }
+        self.reload_trust();
         let side = self.trust.get(&fp).map_or(Side::Right, |d| d.side());
         let addr = canonical(link.conn.remote_address());
         if let Some(dev) = self.trust.get_mut(&fp) {
             let a = addr.to_string();
+            let mut changed = std::mem::replace(&mut dev.os, link.os) != link.os;
             if dev.addrs.first() != Some(&a) {
                 dev.addrs.retain(|x| *x != a);
                 dev.addrs.insert(0, a);
                 dev.addrs.truncate(4);
-                if let Err(e) = self.trust.save() {
-                    tracing::debug!("saving device address: {e:#}");
-                }
+                changed = true;
+            }
+            if changed && let Err(e) = self.trust.save() {
+                tracing::debug!("saving device details: {e:#}");
             }
         }
-        tracing::info!(peer = %link.name, %addr, %side, os = link.os, "connected");
+        // A better duplicate connection replaces the first one quietly.
+        if !self.peers.contains_key(&fp) {
+            println!("Connected to {} ({}).", link.name, on_your(side));
+        }
+        tracing::debug!(peer = %link.name, %addr, os = link.os, "connected");
         let desktop = (!link.screens.is_empty()).then(|| Desktop::new(link.screens.clone()));
-        let (id, name, rank, sent) = (link.id, link.name.clone(), link.rank, link.sent_screens.clone());
+        let (id, name, os, rank, sent) = (link.id, link.name.clone(), link.os, link.rank, link.sent_screens.clone());
         let (conn, ctl) = link.spawn(self.link_tx.clone());
         // Our monitors may have changed during the handshake.
         if let Some(local) = &self.local
@@ -797,9 +819,10 @@ impl App {
         {
             ctl.send(Control::Screens(local.screens.clone()));
         }
-        if let Some(old) = self.peers.insert(fp, Connected { id, name, rank, side, conn, ctl, desktop }) {
+        if let Some(old) = self.peers.insert(fp, Connected { id, name, os, rank, side, conn, ctl, desktop }) {
             old.conn.close(2u32.into(), b"duplicate");
         }
+        self.send_layout(fp);
         self.update_sides();
     }
 
@@ -825,7 +848,7 @@ impl App {
                 if self.owner.as_ref().is_some_and(|o| o.peer == fp) {
                     self.end_owner(false);
                 }
-                tracing::info!(peer = %peer.name, "disconnected");
+                println!("{} disconnected; reconnecting automatically.", peer.name);
                 if let Some(clip) = &self.services.clip {
                     clip.forget(fp);
                 }
@@ -842,6 +865,7 @@ impl App {
         match msg {
             Control::Hello { .. } => {}
             Control::Screens(screens) => self.on_peer_screens(fp, screens),
+            Control::Layout { side_of_you, version } => self.on_peer_layout(fp, side_of_you, version),
             Control::Enter { epoch, pos } => self.on_enter(fp, id, epoch, pos),
             Control::Leave => {
                 if self.is_owner(fp, id) {
@@ -871,6 +895,85 @@ impl App {
                     o.input(input, &self.inject);
                 }
             }
+        }
+    }
+
+    fn reload_trust(&mut self) {
+        if let Ok(t) = TrustStore::load(&self.dir) {
+            self.trust = t;
+        }
+    }
+
+    /// Tells a peer where we think it is, from its point of view. It adopts
+    /// that only if our version is newer than its own.
+    fn send_layout(&self, fp: Fingerprint) {
+        if let (Some(p), Some(d)) = (self.peers.get(&fp), self.trust.get(&fp)) {
+            p.ctl.send(Control::Layout { side_of_you: d.side().opposite(), version: d.layout_version });
+        }
+    }
+
+    /// The peer says it sits on `side_of_you` of us.
+    fn on_peer_layout(&mut self, fp: Fingerprint, side_of_you: Side, version: u64) {
+        self.reload_trust();
+        let Some(dev) = self.trust.get_mut(&fp).filter(|d| version > d.layout_version) else { return };
+        dev.side = side_of_you.to_string();
+        dev.layout_version = version;
+        if let Err(e) = self.trust.save() {
+            tracing::warn!("could not save the new layout: {e:#}");
+        }
+        self.sync_sides();
+    }
+
+    /// Applies the sides in the trust store to connected peers.
+    fn sync_sides(&mut self) {
+        let mut moved = Vec::new();
+        for (fp, p) in &mut self.peers {
+            let Some(side) = self.trust.get(fp).map(|d| d.side()).filter(|s| *s != p.side) else { continue };
+            p.side = side;
+            moved.push(*fp);
+            println!("{} is now {}.", p.name, on_your(side));
+        }
+        if let Some(r) = self.remote.as_ref().filter(|r| moved.contains(&r.peer)) {
+            let t = r.cursor.home_fraction();
+            self.go_home(t);
+        }
+        self.update_sides();
+    }
+
+    fn on_request(&mut self, req: Request, reply: tokio::sync::oneshot::Sender<String>) {
+        self.reload_trust();
+        let text = match req {
+            Request::Status => self.status().encode(),
+            Request::Reload => {
+                self.sync_sides();
+                let fps: Vec<_> = self.peers.keys().copied().collect();
+                fps.into_iter().for_each(|fp| self.send_layout(fp));
+                "ok\n".to_owned()
+            }
+        };
+        let _ = reply.send(text);
+    }
+
+    fn status(&self) -> Status {
+        let id = self.node.identity();
+        let name_of = |fp: &Fingerprint| self.peers.get(fp).map_or_else(String::new, |p| p.name.clone());
+        let peers = self.trust.devices().iter().filter_map(|d| {
+            let live = self.peers.get(&d.fingerprint()?);
+            Some(PeerStatus {
+                id: d.short_id(),
+                name: sanitize_name(&d.name),
+                side: live.map_or_else(|| d.side(), |p| p.side),
+                os: live.map_or(d.os, |p| p.os),
+                online: live.is_some(),
+            })
+        });
+        Status {
+            name: sanitize_name(&id.name),
+            id: id.fingerprint.short(),
+            port: self.node.local_addr().map_or(0, |a| a.port()),
+            controlling: self.remote.as_ref().map(|r| name_of(&r.peer)),
+            controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
+            peers: peers.collect(),
         }
     }
 
@@ -969,6 +1072,16 @@ impl App {
     }
 }
 
+/// Whether keys sent to a computer running `peer_os` trade Ctrl and Cmd.
+/// Automatic means exactly one of the two computers is a Mac.
+fn swap_applies(setting: Swap, local_os: u8, peer_os: u8) -> bool {
+    match setting {
+        Swap::On => true,
+        Swap::Off => false,
+        Swap::Auto => local_os != peer_os && [local_os, peer_os].contains(&os::MACOS) && !(local_os == os::UNKNOWN || peer_os == os::UNKNOWN),
+    }
+}
+
 fn canonical(addr: SocketAddr) -> SocketAddr {
     SocketAddr::new(addr.ip().to_canonical(), addr.port())
 }
@@ -1006,6 +1119,7 @@ mod tests {
             fingerprint: other.fingerprint.to_string(),
             side: side.to_string(),
             addrs: vec![],
+            ..Device::default()
         });
         t.save().unwrap();
     }
@@ -1100,20 +1214,39 @@ mod tests {
         ha: NullHandles,
         hb: NullHandles,
         pb: u16,
+        /// Fingerprints of A and B.
+        fa: String,
+        fb: String,
         stop: watch::Sender<bool>,
         tasks: Vec<tokio::task::JoinHandle<Result<()>>>,
     }
 
     impl Duo {
         async fn start(tag: &str, clips: Option<(one_mk_clipboard::Clipboard, one_mk_clipboard::Clipboard)>) -> Duo {
+            let mut duo = Self::start_with(tag, clips, |_, _| {}).await;
+            duo.settle().await;
+            duo
+        }
+
+        /// Starts both daemons after `setup` has edited A's record of B and
+        /// B's record of A.
+        async fn start_with(
+            tag: &str,
+            clips: Option<(one_mk_clipboard::Clipboard, one_mk_clipboard::Clipboard)>,
+            setup: impl FnOnce(&mut Device, &mut Device),
+        ) -> Duo {
             let (da, db) = (temp_dir(&format!("{tag}-a")), temp_dir(&format!("{tag}-b")));
             let (ia, ib) = (Identity::load_or_create(&da).unwrap(), Identity::load_or_create(&db).unwrap());
             trust(&da, &ib, Side::Right);
             trust(&db, &ia, Side::Left);
+            let (mut ta, mut tb) = (TrustStore::load(&da).unwrap(), TrustStore::load(&db).unwrap());
+            setup(ta.get_mut(&ib.fingerprint).unwrap(), tb.get_mut(&ia.fingerprint).unwrap());
+            ta.save().unwrap();
+            tb.save().unwrap();
             let (pa, pb) = (free_port(), free_port());
             let desk = Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]);
-            let (ba, mut ha) = one_mk_input::null(desk.clone());
-            let (bb, mut hb) = one_mk_input::null(desk);
+            let (ba, ha) = one_mk_input::null(desk.clone());
+            let (bb, hb) = one_mk_input::null(desk);
             let (stop, stop_rx) = watch::channel(false);
             let wait = |mut rx: watch::Receiver<bool>| async move {
                 let _ = rx.wait_for(|s| *s).await;
@@ -1130,9 +1263,25 @@ mod tests {
             let a = tokio::spawn(serve(da.clone(), opts(pa, vec![], ca, &da), ba, wait(stop_rx.clone())));
             let to_a = vec![SocketAddr::from(([127, 0, 0, 1], pa))];
             let b = tokio::spawn(serve(db.clone(), opts(pb, to_a, cb, &db), bb, wait(stop_rx)));
-            assert_eq!(next_capture(&mut ha).await, CaptureCmd::SetSides(vec![Side::Right]));
-            assert_eq!(next_capture(&mut hb).await, CaptureCmd::SetSides(vec![Side::Left]));
-            Duo { da, db, ha, hb, pb, stop, tasks: vec![a, b] }
+            Duo { da, db, ha, hb, pb, fa: ia.fingerprint.to_string(), fb: ib.fingerprint.to_string(), stop, tasks: vec![a, b] }
+        }
+
+        /// Waits until each side has armed the edge facing the other.
+        async fn settle(&mut self) {
+            assert_eq!(next_capture(&mut self.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
+            assert_eq!(next_capture(&mut self.hb).await, CaptureCmd::SetSides(vec![Side::Left]));
+        }
+
+        /// What `daemon_dir`'s daemon says about its single paired peer.
+        async fn peer_status(dir: &std::path::Path) -> PeerStatus {
+            let text = control::request(dir, Request::Status).await.unwrap().expect("daemon running");
+            Status::decode(&text).unwrap().peers.remove(0)
+        }
+
+        /// `one-mk layout` run on the computer with settings in `dir`.
+        async fn layout(dir: &std::path::Path, peer: &str, side: Option<Side>, swap: Option<Swap>) {
+            crate::manage::set_layout(dir, &peer[..8], side, swap).unwrap();
+            assert!(control::request(dir, Request::Reload).await.unwrap().is_some());
         }
 
         /// Moves the pointer from A onto B, and waits until B has it.
@@ -1384,6 +1533,7 @@ mod tests {
             raw.send(Control::Hello { version: PROTOCOL_VERSION, name: "raw".into(), screens: vec![], nonce: 0, os: 0 })
                 .await;
             assert!(matches!(raw.next().await, Control::Hello { .. }));
+            assert!(matches!(raw.next().await, Control::Layout { .. }));
             raw
         }
 
@@ -1460,5 +1610,108 @@ mod tests {
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(6.0, 6.0)));
         drop(c);
         duo.stop().await;
+    }
+
+    /// Changing the layout on one computer applies at once, with no
+    /// restart, and the other computer records the mirror image.
+    #[tokio::test]
+    async fn layout_change_converges() {
+        let mut duo = Duo::start("layout", None).await;
+        let (fa, fb) = (duo.fa.clone(), duo.fb.clone());
+
+        // On A: B is now on the left.
+        Duo::layout(&duo.da, &fb, Some(Side::Left), None).await;
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Left]));
+        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Right]));
+        let (sa, sb) = (Duo::peer_status(&duo.da).await, Duo::peer_status(&duo.db).await);
+        assert_eq!((sa.side, sa.online), (Side::Left, true));
+        assert_eq!((sb.side, sb.online), (Side::Right, true));
+        let version = |dir: &std::path::Path, fp: &str| {
+            let t = TrustStore::load(dir).unwrap();
+            let d = t.get(&fp.parse().unwrap()).unwrap().clone();
+            (d.side(), d.layout_version)
+        };
+        let (side_a, v) = version(&duo.da, &fb);
+        assert_eq!(side_a, Side::Left);
+        assert!(v > 0);
+        assert_eq!(version(&duo.db, &fa), (Side::Right, v), "B stored the same version");
+
+        // Then on B: A is above. The newer change wins over the old one.
+        Duo::layout(&duo.db, &fa, Some(Side::Top), None).await;
+        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Top]));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Bottom]));
+        assert_eq!(Duo::peer_status(&duo.da).await.side, Side::Bottom);
+        assert!(version(&duo.da, &fb).1 > v);
+        duo.stop().await;
+    }
+
+    /// A layout changed while the daemons were not talking is settled when
+    /// they connect: the newer version wins on both.
+    #[tokio::test]
+    async fn newer_layout_wins_on_connect() {
+        let mut duo = Duo::start_with("version", None, |a_sees_b, _| {
+            // A was told "B is on the left" while offline; B still thinks
+            // A is on its left too (an old, version 0 layout).
+            a_sees_b.side = Side::Left.to_string();
+            a_sees_b.layout_version = 5;
+        })
+        .await;
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Left]));
+        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Left]));
+        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Right]));
+        let t = TrustStore::load(&duo.db).unwrap();
+        let d = t.get(&duo.fa.parse().unwrap()).unwrap();
+        assert_eq!((d.side(), d.layout_version), (Side::Right, 5));
+        duo.stop().await;
+    }
+
+    /// With swapping on, Ctrl and Cmd trade places in what A sends. The
+    /// choice is fixed per visit, so a key released after the setting
+    /// changed still releases the code that was pressed.
+    #[tokio::test]
+    async fn ctrl_and_cmd_swap_consistently() {
+        let mut duo = Duo::start_with("swap", None, |a_sees_b, _| a_sees_b.swap_ctrl_cmd = Swap::On).await;
+        duo.settle().await;
+        duo.enter_b().await;
+        for (code, sent) in [(29, 125), (30, 30)] {
+            duo.ha.events.send(Event::Key { code, down: true }).unwrap();
+            assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: sent, down: true });
+        }
+        // The setting changes mid-visit.
+        let fb = duo.fb.clone();
+        Duo::layout(&duo.da, &fb, None, Some(Swap::Off)).await;
+        for (code, sent) in [(29, 125), (30, 30)] {
+            duo.ha.events.send(Event::Key { code, down: false }).unwrap();
+            assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: sent, down: false });
+        }
+        // Still swapped for the rest of this visit; leaving releases the swapped code.
+        duo.ha.events.send(Event::Key { code: 97, down: true }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 126, down: true });
+        duo.leave_b().await;
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 126, down: false });
+
+        // The next visit follows the new setting.
+        duo.enter_b().await;
+        duo.ha.events.send(Event::Key { code: 29, down: true }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 29, down: true });
+        duo.stop().await;
+    }
+
+    #[test]
+    fn swaps_only_between_a_mac_and_something_else() {
+        use one_mk_proto::os::{LINUX, MACOS, UNKNOWN, WINDOWS};
+        for (local, peer, expected) in [
+            (LINUX, MACOS, true),
+            (MACOS, WINDOWS, true),
+            (MACOS, LINUX, true),
+            (MACOS, MACOS, false),
+            (LINUX, WINDOWS, false),
+            (LINUX, LINUX, false),
+            (MACOS, UNKNOWN, false),
+        ] {
+            assert_eq!(swap_applies(Swap::Auto, local, peer), expected, "{local} -> {peer}");
+            assert!(swap_applies(Swap::On, local, peer));
+            assert!(!swap_applies(Swap::Off, local, peer));
+        }
     }
 }

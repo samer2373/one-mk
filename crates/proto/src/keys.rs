@@ -60,9 +60,30 @@ impl HeldKeys {
     }
 }
 
+/// Trades Ctrl and Cmd (Meta) places, left with left and right with right;
+/// every other code is unchanged. Applying it twice gives the original.
+pub fn swap_ctrl_meta(code: u32) -> u32 {
+    match code {
+        29 => 125,  // KEY_LEFTCTRL <-> KEY_LEFTMETA
+        125 => 29,
+        97 => 126,  // KEY_RIGHTCTRL <-> KEY_RIGHTMETA
+        126 => 97,
+        c => c,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swaps_ctrl_and_meta_only() {
+        assert_eq!([29, 97, 125, 126].map(swap_ctrl_meta), [125, 126, 29, 97]);
+        assert_eq!([30, 56, 42, 0x110].map(swap_ctrl_meta), [30, 56, 42, 0x110]);
+        for c in 0..0x300 {
+            assert_eq!(swap_ctrl_meta(swap_ctrl_meta(c)), c);
+        }
+    }
 
     #[test]
     fn tracks_and_releases() {

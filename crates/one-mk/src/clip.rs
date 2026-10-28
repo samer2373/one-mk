@@ -135,7 +135,7 @@ impl ClipSync {
                 }
             }
             Ok(Read::TooLarge { digest, size }) => {
-                tracing::info!(peer = %name, "clipboard is too large to share ({} MB, limit {} MB); skipped",
+                tracing::warn!(peer = %name, "clipboard is too large to share ({} MB, limit {} MB); skipped",
                     size >> 20, MAX_BYTES >> 20);
                 self.state().known.insert(fp, digest);
             }
@@ -205,7 +205,7 @@ impl ClipSync {
         let header = read_clip_header(recv).await?;
         let total = header.total();
         if total > MAX_BYTES as u64 {
-            tracing::info!("peer sent a {} MB clipboard (limit {} MB); ignored", total >> 20, MAX_BYTES >> 20);
+            tracing::warn!("peer sent a {} MB clipboard (limit {} MB); ignored", total >> 20, MAX_BYTES >> 20);
             let _ = recv.stop(0u32.into());
             return Ok(None);
         }

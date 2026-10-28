@@ -42,7 +42,9 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
     let conn = peer.conn;
 
     let total: u64 = files.iter().map(|f| f.size).sum();
-    eprintln!("Sending {} to {} ({})", summary(files.len(), total), device.name, conn.remote_address());
+    let addr = conn.remote_address();
+    let addr = SocketAddr::new(addr.ip().to_canonical(), addr.port());
+    eprintln!("Sending {} to {} ({addr})", summary(files.len(), total), device.name);
     let progress = Arc::new(Progress::default());
     let start = Instant::now();
     let ticker = tokio::spawn(show_progress(progress.clone(), start));

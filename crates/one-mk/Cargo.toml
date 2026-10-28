@@ -15,7 +15,7 @@ one-mk-input = { version = "0.1.0", path = "../input" }
 one-mk-net = { version = "0.1.0", path = "../net" }
 one-mk-proto = { version = "0.1.0", path = "../proto" }
 quinn = { version = "0.11.12", default-features = false }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-std", "io-util"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-std", "io-util", "net"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-normalization = "0.1.26"

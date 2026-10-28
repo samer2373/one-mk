@@ -392,7 +392,7 @@ impl Inbox {
         let placed = tokio::task::spawn_blocking(move || place(&root, &parts, &part)).await?;
         match placed {
             Ok(name) => {
-                tracing::info!(%peer, file = %name, bytes = size, "received file");
+                println!("Received {name} from {peer} (saved to {}).", self.root.join(&name).display());
                 write_file_msg(send, &FileMsg::Saved { name }).await
             }
             Err(e) => {

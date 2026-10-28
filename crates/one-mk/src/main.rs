@@ -3,14 +3,17 @@
 mod app;
 mod bench;
 mod clip;
+mod control;
+mod install;
 mod link;
+mod manage;
 mod pair;
 mod send;
 mod transfer;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use one_mk_net::{Identity, TrustStore};
+use one_mk_net::{Identity, Swap, TrustStore};
 use one_mk_proto::{DEFAULT_PORT, Side};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -20,8 +23,7 @@ use std::process::ExitCode;
 #[command(
     name = "one-mk",
     version,
-    about = "Share one mouse and keyboard across your computers",
-    args_conflicts_with_subcommands = true
+    about = "Share one mouse and keyboard across your computers"
 )]
 struct Cli {
     /// Where settings and keys live (default: your config folder).
@@ -84,12 +86,23 @@ enum Cmd {
     },
     /// List paired computers.
     Devices,
-    /// Say which side of this computer a paired computer is on.
+    /// Show whether one-mk is running, who is connected and who controls whom.
+    Status,
+    /// Start one-mk automatically when you log in.
+    Install,
+    /// Stop starting one-mk automatically.
+    Uninstall,
+    /// Say which side of this computer a paired computer is on (applies at
+    /// once if one-mk is running) and how Ctrl/Cmd are treated.
     Layout {
         /// Name or id of the paired computer (see `one-mk devices`).
         device: String,
         /// Where it is: left, right, top or bottom.
-        side: Side,
+        side: Option<Side>,
+        /// Swap Ctrl and Cmd for keys sent to it, so copy and paste feel the same
+        /// between a Mac and a PC (default: auto, which swaps only between a Mac and another computer).
+        #[arg(long, value_name = "on|off|auto")]
+        swap_ctrl_cmd: Option<Swap>,
     },
     /// Unpair a computer.
     Forget {
@@ -136,16 +149,21 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let verbose = cli.verbose;
     let level = match verbose {
-        0 => "info,mdns_sd=warn,zbus=warn,quinn=warn,quinn_proto=warn",
+        0 => "warn,mdns_sd=error,zbus=error",
         1 => "debug,mdns_sd=warn,zbus=info,quinn=info,quinn_proto=info,rustls=info",
         _ => "trace",
     };
-    tracing_subscriber::fmt()
+    let log = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| level.into()),
         )
-        .with_target(false)
-        .init();
+        .with_target(false);
+    // Plain lines unless the user asked for details.
+    if verbose == 0 {
+        log.without_time().init();
+    } else {
+        log.init();
+    }
 
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -162,6 +180,7 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    let custom_home = cli.home.is_some();
     let dir = match cli.home {
         Some(d) => d,
         None => default_home()?,
@@ -189,7 +208,10 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Send { paths, to, connect } => send::run(&dir, paths, to, connect).await,
             Cmd::Pair { connect } => pair::run(&dir, connect).await,
             Cmd::Devices => devices(&dir, cli.verbose > 0),
-            Cmd::Layout { device, side } => layout(&dir, &device, side),
+            Cmd::Status => manage::status(&dir).await,
+            Cmd::Install => install::install(&dir, custom_home).await,
+            Cmd::Uninstall => install::uninstall(),
+            Cmd::Layout { device, side, swap_ctrl_cmd } => manage::layout(&dir, &device, side, swap_ctrl_cmd).await,
             Cmd::Forget { device } => forget(&dir, &device),
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;
@@ -272,28 +294,9 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-fn unknown_device(device: &str) -> anyhow::Error {
-    anyhow::anyhow!("no paired computer called {device:?}; see `one-mk devices` for names and ids")
-}
-
-fn layout(dir: &Path, device: &str, side: Side) -> Result<()> {
-    let mut trust = TrustStore::load(dir)?;
-    let Some(fp) = trust.find(device).map(|d| d.fingerprint()) else {
-        return Err(unknown_device(device));
-    };
-    let Some(fp) = fp else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
-    let dev = trust.get_mut(&fp).expect("found above");
-    dev.side = side.to_string();
-    let name = dev.name.clone();
-    trust.save()?;
-    println!("{name} is now to the {side} of this computer.");
-    println!("On {name}, this computer should be set to the {}. Restart `one-mk run` to apply.", side.opposite());
-    Ok(())
-}
-
 fn forget(dir: &Path, device: &str) -> Result<()> {
     let mut trust = TrustStore::load(dir)?;
-    let d = trust.remove(device).ok_or_else(|| unknown_device(device))?;
+    let d = trust.remove(device).ok_or_else(|| manage::unknown_device(device))?;
     trust.save()?;
     println!("Forgot {}.", d.name);
     Ok(())
