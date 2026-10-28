@@ -1,0 +1,20 @@
+[package]
+name = "one-mk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+bytes = "1.12.1"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+directories = "6.0.0"
+one-mk-input = { version = "0.1.0", path = "../input" }
+one-mk-net = { version = "0.1.0", path = "../net" }
+one-mk-proto = { version = "0.1.0", path = "../proto" }
+quinn = { version = "0.11.12", default-features = false }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-std", "io-util"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"

@@ -1,0 +1,16 @@
+[package]
+name = "one-mk-input"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+one-mk-proto = { version = "0.1.0", path = "../proto" }
+tokio = { version = "1.54.1", features = ["rt", "sync", "macros", "time"] }
+tracing = "0.1.44"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "input_capture", "remote_desktop", "screencast"] }
+futures = "0.3.34"
+libc = "0.2.191"
+reis = { version = "0.7.1", features = ["tokio"] }
