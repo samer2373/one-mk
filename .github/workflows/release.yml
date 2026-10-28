@@ -2,6 +2,7 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -39,6 +40,15 @@ jobs:
       - name: Mac app
         if: runner.os == 'macOS'
         run: sh scripts/bundle-mac.sh target/${{ matrix.target }}/release one-mk-${{ matrix.target }}.app.zip
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          choco install innosetup -y --no-progress >/dev/null
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "//DAppVersion=$v" "//DReleaseDir=..\\target\\${{ matrix.target }}\\release" installer/one-mk.iss
+          ./one-mk-${{ matrix.target }}-setup.exe //VERYSILENT //SUPPRESSMSGBOXES //NORESTART "//DIR=$(cygpath -w "$PWD/installed")"
+          "$PWD/installed/one-mk.exe" id
       - name: Linux .deb
         if: runner.os == 'Linux'
         run: |
@@ -52,6 +62,7 @@ jobs:
 
   publish:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -68,14 +79,14 @@ jobs:
           |---|---|
           | macOS, Apple silicon (M1 and later) | `one-mk-aarch64-apple-darwin.dmg` |
           | macOS, Intel | `one-mk-x86_64-apple-darwin.dmg` |
-          | Windows 10/11, 64-bit | `one-mk-x86_64-pc-windows-msvc.zip` |
+          | Windows 10/11, 64-bit | `one-mk-x86_64-pc-windows-msvc-setup.exe` |
           | Debian, Ubuntu and relatives, 64-bit (Wayland) | `one-mk-x86_64-unknown-linux-gnu.deb` |
           | Other Linux, 64-bit | `one-mk-x86_64-unknown-linux-gnu.tar.gz` |
 
           On macOS and Linux the one-line installer picks the right file:
           `curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh`
 
-          On macOS, open the `.dmg` and drag one·mk onto Applications (the `.app.zip` is what the installer uses). The macOS `.tar.gz` holds only the command-line programs. `SHA256SUMS` lists checksums for every file.
+          On macOS, open the `.dmg` and drag one·mk onto Applications (the `.app.zip` is what the installer uses). The `.zip` and `.tar.gz` files hold only the programs, for people who prefer to unpack them by hand. `SHA256SUMS` lists checksums for every file.
           MD
       - env:
           GH_TOKEN: ${{ github.token }}
