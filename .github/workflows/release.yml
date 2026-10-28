@@ -39,6 +39,12 @@ jobs:
       - name: Mac app
         if: runner.os == 'macOS'
         run: sh scripts/bundle-mac.sh target/${{ matrix.target }}/release one-mk-${{ matrix.target }}.app.zip
+      - name: Linux .deb
+        if: runner.os == 'Linux'
+        run: |
+          sh scripts/bundle-deb.sh target/${{ matrix.target }}/release one-mk-${{ matrix.target }}.deb
+          sudo dpkg -i one-mk-${{ matrix.target }}.deb
+          one-mk id
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -60,15 +66,16 @@ jobs:
 
           | System | File |
           |---|---|
-          | macOS, Apple silicon (M1 and later) | `one-mk-aarch64-apple-darwin.app.zip` |
-          | macOS, Intel | `one-mk-x86_64-apple-darwin.app.zip` |
+          | macOS, Apple silicon (M1 and later) | `one-mk-aarch64-apple-darwin.dmg` |
+          | macOS, Intel | `one-mk-x86_64-apple-darwin.dmg` |
           | Windows 10/11, 64-bit | `one-mk-x86_64-pc-windows-msvc.zip` |
-          | Linux, 64-bit (Wayland) | `one-mk-x86_64-unknown-linux-gnu.tar.gz` |
+          | Debian, Ubuntu and relatives, 64-bit (Wayland) | `one-mk-x86_64-unknown-linux-gnu.deb` |
+          | Other Linux, 64-bit | `one-mk-x86_64-unknown-linux-gnu.tar.gz` |
 
           On macOS and Linux the one-line installer picks the right file:
           `curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh`
 
-          The `.tar.gz` for macOS holds only the command-line programs. `SHA256SUMS` lists checksums for every file.
+          On macOS, open the `.dmg` and drag one·mk onto Applications (the `.app.zip` is what the installer uses). The macOS `.tar.gz` holds only the command-line programs. `SHA256SUMS` lists checksums for every file.
           MD
       - env:
           GH_TOKEN: ${{ github.token }}

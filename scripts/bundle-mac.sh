@@ -1,6 +1,7 @@
 #!/bin/sh
 # Wraps the built programs in one-mk.app and zips it, on macOS:
 #   sh scripts/bundle-mac.sh <release dir, e.g. target/release> <out.zip>
+# Also writes the matching .dmg next to the zip (drag one·mk onto Applications).
 # The app is ad-hoc signed; a Developer ID would be needed to notarize it.
 set -eu
 
@@ -35,4 +36,10 @@ PLIST
 codesign --force --deep --sign - "$app"
 rm -f "$out"
 ditto -c -k --norsrc --noextattr --keepParent "$app" "$out"
-echo "Wrote $out"
+dmg="${out%.app.zip}.dmg"
+mkdir "$tmp/dmg"
+cp -R "$app" "$tmp/dmg/"
+ln -s /Applications "$tmp/dmg/Applications"
+rm -f "$dmg"
+hdiutil create -quiet -volname "one·mk" -srcfolder "$tmp/dmg" -ov -format UDZO "$dmg"
+echo "Wrote $out and $dmg"
