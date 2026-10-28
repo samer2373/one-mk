@@ -17,7 +17,13 @@ trap cleanup EXIT
 
 shot() { # name after-seconds home [extra env...]
     local name=$1 after=$2 home=$3; shift 3
-    env "$@" ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 30 "$APP" --home "$home" || true
+    # The compositor sometimes never draws a fresh window (e.g. covered or
+    # on another workspace); try again rather than fail the whole run.
+    for _ in 1 2 3; do
+        rm -f "$W/$name.ppm"
+        env "$@" ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 20 "$APP" --home "$home" || true
+        [ -s "$W/$name.ppm" ] && break
+    done
     python3 -c "from PIL import Image; Image.open('$W/$name.ppm').save('$OUT/$name.png')"
     echo "$OUT/$name.png"
 }

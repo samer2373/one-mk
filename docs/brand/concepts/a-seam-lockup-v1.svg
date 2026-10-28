@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 256" width="850" height="256" role="img" aria-labelledby="title">
+  <title id="title">one·mk — Seam lockup</title>
+  <g id="symbol" transform="translate(0 48.64) scale(0.62)">
+  <path id="screens" fill="#111111" d="M117 36 H88 A52 52 0 0 0 36 88 V168 A52 52 0 0 0 88 220 H117 V172.67 A46 46 0 0 1 117 83.33 Z M139 36 H168 A52 52 0 0 1 220 88 V168 A52 52 0 0 1 168 220 H139 V172.67 A46 46 0 0 0 139 83.33 Z"/>
+  <circle id="pointer" cx="128" cy="128" r="28" fill="#FFB547"/>
+  </g>
+  <g id="wordmark" transform="translate(198.72 0)">
+  <circle cx="50" cy="128" r="39" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M129 176 V80 M129 123 A34 34 0 0 1 197 123 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M226 128 H315 A39 39 0 1 0 306.73 152.01" fill="none" stroke="#111111" stroke-width="22"/>
+  <circle cx="363" cy="128" r="15" fill="#FFB547"/>
+  <path d="M411 176 V80 M411 116 A27 27 0 0 1 465 116 V176 M465 116 A27 27 0 0 1 519 116 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M559 176 V40" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M566 152 L638 80" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M592 126 L632 176" fill="none" stroke="#111111" stroke-width="22"/>
+  </g>
+</svg>

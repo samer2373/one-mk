@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">one·mk — Leap</title>
+  <path id="screens" fill="#111111" d="M36 136 H96 A16 16 0 0 1 112 152 V188 A16 16 0 0 1 96 204 H36 A16 16 0 0 1 20 188 V152 A16 16 0 0 1 36 136 Z M40 150 A6 6 0 0 0 34 156 V184 A6 6 0 0 0 40 190 H92 A6 6 0 0 0 98 184 V156 A6 6 0 0 0 92 150 Z M160 136 H220 A16 16 0 0 1 236 152 V188 A16 16 0 0 1 220 204 H160 A16 16 0 0 1 144 188 V152 A16 16 0 0 1 160 136 Z"/>
+  <path id="arc" fill="#FFB547" d="M66 114 A62 62 0 0 1 190 114 H170 A52 52 0 0 0 66 114 Z"/>
+  <circle id="pointer" cx="180" cy="114" r="16" fill="#FFB547"/>
+</svg>

@@ -37,8 +37,8 @@ fn icon(state: IconState) -> Icon {
 /// bar recolours it); the amber ones keep their colour.
 fn set_icon(tray: &TrayIcon, state: IconState) {
     #[cfg(target_os = "macos")]
-    if matches!(state, IconState::Off | IconState::Idle) {
-        let t = Icon::from_rgba(icon::template_rgba(32), 32, 32).expect("a 32x32 RGBA buffer");
+    if let Some(t) = icon::template_rgba(state) {
+        let t = Icon::from_rgba(t, 32, 32).expect("a 32x32 RGBA buffer");
         let _ = tray.set_icon_templated(Some(t));
         return;
     }

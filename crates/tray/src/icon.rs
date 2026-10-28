@@ -1,10 +1,8 @@
-//! The tray icons, drawn in code (no image files, no image decoder): two
-//! screen outlines side by side on a transparent background, with a bridge
-//! over their top edges. Amber is the one signal colour: it appears only
-//! when computers are connected.
-
-const GREY: [f32; 3] = [0xe8 as f32, 0xe6 as f32, 0xe1 as f32];
-const AMBER: [f32; 3] = [0xff as f32, 0xb5 as f32, 0x47 as f32];
+//! The tray icons: the brand's Crossing mark (a laptop and a monitor with
+//! the pointer on the seam between them), pre-drawn per state and size in
+//! docs/brand/tray and embedded as raw RGBA by scripts/brand-assets.py, so
+//! there is no image decoder at run time. Amber is the one signal colour:
+//! it appears only when computers are connected.
 
 /// What the icon says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,131 +17,103 @@ pub enum IconState {
     Controlling,
 }
 
-/// Coverage (0..=1) of a rounded rectangle at pixel centre (x, y), anti-aliased over one pixel.
-fn rrect(x: f32, y: f32, (x0, y0, x1, y1): (f32, f32, f32, f32), r: f32) -> f32 {
-    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    let (hx, hy) = ((x1 - x0) / 2.0 - r, (y1 - y0) / 2.0 - r);
-    let (dx, dy) = ((x - cx).abs() - hx, (y - cy).abs() - hy);
-    let dist = dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - r;
-    (0.5 - dist).clamp(0.0, 1.0)
+/// One embedded image: width and height (u32 LE), then straight RGBA.
+struct Raw(&'static [u8]);
+
+impl Raw {
+    fn size(&self) -> u32 {
+        u32::from_le_bytes(self.0[..4].try_into().expect("header"))
+    }
+    fn pixels(&self) -> &'static [u8] {
+        &self.0[8..]
+    }
 }
 
-/// Coverage of a rounded rectangle's outline of width `w`.
-fn outline(x: f32, y: f32, r: (f32, f32, f32, f32), rad: f32, w: f32) -> f32 {
-    let inner = (r.0 + w, r.1 + w, r.2 - w, r.3 - w);
-    rrect(x, y, r, rad).min(1.0 - rrect(x, y, inner, (rad - w).max(0.0)))
+macro_rules! raw {
+    ($name:literal) => {
+        Raw(include_bytes!(concat!("../assets/", $name, ".rgba")))
+    };
 }
 
-/// Coverage of the upper half of a ring (the bridge) centred on (cx, cy).
-fn arc(x: f32, y: f32, (cx, cy): (f32, f32), radius: f32, w: f32) -> f32 {
-    let ring = (0.5 - ((x - cx).hypot(y - cy) - radius).abs() + w / 2.0).clamp(0.0, 1.0);
-    ring * (cy - y + 0.5).clamp(0.0, 1.0)
-}
-
-/// Source-over of a colour with coverage `a` onto a straight-alpha pixel.
-fn over(dst: &mut [f32; 4], c: [f32; 3], a: f32) {
-    let out = a + dst[3] * (1.0 - a);
-    if out > 0.0 {
-        for i in 0..3 {
-            dst[i] = (c[i] * a + dst[i] * dst[3] * (1.0 - a)) / out;
+/// The drawings for one state, by pixel size: hand-tuned 22 px for the
+/// GNOME/KDE panel, and the 16, 22 and 32 px drawings at 2x.
+fn set(state: IconState) -> [Raw; 4] {
+    match state {
+        IconState::Off => [raw!("off-22"), raw!("off-16x2"), raw!("off-22x2"), raw!("off-32x2")],
+        IconState::Idle => [raw!("idle-22"), raw!("idle-16x2"), raw!("idle-22x2"), raw!("idle-32x2")],
+        IconState::Connected => {
+            [raw!("connected-22"), raw!("connected-16x2"), raw!("connected-22x2"), raw!("connected-32x2")]
+        }
+        IconState::Controlling => {
+            [raw!("controlling-22"), raw!("controlling-16x2"), raw!("controlling-22x2"), raw!("controlling-32x2")]
         }
     }
-    dst[3] = out;
 }
 
-/// Coverage of the two screens' outlines, the bridge, and the second screen's body.
-fn shapes(s: f32, x: f32, y: f32) -> [f32; 4] {
-    let (w, top, bottom) = (0.09 * s, 0.38 * s, 0.80 * s);
-    let left = (0.07 * s, top, 0.43 * s, bottom);
-    let right = (0.57 * s, top, 0.93 * s, bottom);
-    let rad = 0.09 * s;
-    let bridge = arc(x, y, (0.5 * s, top + w / 2.0), 0.25 * s, w);
-    [outline(x, y, left, rad, w), outline(x, y, right, rad, w), bridge, rrect(x, y, right, rad)]
-}
+/// The sizes there are drawings for (Linux offers them all to the panel).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const SIZES: [u32; 4] = [22, 32, 44, 64];
 
-/// `size` x `size` pixels, RGBA, not premultiplied.
+/// `size` x `size` pixels, RGBA, not premultiplied. `size` must be one of [`SIZES`].
 pub fn rgba(size: u32, state: IconState) -> Vec<u8> {
-    let s = size as f32;
-    let screens = if state == IconState::Off { 0.45 } else { 1.0 };
-    let mut out = Vec::with_capacity((size * size * 4) as usize);
-    for py in 0..size {
-        for px in 0..size {
-            let [l, r, bridge, body] = shapes(s, px as f32 + 0.5, py as f32 + 0.5);
-            let mut p = [0.0; 4];
-            over(&mut p, GREY, l * screens);
-            over(&mut p, GREY, r * screens);
-            match state {
-                IconState::Off => {}
-                IconState::Idle => over(&mut p, GREY, bridge * 0.35),
-                _ => over(&mut p, AMBER, bridge),
-            }
-            if state == IconState::Controlling {
-                over(&mut p, AMBER, body);
-            }
-            out.extend(p[..3].iter().map(|c| c.round() as u8));
-            out.push((p[3] * 255.0).round() as u8);
-        }
-    }
-    out
+    let raw = set(state).into_iter().find(|r| r.size() == size).expect("a size from SIZES");
+    raw.pixels().to_vec()
 }
 
-/// A macOS template image: black shapes, only the alpha matters.
+/// 32 x 32 black-and-alpha template for the macOS menu bar, which recolours
+/// it to match light or dark mode. Only the states without amber have one.
 #[cfg(any(target_os = "macos", test))]
-pub fn template_rgba(size: u32) -> Vec<u8> {
-    let s = size as f32;
-    let mut out = Vec::with_capacity((size * size * 4) as usize);
-    for py in 0..size {
-        for px in 0..size {
-            let [l, r, bridge, _] = shapes(s, px as f32 + 0.5, py as f32 + 0.5);
-            out.extend([0, 0, 0, (l.max(r).max(bridge) * 255.0).round() as u8]);
-        }
-    }
-    out
+pub fn template_rgba(state: IconState) -> Option<Vec<u8>> {
+    let raw = match state {
+        IconState::Off => raw!("off-template-32"),
+        IconState::Idle => raw!("idle-template-32"),
+        _ => return None,
+    };
+    Some(raw.pixels().to_vec())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use IconState::*;
 
-    const ALL: [IconState; 4] = [Off, Idle, Connected, Controlling];
+    const ALL: [IconState; 4] = [IconState::Off, IconState::Idle, IconState::Connected, IconState::Controlling];
 
     fn has_amber(a: &[u8]) -> bool {
-        a.as_chunks::<4>().0.iter().any(|p| p[3] > 200 && p[0] > 240 && (0xa0..0xc0).contains(&p[1]) && p[2] < 0x60)
+        a.as_chunks::<4>().0.iter().any(|p| p[3] > 128 && p[0] > 200 && p[1] > 140 && p[1] < 210 && p[2] < 120)
     }
 
     #[test]
-    fn icons_have_the_right_size_and_transparent_corners() {
-        for st in ALL {
-            let a = rgba(32, st);
-            assert_eq!(a.len(), 32 * 32 * 4);
-            assert_eq!(a[3], 0, "corner is transparent");
-            assert!(a.as_chunks::<4>().0.iter().any(|p| p[3] > 100), "{st:?} has solid pixels");
-        }
-        assert_eq!(template_rgba(22).len(), 22 * 22 * 4);
-    }
-
-    #[test]
-    fn states_differ() {
-        for (i, a) in ALL.iter().enumerate() {
-            for b in &ALL[i + 1..] {
-                assert_ne!(rgba(32, *a), rgba(32, *b), "{a:?} vs {b:?}");
+    fn every_drawing_is_complete_and_transparent_in_the_corner() {
+        for state in ALL {
+            for size in SIZES {
+                let a = rgba(size, state);
+                assert_eq!(a.len(), (size * size * 4) as usize, "{state:?} {size}");
+                assert_eq!(a[3], 0, "{state:?} {size}: corner is transparent");
+                assert!(a.as_chunks::<4>().0.iter().any(|p| p[3] > 100), "{state:?} {size}: something is drawn");
             }
         }
     }
 
     #[test]
-    fn amber_only_when_connected() {
-        for st in ALL {
-            assert_eq!(has_amber(&rgba(64, st)), matches!(st, Connected | Controlling), "{st:?}");
+    fn states_differ_and_amber_means_connected() {
+        for (i, a) in ALL.iter().enumerate() {
+            for b in &ALL[i + 1..] {
+                assert_ne!(rgba(32, *a), rgba(32, *b), "{a:?} vs {b:?}");
+            }
+        }
+        for state in ALL {
+            let amber = matches!(state, IconState::Connected | IconState::Controlling);
+            assert_eq!(has_amber(&rgba(64, state)), amber, "{state:?}");
         }
     }
 
     #[test]
-    fn template_is_black_with_alpha_only() {
-        let t = template_rgba(32);
-        assert!(t.as_chunks::<4>().0.iter().all(|p| p[..3] == [0, 0, 0]));
-        assert!(t.as_chunks::<4>().0.iter().any(|p| p[3] == 255));
-        assert_eq!(t[3], 0);
+    fn templates_are_black_with_alpha_only() {
+        for state in [IconState::Off, IconState::Idle] {
+            let t = template_rgba(state).unwrap();
+            assert_eq!(t.len(), 32 * 32 * 4);
+            assert!(t.as_chunks::<4>().0.iter().all(|p| p[..3] == [0, 0, 0]));
+        }
+        assert!(template_rgba(IconState::Connected).is_none());
     }
 }

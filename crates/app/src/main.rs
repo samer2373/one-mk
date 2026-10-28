@@ -55,6 +55,7 @@ fn main() {
             .with_title("one·mk")
             .with_app_id("one-mk")
             .with_inner_size(size)
+            .with_icon(window_icon())
             .with_min_inner_size([760.0, 540.0]),
         ..Default::default()
     };
@@ -67,4 +68,10 @@ fn main() {
         eprintln!("one-mk-app: {e}");
         std::process::exit(1);
     }
+}
+
+/// The app icon, for the title bar, task switcher and dock.
+fn window_icon() -> std::sync::Arc<egui::IconData> {
+    let ([width, height], rgba) = app::embedded(include_bytes!("../assets/icon-256.rgba"));
+    std::sync::Arc::new(egui::IconData { rgba: rgba.to_vec(), width: width as u32, height: height as u32 })
 }

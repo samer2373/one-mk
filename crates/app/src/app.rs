@@ -160,6 +160,7 @@ pub struct App {
     size: egui::Vec2,
     now: f64,
     ctx: egui::Context,
+    lockup: egui::TextureHandle,
 }
 
 fn me_kind() -> Kind {
@@ -335,6 +336,7 @@ impl App {
             size: vec2(size[0], size[1]),
             now: 0.0,
             ctx: cc.egui_ctx.clone(),
+            lockup: lockup_texture(&cc.egui_ctx),
         })
     }
 
@@ -686,15 +688,25 @@ impl App {
     }
 }
 
-/// The mark, top left. Drawn in this one place so it can be swapped
-/// whole: this screen outlined, the next one lit.
-pub fn draw_mark(p: &Painter, rect: Rect) {
-    let s = rect.width() / 24.0;
-    let o = rect.min;
-    let back = Rect::from_min_size(o + vec2(2.5, 5.0) * s, vec2(11.0, 8.0) * s);
-    p.rect_stroke(back, CornerRadius::same(2), Stroke::new(1.8 * s.max(0.9), INK), StrokeKind::Middle);
-    let front = Rect::from_min_size(o + vec2(10.5, 11.0) * s, vec2(11.0, 8.0) * s);
-    p.rect_filled(front, CornerRadius::same(2), SIGNAL);
+/// An image embedded by scripts/brand-assets.py: width and height (u32
+/// LE), then straight RGBA.
+pub fn embedded(bytes: &[u8]) -> ([usize; 2], &[u8]) {
+    let n = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().expect("header")) as usize;
+    ([n(0), n(4)], &bytes[8..])
+}
+
+/// The brand lockup (the Crossing mark and the one·mk wordmark), drawn at
+/// 2x for sharpness on high-density screens.
+pub fn lockup_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    let (size, px) = embedded(include_bytes!("../assets/lockup.rgba"));
+    ctx.load_texture("lockup", egui::ColorImage::from_rgba_unmultiplied(size, px), egui::TextureOptions::LINEAR)
+}
+
+/// The lockup, top left, `height` points tall.
+pub fn draw_lockup(p: &Painter, tex: &egui::TextureHandle, left_center: Pos2, height: f32) {
+    let [w, h] = tex.size();
+    let rect = Rect::from_min_size(left_center - vec2(0.0, height / 2.0), vec2(height * w as f32 / h as f32, height));
+    p.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
 
 impl App {
@@ -1039,8 +1051,7 @@ impl App {
         m.add_triangle(0, 2, 3);
         p.add(egui::Shape::mesh(m));
 
-        draw_mark(&p, Rect::from_min_size(pos2(rect.left() + 16.0, rect.center().y - 11.0), vec2(22.0, 22.0)));
-        p.text(pos2(rect.left() + 46.0, rect.center().y), Align2::LEFT_CENTER, "one·mk", semibold(16.0), INK);
+        draw_lockup(&p, &self.lockup, pos2(rect.left() + 18.0, rect.center().y), 22.0);
 
         // Tabs. With one·mk off only the desk has anything to show.
         let off = self.off();

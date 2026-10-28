@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 256" width="850" height="256" role="img" aria-labelledby="title">
+  <title id="title">one·mk — Leap lockup</title>
+  <g id="symbol" transform="translate(0 48.64) scale(0.62)">
+  <path id="screens" fill="#111111" d="M46 140 H94 A18 18 0 0 1 112 158 V194 A18 18 0 0 1 94 212 H46 A18 18 0 0 1 28 194 V158 A18 18 0 0 1 46 140 Z M162 140 H210 A18 18 0 0 1 228 158 V194 A18 18 0 0 1 210 212 H162 A18 18 0 0 1 144 194 V158 A18 18 0 0 1 162 140 Z"/>
+  <path id="arc" d="M64 120 A64 64 0 0 1 175.56 77.18" fill="none" stroke="#FFB547" stroke-width="18" stroke-linecap="round"/>
+  <circle id="pointer" cx="192" cy="120" r="17" fill="#FFB547"/>
+  </g>
+  <g id="wordmark" transform="translate(198.72 0)">
+  <circle cx="50" cy="128" r="39" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M129 176 V80 M129 123 A34 34 0 0 1 197 123 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M226 128 H315 A39 39 0 1 0 306.73 152.01" fill="none" stroke="#111111" stroke-width="22"/>
+  <circle cx="363" cy="128" r="15" fill="#FFB547"/>
+  <path d="M411 176 V80 M411 116 A27 27 0 0 1 465 116 V176 M465 116 A27 27 0 0 1 519 116 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M559 176 V40" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M566 152 L638 80" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M592 126 L632 176" fill="none" stroke="#111111" stroke-width="22"/>
+  </g>
+</svg>

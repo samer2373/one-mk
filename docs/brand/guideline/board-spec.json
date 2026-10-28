@@ -1,0 +1,38 @@
+{
+  "brand": "one·mk",
+  "tagline": "One mouse and keyboard for every computer on your desk",
+  "brief": "A free, open-source tool that shares one mouse and keyboard across macOS, Windows and Linux computers. It should feel fast, precise, calm and quietly confident, and show what it does at a glance.",
+  "adjectives": ["fast", "precise", "calm", "trustworthy"],
+  "criteria": "Readable as 'one pointer moving between computers' at 16 px, works in one colour and reversed, amber as the only accent.",
+  "industry": "software",
+  "mockups": ["readme", "app-icon", "terminal", "favicon-tab", "website", "sticker"],
+  "nav": ["Download", "How it works", "GitHub"],
+  "brand_color": "#FFB547",
+  "tile_color": "#0F1216",
+  "greyscale": false,
+  "final": true,
+  "designer": "one·mk",
+  "round": 4,
+  "concepts": [
+    {
+      "name": "Crossing",
+      "symbol": "../logo/onemk-symbol-color.svg",
+      "lockup": "../logo/onemk-lockup-horizontal-color.svg",
+      "stacked": "../logo/onemk-lockup-stacked-color.svg",
+      "avatar": "../logo/onemk-symbol-small24-color.svg",
+      "symbol_on_tile": "../logo/onemk-symbol-reversed.svg",
+      "stacked_on_tile": "../logo/onemk-lockup-stacked-reversed.svg",
+      "symbol_on_dark": "../logo/onemk-symbol-reversed.svg",
+      "lockup_on_dark": "../logo/onemk-lockup-horizontal-reversed.svg",
+      "stacked_on_dark": "../logo/onemk-lockup-stacked-reversed.svg",
+      "idea": "A laptop and a monitor with one amber pointer on the seam between them: one mouse and keyboard, crossing to the next computer.",
+      "rationale": [
+        "Says what the app does in one glance, at any size",
+        "Pixel-fitted 16, 22 and 24 px drawings keep both computers in the tray",
+        "Amber appears only on the pointer, the same signal the app uses for live state"
+      ]
+    }
+  ],
+  "recommendation": "Crossing: final artwork, icons and tray states delivered in docs/brand/.",
+  "next_steps": ["Swap the tray drawing in crates/tray/src/icon.rs using tray-geometry.md", "Ship the app icons with the packages", "Use tokens.css in the app window"]
+}

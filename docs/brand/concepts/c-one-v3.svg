@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">one·mk — One</title>
+  <path id="one" fill="#111111" d="M168 220 H132 V72 A40.0 40.0 0 0 0 105.23 82.27 L81.15 55.52 A76.0 76.0 0 0 1 132 36 H168 Z"/>
+  <circle id="pointer" cx="76.84" cy="94.08" r="19.0" fill="#FFB547"/>
+</svg>

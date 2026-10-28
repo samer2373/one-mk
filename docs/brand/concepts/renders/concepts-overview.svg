@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1600" height="984" viewBox="0 0 1600 984"><defs><filter id="grey"><feColorMatrix type="saturate" values="0"/></filter></defs><rect width="1600" height="984" fill="#f7f7f4"/><text x="60" y="78" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="40" font-weight="700" fill="#161616">one·mk — logo concepts, round 1</text><text x="60" y="116" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="20" fill="#6b6b6b">Fast · precise · calm · light. Shown in greyscale; amber version in concepts-overview-colour.png.</text><rect x="60" y="150" width="474.667" height="774" rx="18" fill="#fff" stroke="#161616" stroke-width="2"/><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="90" y="190" width="414.667" height="300" preserveAspectRatio="xMidYMid meet">
+  <title id="c0-title">one·mk — Seam</title>
+  <path id="c0-screens" fill="#111111" d="M117 36 H88 A52 52 0 0 0 36 88 V168 A52 52 0 0 0 88 220 H117 V172.67 A46 46 0 0 1 117 83.33 Z M139 36 H168 A52 52 0 0 1 220 88 V168 A52 52 0 0 1 168 220 H139 V172.67 A46 46 0 0 0 139 83.33 Z"/>
+  <circle id="c0-pointer" cx="128" cy="128" r="28" fill="#FFB547"/>
+</svg>
+</g><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 850 256" x="90" y="514" width="414.667" height="120" preserveAspectRatio="xMidYMid meet">
+  <title id="l0-title">one·mk — Seam lockup</title>
+  <g id="l0-symbol" transform="translate(0 35.84) scale(0.72)">
+  <path id="l0-screens" fill="#111111" d="M117 36 H88 A52 52 0 0 0 36 88 V168 A52 52 0 0 0 88 220 H117 V172.67 A46 46 0 0 1 117 83.33 Z M139 36 H168 A52 52 0 0 1 220 88 V168 A52 52 0 0 1 168 220 H139 V172.67 A46 46 0 0 0 139 83.33 Z"/>
+  <circle id="l0-pointer" cx="128" cy="128" r="28" fill="#FFB547"/>
+  </g>
+  <g id="l0-wordmark" transform="translate(224.32 0)">
+  <ellipse cx="46" cy="128" rx="35" ry="39" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M119 176 V80 M119 123 A34 34 0 0 1 187 123 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M225 128 H295 A35 39 0 1 0 286.81 153.07" fill="none" stroke="#111111" stroke-width="22"/>
+  <circle cx="341" cy="128" r="15" fill="#FFB547"/>
+  <path d="M387 176 V80 M387 116 A27 27 0 0 1 441 116 V176 M441 116 A27 27 0 0 1 495 116 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M533 176 V40" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M540 152 L612 80" fill="none" stroke="#111111" stroke-width="22"/>
+  <polygon points="557.41,132.87 574.59,119.13 620.09,176 591.91,176" fill="#111111"/>
+  </g>
+</svg>
+</g><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="90" y="660" width="64" height="64" preserveAspectRatio="xMidYMid meet">
+  <title id="s064-title">one·mk — Seam</title>
+  <path id="s064-screens" fill="#111111" d="M117 36 H88 A52 52 0 0 0 36 88 V168 A52 52 0 0 0 88 220 H117 V172.67 A46 46 0 0 1 117 83.33 Z M139 36 H168 A52 52 0 0 1 220 88 V168 A52 52 0 0 1 168 220 H139 V172.67 A46 46 0 0 0 139 83.33 Z"/>
+  <circle id="s064-pointer" cx="128" cy="128" r="28" fill="#FFB547"/>
+</svg>
+</g><text x="122" y="744" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#8a8a8a" text-anchor="middle">64px</text><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="180" y="692" width="32" height="32" preserveAspectRatio="xMidYMid meet">
+  <title id="s032-title">one·mk — Seam</title>
+  <path id="s032-screens" fill="#111111" d="M117 36 H88 A52 52 0 0 0 36 88 V168 A52 52 0 0 0 88 220 H117 V172.67 A46 46 0 0 1 117 83.33 Z M139 36 H168 A52 52 0 0 1 220 88 V168 A52 52 0 0 1 168 220 H139 V172.67 A46 46 0 0 0 139 83.33 Z"/>
+  <circle id="s032-pointer" cx="128" cy="128" r="28" fill="#FFB547"/>
+</svg>
+</g><text x="196" y="744" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#8a8a8a" text-anchor="middle">32px</text><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="238" y="708" width="16" height="16" preserveAspectRatio="xMidYMid meet">
+  <title id="s016-title">one·mk — Seam</title>
+  <path id="s016-screens" fill="#111111" d="M117 36 H88 A52 52 0 0 0 36 88 V168 A52 52 0 0 0 88 220 H117 V172.67 A46 46 0 0 1 117 83.33 Z M139 36 H168 A52 52 0 0 1 220 88 V168 A52 52 0 0 1 168 220 H139 V172.67 A46 46 0 0 0 139 83.33 Z"/>
+  <circle id="s016-pointer" cx="128" cy="128" r="28" fill="#FFB547"/>
+</svg>
+</g><text x="246" y="744" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#8a8a8a" text-anchor="middle">16px</text><text x="90.0" y="780" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="26" font-weight="700" fill="#161616">A · Seam</text><text x="90.0" y="808" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" font-weight="700" fill="#161616" letter-spacing="1.5">RECOMMENDED</text><text x="90.0" y="842" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" fill="#555">One desk split by the screen edge; the</text><text x="90.0" y="868" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" fill="#555">pointer is the dot that sits across the</text><text x="90.0" y="894" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" fill="#555">seam.</text><rect x="562.667" y="150" width="474.667" height="774" rx="18" fill="#fff" stroke="#e4e4e0" stroke-width="1"/><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="592.667" y="190" width="414.667" height="300" preserveAspectRatio="xMidYMid meet">
+  <title id="c1-title">one·mk — Leap</title>
+  <path id="c1-screens" fill="#111111" d="M36 136 H96 A16 16 0 0 1 112 152 V188 A16 16 0 0 1 96 204 H36 A16 16 0 0 1 20 188 V152 A16 16 0 0 1 36 136 Z M40 150 A6 6 0 0 0 34 156 V184 A6 6 0 0 0 40 190 H92 A6 6 0 0 0 98 184 V156 A6 6 0 0 0 92 150 Z M160 136 H220 A16 16 0 0 1 236 152 V188 A16 16 0 0 1 220 204 H160 A16 16 0 0 1 144 188 V152 A16 16 0 0 1 160 136 Z"/>
+  <path id="c1-arc" fill="#FFB547" d="M66 114 A62 62 0 0 1 190 114 H170 A52 52 0 0 0 66 114 Z"/>
+  <circle id="c1-pointer" cx="180" cy="114" r="16" fill="#FFB547"/>
+</svg>
+</g><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 850 256" x="592.667" y="514" width="414.667" height="120" preserveAspectRatio="xMidYMid meet">
+  <title id="l1-title">one·mk — Leap lockup</title>
+  <g id="l1-symbol" transform="translate(0 35.84) scale(0.72)">
+  <path id="l1-screens" fill="#111111" d="M36 136 H96 A16 16 0 0 1 112 152 V188 A16 16 0 0 1 96 204 H36 A16 16 0 0 1 20 188 V152 A16 16 0 0 1 36 136 Z M40 150 A6 6 0 0 0 34 156 V184 A6 6 0 0 0 40 190 H92 A6 6 0 0 0 98 184 V156 A6 6 0 0 0 92 150 Z M160 136 H220 A16 16 0 0 1 236 152 V188 A16 16 0 0 1 220 204 H160 A16 16 0 0 1 144 188 V152 A16 16 0 0 1 160 136 Z"/>
+  <path id="l1-arc" fill="#FFB547" d="M66 114 A62 62 0 0 1 190 114 H170 A52 52 0 0 0 66 114 Z"/>
+  <circle id="l1-pointer" cx="180" cy="114" r="16" fill="#FFB547"/>
+  </g>
+  <g id="l1-wordmark" transform="translate(224.32 0)">
+  <ellipse cx="46" cy="128" rx="35" ry="39" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M119 176 V80 M119 123 A34 34 0 0 1 187 123 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M225 128 H295 A35 39 0 1 0 286.81 153.07" fill="none" stroke="#111111" stroke-width="22"/>
+  <circle cx="341" cy="128" r="15" fill="#FFB547"/>
+  <path d="M387 176 V80 M387 116 A27 27 0 0 1 441 116 V176 M441 116 A27 27 0 0 1 495 116 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M533 176 V40" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M540 152 L612 80" fill="none" stroke="#111111" stroke-width="22"/>
+  <polygon points="557.41,132.87 574.59,119.13 620.09,176 591.91,176" fill="#111111"/>
+  </g>
+</svg>
+</g><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="592.667" y="660" width="64" height="64" preserveAspectRatio="xMidYMid meet">
+  <title id="s164-title">one·mk — Leap</title>
+  <path id="s164-screens" fill="#111111" d="M36 136 H96 A16 16 0 0 1 112 152 V188 A16 16 0 0 1 96 204 H36 A16 16 0 0 1 20 188 V152 A16 16 0 0 1 36 136 Z M40 150 A6 6 0 0 0 34 156 V184 A6 6 0 0 0 40 190 H92 A6 6 0 0 0 98 184 V156 A6 6 0 0 0 92 150 Z M160 136 H220 A16 16 0 0 1 236 152 V188 A16 16 0 0 1 220 204 H160 A16 16 0 0 1 144 188 V152 A16 16 0 0 1 160 136 Z"/>
+  <path id="s164-arc" fill="#FFB547" d="M66 114 A62 62 0 0 1 190 114 H170 A52 52 0 0 0 66 114 Z"/>
+  <circle id="s164-pointer" cx="180" cy="114" r="16" fill="#FFB547"/>
+</svg>
+</g><text x="624.667" y="744" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#8a8a8a" text-anchor="middle">64px</text><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="682.667" y="692" width="32" height="32" preserveAspectRatio="xMidYMid meet">
+  <title id="s132-title">one·mk — Leap</title>
+  <path id="s132-screens" fill="#111111" d="M36 136 H96 A16 16 0 0 1 112 152 V188 A16 16 0 0 1 96 204 H36 A16 16 0 0 1 20 188 V152 A16 16 0 0 1 36 136 Z M40 150 A6 6 0 0 0 34 156 V184 A6 6 0 0 0 40 190 H92 A6 6 0 0 0 98 184 V156 A6 6 0 0 0 92 150 Z M160 136 H220 A16 16 0 0 1 236 152 V188 A16 16 0 0 1 220 204 H160 A16 16 0 0 1 144 188 V152 A16 16 0 0 1 160 136 Z"/>
+  <path id="s132-arc" fill="#FFB547" d="M66 114 A62 62 0 0 1 190 114 H170 A52 52 0 0 0 66 114 Z"/>
+  <circle id="s132-pointer" cx="180" cy="114" r="16" fill="#FFB547"/>
+</svg>
+</g><text x="698.667" y="744" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#8a8a8a" text-anchor="middle">32px</text><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="740.667" y="708" width="16" height="16" preserveAspectRatio="xMidYMid meet">
+  <title id="s116-title">one·mk — Leap</title>
+  <path id="s116-screens" fill="#111111" d="M36 136 H96 A16 16 0 0 1 112 152 V188 A16 16 0 0 1 96 204 H36 A16 16 0 0 1 20 188 V152 A16 16 0 0 1 36 136 Z M40 150 A6 6 0 0 0 34 156 V184 A6 6 0 0 0 40 190 H92 A6 6 0 0 0 98 184 V156 A6 6 0 0 0 92 150 Z M160 136 H220 A16 16 0 0 1 236 152 V188 A16 16 0 0 1 220 204 H160 A16 16 0 0 1 144 188 V152 A16 16 0 0 1 160 136 Z"/>
+  <path id="s116-arc" fill="#FFB547" d="M66 114 A62 62 0 0 1 190 114 H170 A52 52 0 0 0 66 114 Z"/>
+  <circle id="s116-pointer" cx="180" cy="114" r="16" fill="#FFB547"/>
+</svg>
+</g><text x="748.667" y="744" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#8a8a8a" text-anchor="middle">16px</text><text x="592.6666666666667" y="780" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="26" font-weight="700" fill="#161616">B · Leap</text><text x="592.6666666666667" y="814" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" fill="#555">The signature arc of light: the pointer</text><text x="592.6666666666667" y="840" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" fill="#555">leaves one screen and lands on the next,</text><text x="592.6666666666667" y="866" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" fill="#555">which lights up.</text><rect x="1065.33" y="150" width="474.667" height="774" rx="18" fill="#fff" stroke="#e4e4e0" stroke-width="1"/><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="1095.33" y="190" width="414.667" height="300" preserveAspectRatio="xMidYMid meet">
+  <title id="c2-title">one·mk — One</title>
+  <path id="c2-one" fill="#111111" d="M186 220 H150 V72 A40.0 40.0 0 0 0 123.23 82.27 L99.15 55.52 A76.0 76.0 0 0 1 150 36 H186 Z"/>
+  <circle id="c2-pointer" cx="94.84" cy="94.08" r="19.0" fill="#FFB547"/>
+</svg>
+</g><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 850 256" x="1095.33" y="514" width="414.667" height="120" preserveAspectRatio="xMidYMid meet">
+  <title id="l2-title">one·mk — One lockup</title>
+  <g id="l2-symbol" transform="translate(0 35.84) scale(0.72)">
+  <path id="l2-one" fill="#111111" d="M186 220 H150 V72 A40.0 40.0 0 0 0 123.23 82.27 L99.15 55.52 A76.0 76.0 0 0 1 150 36 H186 Z"/>
+  <circle id="l2-pointer" cx="94.84" cy="94.08" r="19.0" fill="#FFB547"/>
+  </g>
+  <g id="l2-wordmark" transform="translate(224.32 0)">
+  <ellipse cx="46" cy="128" rx="35" ry="39" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M119 176 V80 M119 123 A34 34 0 0 1 187 123 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M225 128 H295 A35 39 0 1 0 286.81 153.07" fill="none" stroke="#111111" stroke-width="22"/>
+  <circle cx="341" cy="128" r="15" fill="#FFB547"/>
+  <path d="M387 176 V80 M387 116 A27 27 0 0 1 441 116 V176 M441 116 A27 27 0 0 1 495 116 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M533 176 V40" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M540 152 L612 80" fill="none" stroke="#111111" stroke-width="22"/>
+  <polygon points="557.41,132.87 574.59,119.13 620.09,176 591.91,176" fill="#111111"/>
+  </g>
+</svg>
+</g><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="1095.33" y="660" width="64" height="64" preserveAspectRatio="xMidYMid meet">
+  <title id="s264-title">one·mk — One</title>
+  <path id="s264-one" fill="#111111" d="M186 220 H150 V72 A40.0 40.0 0 0 0 123.23 82.27 L99.15 55.52 A76.0 76.0 0 0 1 150 36 H186 Z"/>
+  <circle id="s264-pointer" cx="94.84" cy="94.08" r="19.0" fill="#FFB547"/>
+</svg>
+</g><text x="1127.33" y="744" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#8a8a8a" text-anchor="middle">64px</text><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="1185.33" y="692" width="32" height="32" preserveAspectRatio="xMidYMid meet">
+  <title id="s232-title">one·mk — One</title>
+  <path id="s232-one" fill="#111111" d="M186 220 H150 V72 A40.0 40.0 0 0 0 123.23 82.27 L99.15 55.52 A76.0 76.0 0 0 1 150 36 H186 Z"/>
+  <circle id="s232-pointer" cx="94.84" cy="94.08" r="19.0" fill="#FFB547"/>
+</svg>
+</g><text x="1201.33" y="744" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#8a8a8a" text-anchor="middle">32px</text><g filter="url(#grey)"><svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title" viewBox="0 0 256 256" x="1243.33" y="708" width="16" height="16" preserveAspectRatio="xMidYMid meet">
+  <title id="s216-title">one·mk — One</title>
+  <path id="s216-one" fill="#111111" d="M186 220 H150 V72 A40.0 40.0 0 0 0 123.23 82.27 L99.15 55.52 A76.0 76.0 0 0 1 150 36 H186 Z"/>
+  <circle id="s216-pointer" cx="94.84" cy="94.08" r="19.0" fill="#FFB547"/>
+</svg>
+</g><text x="1251.33" y="744" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#8a8a8a" text-anchor="middle">16px</text><text x="1095.3333333333335" y="780" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="26" font-weight="700" fill="#161616">C · One</text><text x="1095.3333333333335" y="814" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" fill="#555">A numeral 1 led by the interpunct of</text><text x="1095.3333333333335" y="840" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" fill="#555">one·mk: one pointer, one keyboard, ahead of</text><text x="1095.3333333333335" y="866" font-family="system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" fill="#555">everything.</text></svg>

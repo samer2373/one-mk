@@ -229,6 +229,7 @@ crates/clipboard  system clipboard on its own thread (arboard)
 crates/ctl        client for the daemon's control channel, status format, login settings
 crates/tray       one-mk-tray: the optional tray icon
 crates/app        one-mk-app: the optional window (egui)
+docs/brand        logo, app and tray icons, colours, brand guideline
 crates/one-mk     the daemon and CLI
 ```
 

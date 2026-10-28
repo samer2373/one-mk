@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 626 256" width="626" height="256" role="img" aria-labelledby="title">
+  <title id="title">one·mk wordmark</title>
+  <ellipse cx="46" cy="128" rx="35" ry="39" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M119 176 V80 M119 123 A34 34 0 0 1 187 123 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M225 128 H295 A35 39 0 1 0 286.81 153.07" fill="none" stroke="#111111" stroke-width="22"/>
+  <circle cx="341" cy="128" r="15" fill="#FFB547"/>
+  <path d="M387 176 V80 M387 116 A27 27 0 0 1 441 116 V176 M441 116 A27 27 0 0 1 495 116 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M533 176 V40" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M540 152 L612 80" fill="none" stroke="#111111" stroke-width="22"/>
+  <polygon points="557.41,132.87 574.59,119.13 620.09,176 591.91,176" fill="#111111"/>
+</svg>

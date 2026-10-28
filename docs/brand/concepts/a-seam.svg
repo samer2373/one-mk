@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">one·mk — Seam</title>
+  <path id="screens" fill="#111111" d="M117 36 H88 A52 52 0 0 0 36 88 V168 A52 52 0 0 0 88 220 H117 V172.67 A46 46 0 0 1 117 83.33 Z M139 36 H168 A52 52 0 0 1 220 88 V168 A52 52 0 0 1 168 220 H139 V172.67 A46 46 0 0 0 139 83.33 Z"/>
+  <circle id="pointer" cx="128" cy="128" r="28" fill="#FFB547"/>
+</svg>

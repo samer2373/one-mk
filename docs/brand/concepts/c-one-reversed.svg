@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">one·mk — One reversed</title>
+  <path id="one" fill="#EDEFF2" d="M186 220 H150 V72 A40.0 40.0 0 0 0 123.23 82.27 L99.15 55.52 A76.0 76.0 0 0 1 150 36 H186 Z"/>
+  <circle id="pointer" cx="94.84" cy="94.08" r="19.0" fill="#FFB547"/>
+</svg>

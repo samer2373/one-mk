@@ -1,0 +1,28 @@
+/* one·mk design tokens. Dark UI is primary; amber is the only signal colour. */
+@font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-SemiBold.ttf") format("truetype"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("../../crates/app/fonts/GeistMono-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+
+:root {
+  /* colour */
+  --omk-ground: #0F1216;      /* app background */
+  --omk-panel: #13171C;       /* cards, sidebars */
+  --omk-raised: #171B21;      /* hover, popovers, inputs */
+  --omk-line: #252B34;        /* hairlines (decorative) */
+  --omk-ink: #EDEFF2;         /* primary text, 16.3:1 on ground */
+  --omk-ink2: #9DA6B1;        /* secondary text, 7.62:1 on ground */
+  --omk-signal: #FFB547;      /* amber: pointer, live state, primary action, 10.69:1 on ground */
+  --omk-signal-ink: #1E1505;  /* text on amber, 10.26:1 */
+
+  /* type */
+  --omk-font-sans: Geist, ui-sans-serif, system-ui, sans-serif;
+  --omk-font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --omk-weight-regular: 400;
+  --omk-weight-semibold: 600;
+  --omk-size-body: 15px;
+  --omk-size-small: 13px;
+  --omk-size-caption: 12px;
+  --omk-leading-body: 1.45;
+  --omk-leading-small: 1.4;
+  --omk-leading-caption: 1.35;
+}

@@ -57,7 +57,7 @@ impl Tray for OneMk {
 
     fn icon_pixmap(&self) -> Vec<Icon> {
         let st = self.snap.icon_state();
-        vec![pixmap(22, st), pixmap(32, st), pixmap(64, st)]
+        icon::SIZES.into_iter().map(|size| pixmap(size, st)).collect()
     }
 
     /// A left click opens the settings window; the menu is on right click.

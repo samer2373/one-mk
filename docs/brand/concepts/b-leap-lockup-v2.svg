@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 256" width="850" height="256" role="img" aria-labelledby="title">
+  <title id="title">one·mk — Leap lockup</title>
+  <g id="symbol" transform="translate(0 35.84) scale(0.72)">
+  <path id="screens" fill="#111111" d="M40 150 H100 A16 16 0 0 1 116 166 V198 A16 16 0 0 1 100 214 H40 A16 16 0 0 1 24 198 V166 A16 16 0 0 1 40 150 Z M156 150 H216 A16 16 0 0 1 232 166 V198 A16 16 0 0 1 216 214 H156 A16 16 0 0 1 140 198 V166 A16 16 0 0 1 156 150 Z"/>
+  <path id="arc" fill="#FFB547" d="M58 118 A70 70 0 0 1 198 118 H176 A59 59 0 0 0 58 118 Z"/>
+  <circle id="pointer" cx="187" cy="118" r="17" fill="#FFB547"/>
+  </g>
+  <g id="wordmark" transform="translate(224.32 0)">
+  <ellipse cx="46" cy="128" rx="35" ry="39" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M119 176 V80 M119 123 A34 34 0 0 1 187 123 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M214 128 H295 A35 39 0 1 0 286.81 153.07" fill="none" stroke="#111111" stroke-width="22"/>
+  <circle cx="341" cy="128" r="15" fill="#FFB547"/>
+  <path d="M387 176 V80 M387 116 A27 27 0 0 1 441 116 V176 M441 116 A27 27 0 0 1 495 116 V176" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M533 176 V40" fill="none" stroke="#111111" stroke-width="22"/>
+  <path d="M540 152 L612 80" fill="none" stroke="#111111" stroke-width="22"/>
+  <polygon points="557.41,132.87 574.59,119.13 620.09,176 591.91,176" fill="#111111"/>
+  </g>
+</svg>
