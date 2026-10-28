@@ -36,6 +36,9 @@ jobs:
             cp $d/one-mk $d/one-mk-tray $d/one-mk-app "$name"/
             tar czf "$name.tar.gz" "$name"
           fi
+      - name: Mac app
+        if: runner.os == 'macOS'
+        run: sh scripts/bundle-mac.sh target/${{ matrix.target }}/release one-mk-${{ matrix.target }}.app.zip
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}

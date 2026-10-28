@@ -19,11 +19,20 @@ Get it first. On macOS and Linux:
 curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh
 ```
 
+On a Mac this installs **one·mk** into Applications and opens it. Click
+Start and turn on "Start at login" in the window, pair from the window, and
+you never need the terminal. macOS asks for Accessibility permission the
+first time: turn on one·mk in System Settings > Privacy & Security >
+Accessibility. The app is not signed with an Apple Developer ID yet, so
+after each update macOS may ask again: remove one·mk from that list and
+add it back.
+
 On Windows, download the `.zip` from the
 [latest release](https://github.com/samer2373/one-mk/releases/latest) and
 unzip it. Or build it yourself (see Building).
 
-Install once, pair once, done. On **each** computer:
+The commands below do the same from a terminal (on Linux, run
+`one-mk-app` to open the window). On **each** computer:
 
 ```bash
 one-mk install     # start one-mk automatically whenever you log in
