@@ -222,7 +222,7 @@ mod tests {
         let d = Desktop::new(vec![Rect::new(0, 0, 1920, 1080), Rect::new(1920, 0, 2560, 1440)]);
         let mut c = RemoteCursor::enter(d, Side::Left, 0.5, 1);
         let y = 1440.0 - 1.0 / 256.0;
-        assert!(matches!(c.motion(1980.0, 800.0), Step::Move(_)));
+        assert!(matches!(c.motion(1980.0, 1000.0), Step::Move(_)));
         assert_eq!(c.pos(), Pos::new(1980.0, y));
         // Moving left from the bottom of the tall monitor, below the short
         // one, clamps against the inner edge instead of leaving.

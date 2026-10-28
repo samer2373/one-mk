@@ -1,6 +1,6 @@
 [package]
 name = "one-mk-tray"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 
 [[bin]]
@@ -9,8 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
-one-mk-ctl = { version = "0.1.2", path = "../ctl" }
-one-mk-proto = { version = "0.1.2", path = "../proto" }
+one-mk-ctl = { version = "0.1.3", path = "../ctl" }
+one-mk-proto = { version = "0.1.3", path = "../proto" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }

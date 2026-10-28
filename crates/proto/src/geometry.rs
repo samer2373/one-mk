@@ -132,27 +132,38 @@ impl Desktop {
             .unwrap_or(p)
     }
 
+    /// Where the screens on `side`'s outer edge begin and how far they run
+    /// along it. This, not the whole bounding box, is what crossing happens
+    /// on, so it is what fractions are measured against.
+    fn edge_span(&self, side: Side) -> (f64, f64) {
+        let (lo, hi) = self.outer_edges(side).fold((i32::MAX, i32::MIN), |(lo, hi), r| match side {
+            Side::Left | Side::Right => (lo.min(r.y), hi.max(r.bottom())),
+            Side::Top | Side::Bottom => (lo.min(r.x), hi.max(r.right())),
+        });
+        (f64::from(lo), f64::from((hi - lo).max(1)))
+    }
+
     /// Position along `side` as a fraction in [0, 1], used to carry the
     /// pointer across machines whose desktops have different sizes.
     pub fn edge_fraction(&self, side: Side, p: Pos) -> f64 {
-        let b = self.bounds();
-        let t = match side {
-            Side::Left | Side::Right => (p.y - f64::from(b.y)) / f64::from(b.h),
-            Side::Top | Side::Bottom => (p.x - f64::from(b.x)) / f64::from(b.w),
+        let (start, len) = self.edge_span(side);
+        let along = match side {
+            Side::Left | Side::Right => p.y,
+            Side::Top | Side::Bottom => p.x,
         };
-        t.clamp(0.0, 1.0)
+        ((along - start) / len).clamp(0.0, 1.0)
     }
 
     /// A point just inside `side` at fraction `t`, `inset` pixels from the edge.
     pub fn point_on_edge(&self, side: Side, t: f64, inset: f64) -> Pos {
         let b = self.bounds();
-        let along_y = f64::from(b.y) + t.clamp(0.0, 1.0) * f64::from(b.h);
-        let along_x = f64::from(b.x) + t.clamp(0.0, 1.0) * f64::from(b.w);
+        let (start, len) = self.edge_span(side);
+        let along = start + t.clamp(0.0, 1.0) * len;
         let p = match side {
-            Side::Left => Pos::new(f64::from(b.x) + inset, along_y),
-            Side::Right => Pos::new(f64::from(b.right()) - 1.0 - inset, along_y),
-            Side::Top => Pos::new(along_x, f64::from(b.y) + inset),
-            Side::Bottom => Pos::new(along_x, f64::from(b.bottom()) - 1.0 - inset),
+            Side::Left => Pos::new(f64::from(b.x) + inset, along),
+            Side::Right => Pos::new(f64::from(b.right()) - 1.0 - inset, along),
+            Side::Top => Pos::new(along, f64::from(b.y) + inset),
+            Side::Bottom => Pos::new(along, f64::from(b.bottom()) - 1.0 - inset),
         };
         self.clamp(p)
     }
@@ -198,6 +209,28 @@ mod tests {
         let p = d.point_on_edge(Side::Right, 0.5, 0.0);
         assert!((d.edge_fraction(Side::Right, p) - 0.5).abs() < 1e-9);
         assert_eq!(p.x, 3359.0);
+    }
+
+    #[test]
+    fn edge_fraction_follows_the_screens_on_that_edge() {
+        // A real 4-display Mac: the right-most monitor (y 0..1080) is far
+        // smaller than the bounding box (y -840..1080). Crossing happens on
+        // that monitor, so its edge must map to the full 0..1 range.
+        let d = Desktop::new(vec![
+            Rect::new(0, 0, 1920, 1080),
+            Rect::new(-2592, 98, 1512, 982),
+            Rect::new(-1080, -840, 1080, 1920),
+            Rect::new(1920, 0, 1920, 1080),
+        ]);
+        let right = |y: f64| d.edge_fraction(Side::Right, Pos::new(3839.0, y));
+        assert!(right(0.0).abs() < 1e-9);
+        assert!((right(540.0) - 0.5).abs() < 1e-9);
+        assert!((right(1080.0) - 1.0).abs() < 1e-9);
+        let p = d.point_on_edge(Side::Right, 0.5, 2.0);
+        assert_eq!((p.x, p.y), (3837.0, 540.0));
+        // The left edge belongs to the 1512x982 monitor at x=-2592 and the
+        // portrait one at -1080 does not touch it: only the former counts.
+        assert_eq!(d.point_on_edge(Side::Left, 0.0, 0.0).y, 98.0);
     }
 
     #[test]
