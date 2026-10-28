@@ -47,7 +47,21 @@ impl Discovery {
         )?
         .enable_addr_auto();
         daemon.register(info)?;
+        let rx = Self::spawn_browser(&daemon, me)?;
+        Ok((Self { daemon }, rx))
+    }
 
+    /// Only looks for other devices, without advertising this one. For
+    /// short-lived tools (like `one-mk send`) that share the identity of
+    /// the long-running service on this machine and must not be mistaken
+    /// for it.
+    pub fn browse(id: &Identity) -> Result<(Self, mpsc::UnboundedReceiver<Found>)> {
+        let daemon = ServiceDaemon::new()?;
+        let rx = Self::spawn_browser(&daemon, id.fingerprint.to_string())?;
+        Ok((Self { daemon }, rx))
+    }
+
+    fn spawn_browser(daemon: &ServiceDaemon, me: String) -> Result<mpsc::UnboundedReceiver<Found>> {
         let events = daemon.browse(SERVICE)?;
         let (tx, rx) = mpsc::unbounded_channel();
         // mdns-sd is runtime-agnostic and blocks; keep it off the async runtime.
@@ -75,7 +89,7 @@ impl Discovery {
                 }
             }
         })?;
-        Ok((Self { daemon }, rx))
+        Ok(rx)
     }
 }
 

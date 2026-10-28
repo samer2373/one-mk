@@ -7,11 +7,13 @@ mod codec;
 mod geometry;
 mod keys;
 mod motion;
+mod transfer;
 
 pub use codec::{Control, Datagram, DecodeError, StreamKind};
 pub use geometry::{Desktop, Pos, Rect, Side};
 pub use keys::HeldKeys;
 pub use motion::{MotionReceiver, RemoteCursor, Step};
+pub use transfer::{ClipFormat, ClipHeader, FileMsg};
 
 /// Bumped on any incompatible wire change; peers refuse mismatched versions.
 pub const PROTOCOL_VERSION: u16 = 1;

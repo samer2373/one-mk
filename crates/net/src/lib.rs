@@ -13,7 +13,9 @@ pub use discovery::{Discovery, Found};
 pub use identity::{Fingerprint, Identity};
 pub use node::{Node, Peer};
 pub use pairing::{Pairing, Sas};
-pub use stream::{read_frame, ControlWriter};
+pub use stream::{
+    ControlWriter, open_stream, read_clip_header, read_file_msg, read_frame, read_stream_kind, write_file_msg,
+};
 pub use trust::{Device, TrustStore};
 
 pub use quinn;

@@ -23,6 +23,18 @@ The computer you pair from first is placed to the right. To change it:
 one-mk layout "other-pc" left
 ```
 
+The clipboard follows the pointer (text, HTML and images; turn it off with
+`one-mk run --no-clipboard`). To send files or folders:
+
+```bash
+one-mk send photos/ notes.pdf              # to your only paired computer
+one-mk send big.iso --to "other-pc"        # if you have several
+```
+
+They arrive in `Downloads/one-mk` on the other computer (change it with
+`one-mk run --downloads <dir>`). An interrupted transfer resumes where it
+stopped when you send the same file again.
+
 Other commands: `one-mk devices`, `one-mk forget <name>`, `one-mk id`,
 `one-mk bench`.
 
@@ -40,6 +52,8 @@ Other commands: `one-mk devices`, `one-mk forget <name>`, `one-mk id`,
 | **No stuck keys** | Held keys are tracked and released when the pointer leaves, the peer disconnects, or traffic stops for 750 ms. |
 | **Light** | Zero CPU when idle. The network side runs on a single thread, with one thread each for input capture and injection. |
 | **Secure by default** | Mutual TLS 1.3 over QUIC. Devices are pinned by certificate fingerprint at pairing, using a commit-then-reveal numeric code (like Bluetooth) that defeats man-in-the-middle attacks. |
+| **Clipboard that just works** | Copy on one computer, paste on the other: text, rich text (HTML) and images, sent once when the pointer crosses and only if it changed. Up to 32 MB, on its own stream so it never holds up the mouse. |
+| **Fast, safe file transfer** | `one-mk send` streams files and folders over mutually authenticated QUIC, with 1 MB chunks, parallel streams for many small files, BLAKE3 verification of every file, and resume. Received files can't escape the download folder or overwrite anything. |
 | **Easy** | No server/client roles, no IP addresses (mDNS discovery), no certificates to copy, no root and no udev rules on Linux. |
 
 ## Measure it
@@ -56,6 +70,7 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
 crates/proto   wire format + pure pointer/edge/key logic (no I/O, unit-tested)
 crates/net     identity, QUIC, pairing, trusted devices, mDNS discovery
 crates/input   platform input: Linux (XDG portals + libei); Windows/macOS next
+crates/clipboard  system clipboard on its own thread (arboard)
 crates/one-mk  the daemon and CLI
 ```
 
@@ -68,12 +83,16 @@ cargo test
 
 On Linux you need GNOME 45+ or KDE Plasma 6.1+ on Wayland. The first
 `one-mk run` asks for permission once (input capture and remote control).
+Clipboard sharing uses the Wayland data-control protocol where the
+compositor has it (KDE, wlroots) and X11 otherwise; GNOME has no Wayland
+clipboard access for background apps, so there it goes through XWayland,
+which GNOME bridges to the Wayland clipboard.
 
 ## Roadmap
 
 1. ✅ Linux ↔ Linux mouse & keyboard, pairing, discovery, benchmark
 2. Windows backend (Raw Input + SendInput, SYSTEM service for UAC/login screen)
 3. macOS backend (CGEventTap + CGEventPost, permission guide)
-4. Clipboard (lazy, text/images/files) and drag-and-drop file transfer
+4. ✅ Clipboard (text, HTML, images) and file transfer (`one-mk send`); drag-and-drop next
 5. Tray app with drag-and-drop layout editor; "push toward it" layout learning
 6. Gaming mode (relative motion), connection doctor, auto-update

@@ -1,10 +1,11 @@
 //! One connection to a trusted peer: the handshake, and the task that
 //! applies input the peer sends us when it controls this machine.
 
+use crate::app::Services;
 use anyhow::{Context, Result, bail, ensure};
 use one_mk_input::Inject;
 use one_mk_net::{ControlWriter, Fingerprint, Identity, Peer, read_frame};
-use one_mk_proto::{Control, Datagram, HeldKeys, MotionReceiver, PROTOCOL_VERSION, Rect, StreamKind};
+use one_mk_proto::{Control, Datagram, HeldKeys, MotionReceiver, PROTOCOL_VERSION, Rect};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -27,18 +28,20 @@ pub struct Link {
 
 pub enum LinkEvent {
     Screens(Vec<Rect>),
+    /// The peer's pointer arrived on this machine.
+    Entered,
+    /// The peer's pointer left this machine.
+    Left,
     Closed,
 }
 
-/// Opens (or accepts) the control stream and exchanges `Hello`s.
-pub async fn handshake(peer: Peer, me: &Identity, screens: Vec<Rect>) -> Result<Link> {
-    let (send, mut recv) = if peer.initiator {
-        peer.open_stream(StreamKind::Control).await?
-    } else {
-        let (kind, send, recv) = peer.accept_stream().await?;
-        ensure!(kind == StreamKind::Control, "expected control stream, got {kind:?}");
-        (send, recv)
-    };
+/// Exchanges `Hello`s on the control stream (opened by the dialer).
+pub async fn handshake(
+    peer: Peer,
+    (send, mut recv): (quinn::SendStream, quinn::RecvStream),
+    me: &Identity,
+    screens: Vec<Rect>,
+) -> Result<Link> {
     let ctl = ControlWriter::spawn(send);
     ctl.send(Control::Hello { version: PROTOCOL_VERSION, name: me.name.clone(), screens });
 
@@ -71,8 +74,12 @@ impl Link {
         self,
         inject: mpsc::UnboundedSender<Inject>,
         events: mpsc::UnboundedSender<(Fingerprint, usize, LinkEvent)>,
+        services: Services,
     ) -> (quinn::Connection, ControlWriter) {
-        let Link { fp, id, conn, ctl, mut recv, .. } = self;
+        let Link { fp, id, conn, ctl, mut recv, name, .. } = self;
+        // Bulk streams (clipboard, files) are served by their own tasks,
+        // never by the input task below.
+        tokio::spawn(crate::app::serve_streams(conn.clone(), fp, name, services, true));
         let task_conn = conn.clone();
         tokio::spawn(async move {
             let mut target = Target::new(inject);
@@ -156,10 +163,12 @@ impl Target {
             Control::Enter { epoch, pos } => {
                 self.motion.enter(epoch);
                 inject(Inject::MoveTo(pos));
+                return Some(LinkEvent::Entered);
             }
             Control::Leave => {
                 self.motion.leave();
                 self.release_all();
+                return Some(LinkEvent::Left);
             }
             Control::Key { code, down } => {
                 if self.motion.is_active() && self.held.update(code, down) {

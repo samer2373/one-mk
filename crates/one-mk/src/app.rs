@@ -1,11 +1,13 @@
 //! The daemon: owns the local input backend and all peer links, and decides
 //! which machine the pointer is on.
 
+use crate::clip::ClipSync;
 use crate::link::{self, Link, LinkEvent};
+use crate::transfer::Inbox;
 use anyhow::{Context, Result};
 use one_mk_input::{Backend, CaptureCmd, Event, Inject};
-use one_mk_net::{ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, TrustStore};
-use one_mk_proto::{Control, Datagram, Desktop, HeldKeys, Pos, Rect, RemoteCursor, Side, Step};
+use one_mk_net::{ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, TrustStore, read_stream_kind};
+use one_mk_proto::{Control, Datagram, Desktop, HeldKeys, Pos, Rect, RemoteCursor, Side, Step, StreamKind};
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
@@ -22,6 +24,8 @@ const KEEPALIVE: Duration = Duration::from_millis(20);
 const RESEND_AFTER: [Duration; 2] = [Duration::from_millis(4), Duration::from_millis(16)];
 const DIAL_INTERVAL: Duration = Duration::from_secs(2);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
+/// How long a peer that connected to us may take to open its first stream.
+const FIRST_STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// evdev codes for the emergency "bring my pointer home" shortcut:
 /// Ctrl+Alt+Shift+Esc.
@@ -35,6 +39,56 @@ pub struct Options {
     pub port: u16,
     pub connect: Vec<SocketAddr>,
     pub discovery: bool,
+    /// Clipboard to share; `None` turns clipboard sharing off.
+    pub clipboard: Option<one_mk_clipboard::Clipboard>,
+    /// Where received files go.
+    pub downloads: PathBuf,
+}
+
+/// What peers can use besides input: clipboard and file streams.
+#[derive(Clone)]
+pub struct Services {
+    pub clip: Option<Arc<ClipSync>>,
+    pub inbox: Arc<Inbox>,
+}
+
+/// Serves the bulk streams a peer opens on `conn` until it closes, each on
+/// its own task. On a transfer-only connection (`link == false`) only
+/// file streams are accepted.
+pub async fn serve_streams(conn: quinn::Connection, fp: Fingerprint, name: String, services: Services, link: bool) {
+    while let Ok((send, mut recv)) = conn.accept_bi().await {
+        let (services, name) = (services.clone(), name.clone());
+        tokio::spawn(async move {
+            let kind = match tokio::time::timeout(FIRST_STREAM_TIMEOUT, read_stream_kind(&mut recv)).await {
+                Ok(Ok(k)) => k,
+                Ok(Err(e)) => return tracing::debug!(peer = %name, "bad stream: {e:#}"),
+                Err(_) => return,
+            };
+            serve_stream(kind, fp, &name, &services, link, send, recv).await;
+        });
+    }
+}
+
+async fn serve_stream(
+    kind: StreamKind,
+    fp: Fingerprint,
+    name: &str,
+    services: &Services,
+    link: bool,
+    send: quinn::SendStream,
+    mut recv: quinn::RecvStream,
+) {
+    match (kind, &services.clip) {
+        (StreamKind::File, _) => services.inbox.receive(fp, name, send, recv).await,
+        (StreamKind::Clipboard, Some(clip)) if link => clip.receive(fp, name, recv).await,
+        (StreamKind::Clipboard, None) if link => {
+            let _ = recv.stop(0u32.into()); // clipboard sharing is off here
+        }
+        _ => {
+            tracing::debug!(peer = %name, "unexpected {kind:?} stream");
+            let _ = recv.stop(0u32.into());
+        }
+    }
 }
 
 enum AppEvent {
@@ -82,6 +136,7 @@ struct App {
     discovered: HashMap<Fingerprint, Vec<SocketAddr>>,
     extra_addrs: Vec<SocketAddr>,
     dialing: HashSet<SocketAddr>,
+    services: Services,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -106,12 +161,18 @@ pub async fn serve(
     tracing::info!(name = %identity.name, id = %identity.fingerprint.short(), port, "one-mk running");
 
     let Backend { mut events, capture, inject } = backend;
+    let services = Services { clip: opts.clipboard.map(ClipSync::new), inbox: Inbox::new(opts.downloads.clone()) };
+    tracing::info!(
+        clipboard = services.clip.is_some(),
+        downloads = %opts.downloads.display(),
+        "sharing"
+    );
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (link_tx, mut link_rx) = mpsc::unbounded_channel();
     let (local_screens, screens_rx) = watch::channel(Vec::new());
 
-    spawn_accept(node.clone(), dir.clone(), screens_rx.clone(), tx.clone());
+    spawn_accept(node.clone(), dir.clone(), screens_rx.clone(), tx.clone(), services.clone());
     let _discovery = if opts.discovery {
         let (d, mut found) = Discovery::start(&identity, port, false)?;
         let tx = tx.clone();
@@ -144,6 +205,7 @@ pub async fn serve(
         discovered: HashMap::new(),
         extra_addrs: opts.connect,
         dialing: HashSet::new(),
+        services,
     };
     app.dial_missing(&screens_rx);
 
@@ -202,7 +264,13 @@ async fn shutdown_signal() {
     let _ = ctrl_c.await;
 }
 
-fn spawn_accept(node: Node, dir: PathBuf, screens: watch::Receiver<Vec<Rect>>, tx: mpsc::UnboundedSender<AppEvent>) {
+fn spawn_accept(
+    node: Node,
+    dir: PathBuf,
+    screens: watch::Receiver<Vec<Rect>>,
+    tx: mpsc::UnboundedSender<AppEvent>,
+    services: Services,
+) {
     tokio::spawn(async move {
         while let Some(res) = node.accept().await {
             let peer = match res {
@@ -212,30 +280,62 @@ fn spawn_accept(node: Node, dir: PathBuf, screens: watch::Receiver<Vec<Rect>>, t
                     continue;
                 }
             };
-            let (node, dir, screens, tx) = (node.clone(), dir.clone(), screens.clone(), tx.clone());
-            tokio::spawn(async move { establish(peer, &node, &dir, &screens, &tx).await });
+            let (node, dir, screens, tx, services) =
+                (node.clone(), dir.clone(), screens.clone(), tx.clone(), services.clone());
+            tokio::spawn(async move { establish(peer, &node, &dir, &screens, &tx, services).await });
         }
     });
 }
 
 /// Checks the peer is paired, then handshakes and hands the link to the app.
+///
+/// A connection we dialed always starts with a control stream. One that
+/// was dialed to us may instead start with a file stream: that is `one-mk
+/// send` on the peer, which shares the peer service's identity. It gets a
+/// transfer-only connection, without a link, so it never replaces the
+/// service's link.
 async fn establish(
     peer: Peer,
     node: &Node,
     dir: &std::path::Path,
     screens: &watch::Receiver<Vec<Rect>>,
     tx: &mpsc::UnboundedSender<AppEvent>,
+    services: Services,
 ) {
     // Re-read the store so devices paired while we run are accepted.
-    let trusted = TrustStore::load(dir).map(|t| t.is_trusted(&peer.fingerprint)).unwrap_or(false);
-    if !trusted {
+    let device = TrustStore::load(dir).ok().and_then(|t| t.get(&peer.fingerprint).map(|d| d.name.clone()));
+    let Some(device_name) = device else {
         tracing::info!(peer = %peer.fingerprint.short(), "rejecting unpaired device");
         peer.conn.close(1u32.into(), b"not paired");
         return;
-    }
+    };
     let addr = peer.conn.remote_address();
-    let local = screens.borrow().clone();
-    match link::handshake(peer, node.identity(), local).await {
+    let first = if peer.initiator {
+        peer.open_stream(StreamKind::Control).await
+    } else {
+        match tokio::time::timeout(FIRST_STREAM_TIMEOUT, peer.accept_stream()).await {
+            Ok(Ok((StreamKind::Control, send, recv))) => Ok((send, recv)),
+            Ok(Ok((StreamKind::File, send, recv))) => {
+                tracing::debug!(peer = %device_name, %addr, "transfer connection");
+                let fp = peer.fingerprint;
+                let conn = peer.conn;
+                tokio::spawn(serve_streams(conn.clone(), fp, device_name.clone(), services.clone(), false));
+                serve_stream(StreamKind::File, fp, &device_name, &services, false, send, recv).await;
+                return;
+            }
+            Ok(Ok((kind, ..))) => Err(anyhow::anyhow!("unexpected first stream {kind:?}")),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(anyhow::anyhow!("peer opened no stream")),
+        }
+    };
+    let res = match first {
+        Ok(streams) => {
+            let local = screens.borrow().clone();
+            link::handshake(peer, streams, node.identity(), local).await
+        }
+        Err(e) => Err(e),
+    };
+    match res {
         Ok(link) => {
             let _ = tx.send(AppEvent::Connected(link));
         }
@@ -323,6 +423,9 @@ impl App {
         let cursor = RemoteCursor::enter(desktop, side.opposite(), t, self.epoch);
         peer.ctl.send(Control::Enter { epoch: self.epoch, pos: cursor.pos() });
         tracing::debug!(peer = %peer.name, %side, "pointer moved to peer");
+        if let Some(clip) = &self.services.clip {
+            clip.push(fp, &peer.name, peer.conn.clone());
+        }
         self.remote = Some(Remote {
             peer: fp,
             side,
@@ -438,7 +541,7 @@ impl App {
         tracing::info!(peer = %link.name, %addr, %side, "connected");
         let desktop = (!link.screens.is_empty()).then(|| Desktop::new(link.screens.clone()));
         let (id, name, initiator) = (link.id, link.name.clone(), link.initiator);
-        let (conn, ctl) = link.spawn(self.inject.clone(), self.link_tx.clone());
+        let (conn, ctl) = link.spawn(self.inject.clone(), self.link_tx.clone(), self.services.clone());
         if let Some(old) = self.peers.insert(fp, Connected { id, name, initiator, side, conn, ctl, desktop }) {
             old.conn.close(2u32.into(), b"duplicate");
         }
@@ -458,9 +561,22 @@ impl App {
                 peer.desktop = desktop;
                 self.update_sides();
             }
+            LinkEvent::Entered => {
+                if let Some(clip) = &self.services.clip {
+                    clip.entered(fp, &peer.name);
+                }
+            }
+            LinkEvent::Left => {
+                if let Some(clip) = &self.services.clip {
+                    clip.left(fp, peer.conn.clone());
+                }
+            }
             LinkEvent::Closed => {
                 let peer = self.peers.remove(&fp).expect("present");
                 tracing::info!(peer = %peer.name, "disconnected");
+                if let Some(clip) = &self.services.clip {
+                    clip.forget(fp);
+                }
                 if self.remote.as_ref().is_some_and(|r| r.peer == fp) {
                     self.go_home(0.5);
                 }
@@ -501,10 +617,11 @@ impl App {
             if !self.dialing.insert(addr) {
                 continue;
             }
-            let (node, dir, screens, tx) = (self.node.clone(), self.dir.clone(), screens.clone(), self.tx.clone());
+            let (node, dir, screens, tx, services) =
+                (self.node.clone(), self.dir.clone(), screens.clone(), self.tx.clone(), self.services.clone());
             tokio::spawn(async move {
                 match tokio::time::timeout(DIAL_TIMEOUT, node.connect(addr)).await {
-                    Ok(Ok(peer)) => establish(peer, &node, &dir, &screens, &tx).await,
+                    Ok(Ok(peer)) => establish(peer, &node, &dir, &screens, &tx, services).await,
                     Ok(Err(e)) => tracing::trace!(%addr, "dial failed: {e:#}"),
                     Err(_) => tracing::trace!(%addr, "dial timed out"),
                 }
@@ -580,6 +697,8 @@ mod tests {
             port,
             connect,
             discovery: false,
+            clipboard: None,
+            downloads: std::env::temp_dir().join("one-mk-test-unused-downloads"),
         };
         let a = tokio::spawn(serve(da.clone(), opts(pa, vec![]), ba, stop(stop_rx.clone())));
         let b = tokio::spawn(serve(db.clone(), opts(pb, vec![SocketAddr::from(([127, 0, 0, 1], pa))]), bb, stop(stop_rx)));
@@ -629,5 +748,193 @@ mod tests {
         b.await.unwrap().unwrap();
         let _ = std::fs::remove_dir_all(da);
         let _ = std::fs::remove_dir_all(db);
+    }
+
+    /// Two linked daemons on loopback (B to the right of A).
+    struct Duo {
+        da: PathBuf,
+        db: PathBuf,
+        ha: NullHandles,
+        hb: NullHandles,
+        pb: u16,
+        stop: watch::Sender<bool>,
+        tasks: Vec<tokio::task::JoinHandle<Result<()>>>,
+    }
+
+    impl Duo {
+        async fn start(tag: &str, clips: Option<(one_mk_clipboard::Clipboard, one_mk_clipboard::Clipboard)>) -> Duo {
+            let (da, db) = (temp_dir(&format!("{tag}-a")), temp_dir(&format!("{tag}-b")));
+            let (ia, ib) = (Identity::load_or_create(&da).unwrap(), Identity::load_or_create(&db).unwrap());
+            trust(&da, &ib, Side::Right);
+            trust(&db, &ia, Side::Left);
+            let (pa, pb) = (free_port(), free_port());
+            let desk = Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]);
+            let (ba, mut ha) = one_mk_input::null(desk.clone());
+            let (bb, mut hb) = one_mk_input::null(desk);
+            let (stop, stop_rx) = watch::channel(false);
+            let wait = |mut rx: watch::Receiver<bool>| async move {
+                let _ = rx.wait_for(|s| *s).await;
+            };
+            let (ca, cb) = clips.map_or((None, None), |(a, b)| (Some(a), Some(b)));
+            let opts = |port, connect, clipboard, dir: &std::path::Path| Options {
+                backend: one_mk_input::Kind::Null,
+                port,
+                connect,
+                discovery: false,
+                clipboard,
+                downloads: dir.join("downloads"),
+            };
+            let a = tokio::spawn(serve(da.clone(), opts(pa, vec![], ca, &da), ba, wait(stop_rx.clone())));
+            let to_a = vec![SocketAddr::from(([127, 0, 0, 1], pa))];
+            let b = tokio::spawn(serve(db.clone(), opts(pb, to_a, cb, &db), bb, wait(stop_rx)));
+            assert_eq!(next_capture(&mut ha).await, CaptureCmd::SetSides(vec![Side::Right]));
+            assert_eq!(next_capture(&mut hb).await, CaptureCmd::SetSides(vec![Side::Left]));
+            Duo { da, db, ha, hb, pb, stop, tasks: vec![a, b] }
+        }
+
+        /// Moves the pointer from A onto B, and waits until B has it.
+        async fn enter_b(&mut self) {
+            self.ha.events.send(Event::Activated { side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+            assert_eq!(next_inject(&mut self.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
+        }
+
+        /// Moves the pointer back from B to A.
+        async fn leave_b(&mut self) {
+            self.ha.events.send(Event::Motion { dx: -100.0, dy: 0.0 }).unwrap();
+            assert!(matches!(next_capture(&mut self.ha).await, CaptureCmd::Release { pos: Some(_) }));
+        }
+
+        async fn stop(self) {
+            self.stop.send(true).unwrap();
+            for t in self.tasks {
+                t.await.unwrap().unwrap();
+            }
+            let _ = std::fs::remove_dir_all(self.da);
+            let _ = std::fs::remove_dir_all(self.db);
+        }
+    }
+
+    async fn eventually(what: &str, mut ok: impl FnMut() -> bool) {
+        for _ in 0..250 {
+            if ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// The clipboard follows the pointer to B, is not echoed back, and comes
+    /// back to A only when the user copied something on B.
+    #[tokio::test]
+    async fn clipboard_follows_the_pointer() {
+        let (ca, ma) = one_mk_clipboard::Clipboard::memory();
+        let (cb, mb) = one_mk_clipboard::Clipboard::memory();
+        let mut duo = Duo::start("clip", Some((ca, cb))).await;
+
+        ma.set_text("copied on A");
+        duo.enter_b().await;
+        eventually("B to get A's clipboard", || mb.text().as_deref() == Some("copied on A")).await;
+        duo.leave_b().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(ma.writes(), 0, "B echoed the clipboard back to A");
+
+        // Unchanged on A: entering B again sends nothing.
+        duo.enter_b().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(mb.writes(), 1);
+
+        // The user copies on B while controlling it, then comes back.
+        mb.set_text("copied on B");
+        duo.leave_b().await;
+        eventually("A to get B's clipboard", || ma.text().as_deref() == Some("copied on B")).await;
+        assert_eq!(ma.writes(), 1);
+
+        // And it is not sent straight back to B.
+        duo.enter_b().await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(mb.writes(), 1);
+        duo.stop().await;
+    }
+
+    /// `one-mk send` from A's identity on its own connection: a folder, a
+    /// resumed file, a file whose partial copy is corrupt, and a path that
+    /// tries to escape. The service link between A and B must survive.
+    #[tokio::test]
+    async fn send_folder_to_running_peer() {
+        use crate::transfer::{self, Outcome, Outgoing, PARTIAL_DIR, Progress};
+        let mut duo = Duo::start("send", None).await;
+
+        let src = temp_dir("send-src");
+        let folder = src.join("album");
+        std::fs::create_dir_all(folder.join("sub/deeper")).unwrap();
+        std::fs::write(folder.join("a.txt"), "hello").unwrap();
+        std::fs::write(folder.join("empty"), "").unwrap();
+        std::fs::write(folder.join("sub/b.bin"), (0..100_000u32).map(|i| i as u8).collect::<Vec<_>>()).unwrap();
+        std::fs::write(folder.join("sub/deeper/c.txt"), "deep").unwrap();
+        let big: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(src.join("big.bin"), &big).unwrap();
+        std::fs::write(src.join("other.bin"), &big[..1_500_000]).unwrap();
+        std::fs::write(src.join("evil"), "pwned").unwrap();
+
+        let mut files = transfer::collect(&[folder.clone(), src.join("big.bin"), src.join("other.bin")]).unwrap();
+        let mut rels: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
+        rels.sort();
+        assert_eq!(rels, ["album/a.txt", "album/empty", "album/sub/b.bin", "album/sub/deeper/c.txt", "big.bin", "other.bin"]);
+        let evil = Outgoing { rel: "../evil".into(), ..transfer::collect(&[src.join("evil")]).unwrap().remove(0) };
+        files.push(evil);
+
+        // B already has the first third of big.bin from an interrupted
+        // transfer, and a corrupt start of other.bin.
+        let me = Identity::load_or_create(&duo.da).unwrap();
+        let downloads = duo.db.join("downloads");
+        let staging = downloads.join(PARTIAL_DIR);
+        std::fs::create_dir_all(&staging).unwrap();
+        let part = |f: &Outgoing| staging.join(transfer::part_id(me.fingerprint, &f.rel, f.size, f.mtime));
+        let by_rel = |r: &str| files.iter().find(|f| f.rel == r).unwrap().clone();
+        std::fs::write(part(&by_rel("big.bin")), &big[..1_000_000]).unwrap();
+        std::fs::write(part(&by_rel("other.bin")), vec![0xAA; 500_000]).unwrap();
+
+        // Dial B with A's identity, like `one-mk send` does.
+        let node = Node::bind(Arc::new(me), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer = node.connect(SocketAddr::from(([127, 0, 0, 1], duo.pb))).await.unwrap();
+        let progress = Arc::new(Progress::default());
+        let results = transfer::send_files(&peer.conn, files.clone(), progress.clone()).await;
+        let outcome = |r: &str| &results.iter().find(|(f, _)| f.rel == r).unwrap().1;
+        assert_eq!(outcome("album/a.txt"), &Outcome::Saved { name: "album/a.txt".into(), resumed_from: 0 });
+        assert_eq!(outcome("big.bin"), &Outcome::Saved { name: "big.bin".into(), resumed_from: 1_000_000 });
+        assert_eq!(outcome("other.bin"), &Outcome::Failed("integrity check failed".into()));
+        assert!(matches!(outcome("../evil"), Outcome::Rejected(r) if r.contains("escapes")));
+        let total: u64 = files.iter().map(|f| f.size).sum();
+        assert_eq!(progress.done.load(std::sync::atomic::Ordering::Relaxed), total);
+        // Resumed bytes of big.bin and of the corrupt other.bin, and the refused file.
+        assert_eq!(progress.skipped.load(std::sync::atomic::Ordering::Relaxed), 1_000_000 + 500_000 + 5);
+
+        for (rel, src_path) in [
+            ("album/a.txt", folder.join("a.txt")),
+            ("album/empty", folder.join("empty")),
+            ("album/sub/b.bin", folder.join("sub/b.bin")),
+            ("album/sub/deeper/c.txt", folder.join("sub/deeper/c.txt")),
+            ("big.bin", src.join("big.bin")),
+        ] {
+            assert_eq!(std::fs::read(downloads.join(rel)).unwrap(), std::fs::read(src_path).unwrap(), "{rel}");
+        }
+        assert!(!downloads.join("other.bin").exists());
+        assert!(!duo.db.join("evil").exists() && !downloads.join("evil").exists());
+
+        // The corrupt partial file was dropped, so sending again works. A
+        // second copy of a.txt gets a new name instead of overwriting.
+        let again = vec![by_rel("other.bin"), by_rel("album/a.txt")];
+        let results = transfer::send_files(&peer.conn, again, Arc::new(Progress::default())).await;
+        assert_eq!(results[0].1, Outcome::Saved { name: "other.bin".into(), resumed_from: 0 });
+        assert_eq!(results[1].1, Outcome::Saved { name: "album/a (1).txt".into(), resumed_from: 0 });
+        assert_eq!(std::fs::read(downloads.join("other.bin")).unwrap(), &big[..1_500_000]);
+        assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
+        peer.conn.close(0u32.into(), b"done");
+
+        // The service link is still there.
+        duo.enter_b().await;
+        duo.stop().await;
+        let _ = std::fs::remove_dir_all(src);
     }
 }

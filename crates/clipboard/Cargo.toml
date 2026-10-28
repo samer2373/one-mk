@@ -1,0 +1,22 @@
+[package]
+name = "one-mk-clipboard"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+blake3 = "1.8.7"
+png = "0.18.1"
+tokio = { version = "1.54.1", features = ["sync"] }
+tracing = "0.1.44"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+arboard = { version = "3.7.0", default-features = false, features = ["image-data"] }
+
+# Linux and the BSDs: X11 and, where the compositor offers it, the Wayland
+# data-control protocol. See the note on GNOME in src/lib.rs.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+arboard = { version = "3.7.0", default-features = false, features = ["image-data", "wayland-data-control"] }
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["rt", "macros"] }

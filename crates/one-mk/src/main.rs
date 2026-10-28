@@ -2,8 +2,11 @@
 
 mod app;
 mod bench;
+mod clip;
 mod link;
 mod pair;
+mod send;
+mod transfer;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -39,6 +42,23 @@ enum Cmd {
         no_discovery: bool,
         #[arg(long, value_enum, default_value_t = BackendArg::Native)]
         backend: BackendArg,
+        /// Don't share the clipboard.
+        #[arg(long)]
+        no_clipboard: bool,
+        /// Where received files go (default: Downloads/one-mk).
+        #[arg(long, value_name = "DIR")]
+        downloads: Option<PathBuf>,
+    },
+    /// Send files or folders to a paired computer running `one-mk run`.
+    Send {
+        #[arg(required = true, value_name = "PATH")]
+        paths: Vec<PathBuf>,
+        /// Name or id of the paired computer (needed if there are several).
+        #[arg(long, value_name = "DEVICE")]
+        to: Option<String>,
+        /// Also try these addresses (for networks that block discovery).
+        #[arg(long)]
+        connect: Vec<SocketAddr>,
     },
     /// Pair with another computer (run it on both).
     Pair {
@@ -112,14 +132,28 @@ fn main() -> Result<()> {
             connect: Vec::new(),
             no_discovery: false,
             backend: BackendArg::Native,
+            no_clipboard: false,
+            downloads: None,
         }) {
-            Cmd::Run { port, connect, no_discovery, backend } => {
+            Cmd::Run { port, connect, no_discovery, backend, no_clipboard, downloads } => {
                 let backend = match backend {
                     BackendArg::Native => one_mk_input::Kind::Native,
                     BackendArg::Null => one_mk_input::Kind::Null,
                 };
-                app::run(dir, app::Options { backend, port, connect, discovery: !no_discovery }).await
+                let opts = app::Options {
+                    backend,
+                    port,
+                    connect,
+                    discovery: !no_discovery,
+                    clipboard: (!no_clipboard).then(one_mk_clipboard::Clipboard::system),
+                    downloads: match downloads {
+                        Some(d) => d,
+                        None => default_downloads()?,
+                    },
+                };
+                app::run(dir, opts).await
             }
+            Cmd::Send { paths, to, connect } => send::run(&dir, paths, to, connect).await,
             Cmd::Pair { connect } => pair::run(&dir, connect).await,
             Cmd::Devices => devices(&dir),
             Cmd::Layout { device, side } => layout(&dir, &device, side),
@@ -135,6 +169,12 @@ fn main() -> Result<()> {
             }
         }
     })
+}
+
+fn default_downloads() -> Result<PathBuf> {
+    let dirs = directories::UserDirs::new().context("no home directory")?;
+    let downloads = dirs.download_dir().map_or_else(|| dirs.home_dir().join("Downloads"), |d| d.to_path_buf());
+    Ok(downloads.join("one-mk"))
 }
 
 fn devices(dir: &std::path::Path) -> Result<()> {

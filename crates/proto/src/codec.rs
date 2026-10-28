@@ -10,6 +10,11 @@ use std::fmt;
 pub enum StreamKind {
     Control = 1,
     Pairing = 2,
+    /// One clipboard snapshot: a [`ClipHeader`](crate::ClipHeader) frame,
+    /// then the payloads, then end of stream.
+    Clipboard = 3,
+    /// A sequence of files; see [`FileMsg`](crate::FileMsg).
+    File = 4,
 }
 
 impl StreamKind {
@@ -17,6 +22,8 @@ impl StreamKind {
         match b {
             1 => Some(Self::Control),
             2 => Some(Self::Pairing),
+            3 => Some(Self::Clipboard),
+            4 => Some(Self::File),
             _ => None,
         }
     }
@@ -106,13 +113,7 @@ impl Control {
 
     /// Appends a length-prefixed frame.
     pub fn encode_frame(&self, out: &mut Vec<u8>) {
-        let start = out.len();
-        out.extend_from_slice(&[0, 0]);
-        let mut w = Writer { buf: std::mem::take(out) };
-        self.encode_body(&mut w);
-        *out = w.buf;
-        let len = u16::try_from(out.len() - start - 2).expect("control frame too large");
-        out[start..start + 2].copy_from_slice(&len.to_le_bytes());
+        frame(out, |w| self.encode_body(w));
     }
 
     fn encode_body(&self, w: &mut Writer) {
@@ -202,27 +203,38 @@ impl fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-struct Writer {
-    buf: Vec<u8>,
+/// Appends a frame: a u16 little-endian body length, then the body.
+pub(crate) fn frame(out: &mut Vec<u8>, body: impl FnOnce(&mut Writer)) {
+    let start = out.len();
+    out.extend_from_slice(&[0, 0]);
+    let mut w = Writer { buf: std::mem::take(out) };
+    body(&mut w);
+    *out = w.buf;
+    let len = u16::try_from(out.len() - start - 2).expect("frame too large");
+    out[start..start + 2].copy_from_slice(&len.to_le_bytes());
+}
+
+pub(crate) struct Writer {
+    pub(crate) buf: Vec<u8>,
 }
 
 impl Writer {
     fn fixed() -> Self {
         Self { buf: Vec::with_capacity(Datagram::MAX_LEN) }
     }
-    fn u8(&mut self, v: u8) {
+    pub(crate) fn u8(&mut self, v: u8) {
         self.buf.push(v);
     }
-    fn u16(&mut self, v: u16) {
+    pub(crate) fn u16(&mut self, v: u16) {
         self.buf.extend_from_slice(&v.to_le_bytes());
     }
-    fn u32(&mut self, v: u32) {
+    pub(crate) fn u32(&mut self, v: u32) {
         self.buf.extend_from_slice(&v.to_le_bytes());
     }
-    fn i32(&mut self, v: i32) {
+    pub(crate) fn i32(&mut self, v: i32) {
         self.buf.extend_from_slice(&v.to_le_bytes());
     }
-    fn u64(&mut self, v: u64) {
+    pub(crate) fn u64(&mut self, v: u64) {
         self.buf.extend_from_slice(&v.to_le_bytes());
     }
     fn pos(&mut self, p: Pos) {
@@ -233,6 +245,15 @@ impl Writer {
         let s = &s[..s.floor_char_boundary(255)];
         self.u8(s.len() as u8);
         self.buf.extend_from_slice(s.as_bytes());
+    }
+    /// A string of up to `max` bytes (truncated at a character boundary).
+    pub(crate) fn long_str(&mut self, s: &str, max: usize) {
+        let s = &s[..s.floor_char_boundary(max.min(u16::MAX as usize))];
+        self.u16(s.len() as u16);
+        self.buf.extend_from_slice(s.as_bytes());
+    }
+    pub(crate) fn bytes(&mut self, b: &[u8]) {
+        self.buf.extend_from_slice(b);
     }
     fn rects(&mut self, rects: &[Rect]) {
         let n = rects.len().min(64);
@@ -246,27 +267,27 @@ impl Writer {
     }
 }
 
-struct Reader<'a>(&'a [u8]);
+pub(crate) struct Reader<'a>(pub(crate) &'a [u8]);
 
 impl Reader<'_> {
-    fn take<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
+    pub(crate) fn take<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
         let (head, rest) = self.0.split_first_chunk::<N>().ok_or(DecodeError::Truncated)?;
         self.0 = rest;
         Ok(*head)
     }
-    fn u8(&mut self) -> Result<u8, DecodeError> {
+    pub(crate) fn u8(&mut self) -> Result<u8, DecodeError> {
         Ok(self.take::<1>()?[0])
     }
-    fn u16(&mut self) -> Result<u16, DecodeError> {
+    pub(crate) fn u16(&mut self) -> Result<u16, DecodeError> {
         Ok(u16::from_le_bytes(self.take()?))
     }
-    fn u32(&mut self) -> Result<u32, DecodeError> {
+    pub(crate) fn u32(&mut self) -> Result<u32, DecodeError> {
         Ok(u32::from_le_bytes(self.take()?))
     }
-    fn i32(&mut self) -> Result<i32, DecodeError> {
+    pub(crate) fn i32(&mut self) -> Result<i32, DecodeError> {
         Ok(i32::from_le_bytes(self.take()?))
     }
-    fn u64(&mut self) -> Result<u64, DecodeError> {
+    pub(crate) fn u64(&mut self) -> Result<u64, DecodeError> {
         Ok(u64::from_le_bytes(self.take()?))
     }
     fn pos(&mut self) -> Result<Pos, DecodeError> {
@@ -274,6 +295,15 @@ impl Reader<'_> {
     }
     fn str(&mut self) -> Result<String, DecodeError> {
         let n = self.u8()? as usize;
+        if self.0.len() < n {
+            return Err(DecodeError::Truncated);
+        }
+        let (s, rest) = self.0.split_at(n);
+        self.0 = rest;
+        String::from_utf8(s.to_vec()).map_err(|_| DecodeError::BadString)
+    }
+    pub(crate) fn long_str(&mut self) -> Result<String, DecodeError> {
+        let n = self.u16()? as usize;
         if self.0.len() < n {
             return Err(DecodeError::Truncated);
         }
@@ -341,6 +371,17 @@ mod tests {
             rest = &rest[2 + len..];
         }
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn stream_kind_round_trip() {
+        for k in [StreamKind::Control, StreamKind::Pairing, StreamKind::Clipboard, StreamKind::File] {
+            assert_eq!(StreamKind::from_u8(k as u8), Some(k));
+        }
+        assert_eq!(StreamKind::Clipboard as u8, 3);
+        assert_eq!(StreamKind::File as u8, 4);
+        assert_eq!(StreamKind::from_u8(0), None);
+        assert_eq!(StreamKind::from_u8(5), None);
     }
 
     #[test]
