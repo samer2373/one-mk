@@ -6,7 +6,10 @@
 //! stream is a file stream, which the receiver treats as transfer-only:
 //! the service's mouse/keyboard link is not touched.
 
+use crate::control::{self, Request};
+use crate::track::Rate;
 use crate::transfer::{self, Outcome, Progress};
+use one_mk_ctl::status::TransferStatus;
 use anyhow::{Context, Result, bail};
 use one_mk_net::{Device, Discovery, Fingerprint, Identity, Node, Peer, TrustStore};
 use std::collections::HashSet;
@@ -47,9 +50,23 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
     eprintln!("Sending {} to {} ({addr})", summary(files.len(), total), device.name);
     let progress = Arc::new(Progress::default());
     let start = Instant::now();
-    let ticker = tokio::spawn(show_progress(progress.clone(), start));
-    let results = transfer::send_files(&conn, files, progress.clone()).await;
+    // The daemon on this computer shows this send in `status` and the window.
+    let tell = Reporter {
+        dir: dir.to_owned(),
+        status: TransferStatus {
+            id: transfer::new_batch_id(),
+            sending: true,
+            peer: one_mk_proto::sanitize_name(&device.name),
+            files: u32::try_from(files.len()).unwrap_or(u32::MAX),
+            total,
+            ..Default::default()
+        },
+    };
+    let id = tell.status.id;
+    let ticker = tokio::spawn(show_progress(progress.clone(), start, tell.clone()));
+    let results = transfer::send_files_as(&conn, files, progress.clone(), id).await;
     ticker.abort();
+    tell.send(progress.done.load(Ordering::Relaxed), 0, true).await;
     conn.close(0u32.into(), b"done");
     node.close();
 
@@ -148,12 +165,38 @@ pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, fp: 
     }
 }
 
-async fn show_progress(p: Arc<Progress>, start: Instant) {
+/// Tells the daemon on this computer how far a send is.
+#[derive(Clone)]
+struct Reporter {
+    dir: PathBuf,
+    status: TransferStatus,
+}
+
+impl Reporter {
+    /// Best effort: no daemon running, or one that doesn't answer, is fine.
+    async fn send(&self, done: u64, rate: u64, finished: bool) {
+        let t = TransferStatus { done, total: self.status.total.max(done), rate, ..self.status.clone() };
+        let req = Request::Transfer { t, finished };
+        let _ = tokio::time::timeout(Duration::from_secs(1), control::request(&self.dir, req)).await;
+    }
+}
+
+async fn show_progress(p: Arc<Progress>, start: Instant, tell: Reporter) {
     let mut tick = tokio::time::interval(Duration::from_millis(250));
+    let mut speed = Rate::new(start);
+    let mut ticks = 0u32;
     loop {
         tick.tick().await;
         let (total, done, skipped) =
             (p.total.load(Ordering::Relaxed), p.done.load(Ordering::Relaxed), p.skipped.load(Ordering::Relaxed));
+        let now = Instant::now();
+        speed.update(now, done - skipped);
+        // Twice a second is plenty for a status line, and costs the daemon nothing between sends.
+        ticks += 1;
+        if ticks % 2 == 1 {
+            let (tell, rate) = (tell.clone(), speed.get(now));
+            tokio::spawn(async move { tell.send(done, rate, false).await });
+        }
         let rate = (done - skipped) as f64 / start.elapsed().as_secs_f64().max(1e-3);
         let eta = if rate > 0.0 { format!("{:.0} s", (total - done.min(total)) as f64 / rate) } else { "-".into() };
         let pct = if total > 0 { done as f64 * 100.0 / total as f64 } else { 100.0 };

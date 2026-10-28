@@ -64,27 +64,33 @@ impl Drop for Server {
 }
 
 async fn serve_conn<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, token: Option<String>, tx: mpsc::UnboundedSender<Pending>) {
-    let _ = tokio::time::timeout(TIMEOUT, async {
+    // A client that connects and says nothing is dropped after `TIMEOUT`.
+    let read = tokio::time::timeout(TIMEOUT, async {
         let mut line = String::new();
-        {
-            let mut r = BufReader::new((&mut s).take(1024));
-            if let Some(t) = &token {
-                r.read_line(&mut line).await?;
-                if !same(line.trim_end(), &format!("auth {t}")) {
-                    return std::io::Result::Ok(());
-                }
-                line.clear();
-            }
+        let mut r = BufReader::new((&mut s).take(1024));
+        if let Some(t) = &token {
             r.read_line(&mut line).await?;
-        }
-        let reply = match Request::parse(line.trim()) {
-            Some(req) => {
-                let (reply_tx, reply_rx) = oneshot::channel();
-                let _ = tx.send((req, reply_tx));
-                reply_rx.await.unwrap_or_default()
+            if !same(line.trim_end(), &format!("auth {t}")) {
+                return std::io::Result::Ok(None);
             }
-            None => "error unknown request\n".to_owned(),
-        };
+            line.clear();
+        }
+        r.read_line(&mut line).await?;
+        Ok(Some(line))
+    })
+    .await;
+    let Ok(Ok(Some(line))) = read else { return };
+    let reply = match Request::parse(line.trim()) {
+        Some(req) => {
+            // Some requests (a clipboard over a slow link) take longer than the rest.
+            let patience = req.reply_timeout();
+            let (reply_tx, reply_rx) = oneshot::channel();
+            let _ = tx.send((req, reply_tx));
+            tokio::time::timeout(patience, reply_rx).await.map_or_else(|_| String::new(), Result::unwrap_or_default)
+        }
+        None => "error unknown request\n".to_owned(),
+    };
+    let _ = tokio::time::timeout(TIMEOUT, async {
         s.write_all(reply.as_bytes()).await?;
         s.shutdown().await
     })
@@ -98,6 +104,7 @@ fn same(a: &str, b: &str) -> bool {
 
 /// Asks the running daemon. `None` means none is running.
 pub async fn request(dir: &Path, req: Request) -> Result<Option<String>> {
+    let patience = req.reply_timeout();
     let stream = match tokio::time::timeout(TIMEOUT, sys::connect(dir)).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused) => {
@@ -106,11 +113,11 @@ pub async fn request(dir: &Path, req: Request) -> Result<Option<String>> {
         Ok(Err(e)) => return Err(e.into()),
         Err(_) => bail!("one-mk did not answer"),
     };
-    Ok(Some(tokio::time::timeout(TIMEOUT, exchange(stream, req)).await??))
+    Ok(Some(tokio::time::timeout(patience + TIMEOUT, exchange(stream, req)).await.map_err(|_| anyhow::anyhow!("one-mk did not answer"))??))
 }
 
 async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, req: Request) -> std::io::Result<String> {
-    s.write_all(format!("{}\n", req.name()).as_bytes()).await?;
+    s.write_all(format!("{}\n", req.line()).as_bytes()).await?;
     let mut out = String::new();
     s.read_to_string(&mut out).await?;
     Ok(out)

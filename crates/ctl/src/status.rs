@@ -43,6 +43,74 @@ pub struct Status {
     /// The paired computer controlling this one right now.
     pub controlled_by: Option<String>,
     pub peers: Vec<PeerStatus>,
+    /// File transfers in flight, to and from this computer.
+    pub transfers: Vec<TransferStatus>,
+}
+
+/// One file transfer in flight (a whole `one-mk send`, not a single file).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TransferStatus {
+    /// Tells transfers apart; 0 if the sender is an older version.
+    pub id: u64,
+    /// True when this computer sends, false when it receives.
+    pub sending: bool,
+    /// The other computer.
+    pub peer: String,
+    /// Files in the transfer, as far as known.
+    pub files: u32,
+    pub done: u64,
+    /// Bytes in the transfer, as far as known (can grow while files are still being offered).
+    pub total: u64,
+    /// Recent speed in bytes per second; 0 when stalled.
+    pub rate: u64,
+}
+
+impl TransferStatus {
+    /// 0 to 100, or `None` while the total is not known.
+    pub fn percent(&self) -> Option<u8> {
+        (self.total > 0).then(|| (u128::from(self.done.min(self.total)) * 100 / u128::from(self.total)) as u8)
+    }
+
+    /// "Receiving 3 files from desk: 45% (12.3 MB of 27.1 MB), 8.1 MB/s"
+    pub fn render(&self) -> String {
+        let files = if self.files == 1 { "1 file".to_owned() } else { format!("{} files", self.files) };
+        let (verb, prep) = if self.sending { ("Sending", "to") } else { ("Receiving", "from") };
+        let what = if self.files == 0 { "files".to_owned() } else { files };
+        let mut out = format!("{verb} {what} {prep} {}: ", self.peer);
+        match self.percent() {
+            Some(p) => out += &format!("{p}% ({} of {})", human_bytes(self.done), human_bytes(self.total)),
+            None => out += &human_bytes(self.done),
+        }
+        if self.rate > 0 {
+            out += &format!(", {}/s", human_bytes(self.rate));
+            if self.total > self.done {
+                out += &format!(", {} left", human_duration((self.total - self.done) / self.rate));
+            }
+        } else {
+            out += ", stalled";
+        }
+        out
+    }
+}
+
+/// 1234567 -> "1.2 MB" (decimal units, like the rest of what one-mk prints).
+pub fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1000.0 && u < UNITS.len() - 1 {
+        v /= 1000.0;
+        u += 1;
+    }
+    if u == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[u]) }
+}
+
+fn human_duration(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs} s"),
+        60..=3599 => format!("{} min {} s", secs / 60, secs % 60),
+        _ => format!("{} h {} min", secs / 3600, secs % 3600 / 60),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +137,18 @@ impl Status {
         for p in &self.peers {
             out += &format!("peer\t{}\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.swap, p.name);
         }
+        for t in &self.transfers {
+            out += &format!(
+                "transfer\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                t.id,
+                if t.sending { 's' } else { 'r' },
+                t.files,
+                t.done,
+                t.total,
+                t.rate,
+                t.peer
+            );
+        }
         out
     }
 
@@ -79,7 +159,7 @@ impl Status {
         }
         let mut s = Status::default();
         for line in lines {
-            let f: Vec<&str> = line.splitn(7, '\t').collect();
+            let f: Vec<&str> = line.splitn(8, '\t').collect();
             match f[..] {
                 ["name", v] => s.name = v.into(),
                 ["id", v] => s.id = v.into(),
@@ -94,6 +174,18 @@ impl Status {
                     online: online == "1",
                     swap: swap.into(),
                 }),
+                // Cosmetic: a line that doesn't parse is skipped, not fatal.
+                ["transfer", id, dir, files, done, total, rate, peer] => s.transfers.extend(|| -> Option<_> {
+                    Some(TransferStatus {
+                        id: id.parse().ok()?,
+                        sending: dir == "s",
+                        peer: peer.into(),
+                        files: files.parse().ok()?,
+                        done: done.parse().ok()?,
+                        total: total.parse().ok()?,
+                        rate: rate.parse().ok()?,
+                    })
+                }()),
                 _ => {}
             }
         }
@@ -113,6 +205,9 @@ impl Status {
         for p in &self.peers {
             let state = if p.online { "online" } else { "offline" };
             out += &format!("  {:<24} {:<10} {:<14} {state}\n", p.name, os_name(p.os), on_your(p.side));
+        }
+        for t in &self.transfers {
+            out += &format!("{}\n", t.render());
         }
         out
     }
@@ -134,6 +229,10 @@ mod tests {
                 PeerStatus { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into() },
                 PeerStatus { id: "9999-0000".into(), name: "old pc".into(), side: Side::Top, os: 0, online: false, swap: "off".into() },
             ],
+            transfers: vec![
+                TransferStatus { id: 7, sending: false, peer: "mac mini".into(), files: 12, done: 5, total: 100, rate: 3 },
+                TransferStatus { id: 0, sending: true, peer: "old pc".into(), ..Default::default() },
+            ],
         };
         assert_eq!(Status::decode(&s.encode()), Some(s));
         assert_eq!(Status::decode("error unknown request\n"), None);
@@ -148,6 +247,7 @@ mod tests {
             controlling: Some("mac mini".into()),
             controlled_by: None,
             peers: vec![PeerStatus { id: "1".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into() }],
+            transfers: vec![],
         };
         let text = s.render();
         assert!(text.starts_with("one-mk is running on desk (id abcd-ef01).\n"), "{text}");
@@ -158,5 +258,39 @@ mod tests {
         let text = controlled.render();
         assert!(text.contains("laptop is controlling this computer right now."), "{text}");
         assert!(text.contains("one-mk takeback"), "{text}");
+    }
+
+    #[test]
+    fn transfers_read_plainly() {
+        let t = TransferStatus { id: 1, sending: false, peer: "desk".into(), files: 3, done: 12_300_000, total: 27_100_000, rate: 8_100_000 };
+        assert_eq!(t.render(), "Receiving 3 files from desk: 45% (12.3 MB of 27.1 MB), 8.1 MB/s, 1 s left");
+        let t = TransferStatus { sending: true, files: 1, done: 0, total: 1000, rate: 0, ..t };
+        assert_eq!(t.render(), "Sending 1 file to desk: 0% (0 B of 1.0 KB), stalled");
+        // Total not known yet (an older sender): no percentage, no guess.
+        let t = TransferStatus { files: 0, total: 0, done: 2_000_000, rate: 1_000_000, ..t };
+        assert_eq!(t.render(), "Sending files to desk: 2.0 MB, 1.0 MB/s");
+        assert_eq!(t.percent(), None);
+        // More done than total (a total that grows as offers arrive) never exceeds 100%.
+        assert_eq!(TransferStatus { done: 9, total: 3, ..t }.percent(), Some(100));
+        assert_eq!(human_duration(125), "2 min 5 s");
+        assert_eq!(human_duration(7300), "2 h 1 min");
+    }
+
+    #[test]
+    fn status_shows_transfers_and_old_readers_skip_them() {
+        let s = Status {
+            name: "desk".into(),
+            transfers: vec![TransferStatus { id: 2, sending: true, peer: "mac mini".into(), files: 2, done: 1, total: 4, rate: 1 }],
+            ..Default::default()
+        };
+        let text = s.render();
+        assert!(text.contains("Sending 2 files to mac mini: 25%"), "{text}");
+        // A reader from before transfers existed ignores lines it doesn't know.
+        let encoded = s.encode();
+        let old: Vec<&str> = encoded.lines().filter(|l| !l.starts_with("transfer")).collect();
+        assert!(Status::decode(&(old.join("\n") + "\n")).unwrap().transfers.is_empty());
+        // A damaged transfer line is skipped; the rest of the status still reads.
+        let damaged = Status::decode("ok\nname\tdesk\ntransfer\tx\ts\t1\t1\t1\t1\tpeer\n").unwrap();
+        assert_eq!((damaged.name.as_str(), damaged.transfers.len()), ("desk", 0));
     }
 }

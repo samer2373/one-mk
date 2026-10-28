@@ -11,7 +11,9 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use crate::status::TransferStatus;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     /// Who we are, who is paired and online, and who controls whom.
     Status,
@@ -20,19 +22,88 @@ pub enum Request {
     /// End the control of whichever peer controls this machine, as if
     /// this machine's own mouse or keyboard had been used.
     TakeBack,
+    /// `settings.toml` (clipboard and notification settings) changed: apply it now.
+    Settings,
+    /// Send this computer's clipboard to one paired computer now (the
+    /// only one online if none is named).
+    ClipSend(Option<String>),
+    /// Fetch one paired computer's clipboard into this one now.
+    ClipGet(Option<String>),
+    /// A running `one-mk send` reports how far it is, so `status` and the
+    /// window can show it. `finished` ends the report.
+    Transfer { t: TransferStatus, finished: bool },
 }
 
 impl Request {
-    pub fn name(self) -> &'static str {
+    /// The command word, the first thing on the request line.
+    pub fn name(&self) -> &'static str {
         match self {
             Request::Status => "status",
             Request::Reload => "reload",
             Request::TakeBack => "takeback",
+            Request::Settings => "settings",
+            Request::ClipSend(_) => "clip-send",
+            Request::ClipGet(_) => "clip-get",
+            Request::Transfer { .. } => "transfer",
         }
     }
 
-    pub fn parse(s: &str) -> Option<Self> {
-        [Request::Status, Request::Reload, Request::TakeBack].into_iter().find(|r| r.name() == s)
+    /// The whole request line, without the newline.
+    pub fn line(&self) -> String {
+        let device = |d: &Option<String>| d.as_deref().map(|d| format!(" {}", d.replace(['\n', '\r'], " "))).unwrap_or_default();
+        match self {
+            Request::ClipSend(d) | Request::ClipGet(d) => format!("{}{}", self.name(), device(d)),
+            Request::Transfer { t, finished } => format!(
+                "transfer {} {} {} {} {} {} {}",
+                t.id,
+                t.files,
+                t.done,
+                t.total,
+                t.rate,
+                u8::from(*finished),
+                t.peer.replace(['\n', '\r'], " ")
+            ),
+            _ => self.name().to_owned(),
+        }
+    }
+
+    pub fn parse(line: &str) -> Option<Self> {
+        let (word, rest) = line.split_once(' ').map_or((line, None), |(w, r)| (w, Some(r.trim()).filter(|r| !r.is_empty())));
+        let device = || rest.map(str::to_owned);
+        Some(match (word, rest) {
+            ("status", None) => Request::Status,
+            ("reload", None) => Request::Reload,
+            ("takeback", None) => Request::TakeBack,
+            ("settings", None) => Request::Settings,
+            ("clip-send", _) => Request::ClipSend(device()),
+            ("clip-get", _) => Request::ClipGet(device()),
+            ("transfer", Some(rest)) => {
+                let f: Vec<&str> = rest.splitn(7, ' ').collect();
+                let [id, files, done, total, rate, finished, peer] = f[..] else { return None };
+                Request::Transfer {
+                    t: TransferStatus {
+                        id: id.parse().ok()?,
+                        sending: true,
+                        peer: peer.to_owned(),
+                        files: files.parse().ok()?,
+                        done: done.parse().ok()?,
+                        total: total.parse().ok()?,
+                        rate: rate.parse().ok()?,
+                    },
+                    finished: finished == "1",
+                }
+            }
+            _ => return None,
+        })
+    }
+
+    /// How long to wait for the daemon's answer: a clipboard can take a
+    /// while to cross a slow link.
+    pub fn reply_timeout(&self) -> Duration {
+        match self {
+            Request::ClipSend(_) | Request::ClipGet(_) => Duration::from_secs(45),
+            _ => Duration::from_secs(5),
+        }
     }
 }
 
@@ -95,7 +166,7 @@ impl Conn for std::net::TcpStream {
 
 fn exchange(mut s: impl Conn, req: Request, timeout: Duration) -> io::Result<String> {
     s.timeouts(timeout)?;
-    s.write_all(format!("{}\n", req.name()).as_bytes())?;
+    s.write_all(format!("{}\n", req.line()).as_bytes())?;
     let mut out = String::new();
     s.read_to_string(&mut out)?;
     Ok(out)
@@ -132,10 +203,32 @@ mod tests {
 
     #[test]
     fn requests_have_names() {
-        for r in [Request::Status, Request::Reload, Request::TakeBack] {
+        for r in [Request::Status, Request::Reload, Request::TakeBack, Request::Settings] {
             assert_eq!(Request::parse(r.name()), Some(r));
         }
         assert_eq!(Request::parse("format c:"), None);
+        assert_eq!(Request::parse("status extra"), None, "words that take no argument refuse one");
+    }
+
+    #[test]
+    fn requests_with_arguments_survive_the_wire() {
+        let t = TransferStatus { id: 9, sending: true, peer: "mac mini".into(), files: 3, done: 10, total: 20, rate: 5 };
+        for r in [
+            Request::ClipSend(None),
+            Request::ClipSend(Some("mac mini".into())),
+            Request::ClipGet(None),
+            Request::ClipGet(Some("desk".into())),
+            Request::Transfer { t: t.clone(), finished: false },
+            Request::Transfer { t, finished: true },
+        ] {
+            assert_eq!(Request::parse(&r.line()), Some(r.clone()), "{}", r.line());
+        }
+        // A newline in a name can't smuggle a second request.
+        assert_eq!(Request::ClipSend(Some("a\nstatus".into())).line(), "clip-send a status");
+        assert_eq!(Request::parse("clip-send  "), Some(Request::ClipSend(None)));
+        assert_eq!(Request::parse("transfer 1 2 3"), None);
+        assert_eq!(Request::parse("transfer x 1 2 3 4 0 peer"), None);
+        assert!(Request::ClipGet(None).reply_timeout() > Request::Status.reply_timeout());
     }
 
     #[test]

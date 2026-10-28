@@ -136,7 +136,7 @@ async fn serve_stream(
 ) {
     match (kind, &services.clip) {
         (StreamKind::File, _) => services.inbox.receive_on(permit, name, send, recv).await,
-        (StreamKind::Clipboard, Some(clip)) => clip.receive(permit.fp(), name, recv).await,
+        (StreamKind::Clipboard, Some(clip)) => clip.receive(permit.fp(), name, send, recv).await,
         _ => {
             // Includes clipboard streams when clipboard sharing is off here.
             tracing::debug!(peer = %name, "refused {kind:?} stream");
@@ -349,6 +349,9 @@ pub async fn serve(
         downloads = %opts.downloads.display(),
         "sharing"
     );
+    if let Err(e) = crate::clipctl::apply_settings(&dir, &services) {
+        tracing::warn!("settings.toml: {e:#}; using the defaults");
+    }
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (link_tx, mut link_rx) = mpsc::unbounded_channel();
@@ -1109,6 +1112,10 @@ impl App {
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
                 "ok\n".to_owned()
             }
+            req @ (Request::Settings | Request::ClipSend(_) | Request::ClipGet(_) | Request::Transfer { .. }) => {
+                let online = self.peers.iter().map(|(fp, p)| crate::clipctl::Online { fp: *fp, name: p.name.clone(), addr: canonical(p.conn.remote_address()) });
+                return crate::clipctl::handle(&self.dir, &self.services, online.collect(), &self.trust, req, reply);
+            }
             Request::TakeBack => match self.owner.as_ref().map(|o| o.peer) {
                 Some(fp) => {
                     let name = self.peers.get(&fp).map_or_else(String::new, |p| p.name.clone());
@@ -1143,6 +1150,7 @@ impl App {
             controlling: self.remote.as_ref().map(|r| name_of(&r.peer)),
             controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
             peers: peers.collect(),
+            transfers: self.services.inbox.transfers().snapshot(),
         }
     }
 

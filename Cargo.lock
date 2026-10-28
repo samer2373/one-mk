@@ -3139,6 +3139,7 @@ dependencies = [
  "clap",
  "directories",
  "fs4",
+ "futures-util",
  "libc",
  "one-mk-clipboard",
  "one-mk-ctl",
@@ -3146,10 +3147,13 @@ dependencies = [
  "one-mk-net",
  "one-mk-proto",
  "quinn",
+ "serde",
  "tokio",
+ "toml 1.1.8+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
+ "zbus",
 ]
 
 [[package]]

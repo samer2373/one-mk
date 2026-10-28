@@ -13,7 +13,7 @@ pub use codec::{Control, Datagram, DecodeError, MAX_SCREENS, StreamKind, os};
 pub use geometry::{Desktop, Pos, Rect, Side};
 pub use keys::{HeldKeys, swap_ctrl_meta};
 pub use motion::{MotionReceiver, Received, RemoteCursor, Step};
-pub use transfer::{ClipFormat, ClipHeader, FileMsg};
+pub use transfer::{Batch, ClipAck, ClipFormat, ClipHeader, FileMsg};
 
 /// Bumped on any incompatible wire change; peers refuse mismatched versions.
 pub const PROTOCOL_VERSION: u16 = 2;

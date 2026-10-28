@@ -57,6 +57,10 @@ soon as they connect.
 | `one-mk layout <pc> <left\|right\|top\|bottom>` | Say where a paired computer sits |
 | `one-mk layout <pc> --swap-ctrl-cmd on\|off\|auto` | Ctrl/Cmd swapping (see below) |
 | `one-mk send <files or folders> [--to <pc>]` | Send files; they arrive in `Downloads/one-mk` |
+| `one-mk clip-send [--to <pc>]` | Send this computer's clipboard to one computer now |
+| `one-mk clip-get [--from <pc>]` | Copy one computer's clipboard to this one now |
+| `one-mk clipboard [--text on\|off] [--html on\|off] [--image on\|off] [--max-mb N]` | Show or change what the clipboard shares (applies at once) |
+| `one-mk notify [on\|off]` | A desktop notification when files arrive |
 | `one-mk devices` | List paired computers |
 | `one-mk forget <pc>` | Unpair |
 | `one-mk run` | Run in the foreground (`-v` for detailed logs) |
@@ -69,12 +73,45 @@ full logs when something is wrong.
 
 **Clipboard.** It follows the pointer: text, HTML and images, sent once when
 the pointer crosses and only if it changed (turn off with
-`one-mk run --no-clipboard`).
+`one-mk run --no-clipboard`). `one-mk clipboard` shows what is shared and
+changes it, at once and for good:
+
+```bash
+one-mk clipboard --image off          # no images, either way
+one-mk clipboard --max-mb 5           # nothing bigger than 5 MB (default 25, at most 256)
+one-mk clipboard --html off --text on
+```
+
+A switched-off kind is neither sent nor accepted; a clipboard over the limit
+is not sent (and a bigger one that arrives is refused before it is read).
+You don't have to move the pointer to move the clipboard:
+
+```bash
+one-mk clip-send --to other-pc    # push mine to it now (--to is optional when only one is connected)
+one-mk clip-get --from other-pc   # fetch its clipboard now
+```
+
+`clip-send` tells you if the other computer ignored it (a kind switched off
+there, or over its limit). Others can only fetch yours if
+`one-mk clipboard --allow-fetch on` (the default). Content a password manager
+marks as sensitive is skipped (`--skip-sensitive on`, the default), and never
+handed out by `clip-get`; `clip-send` is you asking for it, so it sends.
+**Limitation:** the clipboard library one-mk uses cannot read those markers
+(`x-kde-passwordManagerHint`, `org.nspasteboard.ConcealedType`,
+`ExcludeClipboardContentFromMonitorProcessing`) from the system clipboard, so
+nothing is detected as sensitive on a real computer yet. The skip is in place
+and tested, and waits for a way to read the markers.
 
 **Files.** `one-mk send photos/ notes.pdf` goes to your only paired computer
 (use `--to` if you have several). They land in `Downloads/one-mk` there
 (change with `one-mk run --downloads <dir>`). An interrupted transfer resumes
-when you send the same file again.
+when you send the same file again. While files move, `one-mk status` shows a
+line like `Receiving 12 files from desk: 45% (12.3 MB of 27.1 MB), 8.1 MB/s,
+3 s left` (and `Sending ...` on the other computer). When a transfer ends,
+the receiving computer shows one desktop notification naming the files, with
+**Show in folder** (Linux, over D-Bus; macOS shows the notification without
+the button; Windows does not notify yet). Turn it off with `one-mk notify off`,
+or for one run with `one-mk run --no-notify`. Nothing runs while idle.
 
 **Mac and PC keyboards.** When keys go between a Mac and a Windows or Linux
 computer, Ctrl and Cmd trade places by default, so Ctrl+C on the PC keyboard
