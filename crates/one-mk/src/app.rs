@@ -12,15 +12,18 @@ use crate::clip::ClipSync;
 use crate::control::{self, Request};
 use crate::link::{self, Link, LinkEvent, Rank};
 use crate::manage::{PeerStatus, Status, on_your, takeback_hint};
+use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
-use one_mk_input::{Backend, CaptureCmd, Event, Inject};
+use one_mk_ctl::client::SwitchTo;
+use one_mk_input::{Backend, CaptureCmd, Event, FocusProbe, Inject, ScreenLocker};
 use one_mk_net::{
     ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, Swap, TrustStore, read_stream_kind,
 };
 use one_mk_proto::{
-    Control, Datagram, Desktop, HeldKeys, MotionReceiver, Pos, Received, Rect, RemoteCursor, Side, Step, StreamKind,
-    os, sanitize_name, swap_ctrl_meta,
+    Approach, Control, Datagram, Desktop, HeldKeys, LockSync, Mods, MotionReceiver, Next, OnRemote, Pos, Received, Rect,
+    Refusal, RelReceived, RemoteCursor, Side, Start, Step, StreamKind, caps, cycle_next, fullscreen_blocks, os,
+    sanitize_name, swap_ctrl_meta,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -49,6 +52,8 @@ const LEASE: Duration = Duration::from_millis(750);
 const IDLE: Duration = Duration::from_secs(60);
 /// If a peer doesn't answer `Enter` within this, the pointer comes home.
 const ENTER_TIMEOUT: Duration = Duration::from_millis(750);
+/// `one-mk switch` gives up if the backend doesn't start capturing in this.
+const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
 const DIAL_INTERVAL: Duration = Duration::from_secs(2);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a peer that connected to us may take to open its first stream.
@@ -80,6 +85,8 @@ pub struct Options {
     pub clipboard: Option<one_mk_clipboard::Clipboard>,
     /// Where received files go.
     pub downloads: PathBuf,
+    /// Start with the pointer locked to this computer (`one-mk lock-pointer`).
+    pub start_locked: bool,
 }
 
 /// What peers can use besides input: clipboard and file streams.
@@ -161,6 +168,8 @@ struct Connected {
     conn: quinn::Connection,
     ctl: ControlWriter,
     desktop: Option<Desktop>,
+    /// What it supports besides the basics (bits of [`caps`]); 0 until it says.
+    caps: u32,
 }
 
 /// We control a peer.
@@ -185,6 +194,10 @@ struct Remote {
     last_send: Instant,
     resend_at: Option<Instant>,
     resends: usize,
+    /// The peer says a fullscreen window has its focus (gaming mode `auto`).
+    peer_fullscreen: bool,
+    /// We asked the peer to report that (`WatchFocus`).
+    watching_focus: bool,
 }
 
 impl Remote {
@@ -213,6 +226,16 @@ struct Owner {
     /// Last real input: a key, button, scroll or a new position (not a
     /// keepalive repeating the same one).
     last_input: Instant,
+    /// The owner sends relative motion (gaming mode), so its clicks carry
+    /// no position to apply.
+    relative: bool,
+    /// The owner asked to hear whether a fullscreen window has the focus.
+    watch_focus: bool,
+    /// Whether a fullscreen window has the focus, as last told to the owner.
+    focus_sent: Option<bool>,
+    /// Modifier keys pressed during this visit; released once more after
+    /// the screen unlocks (see `App::on_screen_locked`).
+    mods_pressed: Mods,
 }
 
 impl Owner {
@@ -220,7 +243,36 @@ impl Owner {
         let mut motion = MotionReceiver::default();
         motion.enter(epoch);
         let now = Instant::now();
-        Self { peer, link, epoch, motion, pos, held: HeldKeys::new(), last_rx: now, last_input: now }
+        Self {
+            peer,
+            link,
+            epoch,
+            motion,
+            pos,
+            held: HeldKeys::new(),
+            last_rx: now,
+            last_input: now,
+            relative: false,
+            watch_focus: false,
+            focus_sent: None,
+            mods_pressed: Mods::default(),
+        }
+    }
+
+    /// A relative-motion datagram from the owner.
+    fn motion_by(&mut self, epoch: u16, seq: u32, sum: (i32, i32), inject: &mpsc::UnboundedSender<Inject>) {
+        match self.motion.accept_relative(epoch, seq, sum) {
+            RelReceived::MoveBy { dx, dy } => {
+                let now = Instant::now();
+                self.last_rx = now;
+                self.last_input = now;
+                if dx != 0 || dy != 0 {
+                    let _ = inject.send(Inject::MoveBy { dx, dy });
+                }
+            }
+            RelReceived::Repeat => self.last_rx = Instant::now(),
+            RelReceived::Stale => {}
+        }
     }
 
     /// A motion datagram from the owner.
@@ -247,8 +299,17 @@ impl Owner {
         };
         match msg {
             Control::Key { code, down } => {
+                if down && Mods::is_modifier(code) {
+                    self.mods_pressed.update(code, true);
+                }
                 if self.held.update(code, down) {
                     inject(Inject::Key { code, down });
+                }
+            }
+            // Relative motion: the click happens wherever the pointer is.
+            Control::Button { button, down, .. } if self.relative => {
+                if self.held.update(button, down) {
+                    inject(Inject::Button { button, down });
                 }
             }
             Control::Button { button, down, seq, pos } => {
@@ -313,6 +374,22 @@ struct App {
     /// Peers whose first time controlling this machine (this run) has been
     /// announced with how to take control back.
     announced: HashSet<Fingerprint>,
+    focus: Box<dyn FocusProbe>,
+    locker: Box<dyn ScreenLocker>,
+    settings: Settings,
+    /// `one-mk lock-pointer`: edges lead nowhere (no barriers are armed).
+    locked: bool,
+    /// Modifier keys held here, as far as we know (`Event::Modifiers`, and
+    /// captured keys); forgotten whenever capture ends.
+    mods: Mods,
+    /// The pointer is held at an edge (capture `.0`), waiting to cross.
+    approach: Option<(u32, Approach)>,
+    /// `one-mk switch` asked the backend to capture: the pointer goes to
+    /// this peer, unless capture hasn't started by then.
+    switching: Option<(Fingerprint, Instant)>,
+    lock_sync: LockSync,
+    /// Modifier keys to release once more when the screen unlocks.
+    unlock_release: Mods,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -339,7 +416,7 @@ pub async fn serve(
     }
     tracing::debug!(id = %identity.fingerprint.short(), port, "listening");
 
-    let Backend { mut events, capture, inject, .. } = backend;
+    let Backend { mut events, capture, inject, focus, locker } = backend;
     let services = Services {
         clip: opts.clipboard.map(|cb| ClipSync::new(cb, node.clone())),
         inbox: Inbox::new(opts.downloads.clone()),
@@ -370,6 +447,7 @@ pub async fn serve(
         None
     };
 
+    let dir_for_settings = dir.clone();
     let mut app = App {
         dir,
         node: node.clone(),
@@ -392,7 +470,19 @@ pub async fn serve(
         dialing: HashSet::new(),
         services,
         announced: HashSet::new(),
+        focus,
+        locker,
+        settings: Settings::load(&dir_for_settings),
+        locked: opts.start_locked,
+        mods: Mods::default(),
+        approach: None,
+        switching: None,
+        lock_sync: LockSync::default(),
+        unlock_release: Mods::default(),
     };
+    if app.locked {
+        println!("The pointer is locked to this computer (`one-mk lock-pointer off` frees it).");
+    }
     app.dial_missing(&screens_rx);
 
     let mut dial_tick = tokio::time::interval(DIAL_INTERVAL);
@@ -431,6 +521,9 @@ pub async fn serve(
     if let Some(r) = app.remote.as_ref() {
         let t = r.cursor.home_fraction();
         app.go_home(t);
+    }
+    if let Some((id, a)) = app.approach.take() {
+        app.release_capture(id, Some(a.pos()));
     }
     app.end_owner(false);
     node.close();
@@ -667,12 +760,37 @@ impl App {
                 self.local = Some(d);
                 self.update_sides();
             }
-            Event::Activated { id, side, pos } => self.enter_peer(id, side, pos),
+            Event::Activated { id, side, pos } => self.on_activated(id, side, pos),
             Event::Motion { dx, dy } => {
-                if let Some(next) = self.on_motion(dx, dy, events) {
+                if let (Some((_, a)), Some(local)) = (self.approach.as_mut(), self.local.as_ref()) {
+                    let next = a.motion(local, dx, dy, std::time::Instant::now());
+                    self.on_approach(next, None);
+                } else if let Some(next) = self.on_motion(dx, dy, events) {
                     self.on_input(next, events);
                 }
             }
+            Event::Button { button, down } if self.approach.is_some() => {
+                self.approach_input(Inject::Button { button, down });
+            }
+            Event::Key { code, down } if self.approach.is_some() => {
+                self.mods.update(code, down);
+                let (Some((_, a)), Some(local)) = (self.approach.as_mut(), self.local.as_ref()) else { return };
+                let next = a.key(local, code, down, std::time::Instant::now());
+                self.on_approach(next, Some(Inject::Key { code, down }));
+            }
+            Event::Scroll { dx, dy } if self.approach.is_some() => self.approach_input(Inject::Scroll { dx, dy }),
+            Event::ScrollDiscrete { dx, dy } if self.approach.is_some() => {
+                self.approach_input(Inject::ScrollDiscrete { dx, dy });
+            }
+            Event::ScrollStop if self.approach.is_some() => self.approach_input(Inject::ScrollStop),
+            Event::Modifiers(m) => {
+                self.mods = m;
+                if let (Some((_, a)), Some(local)) = (self.approach.as_mut(), self.local.as_ref()) {
+                    let next = a.modifiers(local, m, std::time::Instant::now());
+                    self.on_approach(next, None);
+                }
+            }
+            Event::ScreenLocked(locked) => self.on_screen_locked(locked),
             Event::Button { button, down } => {
                 let Some(r) = self.remote.as_mut() else { return };
                 if r.held.update(button, down) {
@@ -681,6 +799,7 @@ impl App {
                 }
             }
             Event::Key { code, down } => {
+                self.mods.update(code, down);
                 let Some(r) = self.remote.as_mut() else { return };
                 if down && code == KEY_ESC && [CTRL, ALT, SHIFT].iter().all(|k| k.iter().any(|&c| r.held.is_held(c))) {
                     tracing::info!("emergency shortcut: bringing the pointer home");
@@ -703,13 +822,16 @@ impl App {
                 }
             }
             Event::Deactivated { id } => {
+                if self.approach.as_ref().is_some_and(|(a, _)| *a == id) {
+                    self.approach = None;
+                    self.mods = Mods::default();
+                }
                 if self.remote.as_ref().is_some_and(|r| r.activation == id) {
                     tracing::info!("capture ended by the system; pointer is home");
                     self.end_visit();
                 }
             }
             Event::Error(msg) => tracing::error!("{msg}"),
-            Event::Modifiers(_) | Event::ScreenLocked(_) => {}
         }
     }
 
@@ -729,27 +851,128 @@ impl App {
         c.next
     }
 
-    /// The pointer hit the `side` edge of our desktop.
-    fn enter_peer(&mut self, activation: u32, side: Side, pos: Pos) {
+    /// The pointer hit the `side` edge of our desktop and is captured: go
+    /// on to the peer there, hand it back, or hold it at the edge, as the
+    /// edge rules say.
+    fn on_activated(&mut self, id: u32, side: Side, pos: Pos) {
         self.end_visit(); // a new activation supersedes any visit in progress
+        self.approach = None;
+        if let Some((fp, _)) = self.switching.take() {
+            self.enter_peer_at_center(id, fp);
+            return;
+        }
+        let (Some(local), Some(_)) = (self.local.as_ref(), self.peer_at(side)) else {
+            self.release_capture(id, None);
+            return;
+        };
+        if self.locked {
+            // Normally unreachable: no barriers are armed while locked.
+            tracing::debug!(%side, "not crossing: {}", Refusal::Locked.as_str());
+            self.release_capture(id, None);
+            return;
+        }
+        let guard = self.settings.edge.guard(side);
+        let edge = &self.settings.edge;
+        let blocked = guard.fullscreen
+            && fullscreen_blocks(true, self.focus.focus().as_ref(), &edge.fullscreen_allow, &edge.fullscreen_block);
+        match Approach::start(guard, local, side, pos, self.mods, blocked, std::time::Instant::now()) {
+            Start::Cross(p) => self.enter_peer(id, side, p),
+            Start::Refuse(why) => {
+                tracing::debug!(%side, "not crossing: {}", why.as_str());
+                self.release_capture(id, None);
+            }
+            Start::Wait(a) => {
+                tracing::debug!(%side, ?guard, "holding the pointer at the edge");
+                self.approach = Some((id, a));
+            }
+        }
+    }
+
+    /// The pointer is held at an edge and something happened.
+    /// `input` is what happened, if it must be replayed here when the
+    /// pointer is handed back.
+    fn on_approach(&mut self, next: Next, input: Option<Inject>) {
+        match next {
+            Next::Wait => {}
+            Next::Cross(pos) => {
+                let Some((id, a)) = self.approach.take() else { return };
+                self.enter_peer(id, a.side(), pos);
+            }
+            Next::Release { pos, press } => {
+                let Some((id, _)) = self.approach.take() else { return };
+                self.release_capture(id, Some(pos));
+                // Captured while held, but meant for this computer.
+                for code in press {
+                    let _ = self.inject.send(Inject::Key { code, down: true });
+                }
+                if let Some(i) = input {
+                    let _ = self.inject.send(i);
+                }
+            }
+        }
+    }
+
+    /// A click or scroll while the pointer is held at an edge.
+    fn approach_input(&mut self, input: Inject) {
+        let Some((_, a)) = self.approach.as_mut() else { return };
+        let next = a.other_input();
+        self.on_approach(next, Some(input));
+    }
+
+    /// Ends capture `id`, putting the pointer at `pos` (or where it was).
+    fn release_capture(&mut self, id: u32, pos: Option<Pos>) {
+        let _ = self.capture.send(CaptureCmd::Release { id, pos });
+        // Keys go up unseen while not captured (except where the backend
+        // reports modifiers at each activation).
+        self.mods = Mods::default();
+    }
+
+    /// The pointer crossed our `side` edge at `pos`: it enters the peer
+    /// there at the matching point of the facing edge.
+    fn enter_peer(&mut self, activation: u32, side: Side, pos: Pos) {
+        self.end_visit();
         let target = self.peer_at(side).and_then(|fp| Some((fp, self.peers.get(&fp)?.desktop.clone()?)));
         let (Some(local), Some((fp, desktop))) = (self.local.as_ref(), target) else {
-            let _ = self.capture.send(CaptureCmd::Release { id: activation, pos: None });
+            self.release_capture(activation, None);
             return;
         };
         self.epoch = self.epoch.wrapping_add(1);
         let t = local.edge_fraction(side, pos);
         let cursor = RemoteCursor::enter(desktop, side.opposite(), t, self.epoch);
+        self.begin_visit(activation, fp, cursor);
+    }
+
+    /// `one-mk switch`: the pointer goes to the centre of `fp`'s main
+    /// screen, without crossing an edge. Its edge facing us still leads back.
+    fn enter_peer_at_center(&mut self, activation: u32, fp: Fingerprint) {
+        self.end_visit();
+        let Some((side, desktop)) = self.peers.get(&fp).and_then(|p| Some((p.side, p.desktop.clone()?))) else {
+            self.release_capture(activation, None);
+            return;
+        };
+        self.epoch = self.epoch.wrapping_add(1);
+        let center = desktop.primary().center();
+        let cursor = RemoteCursor::enter_at(desktop, side.opposite(), center, self.epoch);
+        self.begin_visit(activation, fp, cursor);
+    }
+
+    /// Starts a visit to `fp` (whose `Enter` goes out now) on capture
+    /// `activation`.
+    fn begin_visit(&mut self, activation: u32, fp: Fingerprint, mut cursor: RemoteCursor) {
         let peer = &self.peers[&fp];
         let setting = self.trust.get(&fp).map_or(Swap::Auto, |d| d.swap_ctrl_cmd);
         let swap = swap_applies(setting, os::local(), peer.os);
-        peer.ctl.send(Control::Enter { epoch: self.epoch, pos: cursor.pos() });
-        tracing::debug!(peer = %peer.name, %side, "pointer moved to peer");
+        let epoch = cursor.epoch();
+        peer.ctl.send(Control::Enter { epoch, pos: cursor.pos() });
+        if wants_relative(self.settings.gaming, peer.caps, false) && cursor.set_relative(true) {
+            peer.ctl.send(Control::PointerMode { epoch, relative: true });
+        }
+        tracing::debug!(peer = %peer.name, side = %peer.side, relative = cursor.is_relative(), "pointer moved to peer");
         let now = Instant::now();
         self.remote = Some(Remote {
             activation,
             peer: fp,
-            side,
+            side: peer.side,
             cursor,
             held: HeldKeys::new(),
             swap,
@@ -759,7 +982,30 @@ impl App {
             last_send: now,
             resend_at: None,
             resends: 0,
+            peer_fullscreen: false,
+            watching_focus: false,
         });
+        self.apply_pointer_mode(); // gaming `auto` starts watching
+        self.update_sides();
+    }
+
+    /// Switches the visit in progress between absolute and relative motion
+    /// when gaming mode, the peer's abilities or its fullscreen state say so.
+    fn apply_pointer_mode(&mut self) {
+        let Some(r) = self.remote.as_mut() else { return };
+        let Some(p) = self.peers.get(&r.peer) else { return };
+        if self.settings.gaming == Gaming::Auto && p.caps & caps::FOCUS != 0 && !r.watching_focus {
+            r.watching_focus = true;
+            p.ctl.send(Control::WatchFocus { epoch: r.cursor.epoch() });
+        }
+        let want = wants_relative(self.settings.gaming, p.caps, r.peer_fullscreen);
+        if r.cursor.set_relative(want) {
+            p.ctl.send(Control::PointerMode { epoch: r.cursor.epoch(), relative: want });
+            tracing::debug!(peer = %p.name, relative = want, "pointer mode changed");
+            if r.acked {
+                r.send_motion(&self.peers, r.cursor.current());
+            }
+        }
     }
 
     /// Ends the visit to a peer (which releases anything still held there),
@@ -774,9 +1020,16 @@ impl App {
 
     /// Returns the pointer to this machine at fraction `t` along the edge.
     fn go_home(&mut self, t: f64) {
+        let Some(side) = self.remote.as_ref().map(|r| r.side) else { return };
+        let pos = self.local.as_ref().map(|d| d.point_on_edge(side, t, 2.0));
+        self.go_home_at(pos);
+    }
+
+    /// Returns the pointer to this machine at `pos`.
+    fn go_home_at(&mut self, pos: Option<Pos>) {
         let Some(r) = self.end_visit() else { return };
-        let pos = self.local.as_ref().map(|d| d.point_on_edge(r.side, t, 2.0));
-        let _ = self.capture.send(CaptureCmd::Release { id: r.activation, pos });
+        self.release_capture(r.activation, pos);
+        self.update_sides();
         tracing::debug!("pointer is home");
     }
 
@@ -803,7 +1056,12 @@ impl App {
     // ----------------------------------------------------------------- timers
 
     fn next_deadline(&self) -> Option<Instant> {
+        // A held approach has a deadline only while a dwell runs, and a
+        // switch only until capture starts: otherwise nothing ticks.
+        let waits = self.approach.as_ref().and_then(|(_, a)| a.deadline()).map(Instant::from_std);
+        let waits = waits.into_iter().chain(self.switching.map(|(_, until)| until)).min();
         let lease = self.owner.as_ref().map(|o| (o.last_rx + LEASE).min(o.last_input + IDLE));
+        let lease = lease.into_iter().chain(waits).min();
         let visit = self.remote.as_ref().map(|r| {
             if r.acked {
                 let keepalive = r.last_send + KEEPALIVE;
@@ -817,6 +1075,20 @@ impl App {
 
     fn on_timer(&mut self) {
         let now = Instant::now();
+        if let Some((fp, until)) = self.switching
+            && now >= until
+        {
+            self.switching = None;
+            let name = self.peers.get(&fp).map_or("", |p| &p.name);
+            tracing::warn!(peer = %name, "could not switch: this computer's input capture did not start");
+            self.update_sides();
+        }
+        if let (Some((_, a)), Some(local)) = (self.approach.as_mut(), self.local.as_ref())
+            && a.deadline().is_some_and(|d| now.into_std() >= d)
+        {
+            let next = a.timer(local, now.into_std());
+            self.on_approach(next, None);
+        }
         if self.owner.as_ref().is_some_and(|o| now >= o.last_rx + LEASE) {
             tracing::warn!("the controlling computer went silent; releasing held keys");
             self.end_owner(true);
@@ -873,6 +1145,21 @@ impl App {
             println!("{} is controlling this computer. {}", peer.name, takeback_hint());
         }
         self.owner = Some(Owner::new(fp, id, epoch, pos));
+    }
+
+    /// Tells the owner whether a fullscreen window has the focus here (for
+    /// its gaming mode `auto`), if it asked, that changed and this OS can
+    /// tell. Asked when it starts watching and on every click, which is
+    /// when focus moves.
+    fn report_focus(&mut self) {
+        let Some(o) = self.owner.as_mut().filter(|o| o.watch_focus) else { return };
+        let Some(fullscreen) = self.focus.focus().map(|f| f.fullscreen) else { return };
+        if o.focus_sent.replace(fullscreen) == Some(fullscreen) {
+            return;
+        }
+        if let Some(p) = self.peers.get(&o.peer).filter(|p| p.id == o.link) {
+            p.ctl.send(Control::Focus { epoch: o.epoch, fullscreen });
+        }
     }
 
     /// Ends the current owner's control, releasing everything it held.
@@ -964,13 +1251,14 @@ impl App {
         let desktop = (!link.screens.is_empty()).then(|| Desktop::new(link.screens.clone()));
         let (id, name, os, rank, sent) = (link.id, link.name.clone(), link.os, link.rank, link.sent_screens.clone());
         let (conn, ctl) = link.spawn(self.link_tx.clone());
+        ctl.send(Control::Caps(caps::LOCAL));
         // Our monitors may have changed during the handshake.
         if let Some(local) = &self.local
             && local.screens != sent
         {
             ctl.send(Control::Screens(local.screens.clone()));
         }
-        if let Some(old) = self.peers.insert(fp, Connected { id, name, os, rank, side, conn, ctl, desktop }) {
+        if let Some(old) = self.peers.insert(fp, Connected { id, name, os, rank, side, conn, ctl, desktop, caps: 0 }) {
             old.conn.close(2u32.into(), b"duplicate");
         }
         self.send_layout(fp);
@@ -987,6 +1275,11 @@ impl App {
                     o.motion(epoch, seq, pos, &self.inject);
                 }
             }
+            LinkEvent::MotionBy { epoch, seq, sum } => {
+                if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id) {
+                    o.motion_by(epoch, seq, sum, &self.inject);
+                }
+            }
             LinkEvent::Control(msg) => self.on_control(fp, id, msg),
             LinkEvent::Closed => {
                 let peer = self.peers.remove(&fp).expect("present");
@@ -999,7 +1292,10 @@ impl App {
                 }
                 if let Some(r) = self.remote.take_if(|r| r.peer == fp) {
                     let pos = self.local.as_ref().map(|d| d.point_on_edge(r.side, r.cursor.home_fraction(), 2.0));
-                    let _ = self.capture.send(CaptureCmd::Release { id: r.activation, pos });
+                    self.release_capture(r.activation, pos);
+                }
+                if self.switching.is_some_and(|(s, _)| s == fp) {
+                    self.switching = None;
                 }
                 self.update_sides();
             }
@@ -1050,9 +1346,37 @@ impl App {
             }
             Control::Busy { epoch } => self.go_home_from(fp, epoch, "it is controlled by another computer"),
             Control::Revoked { epoch } => self.go_home_from(fp, epoch, "it took back control"),
+            Control::Caps(bits) => {
+                if let Some(p) = self.peers.get_mut(&fp) {
+                    p.caps = bits;
+                }
+                self.apply_pointer_mode();
+            }
+            Control::PointerMode { epoch, relative } => {
+                if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
+                    o.relative = relative;
+                }
+            }
+            Control::Focus { epoch, fullscreen } => {
+                if let Some(r) = self.remote.as_mut().filter(|r| r.peer == fp && r.cursor.epoch() == epoch) {
+                    r.peer_fullscreen = fullscreen;
+                    self.apply_pointer_mode();
+                }
+            }
+            Control::Lock { id: lock } => self.on_peer_lock(fp, lock),
+            Control::WatchFocus { epoch } => {
+                if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
+                    o.watch_focus = true;
+                    self.report_focus();
+                }
+            }
             input => {
+                let click = matches!(input, Control::Button { down: true, .. });
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id) {
                     o.input(input, &self.inject);
+                    if click {
+                        self.report_focus();
+                    }
                 }
             }
         }
@@ -1105,10 +1429,39 @@ impl App {
         let text = match req {
             Request::Status => self.status().encode(),
             Request::Reload => {
+                self.settings = Settings::load(&self.dir);
+                self.apply_pointer_mode();
                 self.sync_sides();
                 let fps: Vec<_> = self.peers.keys().copied().collect();
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
                 "ok\n".to_owned()
+            }
+            Request::Switch(to) => self.switch(to),
+            Request::LockPointer(t) => {
+                let was = self.locked;
+                self.locked = t.apply(was);
+                if self.locked != was {
+                    if self.locked {
+                        println!("The pointer is locked to this computer.");
+                        if let Some((id, a)) = self.approach.take() {
+                            self.release_capture(id, Some(a.pos()));
+                        }
+                    } else {
+                        println!("The pointer can cross edges again.");
+                    }
+                }
+                self.update_sides();
+                format!("ok\n{}\n", if self.locked { "on" } else { "off" })
+            }
+            Request::LockAll => {
+                let id = self.lock_sync.lock_all(link::random_u64(), std::time::Instant::now());
+                for p in self.peers.values() {
+                    p.ctl.send(Control::Lock { id });
+                }
+                let n = self.peers.len();
+                println!("Locking this computer{}.", if n > 0 { " and the connected ones" } else { "" });
+                self.lock_screen();
+                format!("ok\n{n}\n")
             }
             Request::TakeBack => match self.owner.as_ref().map(|o| o.peer) {
                 Some(fp) => {
@@ -1119,7 +1472,6 @@ impl App {
                 }
                 None => "none\n".to_owned(),
             },
-            Request::Switch(_) | Request::LockPointer(_) | Request::LockAll => "error not supported yet\n".to_owned(),
         };
         let _ = reply.send(text);
     }
@@ -1145,7 +1497,169 @@ impl App {
             controlling: self.remote.as_ref().map(|r| name_of(&r.peer)),
             controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
             peers: peers.collect(),
-            ..Status::default()
+            pointer_locked: self.locked,
+            screen_locked: self.lock_sync.is_locked(),
+            gaming: self.settings.gaming.to_string(),
+            relative: self.remote.as_ref().is_some_and(|r| r.cursor.is_relative()),
+            lock_sync: self.settings.lock_sync,
+            edges: self.settings.edge.describe(),
+        }
+    }
+
+    // ------------------------------------------------------------- switching
+
+    /// `one-mk switch` (and, later, its keyboard shortcut). The reply's
+    /// first line is `ok`, `already`, `here` or `error <why>`.
+    fn switch(&mut self, to: SwitchTo) -> String {
+        match to {
+            SwitchTo::Here => self.switch_here(),
+            SwitchTo::Next => {
+                let mut online: Vec<_> =
+                    self.peers.iter().filter(|(_, p)| p.desktop.is_some()).map(|(fp, p)| (p.name.clone(), *fp)).collect();
+                online.sort();
+                let order: Vec<Fingerprint> = online.into_iter().map(|(_, fp)| fp).collect();
+                let current = self.switching.map(|(fp, _)| fp).or(self.remote.as_ref().map(|r| r.peer));
+                match cycle_next(current, &order) {
+                    Some(fp) => self.switch_to(fp),
+                    None => self.switch_here(),
+                }
+            }
+            SwitchTo::Device(name) => {
+                let Some(fp) = self.trust.find(&name).and_then(|d| d.fingerprint()) else {
+                    return format!("error no paired computer called {:?}; see `one-mk devices`\n", sanitize_name(&name));
+                };
+                match self.peers.get(&fp) {
+                    Some(p) if p.desktop.is_some() => self.switch_to(fp),
+                    Some(p) => format!("error {} has not said what its screens are\n", p.name),
+                    None => {
+                        let name = self.trust.get(&fp).map_or_else(|| sanitize_name(&name), |d| sanitize_name(&d.name));
+                        format!("error {name} is not connected\n")
+                    }
+                }
+            }
+        }
+    }
+
+    /// The mouse and keyboard come back to this computer, from a peer we
+    /// control, and from a peer controlling us (like `one-mk takeback`).
+    fn switch_here(&mut self) -> String {
+        self.switching = None;
+        if let Some((id, a)) = self.approach.take() {
+            self.release_capture(id, Some(a.pos()));
+        }
+        let mut what = Vec::new();
+        if let Some(r) = self.remote.as_ref() {
+            let name = self.peers.get(&r.peer).map_or_else(String::new, |p| p.name.clone());
+            tracing::info!(peer = %name, "`one-mk switch here`: pointer is home");
+            what.push(format!("left {name}"));
+            let center = self.local.as_ref().map(|d| d.primary().center());
+            self.go_home_at(center);
+        }
+        if let Some(fp) = self.owner.as_ref().map(|o| o.peer) {
+            let name = self.peers.get(&fp).map_or_else(String::new, |p| p.name.clone());
+            tracing::info!(peer = %name, "control taken back with `one-mk switch here`");
+            what.push(format!("took control back from {name}"));
+            self.end_owner(true);
+        }
+        self.update_sides();
+        format!("here\n{}\n", what.join(", "))
+    }
+
+    fn switch_to(&mut self, fp: Fingerprint) -> String {
+        let (name, side) = (self.peers[&fp].name.clone(), self.peers[&fp].side);
+        if self.remote.as_ref().is_some_and(|r| r.peer == fp) {
+            return format!("already\n{name}\n");
+        }
+        // The person here wants this computer's mouse and keyboard: whoever
+        // controls this computer lets go first.
+        self.end_owner(true);
+        let captured = self.remote.as_ref().map(|r| r.activation).or(self.approach.as_ref().map(|(id, _)| *id));
+        self.approach = None;
+        match captured {
+            // Already capturing: the visit moves to the new peer.
+            Some(activation) => self.enter_peer_at_center(activation, fp),
+            None => {
+                self.switching = Some((fp, Instant::now() + SWITCH_TIMEOUT));
+                self.update_sides(); // arms `side` even while the pointer is locked
+                let _ = self.capture.send(CaptureCmd::Activate { side });
+            }
+        }
+        format!("ok\n{name}\n")
+    }
+
+    // ------------------------------------------------------------ screen lock
+
+    /// Locks this computer's screen, letting go of everything first.
+    fn lock_screen(&mut self) {
+        self.let_go_for_lock();
+        if let Err(e) = self.locker.lock() {
+            tracing::warn!("could not lock the screen: {e:#}");
+        }
+    }
+
+    /// Nothing may stay held across a lock: the lock screen would swallow
+    /// the key-ups, leaving keys stuck after unlocking.
+    fn let_go_for_lock(&mut self) {
+        if let Some(r) = self.remote.as_ref() {
+            let t = r.cursor.home_fraction();
+            self.go_home(t);
+        }
+        if let Some((id, a)) = self.approach.take() {
+            self.release_capture(id, Some(a.pos()));
+        }
+        if let Some(o) = self.owner.as_ref() {
+            for code in o.mods_pressed.keys() {
+                self.unlock_release.update(code, true);
+            }
+            self.end_owner(true);
+        }
+    }
+
+    /// The OS says this screen locked or unlocked.
+    fn on_screen_locked(&mut self, locked: bool) {
+        if !locked {
+            tracing::debug!("screen unlocked");
+            self.lock_sync.on_local_unlocked();
+            // Releases sent while locked may have gone to the lock screen
+            // instead (a Win key stuck after unlocking, typically): send
+            // them again, now that they reach the desktop.
+            for code in self.unlock_release.keys() {
+                let _ = self.inject.send(Inject::Key { code, down: false });
+            }
+            self.unlock_release = Mods::default();
+            return;
+        }
+        tracing::debug!("screen locked");
+        let fresh = link::random_u64();
+        if let Some(id) = self.lock_sync.on_local_locked(self.settings.lock_sync, fresh, std::time::Instant::now()) {
+            if !self.peers.is_empty() {
+                println!("This computer locked; locking the connected ones too (lock sync).");
+            }
+            for p in self.peers.values() {
+                p.ctl.send(Control::Lock { id });
+            }
+        }
+        self.let_go_for_lock();
+    }
+
+    /// Peer `fp` asks us to lock (its `lock-all`, or its lock sync).
+    fn on_peer_lock(&mut self, fp: Fingerprint, id: u64) {
+        match self.lock_sync.on_remote(id, self.settings.lock_sync, std::time::Instant::now()) {
+            OnRemote::Ignore => {}
+            OnRemote::Lock { lock_here, forward } => {
+                if forward {
+                    for (other, p) in &self.peers {
+                        if *other != fp {
+                            p.ctl.send(Control::Lock { id });
+                        }
+                    }
+                }
+                if lock_here {
+                    let name = self.peers.get(&fp).map_or("", |p| &p.name);
+                    println!("{name} locked its screen; locking this one too.");
+                    self.lock_screen();
+                }
+            }
         }
     }
 
@@ -1201,6 +1715,14 @@ impl App {
             }
             self.conflicts = conflicts;
         }
+        if self.locked {
+            // Only the edge of a visit in progress (or of a switch about to
+            // start) stays armed, so the pointer can come back that way.
+            let keep: Vec<Side> = (self.remote.as_ref().map(|r| r.side).into_iter())
+                .chain(self.switching.and_then(|(fp, _)| self.peers.get(&fp).map(|p| p.side)))
+                .collect();
+            sides.retain(|s| keep.contains(s));
+        }
         if sides != self.sides {
             self.sides = sides.clone();
             let _ = self.capture.send(CaptureCmd::SetSides(sides));
@@ -1244,6 +1766,17 @@ impl App {
     }
 }
 
+/// Whether to send relative motion (gaming mode) to a peer that supports
+/// `peer_caps` and reports `peer_fullscreen`.
+fn wants_relative(mode: Gaming, peer_caps: u32, peer_fullscreen: bool) -> bool {
+    peer_caps & caps::RELATIVE != 0
+        && match mode {
+            Gaming::Off => false,
+            Gaming::On => true,
+            Gaming::Auto => peer_fullscreen,
+        }
+}
+
 /// Whether keys sent to a computer running `peer_os` trade Ctrl and Cmd.
 /// Automatic means exactly one of the two computers is a Mac.
 fn swap_applies(setting: Swap, local_os: u8, peer_os: u8) -> bool {
@@ -1270,8 +1803,10 @@ fn send_datagram(peers: &HashMap<Fingerprint, Connected>, fp: Fingerprint, d: Da
 #[cfg(test)]
 mod tests {
     use super::*;
+    use one_mk_ctl::client::Toggle;
     use one_mk_input::NullHandles;
     use one_mk_net::{Device, read_frame};
+    use one_mk_proto::Focus;
     use one_mk_proto::PROTOCOL_VERSION;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -1280,8 +1815,18 @@ mod tests {
         d
     }
 
+    /// A port nothing listens on. Tests run in parallel and the OS may hand
+    /// out a just-released port again, so none is given out twice.
     fn free_port() -> u16 {
-        std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+        static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+        let mut given = GIVEN.lock().unwrap();
+        loop {
+            let port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            if !given.contains(&port) {
+                given.push(port);
+                return port;
+            }
+        }
     }
 
     fn trust(dir: &std::path::Path, other: &Identity, side: Side) {
@@ -1338,6 +1883,7 @@ mod tests {
             discovery: false,
             clipboard: None,
             downloads: std::env::temp_dir().join("one-mk-test-unused-downloads"),
+            start_locked: false,
         };
         let a = tokio::spawn(serve(da.clone(), opts(pa, vec![]), ba, stop(stop_rx.clone())));
         let b = tokio::spawn(serve(db.clone(), opts(pb, vec![SocketAddr::from(([127, 0, 0, 1], pa))]), bb, stop(stop_rx)));
@@ -1441,6 +1987,7 @@ mod tests {
                 discovery: false,
                 clipboard,
                 downloads: dir.join("downloads"),
+                start_locked: false,
             };
             let a = tokio::spawn(serve(da.clone(), opts(pa, vec![], ca, &da), ba, wait(stop_rx.clone())));
             let to_a = vec![SocketAddr::from(([127, 0, 0, 1], pa))];
@@ -1890,6 +2437,7 @@ mod tests {
             raw.send(Control::Hello { version: PROTOCOL_VERSION, name: "raw".into(), screens: vec![], nonce: 0, os: 0 })
                 .await;
             assert!(matches!(raw.next().await, Control::Hello { .. }));
+            assert_eq!(raw.next().await, Control::Caps(caps::LOCAL));
             assert!(matches!(raw.next().await, Control::Layout { .. }));
             raw
         }
@@ -2052,6 +2600,353 @@ mod tests {
         duo.ha.events.send(Event::Key { code: 29, down: true }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 29, down: true });
         duo.stop().await;
+    }
+
+    async fn ask(dir: &std::path::Path, req: Request) -> String {
+        control::request(dir, req).await.unwrap().expect("daemon running")
+    }
+
+    /// Changes `dir`'s settings and has its daemon apply them.
+    async fn set(dir: &std::path::Path, change: impl FnOnce(&mut Settings)) {
+        let mut s = Settings::load(dir);
+        change(&mut s);
+        s.save(dir).unwrap();
+        assert_eq!(ask(dir, Request::Reload).await, "ok\n");
+    }
+
+    async fn status(dir: &std::path::Path) -> Status {
+        Status::decode(&ask(dir, Request::Status).await).unwrap()
+    }
+
+    /// What was injected so far, without `Controlled`.
+    fn injected(h: &mut NullHandles) -> Vec<Inject> {
+        std::iter::from_fn(|| h.inject.try_recv().ok()).filter(|i| !matches!(i, Inject::Controlled(_))).collect()
+    }
+
+    fn switch_to(fp: &str) -> Request {
+        Request::Switch(SwitchTo::Device(fp[..8].to_owned()))
+    }
+
+    const CENTER: Pos = Pos::new(960.0, 540.0);
+
+    /// `one-mk switch` moves control to B's screen centre without an edge,
+    /// keeps the visit lifecycle (held keys released on the way back), and
+    /// `switch next` cycles through B and back here.
+    #[tokio::test]
+    async fn switch_moves_control_without_crossing_an_edge() {
+        let mut duo = Duo::start("switch", None).await;
+        let fb = duo.fb.clone();
+        assert!(ask(&duo.da, Request::Switch(SwitchTo::Device("nobody".into()))).await.starts_with("error no paired computer"));
+        assert_eq!(ask(&duo.da, Request::Switch(SwitchTo::Here)).await, "here\n\n", "already here");
+
+        let reply = ask(&duo.da, switch_to(&fb)).await;
+        assert!(reply.starts_with("ok\n"), "{reply}");
+        // A asks its backend to capture; B gets the pointer at its centre.
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.ha.events.send(Event::Activated { id: 9, side: Side::Right, pos: Pos::new(1919.0, 3.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
+        assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("already\n"));
+        assert!(status(&duo.da).await.controlling.is_some());
+
+        duo.ha.events.send(Event::Key { code: 29, down: true }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 29, down: true });
+        // Back here: A's pointer goes to its own centre, B lets go of Ctrl.
+        assert!(ask(&duo.da, Request::Switch(SwitchTo::Here)).await.starts_with("here\nleft "));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 9, pos: Some(CENTER) });
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 29, down: false });
+        // The Ctrl release that follows on A goes nowhere.
+        duo.ha.events.send(Event::Key { code: 29, down: false }).unwrap();
+
+        // next: here -> B -> here.
+        assert!(ask(&duo.da, Request::Switch(SwitchTo::Next)).await.starts_with("ok\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.ha.events.send(Event::Activated { id: 10, side: Side::Right, pos: Pos::new(1919.0, 3.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
+        // The edge facing A still leads back.
+        duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0 }).unwrap();
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 10, pos: Some(_) }));
+        assert!(ask(&duo.da, Request::Switch(SwitchTo::Next)).await.starts_with("ok\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.ha.events.send(Event::Activated { id: 11, side: Side::Right, pos: Pos::new(1919.0, 3.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
+        assert!(ask(&duo.da, Request::Switch(SwitchTo::Next)).await.starts_with("here\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 11, pos: Some(CENTER) });
+        duo.stop().await;
+    }
+
+    /// `switch here` on the controlled computer works like `takeback`, and
+    /// a switch the backend never starts times out quietly.
+    #[tokio::test]
+    async fn switch_here_takes_back_and_unanswered_switch_gives_up() {
+        let mut duo = Duo::start("switch-back", None).await;
+        duo.enter_b().await;
+        duo.ha.events.send(Event::Key { code: 42, down: true }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 42, down: true });
+        let reply = ask(&duo.db, Request::Switch(SwitchTo::Here)).await;
+        assert!(reply.starts_with("here\ntook control back from "), "{reply}");
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 42, down: false });
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(_) }));
+
+        // A switch whose capture never starts is dropped after the timeout.
+        let fb = duo.fb.clone();
+        assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        tokio::time::sleep(SWITCH_TIMEOUT + Duration::from_millis(100)).await;
+        // A later edge crossing is a normal one, not the stale switch.
+        duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 100.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 100.0)));
+        duo.stop().await;
+    }
+
+    /// While the pointer is locked no edge is armed (a stray activation is
+    /// refused), `switch` still works and its edge leads back, and status
+    /// shows the lock.
+    #[tokio::test]
+    async fn lock_pointer_disarms_edges() {
+        let mut duo = Duo::start("lockptr", None).await;
+        assert_eq!(ask(&duo.da, Request::LockPointer(Toggle::On)).await, "ok\non\n");
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![]));
+        assert!(status(&duo.da).await.pointer_locked);
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: None });
+
+        let fb = duo.fb.clone();
+        assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
+        duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0 }).unwrap();
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: Some(_) }));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![]), "locked again once home");
+
+        assert_eq!(ask(&duo.da, Request::LockPointer(Toggle::Toggle)).await, "ok\noff\n");
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
+        assert!(!status(&duo.da).await.pointer_locked);
+        duo.stop().await;
+    }
+
+    /// A dwell holds the pointer at the edge for its time, with no timer
+    /// otherwise; moving away first hands it back where it would be.
+    #[tokio::test]
+    async fn dwell_holds_the_pointer_at_the_edge() {
+        let mut duo = Duo::start("dwell", None).await;
+        set(&duo.da, |s| s.edge.all.dwell_ms = Some(200)).await;
+        assert_eq!(status(&duo.da).await.edges, "dwell 200 ms");
+        let started = Instant::now();
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: 40.0, dy: 10.0 }).unwrap(); // pushing, sliding down
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 550.0)));
+        assert!(started.elapsed() >= Duration::from_millis(200), "{:?}", started.elapsed());
+        duo.leave_b().await;
+
+        duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: -30.0, dy: 0.0 }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: Some(Pos::new(1889.0, 540.0)) });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(injected(&mut duo.hb), vec![], "never crossed");
+        duo.stop().await;
+    }
+
+    /// Modifier-to-cross: held at activation (Windows/macOS report it) it
+    /// crosses at once; pressed while held at the edge it crosses then and
+    /// is not sent on; another key hands the pointer back and is typed here.
+    #[tokio::test]
+    async fn modifier_to_cross() {
+        let mut duo = Duo::start("modifier", None).await;
+        set(&duo.da, |s| s.edge.all.modifier = Some("shift".into())).await;
+        duo.ha.events.send(Event::Modifiers(Mods::from_keys([42]))).unwrap();
+        duo.enter_b().await;
+        duo.leave_b().await;
+
+        duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(injected(&mut duo.hb), vec![], "held at the edge: Shift was released when capture ended");
+        duo.ha.events.send(Event::Key { code: 54, down: true }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
+        duo.ha.events.send(Event::Key { code: 30, down: true }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 30, down: true }, "Shift was not sent");
+        duo.ha.events.send(Event::Key { code: 30, down: false }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 30, down: false });
+        duo.leave_b().await;
+
+        duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        duo.ha.events.send(Event::Key { code: 30, down: true }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 3, pos: Some(Pos::new(1919.0, 540.0)) });
+        assert_eq!(next_inject(&mut duo.ha).await, Inject::Key { code: 30, down: true }, "typed here, not lost");
+        duo.stop().await;
+    }
+
+    /// Dead corners and the fullscreen guard refuse at once; the allow list
+    /// lets a fullscreen program be left.
+    #[tokio::test]
+    async fn corners_and_fullscreen_refuse() {
+        let mut duo = Duo::start("guards", None).await;
+        set(&duo.da, |s| {
+            s.edge.right = Some(crate::settings::Rules { corner: Some(20), ..Default::default() });
+            s.edge.all.fullscreen_guard = Some(true);
+        })
+        .await;
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 5.0) }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: None });
+
+        *duo.ha.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec!["game".into()] });
+        duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: None });
+        set(&duo.da, |s| s.edge.fullscreen_allow.push("GAME".into())).await;
+        duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 500.0)));
+        assert!(injected(&mut duo.hb).is_empty());
+        duo.stop().await;
+    }
+
+    /// Gaming mode: relative moves that never clip at B's edge or lead
+    /// home; clicks don't warp; `switch here` brings the pointer back.
+    #[tokio::test]
+    async fn gaming_mode_sends_relative_motion() {
+        let mut duo = Duo::start("gaming", None).await;
+        set(&duo.da, |s| s.gaming = Gaming::On).await;
+        tokio::time::sleep(Duration::from_millis(100)).await; // B's caps arrive
+        duo.enter_b().await;
+        assert!(status(&duo.da).await.relative);
+        duo.ha.events.send(Event::Motion { dx: 10.4, dy: 5.0 }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveBy { dx: 10, dy: 5 });
+        duo.ha.events.send(Event::Motion { dx: 0.4, dy: 0.0 }).unwrap(); // the fractions add up
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveBy { dx: 1, dy: 0 });
+        // Far past A's side of B: still on B, still relative.
+        duo.ha.events.send(Event::Motion { dx: -5000.0, dy: 0.0 }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveBy { dx: -5000, dy: 0 });
+        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Button { button: 0x110, down: true }, "no warp first");
+        assert!(duo.ha.capture.try_recv().is_err(), "the pointer did not leave B");
+
+        assert!(ask(&duo.da, Request::Switch(SwitchTo::Here)).await.starts_with("here\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(CENTER) });
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Button { button: 0x110, down: false });
+        duo.stop().await;
+    }
+
+    /// Gaming mode `auto`: relative while B reports a fullscreen window,
+    /// absolute again once a click finds it isn't.
+    #[tokio::test]
+    async fn gaming_auto_follows_the_peers_fullscreen_window() {
+        let mut duo = Duo::start("gaming-auto", None).await;
+        set(&duo.da, |s| s.gaming = Gaming::Auto).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec![] });
+        duo.enter_b().await;
+        eventually_async("relative motion", || async { status(&duo.da).await.relative }).await;
+        assert!(duo.hb.focus_probes.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        duo.ha.events.send(Event::Motion { dx: 3.0, dy: 0.0 }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveBy { dx: 3, dy: 0 });
+
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: false, apps: vec![] });
+        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Button { button: 0x110, down: true });
+        eventually_async("absolute motion", || async { !status(&duo.da).await.relative }).await;
+        // Absolute again from the estimate (B's left edge + 3), then on.
+        assert_eq!(next_non_rel_move(&mut duo.hb).await, Inject::MoveTo(Pos::new(3.0, 540.0)));
+        duo.ha.events.send(Event::Motion { dx: 1.0, dy: 0.0 }).unwrap();
+        assert_eq!(next_non_rel_move(&mut duo.hb).await, Inject::MoveTo(Pos::new(4.0, 540.0)));
+        duo.stop().await;
+    }
+
+    /// Nobody looks at B's windows unless A's gaming mode is `auto` (on
+    /// GNOME, just connecting to X11 can start XWayland).
+    #[tokio::test]
+    async fn focus_is_watched_only_for_gaming_auto() {
+        let mut duo = Duo::start("focus-off", None).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec![] });
+        duo.enter_b().await;
+        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Button { button: 0x110, down: true });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!status(&duo.da).await.relative, "gaming off: B's fullscreen window changes nothing");
+        assert_eq!(duo.hb.focus_probes.load(std::sync::atomic::Ordering::SeqCst), 0, "B never looked");
+        assert_eq!(duo.ha.focus_probes.load(std::sync::atomic::Ordering::SeqCst), 0, "nor A (no fullscreen guard)");
+        duo.stop().await;
+    }
+
+    async fn next_non_rel_move(h: &mut NullHandles) -> Inject {
+        loop {
+            match next_inject(h).await {
+                m @ Inject::MoveTo(_) => return m,
+                Inject::MoveBy { .. } | Inject::Button { .. } => {}
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    async fn eventually_async<F: std::future::Future<Output = bool>>(what: &str, mut ok: impl FnMut() -> F) {
+        for _ in 0..100 {
+            if ok().await {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// `lock-all` locks both screens once; with lock sync on everywhere,
+    /// a user locking B locks A, and nothing bounces back to B.
+    #[tokio::test]
+    async fn lock_all_and_lock_sync_without_echo() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let duo = Duo::start("lock", None).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(ask(&duo.da, Request::LockAll).await, "ok\n1\n");
+        eventually("both screens to lock", || duo.ha.locks.load(SeqCst) == 1 && duo.hb.locks.load(SeqCst) == 1).await;
+        assert!(status(&duo.db).await.screen_locked);
+        // B's lock (reported by its OS a moment later) does not echo back.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!((duo.ha.locks.load(SeqCst), duo.hb.locks.load(SeqCst)), (1, 1));
+
+        for h in [&duo.ha, &duo.hb] {
+            h.events.send(Event::ScreenLocked(false)).unwrap();
+        }
+        set(&duo.da, |s| s.lock_sync = true).await;
+        set(&duo.db, |s| s.lock_sync = true).await;
+        assert!(status(&duo.db).await.lock_sync);
+        // The user locks B by hand.
+        duo.hb.events.send(Event::ScreenLocked(true)).unwrap();
+        eventually("A to lock", || duo.ha.locks.load(SeqCst) == 2).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!((duo.ha.locks.load(SeqCst), duo.hb.locks.load(SeqCst)), (2, 1), "no echo");
+        duo.stop().await;
+    }
+
+    /// Locking while controlled releases what the controller held, and
+    /// unlocking releases its modifiers once more, in case the lock screen
+    /// swallowed the first releases (the stuck Win key after unlocking).
+    #[tokio::test]
+    async fn lock_and_unlock_release_held_keys() {
+        let mut duo = Duo::start("unlock", None).await;
+        duo.enter_b().await;
+        duo.ha.events.send(Event::Key { code: 125, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 38, down: true }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 125, down: true });
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 38, down: true });
+        duo.hb.events.send(Event::ScreenLocked(true)).unwrap();
+        let mut up = vec![next_non_move(&mut duo.hb).await, next_non_move(&mut duo.hb).await];
+        up.sort_by_key(|i| format!("{i:?}"));
+        assert_eq!(up, vec![Inject::Key { code: 125, down: false }, Inject::Key { code: 38, down: false }]);
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(_) }));
+        duo.hb.events.send(Event::ScreenLocked(false)).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 125, down: false }, "the modifier again");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(injected(&mut duo.hb), vec![]);
+        duo.stop().await;
+    }
+
+    #[test]
+    fn relative_only_for_peers_that_support_it() {
+        assert!(wants_relative(Gaming::On, caps::RELATIVE, false));
+        assert!(!wants_relative(Gaming::On, 0, true), "an older peer");
+        assert!(!wants_relative(Gaming::Off, caps::LOCAL, true));
+        assert!(wants_relative(Gaming::Auto, caps::LOCAL, true));
+        assert!(!wants_relative(Gaming::Auto, caps::LOCAL, false));
     }
 
     #[test]

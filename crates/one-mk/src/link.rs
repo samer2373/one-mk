@@ -30,6 +30,8 @@ pub struct Link {
 pub enum LinkEvent {
     Control(Control),
     Motion { epoch: u16, seq: u32, pos: Pos },
+    /// Relative motion: the controller's running sums (see `Datagram::MotionBy`).
+    MotionBy { epoch: u16, seq: u32, sum: (i32, i32) },
     Closed,
 }
 
@@ -53,7 +55,7 @@ impl Rank {
     }
 }
 
-fn random_u64() -> u64 {
+pub fn random_u64() -> u64 {
     // std seeds RandomState from the OS and changes its keys on every call.
     RandomState::new().hash_one(SystemTime::now())
 }
@@ -148,12 +150,14 @@ impl Link {
                     Ok(Datagram::Motion { epoch, seq, pos }) => {
                         let _ = events.send((fp, id, LinkEvent::Motion { epoch, seq, pos }));
                     }
+                    Ok(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) => {
+                        let _ = events.send((fp, id, LinkEvent::MotionBy { epoch, seq, sum: (sum_x, sum_y) }));
+                    }
                     Ok(Datagram::Probe { id, sent_ns }) => {
                         let (b, n) = Datagram::ProbeEcho { id, sent_ns }.encode();
                         let _ = task_conn.send_datagram(bytes::Bytes::copy_from_slice(&b[..n]));
                     }
                     Ok(Datagram::ProbeEcho { .. }) => {}
-                    Ok(Datagram::MotionBy { .. }) => {} // gaming mode, not handled yet
                     Err(e) => tracing::trace!("bad datagram: {e}"),
                 }
             }
