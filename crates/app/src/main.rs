@@ -37,11 +37,21 @@ fn main() {
             std::process::exit(2);
         }
     };
+    #[allow(unused_mut)]
+    let mut size = [980.0, 660.0];
+    // Development aid (see app.rs `shot`): ONE_MK_APP_SIZE=760x540.
+    #[cfg(debug_assertions)]
+    if let Some((w, h)) = std::env::var("ONE_MK_APP_SIZE").ok().and_then(|s| {
+        let (w, h) = s.split_once('x')?;
+        Some((w.parse().ok()?, h.parse().ok()?))
+    }) {
+        size = [w, h];
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("one·mk")
             .with_app_id("one-mk")
-            .with_inner_size([980.0, 660.0])
+            .with_inner_size(size)
             .with_min_inner_size([760.0, 540.0]),
         ..Default::default()
     };
