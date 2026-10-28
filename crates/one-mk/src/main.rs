@@ -46,20 +46,25 @@ struct Cli {
     cmd: Option<Cmd>,
 }
 
-#[derive(Args)]
+/// Options for `run`. They are accepted before the subcommand
+/// (`one-mk --backend null run`), after it (`one-mk run --backend null`) and,
+/// with no subcommand at all, on their own; given in both places, the ones
+/// after `run` win. Nothing has a clap default, so "not given" can be told
+/// from "given" when the two are merged (see [`RunArgs::over`]).
+#[derive(Args, Debug, Default, PartialEq)]
 struct RunArgs {
-    /// UDP port to listen on.
-    #[arg(long, default_value_t = DEFAULT_PORT)]
-    port: u16,
+    /// UDP port to listen on (default: 24900).
+    #[arg(long)]
+    port: Option<u16>,
     /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
     #[arg(long, value_name = "IP:PORT")]
     connect: Vec<SocketAddr>,
     /// Don't advertise or look for computers on the local network.
     #[arg(long)]
     no_discovery: bool,
-    /// Input backend.
-    #[arg(long, value_enum, default_value_t = Backend::Native)]
-    backend: Backend,
+    /// Input backend (default: native).
+    #[arg(long, value_enum)]
+    backend: Option<Backend>,
     /// Don't share the clipboard.
     #[arg(long)]
     no_clipboard: bool,
@@ -72,6 +77,45 @@ struct RunArgs {
     /// Don't show a notification when files arrive (for this run; `one-mk notify off` is permanent).
     #[arg(long)]
     no_notify: bool,
+}
+
+impl RunArgs {
+    /// `self` (given after `run`) on top of `outer` (given before it): what
+    /// `self` leaves out comes from `outer`, and repeatable options add up.
+    fn over(self, mut outer: RunArgs) -> RunArgs {
+        outer.connect.extend(self.connect);
+        RunArgs {
+            port: self.port.or(outer.port),
+            connect: outer.connect,
+            no_discovery: self.no_discovery || outer.no_discovery,
+            backend: self.backend.or(outer.backend),
+            no_clipboard: self.no_clipboard || outer.no_clipboard,
+            downloads: self.downloads.or(outer.downloads),
+            start_locked: self.start_locked || outer.start_locked,
+            no_notify: self.no_notify || outer.no_notify,
+        }
+    }
+}
+
+/// What the command line asks for.
+enum Action {
+    /// `one-mk run`, which is what plain `one-mk` does.
+    Run(RunArgs),
+    Other(Cmd),
+}
+
+impl Action {
+    /// `outer` is what came before the subcommand. Options for `run` in front
+    /// of another command are an error, not ignored: a `--backend null` that
+    /// silently did nothing would be a nasty surprise.
+    fn of(outer: RunArgs, cmd: Option<Cmd>) -> Result<Action> {
+        match cmd {
+            None => Ok(Action::Run(outer)),
+            Some(Cmd::Run(r)) => Ok(Action::Run(r.over(outer))),
+            Some(other) if outer == RunArgs::default() => Ok(Action::Other(other)),
+            Some(_) => anyhow::bail!("those options are for `one-mk run`; put them after it (see `one-mk run --help`)"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -224,7 +268,7 @@ enum Cmd {
     },
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum Backend {
     /// This system's real mouse and keyboard.
     Native,
@@ -275,8 +319,26 @@ fn main() -> ExitCode {
     }
 }
 
+/// What `run` is started with.
+fn options(r: RunArgs) -> Result<app::Options> {
+    Ok(app::Options {
+        backend: r.backend.unwrap_or(Backend::Native).into(),
+        port: r.port.unwrap_or(DEFAULT_PORT),
+        connect: r.connect,
+        discovery: !r.no_discovery,
+        clipboard: (!r.no_clipboard).then(one_mk_clipboard::Clipboard::system),
+        downloads: match r.downloads {
+            Some(d) => d,
+            None => default_downloads()?,
+        },
+        start_locked: r.start_locked,
+    })
+}
+
 fn run(cli: Cli) -> Result<()> {
     let custom_home = cli.home.is_some();
+    let verbose = cli.verbose;
+    let action = Action::of(cli.run, cli.cmd)?;
     let dir = match cli.home {
         Some(d) => d,
         None => default_home()?,
@@ -286,25 +348,17 @@ fn run(cli: Cli) -> Result<()> {
     // input capture and injection have their own threads.
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     rt.block_on(async move {
-        match cli.cmd.unwrap_or(Cmd::Run(cli.run)) {
-            Cmd::Run(r) => {
+        let cmd = match action {
+            Action::Run(r) => {
                 if r.no_notify {
                     notify::disable();
                 }
-                let opts = app::Options {
-                    backend: r.backend.into(),
-                    port: r.port,
-                    connect: r.connect,
-                    discovery: !r.no_discovery,
-                    clipboard: (!r.no_clipboard).then(one_mk_clipboard::Clipboard::system),
-                    downloads: match r.downloads {
-                        Some(d) => d,
-                        None => default_downloads()?,
-                    },
-                    start_locked: r.start_locked,
-                };
-                app::run(dir, opts).await
+                return app::run(dir, options(r)?).await;
             }
+            Action::Other(cmd) => cmd,
+        };
+        match cmd {
+            Cmd::Run(_) => unreachable!("handled above"),
             Cmd::Clipboard { text, html, image, max_mb, skip_sensitive, allow_fetch } => {
                 clipctl::clipboard(&dir, clipctl::ClipChange { text, html, image, max_mb, skip_sensitive, allow_fetch }).await
             }
@@ -313,7 +367,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Notify { state } => clipctl::notify(&dir, state).await,
             Cmd::Send { paths, to, connect } => send::run(&dir, paths, to, connect).await,
             Cmd::Pair { connect, machine } => pair::run(&dir, connect, pair::Out::new(machine)).await,
-            Cmd::Devices => devices(&dir, cli.verbose > 0),
+            Cmd::Devices => devices(&dir, verbose > 0),
             Cmd::Status => manage::status(&dir).await,
             Cmd::Takeback => manage::takeback(&dir).await,
             Cmd::Install => install::install(&dir, custom_home).await,
@@ -416,4 +470,67 @@ fn forget(dir: &Path, device: &str) -> Result<()> {
     trust.save()?;
     println!("Forgot {}.", d.name);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_args(args: &[&str]) -> RunArgs {
+        let cli = Cli::try_parse_from(std::iter::once("one-mk").chain(args.iter().copied())).unwrap();
+        match Action::of(cli.run, cli.cmd).unwrap() {
+            Action::Run(r) => r,
+            Action::Other(_) => panic!("not run: {args:?}"),
+        }
+    }
+
+    /// What the options are in the end, for the settings that must not be lost.
+    fn effective(args: &[&str]) -> (one_mk_input::Kind, u16, bool, bool, Vec<SocketAddr>) {
+        let r = run_args(args);
+        let clipboard = !r.no_clipboard;
+        // Not the real clipboard: that would start a thread reading the desktop's.
+        let o = options(RunArgs { no_clipboard: true, ..r }).unwrap();
+        (o.backend, o.port, o.discovery, clipboard, o.connect)
+    }
+
+    #[test]
+    fn run_options_mean_the_same_before_and_after_run() {
+        let c: SocketAddr = "127.0.0.1:24901".parse().unwrap();
+        let want = (one_mk_input::Kind::Null, 24901, false, false, vec![c]);
+        for args in [
+            &["--backend", "null", "--port", "24901", "--no-discovery", "--no-clipboard", "--connect", "127.0.0.1:24901", "-v", "run"][..],
+            &["-v", "run", "--backend", "null", "--port", "24901", "--no-discovery", "--no-clipboard", "--connect", "127.0.0.1:24901"],
+            &["--backend", "null", "--no-discovery", "-v", "run", "--port", "24901", "--no-clipboard", "--connect", "127.0.0.1:24901"],
+            // No `run` at all is the same as `run`.
+            &["--backend", "null", "--port", "24901", "--no-discovery", "--no-clipboard", "--connect", "127.0.0.1:24901"],
+        ] {
+            assert_eq!(effective(args), want, "{args:?}");
+        }
+        // Left out, the defaults.
+        for args in [&["run"][..], &[]] {
+            let d = effective(args);
+            assert_eq!((d.0, d.1, d.2, d.3), (one_mk_input::Kind::Native, DEFAULT_PORT, true, true), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn options_after_run_win_and_lists_add_up() {
+        let r = run_args(&["--port", "1", "--connect", "10.0.0.1:1", "run", "--port", "2", "--connect", "10.0.0.2:2"]);
+        assert_eq!(r.port, Some(2));
+        assert_eq!(r.connect.len(), 2);
+        let r = run_args(&["--backend", "null", "run", "--backend", "native"]);
+        assert_eq!(r.backend, Some(Backend::Native));
+    }
+
+    #[test]
+    fn run_options_before_another_command_are_refused() {
+        let parse = |args: &[&str]| {
+            let cli = Cli::try_parse_from(args).unwrap();
+            Action::of(cli.run, cli.cmd).map(|_| ())
+        };
+        assert!(parse(&["one-mk", "--backend", "null", "devices"]).is_err());
+        assert!(parse(&["one-mk", "--no-discovery", "status"]).is_err());
+        assert!(parse(&["one-mk", "--home", "/tmp/x", "-v", "devices"]).is_ok(), "global options are fine");
+        assert!(parse(&["one-mk", "send", "--connect", "127.0.0.1:1", "f"]).is_ok(), "send has its own --connect");
+    }
 }
