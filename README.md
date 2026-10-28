@@ -52,6 +52,12 @@ soon as they connect.
 |---|---|
 | `one-mk status` | Is it running? Who is paired, online, where, and who controls whom |
 | `one-mk takeback` | Take this computer back from the one controlling it |
+| `one-mk switch <pc\|here\|next>` | Move the mouse and keyboard to another computer without crossing an edge (`here`: back to this one) |
+| `one-mk lock-pointer on\|off\|toggle` | Keep the pointer on this computer: edges lead nowhere |
+| `one-mk edge [options]` | Rules for crossing edges (see below) |
+| `one-mk gaming on\|off\|auto` | Raw mouse movement for games on another computer |
+| `one-mk lock-all` | Lock this computer's screen and every connected one's |
+| `one-mk lock-sync on\|off` | Locking any computer locks the others |
 | `one-mk install` / `uninstall` | Start automatically at login / stop doing that |
 | `one-mk pair` | Pair with another computer (run on both) |
 | `one-mk layout <pc> <left\|right\|top\|bottom>` | Say where a paired computer sits |
@@ -86,13 +92,65 @@ for each device on the computer where you set it.
 **Emergency:** `Ctrl+Alt+Shift+Esc` always brings the pointer back to the
 computer you are sitting at.
 
+**Switching without an edge.** `one-mk switch desk` puts the pointer in the
+middle of desk's main screen; `one-mk switch next` goes round every online
+computer and back to this one; `one-mk switch here` brings the mouse and
+keyboard back (and, if another computer is controlling this one, takes it
+back, like `takeback`). Held keys are released on the computer left behind,
+as with any crossing. Bind it to a keyboard shortcut in your desktop's
+settings for a quick switch.
+
+**Lock to this computer.** `one-mk lock-pointer on` (like Scroll Lock in
+Barrier) stops the edges from leading anywhere, for example while playing a
+game here; `one-mk switch` still works. `one-mk run --start-locked` starts
+that way. `one-mk status` shows it.
+
+**Edge rules.** For every edge, or one edge with `--side left|right|top|bottom`:
+
+```bash
+one-mk edge --corner 20          # ignore crossings within 20 px of a screen corner
+one-mk edge --dwell 250          # the pointer must rest at the edge for 250 ms
+one-mk edge --modifier shift     # only cross while holding Shift (none|shift|ctrl|alt)
+one-mk edge --fullscreen-guard on --fullscreen-allow vlc
+one-mk edge                      # show the rules; --reset turns them off
+```
+
+While the pointer waits at an edge (dwell or modifier), moving away hands it
+back at once, and typing or clicking there goes to this computer. The
+fullscreen guard keeps the pointer here while the focused window fills its
+screen, except for programs in the allow list (`--fullscreen-block` never
+leaves a program, fullscreen or not). Windows can always tell; on Linux only
+X11 windows can be seen, which on Wayland means programs running through
+XWayland (most games); macOS can't tell yet. Where it can't tell, the
+pointer crosses as usual. Settings are kept in `settings.toml` and apply at
+once.
+
+**Gaming mode.** Games capture the pointer and want raw movement, not
+positions. With `one-mk gaming on`, while the pointer is on another computer
+the mouse sends relative movement, which never stops at that computer's
+screen edges, so it doesn't lead back either: come back with
+`one-mk switch here` (or the emergency shortcut). `auto` does this only while
+the other computer has a fullscreen window in front, where it can tell (see
+above). Both computers need this version of one-mk; with an older one,
+positions are sent as before. On Windows, the pointer speed setting also
+applies to these movements outside games.
+
+**Lock every screen.** `one-mk lock-all` locks this computer and asks every
+connected one to lock too. With `one-mk lock-sync on`, locking this computer
+in any way locks the others (each lock is passed on once, so it never comes
+back). Anything held down is let go before a screen locks, and modifier keys
+are released once more after it unlocks, so no key stays stuck. Locking uses
+logind on Linux, `LockWorkStation` on Windows and the login window (or
+display sleep) on macOS; noticing a lock uses logind's lock hint on Linux
+and the system's lock notifications on Windows and macOS.
+
 **Taking a computer back.** When someone else's pointer is on your computer,
 you can take it back:
 
 - On Windows and macOS, just use your computer's own mouse or keyboard.
 - On Linux this doesn't work: the Wayland portals one-mk uses can't tell
   your own mouse and keyboard apart from the input one-mk injects, so one-mk
-  can't notice you. Run `one-mk takeback` instead. It's worth binding it to
+  can't notice you. Run `one-mk takeback` (or `one-mk switch here`) instead. It's worth binding it to
   a keyboard shortcut in your desktop's settings (GNOME: Settings >
   Keyboard > Custom Shortcuts; KDE: System Settings > Shortcuts).
 - On every system, a computer that sends no input at all (no key, click,
@@ -265,4 +323,6 @@ background apps, so there it goes through XWayland.
    Ctrl/Cmd swapping, start at login
 5. Done: a small tray icon (status, sides, take back, start at login).
    **Next:** a drag-and-drop layout editor and "push toward it" layout learning
-6. Gaming mode (relative motion), connection doctor, auto-update
+6. Done: gaming mode (relative motion), switching without an edge, edge
+   rules, lock sync. **Next:** global keyboard shortcuts (on Linux through
+   the GlobalShortcuts portal), connection doctor, auto-update
