@@ -42,11 +42,16 @@ pub struct Online {
 /// Reads `settings.toml` and applies it to the running services.
 pub fn apply_settings(dir: &Path, services: &Services) -> Result<Settings> {
     let s = Settings::load(dir)?;
+    apply(&s, services);
+    Ok(s)
+}
+
+/// Applies the clipboard and notification parts of `s`.
+pub fn apply(s: &Settings, services: &Services) {
     if let Some(clip) = &services.clip {
         clip.apply(&s.clipboard);
     }
     services.inbox.transfers().set_notify(s.notify_files && !notify::disabled());
-    Ok(s)
 }
 
 /// Answers the requests `app.rs` doesn't handle itself. Never blocks: a

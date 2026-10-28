@@ -187,7 +187,7 @@ impl Status {
         }
         let mut s = Status::default();
         for line in lines {
-            let f: Vec<&str> = line.splitn(7, '\t').collect();
+            let f: Vec<&str> = line.splitn(8, '\t').collect();
             match f[..] {
                 ["name", v] => s.name = v.into(),
                 ["id", v] => s.id = v.into(),
@@ -346,8 +346,10 @@ mod tests {
         };
         let text = s.render();
         assert!(text.contains("Sending 2 files to mac mini: 25%"), "{text}");
-        // A reader from before transfers existed ignores lines it doesn't know.
+        // What the daemon encodes is what `one-mk status` decodes (8 tab-separated fields).
         let encoded = s.encode();
+        assert_eq!(Status::decode(&encoded).unwrap().transfers, s.transfers);
+        // A reader from before transfers existed ignores lines it doesn't know.
         let old: Vec<&str> = encoded.lines().filter(|l| !l.starts_with("transfer")).collect();
         assert!(Status::decode(&(old.join("\n") + "\n")).unwrap().transfers.is_empty());
         // A damaged transfer line is skipped; the rest of the status still reads.

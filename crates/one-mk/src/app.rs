@@ -1427,18 +1427,36 @@ impl App {
         self.update_sides();
     }
 
+    /// Reads `settings.toml` and applies all of it: clipboard and
+    /// notifications, edge rules, gaming mode and lock sync. A file that
+    /// can't be read changes nothing.
+    fn reload_settings(&mut self) -> Result<()> {
+        self.settings = Settings::load(&self.dir)?;
+        crate::clipctl::apply(&self.settings, &self.services);
+        self.apply_pointer_mode();
+        self.sync_sides();
+        Ok(())
+    }
+
     fn on_request(&mut self, req: Request, reply: tokio::sync::oneshot::Sender<String>) {
         self.reload_trust();
         let text = match req {
             Request::Status => self.status().encode(),
             Request::Reload => {
-                self.settings = Settings::load_or_default(&self.dir);
-                self.apply_pointer_mode();
-                self.sync_sides();
+                // `devices.toml` was reloaded above; layouts go out whatever
+                // `settings.toml` says. A settings file that can't be read
+                // keeps the settings in force (not the defaults).
+                if let Err(e) = self.reload_settings() {
+                    tracing::warn!("keeping the current settings: {e:#}");
+                }
                 let fps: Vec<_> = self.peers.keys().copied().collect();
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
                 "ok\n".to_owned()
             }
+            Request::Settings => match self.reload_settings() {
+                Ok(()) => "ok\n".to_owned(),
+                Err(e) => format!("error {e:#}\n"),
+            },
             Request::Switch(to) => self.switch(to),
             Request::LockPointer(t) => {
                 let was = self.locked;
@@ -1466,7 +1484,7 @@ impl App {
                 self.lock_screen();
                 format!("ok\n{n}\n")
             }
-            req @ (Request::Settings | Request::ClipSend(_) | Request::ClipGet(_) | Request::Transfer { .. }) => {
+            req @ (Request::ClipSend(_) | Request::ClipGet(_) | Request::Transfer { .. }) => {
                 let online = self.peers.iter().map(|(fp, p)| crate::clipctl::Online { fp: *fp, name: p.name.clone(), addr: canonical(p.conn.remote_address()) });
                 return crate::clipctl::handle(&self.dir, &self.services, online.collect(), &self.trust, req, reply);
             }
