@@ -11,28 +11,124 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     /// Who we are, who is paired and online, and who controls whom.
     Status,
-    /// `devices.toml` changed: apply it now.
+    /// `devices.toml` or `settings.toml` changed: apply it now.
     Reload,
     /// End the control of whichever peer controls this machine, as if
     /// this machine's own mouse or keyboard had been used.
     TakeBack,
+    /// Move the mouse and keyboard to another computer, or back here,
+    /// without crossing an edge. A keyboard shortcut does the same.
+    Switch(SwitchTo),
+    /// Keep the pointer on this computer: edges lead nowhere while on.
+    LockPointer(Toggle),
+    /// Lock this computer's screen and ask every connected one to lock too.
+    LockAll,
+}
+
+/// Where `one-mk switch` sends the mouse and keyboard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SwitchTo {
+    /// This computer (taking it back if another one controls it).
+    Here,
+    /// The next online computer, then this one again, round and round.
+    Next,
+    /// A paired computer, by name or id.
+    Device(String),
+}
+
+impl SwitchTo {
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        match s {
+            "" => None,
+            "here" => Some(SwitchTo::Here),
+            "next" => Some(SwitchTo::Next),
+            _ if s.contains(['\n', '\r']) => None,
+            _ => Some(SwitchTo::Device(s.to_owned())),
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        match self {
+            SwitchTo::Here => "here",
+            SwitchTo::Next => "next",
+            SwitchTo::Device(d) => d,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Toggle {
+    On,
+    Off,
+    Toggle,
+}
+
+impl Toggle {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "on" => Some(Toggle::On),
+            "off" => Some(Toggle::Off),
+            "toggle" => Some(Toggle::Toggle),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Toggle::On => "on",
+            Toggle::Off => "off",
+            Toggle::Toggle => "toggle",
+        }
+    }
+
+    /// The new state, from the current one.
+    pub fn apply(self, now: bool) -> bool {
+        match self {
+            Toggle::On => true,
+            Toggle::Off => false,
+            Toggle::Toggle => !now,
+        }
+    }
 }
 
 impl Request {
-    pub fn name(self) -> &'static str {
+    /// The command word on the wire.
+    pub fn name(&self) -> &'static str {
         match self {
             Request::Status => "status",
             Request::Reload => "reload",
             Request::TakeBack => "takeback",
+            Request::Switch(_) => "switch",
+            Request::LockPointer(_) => "lock-pointer",
+            Request::LockAll => "lock-all",
+        }
+    }
+
+    /// The request line (without its newline).
+    pub fn line(&self) -> String {
+        match self {
+            Request::Switch(to) => format!("switch {}", to.as_str()),
+            Request::LockPointer(t) => format!("lock-pointer {}", t.as_str()),
+            other => other.name().to_owned(),
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        [Request::Status, Request::Reload, Request::TakeBack].into_iter().find(|r| r.name() == s)
+        let (word, arg) = s.split_once(' ').unwrap_or((s, ""));
+        match word {
+            "status" if arg.is_empty() => Some(Request::Status),
+            "reload" if arg.is_empty() => Some(Request::Reload),
+            "takeback" if arg.is_empty() => Some(Request::TakeBack),
+            "lock-all" if arg.is_empty() => Some(Request::LockAll),
+            "switch" => SwitchTo::parse(arg).map(Request::Switch),
+            "lock-pointer" => Toggle::parse(arg).map(Request::LockPointer),
+            _ => None,
+        }
     }
 }
 
@@ -95,7 +191,7 @@ impl Conn for std::net::TcpStream {
 
 fn exchange(mut s: impl Conn, req: Request, timeout: Duration) -> io::Result<String> {
     s.timeouts(timeout)?;
-    s.write_all(format!("{}\n", req.name()).as_bytes())?;
+    s.write_all(format!("{}\n", req.line()).as_bytes())?;
     let mut out = String::new();
     s.read_to_string(&mut out)?;
     Ok(out)
@@ -132,10 +228,27 @@ mod tests {
 
     #[test]
     fn requests_have_names() {
-        for r in [Request::Status, Request::Reload, Request::TakeBack] {
-            assert_eq!(Request::parse(r.name()), Some(r));
+        for r in [
+            Request::Status,
+            Request::Reload,
+            Request::TakeBack,
+            Request::LockAll,
+            Request::Switch(SwitchTo::Here),
+            Request::Switch(SwitchTo::Next),
+            Request::Switch(SwitchTo::Device("mac mini".into())),
+            Request::LockPointer(Toggle::On),
+            Request::LockPointer(Toggle::Off),
+            Request::LockPointer(Toggle::Toggle),
+        ] {
+            assert_eq!(Request::parse(&r.line()), Some(r));
         }
         assert_eq!(Request::parse("format c:"), None);
+        assert_eq!(Request::parse("status now"), None);
+        assert_eq!(Request::parse("switch"), None);
+        assert_eq!(Request::parse("switch  "), None);
+        assert_eq!(Request::parse("lock-pointer maybe"), None);
+        assert!(!Toggle::Toggle.apply(true));
+        assert!(Toggle::On.apply(true));
     }
 
     #[test]

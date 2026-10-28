@@ -110,7 +110,7 @@ pub async fn request(dir: &Path, req: Request) -> Result<Option<String>> {
 }
 
 async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, req: Request) -> std::io::Result<String> {
-    s.write_all(format!("{}\n", req.name()).as_bytes()).await?;
+    s.write_all(format!("{}\n", req.line()).as_bytes()).await?;
     let mut out = String::new();
     s.read_to_string(&mut out).await?;
     Ok(out)

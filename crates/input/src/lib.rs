@@ -7,6 +7,7 @@
 
 mod common_logic;
 mod null;
+pub mod system;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "macos", test))]
@@ -19,9 +20,10 @@ mod windows;
 mod win_logic;
 
 pub use null::NullHandles;
+pub use system::{FocusProbe, ScreenLocker};
 
 use anyhow::Result;
-use one_mk_proto::{Desktop, Pos, Side};
+use one_mk_proto::{Desktop, Mods, Pos, Side};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
@@ -50,6 +52,15 @@ pub enum Event {
     /// and only by backends that can tell injected input apart (Windows and
     /// macOS; not the Linux portals).
     LocalInput,
+    /// The modifier keys held on this machine, where the backend can tell:
+    /// Windows and macOS send it just before each `Activated` (their hooks
+    /// see every key); Linux whenever libei reports modifiers, which it
+    /// does only while input is captured.
+    Modifiers(Mods),
+    /// This machine's screen was locked (`true`) or unlocked, where the OS
+    /// tells us: logind's `LockedHint` on Linux, session notifications on
+    /// Windows, the screen lock notifications on macOS.
+    ScreenLocked(bool),
     /// A part of the backend failed; the message is shown to the user.
     Error(String),
 }
@@ -62,12 +73,20 @@ pub enum CaptureCmd {
     /// End activation `id` and give the pointer back to this machine,
     /// placing it at `pos`. Ignored if `id` is not the current activation.
     Release { id: u32, pos: Option<Pos> },
+    /// Start capturing as if the pointer had just hit the `side` edge
+    /// (`one-mk switch`): answered with `Event::Activated` for `side`, or
+    /// with `Event::Error` if this backend can't. The daemon decides where
+    /// the pointer goes, so the reported position doesn't matter.
+    Activate { side: Side },
 }
 
 /// From the daemon to the injection side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Inject {
     MoveTo(Pos),
+    /// Relative motion in whole logical pixels (gaming mode): games that
+    /// capture the pointer read these as raw movement.
+    MoveBy { dx: i32, dy: i32 },
     Button { button: u32, down: bool },
     Scroll { dx: f64, dy: f64 },
     ScrollDiscrete { dx: i32, dy: i32 },
@@ -84,6 +103,10 @@ pub struct Backend {
     pub events: mpsc::UnboundedReceiver<Event>,
     pub capture: mpsc::UnboundedSender<CaptureCmd>,
     pub inject: mpsc::UnboundedSender<Inject>,
+    /// What the focused window is, for the fullscreen guard.
+    pub focus: Box<dyn FocusProbe>,
+    /// Locks this machine's screen.
+    pub locker: Box<dyn ScreenLocker>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,10 +122,27 @@ pub enum Kind {
 pub async fn open(kind: Kind, state_dir: PathBuf) -> Result<Backend> {
     match kind {
         Kind::Null => {
-            let (backend, mut handles) = null::open(Desktop::new(vec![one_mk_proto::Rect::new(0, 0, 1920, 1080)]));
+            let desktop = Desktop::new(vec![one_mk_proto::Rect::new(0, 0, 1920, 1080)]);
+            let (backend, mut handles) = null::open(desktop.clone());
             tokio::spawn(async move {
-                while let Some(ev) = handles.inject.recv().await {
-                    tracing::debug!(?ev, "inject (null backend)");
+                let mut next_id = 0u32;
+                loop {
+                    tokio::select! {
+                        ev = handles.inject.recv() => match ev {
+                            Some(ev) => tracing::debug!(?ev, "inject (null backend)"),
+                            None => break,
+                        },
+                        // Pretend to capture when asked, so `one-mk switch`
+                        // can be tried without real input.
+                        Some(cmd) = handles.capture.recv() => {
+                            tracing::debug!(?cmd, "capture (null backend)");
+                            if let CaptureCmd::Activate { side } = cmd {
+                                next_id = next_id.wrapping_add(1);
+                                let pos = desktop.point_on_edge(side, 0.5, 0.0);
+                                let _ = handles.events.send(Event::Activated { id: next_id, side, pos });
+                            }
+                        }
+                    }
                 }
                 drop(handles.events);
             });

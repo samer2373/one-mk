@@ -339,7 +339,7 @@ pub async fn serve(
     }
     tracing::debug!(id = %identity.fingerprint.short(), port, "listening");
 
-    let Backend { mut events, capture, inject } = backend;
+    let Backend { mut events, capture, inject, .. } = backend;
     let services = Services {
         clip: opts.clipboard.map(|cb| ClipSync::new(cb, node.clone())),
         inbox: Inbox::new(opts.downloads.clone()),
@@ -709,6 +709,7 @@ impl App {
                 }
             }
             Event::Error(msg) => tracing::error!("{msg}"),
+            Event::Modifiers(_) | Event::ScreenLocked(_) => {}
         }
     }
 
@@ -1118,6 +1119,7 @@ impl App {
                 }
                 None => "none\n".to_owned(),
             },
+            Request::Switch(_) | Request::LockPointer(_) | Request::LockAll => "error not supported yet\n".to_owned(),
         };
         let _ = reply.send(text);
     }
@@ -1143,6 +1145,7 @@ impl App {
             controlling: self.remote.as_ref().map(|r| name_of(&r.peer)),
             controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
             peers: peers.collect(),
+            ..Status::default()
         }
     }
 

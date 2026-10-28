@@ -28,7 +28,7 @@ use ashpd::desktop::input_capture::{
 use ashpd::desktop::remote_desktop::{self, DeviceType, RemoteDesktop, SelectDevicesOptions};
 use ashpd::desktop::{PersistMode, ResponseError, Session};
 use futures::StreamExt;
-use one_mk_proto::{Desktop, Pos, Rect, Side};
+use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
 use reis::ei;
 use reis::event::{DeviceCapability, EiEvent};
 use std::collections::HashMap;
@@ -46,10 +46,11 @@ pub(crate) async fn open(state_dir: PathBuf) -> Result<Backend> {
     let (cap_tx, cap_rx) = mpsc::unbounded_channel();
     let (inj_tx, inj_rx) = mpsc::unbounded_channel();
 
-    let tx = ev_tx.clone();
-    spawn_thread("one-mk-capture", move || capture(tx, cap_rx))?;
+    let (focus, locker) = crate::system::native(&ev_tx);
+    let (tx, warp) = (ev_tx.clone(), inj_tx.clone());
+    spawn_thread("one-mk-capture", move || capture(tx, cap_rx, warp))?;
     spawn_thread("one-mk-inject", move || inject(ev_tx, inj_rx, state_dir))?;
-    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx })
+    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 /// libei streams are not `Send`, and input should not queue behind network
@@ -147,6 +148,8 @@ struct CaptureState {
     next_id: u32,
     /// Our activation id, and the portal's id for the same activation.
     activation: Option<(u32, Option<u32>)>,
+    /// This machine's injector, to push the pointer into a barrier.
+    warp: mpsc::UnboundedSender<Inject>,
 }
 
 impl CaptureState {
@@ -266,8 +269,12 @@ impl Capture<'_> {
     }
 }
 
-async fn capture(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedReceiver<CaptureCmd>) {
-    let mut st = CaptureState { tx, sides: Vec::new(), reported: None, next_id: 0, activation: None };
+async fn capture(
+    tx: mpsc::UnboundedSender<Event>,
+    mut cmds: mpsc::UnboundedReceiver<CaptureCmd>,
+    warp: mpsc::UnboundedSender<Inject>,
+) {
+    let mut st = CaptureState { tx, sides: Vec::new(), reported: None, next_id: 0, activation: None, warp };
     let mut retry = Retry::new("Can't share this computer's mouse with others");
     loop {
         let started = Instant::now();
@@ -286,6 +293,9 @@ async fn capture(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedRece
                         cmd = cmds.recv() => match cmd {
                             Some(CaptureCmd::SetSides(sides)) => st.sides = sides,
                             Some(CaptureCmd::Release { .. }) => {}
+                            Some(CaptureCmd::Activate { .. }) => {
+                                let _ = st.tx.send(Event::Error(NO_CAPTURE.into()));
+                            }
                             None => return,
                         },
                     }
@@ -370,6 +380,11 @@ async fn run_capture(
                         cap.release(portal_id, pos, &st.sides).await?;
                     }
                 }
+                Some(CaptureCmd::Activate { side }) => {
+                    if st.activation.is_none() {
+                        push_into_barrier(&cap.desktop, st, side);
+                    }
+                }
                 None => return Ok(()),
             },
             Some(a) = activated.next() => {
@@ -429,6 +444,7 @@ async fn run_capture(
                     EiEvent::ScrollDiscrete(s) => Event::ScrollDiscrete { dx: s.discrete_dx, dy: s.discrete_dy },
                     EiEvent::ScrollStop(_) => Event::ScrollStop,
                     EiEvent::KeyboardKey(k) => Event::Key { code: k.key, down: k.state == ei::keyboard::KeyState::Press },
+                    EiEvent::KeyboardModifiers(m) => Event::Modifiers(Mods::from_xkb(m.depressed | m.latched)),
                     EiEvent::Disconnected(d) => bail!("input capture disconnected: {:?}", d.explanation),
                     _ => continue,
                 };
@@ -438,6 +454,29 @@ async fn run_capture(
             }
         }
     }
+}
+
+const NO_CAPTURE: &str = "Can't move the pointer to another computer right now: input capture is not ready.";
+
+/// `CaptureCmd::Activate`: the InputCapture portal has no call to start
+/// capturing, only barriers, so this pushes the pointer into the barrier
+/// with our own injector; the compositor then activates capture as if the
+/// mouse had done it. Needs a barrier on `side` (the daemon arms it).
+fn push_into_barrier(desktop: &Desktop, st: &CaptureState, side: Side) {
+    let Some(r) = desktop.outer_edges(side).next().filter(|_| st.sides.contains(&side)) else {
+        let _ = st.tx.send(Event::Error(NO_CAPTURE.into()));
+        return;
+    };
+    let c = r.center();
+    let (x, y, right, bottom) = (f64::from(r.x), f64::from(r.y), f64::from(r.right()), f64::from(r.bottom()));
+    let (at, dx, dy) = match side {
+        Side::Left => (Pos::new(x + 1.0, c.y), -64, 0),
+        Side::Right => (Pos::new(right - 2.0, c.y), 64, 0),
+        Side::Top => (Pos::new(c.x, y + 1.0), 0, -64),
+        Side::Bottom => (Pos::new(c.x, bottom - 2.0), 0, 64),
+    };
+    let _ = st.warp.send(Inject::MoveTo(at));
+    let _ = st.warp.send(Inject::MoveBy { dx, dy });
 }
 
 // --------------------------------------------------------------- injection
@@ -622,6 +661,10 @@ fn apply(devices: &mut Devices, m: Inject, last: &mut Option<Pos>, warned_relati
                 devices.with::<ei::Pointer>(|d| d.motion_relative(dx as f32, dy as f32));
             }
             *last = Some(p);
+        }
+        Inject::MoveBy { dx, dy } => {
+            devices.with::<ei::Pointer>(|d| d.motion_relative(dx as f32, dy as f32));
+            *last = None; // where it ended up is the compositor's business
         }
         Inject::Button { button, down } => {
             let state = if down { ei::button::ButtonState::Press } else { ei::button::ButtonState::Released };

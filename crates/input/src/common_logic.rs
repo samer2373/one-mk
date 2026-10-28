@@ -17,15 +17,29 @@ use tokio::sync::mpsc;
 /// Appends `batch` to `out`, dropping stale moves: only the last `MoveTo`
 /// before each key/button/scroll "barrier" (and the last one at the end) is
 /// kept, so every barrier still happens at the position that preceded it,
-/// in order, while a burst of queued moves costs one move.
+/// in order, while a burst of queued moves costs one move. A run of
+/// relative moves becomes one move by their sum (none of it is dropped).
 pub(crate) fn coalesce(batch: impl IntoIterator<Item = Inject>, out: &mut Vec<Inject>) {
     let mut pending = None;
     for m in batch {
-        if let Inject::MoveTo(_) = m {
-            pending = Some(m);
-        } else {
-            out.extend(pending.take());
-            out.push(m);
+        match (m, &mut pending) {
+            (Inject::MoveTo(_), Some(Inject::MoveBy { .. })) => {
+                out.extend(pending.take());
+                pending = Some(m);
+            }
+            (Inject::MoveTo(_), _) => pending = Some(m),
+            (Inject::MoveBy { dx, dy }, Some(Inject::MoveBy { dx: px, dy: py })) => {
+                *px = px.saturating_add(dx);
+                *py = py.saturating_add(dy);
+            }
+            (Inject::MoveBy { .. }, _) => {
+                out.extend(pending.take());
+                pending = Some(m);
+            }
+            _ => {
+                out.extend(pending.take());
+                out.push(m);
+            }
         }
     }
     out.extend(pending);
@@ -253,6 +267,13 @@ mod tests {
         out.clear();
         coalesce([click, click], &mut out);
         assert_eq!(out, vec![click, click]);
+
+        // Relative moves add up; an absolute move before them still goes
+        // first, and one after them replaces nothing that came before.
+        let by = |dx, dy| Inject::MoveBy { dx, dy };
+        out.clear();
+        coalesce([mv(1.0), by(1, 2), by(3, -4), click, by(5, 5), mv(2.0), mv(3.0), by(i32::MAX, 0), by(1, 0)], &mut out);
+        assert_eq!(out, vec![mv(1.0), by(4, -2), click, by(5, 5), mv(3.0), by(i32::MAX, 0)]);
     }
 
     #[test]
