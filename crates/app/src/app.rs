@@ -1,46 +1,40 @@
 //! The window: a top bar, the desk, a panel of facts and switches under it,
-//! and the pairing sheet. Everything shown comes from the running daemon;
-//! everything changed goes through it.
+//! and a sheet for pairing and for choosing where dropped files go.
+//! Everything shown comes from the running daemon; everything changed goes
+//! through it.
 
 use crate::daemon::{Event, Job, Latency, Link};
+use crate::motion::{self, tween};
 use crate::pairing::{Pairing, Step};
-use crate::scene::{self, Cargo, Device, Kind, SIGNAL, SPACING, Scene, v};
-use egui::{Align2, Color32, CornerRadius, FontFamily, FontId, Id, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use one_mk_ctl::status::{Status, on_your, os_name, takeback_hint};
+use crate::scene::{self, Cargo, Device, Kind, SPACING, Scene, v};
+use crate::style::*;
+use crate::widgets::{self, Look, Pills, a11y_text, button, button_width, mix, para, switch, text_width};
+use egui::accesskit::{Live, Role};
+use egui::{Align2, Color32, CornerRadius, Id, Key, Modifiers, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use one_mk_ctl::status::{PeerStatus, Status, on_your, os_name};
 use one_mk_proto::{Side, os};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-pub const GROUND: Color32 = Color32::from_rgb(0x0F, 0x12, 0x16);
-pub const PANEL: Color32 = Color32::from_rgb(0x13, 0x17, 0x1C);
-pub const RAISED: Color32 = Color32::from_rgb(0x17, 0x1B, 0x21);
-pub const LINE: Color32 = Color32::from_rgb(0x25, 0x2B, 0x34);
-pub const INK: Color32 = Color32::from_rgb(0xED, 0xEF, 0xF2);
-pub const INK2: Color32 = Color32::from_rgb(0x9D, 0xA6, 0xB1);
-pub const SIGNAL_INK: Color32 = Color32::from_rgb(0x1E, 0x15, 0x05);
 const TOP_H: f32 = 56.0;
-const PANEL_H: f32 = 140.0;
+const PANEL_H: f32 = 160.0;
+/// Inner padding of the panel's cells.
+const PAD: f32 = 20.0;
 const GHOST: &str = "\u{0}pairing";
-const WALLS: [[u32; 2]; 4] = [[0x3D3127, 0x1A1511], [0x22302A, 0x0F1613], [0x2E2638, 0x141019], [0x3A2A2A, 0x170F0F]];
+/// Wallpapers for paired computers: low chroma, about equal lightness.
+const WALLS: [[u32; 2]; 4] = [[0x35312C, 0x16140F], [0x283430, 0x101614], [0x2A313B, 0x11151A], [0x3A2E2A, 0x171211]];
+const ME_WALL: [u32; 2] = [0x1D2D3C, 0x0D151E];
 
-fn semibold(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Name("semibold".into()))
-}
-fn regular(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Proportional)
-}
-fn mono(size: f32) -> FontId {
-    FontId::new(size, FontFamily::Monospace)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tab {
     Desk,
     Files,
     Keyboard,
 }
 const TABS: [(Tab, &str); 3] = [(Tab::Desk, "Desk"), (Tab::Files, "Clipboard & files"), (Tab::Keyboard, "Keyboard")];
+const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"), (Side::Top, "Above"), (Side::Bottom, "Below")];
+const SWAPS: [(&str, &str); 3] = [("auto", "Auto"), ("on", "Always swap"), ("off", "Never swap")];
 
 enum Drag {
     Device { i: usize, start: Pos2, x0: f32 },
@@ -52,14 +46,70 @@ struct PairUi {
     step: Step,
     /// When the current step began (for staggered reveals).
     since: f64,
+    /// When pairing began: the sheet waits for the desk to make room.
+    opened: f64,
     hint: bool,
     retry: Option<String>,
     me: String,
 }
 
+/// What the sheet does when one of its buttons is chosen.
+#[derive(Clone, Debug, PartialEq)]
+enum Act {
+    Close,
+    Decline,
+    Confirm,
+    Retry,
+    Send(String),
+}
+
+/// Everything the sheet shows, so it can be drawn again while it leaves.
+#[derive(Clone, PartialEq)]
+struct SheetView {
+    title: String,
+    sub: String,
+    code: Option<(String, f64)>,
+    /// A tick drawn in from this time: paired.
+    check: Option<f64>,
+    buttons: Vec<(String, Look, Act)>,
+    /// The button the keyboard starts on: never the one that confirms.
+    focus: usize,
+    /// When it may start to show.
+    appear: f64,
+    /// Changes when the step changes, to move focus into it again.
+    key: String,
+}
+
 struct Toast {
     text: String,
+    /// The raw error, quieter, under the message.
+    detail: Option<String>,
     error: bool,
+    at: f64,
+    life: f32,
+}
+
+/// A measurement, and what it replaced, so the numbers can count over.
+struct Measured {
+    l: Latency,
+    was: (f32, f32),
+    at: f64,
+}
+
+/// What a cell of the panel shows. When it changes, the old one fades
+/// out and the new one rises in.
+#[derive(Clone, PartialEq, Debug)]
+enum Cell {
+    Head(String, String),
+    Inspector(Option<String>),
+    Clipboard,
+    Settings,
+    Swaps,
+}
+
+struct Slot {
+    cell: Option<(Cell, Rect)>,
+    was: Option<(Cell, Rect)>,
     at: f64,
 }
 
@@ -72,24 +122,81 @@ pub struct App {
     scene: Scene,
     tab: Tab,
     drag: Option<Drag>,
+    /// While dragging: the side the computer would go to if let go now.
+    drag_side: Option<(String, Side)>,
     menu_for: Option<usize>,
     pairing: Option<PairUi>,
+    /// Files dropped where it wasn't clear which computer they were for, and when.
+    pending_drop: Option<(Vec<PathBuf>, f64)>,
+    /// The sheet as last drawn, and when it started to leave.
+    sheet_was: Option<(SheetView, f64)>,
+    sheet_top: Option<f32>,
+    sheet_key: String,
     toast: Option<Toast>,
-    latency: HashMap<String, Latency>,
+    latency: HashMap<String, Measured>,
+    failed_measure: HashSet<String>,
     measuring: Option<String>,
-    /// Sides chosen here and not yet reported back by the daemon.
-    pending_side: HashMap<String, Side>,
+    /// Sides chosen here and not yet reported back by the daemon, and when.
+    pending_side: HashMap<String, (Side, f64)>,
+    pending_swap: HashMap<String, String>,
+    /// A computer that should hop (not slide) to its new place.
+    hop: Option<String>,
+    /// A computer just paired, and when: shown before the daemon lists it.
+    just_paired: Option<(String, f64)>,
     /// The screen that gets the mouse and keyboard right now.
     active: String,
-    headline: (String, f64),
     busy: Vec<Job>,
     /// The computer the panel describes (an id, or "me").
     selected: Option<String>,
+    slots: [Slot; 3],
+    /// Whether the files were moving over the window (so the pointer
+    /// position is real, not left over from before the drag).
+    drop_pos_fresh: bool,
+    /// An arrow key went down on the frame before (focus moves the frame
+    /// after the key, and arrowing onto a choice picks it).
+    arrowed: bool,
+    arrow_down: bool,
+    fonts: Fallbacks,
+    size: egui::Vec2,
+    now: f64,
     ctx: egui::Context,
 }
 
 fn me_kind() -> Kind {
     if cfg!(target_os = "macos") { Kind::Laptop } else { Kind::Monitor }
+}
+
+fn me_os() -> u8 {
+    if cfg!(target_os = "macos") {
+        os::MACOS
+    } else if cfg!(windows) {
+        os::WINDOWS
+    } else {
+        os::LINUX
+    }
+}
+
+fn items(n: usize) -> String {
+    if n == 1 { "1 item".to_owned() } else { format!("{n} items") }
+}
+
+/// "to the left", "above this computer"…: for sentences about moving one.
+fn to_side(side: Side) -> &'static str {
+    match side {
+        Side::Left => "to the left",
+        Side::Right => "to the right",
+        Side::Top => "above this computer",
+        Side::Bottom => "below this computer",
+    }
+}
+
+fn edge_word(side: Side) -> &'static str {
+    match side {
+        Side::Left => "left",
+        Side::Right => "right",
+        Side::Top => "top",
+        Side::Bottom => "bottom",
+    }
 }
 
 /// Room between neighbouring devices on the desk, in centimetres: enough
@@ -120,42 +227,113 @@ fn slots(me_half: f32, peers: &[(String, Side, f32)]) -> HashMap<String, (scene:
                 (v(x, 0.0, 0.0), 1.0)
             }
             Side::Top => (v((k - 1.0) * SPACING, 34.0 + (k - 1.0) * 6.0, -26.0), 0.92),
-            Side::Bottom => (v((k - 1.0) * SPACING, 0.0, 30.0), 0.8),
+            // In front of this computer, but beside it, so it hides
+            // neither screen.
+            Side::Bottom => (v(me_half + (k - 0.5) * SPACING, 0.0, 40.0), 0.8),
         };
         out.insert(id.clone(), place);
     }
     out
 }
 
+// ---------- the panel's painted rows ----------
+
+/// Status by shape, not colour: a filled dot when connected, a ring when
+/// not, no dot for this computer. Returns the width it took.
+fn chip(ui: &Ui, c: Rect, label: &str, dot: Option<bool>) -> f32 {
+    let p = ui.painter();
+    let mid = c.top() + 10.0;
+    let tw = text_width(ui, label, regular(T_META));
+    p.text(pos2(c.right(), mid), Align2::RIGHT_CENTER, label, regular(T_META), INK2);
+    let at = pos2(c.right() - tw - 9.0, mid);
+    match dot {
+        Some(true) => {
+            p.circle_filled(at, 3.0, INK);
+        }
+        Some(false) => {
+            p.circle_stroke(at, 2.6, Stroke::new(1.5, OFF));
+        }
+        None => {}
+    }
+    tw + if dot.is_some() { 22.0 } else { 10.0 }
+}
+
+/// A computer's name on the inspector's first row, shortened to fit.
+fn title_row(ui: &Ui, c: Rect, name: &str, room: f32) {
+    let font = semibold(T_TITLE);
+    let text = fit(ui.painter(), name, &font, c.width() - room);
+    ui.painter().text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, &text, font, INK);
+    if text != name {
+        ui.interact(Rect::from_min_size(c.min, vec2(c.width() - room, 20.0)), Id::unique(("title", name)), Sense::hover()).on_hover_text(name);
+    }
+}
+
+/// A key on the left and its value on the right, centred on `y`.
+fn info_row(ui: &Ui, c: Rect, y: f32, key: &str, val: &str, mono_val: bool, alpha: f32) {
+    let p = ui.painter();
+    p.text(pos2(c.left(), y), Align2::LEFT_CENTER, key, regular(T_BODY), INK2);
+    let font = if mono_val { mono(T_META) } else { regular(T_BODY) };
+    let val = fit(p, val, &font, c.width() - text_width(ui, key, regular(T_BODY)) - 12.0);
+    p.text(pos2(c.right(), y), Align2::RIGHT_CENTER, &val, font, INK.gamma_multiply(alpha));
+    let r = Rect::from_min_max(pos2(c.left(), y - 10.0), pos2(c.right(), y + 10.0));
+    a11y_text(ui, Id::unique(("row", key)), r, Role::Label, &format!("{key}: {val}"), None);
+}
+
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, home: Option<PathBuf>) -> anyhow::Result<Self> {
+    pub fn new(cc: &eframe::CreationContext<'_>, home: Option<PathBuf>, size: [f32; 2]) -> anyhow::Result<Self> {
         crate::style::install(&cc.egui_ctx);
+        motion::set_reduced(motion::detect());
         let (tx, rx) = std::sync::mpsc::channel();
         let link = Link::new(home, tx, cc.egui_ctx.clone())?;
         link.watch();
         let mut scene = Scene::default();
-        let mut me = Device::new("me", "This computer", me_kind(), true, [0x1D2D3C, 0x0D151E]);
-        me.alpha = 0.0;
+        scene.top_clear = TOP_H + 12.0;
+        let mut me = Device::new("me", "This computer", me_kind(), true, ME_WALL);
+        me.arrive(v(0.0, 0.0, 0.0), 0.0, 0.0);
         scene.devices.push(me);
         scene.cursor_on = "me".into();
+        #[allow(unused_mut)]
+        let mut tab = Tab::Desk;
+        #[cfg(debug_assertions)]
+        match std::env::var("ONE_MK_APP_TAB").as_deref() {
+            Ok("files") => tab = Tab::Files,
+            Ok("keyboard") => tab = Tab::Keyboard,
+            _ => {}
+        }
+        let slot = || Slot { cell: None, was: None, at: f64::NEG_INFINITY };
         Ok(Self {
             link,
             rx,
             status: None,
             autostart: None,
             scene,
-            tab: Tab::Desk,
+            tab,
             drag: None,
+            drag_side: None,
             menu_for: None,
             pairing: None,
+            pending_drop: None,
+            sheet_was: None,
+            sheet_top: None,
+            sheet_key: String::new(),
             toast: None,
             latency: HashMap::new(),
+            failed_measure: HashSet::new(),
             measuring: None,
             pending_side: HashMap::new(),
+            pending_swap: HashMap::new(),
+            hop: None,
+            just_paired: None,
             active: "me".into(),
-            headline: (String::new(), 0.0),
             busy: vec![],
             selected: None,
+            slots: [slot(), slot(), slot()],
+            drop_pos_fresh: false,
+            arrowed: false,
+            arrow_down: false,
+            fonts: Fallbacks::default(),
+            size: vec2(size[0], size[1]),
+            now: 0.0,
             ctx: cc.egui_ctx.clone(),
         })
     }
@@ -164,8 +342,19 @@ impl App {
         self.status.as_ref().and_then(Option::as_ref)
     }
 
-    fn toast(&mut self, text: impl Into<String>, error: bool, now: f64) {
-        self.toast = Some(Toast { text: text.into(), error, at: now });
+    fn off(&self) -> bool {
+        matches!(self.status, Some(None))
+    }
+
+    fn toast(&mut self, text: impl Into<String>, now: f64) {
+        self.toast = Some(Toast { text: text.into(), detail: None, error: false, at: now, life: 3.5 });
+    }
+
+    /// An error says what went wrong and what to do; the raw reason goes
+    /// underneath. It stays until dismissed, or for ten seconds.
+    fn toast_error(&mut self, text: impl Into<String>, detail: Option<String>, now: f64) {
+        let detail = detail.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
+        self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0 });
     }
 
     fn handle_events(&mut self, now: f64) {
@@ -173,37 +362,82 @@ impl App {
             match e {
                 Event::Status(s) => {
                     self.status = Some(s);
+                    let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).collect());
+                    self.fonts.cover(&self.ctx, names.iter().map(String::as_str));
+                    // A measurement belongs to one connection: once that
+                    // computer goes offline (or one·mk stops) it means nothing.
+                    let online: Vec<String> = self.running().map_or(vec![], |s| s.peers.iter().filter(|p| p.online).map(|p| p.id.clone()).collect());
+                    self.latency.retain(|id, _| online.contains(id));
+                    self.failed_measure.retain(|id| online.contains(id));
                     self.sync_scene();
                 }
                 Event::Autostart(on) => self.autostart = Some(on),
                 Event::Latency(l) => {
                     self.measuring = None;
+                    self.failed_measure.remove(&l.peer);
                     // Show the measurement where it was taken: one crossing, labelled.
                     self.scene.latency_label = Some(format!("{:.2} ms", l.p50_us / 2000.0));
                     if self.active == "me" && self.scene.flight.is_none() {
                         self.scene.fly("me", &l.peer, Cargo::Probe);
                     }
-                    self.latency.insert(l.peer.clone(), l);
+                    let was = self.latency.get(&l.peer).map_or((0.0, 0.0), |m| (m.l.p50_us, m.l.p99_us));
+                    self.latency.insert(l.peer.clone(), Measured { l, was, at: now });
                 }
                 Event::Done { what, error } => {
                     self.busy.retain(|j| j != &what);
-                    match (&what, error) {
-                        (Job::Measure, Some(_)) => self.measuring = None,
-                        (Job::Layout, Some(e)) => {
-                            self.pending_side.clear();
-                            self.sync_scene();
-                            self.toast(format!("Could not change the layout: {e}"), true, now);
-                        }
-                        (Job::Send { to, count }, None) => {
-                            let what = if *count == 1 { "1 item".to_owned() } else { format!("{count} items") };
-                            self.toast(format!("Sent {what} to {to}"), false, now);
-                        }
-                        (_, Some(e)) => self.toast(e, true, now),
-                        _ => {}
-                    }
+                    self.finished(what, error, now);
                 }
             }
         }
+        self.pairing_steps(now);
+        // A side the daemon never confirmed: show what it really has.
+        let before = self.pending_side.len();
+        self.pending_side.retain(|_, (_, t)| now - *t < 5.0);
+        if self.pending_side.len() != before {
+            self.sync_scene();
+        }
+        self.sync_pairing_scene(now);
+    }
+
+    /// A command finished: say how it went, and undo what it promised if it failed.
+    fn finished(&mut self, what: Job, error: Option<String>, now: f64) {
+        let Some(e) = error else {
+            if let Job::Send { to, count } = what {
+                self.toast(format!("Sent {} to {to}", items(count)), now);
+            }
+            return;
+        };
+        let e = Some(e);
+        match what {
+            Job::Measure(id) => {
+                // Not again by itself: it would fail again, forever.
+                self.measuring = None;
+                self.failed_measure.insert(id);
+            }
+            Job::Layout { id, name, side } => {
+                self.pending_side.remove(&id);
+                self.sync_scene();
+                self.toast_error(format!("Couldn't move {name} {}. The desk went back to where it was; try again.", to_side(side)), e, now);
+            }
+            Job::Send { to, count } => {
+                self.toast_error(format!("Couldn't send {} to {to}. Check that {to} is online, then drop the files again.", items(count)), e, now);
+            }
+            Job::Swap { id, name, .. } => {
+                self.pending_swap.remove(&id);
+                self.sync_scene();
+                self.toast_error(format!("Couldn't change Ctrl and Cmd for {name}. Try again."), e, now);
+            }
+            Job::TakeBack => self.toast_error("Couldn't take back control. Press a key on this computer, or run `one-mk takeback`.", e, now),
+            Job::Autostart(on) => {
+                let word = if on { "on" } else { "off" };
+                self.toast_error(format!("Couldn't turn {word} start at login."), e, now);
+            }
+            Job::Start => self.toast_error("one·mk didn't start.", e, now),
+            Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
+        }
+    }
+
+    fn pairing_steps(&mut self, now: f64) {
         let mut finished: Option<(String, String)> = None;
         if let Some(p) = &mut self.pairing {
             while let Some(step) = p.proc.as_ref().and_then(|c| c.rx.try_recv().ok()) {
@@ -212,16 +446,25 @@ impl App {
                     Step::Hint => p.hint = true,
                     Step::Retry(why) => {
                         p.retry = Some(why);
+                        p.hint = false;
                         p.step = Step::Searching { me: p.me.clone() };
                         p.since = now;
                     }
-                    Step::Paired { id, name } => finished = Some((id, name)),
+                    Step::Paired { id, name } => {
+                        finished = Some((id.clone(), name.clone()));
+                        p.proc = None;
+                        p.step = Step::Paired { id, name };
+                        p.since = now;
+                    }
                     Step::Ended(why) => {
                         p.proc = None;
                         p.step = Step::Ended(why);
                         p.since = now;
                     }
                     s => {
+                        if s == Step::Found {
+                            p.hint = false;
+                        }
                         p.step = s;
                         p.since = now;
                     }
@@ -229,39 +472,71 @@ impl App {
             }
         }
         if let Some((id, name)) = finished {
-            // The ghost becomes the new computer; the daemon picks it up on reload.
+            // The outline becomes the new computer; the daemon picks it up
+            // on reload. The sheet says it worked, so no toast.
             if let Some(i) = self.scene.index(GHOST) {
+                let n = self.running().map_or(0, |s| s.peers.len());
                 let d = &mut self.scene.devices[i];
-                d.id = id;
+                d.id = id.clone();
                 d.name = name.clone();
-                d.alpha_to = 1.0;
+                d.wall = WALLS[n % WALLS.len()];
+                d.alpha.go(1.0, now, motion::fade(0.4), motion::out_cubic);
+                d.wire.go(0.0, now, motion::fade(0.4), motion::out_cubic);
             }
             self.scene.code = None;
-            self.pairing = None;
-            self.toast(format!("Paired with {name}"), false, now);
+            self.just_paired = Some((id.clone(), now));
+            // Selecting it measures it: the first crossing, labelled, is the payoff.
+            self.selected = Some(id);
+            if self.running().is_none() {
+                self.toast(format!("Paired with {name}. Start one·mk to connect."), now);
+            }
             let dir = self.link.dir.clone();
             std::thread::spawn(move || {
                 let _ = one_mk_ctl::client::request(&dir, one_mk_ctl::client::Request::Reload, std::time::Duration::from_secs(3));
             });
             self.sync_scene();
         }
-        self.sync_pairing_scene(now);
+        // The success sheet holds a moment, then goes.
+        #[cfg(debug_assertions)]
+        let hold = if std::env::var_os("ONE_MK_APP_CONFIRM").is_some() { 60.0 } else { 1.15 };
+        #[cfg(not(debug_assertions))]
+        let hold = 1.15;
+        if self.pairing.as_ref().is_some_and(|p| matches!(p.step, Step::Paired { .. }) && now - p.since > hold) {
+            self.pairing = None;
+        }
     }
 
-    /// Makes the desk match what the daemon reports.
+    fn side_shown(&self, id: &str, reported: Side) -> Side {
+        match &self.drag_side {
+            Some((d, side)) if d == id => *side,
+            _ => self.pending_side.get(id).map_or(reported, |(s, _)| *s),
+        }
+    }
+
+    /// Makes the desk match what the daemon reports (and what was chosen
+    /// here but not yet confirmed).
     fn sync_scene(&mut self) {
+        let now = self.now;
         let status = self.running().cloned();
+        let off = self.off();
         let peers: Vec<_> = status.as_ref().map(|s| s.peers.clone()).unwrap_or_default();
-        // The daemon has caught up with a side chosen here.
-        self.pending_side.retain(|id, side| peers.iter().any(|p| &p.id == id && p.side != *side));
+        // The daemon has caught up with a side or a swap chosen here.
+        self.pending_side.retain(|id, (side, _)| peers.iter().any(|p| &p.id == id && p.side != *side));
+        self.pending_swap.retain(|id, swap| peers.iter().any(|p| &p.id == id && &p.swap != swap));
+        let listed = self.just_paired.as_ref().is_some_and(|(j, _)| peers.iter().any(|p| &p.id == j));
+        if listed || self.just_paired.as_ref().is_some_and(|(_, t)| now - t > 6.0) {
+            self.just_paired = None;
+        }
         let half = |kind: Kind| if kind == Kind::Laptop { 15.5 } else { 29.0 };
-        let mut layout: Vec<(String, Side, f32)> = peers
-            .iter()
-            .map(|p| {
-                let kind = if p.os == os::MACOS { Kind::Laptop } else { Kind::Monitor };
-                (p.id.clone(), *self.pending_side.get(&p.id).unwrap_or(&p.side), half(kind))
-            })
-            .collect();
+        let kind_of = |o: u8| if o == os::MACOS { Kind::Laptop } else { Kind::Monitor };
+        let mut layout: Vec<(String, Side, f32)> = peers.iter().map(|p| (p.id.clone(), self.side_shown(&p.id, p.side), half(kind_of(p.os)))).collect();
+        if let Some((id, _)) = &self.just_paired
+            && let Some(i) = self.scene.index(id)
+        {
+            let d = &self.scene.devices[i];
+            let side = if d.target.x < 0.0 { Side::Left } else { Side::Right };
+            layout.push((id.clone(), side, half(d.kind) * d.scale));
+        }
         if self.scene.index(GHOST).is_some() {
             let right = layout.iter().filter(|(_, s, _)| *s == Side::Right).count();
             let left = layout.iter().filter(|(_, s, _)| *s == Side::Left).count();
@@ -270,52 +545,54 @@ impl App {
         let places = slots(half(me_kind()), &layout);
 
         let me = &mut self.scene.devices[0];
-        me.alpha_to = 1.0;
-        me.wire_to = 1.0;
         if let Some(s) = &status {
             me.name = s.name.clone();
         }
-        me.subtitle = if status.is_some() { "This computer".into() } else { "This computer · one·mk is off".into() };
+        me.online = !off;
+        me.set_subtitle(if off { "one·mk is off" } else { "This computer" }, now);
+
+        // New computers come in staggered by how far they are from this one.
+        let opening = self.scene.opening(now);
         for (n, p) in peers.iter().enumerate() {
             let i = match self.scene.index(&p.id) {
                 Some(i) => i,
                 None => {
-                    let kind = if p.os == os::MACOS { Kind::Laptop } else { Kind::Monitor };
-                    let mut d = Device::new(&p.id, &p.name, kind, false, WALLS[n % WALLS.len()]);
+                    let mut d = Device::new(&p.id, &p.name, kind_of(p.os), false, WALLS[n % WALLS.len()]);
                     let (pos, _) = places[&p.id];
-                    d.pos = pos + v(0.0, 0.0, -8.0);
-                    d.alpha = 0.0;
-                    d.wire = 0.0;
+                    let delay = if opening { 0.1 + 0.06 * (pos.x.abs() / SPACING).round() as f64 } else { 0.0 };
+                    d.arrive(pos, now, delay);
                     self.scene.devices.push(d);
                     self.scene.devices.len() - 1
                 }
             };
+            let sub = self.subtitle_for(p);
             let d = &mut self.scene.devices[i];
             d.name = p.name.clone();
             d.online = p.online;
-            d.subtitle = if p.online { os_name(p.os).into() } else { "Offline".into() };
-            d.kind = if p.os == os::MACOS { Kind::Laptop } else if p.os == 0 { d.kind } else { Kind::Monitor };
-            d.leaving = false;
-            d.alpha_to = 1.0;
-            d.wire_to = 1.0;
+            d.kind = if p.os == 0 { d.kind } else { kind_of(p.os) };
+            d.stay(now);
+            d.set_subtitle(&sub, now);
         }
+        let just = self.just_paired.as_ref().map(|(j, _)| j.clone());
+        let hop = self.hop.take();
         for d in self.scene.devices.iter_mut().skip(1) {
-            if d.id != GHOST && !peers.iter().any(|p| p.id == d.id) {
-                d.leaving = true;
-                d.alpha_to = 0.0;
-                d.wire_to = 0.0;
+            let keep = d.id == GHOST || peers.iter().any(|p| p.id == d.id) || just.as_deref() == Some(d.id.as_str());
+            if !keep {
+                d.leave(now);
             }
             if let Some((pos, scale)) = places.get(&d.id) {
-                d.target = *pos;
+                if hop.as_deref() == Some(d.id.as_str()) {
+                    d.hop_to(*pos, now);
+                } else {
+                    d.target = *pos;
+                }
                 d.scale = *scale;
             }
         }
 
         // Follow the mouse and keyboard to whichever screen has them.
         let active = match &status {
-            Some(Status { controlling: Some(name), .. }) => {
-                peers.iter().find(|p| &p.name == name).map_or("me".to_owned(), |p| p.id.clone())
-            }
+            Some(Status { controlling: Some(name), .. }) => peers.iter().find(|p| &p.name == name).map_or("me".to_owned(), |p| p.id.clone()),
             _ => "me".to_owned(),
         };
         if active != self.active {
@@ -324,27 +601,44 @@ impl App {
         }
     }
 
-    /// The pairing ghost and the code on screens.
+    /// The second line on a computer's screen says what matters in the
+    /// open tab: its system, that files can go there, or its keys.
+    fn subtitle_for(&self, p: &PeerStatus) -> String {
+        if !p.online {
+            return "Offline".into();
+        }
+        let swap = self.pending_swap.get(&p.id).unwrap_or(&p.swap);
+        match self.tab {
+            Tab::Desk => os_name(p.os).into(),
+            Tab::Files => "Drop files here".into(),
+            Tab::Keyboard => {
+                let swapped = match swap.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => p.os != 0 && (p.os == os::MACOS) != (me_os() == os::MACOS),
+                };
+                if swapped { "Ctrl/Cmd swapped".into() } else { "Keys as typed".into() }
+            }
+        }
+    }
+
+    /// The pairing outline and the code on its screen.
     fn sync_pairing_scene(&mut self, now: f64) {
-        let Some(step) = self.pairing.as_ref().map(|p| (p.step.clone(), p.since)) else {
+        let Some((step, since)) = self.pairing.as_ref().map(|p| (p.step.clone(), p.since)) else {
             if let Some(i) = self.scene.index(GHOST) {
-                let d = &mut self.scene.devices[i];
-                d.leaving = true;
-                d.alpha_to = 0.0;
-                d.wire_to = 0.0;
+                self.scene.devices[i].leave(now);
             }
             self.scene.code = None;
             return;
         };
-        let (step, since) = step;
-        if self.scene.index(GHOST).is_none() && !matches!(step, Step::Ended(_)) {
+        let live = matches!(step, Step::Searching { .. } | Step::Hint | Step::Found | Step::Code { .. } | Step::Waiting { .. });
+        if self.scene.index(GHOST).is_none() && live {
             let mut g = Device::new(GHOST, "Looking…", Kind::Monitor, false, WALLS[1]);
-            g.subtitle = "Pairing".into();
-            g.alpha = 0.0;
-            g.alpha_to = 0.0;
-            g.wire = 0.0;
-            g.wire_to = 1.0;
+            g.alpha.set(0.0);
+            // Drawn in once, then still: nothing loops while it waits.
+            g.wire = motion::Tween::from_to(0.0, 1.0, now, motion::fade(0.6), motion::in_out_cubic);
             g.scale = 0.86;
+            g.set_subtitle("Pairing", now);
             self.scene.devices.push(g);
             self.sync_scene();
             let i = self.scene.index(GHOST).unwrap();
@@ -356,124 +650,51 @@ impl App {
             match &step {
                 Step::Code { name, code } => {
                     d.name = name.clone();
+                    // The sheet is this computer's display of the code; the
+                    // outline shows what the other screen displays.
                     if self.scene.code.as_ref().is_none_or(|(_, c, _)| c != code) {
-                        self.scene.code = Some((vec!["me".into(), GHOST.into()], code.clone(), since));
+                        self.scene.code = Some((vec![GHOST.into()], code.clone(), since));
                     }
                 }
                 Step::Ended(_) => {
-                    d.leaving = true;
-                    d.wire_to = 0.0;
+                    d.leave(now);
                     self.scene.code = None;
                 }
-                Step::Waiting { .. } => {}
+                Step::Waiting { .. } | Step::Paired { .. } => {}
                 _ => {
                     d.name = "Looking…".into();
                     self.scene.code = None;
-                    // A slow breathing outline while searching.
-                    d.wire_to = 0.55 + 0.45 * ((now * 1.6).sin() as f32 * 0.5 + 0.5);
                 }
             }
         }
     }
 
     fn start_pairing(&mut self, now: f64) {
-        match Pairing::start(&self.link.daemon, &self.link.home_args(), self.link_ctx()) {
+        self.pending_drop = None;
+        match Pairing::start(&self.link.daemon, &self.link.home_args(), self.ctx.clone()) {
             Ok(proc) => {
                 let me = self.running().map(|s| s.name.clone()).unwrap_or_default();
-                self.pairing = Some(PairUi { proc: Some(proc), step: Step::Searching { me: me.clone() }, since: now, hint: false, retry: None, me });
+                let step = Step::Searching { me: me.clone() };
+                self.pairing = Some(PairUi { proc: Some(proc), step, since: now, opened: now, hint: false, retry: None, me });
             }
-            Err(e) => self.toast(format!("Could not start pairing: {e}"), true, now),
+            Err(e) => self.toast_error("Couldn't start pairing. Is one-mk installed next to this app?", Some(e.to_string()), now),
         }
     }
 
-    fn link_ctx(&self) -> egui::Context {
-        self.ctx.clone()
+    fn sheet_open(&self) -> bool {
+        self.pairing.is_some() || self.pending_drop.is_some()
     }
 }
 
-// ---------- drawing helpers ----------
-
-fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
-    let t = t.clamp(0.0, 1.0);
-    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgba_premultiplied(f(a.r(), b.r()), f(a.g(), b.g()), f(a.b(), b.b()), f(a.a(), b.a()))
-}
-
-/// Overshoots a little and settles: for switches and toggles.
-fn back_out(t: f32) -> f32 {
-    let (c1, t) = (1.55, t.clamp(0.0, 1.0) - 1.0);
-    1.0 + (c1 + 1.0) * t * t * t + c1 * t * t
-}
-
-fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {
-    ui.painter().layout_no_wrap(text.into(), font, INK).size().x
-}
-
-fn button_width(ui: &Ui, label: &str) -> f32 {
-    text_width(ui, label, semibold(13.0)) + 28.0
-}
-
-/// A pill button that presses in a little.
-fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, primary: bool) -> egui::Response {
-    let r = ui.interact(rect, id, Sense::click());
-    let ctx = ui.ctx().clone();
-    let press = ctx.animate_bool_with_time(id.with("press"), r.is_pointer_button_down_on(), 0.1);
-    let hover = ctx.animate_bool_with_time(id.with("hover"), r.hovered(), 0.15);
-    let rr = Rect::from_center_size(rect.center(), rect.size() * (1.0 - 0.05 * press));
-    let (bg, lit, fg) = if primary {
-        (SIGNAL, Color32::from_rgb(0xFF, 0xC2, 0x66), SIGNAL_INK)
-    } else {
-        (Color32::from_rgb(0x22, 0x28, 0x31), Color32::from_rgb(0x2A, 0x31, 0x3B), INK)
-    };
-    let p = ui.painter();
-    p.rect_filled(rr, CornerRadius::same(9), mix(bg, lit, hover));
-    if r.has_focus() {
-        p.rect_stroke(rr.expand(2.0), CornerRadius::same(11), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
-    }
-    p.text(rr.center(), Align2::CENTER_CENTER, label, semibold(13.0 * (1.0 - 0.05 * press)), fg);
-    if r.hovered() {
-        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    r
-}
-
-/// A text link: quiet until hovered.
-fn link(ui: &mut Ui, pos: Pos2, id: Id, label: &str) -> egui::Response {
-    let w = text_width(ui, label, regular(12.5));
-    let rect = Rect::from_min_size(pos, vec2(w, 18.0));
-    let r = ui.interact(rect, id, Sense::click());
-    let col = if r.hovered() { SIGNAL } else { INK };
-    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, label, regular(12.5), col);
-    if r.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, Stroke::new(1.0, mix(SIGNAL, Color32::TRANSPARENT, 0.5)));
-    }
-    r
-}
-
-/// A labelled switch across `row`; true when clicked.
-fn switch(ui: &mut Ui, row: Rect, id: Id, label: &str, on: bool, enabled: bool) -> bool {
-    let r = ui.interact(row, id, if enabled { Sense::click() } else { Sense::hover() });
-    let t = ui.ctx().animate_bool_with_time(id.with("knob"), on, 0.42);
-    let e = if on { back_out(t) } else { 1.0 - back_out(1.0 - t) };
-    let p = ui.painter();
-    p.text(row.left_center(), Align2::LEFT_CENTER, label, regular(13.0), if enabled { INK } else { INK2 });
-    let track = Rect::from_min_size(pos2(row.right() - 34.0, row.center().y - 10.0), vec2(34.0, 20.0));
-    p.rect_filled(track, CornerRadius::same(10), mix(Color32::from_rgb(0x2A, 0x30, 0x3A), SIGNAL, t));
-    let knob = pos2(track.left() + 10.0 + 14.0 * e, track.center().y);
-    p.circle_filled(knob, 8.0, mix(Color32::from_rgb(0xC9, 0xCE, 0xD6), SIGNAL_INK, t));
-    if r.hovered() && enabled {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    enabled && r.clicked()
-}
-
-/// Wrapped text; returns its height.
-fn para(ui: &Ui, pos: Pos2, width: f32, text: &str, font: FontId, col: Color32) -> f32 {
-    let g = ui.painter().layout(text.into(), font, col, width);
-    let h = g.size().y;
-    ui.painter().galley(pos, g, col);
-    h
+/// The mark, top left. Drawn in this one place so it can be swapped
+/// whole: this screen outlined, the next one lit.
+pub fn draw_mark(p: &Painter, rect: Rect) {
+    let s = rect.width() / 24.0;
+    let o = rect.min;
+    let back = Rect::from_min_size(o + vec2(2.5, 5.0) * s, vec2(11.0, 8.0) * s);
+    p.rect_stroke(back, CornerRadius::same(2), Stroke::new(1.8 * s.max(0.9), INK), StrokeKind::Middle);
+    let front = Rect::from_min_size(o + vec2(10.5, 11.0) * s, vec2(11.0, 8.0) * s);
+    p.rect_filled(front, CornerRadius::same(2), SIGNAL);
 }
 
 impl App {
@@ -497,91 +718,177 @@ impl App {
 
     fn draggable(&self, i: usize) -> bool {
         let d = &self.scene.devices[i];
-        i != 0 && d.id != GHOST && !d.leaving
+        i != 0 && d.id != GHOST && !d.leaving && self.running().is_some_and(|s| s.peers.iter().any(|p| p.id == d.id))
     }
 
     fn side_of(&self, id: &str) -> Option<Side> {
-        self.pending_side.get(id).copied().or_else(|| self.running()?.peers.iter().find(|p| p.id == id).map(|p| p.side))
+        self.pending_side.get(id).map(|(s, _)| *s).or_else(|| self.running()?.peers.iter().find(|p| p.id == id).map(|p| p.side))
     }
 
-    fn choose_side(&mut self, id: &str, side: Side) {
+    fn name_of(&self, id: &str) -> String {
+        self.running().and_then(|s| s.peers.iter().find(|p| p.id == id)).map_or_else(|| id.to_owned(), |p| p.name.clone())
+    }
+
+    fn choose_side(&mut self, id: &str, side: Side, hop: bool) {
         if self.side_of(id) != Some(side) {
-            self.pending_side.insert(id.to_owned(), side);
-            self.busy.push(Job::Layout);
-            self.link.set_side(id, side);
+            let name = self.name_of(id);
+            self.pending_side.insert(id.to_owned(), (side, self.now));
+            self.busy.push(Job::Layout { id: id.into(), name: name.clone(), side });
+            self.link.set_side(id, &name, side);
+            if hop {
+                self.hop = Some(id.to_owned());
+            }
         }
         self.sync_scene();
     }
 
-    /// A computer was let go after dragging: it goes to the side it is on.
-    fn dropped_device(&mut self, i: usize) {
+    /// The side a dragged computer is on right now.
+    fn side_at(&self, i: usize) -> Side {
         let d = &self.scene.devices[i];
-        let id = d.id.clone();
         let dx = d.pos.x - self.scene.devices[0].pos.x;
         let moved = (d.pos.x - d.target.x).abs();
-        let current = self.side_of(&id);
-        let side = match current {
-            Some(Side::Top | Side::Bottom) if moved < 20.0 => current.unwrap(),
+        match self.side_of(&d.id) {
+            Some(s @ (Side::Top | Side::Bottom)) if moved < 20.0 => s,
             _ if dx < 0.0 => Side::Left,
             _ => Side::Right,
-        };
-        self.choose_side(&id, side);
+        }
+    }
+
+    /// Chooses a computer for the panel; the first look at one measures it.
+    fn select(&mut self, id: String) {
+        let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.id == id && p.online));
+        if online && !self.latency.contains_key(&id) && !self.failed_measure.contains(&id) {
+            self.measure(&id);
+        }
+        self.selected = Some(id);
     }
 
     fn measure(&mut self, id: &str) {
         if self.measuring.is_none() {
             self.measuring = Some(id.to_owned());
+            self.busy.push(Job::Measure(id.to_owned()));
             self.link.measure(id);
         }
     }
 
+    fn online_targets(&self) -> Vec<usize> {
+        (1..self.scene.devices.len()).filter(|&i| self.draggable(i) && self.scene.devices[i].online).collect()
+    }
+
+    /// Files let go over the window. Without a computer under them (or
+    /// with a pointer position that can't be trusted), ask which one,
+    /// unless only one could take them.
     fn drop_files(&mut self, paths: Vec<PathBuf>, at: Option<Pos2>, now: f64) {
-        let online: Vec<usize> = (1..self.scene.devices.len()).filter(|&i| self.draggable(i) && self.scene.devices[i].online).collect();
-        let target = at.and_then(|p| self.scene.hit(p)).filter(|i| online.contains(i)).or(if online.len() == 1 { Some(online[0]) } else { None });
-        let Some(i) = target else {
-            let msg = if online.is_empty() { "Connect a computer first, then drop files on it." } else { "Drop the files onto the computer you want to send them to." };
-            self.toast(msg, true, now);
-            return;
-        };
+        let online = self.online_targets();
+        match at.and_then(|p| self.scene.hit(p)) {
+            Some(i) if i != 0 && self.draggable(i) && !self.scene.devices[i].online => {
+                let name = self.scene.devices[i].name.clone();
+                self.toast_error(format!("{name} is offline. Files can only go to a connected computer."), None, now);
+            }
+            Some(i) if online.contains(&i) => self.send_to(i, paths),
+            _ if online.is_empty() => {
+                self.toast_error("No computer is connected right now. Start one·mk on the other computer, then drop the files again.", None, now)
+            }
+            _ if online.len() == 1 => self.send_to(online[0], paths),
+            _ => self.pending_drop = Some((paths, now)),
+        }
+    }
+
+    fn send_to(&mut self, i: usize, paths: Vec<PathBuf>) {
         let (id, name) = (self.scene.devices[i].id.clone(), self.scene.devices[i].name.clone());
-        let n = paths.len();
-        self.busy.push(Job::Send { to: name.clone(), count: n });
+        self.busy.push(Job::Send { to: name.clone(), count: paths.len() });
         self.link.send_files(&id, &name, paths);
         self.scene.fly(&self.active.clone(), &id, Cargo::Parcel);
-        let what = if n == 1 { "1 item".to_owned() } else { format!("{n} items") };
-        self.toast(format!("Sending {what} to {name}…"), false, now);
     }
 
     // ---------- the desk ----------
 
+    /// Keyboard stops for each computer and the empty slot. They are made
+    /// before the desk, so the desk stays on top for the pointer.
+    fn desk_keys(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
+        let kb = widgets::keyboard_focus(ui.ctx());
+        let enter = ui.input(|inp| inp.key_pressed(Key::Enter) || inp.key_pressed(Key::Space));
+        let mut focused = None;
+        let mut pick = None;
+        let sel = self.selected_id();
+        for i in 0..self.scene.devices.len() {
+            let selectable = i == 0 || self.draggable(i);
+            let Some(b) = self.scene.bounds(i).filter(|_| selectable && self.running().is_some()) else { continue };
+            let d = &self.scene.devices[i];
+            let id = if i == 0 { "me".to_owned() } else { d.id.clone() };
+            let r = ui.interact(b, Id::unique(("device", &id)), widgets::sense(ui, Sense::focusable_noninteractive()));
+            let chosen = sel.as_deref() == Some(id.as_str());
+            let place = if i == 0 { "this computer".to_owned() } else { self.side_of(&id).map_or(String::new(), |s| on_your(s).to_owned()) };
+            let label = format!("{}, {}, {place}", d.name, d.subtitle);
+            r.widget_info(move || egui::WidgetInfo::selected(Role::Button, true, chosen, &label));
+            if r.has_focus() {
+                focused = Some(i);
+                if enter {
+                    pick = Some(id);
+                }
+            }
+        }
+        if let Some(id) = pick {
+            self.select(id);
+        }
+        self.scene.focused = focused.filter(|_| kb);
+        self.scene.slot_focus = false;
+        if let Some(s) = self.scene.slot_rect(rect) {
+            let r = ui.interact(s, Id::unique("slot"), widgets::sense(ui, Sense::focusable_noninteractive()));
+            widgets::a11y(&r, Role::Button, "Add a computer: pair another computer", None);
+            self.scene.slot_focus = r.has_focus() && kb;
+            if r.has_focus() && enter {
+                self.start_pairing(now);
+            }
+        }
+    }
+
     fn desk(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
-        let resp = ui.interact(rect, Id::unique("desk"), Sense::click_and_drag());
-        let pointer = resp.hover_pos();
+        let locked = widgets::locked(ui);
+        self.desk_keys(ui, rect, now);
+        let resp = ui.interact(rect, Id::unique("desk"), if locked { Sense::hover() } else { Sense::CLICK | Sense::DRAG });
+        let pointer = resp.hover_pos().filter(|_| !locked);
         let hovering_files = ui.input(|i| !i.raw.hovered_files.is_empty());
         self.scene.drop_targets = hovering_files;
+        if hovering_files {
+            self.drop_pos_fresh |= ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO);
+        }
         let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if !dropped.is_empty() {
-            let at = ui.input(|i| i.pointer.latest_pos());
+            // Some systems don't move the pointer during a drag from
+            // another app; then where it was before means nothing.
+            let at = if self.drop_pos_fresh { ui.input(|i| i.pointer.latest_pos()) } else { None };
             self.drop_files(dropped, at, now);
+        }
+        if !hovering_files {
+            self.drop_pos_fresh = false;
         }
 
         if resp.drag_started() {
             let start = resp.interact_pointer_pos().unwrap_or_default();
             self.drag = match self.scene.hit(start) {
-                Some(i) if self.draggable(i) => Some(Drag::Device { i, start, x0: self.scene.devices[i].pos.x }),
+                Some(i) if self.draggable(i) => {
+                    let d = &mut self.scene.devices[i];
+                    // Picked up: it lifts a little and its shadow softens.
+                    d.lift.go(motion::space(2.5), now, 0.12, motion::out_cubic);
+                    d.pop.go(if motion::reduced() { 1.0 } else { 1.02 }, now, 0.12, motion::out_cubic);
+                    Some(Drag::Device { i, start, x0: d.pos.x })
+                }
                 _ => Some(Drag::Orbit),
             };
         }
         if resp.dragged() {
             match &self.drag {
                 Some(Drag::Device { i, start, x0 }) => {
+                    let (i, start, x0) = (*i, *start, *x0);
                     if let Some(p) = resp.interact_pointer_pos() {
-                        let ax = self.scene.x_axis(rect, *i);
-                        let d = p - *start;
+                        let ax = self.scene.x_axis(rect, i);
+                        let d = p - start;
                         let dx = (d.x * ax.x + d.y * ax.y) / ax.length_sq().max(1e-3);
                         let me_x = self.scene.devices[0].pos.x;
-                        self.scene.devices[*i].pos.x = (x0 + dx).clamp(me_x - SPACING * 3.0, me_x + SPACING * 3.0);
+                        self.scene.devices[i].pos.x = (x0 + dx).clamp(me_x - SPACING * 4.0, me_x + SPACING * 4.0);
                     }
+                    self.make_room(i);
                 }
                 Some(Drag::Orbit) => {
                     let d = resp.drag_delta();
@@ -592,8 +899,16 @@ impl App {
             }
         }
         if resp.drag_stopped() {
-            if let Some(Drag::Device { i, .. }) = self.drag {
-                self.dropped_device(i);
+            if let Some(Drag::Device { i, .. }) = self.drag
+                && i < self.scene.devices.len()
+            {
+                let side = self.side_at(i);
+                let d = &mut self.scene.devices[i];
+                d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
+                d.pop.go(1.0, now, 0.16, motion::out_cubic);
+                let id = d.id.clone();
+                self.drag_side = None;
+                self.choose_side(&id, side, false);
             }
             self.drag = None;
         }
@@ -618,55 +933,96 @@ impl App {
             if self.scene.slot_hover {
                 self.start_pairing(now);
             } else if let Some(i) = under.filter(|&i| i == 0 || self.draggable(i)) {
-                let d = &self.scene.devices[i];
-                let id = if i == 0 { "me".to_owned() } else { d.id.clone() };
-                let measure = i != 0 && d.online && !self.latency.contains_key(&id);
-                self.selected = Some(id.clone());
-                if measure {
-                    self.measure(&id);
-                }
+                let id = if i == 0 { "me".to_owned() } else { self.scene.devices[i].id.clone() };
+                self.select(id);
             }
+        }
+        // Double-click the empty desk: the camera goes back to where it rests.
+        if resp.double_clicked() && under.is_none() {
+            self.scene.reset_camera();
         }
         if resp.secondary_clicked() {
             self.menu_for = under.filter(|&i| self.draggable(i));
         }
-        resp.context_menu(|ui| {
-            let Some(i) = self.menu_for.filter(|&i| i < self.scene.devices.len()) else {
-                ui.close();
-                return;
-            };
-            let (id, name) = (self.scene.devices[i].id.clone(), self.scene.devices[i].name.clone());
-            ui.label(egui::RichText::new(format!("Where is {name}?")).color(INK2).size(12.0));
-            let current = self.side_of(&id);
-            for (side, label) in [(Side::Left, "On the left"), (Side::Right, "On the right"), (Side::Top, "Above"), (Side::Bottom, "Below")] {
-                if ui.radio(current == Some(side), label).clicked() {
-                    self.choose_side(&id, side);
-                    ui.close();
-                }
-            }
-        });
+        resp.context_menu(|ui| self.place_menu(ui));
 
         let dragging = match self.drag {
             Some(Drag::Device { i, .. }) => Some(i),
             _ => None,
         };
-        self.scene.raise_to = if self.pairing.is_some() { 1.0 } else { 0.0 };
-        let several = self.scene.devices.iter().filter(|d| !d.leaving).count() > 1;
-        self.scene.selected = match self.selected_id().as_deref().filter(|_| several) {
+        self.scene.raise.go(f32::from(self.sheet_open()), now, motion::space(0.38), motion::out_expo);
+        self.scene.sheet_top = self.sheet_top;
+        self.scene.drop_preview.go(f32::from(self.tab == Tab::Files), now, motion::fade(0.28), motion::out_cubic);
+        let several = self.scene.devices.iter().filter(|d| !d.leaving && d.id != GHOST).count() > 1;
+        let shown = several && self.tab == Tab::Desk;
+        self.scene.selected = match self.selected_id().as_deref().filter(|_| shown) {
             Some("me") => Some(0),
             Some(id) => self.scene.index(id),
             None => None,
         };
-        self.scene.empty_slot = self.pairing.is_none() && self.running().is_some_and(|s| s.peers.is_empty());
+        self.scene.empty_slot = !self.sheet_open() && self.running().is_some_and(|s| s.peers.is_empty()) && self.just_paired.is_none();
         let moving = self.scene.step(now, dragging);
         let painter = ui.painter_at(rect);
-        self.scene.paint(&painter, rect, now);
-        if moving || self.drag.is_some() || self.pairing.is_some() {
+        self.scene.paint(&painter, rect);
+        if moving || self.drag.is_some() {
             ui.ctx().request_repaint();
         }
+        self.desk_status(&painter, rect, hovering_files);
+    }
+
+    /// While a computer is dragged, the others make room live, so the
+    /// result shows before it is let go.
+    fn make_room(&mut self, i: usize) {
+        let side = (self.scene.devices[i].id.clone(), self.side_at(i));
+        if self.drag_side.as_ref() != Some(&side) {
+            self.drag_side = Some(side);
+            self.sync_scene();
+        }
+    }
+
+    /// One quiet line at the foot of the desk: files on their way, or
+    /// where to let go of the ones being dragged in.
+    fn desk_status(&self, painter: &Painter, rect: Rect, hovering_files: bool) {
+        let p = pos2(rect.center().x, rect.bottom() - 22.0);
         if hovering_files {
-            let p = pos2(rect.center().x, rect.bottom() - 26.0);
-            painter.text(p, Align2::CENTER_CENTER, "Drop on a computer to send", semibold(14.0), SIGNAL);
+            painter.text(p, Align2::CENTER_CENTER, "Drop on a computer to send", semibold(T_BODY), SIGNAL);
+            return;
+        }
+        let sending: Vec<String> = self.busy.iter().filter_map(|j| if let Job::Send { to, count } = j { Some(format!("{} to {to}", items(*count))) } else { None }).collect();
+        if !sending.is_empty() {
+            let text = fit(painter, &format!("Sending {}…", sending.join(", ")), &regular(T_META), rect.width() - 80.0);
+            painter.text(p, Align2::CENTER_CENTER, text, regular(T_META), INK2);
+        }
+    }
+
+    /// The right-click menu on a computer: where it is.
+    fn place_menu(&mut self, ui: &mut Ui) {
+        let Some(i) = self.menu_for.filter(|&i| i < self.scene.devices.len()) else {
+            ui.close();
+            return;
+        };
+        let (id, name) = (self.scene.devices[i].id.clone(), self.scene.devices[i].name.clone());
+        let width = 180.0;
+        let p = ui.painter().clone();
+        let head = fit(&p, &format!("Where is {name}?"), &regular(T_META), width - 16.0);
+        let (r, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+        p.text(r.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, head, regular(T_META), INK2);
+        let current = self.side_of(&id);
+        for (side, label) in [(Side::Left, "On the left"), (Side::Right, "On the right"), (Side::Top, "Above"), (Side::Bottom, "Below")] {
+            let (r, resp) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
+            let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
+            p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, PILL, hover));
+            widgets::focus_ring(ui, &resp, r, 6);
+            let on = current == Some(side);
+            if on {
+                widgets::draw_check(&p, pos2(r.left() + 16.0, r.center().y), 10.0, INK, 1.0);
+            }
+            p.text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, label, regular(T_BODY), if on { INK } else { INK_HOVER });
+            widgets::a11y(&resp, Role::MenuItemRadio, &format!("{name}: {label}"), Some(on));
+            if resp.clicked() {
+                self.choose_side(&id, side, true);
+                ui.close();
+            }
         }
     }
 
@@ -675,80 +1031,87 @@ impl App {
     fn top_bar(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
         let p = ui.painter_at(rect);
         let mut m = egui::Mesh::default();
-        let fade = Color32::from_rgba_premultiplied(0, 0, 0, 0);
-        for (pt, c) in [(rect.left_top(), GROUND), (rect.right_top(), GROUND), (rect.right_bottom(), fade), (rect.left_bottom(), fade)] {
+        let clear = Color32::from_rgba_premultiplied(0, 0, 0, 0);
+        for (pt, c) in [(rect.left_top(), GROUND), (rect.right_top(), GROUND), (rect.right_bottom(), clear), (rect.left_bottom(), clear)] {
             m.colored_vertex(pt, c);
         }
         m.add_triangle(0, 1, 2);
         m.add_triangle(0, 2, 3);
         p.add(egui::Shape::mesh(m));
 
-        // The mark: this screen, and the next one lit.
-        let o = pos2(rect.left() + 16.0, rect.center().y - 11.0);
-        let s = 22.0 / 24.0;
-        p.rect_stroke(
-            Rect::from_min_size(o + vec2(2.5, 5.0) * s, vec2(11.0, 8.0) * s),
-            CornerRadius::same(2),
-            Stroke::new(1.8, INK),
-            StrokeKind::Middle,
-        );
-        p.rect_filled(Rect::from_min_size(o + vec2(10.5, 11.0) * s, vec2(11.0, 8.0) * s), CornerRadius::same(2), SIGNAL);
-        p.text(pos2(o.x + 30.0, rect.center().y), Align2::LEFT_CENTER, "one·mk", semibold(16.0), INK);
+        draw_mark(&p, Rect::from_min_size(pos2(rect.left() + 16.0, rect.center().y - 11.0), vec2(22.0, 22.0)));
+        p.text(pos2(rect.left() + 46.0, rect.center().y), Align2::LEFT_CENTER, "one·mk", semibold(16.0), INK);
 
-        // Tabs, with an indicator that slides between them.
-        let widths: Vec<f32> = TABS.iter().map(|(_, l)| text_width(ui, l, regular(13.0)) + 24.0).collect();
+        // Tabs. With one·mk off only the desk has anything to show.
+        let off = self.off();
+        let labels: Vec<&str> = TABS.iter().map(|(_, l)| *l).collect();
+        let widths: Vec<f32> = labels.iter().map(|l| text_width(ui, l, semibold(T_BODY)) + 26.0).collect();
         let total = widths.iter().sum::<f32>() + 2.0 * (TABS.len() - 1) as f32 + 6.0;
-        let bar = Rect::from_center_size(rect.center(), vec2(total, 34.0));
-        p.rect(bar, CornerRadius::same(10), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
-        let mut x = bar.left() + 3.0;
-        let mut target = (0.0, 0.0);
-        let mut cells = vec![];
-        for ((tab, _), w) in TABS.iter().zip(&widths) {
-            let r = Rect::from_min_size(pos2(x, bar.top() + 3.0), vec2(*w, 28.0));
-            if *tab == self.tab {
-                target = (r.left(), r.width());
-            }
-            cells.push(r);
-            x += w + 2.0;
-        }
-        let ctx = ui.ctx().clone();
-        let ix = ctx.animate_value_with_time(Id::unique("tab-x"), target.0, 0.32);
-        let iw = ctx.animate_value_with_time(Id::unique("tab-w"), target.1, 0.32);
-        p.rect_filled(Rect::from_min_size(pos2(ix, bar.top() + 3.0), vec2(iw, 28.0)), CornerRadius::same(7), Color32::from_rgb(0x26, 0x2C, 0x36));
-        for (((tab, label), r), i) in TABS.iter().zip(&cells).zip(0..) {
-            let resp = ui.interact(*r, Id::unique(("tab", i)), Sense::click());
-            if resp.clicked() {
-                self.tab = *tab;
-                self.headline.1 = now;
-            }
-            let on = ctx.animate_bool_with_time(Id::unique(("tab-on", i)), *tab == self.tab, 0.25);
-            let col = mix(if resp.hovered() { Color32::from_rgb(0xC4, 0xCA, 0xD2) } else { INK2 }, INK, on);
-            p.text(r.center(), Align2::CENTER_CENTER, *label, regular(13.0), col);
-            if resp.hovered() {
-                ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
+        let track = Rect::from_center_size(rect.center(), vec2(total, 34.0));
+        let mut x = track.left() + 3.0;
+        let cells: Vec<Rect> = widths
+            .iter()
+            .map(|w| {
+                let r = Rect::from_min_size(pos2(x, track.top() + 3.0), vec2(*w, 28.0));
+                x += w + 2.0;
+                r
+            })
+            .collect();
+        let tabs = Pills {
+            id: Id::unique("tabs"),
+            track,
+            cells,
+            labels: &labels,
+            names: labels.iter().map(|l| (*l).to_owned()).collect(),
+            chosen: TABS.iter().position(|(t, _)| *t == self.tab).unwrap_or(0),
+            enabled: TABS.iter().map(|(t, _)| !off || *t == Tab::Desk).collect(),
+            role: Role::Tab,
+            font: T_BODY,
+            radius: 7,
+        };
+        if let Some(k) = tabs.show(ui, self.arrowed) {
+            self.set_tab(TABS[k].0);
         }
 
-        // The one action that matters most right now.
-        let (label, primary) = match (self.status.as_ref(), &self.pairing) {
-            (Some(None), _) => ("Start one·mk", true),
-            (_, Some(_)) => ("Cancel pairing", false),
-            _ if self.running().is_some_and(|s| !s.peers.is_empty()) => ("Pair another", true),
-            _ => ("Pair a device", true),
+        // The one action that matters most right now. A sheet owns its own
+        // way out, so the button steps aside while one is open.
+        let controlled = self.running().is_some_and(|s| s.controlled_by.is_some());
+        let (label, look, enabled, job) = match self.status.as_ref() {
+            Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
+            Some(None) => ("Start one·mk", Look::Primary, true, Some(Job::Start)),
+            _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
+            _ if controlled => ("Take back", Look::Primary, true, Some(Job::TakeBack)),
+            _ if self.running().is_some_and(|s| !s.peers.is_empty()) => ("Pair another computer", Look::Quiet, true, None),
+            _ => ("Pair a computer", Look::Primary, true, None),
         };
+        let shown = tween(ui.ctx(), Id::unique("action-shown"), f32::from(self.status.is_some() && !self.sheet_open()), motion::fade(0.12), motion::linear);
+        if shown < 0.01 {
+            return;
+        }
         let w = button_width(ui, label);
-        let r = Rect::from_min_size(pos2(rect.right() - 16.0 - w, rect.center().y - 16.0), vec2(w, 32.0));
-        if self.status.is_some() && button(ui, r, Id::unique("action"), label, primary).clicked() {
-            match (self.status.as_ref(), self.pairing.is_some()) {
-                (Some(None), _) => {
-                    if !self.busy.contains(&Job::Start) {
-                        self.busy.push(Job::Start);
-                        self.link.start();
-                    }
+        let r = Rect::from_min_size(pos2(rect.right() - 16.0 - w, rect.center().y - 17.0), vec2(w, 34.0));
+        let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
+        child.set_opacity(shown);
+        let a11y_label = (label == "Take back").then_some("Take back control of this computer");
+        if button(&mut child, r, Id::unique("action"), label, look, enabled && shown > 0.99, a11y_label).clicked() {
+            match job {
+                Some(Job::Start) => {
+                    self.busy.push(Job::Start);
+                    self.link.start();
                 }
-                (_, true) => self.pairing = None,
+                Some(Job::TakeBack) => {
+                    self.busy.push(Job::TakeBack);
+                    self.link.take_back();
+                }
                 _ => self.start_pairing(now),
             }
+        }
+    }
+
+    fn set_tab(&mut self, tab: Tab) {
+        if tab != self.tab {
+            self.tab = tab;
+            self.sync_scene();
         }
     }
 
@@ -759,22 +1122,60 @@ impl App {
         let Some(s) = s else {
             return ("one·mk isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
         };
-        let arrange = "Drag a computer to where it really is. Right-click it for above or below.";
         if let Some(p) = &s.controlled_by {
-            return (format!("{p} is controlling this computer"), takeback_hint().replace("`one-mk takeback`", "Take back"));
+            let sub = if cfg!(target_os = "linux") {
+                format!("Choose Take back, or stop sending input from {p}. Control comes back by itself after a minute without input from it.")
+            } else {
+                "Move this computer's mouse or press a key, or choose Take back.".into()
+            };
+            return (format!("{p} is controlling this computer"), sub);
         }
         if let Some(p) = &s.controlling {
             return (format!("Controlling {p}"), "Move the pointer back across the lit edge to return.".into());
         }
         let online: Vec<_> = s.peers.iter().filter(|p| p.online).collect();
+        let away = match s.peers.len() - online.len() {
+            0 => String::new(),
+            1 => " 1 paired computer is offline.".into(),
+            n => format!(" {n} paired computers are offline."),
+        };
         match online[..] {
-            [] if s.peers.is_empty() => ("No computers paired yet".into(), "Choose Pair a device here and on the other computer.".into()),
+            [] if s.peers.is_empty() => ("No computers paired yet".into(), "Choose Pair a computer, then do the same on the other computer.".into()),
             [] => (
                 "Waiting for your computers".into(),
                 "Paired computers appear here when one·mk is running on them and they're on the same network.".into(),
             ),
-            [p] => (format!("{} is {}", p.name, on_your(*self.pending_side.get(&p.id).unwrap_or(&p.side))), arrange.into()),
-            _ => (format!("Connected to {} computers", online.len()), arrange.into()),
+            [p] => {
+                let side = self.side_shown(&p.id, p.side);
+                (format!("{} is {}", p.name, on_your(side)), format!("Move the pointer off the {} edge to cross over.{away}", edge_word(side)))
+            }
+            _ => (format!("Connected to {} computers", online.len()), format!("Move the pointer off an edge to cross over. Drag computers to match your desk.{away}")),
+        }
+    }
+
+    /// What each cell of the panel shows in this state, and where.
+    fn cells(&self, rect: Rect) -> Vec<(Cell, Rect)> {
+        let w = rect.width();
+        let x = [0.0, w * 0.4, w * 0.71, w];
+        let cell = |a: usize, b: usize| Rect::from_min_max(pos2(rect.left() + x[a] + PAD, rect.top() + PAD), pos2(rect.left() + x[b] - PAD, rect.bottom() - PAD));
+        let (t, s) = self.headline_text();
+        match self.tab {
+            // Off, there is nothing to inspect: the message takes the room.
+            Tab::Desk if self.off() => vec![(Cell::Head(t, s), cell(0, 2)), (Cell::Settings, cell(2, 3))],
+            Tab::Desk => vec![(Cell::Head(t, s), cell(0, 1)), (Cell::Inspector(self.selected_id()), cell(1, 2)), (Cell::Settings, cell(2, 3))],
+            Tab::Files => {
+                let any = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
+                let sub = if any {
+                    "Drag files or folders onto a connected computer on the desk. They arrive in its Downloads/one-mk folder."
+                } else {
+                    "No computer is connected right now. Files can go to one once it's on and connected."
+                };
+                vec![(Cell::Head("Drop files on a computer".into(), sub.into()), cell(0, 1)), (Cell::Clipboard, cell(1, 2)), (Cell::Settings, cell(2, 3))]
+            }
+            Tab::Keyboard => {
+                let sub = "Swap them for keys sent to another computer, so shortcuts like copy and paste use the same keys everywhere. Auto swaps only between a Mac and a PC.";
+                vec![(Cell::Head("Ctrl and Cmd".into(), sub.into()), cell(0, 1)), (Cell::Swaps, cell(1, 3))]
+            }
         }
     }
 
@@ -782,288 +1183,483 @@ impl App {
         let p = ui.painter_at(rect);
         p.rect_filled(rect, 0.0, PANEL);
         p.hline(rect.x_range(), rect.top(), Stroke::new(1.0, LINE));
-        let w = rect.width();
-        let cols = [0.0, w * 0.4, w * 0.71, w];
-        // The keyboard tab uses the last two cells as one.
-        let seps = if self.tab == Tab::Keyboard { &cols[1..2] } else { &cols[1..3] };
-        for x in seps {
-            p.vline(rect.left() + x, rect.top() + 1.0..=rect.bottom(), Stroke::new(1.0, LINE));
+        let cells = self.cells(rect);
+        for (_, r) in cells.iter().skip(1) {
+            p.vline(r.left() - PAD, rect.top() + 1.0..=rect.bottom(), Stroke::new(1.0, LINE));
         }
-        let cell = |k: usize| Rect::from_min_max(pos2(rect.left() + cols[k] + 20.0, rect.top() + 18.0), pos2(rect.left() + cols[k + 1] - 20.0, rect.bottom() - 16.0));
-
-        let (title, sub) = match self.tab {
-            Tab::Desk => self.headline_text(),
-            Tab::Files => (
-                "Drop files on a computer".into(),
-                "Drag files or folders from this computer onto another one on the desk. They arrive in Downloads/one-mk there.".into(),
-            ),
-            Tab::Keyboard => (
-                "Ctrl and Cmd".into(),
-                "Swap them for keys sent to another computer, so shortcuts like copy and paste use the same keys everywhere. Auto swaps only between a Mac and a PC.".into(),
-            ),
-        };
-        // New words slide in a few pixels.
-        if self.headline.0 != title {
-            self.headline = (title.clone(), now);
-        }
-        let k = scene::ease_out(((now - self.headline.1) / 0.3) as f32);
-        if k < 1.0 {
-            ui.ctx().request_repaint();
-        }
-        let c1 = cell(0);
-        let off = vec2(0.0, 5.0 * (1.0 - k));
-        let th = para(ui, c1.left_top() + off, c1.width(), &title, semibold(15.0), INK.gamma_multiply(k));
-        let h = para(ui, c1.left_top() + off + vec2(0.0, th + 6.0), c1.width(), &sub, regular(12.5), INK2.gamma_multiply(k));
-
-        match self.tab {
-            Tab::Desk => {
-                // Starting one·mk is the top bar's button; taking back lives here.
-                if self.running().is_some_and(|s| s.controlled_by.is_some()) {
-                    let label = "Take back";
-                    let r = Rect::from_min_size(pos2(c1.left(), (c1.top() + th + h + 18.0).min(c1.bottom() - 30.0)), vec2(button_width(ui, label), 30.0));
-                    if button(ui, r, Id::unique("panel-action"), label, true).clicked() {
-                        self.link.take_back();
-                    }
-                }
-                self.inspector(ui, cell(1));
-                self.settings(ui, cell(2));
+        let opening = self.scene.opening(now);
+        for k in 0..3 {
+            let next = cells.get(k).cloned();
+            let slot = &mut self.slots[k];
+            if slot.cell.as_ref().map(|c| &c.0) != next.as_ref().map(|c| &c.0) {
+                let was = std::mem::replace(&mut slot.cell, next);
+                // On first sight nothing fades out; the panel just rises in.
+                slot.was = if opening { None } else { was };
+                slot.at = now;
+            } else if let (Some(c), Some(n)) = (&mut slot.cell, next) {
+                c.1 = n.1;
             }
-            Tab::Files => {
-                let c = cell(1);
-                let th = para(ui, c.left_top(), c.width(), "Clipboard", semibold(13.5), INK);
-                para(ui, c.left_top() + vec2(0.0, th + 6.0), c.width(), "Copy on one computer, paste on another. It follows the pointer.", regular(12.5), INK2);
-                self.settings(ui, cell(2));
+        }
+        let out = motion::fade(0.09) as f64;
+        // Under a sheet the panel steps back.
+        let dim = tween(ui.ctx(), Id::unique("panel-dim"), if self.sheet_open() { 0.3 } else { 1.0 }, motion::fade(0.2), motion::out_cubic);
+        for k in 0..3 {
+            let (at, was, cell) = (self.slots[k].at, self.slots[k].was.clone(), self.slots[k].cell.clone());
+            let t = now - at;
+            if let Some((c, r)) = was.filter(|_| t < out) {
+                ui.ctx().request_repaint();
+                let mut child = ui.new_child(UiBuilder::new().max_rect(r).id_salt(("was", k)));
+                child.set_clip_rect(rect);
+                child.disable();
+                child.set_opacity((1.0 - (t / out) as f32) * dim);
+                self.draw_cell(&mut child, &c, r, now);
+                continue;
             }
-            Tab::Keyboard => self.swaps(ui, Rect::from_min_max(cell(1).min, cell(2).max)),
+            let Some((c, r)) = cell else { continue };
+            let delay = if opening && at < 1.0 { 0.25 + 0.04 * k as f64 } else if self.slots[k].was.is_some() { out + 0.03 * k as f64 } else { 0.0 };
+            let e = motion::progress(now, at + delay, motion::fade(if opening { 0.2 } else { 0.18 }), motion::out_cubic);
+            if e < 1.0 {
+                ui.ctx().request_repaint();
+            }
+            let r2 = r.translate(vec2(0.0, motion::space(4.0) * (1.0 - e)));
+            let mut child = ui.new_child(UiBuilder::new().max_rect(r2).id_salt(("cell", k)));
+            child.set_clip_rect(rect);
+            child.set_opacity(e * dim);
+            self.draw_cell(&mut child, &c, r2, now);
+        }
+    }
+
+    fn draw_cell(&mut self, ui: &mut Ui, cell: &Cell, r: Rect, now: f64) {
+        match cell {
+            Cell::Head(title, sub) => {
+                let th = para(ui, r.left_top(), r.width(), title, semibold(T_TITLE), INK);
+                let sh = para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), sub, regular(T_BODY), INK2);
+                let at = Rect::from_min_size(r.min, vec2(r.width(), th + sh + 6.0));
+                a11y_text(ui, Id::unique("headline"), at, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
+            }
+            Cell::Inspector(sel) => self.inspector(ui, r, sel.clone(), now),
+            Cell::Clipboard => {
+                let th = para(ui, r.left_top(), r.width(), "Clipboard", semibold(T_TITLE), INK);
+                let text = "Copy on one computer, paste on another. It follows the pointer.";
+                para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), text, regular(T_BODY), INK2);
+                a11y_text(ui, Id::unique("clipboard"), r, Role::Label, &format!("Clipboard. {text}"), None);
+            }
+            Cell::Settings => self.settings(ui, r),
+            Cell::Swaps => self.swaps(ui, r),
         }
     }
 
     /// The selected computer: what it is, where it is, how fast it answers.
-    fn inspector(&mut self, ui: &mut Ui, c: Rect) {
-        let Some(status) = self.running().cloned() else {
-            para(ui, c.left_top(), c.width(), "Details of the selected computer show here once one·mk is running.", regular(12.5), INK2);
-            return;
-        };
-        let sel = self.selected_id();
-        let p = ui.painter().clone();
-        let chip = |label: &str, dot: Color32| {
-            let tw = text_width(ui, label, regular(12.0));
-            p.text(pos2(c.right(), c.top() + 9.0), Align2::RIGHT_CENTER, label, regular(12.0), INK2);
-            p.circle_filled(pos2(c.right() - tw - 9.0, c.top() + 9.5), 3.0, dot);
-            tw + 20.0
-        };
-        let row = |i: usize, key: &str, val: &str, mono_val: bool| {
-            let y = c.top() + 32.0 + i as f32 * 22.0;
-            p.text(pos2(c.left(), y), Align2::LEFT_TOP, key, regular(12.5), INK2);
-            p.text(pos2(c.right(), y), Align2::RIGHT_TOP, val, if mono_val { mono(12.5) } else { regular(12.5) }, INK);
-        };
-        let title = |name: &str, room: f32| {
-            let g = ui.painter().layout_no_wrap(name.into(), semibold(14.0), INK);
-            let fits = g.size().x <= c.width() - room;
-            let text = if fits { name.to_owned() } else { format!("{}…", name.chars().take(18).collect::<String>()) };
-            p.text(c.left_top(), Align2::LEFT_TOP, text, semibold(14.0), INK);
-        };
-        let Some(peer) = status.peers.iter().find(|p| Some(&p.id) == sel.as_ref()) else {
-            let room = chip("This computer", INK2);
-            title(&status.name, room);
+    fn inspector(&mut self, ui: &mut Ui, c: Rect, sel: Option<String>, now: f64) {
+        let Some(status) = self.running().cloned() else { return };
+        let Some(peer) = status.peers.iter().find(|p| Some(&p.id) == sel.as_ref()).cloned() else {
+            let room = chip(ui, c, "This computer", None);
+            title_row(ui, c, &status.name, room);
             let online = status.peers.iter().filter(|p| p.online).count();
-            row(0, "ID", &status.id, true);
-            row(1, "Paired", &match status.peers.len() {
+            let paired = match status.peers.len() {
                 0 => "None yet".to_owned(),
                 n => format!("{n}, {online} connected"),
-            }, false);
-            row(2, "System", os_name(match () {
-                _ if cfg!(target_os = "macos") => os::MACOS,
-                _ if cfg!(windows) => os::WINDOWS,
-                _ => os::LINUX,
-            }), false);
+            };
+            // No position here: the others are placed around this one.
+            info_row(ui, c, c.top() + 42.0, "ID", &status.id, true, 1.0);
+            info_row(ui, c, c.top() + 66.0, "Paired", &paired, false, 1.0);
+            info_row(ui, c, c.top() + 90.0, "System", os_name(me_os()), false, 1.0);
             return;
         };
-        let room = if peer.online { chip("Connected", SIGNAL) } else { chip("Offline", Color32::from_rgb(0x5A, 0x62, 0x6D)) };
-        title(&peer.name, room);
-        let side = *self.pending_side.get(&peer.id).unwrap_or(&peer.side);
-        let place = match side {
-            Side::Left => "Left of this one",
-            Side::Right => "Right of this one",
-            Side::Top => "Above this one",
-            Side::Bottom => "Below this one",
-        };
-        row(0, "Position", place, false);
-        match (self.latency.get(&peer.id), peer.online) {
-            (Some(l), true) => {
-                row(1, "Handoff", &format!("{:.2} ms", l.p50_us / 2000.0), true);
-                row(2, "Slowest 1%", &format!("{:.2} ms", l.p99_us / 2000.0), true);
+        let mut room = if peer.online { chip(ui, c, "Connected", Some(true)) } else { chip(ui, c, "Offline", Some(false)) };
+        // Measure again: a quiet icon button on the title row.
+        if peer.online && (self.latency.contains_key(&peer.id) || self.failed_measure.contains(&peer.id)) {
+            let busy = self.measuring.is_some();
+            let r = Rect::from_min_size(pos2(c.right() - room - 26.0, c.top() - 2.0), vec2(24.0, 24.0));
+            let spin = if self.measuring.as_ref() == Some(&peer.id) && !motion::reduced() {
+                ui.ctx().request_repaint();
+                (now * 5.0) as f32
+            } else {
+                0.0
+            };
+            let name = if busy { "Measuring…" } else { "Measure again" };
+            if widgets::icon_button(ui, r, Id::unique(("measure", &peer.id)), name, !busy, |pp, rr, col| widgets::draw_refresh(pp, rr, col, spin)).clicked() {
+                self.measure(&peer.id);
             }
-            (None, true) => {
-                row(1, "Handoff", "Measuring…", false);
-                // Measure each computer once, the first time it is shown.
-                if self.measuring.is_none() && !self.busy.contains(&Job::Measure) {
-                    let id = peer.id.clone();
-                    self.busy.push(Job::Measure);
-                    self.measure(&id);
-                }
-            }
-            (_, false) => row(1, "System", os_name(peer.os), false),
+            room += 32.0;
         }
-        if peer.online && self.latency.contains_key(&peer.id) && self.measuring.is_none() {
-            let label = "Measure again";
-            let lw = text_width(ui, label, regular(12.5));
-            if link(ui, pos2(c.right() - lw, c.top() + 32.0 + 3.0 * 22.0), Id::unique("measure"), label).clicked() {
-                let id = peer.id.clone();
-                self.measure(&id);
+        title_row(ui, c, &peer.name, room);
+
+        // Where it is: a control, so it can be set without a mouse.
+        let side = self.side_shown(&peer.id, peer.side);
+        let track = Rect::from_min_size(pos2(c.left(), c.top() + 28.0), vec2(c.width(), 26.0));
+        let labels: Vec<&str> = PLACES.iter().map(|(_, l)| *l).collect();
+        let pills = Pills {
+            id: Id::unique(("position", &peer.id)),
+            track,
+            cells: Pills::even(track, 4, 2.0),
+            labels: &labels,
+            names: PLACES.iter().map(|(_, l)| format!("Position of {}: {l}", peer.name)).collect(),
+            chosen: PLACES.iter().position(|(s, _)| *s == side).unwrap_or(0),
+            enabled: vec![true; 4],
+            role: Role::RadioButton,
+            font: if c.width() >= 230.0 { T_BODY } else { T_META },
+            radius: 6,
+        };
+        if let Some(k) = pills.show(ui, self.arrowed) {
+            self.choose_side(&peer.id, PLACES[k].0, true);
+        }
+
+        let (y0, y1) = (c.top() + 72.0, c.top() + 96.0);
+        if !peer.online {
+            info_row(ui, c, y0, "System", os_name(peer.os), false, 1.0);
+            return;
+        }
+        match self.latency.get(&peer.id) {
+            Some(m) => {
+                // New numbers count over from the old ones, in fixed-width digits.
+                let k = motion::progress(now, m.at, motion::fade(0.45), motion::out_cubic);
+                if k < 1.0 {
+                    ui.ctx().request_repaint();
+                }
+                let fade_in = if m.was.0 > 0.0 { 1.0 } else { motion::progress(now, m.at, 0.1, motion::linear) };
+                let p50 = scene::lerp(m.was.0, m.l.p50_us, k) / 2000.0;
+                let p99 = scene::lerp(m.was.1, m.l.p99_us, k) / 2000.0;
+                info_row(ui, c, y0, "Response time", &format!("{p50:.2} ms"), true, fade_in);
+                info_row(ui, c, y1, "Slowest 1 in 100", &format!("{p99:.2} ms"), true, fade_in);
+                let tip = Rect::from_min_max(pos2(c.left(), y0 - 10.0), pos2(c.right(), y0 + 10.0));
+                ui.interact(tip, Id::unique("response-tip"), Sense::hover())
+                    .on_hover_text("How long a mouse move takes to reach that computer: half the measured round trip.");
+            }
+            None if self.failed_measure.contains(&peer.id) => info_row(ui, c, y0, "Response time", "Not measured", false, 1.0),
+            None => {
+                info_row(ui, c, y0, "Response time", "Measuring…", false, 0.6);
+                // Measure each computer once, the first time it is shown.
+                if self.measuring.is_none() {
+                    self.measure(&peer.id);
+                }
             }
         }
     }
 
     /// Settings that apply to this computer, as a short list of rows.
     fn settings(&mut self, ui: &mut Ui, c: Rect) {
-        let row_h = 34.0;
-        let rows = [c.top() - 7.0, c.top() - 7.0 + row_h];
+        let row_h = 36.0;
+        let top = c.top() - 8.0;
         let on = self.autostart.unwrap_or(false);
-        let busy = self.busy.contains(&Job::Autostart);
-        let r0 = Rect::from_min_size(pos2(c.left(), rows[0]), vec2(c.width(), row_h));
-        if switch(ui, r0, Id::unique("autostart"), "Start at login", on, self.autostart.is_some() && !busy) {
-            self.busy.push(Job::Autostart);
+        let busy = self.busy.iter().any(|j| matches!(j, Job::Autostart(_)));
+        let r0 = Rect::from_min_size(pos2(c.left(), top), vec2(c.width(), row_h));
+        let r = switch(ui, r0, Id::unique("autostart"), "Start at login", on, self.autostart.is_some() && !busy);
+        if self.autostart.is_none() {
+            r.on_hover_text("Checking…");
+        } else if r.clicked() {
+            // Shown at once; the link reports what really happened.
+            self.busy.push(Job::Autostart(!on));
             self.autostart = Some(!on);
             self.link.set_autostart(!on);
         }
-        ui.painter().hline(c.x_range(), rows[1], Stroke::new(1.0, LINE));
-        let r1 = Rect::from_min_size(pos2(c.left(), rows[1]), vec2(c.width(), row_h));
-        ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(13.0), INK);
+        ui.painter().hline(c.x_range(), top + row_h, Stroke::new(1.0, LINE));
+        let r1 = Rect::from_min_size(pos2(c.left(), top + row_h), vec2(c.width(), row_h));
+        ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), INK);
         let label = "Open";
-        let bw = button_width(ui, label) - 6.0;
-        let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 13.0), vec2(bw, 26.0));
-        if button(ui, b, Id::unique("open-dl"), label, false).clicked() {
+        let bw = button_width(ui, label) - 4.0;
+        let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 14.0), vec2(bw, 28.0));
+        let busy = self.busy.contains(&Job::Open);
+        if button(ui, b, Id::unique("open-dl"), label, Look::Quiet, !busy, Some("Open received files folder")).clicked() {
+            self.busy.push(Job::Open);
             self.link.open_downloads();
-        }
-        if let Some(Job::Send { to, count }) = self.busy.iter().find(|j| matches!(j, Job::Send { .. })) {
-            let what = if *count == 1 { "1 item".to_owned() } else { format!("{count} items") };
-            ui.painter().hline(c.x_range(), rows[1] + row_h, Stroke::new(1.0, LINE));
-            ui.painter().text(pos2(c.left(), rows[1] + row_h + 17.0), Align2::LEFT_CENTER, format!("Sending {what} to {to}…"), regular(12.5), SIGNAL);
         }
     }
 
+    /// Ctrl and Cmd for every paired computer: a list that scrolls when
+    /// there are more than fit.
     fn swaps(&mut self, ui: &mut Ui, c: Rect) {
         let peers: Vec<_> = self.running().map(|s| s.peers.clone()).unwrap_or_default();
         if peers.is_empty() {
-            ui.painter().text(c.left_top(), Align2::LEFT_TOP, "Pair a computer to choose this for it.", regular(12.5), INK2);
+            para(ui, c.left_top(), c.width(), "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), INK2);
             return;
         }
-        for (i, peer) in peers.iter().take(4).enumerate() {
-            let y = c.top() + i as f32 * 26.0;
-            let p = ui.painter();
-            p.text(pos2(c.left(), y + 11.0), Align2::LEFT_CENTER, &peer.name, regular(13.0), INK);
-            let nw = text_width(ui, &peer.name, regular(13.0));
-            ui.painter().text(pos2(c.left() + nw + 8.0, y + 11.0), Align2::LEFT_CENTER, os_name(peer.os), regular(12.0), INK2);
-            let opts = [("auto", "Auto"), ("on", "Swap"), ("off", "Don't")];
-            let seg_w = 58.0;
-            let bar = Rect::from_min_size(pos2(c.right() - seg_w * 3.0 - 6.0, y), vec2(seg_w * 3.0 + 6.0, 22.0));
-            ui.painter().rect(bar, CornerRadius::same(7), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
-            let sel = opts.iter().position(|(v, _)| *v == peer.swap).unwrap_or(0);
-            let ctx = ui.ctx().clone();
-            let x = ctx.animate_value_with_time(Id::unique(("swap-x", &peer.id)), bar.left() + 3.0 + sel as f32 * seg_w, 0.3);
-            ui.painter().rect_filled(Rect::from_min_size(pos2(x, bar.top() + 2.0), vec2(seg_w, 18.0)), CornerRadius::same(5), Color32::from_rgb(0x26, 0x2C, 0x36));
-            for (k, (val, label)) in opts.iter().enumerate() {
-                let r = Rect::from_min_size(pos2(bar.left() + 3.0 + k as f32 * seg_w, bar.top() + 2.0), vec2(seg_w, 18.0));
-                let resp = ui.interact(r, Id::unique(("swap", &peer.id, k)), Sense::click());
-                let col = if k == sel { INK } else if resp.hovered() { Color32::from_rgb(0xC4, 0xCA, 0xD2) } else { INK2 };
-                ui.painter().text(r.center(), Align2::CENTER_CENTER, *label, regular(12.0), col);
-                if resp.clicked() && k != sel {
-                    self.link.set_swap(&peer.id, val);
+        let arrowed = self.arrowed;
+        let mut child = ui.new_child(UiBuilder::new().max_rect(c.expand2(vec2(4.0, 8.0))));
+        let mut changes = vec![];
+        egui::ScrollArea::vertical().id_salt("swaps").auto_shrink([false, false]).show(&mut child, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for peer in &peers {
+                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
+                let row = row.shrink2(vec2(4.0, 0.0));
+                let p = ui.painter().clone();
+                let seg_w = 288.0f32.min(row.width() * 0.62);
+                let seg = Rect::from_min_size(pos2(row.right() - seg_w, row.center().y - 14.0), vec2(seg_w, 28.0));
+                let os_label = os_name(peer.os);
+                let ow = text_width(ui, os_label, regular(T_META));
+                let name = fit(&p, &peer.name, &regular(T_BODY), seg.left() - row.left() - ow - 20.0);
+                let nw = text_width(ui, &name, regular(T_BODY));
+                p.text(pos2(row.left(), row.center().y), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
+                p.text(pos2(row.left() + nw + 8.0, row.center().y), Align2::LEFT_CENTER, os_label, regular(T_META), INK2);
+                if name != peer.name {
+                    ui.interact(Rect::from_min_max(row.min, pos2(row.left() + nw, row.max.y)), Id::unique(("swap-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
+                }
+                let current = self.pending_swap.get(&peer.id).unwrap_or(&peer.swap);
+                let labels: Vec<&str> = SWAPS.iter().map(|(_, l)| *l).collect();
+                let pills = Pills {
+                    id: Id::unique(("swap", &peer.id)),
+                    track: seg,
+                    cells: Pills::even(seg, 3, 2.0),
+                    labels: &labels,
+                    names: SWAPS.iter().map(|(_, l)| format!("Ctrl and Cmd for {}: {l}", peer.name)).collect(),
+                    chosen: SWAPS.iter().position(|(v, _)| v == current).unwrap_or(0),
+                    enabled: vec![true; 3],
+                    role: Role::RadioButton,
+                    font: if seg.width() >= 270.0 { T_BODY } else { T_META },
+                    radius: 6,
+                };
+                if let Some(k) = pills.show(ui, arrowed) {
+                    changes.push((peer.id.clone(), peer.name.clone(), SWAPS[k].0));
                 }
             }
+        });
+        for (id, name, val) in changes {
+            self.pending_swap.insert(id.clone(), val.to_owned());
+            self.busy.push(Job::Swap { id: id.clone(), name: name.clone(), swap: val.to_owned() });
+            self.link.set_swap(&id, &name, val);
+            self.sync_scene();
         }
     }
 
-    // ---------- the pairing sheet ----------
+    // ---------- the sheet ----------
+
+    /// What the sheet shows now: pairing, or where dropped files go.
+    fn sheet_view(&self) -> Option<SheetView> {
+        if let Some((paths, at)) = &self.pending_drop {
+            let mut buttons: Vec<(String, Look, Act)> = vec![("Cancel".into(), Look::Quiet, Act::Close)];
+            for i in self.online_targets() {
+                let d = &self.scene.devices[i];
+                buttons.push((d.name.clone(), Look::Quiet, Act::Send(d.id.clone())));
+            }
+            return Some(SheetView {
+                title: format!("Send {} to which computer?", items(paths.len())),
+                sub: "Couldn't tell which computer you dropped them on.".into(),
+                code: None,
+                check: None,
+                buttons,
+                focus: 1,
+                appear: *at,
+                key: "drop".into(),
+            });
+        }
+        let pair = self.pairing.as_ref()?;
+        let quiet = |l: &str, a: Act| (l.to_owned(), Look::Quiet, a);
+        let (title, sub, buttons, focus): (String, String, Vec<(String, Look, Act)>, usize) = match &pair.step {
+            Step::Searching { .. } | Step::Hint => {
+                let me = if pair.me.is_empty() { String::new() } else { format!(" This one shows up there as “{}”.", pair.me) };
+                let mut sub = format!("On the other computer, open one·mk and choose Pair a computer.{me}");
+                if let Some(why) = &pair.retry {
+                    sub += &format!("\n\nThat attempt didn't finish: {why}. Still looking.");
+                } else if pair.hint {
+                    sub += "\n\nNothing found yet. Check that both computers are on the same network (not a guest network) and that the firewall allows one·mk.";
+                }
+                ("Looking for another computer".into(), sub, vec![quiet("Cancel", Act::Close)], 0)
+            }
+            Step::Found => ("Found a computer".into(), "Connecting to it…".into(), vec![quiet("Cancel", Act::Close)], 0),
+            Step::Code { name, .. } => (
+                format!("Found “{name}”"),
+                "Check that its screen shows the same code, then confirm.".into(),
+                vec![quiet("They don't match", Act::Decline), ("Codes match, pair".into(), Look::Primary, Act::Confirm)],
+                0,
+            ),
+            Step::Waiting { name } => (
+                format!("Waiting for {name} to confirm"),
+                format!("Confirm the same code on {name}. This stops waiting after 2 minutes."),
+                vec![quiet("Cancel", Act::Close)],
+                0,
+            ),
+            Step::Ended(why) => ("Not paired".into(), why.clone(), vec![quiet("Close", Act::Close), ("Try again".into(), Look::Primary, Act::Retry)], 1),
+            Step::Paired { name, .. } => {
+                let side = self.running().and_then(|s| s.peers.iter().find(|p| &p.name == name)).map(|p| edge_word(p.side));
+                let sub = match (self.running(), side) {
+                    (None, _) => "Start one·mk to connect.".into(),
+                    (_, Some(e)) => format!("Move the pointer off the {e} edge to cross over."),
+                    _ => "It joins the desk in a moment.".into(),
+                };
+                (format!("Paired with {name}"), sub, vec![], 0)
+            }
+            Step::Retry(_) => return None,
+        };
+        let code = match &pair.step {
+            Step::Code { code, .. } => Some((code.clone(), pair.since)),
+            _ => None,
+        };
+        let check = matches!(pair.step, Step::Paired { .. }).then_some(pair.since);
+        let key = format!("{:?}", std::mem::discriminant(&pair.step));
+        Some(SheetView { title, sub, code, check, buttons, focus, appear: pair.opened + motion::space(0.4) as f64, key })
+    }
 
     fn sheet(&mut self, ui: &mut Ui, desk: Rect, now: f64) {
-        let open = ui.ctx().animate_bool_with_time(Id::unique("sheet"), self.pairing.is_some(), 0.3);
-        let Some(pair) = &self.pairing else { return };
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.pairing = None;
+        let (view, leaving) = match self.sheet_view() {
+            Some(v) => {
+                self.sheet_was = Some((v.clone(), now));
+                (v, None)
+            }
+            None => match &self.sheet_was {
+                Some((v, t)) if now - t < 0.16 => (v.clone(), Some(*t)),
+                _ => {
+                    self.sheet_was = None;
+                    self.sheet_top = None;
+                    self.sheet_key.clear();
+                    return;
+                }
+            },
+        };
+        if leaving.is_none() && self.keys_on_sheet(ui) {
             return;
         }
-        let width = 380.0;
+        let width = 380.0f32.min(desk.width() - 40.0);
+        let x = desk.center().x - width / 2.0 + 18.0;
         let inner = width - 36.0;
-        let (title, sub): (String, String) = match &pair.step {
-            Step::Searching { .. } | Step::Hint => {
-                let me = if pair.me.is_empty() { String::new() } else { format!(" This one appears as “{}”.", pair.me) };
-                let mut sub = format!("On the other computer, open one·mk and choose Pair a device.{me}");
-                if let Some(why) = &pair.retry {
-                    sub += &format!("\n\nThe last try didn't finish ({why}). Still looking.");
-                } else if pair.hint {
-                    sub += "\n\nNothing yet. Both computers need to be on the same network, and a firewall must allow one·mk.";
-                }
-                ("Looking for another computer".into(), sub)
-            }
-            Step::Found => ("Found a computer".into(), "Agreeing on a code…".into()),
-            Step::Code { name, .. } => (format!("Found “{name}”"), "Check that its screen shows the same code, then confirm.".into()),
-            Step::Waiting { name } => (format!("Waiting for {name}"), "Confirm the code on the other computer too.".into()),
-            Step::Ended(why) => ("Not paired".into(), why.clone()),
-            Step::Paired { .. } | Step::Retry(_) => (String::new(), String::new()),
+        let sub_g = {
+            let mut job = egui::text::LayoutJob::simple(view.sub.clone(), regular(T_BODY), INK2, inner);
+            job.sections[0].format.line_height = Some((T_BODY * LEADING).round());
+            ui.painter().layout_job(job)
         };
-        let sub_g = ui.painter().layout(sub.clone(), regular(12.5), INK2, inner);
-        let code_h = if matches!(pair.step, Step::Code { .. }) { 56.0 } else { 0.0 };
-        let height = 16.0 + 22.0 + sub_g.size().y + code_h + 14.0 + 32.0 + 16.0;
-        let lift = 16.0 * (1.0 - scene::ease_out(open));
-        let rect = Rect::from_min_size(pos2(desk.center().x - width / 2.0, desk.bottom() - height - 20.0 + lift), vec2(width, height));
-        let p = ui.painter().clone().with_layer_id(egui::LayerId::new(egui::Order::Foreground, Id::unique("sheet-layer")));
-        let a = open;
-        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: Color32::from_black_alpha((115.0 * a) as u8) }.as_shape(rect, CornerRadius::same(14)));
-        p.rect(rect, CornerRadius::same(14), RAISED.gamma_multiply(a), Stroke::new(1.0, LINE.gamma_multiply(a)), StrokeKind::Inside);
-        let mut y = rect.top() + 16.0;
-        let x = rect.left() + 18.0;
-        p.text(pos2(x, y), Align2::LEFT_TOP, &title, semibold(15.0), INK.gamma_multiply(a));
-        y += 22.0;
-        p.galley(pos2(x, y), sub_g.clone(), INK2.gamma_multiply(a));
-        y += sub_g.size().y;
-        if let Step::Code { code, .. } = &pair.step {
-            // Digits arrive one by one: easy to compare in the same rhythm on both screens.
+        let code_h = if view.code.is_some() { 60.0 } else { 0.0 };
+        // Buttons in a row if they fit, else one under another with the
+        // way out last.
+        let row = view.buttons.iter().map(|(l, _, _)| button_width(ui, l) + 8.0).sum::<f32>() - 8.0 <= inner;
+        let mut view = view;
+        if !row && view.buttons.first().is_some_and(|b| b.2 == Act::Close) {
+            view.buttons.rotate_left(1);
+            view.focus = view.focus.saturating_sub(1);
+        }
+        let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
+        let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { widths.len() as f32 * 42.0 - 8.0 };
+        let title_h = 22.0;
+        let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0;
+        let rect = Rect::from_min_size(pos2(x - 18.0, desk.bottom() - height - 20.0), vec2(width, height));
+        self.sheet_top = Some(rect.top());
+
+        // In: rises 16 points and grows from 98%; out: fades and drops 8.
+        let (o, dy, s) = match leaving {
+            None => {
+                let t = motion::progress(now, view.appear, motion::space(0.32), motion::out_expo);
+                let o = motion::progress(now, view.appear, motion::fade(0.2), motion::linear);
+                (o, motion::space(16.0) * (1.0 - t), lerp_scale(t))
+            }
+            Some(t0) => {
+                let t = motion::progress(now, t0, motion::fade(0.16), motion::linear);
+                (1.0 - t, motion::space(8.0) * t, 1.0)
+            }
+        };
+        if o < 1.0 || dy > 0.0 {
+            ui.ctx().request_repaint();
+        }
+        let layer = egui::LayerId::new(egui::Order::Foreground, Id::unique("sheet-layer"));
+        let c = rect.center();
+        ui.ctx().set_transform_layer(layer, egui::emath::TSTransform::new(c.to_vec2() * (1.0 - s) + vec2(0.0, dy), s));
+        let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
+        child.set_opacity(o);
+        if leaving.is_some() || o < 0.5 {
+            child.disable();
+        }
+        // The sheet is modal: what is behind it doesn't get its clicks.
+        child.interact(rect, Id::unique("sheet-body"), Sense::CLICK | Sense::DRAG);
+        let p = child.painter().clone();
+        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: Color32::from_black_alpha(115) }.as_shape(rect, CornerRadius::same(14)));
+        p.rect(rect, CornerRadius::same(14), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        let mut y = rect.top() + 18.0;
+        let mut tx = x;
+        if let Some(t0) = view.check {
+            // A tick drawn in, then it holds.
+            let k = motion::progress(now, t0, motion::fade(0.24), motion::out_cubic);
+            widgets::draw_check(&p, pos2(x + 8.0, y + title_h / 2.0), 16.0, INK, k);
+            tx += 26.0;
+            if k < 1.0 {
+                ui.ctx().request_repaint();
+            }
+        }
+        let title = fit(&p, &view.title, &semibold(T_TITLE), inner - (tx - x));
+        p.text(pos2(tx, y + title_h / 2.0), Align2::LEFT_CENTER, &title, semibold(T_TITLE), INK);
+        y += title_h + 4.0;
+        let sub_h = sub_g.size().y;
+        p.galley(pos2(x, y), sub_g, INK2);
+        y += sub_h;
+        a11y_text(&child, Id::unique("sheet-dialog"), rect, Role::Dialog, &format!("{}. {}", view.title, view.sub), Some(Live::Polite));
+        if let Some((code, since)) = &view.code {
+            // Digits rise in one by one, in the same rhythm as the other screen.
+            let font = mono_medium(28.0);
+            let adv = text_width(&child, "0", font.clone()) + 3.0;
             let mut cx = x;
             for (i, ch) in code.chars().enumerate() {
                 if i == 3 {
-                    cx += 14.0;
+                    cx += 12.0;
                 }
-                let t = (((now - pair.since - 0.3 - i as f64 * 0.07) / 0.45) as f32).clamp(0.0, 1.0);
-                let e = scene::ease_out(t);
-                p.text(pos2(cx, y + 12.0 + 10.0 * (1.0 - e)), Align2::LEFT_TOP, ch.to_string(), mono(30.0), INK.gamma_multiply(e * a));
-                cx += 24.0;
+                let e = scene::digit_t(i, *since, now);
+                p.text(pos2(cx, y + 14.0 + motion::space(8.0) * (1.0 - e)), Align2::LEFT_TOP, ch, font.clone(), INK.gamma_multiply(e));
+                cx += adv;
             }
-            if now - pair.since < 1.5 {
+            if now - since < 1.2 {
                 ui.ctx().request_repaint();
             }
+            let digits: Vec<String> = code.chars().map(String::from).collect();
+            let spoken = if digits.len() == 6 { format!("{}, {}", digits[..3].join(" "), digits[3..].join(" ")) } else { digits.join(" ") };
+            a11y_text(&child, Id::unique("sheet-code"), Rect::from_min_size(pos2(x, y), vec2(inner, code_h)), Role::Label, &format!("Pairing code {spoken}"), None);
             y += code_h;
         }
-        y += 14.0;
-        // Buttons, right-aligned.
-        let buttons: Vec<(&str, bool, u8)> = match &pair.step {
-            Step::Code { .. } => vec![("They don't match", false, 1), ("Codes match, pair", true, 2)],
-            Step::Ended(_) => vec![("Close", false, 0), ("Try again", true, 3)],
-            _ => vec![("Cancel", false, 0)],
-        };
-        let mut bx = rect.right() - 18.0;
-        let mut clicked = None;
-        let child = &mut ui.new_child(egui::UiBuilder::new().layer_id(p.layer_id()).max_rect(rect));
-        for (label, primary, what) in buttons.iter().rev() {
-            let bw = button_width(child, label);
-            bx -= bw;
-            let r = Rect::from_min_size(pos2(bx, y), vec2(bw, 32.0));
-            if button(child, r, Id::unique(("sheet-btn", *what)), label, *primary).clicked() {
-                clicked = Some(*what);
-            }
-            bx -= 8.0;
+        if view.buttons.is_empty() {
+            return;
         }
-        match clicked {
-            Some(0) => self.pairing = None,
-            Some(1) => {
+        y += 18.0;
+        let mut clicked = None;
+        let mut bx = rect.right() - 18.0;
+        for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate().rev() {
+            let r = if row {
+                bx -= w;
+                let r = Rect::from_min_size(pos2(bx, y), vec2(*w, 34.0));
+                bx -= 8.0;
+                r
+            } else {
+                Rect::from_min_size(pos2(x, y + k as f32 * 42.0), vec2(inner, 34.0))
+            };
+            let shown = fit(&p, label, &semibold(T_BODY), r.width() - 28.0);
+            let id = Id::unique(("sheet-btn", &view.key, k));
+            let resp = button(&mut child, r, id, &shown, *look, true, Some(label));
+            if k == view.focus && self.sheet_key != view.key && o >= 0.5 {
+                resp.request_focus();
+                self.sheet_key = view.key.clone();
+            }
+            if resp.clicked() {
+                clicked = Some(act.clone());
+            }
+        }
+        if let Some(act) = clicked {
+            self.sheet_act(act, now);
+        }
+    }
+
+    /// Esc on the sheet. Comparing codes, it means "they don't match", so
+    /// the other side hears a no; once confirmed, it waits for Cancel.
+    /// Returns true when the sheet went away.
+    fn keys_on_sheet(&mut self, ui: &Ui) -> bool {
+        let act = match self.pairing.as_ref().map(|p| &p.step) {
+            Some(Step::Waiting { .. } | Step::Paired { .. }) => return false,
+            Some(Step::Code { .. }) => Act::Decline,
+            _ => Act::Close,
+        };
+        if !ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            return false;
+        }
+        self.sheet_act(act, self.now);
+        !self.sheet_open()
+    }
+
+    fn sheet_act(&mut self, act: Act, now: f64) {
+        match act {
+            Act::Close => {
+                self.pairing = None;
+                self.pending_drop = None;
+            }
+            Act::Decline => {
                 if let Some(pr) = &mut self.pairing
                     && let Some(proc) = &mut pr.proc
                 {
                     proc.answer(false);
                 }
             }
-            Some(2) => {
+            Act::Confirm => {
                 if let Some(pr) = &mut self.pairing {
                     if let Some(proc) = &mut pr.proc {
                         proc.answer(true);
@@ -1074,49 +1670,132 @@ impl App {
                     }
                 }
             }
-            Some(3) => {
+            Act::Retry => {
                 self.pairing = None;
                 self.start_pairing(now);
+                // The desk has already made room: no need to wait again.
+                if let Some(p) = &mut self.pairing {
+                    p.opened = now - 0.4;
+                }
             }
-            _ => {}
+            Act::Send(id) => {
+                if let (Some((paths, _)), Some(i)) = (self.pending_drop.take(), self.scene.index(&id)) {
+                    self.send_to(i, paths);
+                }
+            }
         }
     }
+
+    // ---------- the toast ----------
 
     fn toast_view(&mut self, ui: &mut Ui, desk: Rect, now: f64) {
         let Some(t) = &self.toast else { return };
         let age = (now - t.at) as f32;
-        let life = if t.error { 6.0 } else { 3.5 };
-        if age > life {
+        let (enter, exit) = (motion::fade(0.22), motion::fade(0.16));
+        if age > t.life {
             self.toast = None;
             return;
         }
-        ui.ctx().request_repaint();
-        let a = scene::ease_out(age / 0.25).min(((life - age) / 0.4).clamp(0.0, 1.0));
-        let g = ui.painter().layout(t.text.clone(), regular(13.0), INK, 520.0);
-        let size = g.size() + vec2(40.0, 18.0);
-        let rect = Rect::from_center_size(pos2(desk.center().x, desk.top() + TOP_H + 14.0 + size.y / 2.0 - 8.0 * (1.0 - a)), size);
-        let p = ui.painter().clone().with_layer_id(egui::LayerId::new(egui::Order::Tooltip, Id::unique("toast")));
-        p.rect(rect, CornerRadius::same(10), RAISED.gamma_multiply(a), Stroke::new(1.0, LINE.gamma_multiply(a)), StrokeKind::Inside);
-        let dot = if t.error { Color32::from_rgb(0xFF, 0x6B, 0x5E) } else { SIGNAL };
-        p.circle_filled(pos2(rect.left() + 16.0, rect.center().y), 3.5, dot.gamma_multiply(a));
-        p.galley(pos2(rect.left() + 28.0, rect.top() + 9.0), g, INK.gamma_multiply(a));
+        let a_in = motion::out_expo(age / enter);
+        let a = a_in.min(((t.life - age) / exit).clamp(0.0, 1.0));
+        let text_w = 520.0f32.min(desk.width() - 120.0);
+        let g = ui.painter().layout(t.text.clone(), regular(T_BODY), INK, text_w);
+        let d = t.detail.as_ref().map(|d| ui.painter().layout(d.clone(), regular(T_META), INK2, text_w));
+        let h = g.size().y + d.as_ref().map_or(0.0, |d| d.size().y + 4.0);
+        let w = g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x));
+        let size = vec2(w + 46.0, h + 20.0);
+        let y = desk.top() + TOP_H + 10.0 + size.y / 2.0 - motion::space(8.0) * (1.0 - a_in);
+        let rect = Rect::from_center_size(pos2(desk.center().x, y), size);
+        let layer = egui::LayerId::new(egui::Order::Tooltip, Id::unique("toast"));
+        let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
+        child.set_opacity(a);
+        let resp = child.interact(rect, Id::unique("toast-body"), Sense::CLICK);
+        let p = child.painter().clone();
+        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(10)));
+        p.rect(rect, CornerRadius::same(10), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        let dot = if t.error { ERROR } else { INK };
+        let gh = g.size().y;
+        p.circle_filled(pos2(rect.left() + 17.0, rect.top() + 10.0 + 9.0), 3.5, dot);
+        p.galley(pos2(rect.left() + 30.0, rect.top() + 10.0), g, INK);
+        if let Some(d) = d {
+            p.galley(pos2(rect.left() + 30.0, rect.top() + 14.0 + gh), d, INK2);
+        }
+        let (role, live) = if t.error { (Role::Alert, Live::Assertive) } else { (Role::Status, Live::Polite) };
+        let label = format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}")));
+        a11y_text(&child, Id::unique("toast-node"), rect, role, &label, Some(live));
+        let dismiss = resp.clicked() || (t.error && !self.sheet_open() && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)));
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        let t = self.toast.as_mut().expect("shown above");
+        if dismiss && age < t.life - exit {
+            t.life = age + exit;
+        } else if resp.hovered() && age > enter && age < t.life - exit {
+            // Held while the pointer is on it, so it can be read.
+            t.at = now - enter as f64;
+        }
+        // Frames only while it moves; while it holds, one wake-up to leave.
+        let age = (now - t.at) as f32;
+        if age < enter || age > t.life - exit {
+            ui.ctx().request_repaint();
+        } else {
+            ui.ctx().request_repaint_after_secs(t.life - exit - age);
+        }
     }
+
+    // ---------- keys ----------
+
+    /// Ctrl+1, 2, 3 switch tabs (Cmd on a Mac).
+    fn shortcuts(&mut self, ui: &Ui) {
+        if widgets::locked(ui) {
+            return;
+        }
+        let off = self.off();
+        for (k, key) in [Key::Num1, Key::Num2, Key::Num3].into_iter().enumerate() {
+            if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || k == 0) {
+                self.set_tab(TABS[k].0);
+            }
+        }
+    }
+}
+
+/// The sheet grows from 98% as it arrives.
+fn lerp_scale(t: f32) -> f32 {
+    if motion::reduced() { 1.0 } else { 0.98 + 0.02 * t }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let now = ui.input(|i| i.time);
-        #[cfg(debug_assertions)]
-        if self.pairing.is_none() && now < 0.5 && self.status.is_some() && std::env::var_os("ONE_MK_APP_PAIR").is_some() {
-            self.start_pairing(now);
+        self.now = now;
+        if self.size.x > 0.0 {
+            // Some desktops (GNOME on Wayland) ignore the size asked for at
+            // start; asking again once the window is mapped works.
+            if (ui.ctx().content_rect().size() - self.size).length() < 2.0 || now > 1.0 {
+                self.size = egui::Vec2::ZERO;
+            } else if now > 0.15 {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(self.size));
+                ui.ctx().request_repaint_after_secs(0.1);
+            } else {
+                ui.ctx().request_repaint_after_secs(0.05);
+            }
         }
         #[cfg(debug_assertions)]
-        match std::env::var("ONE_MK_APP_TAB").as_deref() {
-            Ok("files") => self.tab = Tab::Files,
-            Ok("keyboard") => self.tab = Tab::Keyboard,
-            _ => {}
+        debug::hooks(self, now);
+        widgets::track_focus_mode(ui.ctx());
+        self.arrowed = self.arrow_down;
+        // Only along a row: Up and Down move between rows without choosing.
+        self.arrow_down = ui.input(|i| i.key_pressed(Key::ArrowLeft) || i.key_pressed(Key::ArrowRight));
+        if self.arrow_down {
+            // Focus moves at the end of this frame; the choice is made on the next.
+            ui.ctx().request_repaint();
         }
         self.handle_events(now);
+        if self.off() && self.tab != Tab::Desk {
+            self.set_tab(Tab::Desk);
+        }
+        widgets::set_locked(ui.ctx(), self.sheet_open());
+        self.shortcuts(ui);
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, GROUND);
         let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - PANEL_H), full.max);
@@ -1125,10 +1804,13 @@ impl eframe::App for App {
         self.desk(ui, desk, now);
         self.top_bar(ui, top, now);
         self.panel(ui, panel, now);
-        self.sheet(ui, desk, now);
+        widgets::set_locked(ui.ctx(), false);
+        // The sheet sits over the panel, leaving the desk room to show
+        // what is being paired.
+        self.sheet(ui, full, now);
         self.toast_view(ui, desk, now);
         #[cfg(debug_assertions)]
-        shot::maybe(ui.ctx(), now);
+        debug::shot(ui.ctx(), now);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -1136,21 +1818,95 @@ impl eframe::App for App {
     }
 }
 
-/// Development aid: `ONE_MK_APP_SHOT=file.ppm` saves the window after
-/// `ONE_MK_APP_SHOT_AFTER` seconds (default 3) and quits.
+/// Development aids for screenshots, in debug builds only:
+/// - `ONE_MK_APP_SHOT=file.ppm` saves the window after
+///   `ONE_MK_APP_SHOT_AFTER` seconds (default 3) and quits;
+/// - `ONE_MK_APP_PAIR=1` starts pairing; `ONE_MK_APP_TAB=files|keyboard`
+///   opens a tab; `ONE_MK_APP_SELECT=name` selects a computer (`me`: this one);
+/// - `ONE_MK_APP_DROP=n` drops n files where it's unclear who gets them;
+/// - `ONE_MK_APP_DRAG=1` carries the first other computer across this one;
+/// - `ONE_MK_APP_FOCUS=1` puts the keyboard on the position control;
+/// - `ONE_MK_APP_TOAST=1` shows an error toast; `ONE_MK_APP_AUTOSTART=1`
+///   shows start at login as on;
+/// - `ONE_MK_APP_CONFIRM=1` says the codes match a second after they
+///   show, and keeps the "paired" sheet up.
+/// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(debug_assertions)]
-mod shot {
+mod debug {
+    use super::*;
     use std::io::Write;
 
-    pub fn maybe(ctx: &egui::Context, now: f64) {
+    fn var(name: &str) -> Option<String> {
+        std::env::var(name).ok().filter(|v| !v.is_empty())
+    }
+
+    fn once(ctx: &egui::Context, key: &str) -> bool {
+        let id = Id::unique(("debug-once", key));
+        let done = ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
+        ctx.data_mut(|d| d.insert_temp(id, true));
+        !done
+    }
+
+    pub fn hooks(app: &mut App, now: f64) {
+        let ctx = app.ctx.clone();
+        let ready = app.running().is_some();
+        if app.status.is_some() && var("ONE_MK_APP_PAIR").is_some() && once(&ctx, "pair") {
+            app.start_pairing(now);
+        }
+        if ready && let Some(name) = var("ONE_MK_APP_SELECT") {
+            let id = if name == "me" { Some(name) } else { app.running().and_then(|s| s.peers.iter().find(|p| p.name == name)).map(|p| p.id.clone()) };
+            if let Some(id) = id
+                && once(&ctx, "select")
+            {
+                app.select(id);
+            }
+        }
+        if ready && now > 1.0 && let Some(n) = var("ONE_MK_APP_DROP").and_then(|n| n.parse::<usize>().ok()) && once(&ctx, "drop") {
+            app.pending_drop = Some(((0..n).map(|i| PathBuf::from(format!("/tmp/file{i}"))).collect(), now));
+        }
+        if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
+            app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("one-mk didn't answer within 3 seconds".into()), now);
+        }
+        if ready && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
+            ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
+            if let Some(id) = app.selected_id() {
+                ctx.memory_mut(|m| m.request_focus(Id::unique(("position", &id)).with(1usize)));
+            }
+        }
+        if var("ONE_MK_APP_AUTOSTART").is_some() {
+            app.autostart = Some(true);
+        }
+        if var("ONE_MK_APP_CONFIRM").is_some()
+            && app.pairing.as_ref().is_some_and(|p| matches!(p.step, Step::Code { .. }) && now - p.since > 1.2)
+        {
+            app.sheet_act(Act::Confirm, now);
+        }
+        // A drag: pick up the first other computer and carry it across.
+        if ready && var("ONE_MK_APP_DRAG").is_some() && app.scene.devices.len() > 1 && now > 1.5 {
+            let i = 1;
+            if once(&ctx, "drag") {
+                let d = &mut app.scene.devices[i];
+                d.lift.go(2.5, now, 0.12, motion::out_cubic);
+                d.pop.go(1.02, now, 0.12, motion::out_cubic);
+                app.drag = Some(Drag::Device { i, start: Pos2::ZERO, x0: d.pos.x });
+            }
+            if let Some(Drag::Device { x0, .. }) = app.drag {
+                let t = ((now - 1.5) / 1.5).min(1.0) as f32;
+                app.scene.devices[i].pos.x = x0 + t * 150.0;
+                app.make_room(i);
+            }
+        }
+    }
+
+    pub fn shot(ctx: &egui::Context, now: f64) {
         let Some(path) = std::env::var_os("ONE_MK_APP_SHOT") else { return };
         let after: f64 = std::env::var("ONE_MK_APP_SHOT_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0);
-        let asked = ctx.data(|d| d.get_temp::<bool>(egui::Id::unique("shot-asked")).unwrap_or(false));
+        let asked = ctx.data(|d| d.get_temp::<bool>(Id::unique("shot-asked")).unwrap_or(false));
         ctx.request_repaint();
         if now < after || asked {
             return;
         }
-        ctx.data_mut(|d| d.insert_temp(egui::Id::unique("shot-asked"), true));
+        ctx.data_mut(|d| d.insert_temp(Id::unique("shot-asked"), true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |img| {
             let mut f = std::fs::File::create(&path).expect("shot file");
             let _ = writeln!(f, "P6 {} {} 255", img.size[0], img.size[1]);
@@ -1175,9 +1931,17 @@ mod tests {
     }
 
     #[test]
-    fn switches_overshoot_then_settle() {
-        assert_eq!(back_out(0.0), 0.0);
-        assert!((back_out(1.0) - 1.0).abs() < 1e-6);
-        assert!((0..100).map(|i| back_out(i as f32 / 100.0)).any(|x| x > 1.0));
+    fn below_stands_beside_this_computer_not_in_front_of_it() {
+        let s = slots(29.0, &[("b".into(), Side::Bottom, 29.0)]);
+        assert!(s["b"].0.z > 0.0, "in front");
+        assert!(s["b"].0.x.abs() > 20.0, "but to one side");
+    }
+
+    #[test]
+    fn sentences_name_the_side() {
+        assert_eq!(to_side(Side::Left), "to the left");
+        assert_eq!(edge_word(Side::Top), "top");
+        assert_eq!(items(1), "1 item");
+        assert_eq!(items(3), "3 items");
     }
 }

@@ -25,15 +25,19 @@ pub enum Event {
     Latency(Latency),
 }
 
+/// A command the window started, with what it needs to report on it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Job {
     Start,
-    Layout,
-    Swap,
+    Layout { id: String, name: String, side: one_mk_proto::Side },
+    Swap { id: String, name: String, swap: String },
     TakeBack,
-    Autostart,
+    /// Turning start at login on (true) or off.
+    Autostart(bool),
     Send { to: String, count: usize },
-    Measure,
+    /// Measuring the computer with this id.
+    Measure(String),
+    Open,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,18 +81,41 @@ impl Link {
         self.ctx.request_repaint();
     }
 
-    fn status(&self) -> Option<Status> {
-        client::request(&self.dir, Request::Status, Duration::from_millis(1500)).ok().flatten().and_then(|t| Status::decode(&t))
+    /// `Err` when the daemon could not be asked (busy, a timeout): that
+    /// says nothing about whether it runs.
+    fn status(&self) -> Result<Option<Status>, ()> {
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os("ONE_MK_APP_STATUS") {
+            // Development aid: a status in its wire format, for screenshots
+            // of states that are hard to set up (long names, many computers).
+            return Ok(std::fs::read_to_string(path).ok().and_then(|t| Status::decode(&t)));
+        }
+        match client::request(&self.dir, Request::Status, Duration::from_millis(1500)) {
+            Ok(text) => Ok(text.and_then(|t| Status::decode(&t))),
+            Err(_) => Err(()),
+        }
     }
 
     /// Watches the daemon until the window closes, reporting only changes.
+    /// A daemon that stops answering once is not yet "not running": that
+    /// takes two looks in a row, so a busy moment doesn't flip the window.
     pub fn watch(&self) {
         let link = self.clone();
         std::thread::spawn(move || {
             link.send(Event::Autostart(install::is_installed()));
             let mut last: Option<Option<Status>> = None;
+            let mut gone = 0;
             loop {
-                let now = link.status();
+                let Ok(now) = link.status() else {
+                    std::thread::sleep(POLL);
+                    continue;
+                };
+                gone = if now.is_none() { gone + 1 } else { 0 };
+                let first = last.is_none();
+                if now.is_none() && gone < 2 && !first {
+                    std::thread::sleep(POLL);
+                    continue;
+                }
                 if last.as_ref() != Some(&now) {
                     if link.tx.send(Event::Status(now.clone())).is_err() {
                         return;
@@ -134,41 +161,47 @@ impl Link {
             while Instant::now() < deadline && !client::is_running(&l.dir) {
                 std::thread::sleep(Duration::from_millis(100));
             }
+            if !client::is_running(&l.dir) {
+                anyhow::bail!("It didn't answer within 4 seconds. Details are in {}.", l.dir.join("daemon.log").display());
+            }
             Ok(())
         });
     }
 
-    pub fn set_side(&self, peer: &str, side: one_mk_proto::Side) {
-        let (peer, side) = (peer.to_owned(), side.to_string());
-        self.job(Job::Layout, move |l| l.one_mk(&["layout", &peer, &side]).map(drop));
+    pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side) {
+        let (id, word) = (peer.to_owned(), side.to_string());
+        self.job(Job::Layout { id: peer.into(), name: name.into(), side }, move |l| l.one_mk(&["layout", &id, &word]).map(drop));
     }
 
-    pub fn set_swap(&self, peer: &str, swap: &str) {
-        let (peer, swap) = (peer.to_owned(), swap.to_owned());
-        self.job(Job::Swap, move |l| l.one_mk(&["layout", &peer, "--swap-ctrl-cmd", &swap]).map(drop));
+    pub fn set_swap(&self, peer: &str, name: &str, swap: &str) {
+        let (id, value) = (peer.to_owned(), swap.to_owned());
+        let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into() };
+        self.job(what, move |l| l.one_mk(&["layout", &id, "--swap-ctrl-cmd", &value]).map(drop));
     }
 
     pub fn take_back(&self) {
         self.job(Job::TakeBack, |l| client::request(&l.dir, Request::TakeBack, Duration::from_secs(5)).map(drop));
     }
 
+    /// Either way it ends, the switch is told what is really installed.
     pub fn set_autostart(&self, on: bool) {
-        self.job(Job::Autostart, move |l| {
-            if on {
-                if !l.daemon.is_absolute() {
-                    anyhow::bail!("cannot find one-mk next to this app; run `one-mk install` instead");
+        self.job(Job::Autostart(on), move |l| {
+            let done = if on {
+                if l.daemon.is_absolute() {
+                    install::install(&Launch {
+                        exe: l.daemon.clone(),
+                        tray: l.tray.clone(),
+                        home: l.custom_home.then(|| install::absolute(&l.dir)),
+                        start_now: !client::is_running(&l.dir),
+                    })
+                } else {
+                    Err(anyhow::anyhow!("one-mk isn't next to this app. Run `one-mk install` instead"))
                 }
-                install::install(&Launch {
-                    exe: l.daemon.clone(),
-                    tray: l.tray.clone(),
-                    home: l.custom_home.then(|| install::absolute(&l.dir)),
-                    start_now: !client::is_running(&l.dir),
-                })?;
             } else {
-                install::uninstall()?;
-            }
+                install::uninstall()
+            };
             l.send(Event::Autostart(install::is_installed()));
-            Ok(())
+            done.map(drop)
         });
     }
 
@@ -186,7 +219,7 @@ impl Link {
     /// of probe messages (a fraction of a second; nothing moves on screen).
     pub fn measure(&self, peer: &str) {
         let peer = peer.to_owned();
-        self.job(Job::Measure, move |l| {
+        self.job(Job::Measure(peer.clone()), move |l| {
             let out = l.one_mk(&["bench", "--peer", &peer, "--count", "400", "--rate", "1000"])?;
             let lat = parse_bench(&out, &peer).ok_or_else(|| anyhow::anyhow!("could not read the measurement"))?;
             l.send(Event::Latency(lat));
@@ -196,18 +229,22 @@ impl Link {
 
     /// Opens the folder received files go to.
     pub fn open_downloads(&self) {
-        let dir = directories::UserDirs::new()
-            .and_then(|u| u.download_dir().map(|d| d.join("one-mk")))
-            .unwrap_or_else(|| self.dir.clone());
-        let _ = std::fs::create_dir_all(&dir);
-        let opener = if cfg!(target_os = "macos") {
-            "open"
-        } else if cfg!(windows) {
-            "explorer"
-        } else {
-            "xdg-open"
-        };
-        let _ = proc::spawn_detached(std::path::Path::new(opener), &[dir.display().to_string()], None);
+        self.job(Job::Open, |l| {
+            let dir = directories::UserDirs::new()
+                .and_then(|u| u.download_dir().map(|d| d.join("one-mk")))
+                .unwrap_or_else(|| l.dir.clone());
+            std::fs::create_dir_all(&dir)?;
+            let opener = if cfg!(target_os = "macos") {
+                "open"
+            } else if cfg!(windows) {
+                "explorer"
+            } else {
+                "xdg-open"
+            };
+            proc::spawn_detached(std::path::Path::new(opener), &[dir.display().to_string()], None)
+                .map_err(|e| anyhow::anyhow!("{opener} didn't start ({e}). The folder is {}", dir.display()))?;
+            Ok(())
+        });
     }
 }
 

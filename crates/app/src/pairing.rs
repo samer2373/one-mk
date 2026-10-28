@@ -42,12 +42,23 @@ pub fn parse(line: &str) -> Option<Step> {
         ["code", name, code] => Step::Code { name: name.into(), code: code.chars().filter(char::is_ascii_digit).collect() },
         ["waiting"] => Step::Waiting { name: String::new() },
         ["paired", id, name, _side] => Step::Paired { id: short(id), name: name.into() },
-        ["cancelled"] => Step::Ended("Pairing cancelled. Nothing was saved.".into()),
-        ["declined"] => Step::Ended("The other computer did not confirm. Nothing was saved.".into()),
-        ["retry", why] => Step::Retry(why.into()),
+        // `cancelled` follows our own "no": the codes didn't match here.
+        ["cancelled"] => Step::Ended(
+            "The codes didn't match, so nothing was saved. If you didn't expect that, make sure the other computer is yours, then try again.".into(),
+        ),
+        ["declined"] => Step::Ended("The other computer didn't confirm the code, so nothing was saved. Try again and confirm on both screens.".into()),
+        ["retry", why] => Step::Retry(plain(why)),
         _ => return None,
     })
 }
+
+/// The command line's reasons, said for the window.
+fn plain(why: &str) -> String {
+    if why.starts_with("no answer within") { "nobody confirmed the code in 2 minutes".into() } else { why.into() }
+}
+
+/// What the window says when `one-mk pair` stops without saying why.
+pub const STOPPED: &str = "one·mk stopped unexpectedly while pairing. Try again.";
 
 /// The short id (`abcd-ef01`) of a full fingerprint, as status reports it.
 fn short(fp: &str) -> String {
@@ -62,8 +73,7 @@ impl Pairing {
         let (tx, rx) = channel();
         let stdout = child.stdout.take().expect("piped");
         let stderr = child.stderr.take().expect("piped");
-        let (tx2, ctx2) = (tx.clone(), ctx.clone());
-        std::thread::spawn(move || {
+        let errors = std::thread::spawn(move || {
             let mut err = String::new();
             // Log lines go here too; the final error is the one-line `one-mk: ...`.
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
@@ -71,13 +81,11 @@ impl Pairing {
                     err = line;
                 }
             }
-            if !err.is_empty() {
-                let _ = tx2.send(Step::Ended(err.trim_start_matches("one-mk: ").to_owned()));
-                ctx2.request_repaint();
-            }
+            err.trim_start_matches("one-mk: ").to_owned()
         });
         std::thread::spawn(move || {
             let mut last_name = String::new();
+            let mut over = false;
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 let Some(mut step) = parse(&line) else { continue };
                 match &mut step {
@@ -85,9 +93,17 @@ impl Pairing {
                     Step::Waiting { name } => *name = last_name.clone(),
                     _ => {}
                 }
+                over |= matches!(step, Step::Paired { .. } | Step::Ended(_));
                 if tx.send(step).is_err() {
-                    break;
+                    return;
                 }
+                ctx.request_repaint();
+            }
+            // It exited. If it never said how pairing ended, say so, with
+            // its own error if it left one: never leave the sheet waiting.
+            let err = errors.join().unwrap_or_default();
+            if !over {
+                let _ = tx.send(Step::Ended(if err.is_empty() { STOPPED.into() } else { err }));
                 ctx.request_repaint();
             }
         });
@@ -125,6 +141,8 @@ mod tests {
         );
         assert!(matches!(parse("declined"), Some(Step::Ended(_))));
         assert_eq!(parse("retry\ttimed out"), Some(Step::Retry("timed out".into())));
+        assert_eq!(parse("retry\tno answer within 120 s"), Some(Step::Retry("nobody confirmed the code in 2 minutes".into())));
+        assert!(matches!(parse("cancelled"), Some(Step::Ended(why)) if why.starts_with("The codes didn't match")));
         assert_eq!(parse("nonsense\tline"), None);
     }
 }

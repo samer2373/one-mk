@@ -4,16 +4,19 @@
 //! channel and the `one-mk` program), so closing it changes nothing, and it
 //! costs nothing when it isn't open.
 //!
-//! `one-mk-app [--home DIR]`
+//! `one-mk-app [--home DIR]`. `ONE_MK_REDUCE_MOTION=1` (or the desktop's
+//! own setting) keeps movement to fades.
 
 // No console window on Windows.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
 mod daemon;
+mod motion;
 mod pairing;
 mod scene;
 mod style;
+mod widgets;
 
 use std::path::PathBuf;
 
@@ -58,7 +61,7 @@ fn main() {
     let result = eframe::run_native(
         "one-mk",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, home).map_err(|e| e.to_string())?))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, home, size).map_err(|e| e.to_string())?))),
     );
     if let Err(e) = result {
         eprintln!("one-mk-app: {e}");
