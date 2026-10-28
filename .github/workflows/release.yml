@@ -53,8 +53,25 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
       - run: cd dist && sha256sum one-mk-* > SHA256SUMS
+      - name: Notes
+        run: |
+          cat > notes.md <<'MD'
+          ## Download
+
+          | System | File |
+          |---|---|
+          | macOS, Apple silicon (M1 and later) | `one-mk-aarch64-apple-darwin.app.zip` |
+          | macOS, Intel | `one-mk-x86_64-apple-darwin.app.zip` |
+          | Windows 10/11, 64-bit | `one-mk-x86_64-pc-windows-msvc.zip` |
+          | Linux, 64-bit (Wayland) | `one-mk-x86_64-unknown-linux-gnu.tar.gz` |
+
+          On macOS and Linux the one-line installer picks the right file:
+          `curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh`
+
+          The `.tar.gz` for macOS holds only the command-line programs. `SHA256SUMS` lists checksums for every file.
+          MD
       - env:
           GH_TOKEN: ${{ github.token }}
         run: >
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY"
-          --title "$GITHUB_REF_NAME" --generate-notes
+          --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes
