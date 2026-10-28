@@ -21,10 +21,11 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read as _, Seek, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::UNIX_EPOCH;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Notify, OwnedMutexGuard, mpsc};
+use unicode_normalization::UnicodeNormalization as _;
 
 /// Size of the buffers between disk and network.
 const CHUNK: usize = 1 << 20;
@@ -35,6 +36,21 @@ pub const PARTIAL_DIR: &str = ".one-mk-partial";
 /// Parallel streams when sending many files.
 const STREAMS: usize = 4;
 
+/// Transfer connections one device may have open at once.
+pub const MAX_CONNS_PER_PEER: usize = 2;
+/// File streams served at once on one connection.
+pub const MAX_STREAMS_PER_CONN: usize = 4;
+/// File streams served at once for all devices together.
+pub const MAX_STREAMS_TOTAL: usize = 8;
+/// Partial files older than this are deleted by the daily sweep.
+pub const PARTIAL_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
+const SWEEP_EVERY: Duration = Duration::from_secs(24 * 3600);
+/// How many bytes of unfinished partial files one device may leave in the
+/// staging folder. A fixed number is simpler and safer than something
+/// derived from the offers (a peer controls those). A single file bigger
+/// than this still works: the limit is `max(this, 2 x that file)`.
+pub const PEER_PARTIAL_CAP: u64 = 50 << 30;
+
 // ---------------------------------------------------------------- receiving
 
 /// Receives files from trusted peers into one folder.
@@ -42,6 +58,64 @@ pub struct Inbox {
     root: PathBuf,
     /// Partial files being written, by id.
     active: Mutex<HashMap<String, Slot>>,
+    limits: Mutex<Limits>,
+    partial_cap: u64,
+}
+
+#[derive(Default)]
+struct Limits {
+    conns: HashMap<Fingerprint, usize>,
+    streams: HashMap<Fingerprint, usize>,
+    total: usize,
+}
+
+/// Admission of one transfer connection; see [`Inbox::admit`]. Dropping it
+/// frees the slot.
+pub struct ConnPermit {
+    inbox: Arc<Inbox>,
+    fp: Fingerprint,
+    streams: Arc<AtomicUsize>,
+}
+
+impl ConnPermit {
+    pub fn fp(&self) -> Fingerprint {
+        self.fp
+    }
+}
+
+impl Drop for ConnPermit {
+    fn drop(&mut self) {
+        let mut l = self.inbox.limits.lock().expect("poisoned");
+        if let Some(n) = l.conns.get_mut(&self.fp) {
+            *n -= 1;
+            if *n == 0 {
+                l.conns.remove(&self.fp);
+            }
+        }
+    }
+}
+
+/// One file stream being served.
+struct StreamGuard<'a> {
+    inbox: &'a Inbox,
+    fp: Fingerprint,
+    conn: Option<Arc<AtomicUsize>>,
+}
+
+impl Drop for StreamGuard<'_> {
+    fn drop(&mut self) {
+        let mut l = self.inbox.limits.lock().expect("poisoned");
+        l.total -= 1;
+        if let Some(n) = l.streams.get_mut(&self.fp) {
+            *n -= 1;
+            if *n == 0 {
+                l.streams.remove(&self.fp);
+            }
+        }
+        if let Some(c) = &self.conn {
+            c.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -52,12 +126,122 @@ struct Slot {
 }
 
 impl Inbox {
+    /// Also, if called inside a tokio runtime, deletes stale partial files
+    /// now and then once a day (see [`Inbox::sweep_partials`]).
     pub fn new(root: PathBuf) -> Arc<Self> {
-        Arc::new(Self { root, active: Mutex::default() })
+        Self::with_cap(root, PEER_PARTIAL_CAP)
     }
 
-    /// Serves one file stream until the sender finishes it.
-    pub async fn receive(&self, fp: Fingerprint, peer: &str, mut send: quinn::SendStream, mut recv: quinn::RecvStream) {
+    fn with_cap(root: PathBuf, partial_cap: u64) -> Arc<Self> {
+        let inbox = Arc::new(Self { root, active: Mutex::default(), limits: Mutex::default(), partial_cap });
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let weak: Weak<Inbox> = Arc::downgrade(&inbox);
+            rt.spawn(async move {
+                while let Some(inbox) = weak.upgrade() {
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let n = inbox.sweep_partials(PARTIAL_MAX_AGE);
+                        if n > 0 {
+                            tracing::info!(removed = n, "deleted stale partial files");
+                        }
+                    })
+                    .await;
+                    tokio::time::sleep(SWEEP_EVERY).await;
+                }
+            });
+        }
+        inbox
+    }
+
+    /// Deletes partial files not modified for `max_age`, except any that is
+    /// being written right now. Returns how many were removed.
+    pub fn sweep_partials(&self, max_age: Duration) -> usize {
+        let Ok(dir) = fs::read_dir(long(&self.root.join(PARTIAL_DIR))) else { return 0 };
+        let now = SystemTime::now();
+        let mut removed = 0;
+        for e in dir.flatten() {
+            let Ok(meta) = e.metadata() else { continue };
+            let old = meta.is_file()
+                && meta.modified().ok().and_then(|m| now.duration_since(m).ok()).is_some_and(|age| age >= max_age);
+            if !old {
+                continue;
+            }
+            // Holding the lock keeps `claim` from taking this file meanwhile.
+            let active = self.active.lock().expect("poisoned");
+            if !active.contains_key(e.file_name().to_string_lossy().as_ref()) && fs::remove_file(e.path()).is_ok() {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
+    /// Admits a new transfer connection from `fp`: at most
+    /// [`MAX_CONNS_PER_PEER`] at a time. Hold the permit as long as the
+    /// connection lives and serve its streams with [`Inbox::receive_on`],
+    /// which then also enforces [`MAX_STREAMS_PER_CONN`].
+    pub fn admit(self: &Arc<Self>, fp: Fingerprint) -> Result<ConnPermit, &'static str> {
+        let mut l = self.limits.lock().expect("poisoned");
+        let n = l.conns.entry(fp).or_default();
+        if *n >= MAX_CONNS_PER_PEER {
+            return Err("too many concurrent transfer connections from this device");
+        }
+        *n += 1;
+        Ok(ConnPermit { inbox: self.clone(), fp, streams: Arc::default() })
+    }
+
+    fn start_stream(&self, fp: Fingerprint, conn: Option<&ConnPermit>) -> Result<StreamGuard<'_>, &'static str> {
+        let mut l = self.limits.lock().expect("poisoned");
+        if l.total >= MAX_STREAMS_TOTAL {
+            return Err("receiver busy: too many file streams in total");
+        }
+        if let Some(c) = conn
+            && c.streams.load(Ordering::SeqCst) >= MAX_STREAMS_PER_CONN
+        {
+            return Err("too many file streams on this connection");
+        }
+        // Without connection tracking, a device is held to what its
+        // connections could use together.
+        if l.streams.get(&fp).copied().unwrap_or(0) >= MAX_CONNS_PER_PEER * MAX_STREAMS_PER_CONN {
+            return Err("too many file streams from this device");
+        }
+        l.total += 1;
+        *l.streams.entry(fp).or_default() += 1;
+        let conn = conn.map(|c| {
+            c.streams.fetch_add(1, Ordering::SeqCst);
+            c.streams.clone()
+        });
+        Ok(StreamGuard { inbox: self, fp, conn })
+    }
+
+    /// Serves one file stream of the connection `conn` until the sender
+    /// finishes it, within the per-device, per-connection and total limits.
+    pub async fn receive_on(
+        &self,
+        conn: &ConnPermit,
+        peer: &str,
+        send: quinn::SendStream,
+        recv: quinn::RecvStream,
+    ) {
+        self.receive_inner(Some(conn), conn.fp, peer, send, recv).await
+    }
+
+    async fn receive_inner(
+        &self,
+        conn: Option<&ConnPermit>,
+        fp: Fingerprint,
+        peer: &str,
+        mut send: quinn::SendStream,
+        mut recv: quinn::RecvStream,
+    ) {
+        let _guard = match self.start_stream(fp, conn) {
+            Ok(g) => g,
+            Err(reason) => {
+                tracing::warn!(%peer, "refused a file stream: {reason}");
+                let _ = write_file_msg(&mut send, &FileMsg::Failed { reason: reason.into() }).await;
+                let _ = recv.stop(2u32.into());
+                let _ = send.finish();
+                return;
+            }
+        };
         let _ = send.set_priority(-1);
         loop {
             let res = match read_file_msg(&mut recv).await {
@@ -100,7 +284,7 @@ impl Inbox {
         // takes over from the old one.
         let id = part_id(fp, path, size, mtime);
         let (guard, cancel) = self.claim(&id).await;
-        let res = self.receive_claimed(peer, send, recv, path, parts, size, &id, &cancel).await;
+        let res = self.receive_claimed(fp, peer, send, recv, path, parts, size, &id, &cancel).await;
         self.release(&id, guard);
         res
     }
@@ -133,6 +317,7 @@ impl Inbox {
     #[allow(clippy::too_many_arguments)]
     async fn receive_claimed(
         &self,
+        fp: Fingerprint,
         peer: &str,
         send: &mut quinn::SendStream,
         recv: &mut quinn::RecvStream,
@@ -142,13 +327,13 @@ impl Inbox {
         id: &str,
         cancel: &Notify,
     ) -> Result<()> {
-        let (root, id) = (self.root.clone(), id.to_owned());
-        let opened = tokio::task::spawn_blocking(move || open_part(&root, &id, size)).await?;
+        let (root, id, prefix, cap) = (self.root.clone(), id.to_owned(), fp_prefix(fp), self.partial_cap);
+        let opened = tokio::task::spawn_blocking(move || prepare(&root, &id, &prefix, size, cap)).await?;
         let (file, part, offset) = match opened {
             Ok(x) => x,
             Err(e) => {
                 tracing::warn!("cannot save {path:?}: {e:#}");
-                return write_file_msg(send, &FileMsg::Reject { reason: format!("cannot save: {e}") }).await;
+                return write_file_msg(send, &FileMsg::Reject { reason: format!("cannot save: {e:#}") }).await;
             }
         };
         write_file_msg(send, &FileMsg::Accept { offset }).await?;
@@ -189,8 +374,10 @@ impl Inbox {
         let hash = match written {
             Ok(h) => h,
             Err(e) => {
-                let _ = write_file_msg(send, &FileMsg::Failed { reason: format!("{e:#}") }).await;
-                bail!("writing {path:?}: {e:#}");
+                let reason = describe_write_error(&e);
+                let _ = write_file_msg(send, &FileMsg::Failed { reason: reason.clone() }).await;
+                // The partial file stays, so the transfer can resume.
+                bail!("writing {path:?}: {reason}");
             }
         };
         let Some(FileMsg::End { hash: theirs }) = read_file_msg(recv).await? else {
@@ -219,6 +406,12 @@ impl Inbox {
 /// Splits a peer-supplied relative path into safe components, or says why
 /// it is refused. Nothing that could leave the download folder survives:
 /// no absolute paths, no `..`, no separators or NULs inside names.
+///
+/// Names are normalized to Unicode NFC, so a Mac's NFD names don't make
+/// look-alike duplicates. Names that are fine here but not on Windows
+/// (reserved device names with or without an extension, trailing dots or
+/// spaces) are renamed by appending `_` rather than refused, so the
+/// result is the same on every platform.
 pub fn sanitize(path: &str) -> Result<Vec<String>, &'static str> {
     if path.is_empty() || path.len() > FileMsg::MAX_PATH {
         return Err("invalid path length");
@@ -226,38 +419,55 @@ pub fn sanitize(path: &str) -> Result<Vec<String>, &'static str> {
     if path.starts_with('/') || path.starts_with('\\') {
         return Err("absolute paths are not allowed");
     }
-    let parts: Vec<String> = path.split('/').map(str::to_owned).collect();
-    for p in &parts {
-        match p.as_str() {
+    let mut parts = Vec::new();
+    for p in path.split('/') {
+        match p {
             "" => return Err("empty path component"),
             "." | ".." => return Err("path escapes the download folder"),
             _ => {}
         }
-        if p.len() > 255 {
-            return Err("name too long");
-        }
         if p.chars().any(|c| c == '\\' || c.is_control()) {
             return Err("invalid character in name");
         }
-        if cfg!(windows) && !windows_safe(p) {
-            return Err("name not allowed on Windows");
+        let nfc: String = p.nfc().collect();
+        if parts.is_empty() && nfc.trim_end_matches(['.', ' ']).to_lowercase() == PARTIAL_DIR {
+            return Err("reserved name");
         }
-    }
-    if parts[0] == PARTIAL_DIR {
-        return Err("reserved name");
+        let fixed = windows_safe_name(&nfc);
+        if fixed.len() > 255 {
+            return Err("name too long");
+        }
+        parts.push(fixed);
     }
     Ok(parts)
 }
 
-fn windows_safe(name: &str) -> bool {
-    const RESERVED: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1",
-        "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+/// Device names Windows reserves, with any extension.
+fn is_reserved(stem: &str) -> bool {
+    const RESERVED: [&str; 28] = [
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6",
+        "COM7", "COM8", "COM9", "COM\u{b9}", "COM\u{b2}", "COM\u{b3}", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4",
+        "LPT5", "LPT6", "LPT7", "LPT8",
     ];
-    let stem = name.split('.').next().unwrap_or("").trim_end();
-    !name.chars().any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
-        && !name.ends_with(['.', ' '])
-        && !RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem))
+    const MORE: [&str; 4] = ["LPT9", "LPT\u{b9}", "LPT\u{b2}", "LPT\u{b3}"];
+    let up = stem.trim_end().to_uppercase();
+    RESERVED.contains(&up.as_str()) || MORE.contains(&up.as_str())
+}
+
+/// Makes one NFC name valid on Windows too (see [`sanitize`]).
+fn windows_safe_name(name: &str) -> String {
+    let mut n = name.to_owned();
+    if cfg!(windows) {
+        n = n.replace(['<', '>', ':', '"', '|', '?', '*'], "_");
+    }
+    let stem_end = n.find('.').unwrap_or(n.len());
+    if is_reserved(&n[..stem_end]) {
+        n.insert(stem_end, '_');
+    }
+    if n.ends_with(['.', ' ']) {
+        n.push('_');
+    }
+    n
 }
 
 /// Names the partial file for one version of one file from one device.
@@ -269,15 +479,129 @@ pub fn part_id(fp: Fingerprint, path: &str, size: u64, mtime: u64) -> String {
     h.update(&size.to_le_bytes());
     h.update(&mtime.to_le_bytes());
     let hex = h.finalize().to_hex();
-    format!("{}.part", &hex[..32])
+    format!("{}.{}.part", fp_prefix(fp), &hex[..32])
+}
+
+/// The start of every partial file name of one device, so the staging
+/// folder can be totalled per device.
+fn fp_prefix(fp: Fingerprint) -> String {
+    fp.0[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Bytes of other unfinished partial files from the device `prefix`.
+fn peer_partial_bytes(staging: &Path, prefix: &str, except: &str) -> u64 {
+    let Ok(dir) = fs::read_dir(long(staging)) else { return 0 };
+    let start = format!("{prefix}.");
+    dir.flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(&start) && name != except
+        })
+        .filter_map(|e| e.metadata().ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum()
+}
+
+fn human(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let (mut v, mut u) = (n as f64, 0);
+    while v >= 1024.0 && u < UNITS.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[u]) }
+}
+
+/// Opens the partial file after checking there is room for the rest of
+/// it, and that this device has not left too much behind.
+fn prepare(root: &Path, id: &str, prefix: &str, size: u64, cap: u64) -> Result<(File, PathBuf, u64)> {
+    let (file, part, offset) = open_part(root, id, size)?;
+    let checked = check_room(root, prefix, id, size, offset, cap);
+    if let Err(e) = checked {
+        drop(file);
+        if offset == 0 {
+            let _ = fs::remove_file(&part);
+        }
+        return Err(e);
+    }
+    Ok((file, part, offset))
+}
+
+fn check_room(root: &Path, prefix: &str, id: &str, size: u64, offset: u64, cap: u64) -> Result<()> {
+    let need = size - offset;
+    match fs4::available_space(long(root)) {
+        Ok(free) if free < need => {
+            bail!("not enough free disk space: {} needed, {} free", human(need), human(free))
+        }
+        Ok(_) => {}
+        Err(e) => tracing::debug!("cannot read free disk space: {e}"),
+    }
+    let limit = cap.max(size.saturating_mul(2));
+    let others = peer_partial_bytes(&root.join(PARTIAL_DIR), prefix, id);
+    if others.saturating_add(size) > limit {
+        bail!(
+            "too many unfinished transfers from this device ({} kept in {PARTIAL_DIR}, limit {})",
+            human(others),
+            human(limit)
+        );
+    }
+    Ok(())
+}
+
+/// A clear failure message for the sender; the partial file is kept.
+fn describe_write_error(e: &anyhow::Error) -> String {
+    let full = e.chain().filter_map(|c| c.downcast_ref::<std::io::Error>()).any(|io| {
+        io.kind() == ErrorKind::StorageFull || io.kind() == ErrorKind::QuotaExceeded || io.raw_os_error() == Some(28)
+    });
+    if full {
+        "disk full on the receiving device; the partial file is kept, send again to resume".into()
+    } else {
+        format!("write error on the receiving device ({e:#}); the partial file is kept, send again to resume")
+    }
+}
+
+/// Windows refuses paths over 260 characters unless they carry the `\\?\`
+/// prefix (which also turns off `/` and `..` handling, so the path is
+/// cleaned first). Elsewhere paths are used as they are.
+#[cfg(windows)]
+fn long(p: &Path) -> PathBuf {
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    match abs.to_str() {
+        Some(s) => PathBuf::from(long_path_string(s)),
+        None => abs,
+    }
+}
+
+#[cfg(not(windows))]
+fn long(p: &Path) -> PathBuf {
+    p.to_path_buf()
+}
+
+/// The text transformation behind [`long`], testable everywhere.
+#[allow(dead_code)]
+fn long_path_string(s: &str) -> String {
+    const MIN: usize = 200;
+    if s.starts_with(r"\\?\") || s.len() < MIN {
+        return s.to_owned();
+    }
+    let s = s.replace('/', "\\");
+    if let Some(unc) = s.strip_prefix(r"\\") {
+        format!(r"\\?\UNC\{unc}")
+    } else if s.as_bytes().get(1) == Some(&b':') {
+        format!(r"\\?\{s}")
+    } else {
+        s
+    }
 }
 
 /// Creates `dir` unless it exists; refuses symlinks and non-folders.
 fn real_dir(dir: &Path) -> Result<()> {
-    match fs::symlink_metadata(dir) {
+    match fs::symlink_metadata(long(dir)) {
         Ok(m) if m.is_dir() => Ok(()),
         Ok(_) => bail!("{} exists and is not a folder", dir.display()),
-        Err(e) if e.kind() == ErrorKind::NotFound => match fs::create_dir(dir) {
+        Err(e) if e.kind() == ErrorKind::NotFound => match fs::create_dir(long(dir)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == ErrorKind::AlreadyExists => real_dir(dir),
             Err(e) => Err(e).with_context(|| format!("creating {}", dir.display())),
@@ -288,10 +612,10 @@ fn real_dir(dir: &Path) -> Result<()> {
 
 /// Opens (or creates) the partial file. Returns how much of it is usable.
 fn open_part(root: &Path, id: &str, size: u64) -> Result<(File, PathBuf, u64)> {
-    fs::create_dir_all(root).with_context(|| format!("creating {}", root.display()))?;
+    fs::create_dir_all(long(root)).with_context(|| format!("creating {}", root.display()))?;
     let staging = root.join(PARTIAL_DIR);
     real_dir(&staging)?;
-    let part = staging.join(id);
+    let part = long(&staging.join(id));
     let mut opts = OpenOptions::new();
     opts.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -345,16 +669,16 @@ fn place(root: &Path, parts: &[String], part: &Path) -> Result<String> {
     }
     for n in 0..10_000 {
         let candidate = if n == 0 { name.clone() } else { numbered(name, n) };
-        let dest = dir.join(&candidate);
-        let done = match fs::hard_link(part, &dest) {
+        let dest = long(&dir.join(&candidate));
+        let done = match fs::hard_link(long(part), &dest) {
             Ok(()) => {
-                fs::remove_file(part)?;
+                fs::remove_file(long(part))?;
                 true
             }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => false,
             // Filesystems without hard links (FAT, some network shares).
             Err(_) if fs::symlink_metadata(&dest).is_err() => {
-                fs::rename(part, &dest)?;
+                fs::rename(long(part), &dest)?;
                 true
             }
             Err(_) => false,
@@ -512,6 +836,7 @@ async fn send_one(
             progress.skipped.fetch_add(file.size, Ordering::Relaxed);
             return Ok(Outcome::Rejected(reason));
         }
+        Some(FileMsg::Failed { reason }) => bail!("receiver: {reason}"),
         other => bail!("unexpected reply {other:?}"),
     };
     ensure!(offset <= file.size, "receiver asked for an offset past the end");
@@ -524,7 +849,16 @@ async fn send_one(
     let reader = tokio::task::spawn_blocking(move || read_file(&path, size, offset, tx));
     while let Some(chunk) = rx.recv().await {
         let n = chunk.len() as u64;
-        send.write_chunk(chunk).await?;
+        if let Err(e) = send.write_chunk(chunk).await {
+            drop(rx);
+            let _ = reader.await;
+            // The receiver may have said why it stopped (disk full, ...).
+            let said = tokio::time::timeout(Duration::from_secs(2), read_file_msg(recv)).await;
+            if let Ok(Ok(Some(FileMsg::Failed { reason }))) = said {
+                bail!("receiver: {reason}");
+            }
+            return Err(e.into());
+        }
         progress.done.fetch_add(n, Ordering::Relaxed);
     }
     let hash = reader.await??;
@@ -575,6 +909,162 @@ mod tests {
             assert!(sanitize(bad).is_err(), "{bad:?} accepted");
         }
         assert!(sanitize(&"x".repeat(256)).is_err());
+    }
+
+    #[test]
+    fn sanitize_windows_and_unicode() {
+        let one = |p: &str| sanitize(p).unwrap().join("/");
+        // Reserved names, any case, with or without extension.
+        assert_eq!(one("aux.txt"), "aux_.txt");
+        assert_eq!(one("Nul"), "Nul_");
+        assert_eq!(one("dir/CONIN$"), "dir/CONIN$_");
+        assert_eq!(one("conout$.log"), "conout$_.log");
+        assert_eq!(one("com0"), "com0_");
+        assert_eq!(one("LPT0.x"), "LPT0_.x");
+        for n in ["COM\u{b9}", "com\u{b2}.txt", "COM\u{b3}", "LPT\u{b9}", "lpt\u{b2}", "LPT\u{b3}.a", "Com1 .txt"] {
+            assert!(one(n).contains('_'), "{n} not renamed");
+        }
+        assert_eq!(one("auxiliary.txt"), "auxiliary.txt");
+        assert_eq!(one("COM10"), "COM10");
+        // Trailing dots and spaces.
+        assert_eq!(one("report."), "report._");
+        assert_eq!(one("a/b "), "a/b _");
+        assert_eq!(one("x..y"), "x..y");
+        // The staging folder, whatever the case or decoration.
+        for bad in [".ONE-MK-PARTIAL/x", ".One-Mk-Partial", ".one-mk-partial./x", ".one-mk-partial /x"] {
+            assert!(sanitize(bad).is_err(), "{bad:?} accepted");
+        }
+        assert!(sanitize("a/.ONE-MK-PARTIAL").is_ok());
+        // NFD (Mac) and NFC spellings give one name.
+        let nfd = "Cafe\u{301}/u\u{308}.txt";
+        assert_eq!(sanitize(nfd).unwrap(), sanitize("Caf\u{e9}/\u{fc}.txt").unwrap());
+        assert_eq!(one(nfd), "Caf\u{e9}/\u{fc}.txt");
+    }
+
+    #[test]
+    fn long_paths_get_the_extended_prefix() {
+        let deep = format!(r"C:\dl\{}", "x".repeat(250));
+        assert_eq!(long_path_string(&deep), format!(r"\\?\{deep}"));
+        let unc = format!(r"\\srv\share\{}", "x".repeat(250));
+        assert_eq!(long_path_string(&unc), format!(r"\\?\UNC\srv\share\{}", "x".repeat(250)));
+        let mixed = format!("C:\\dl/{}", "y".repeat(250));
+        assert!(long_path_string(&mixed).starts_with(r"\\?\C:\dl\y"));
+        assert!(!long_path_string(&mixed).contains('/'));
+        assert_eq!(long_path_string(r"C:\short"), r"C:\short");
+        let done = format!(r"\\?\{deep}");
+        assert_eq!(long_path_string(&done), done);
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("one-mk-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn refuses_when_disk_is_too_small() {
+        let root = temp("space");
+        let fp = Fingerprint([7; 32]);
+        let id = part_id(fp, "big", u64::MAX / 2, 1);
+        let err = prepare(&root, &id, &fp_prefix(fp), u64::MAX / 2, PEER_PARTIAL_CAP).unwrap_err();
+        assert!(format!("{err:#}").contains("not enough free disk space"), "{err:#}");
+        // The empty partial file was not left behind.
+        assert!(!root.join(PARTIAL_DIR).join(&id).exists());
+        // Something small fits.
+        let id = part_id(fp, "small", 10, 1);
+        assert!(prepare(&root, &id, &fp_prefix(fp), 10, PEER_PARTIAL_CAP).is_ok());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn full_disk_error_is_explained() {
+        let e = anyhow::Error::new(std::io::Error::from(ErrorKind::StorageFull)).context("writing");
+        let msg = describe_write_error(&e);
+        assert!(msg.contains("disk full") && msg.contains("resume"), "{msg}");
+        let e = anyhow::Error::new(std::io::Error::from_raw_os_error(28));
+        assert!(describe_write_error(&e).contains("disk full"));
+        let e = anyhow::Error::new(std::io::Error::from(ErrorKind::PermissionDenied));
+        assert!(describe_write_error(&e).contains("write error"));
+        // A write to /dev/full fails with ENOSPC and is reported as such.
+        #[cfg(target_os = "linux")]
+        {
+            let f = OpenOptions::new().write(true).open("/dev/full").unwrap();
+            let mut f = f;
+            let r: Result<()> = f.write_all(&[1, 2, 3]).map_err(Into::into);
+            assert!(describe_write_error(&r.unwrap_err()).contains("disk full"));
+        }
+    }
+
+    #[test]
+    fn staging_is_capped_per_peer() {
+        let root = temp("cap");
+        let (a, b) = (Fingerprint([1; 32]), Fingerprint([2; 32]));
+        let staging = root.join(PARTIAL_DIR);
+        fs::create_dir_all(&staging).unwrap();
+        // Device A already keeps 600 bytes; B's files don't count against A.
+        fs::write(staging.join(part_id(a, "old1", 400, 1)), vec![0; 400]).unwrap();
+        fs::write(staging.join(part_id(a, "old2", 200, 1)), vec![0; 200]).unwrap();
+        fs::write(staging.join(part_id(b, "other", 900, 1)), vec![0; 900]).unwrap();
+        let pa = fp_prefix(a);
+        let id = part_id(a, "new", 300, 1);
+        // 600 + 300 <= 1000
+        assert!(prepare(&root, &id, &pa, 300, 1000).is_ok());
+        let id2 = part_id(a, "new2", 500, 1);
+        // 600 + 500 > 1000, and 2 x 500 does not save it either.
+        let err = prepare(&root, &id2, &pa, 500, 1000).unwrap_err();
+        assert!(format!("{err:#}").contains("too many unfinished"), "{err:#}");
+        // A file bigger than the cap is still allowed on its own: 2 x size.
+        let big = part_id(b, "big", 5000, 1);
+        assert!(prepare(&root, &big, &fp_prefix(b), 5000, 1000).is_ok()); // 900 + 5000 <= 2 x 5000
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sweep_keeps_fresh_and_active_partials() {
+        let root = temp("sweep");
+        let staging = root.join(PARTIAL_DIR);
+        fs::create_dir_all(&staging).unwrap();
+        let inbox = Inbox::new(root.clone());
+        for n in ["stale", "active", "fresh"] {
+            fs::write(staging.join(n), "x").unwrap();
+        }
+        let old = SystemTime::now() - Duration::from_secs(8 * 24 * 3600);
+        for n in ["stale", "active"] {
+            File::options().write(true).open(staging.join(n)).unwrap().set_modified(old).unwrap();
+        }
+        inbox.active.lock().unwrap().insert("active".into(), Slot::default());
+        assert_eq!(inbox.sweep_partials(PARTIAL_MAX_AGE), 1);
+        assert!(!staging.join("stale").exists());
+        assert!(staging.join("active").exists() && staging.join("fresh").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stream_and_connection_limits() {
+        let inbox = Inbox::new(temp("limits"));
+        let fp = Fingerprint([3; 32]);
+        let c1 = inbox.admit(fp).unwrap();
+        let c2 = inbox.admit(fp).unwrap();
+        assert!(inbox.admit(fp).is_err());
+        // Another device has its own connections.
+        let other = inbox.admit(Fingerprint([4; 32])).unwrap();
+        drop(c2);
+        let c2 = inbox.admit(fp).unwrap();
+
+        // 4 streams per connection.
+        let mut g: Vec<_> = (0..MAX_STREAMS_PER_CONN).map(|_| inbox.start_stream(fp, Some(&c1)).unwrap()).collect();
+        assert!(inbox.start_stream(fp, Some(&c1)).is_err());
+        g.pop();
+        g.push(inbox.start_stream(fp, Some(&c1)).unwrap());
+        // c2 can fill up too (8 for this device), then the device is at its limit.
+        g.extend((0..MAX_STREAMS_PER_CONN).map(|_| inbox.start_stream(fp, Some(&c2)).unwrap()));
+        assert!(inbox.start_stream(fp, None).is_err());
+        // 8 in total across devices: the device above holds all 8.
+        assert!(inbox.start_stream(Fingerprint([4; 32]), Some(&other)).is_err());
+        g.clear();
+        assert!(inbox.start_stream(Fingerprint([4; 32]), Some(&other)).is_ok());
+        assert_eq!(inbox.limits.lock().unwrap().total, 0);
     }
 
     #[test]

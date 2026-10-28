@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use one_mk_net::{Device, Discovery, Fingerprint, Identity, Node, Peer, TrustStore};
 use std::collections::HashSet;
 use std::io::Write;
-use std::net::{Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -23,6 +23,11 @@ const FIND_TIMEOUT: Duration = Duration::from_secs(6);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<()> {
+    for p in &paths {
+        if std::fs::symlink_metadata(p).is_err() {
+            bail!("{}: no such file or folder", p.display());
+        }
+    }
     let files = transfer::collect(&paths)?;
     if files.is_empty() {
         bail!("nothing to send (the folders are empty)");
@@ -32,8 +37,7 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
     let device = pick(&trust, to.as_deref())?.clone();
     let fp = device.fingerprint().context("corrupt fingerprint in devices.toml")?;
 
-    let node = Node::bind(identity.clone(), SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)))
-        .or_else(|_| Node::bind(identity.clone(), SocketAddr::from(([0, 0, 0, 0], 0))))?;
+    let node = Node::bind_any(identity.clone(), 0)?;
     let peer = find(&node, &identity, &device, fp, connect).await?;
     let conn = peer.conn;
 
@@ -106,13 +110,12 @@ async fn find(node: &Node, identity: &Identity, device: &Device, fp: Fingerprint
         }
         let (node, tx) = (node.clone(), tx.clone());
         tokio::spawn(async move {
-            match tokio::time::timeout(DIAL_TIMEOUT, node.connect(addr)).await {
-                Ok(Ok(p)) if p.fingerprint == fp => {
+            match node.connect_timeout(addr, DIAL_TIMEOUT).await {
+                Ok(p) if p.fingerprint == fp => {
                     let _ = tx.send(p);
                 }
-                Ok(Ok(p)) => p.conn.close(0u32.into(), b"wrong device"),
-                Ok(Err(e)) => tracing::debug!(%addr, "dial failed: {e:#}"),
-                Err(_) => tracing::debug!(%addr, "dial timed out"),
+                Ok(p) => p.conn.close(0u32.into(), b"wrong device"),
+                Err(e) => tracing::debug!(%addr, "dial failed: {e:#}"),
             }
         });
     };

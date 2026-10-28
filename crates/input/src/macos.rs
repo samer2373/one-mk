@@ -10,25 +10,37 @@
 //!   missing we tell the user what to do, open the right System Settings
 //!   pane and check again every second, so sharing starts as soon as the
 //!   switch is flipped, with no restart.
+//! - The once-a-second check runs only while a permission is missing or
+//!   input is captured (then it also watches for Secure Input, a locked
+//!   screen, a switched-away session and sleep, which all end the crossing).
+//!   Otherwise display changes come from the reconfiguration callback and
+//!   the thread sleeps, so idle CPU stays near zero.
+//! - Injected keys are auto-repeated here with the user's own key repeat
+//!   settings (senders drop their repeats).
+//! - Real input while a peer is in control here is reported as
+//!   `Event::LocalInput`.
 //!
 //! Coordinates are global display points (CGDisplayBounds), origin at the
 //! top-left of the main display, the same space as `CGEventGetLocation`.
 //! Platform-independent logic lives in `macos_logic`.
 
+use crate::common_logic::{Controlled, KeyRepeat, LocalInputGate, drain_coalesced, is_repeatable, now_ms};
 use crate::macos_logic::{self as logic, MacScroll};
 use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::Result;
 use objc2_core_foundation::{
-    CFAbsoluteTimeGetCurrent, CFBoolean, CFDictionary, CFMachPort, CFRetained, CFRunLoop, CFRunLoopSource,
-    CFRunLoopSourceContext, CFRunLoopTimer, CFRunLoopTimerContext, CFString, CGPoint, kCFRunLoopCommonModes,
+    CFAbsoluteTimeGetCurrent, CFBoolean, CFDictionary, CFMachPort, CFNotificationCenter, CFNotificationName,
+    CFNotificationSuspensionBehavior, CFNumber, CFPreferencesCopyAppValue, CFRetained, CFRunLoop, CFRunLoopSource,
+    CFRunLoopSourceContext, CFRunLoopTimer, CFRunLoopTimerContext, CFString, CFType, CGPoint,
+    kCFPreferencesAnyApplication, kCFRunLoopCommonModes,
 };
 use objc2_core_graphics::{
     CGAssociateMouseAndMouseCursorPosition, CGDirectDisplayID, CGDisplayBounds, CGDisplayChangeSummaryFlags,
     CGDisplayHideCursor, CGDisplayRegisterReconfigurationCallback, CGDisplayShowCursor, CGError, CGEvent,
     CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventTapOptions,
     CGEventTapPlacement, CGEventTapProxy, CGEventType, CGGetActiveDisplayList, CGMouseButton,
-    CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGWarpMouseCursorPosition,
-    kCGNullDirectDisplay,
+    CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGSessionCopyCurrentDictionary,
+    CGWarpMouseCursorPosition, kCGNullDirectDisplay,
 };
 use one_mk_proto::{Desktop, Pos, Rect, Side};
 use std::cell::RefCell;
@@ -38,7 +50,7 @@ use std::path::PathBuf;
 use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 /// Stamped on every event we post (`kCGEventSourceUserData`) so our own
@@ -51,6 +63,9 @@ const DOUBLE_CLICK_SLOP: f64 = 4.0;
 
 const KEY_CAPSLOCK: u32 = 58;
 
+/// A gap this much longer than the 1 s check interval means the Mac slept.
+const SLEPT_SECS: f64 = 5.0;
+
 const ACCESSIBILITY_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 const INPUT_MONITORING_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
 
@@ -59,14 +74,15 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let (cap_tx, cap_rx) = mpsc::unbounded_channel();
     let (inj_tx, inj_rx) = mpsc::unbounded_channel();
     let trusted = Arc::new(AtomicBool::new(ax_trusted(false)));
+    let controlled = Arc::new(Controlled::default());
 
-    let (tx, t) = (ev_tx.clone(), trusted.clone());
+    let (tx, t, c) = (ev_tx.clone(), trusted.clone(), controlled.clone());
     std::thread::Builder::new()
         .name("one-mk-capture".into())
-        .spawn(move || capture_thread(tx, cap_rx, t))?;
+        .spawn(move || capture_thread(tx, cap_rx, t, c))?;
     std::thread::Builder::new()
         .name("one-mk-inject".into())
-        .spawn(move || inject_thread(ev_tx, inj_rx, trusted))?;
+        .spawn(move || inject_thread(ev_tx, inj_rx, trusted, controlled))?;
     Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx })
 }
 
@@ -86,6 +102,41 @@ fn ax_trusted(prompt: bool) -> bool {
     let dict = CFDictionary::<CFString, CFBoolean>::from_slices(&[&*key], &[CFBoolean::new(prompt)]);
     // SAFETY: a valid CFDictionary, borrowed for the duration of the call.
     unsafe { AXIsProcessTrustedWithOptions(Some(dict.as_opaque())) != 0 }
+}
+
+#[link(name = "Carbon", kind = "framework")]
+unsafe extern "C" {
+    fn IsSecureEventInputEnabled() -> u8;
+}
+
+/// A password field or an app like Terminal with "Secure Keyboard Entry"
+/// has Secure Input on: our event tap then gets no key events, so typing
+/// on a peer would silently go nowhere.
+fn secure_input() -> bool {
+    // SAFETY: no arguments; only reads state.
+    unsafe { IsSecureEventInputEnabled() != 0 }
+}
+
+const SECURE_INPUT_MESSAGE: &str = "A password field or an app using Secure Keyboard Entry is active on this Mac, \
+     so macOS hides the keyboard from one-mk and the pointer stays here. Leave the password field \
+     (or turn off Secure Keyboard Entry in that app) to control your other computers.";
+
+/// The screen is locked, or another user's session is on the console.
+fn session_inactive() -> bool {
+    let Some(dict) = CGSessionCopyCurrentDictionary() else { return false };
+    let get = |key: &'static str| -> Option<bool> {
+        let key = CFString::from_static_str(key);
+        // SAFETY: a valid dictionary and CFString key; the value, if any,
+        // is a CF object owned by the dictionary, alive while we use it.
+        unsafe {
+            let v = dict.value((&*key as *const CFString).cast());
+            if v.is_null() {
+                return None;
+            }
+            (*(v as *const CFType)).downcast_ref::<CFBoolean>().map(|b| b.as_bool())
+        }
+    };
+    get("CGSSessionScreenIsLocked") == Some(true) || get("kCGSSessionOnConsoleKey") == Some(false)
 }
 
 fn open_settings(url: &'static str) {
@@ -132,6 +183,8 @@ impl Problem {
 enum Msg {
     Cmd(CaptureCmd),
     Displays,
+    /// The screen was locked.
+    Locked,
     Quit,
 }
 
@@ -174,6 +227,8 @@ struct Ctx {
     tx: mpsc::UnboundedSender<Event>,
     /// Accessibility granted; read by the injection thread.
     trusted: Arc<AtomicBool>,
+    /// When a peer last injected input here.
+    controlled: Arc<Controlled>,
     inbox: Arc<Inbox>,
     st: RefCell<State>,
 }
@@ -183,6 +238,16 @@ struct State {
     sides: Vec<Side>,
     /// Input goes to a peer: events are swallowed and the cursor is frozen.
     active: bool,
+    /// The current (or last) activation id.
+    id: u32,
+    /// The 1 s check timer, and whether it is scheduled.
+    timer: Option<CFRetained<CFRunLoopTimer>>,
+    timer_on: bool,
+    /// When the check last ran, to notice sleep.
+    last_tick: f64,
+    /// The user has been told that Secure Input blocks crossing.
+    secure_reported: bool,
+    local_gate: LocalInputGate,
     /// False after a refused activation, until the pointer leaves the edge,
     /// so pushing against an edge with no peer doesn't spam the daemon.
     armed: bool,
@@ -202,6 +267,12 @@ impl State {
             desktop: None,
             sides: Vec::new(),
             active: false,
+            id: 0,
+            timer: None,
+            timer_on: true,
+            last_tick: 0.0,
+            secure_reported: false,
+            local_gate: LocalInputGate::default(),
             armed: true,
             cursor_hidden: false,
             tap: None,
@@ -257,7 +328,12 @@ impl State {
     }
 }
 
-fn capture_thread(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedReceiver<CaptureCmd>, trusted: Arc<AtomicBool>) {
+fn capture_thread(
+    tx: mpsc::UnboundedSender<Event>,
+    mut cmds: mpsc::UnboundedReceiver<CaptureCmd>,
+    trusted: Arc<AtomicBool>,
+    controlled: Arc<Controlled>,
+) {
     allow_cursor_hiding_in_background();
     let Some(run_loop) = CFRunLoop::current() else {
         let _ = tx.send(Event::Error("Can't share this Mac's mouse: no run loop for input capture.".into()));
@@ -267,7 +343,8 @@ fn capture_thread(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedRec
     let modes = unsafe { kCFRunLoopCommonModes };
 
     let inbox = Arc::new(Inbox::default());
-    let ctx: &'static Ctx = Box::leak(Box::new(Ctx { tx, trusted, inbox: inbox.clone(), st: RefCell::new(State::new()) }));
+    let ctx: &'static Ctx =
+        Box::leak(Box::new(Ctx { tx, trusted, controlled, inbox: inbox.clone(), st: RefCell::new(State::new()) }));
     let info = ctx as *const Ctx as *mut c_void;
 
     // Commands arrive through a custom run loop source.
@@ -292,7 +369,7 @@ fn capture_thread(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedRec
     let _ = inbox.waker.set(Waker { source, run_loop: run_loop.clone() });
 
     // Display changes. The callback may run on another thread, so it only
-    // posts to the inbox; the once-a-second check below is the fallback.
+    // posts to the inbox.
     let inbox_ptr = Arc::into_raw(inbox.clone()) as *mut c_void;
     // SAFETY: the callback matches the signature and `inbox_ptr` is never freed.
     let err = unsafe { CGDisplayRegisterReconfigurationCallback(Some(on_display_change), inbox_ptr) };
@@ -300,7 +377,25 @@ fn capture_thread(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedRec
         tracing::debug!(?err, "display reconfiguration callback not registered");
     }
 
-    // Permission and display checks once a second.
+    // Screen lock. Delivery depends on run loops we don't control, so the
+    // check timer also polls the session while captured.
+    if let Some(center) = CFNotificationCenter::distributed_center() {
+        let name = CFString::from_static_str("com.apple.screenIsLocked");
+        // SAFETY: the callback matches the signature; `inbox_ptr` is never
+        // freed, so the observer stays valid for the life of the process.
+        unsafe {
+            center.add_observer(
+                inbox_ptr,
+                Some(on_screen_locked),
+                Some(&name),
+                std::ptr::null(),
+                CFNotificationSuspensionBehavior::DeliverImmediately,
+            );
+        }
+    }
+
+    // Permission checks, and checks while captured, once a second; only
+    // scheduled while needed (see `Ctx::update_timer`).
     let mut timer_ctx = CFRunLoopTimerContext { version: 0, info, retain: None, release: None, copyDescription: None };
     // SAFETY: the context is copied; `info` is 'static.
     let timer = unsafe { CFRunLoopTimer::new(None, CFAbsoluteTimeGetCurrent() + 1.0, 1.0, 0, 0, Some(on_timer), &mut timer_ctx) };
@@ -308,6 +403,7 @@ fn capture_thread(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedRec
         Some(t) => run_loop.add_timer(Some(t), modes),
         None => tracing::warn!("permission check timer not created"),
     }
+    ctx.st.borrow_mut().timer = timer;
 
     let cmd_inbox = inbox.clone();
     let spawned = std::thread::Builder::new().name("one-mk-capture-cmd".into()).spawn(move || {
@@ -331,7 +427,52 @@ impl Ctx {
     /// permission before installing the event tap.
     fn tick(&'static self) {
         let Ok(mut st) = self.st.try_borrow_mut() else { return };
+        let now = CFAbsoluteTimeGetCurrent();
+        let slept = st.timer_on && st.last_tick > 0.0 && now - st.last_tick > SLEPT_SECS;
+        st.last_tick = now;
         st.refresh_desktop(&self.tx);
+        self.check_permissions(&mut st);
+        if st.active {
+            if slept {
+                tracing::info!("the Mac slept while captured; giving the pointer back");
+                self.end(&mut st);
+            } else if secure_input() {
+                self.end(&mut st);
+                let _ = self.tx.send(Event::Error(SECURE_INPUT_MESSAGE.into()));
+            } else if session_inactive() {
+                tracing::info!("screen locked or session switched while captured; giving the pointer back");
+                self.end(&mut st);
+            }
+        }
+        self.update_timer(&mut st);
+    }
+
+    /// Schedules the 1 s check only while it has something to watch.
+    fn update_timer(&self, st: &mut State) {
+        let want = st.problem.is_some() || st.tap.is_none() || st.active;
+        if want == st.timer_on {
+            return;
+        }
+        let Some(timer) = &st.timer else { return };
+        let now = CFAbsoluteTimeGetCurrent();
+        // A repeating timer keeps its interval from whatever date is set;
+        // "never" is a date a century away.
+        timer.set_next_fire_date(if want { now + 1.0 } else { now + 3.0e9 });
+        st.timer_on = want;
+        st.last_tick = now;
+    }
+
+    /// Ends capture on our own initiative, telling the daemon.
+    fn end(&self, st: &mut State) {
+        if st.active {
+            st.deactivate(None);
+            let _ = self.tx.send(Event::Deactivated { id: st.id });
+        }
+        self.update_timer(st);
+    }
+
+    /// Waits for permission before installing the event tap.
+    fn check_permissions(&'static self, st: &mut State) {
         let ax = ax_trusted(false);
         self.trusted.store(ax, Ordering::Relaxed);
 
@@ -341,7 +482,7 @@ impl Ctx {
             None
         } else if !CGPreflightListenEventAccess() {
             Some(Problem::InputMonitoring)
-        } else if let Err(e) = self.install_tap(&mut st) {
+        } else if let Err(e) = self.install_tap(st) {
             tracing::warn!("event tap: {e}");
             Some(Problem::TapFailed)
         } else {
@@ -354,11 +495,8 @@ impl Ctx {
         match problem {
             Some(p) => {
                 tracing::warn!(?p, "input permission missing");
-                if st.active {
-                    // Permission revoked mid-capture: give the pointer back.
-                    st.deactivate(None);
-                    let _ = self.tx.send(Event::Deactivated);
-                }
+                // Permission revoked mid-capture: give the pointer back.
+                self.end(st);
                 let _ = self.tx.send(Event::Error(p.message().into()));
                 match p {
                     Problem::Accessibility if !st.asked_accessibility => {
@@ -430,8 +568,15 @@ impl Ctx {
         };
         match msg {
             Msg::Cmd(CaptureCmd::SetSides(sides)) => st.sides = sides,
-            Msg::Cmd(CaptureCmd::Release { pos }) => st.deactivate(pos),
+            Msg::Cmd(CaptureCmd::Release { id, pos }) => {
+                // A release for an earlier activation is stale.
+                if st.active && st.id == id {
+                    st.deactivate(pos);
+                    self.update_timer(&mut st);
+                }
+            }
             Msg::Displays => st.refresh_desktop(&self.tx),
+            Msg::Locked => self.end(&mut st),
             Msg::Quit => {
                 if st.active || st.cursor_hidden {
                     st.deactivate(None);
@@ -459,7 +604,18 @@ impl Ctx {
             return true;
         }
         let Ok(mut st) = self.st.try_borrow_mut() else { return true };
-        if st.active { self.on_active(&mut st, ty, ev) } else { self.on_idle(&mut st, ty, ev) }
+        if st.active {
+            return self.on_active(&mut st, ty, ev);
+        }
+        // Real input (from the HID system, not posted by software) while a
+        // peer is in control here.
+        if CGEvent::integer_value_field(e, CGEventField::EventSourceStateID)
+            == i64::from(CGEventSourceStateID::HIDSystemState.0)
+            && st.local_gate.check(now_ms(), self.controlled.last())
+        {
+            let _ = self.tx.send(Event::LocalInput);
+        }
+        self.on_idle(&mut st, ty, ev)
     }
 
     /// Pointer is on this Mac: watch for edge hits and track held keys.
@@ -480,10 +636,23 @@ impl Ctx {
                 let p = Pos::new(loc.x, loc.y);
                 let (dx, dy) = mouse_delta(ev);
                 match logic::edge_hit(desktop, &st.sides, p, dx, dy) {
+                    Some(_) if st.armed && secure_input() => {
+                        // Keys wouldn't reach the peer; don't cross.
+                        st.armed = false;
+                        if !std::mem::replace(&mut st.secure_reported, true) {
+                            let _ = self.tx.send(Event::Error(SECURE_INPUT_MESSAGE.into()));
+                        }
+                    }
                     Some(side) if st.armed => {
                         let pos = desktop.clamp(p);
-                        if self.tx.send(Event::Activated { side, pos }).is_ok() {
+                        let id = st.id.wrapping_add(1);
+                        if self.tx.send(Event::Activated { id, side, pos }).is_ok() {
+                            st.id = id;
+                            st.secure_reported = false;
                             st.activate();
+                            // We control others now, so nobody controls us.
+                            self.controlled.clear();
+                            self.update_timer(st);
                             return false;
                         }
                     }
@@ -619,6 +788,18 @@ unsafe extern "C-unwind" fn on_timer(_timer: *mut CFRunLoopTimer, info: *mut c_v
     let _ = std::panic::catch_unwind(AssertUnwindSafe(|| ctx.tick()));
 }
 
+unsafe extern "C-unwind" fn on_screen_locked(
+    _center: *mut CFNotificationCenter,
+    observer: *mut c_void,
+    _name: *const CFNotificationName,
+    _object: *const c_void,
+    _info: *const CFDictionary,
+) {
+    // SAFETY: `observer` is a leaked `Arc<Inbox>`; `Inbox` is Sync.
+    let inbox = unsafe { &*(observer as *const Inbox) };
+    inbox.post(Msg::Locked);
+}
+
 unsafe extern "C-unwind" fn on_display_change(_display: CGDirectDisplayID, flags: CGDisplayChangeSummaryFlags, info: *mut c_void) {
     if flags.contains(CGDisplayChangeSummaryFlags::BeginConfigurationFlag) {
         return;
@@ -690,7 +871,12 @@ fn allow_cursor_hiding_in_background() {
 
 // --------------------------------------------------------------- injection
 
-fn inject_thread(tx: mpsc::UnboundedSender<Event>, mut rx: mpsc::UnboundedReceiver<Inject>, trusted: Arc<AtomicBool>) {
+fn inject_thread(
+    tx: mpsc::UnboundedSender<Event>,
+    rx: mpsc::UnboundedReceiver<Inject>,
+    trusted: Arc<AtomicBool>,
+    controlled: Arc<Controlled>,
+) {
     let Some(source) = CGEventSource::new(CGEventSourceStateID::HIDSystemState) else {
         let _ = tx.send(Event::Error("Other computers can't control this Mac: couldn't create an input source.".into()));
         return;
@@ -699,20 +885,83 @@ fn inject_thread(tx: mpsc::UnboundedSender<Event>, mut rx: mpsc::UnboundedReceiv
     // By default, posting an event mutes the local mouse and keyboard for
     // a quarter second. Don't.
     CGEventSource::set_local_events_suppression_interval(Some(&source), 0.0);
-    let mut inj = Injector::new(source);
-    tracing::info!("input injection ready");
-
-    let mut warned = false;
-    while let Some(msg) = rx.blocking_recv() {
-        if !trusted.load(Ordering::Relaxed) {
-            if !warned {
-                tracing::warn!("ignoring input from peers until Accessibility permission is granted");
-                warned = true;
-            }
-            continue;
+    // A small runtime of its own, for the key repeat timer.
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_time().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = tx.send(Event::Error(format!("Other computers can't control this Mac: {e}")));
+            return;
         }
-        warned = false;
-        inj.apply(msg);
+    };
+    let inj = Injector::new(source);
+    tracing::info!("input injection ready");
+    rt.block_on(inject_loop(inj, rx, trusted, controlled));
+}
+
+/// A number from the global preferences domain (`defaults read -g key`).
+fn global_pref(key: &'static str) -> Option<i64> {
+    let key = CFString::from_static_str(key);
+    // SAFETY: an immutable CF constant.
+    let app = unsafe { kCFPreferencesAnyApplication };
+    CFPreferencesCopyAppValue(&key, app)?.downcast_ref::<CFNumber>()?.as_i64()
+}
+
+/// The user's key repeat settings (System Settings > Keyboard).
+fn repeat_setting() -> Option<(Duration, Duration)> {
+    logic::repeat_timing(global_pref("InitialKeyRepeat"), global_pref("KeyRepeat"))
+}
+
+async fn inject_loop(
+    mut inj: Injector,
+    mut rx: mpsc::UnboundedReceiver<Inject>,
+    trusted: Arc<AtomicBool>,
+    controlled: Arc<Controlled>,
+) {
+    let mut warned = false;
+    let mut batch = Vec::new();
+    // CGEventPost doesn't auto-repeat, and senders drop their repeats.
+    let mut repeat = KeyRepeat::new(repeat_setting());
+    let mut settings_read = Instant::now();
+    loop {
+        let deadline = repeat.deadline();
+        let wake = tokio::time::Instant::from_std(deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(3600)));
+        tokio::select! {
+            msg = rx.recv() => {
+                let Some(first) = msg else { return };
+                // Everything already queued, without the moves that later
+                // ones make stale: a burst costs one move, not latency.
+                drain_coalesced(first, &mut rx, &mut batch);
+                if !trusted.load(Ordering::Relaxed) {
+                    if !warned {
+                        tracing::warn!("ignoring input from peers until Accessibility permission is granted");
+                        warned = true;
+                    }
+                    batch.clear();
+                    repeat.clear();
+                    continue;
+                }
+                warned = false;
+                controlled.injected(now_ms());
+                let now = Instant::now();
+                for m in batch.drain(..) {
+                    if let Inject::Key { code, down } = m {
+                        if down && is_repeatable(code) && now.duration_since(settings_read) > Duration::from_secs(5) {
+                            repeat.set_timing(repeat_setting());
+                            settings_read = now;
+                        }
+                        if !repeat.key(code, down, now) {
+                            continue;
+                        }
+                    }
+                    inj.apply(m);
+                }
+            }
+            _ = tokio::time::sleep_until(wake), if deadline.is_some() => {
+                if let Some(code) = repeat.poll(Instant::now()) {
+                    inj.repeat_key(code);
+                }
+            }
+        }
     }
 }
 
@@ -801,12 +1050,16 @@ impl Injector {
                 self.scroll(CGScrollEventUnit::Pixel, v, h);
             }
             Inject::ScrollDiscrete { dx, dy } => {
-                let (v, h) = logic::wire_to_mac_scroll(f64::from(dx) / 120.0, f64::from(dy) / 120.0);
+                let (v, h) = logic::wire_discrete_to_mac_lines(dx, dy);
                 let (h, v) = self.wheel.take(h, v);
                 self.scroll(CGScrollEventUnit::Line, v, h);
             }
             Inject::ScrollStop => self.smooth.reset(),
             Inject::Key { code, down } => {
+                // Each posted Caps Lock press toggles it; a repeat must not.
+                if self.mods.is_caps_repeat(code, down) {
+                    return;
+                }
                 self.mods.update(code, down);
                 if code == KEY_CAPSLOCK && !down {
                     return; // a toggle: one event per press
@@ -822,6 +1075,14 @@ impl Injector {
                 self.post(&ev, logic::key_extra_flags(kc));
             }
         }
+    }
+
+    /// Another "down" for a held key, marked as auto-repeat like a real one.
+    fn repeat_key(&self, code: u32) {
+        let Some(kc) = logic::evdev_to_mac(code) else { return };
+        let Some(ev) = CGEvent::new_keyboard_event(Some(&self.source), kc, true) else { return };
+        CGEvent::set_integer_value_field(Some(&ev), CGEventField::KeyboardEventAutorepeat, 1);
+        self.post(&ev, logic::key_extra_flags(kc));
     }
 
     fn scroll(&self, unit: CGScrollEventUnit, vertical: i32, horizontal: i32) {

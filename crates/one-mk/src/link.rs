@@ -1,212 +1,193 @@
-//! One connection to a trusted peer: the handshake, and the task that
-//! applies input the peer sends us when it controls this machine.
+//! One connection to a trusted peer: the handshake, and the tasks that
+//! read what the peer sends. Everything read is handed to the app, which
+//! alone decides what to do with it.
 
-use crate::app::Services;
-use anyhow::{Context, Result, bail, ensure};
-use one_mk_input::Inject;
+use anyhow::{Context, Result, bail};
 use one_mk_net::{ControlWriter, Fingerprint, Identity, Peer, read_frame};
-use one_mk_proto::{Control, Datagram, HeldKeys, MotionReceiver, PROTOCOL_VERSION, Rect};
-use std::time::Duration;
+use one_mk_proto::{Control, Datagram, DecodeError, PROTOCOL_VERSION, Pos, Rect, os, sanitize_name};
+use std::hash::{BuildHasher, RandomState};
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
-use tokio::time::Instant;
-
-/// If the controlling peer goes silent this long while keys are held, the
-/// keys are released. The sender keeps traffic flowing every 20 ms while
-/// it controls us, so this only fires when something is really wrong.
-const STUCK_KEY_TIMEOUT: Duration = Duration::from_millis(750);
 
 pub struct Link {
     pub fp: Fingerprint,
     pub id: usize,
+    /// Display-safe name the peer gave itself.
     pub name: String,
-    pub initiator: bool,
+    /// The peer's OS (see [`one_mk_proto::os`]).
+    pub os: u8,
+    pub rank: Rank,
     pub conn: quinn::Connection,
     pub ctl: ControlWriter,
+    /// The peer's monitors.
     pub screens: Vec<Rect>,
+    /// Our monitors as we announced them in our `Hello`.
+    pub sent_screens: Vec<Rect>,
     recv: quinn::RecvStream,
 }
 
+/// What a link task tells the app, tagged with the peer and link id.
 pub enum LinkEvent {
-    Screens(Vec<Rect>),
-    /// The peer's pointer arrived on this machine.
-    Entered,
-    /// The peer's pointer left this machine.
-    Left,
+    Control(Control),
+    Motion { epoch: u16, seq: u32, pos: Pos },
     Closed,
 }
 
+pub type LinkTx = mpsc::UnboundedSender<(Fingerprint, usize, LinkEvent)>;
+
+/// Orders duplicate connections between the same two machines (both may
+/// dial, and each may dial several addresses). Both sides compute the same
+/// rank for a connection, and both keep the lowest, whatever order the
+/// connections arrive in: those dialed by the lower fingerprint first,
+/// then by the dialer's random nonce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Rank {
+    dialed_by_higher: bool,
+    dialer_nonce: u64,
+}
+
+impl Rank {
+    pub fn new(me: Fingerprint, peer: Fingerprint, initiator: bool, dialer_nonce: u64) -> Self {
+        let dialer = if initiator { me } else { peer };
+        Self { dialed_by_higher: dialer != me.min(peer), dialer_nonce }
+    }
+}
+
+fn random_u64() -> u64 {
+    // std seeds RandomState from the OS and changes its keys on every call.
+    RandomState::new().hash_one(SystemTime::now())
+}
+
 /// Exchanges `Hello`s on the control stream (opened by the dialer).
+/// `device` is our own name for the peer, for error messages.
 pub async fn handshake(
     peer: Peer,
     (send, mut recv): (quinn::SendStream, quinn::RecvStream),
     me: &Identity,
     screens: Vec<Rect>,
+    device: &str,
 ) -> Result<Link> {
     let ctl = ControlWriter::spawn(send);
-    ctl.send(Control::Hello { version: PROTOCOL_VERSION, name: me.name.clone(), screens });
+    let nonce = random_u64();
+    ctl.send(Control::Hello {
+        version: PROTOCOL_VERSION,
+        name: me.name.clone(),
+        screens: screens.clone(),
+        nonce,
+        os: os::local(),
+    });
 
     let mut buf = Vec::new();
-    let hello = tokio::time::timeout(Duration::from_secs(5), read_frame(&mut recv, &mut buf))
+    let hello = match tokio::time::timeout(Duration::from_secs(5), read_frame(&mut recv, &mut buf))
         .await
-        .context("peer did not say hello")??;
-    let Some(Control::Hello { version, name, screens }) = hello else {
+        .context("peer did not say hello")?
+    {
+        Err(e) => match e.downcast_ref::<DecodeError>() {
+            Some(DecodeError::Version(v)) => bail!(
+                "{device} runs an incompatible version of one-mk (protocol {v}, we speak {PROTOCOL_VERSION}); update both"
+            ),
+            _ => return Err(e),
+        },
+        Ok(hello) => hello,
+    };
+    let Some(Control::Hello { name, screens: peer_screens, nonce: peer_nonce, os, .. }) = hello else {
         bail!("peer sent an unexpected first message");
     };
-    ensure!(
-        version == PROTOCOL_VERSION,
-        "{name} runs an incompatible version of one-mk (protocol {version}, we speak {PROTOCOL_VERSION}); update both"
-    );
+    let dialer_nonce = if peer.initiator { nonce } else { peer_nonce };
     Ok(Link {
         fp: peer.fingerprint,
         id: peer.conn.stable_id(),
-        name,
-        initiator: peer.initiator,
+        name: sanitize_name(&name),
+        os,
+        rank: Rank::new(me.fingerprint, peer.fingerprint, peer.initiator, dialer_nonce),
         conn: peer.conn,
         ctl,
-        screens,
+        screens: peer_screens,
+        sent_screens: screens,
         recv,
     })
 }
 
 impl Link {
-    /// Spawns the receive side. Returns the parts the app keeps.
-    pub fn spawn(
-        self,
-        inject: mpsc::UnboundedSender<Inject>,
-        events: mpsc::UnboundedSender<(Fingerprint, usize, LinkEvent)>,
-        services: Services,
-    ) -> (quinn::Connection, ControlWriter) {
-        let Link { fp, id, conn, ctl, mut recv, name, .. } = self;
-        // Bulk streams (clipboard, files) are served by their own tasks,
-        // never by the input task below.
-        tokio::spawn(crate::app::serve_streams(conn.clone(), fp, name, services, true));
-        let task_conn = conn.clone();
+    /// Spawns the tasks that read the peer's control stream and datagrams.
+    /// Each sends what it reads to `events` as soon as it arrives, so
+    /// neither can starve the other, and no read is ever cancelled halfway
+    /// through a frame. Exactly one `Closed` follows the last event.
+    pub fn spawn(self, events: LinkTx) -> (quinn::Connection, ControlWriter) {
+        let Link { fp, id, name, conn, ctl, mut recv, .. } = self;
+        let (ctl_conn, ctl_events) = (conn.clone(), events.clone());
         tokio::spawn(async move {
-            let mut target = Target::new(inject);
-            let send = |e| {
-                let _ = events.send((fp, id, e));
-            };
             let mut buf = Vec::with_capacity(256);
             loop {
-                let check_stuck = !target.held.is_empty();
-                tokio::select! {
-                    biased;
-                    d = task_conn.read_datagram() => match d {
-                        Ok(bytes) => {
-                            target.last_rx = Instant::now();
-                            match Datagram::decode(&bytes) {
-                                Ok(Datagram::Probe { id, sent_ns }) => {
-                                    let (b, n) = Datagram::ProbeEcho { id, sent_ns }.encode();
-                                    let _ = task_conn.send_datagram(bytes::Bytes::copy_from_slice(&b[..n]));
-                                }
-                                Ok(d) => target.datagram(d),
-                                Err(e) => tracing::debug!("bad datagram: {e}"),
-                            }
+                match read_frame(&mut recv, &mut buf).await {
+                    Ok(Some(msg)) => {
+                        if ctl_events.send((fp, id, LinkEvent::Control(msg))).is_err() {
+                            break;
                         }
-                        Err(_) => break,
-                    },
-                    f = read_frame(&mut recv, &mut buf) => match f {
-                        Ok(Some(msg)) => {
-                            target.last_rx = Instant::now();
-                            if let Some(e) = target.control(msg) {
-                                send(e);
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            tracing::debug!("control stream: {e:#}");
+                    }
+                    Ok(None) => break,
+                    // The whole frame was read, so the stream is still in
+                    // step: skip it. Unknown tags come from newer peers.
+                    Err(e) => match e.downcast_ref::<DecodeError>() {
+                        Some(DecodeError::UnknownTag(t)) => tracing::debug!(peer = %name, "skipping unknown message {t}"),
+                        Some(d) => tracing::warn!(peer = %name, "ignoring a malformed message: {d}"),
+                        None => {
+                            tracing::debug!(peer = %name, "control stream: {e:#}");
                             break;
                         }
                     },
-                    _ = tokio::time::sleep(STUCK_KEY_TIMEOUT / 3), if check_stuck => {
-                        if target.last_rx.elapsed() >= STUCK_KEY_TIMEOUT {
-                            tracing::warn!("controlling peer went silent; releasing held keys");
-                            target.release_all();
-                        }
-                    }
                 }
             }
-            target.release_all();
-            send(LinkEvent::Closed);
+            // Ends the datagram task below, which reports `Closed`.
+            ctl_conn.close(0u32.into(), b"control stream ended");
+        });
+        let task_conn = conn.clone();
+        tokio::spawn(async move {
+            while let Ok(bytes) = task_conn.read_datagram().await {
+                match Datagram::decode(&bytes) {
+                    Ok(Datagram::Motion { epoch, seq, pos }) => {
+                        let _ = events.send((fp, id, LinkEvent::Motion { epoch, seq, pos }));
+                    }
+                    Ok(Datagram::Probe { id, sent_ns }) => {
+                        let (b, n) = Datagram::ProbeEcho { id, sent_ns }.encode();
+                        let _ = task_conn.send_datagram(bytes::Bytes::copy_from_slice(&b[..n]));
+                    }
+                    Ok(Datagram::ProbeEcho { .. }) => {}
+                    Err(e) => tracing::trace!("bad datagram: {e}"),
+                }
+            }
+            let _ = events.send((fp, id, LinkEvent::Closed));
         });
         (conn, ctl)
-    }
-}
-
-/// State for when the peer controls this machine.
-struct Target {
-    inject: mpsc::UnboundedSender<Inject>,
-    motion: MotionReceiver,
-    held: HeldKeys,
-    last_rx: Instant,
-}
-
-impl Target {
-    fn new(inject: mpsc::UnboundedSender<Inject>) -> Self {
-        Self { inject, motion: MotionReceiver::default(), held: HeldKeys::new(), last_rx: Instant::now() }
-    }
-
-    fn datagram(&mut self, d: Datagram) {
-        if let Datagram::Motion { epoch, seq, pos } = d
-            && let Some(p) = self.motion.accept(epoch, seq, pos)
-        {
-            let _ = self.inject.send(Inject::MoveTo(p));
-        }
-    }
-
-    fn control(&mut self, msg: Control) -> Option<LinkEvent> {
-        let inject = |i| {
-            let _ = self.inject.send(i);
-        };
-        match msg {
-            Control::Hello { screens, .. } | Control::Screens(screens) => return Some(LinkEvent::Screens(screens)),
-            Control::Enter { epoch, pos } => {
-                self.motion.enter(epoch);
-                inject(Inject::MoveTo(pos));
-                return Some(LinkEvent::Entered);
-            }
-            Control::Leave => {
-                self.motion.leave();
-                self.release_all();
-                return Some(LinkEvent::Left);
-            }
-            Control::Key { code, down } => {
-                if self.motion.is_active() && self.held.update(code, down) {
-                    inject(Inject::Key { code, down });
-                }
-            }
-            Control::Button { button, down, seq, pos } => {
-                if self.motion.is_active() {
-                    self.motion.sync(seq);
-                    inject(Inject::MoveTo(pos));
-                    if self.held.update(button, down) {
-                        inject(Inject::Button { button, down });
-                    }
-                }
-            }
-            Control::Scroll { dx, dy } if self.motion.is_active() => {
-                inject(Inject::Scroll { dx: f64::from(dx), dy: f64::from(dy) })
-            }
-            Control::ScrollDiscrete { dx, dy } if self.motion.is_active() => inject(Inject::ScrollDiscrete { dx, dy }),
-            Control::ScrollStop if self.motion.is_active() => inject(Inject::ScrollStop),
-            Control::Scroll { .. } | Control::ScrollDiscrete { .. } | Control::ScrollStop => {}
-        }
-        None
-    }
-
-    fn release_all(&mut self) {
-        for code in self.held.take_all() {
-            let release = if is_button(code) {
-                Inject::Button { button: code, down: false }
-            } else {
-                Inject::Key { code, down: false }
-            };
-            let _ = self.inject.send(release);
-        }
     }
 }
 
 /// evdev BTN_* codes for mice live in 0x110..0x120.
 pub fn is_button(code: u32) -> bool {
     (0x110..0x120).contains(&code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both machines rank every connection between them identically, so
+    /// they keep the same one whatever order the duplicates arrive in.
+    #[test]
+    fn both_sides_keep_the_same_duplicate() {
+        let a = Identity::ephemeral().unwrap().fingerprint;
+        let b = Identity::ephemeral().unwrap().fingerprint;
+        // (dialed by a?, dialer's nonce) for four duplicate connections.
+        let conns = [(true, 7u64), (true, 3), (false, 1), (false, 9)];
+        let ranks = |me, peer| -> Vec<Rank> {
+            conns.iter().map(|&(by_a, n)| Rank::new(me, peer, by_a == (me == a), n)).collect()
+        };
+        let (on_a, on_b) = (ranks(a, b), ranks(b, a));
+        assert_eq!(on_a, on_b);
+        // Arrival order doesn't matter: each side keeps the minimum.
+        let keep = |order: &[usize], r: &[Rank]| order.iter().map(|&i| (r[i], i)).min().unwrap().1;
+        let winner = keep(&[0, 1, 2, 3], &on_a);
+        assert_eq!(keep(&[3, 2, 1, 0], &on_b), winner);
+        assert_eq!(winner, if a < b { 1 } else { 2 });
+    }
 }

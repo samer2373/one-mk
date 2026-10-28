@@ -15,45 +15,64 @@
 //! Windows silently removes low-level hooks that take longer than
 //! `LowLevelHooksTimeout` (about 300 ms to 1 s) to return, so the hook
 //! callbacks only update in-thread state, push to an unbounded channel and
-//! (once per activation) warp the cursor. Everything else is posted to the
-//! window and done by the message loop.
+//! (once per activation) warp the cursor and read the key state. Everything
+//! else is posted to the window and done by the message loop. A guard timer
+//! notices if the hooks were removed anyway (the parked cursor keeps
+//! moving), reinstalls them, and gives the pointer back if that doesn't help.
+//!
+//! Pen, touch and injected mouse input never starts a crossing and is never
+//! forwarded; injected keys are left alone. Real input while a peer is in
+//! control here is reported as `Event::LocalInput`.
 //!
 //! TODO: run as a SYSTEM service (with a helper in the user's session) so
 //! that UAC prompts, the secure desktop (Ctrl+Alt+Del) and the login screen
 //! can be controlled. A normal process can't see or inject input there, and
 //! can't inject into windows of elevated programs (UIPI).
 
+use crate::common_logic::{Controlled, KeyRepeat, LocalInputGate, drain_coalesced, is_repeatable, now_ms};
 use crate::win_logic::{
-    BTN_EXTRA, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BTN_SIDE, SmoothScroll, Space, WinKey, evdev_to_win,
-    hook_key_to_evdev, wheel_to_wire, wire_to_wheel,
+    BTN_EXTRA, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, BTN_SIDE, EdgeGate, Heading, Held, HookWatchdog, LLMHF_INJECTED,
+    LLMHF_LOWER_IL_INJECTED, SenderKeys, SmoothScroll, Space, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1,
+    VK_XBUTTON2, Watch, WinKey, evdev_to_win, hook_key_to_evdev, is_synthetic_mouse, repeat_timing, vk_to_evdev,
+    wheel_to_wire, wire_to_wheel,
 };
 use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::{Result, bail};
 use one_mk_proto::{Rect, Side};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
+use std::time::Duration;
 use tokio::sync::mpsc;
-use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
+use windows_sys::Win32::Media::{timeBeginPeriod, timeEndPeriod};
+use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::RemoteDesktop::{NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcessId, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor,
     MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext, SetThreadDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+    GetAsyncKeyState, INPUT, INPUT_0, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
     KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
-    HC_ACTION, HHOOK, HWND_TOPMOST, KBDLLHOOKSTRUCT, KillTimer, LLKHF_EXTENDED, LLKHF_UP, LLMHF_INJECTED,
-    LWA_ALPHA, MONITORINFOF_PRIMARY, MSG, MSLLHOOKSTRUCT, PostMessageW, PostQuitMessage, RegisterClassW,
-    SW_HIDE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetCursorPos, SetLayeredWindowAttributes, SetTimer,
-    SetWindowPos, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP,
+    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
+    GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowThreadProcessId, HC_ACTION, HHOOK, HWND_TOPMOST,
+    KBDLLHOOKSTRUCT, KillTimer, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP, LWA_ALPHA, MONITORINFOF_PRIMARY, MSG,
+    MSLLHOOKSTRUCT, PostMessageW, PostQuitMessage, RegisterClassW, SM_SWAPBUTTON, SPI_GETKEYBOARDDELAY,
+    SPI_GETKEYBOARDSPEED, SW_HIDE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetCursor, SetCursorPos,
+    SetLayeredWindowAttributes, SetTimer, SetWindowPos, SetWindowsHookExW, ShowWindow, SystemParametersInfoW,
+    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP,
     WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
     WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
     WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
@@ -102,15 +121,18 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let _ = ev_tx.send(Event::Desktop(space.logical().clone()));
     tracing::info!(screens = ?space.phys().screens, scale = space.scale(), "monitors (physical pixels)");
     let shared = Arc::new(Mutex::new(space));
+    let controlled = Arc::new(Controlled::default());
 
-    let (tx, sh) = (ev_tx.clone(), shared.clone());
+    let (tx, sh, ctl) = (ev_tx.clone(), shared.clone(), controlled.clone());
     std::thread::Builder::new().name("one-mk-capture".into()).spawn(move || {
-        if let Err(e) = capture_thread(tx.clone(), cap_rx, sh) {
+        if let Err(e) = capture_thread(tx.clone(), cap_rx, sh, ctl) {
             tracing::warn!("input capture unavailable: {e:#}");
             let _ = tx.send(Event::Error(format!("Can't share this computer's mouse and keyboard with others: {e:#}")));
         }
     })?;
-    std::thread::Builder::new().name("one-mk-inject".into()).spawn(move || inject_thread(ev_tx, inj_rx, shared))?;
+    std::thread::Builder::new()
+        .name("one-mk-inject".into())
+        .spawn(move || inject_thread(ev_tx, inj_rx, shared, controlled))?;
     Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx })
 }
 
@@ -178,33 +200,147 @@ struct State {
     sides: Vec<Side>,
     cmds: std_mpsc::Receiver<CaptureCmd>,
     captured: Option<Captured>,
+    /// The last activation id handed out.
+    next_id: u32,
     /// evdev keys and buttons that went down locally (not forwarded); their
     /// release must reach this machine even while captured, or they would
-    /// stay stuck down here.
+    /// stay stuck down here. Rebuilt from the real key state when capture
+    /// starts, because Win+L, Ctrl+Alt+Del and UAC prompts hide key-ups.
     local: Held,
+    /// Keys forwarded while captured, to drop auto-repeat.
+    fwd: SenderKeys,
+    gate: EdgeGate,
+    /// The local mouse's direction of movement, for corners.
+    heading: Heading,
+    controlled: Arc<Controlled>,
+    local_gate: LocalInputGate,
+    hooks: Hooks,
+    watchdog: HookWatchdog,
+    /// We run elevated ourselves, so elevated windows are no problem.
+    self_elevated: bool,
+    /// Foreground window and whether it is elevated, to avoid asking twice.
+    elevated_cache: Option<(usize, bool)>,
 }
 
 #[derive(Clone, Copy)]
 struct Captured {
+    id: u32,
     /// Where the cursor is kept while captured.
     park: (i32, i32),
     /// Where it hit the edge, for `Release { pos: None }`.
     entry: (i32, i32),
 }
 
-/// A set of evdev codes below 0x200 (all keys and mouse buttons we map).
-#[derive(Default)]
-struct Held([u64; 8]);
+#[derive(Clone, Copy)]
+struct Hooks {
+    mouse: HHOOK,
+    keyboard: HHOOK,
+}
 
-impl Held {
-    fn set(&mut self, code: u32, down: bool) {
-        if let Some(word) = self.0.get_mut(code as usize / 64) {
-            let bit = 1u64 << (code % 64);
-            if down { *word |= bit } else { *word &= !bit }
+impl Hooks {
+    /// Installs both low-level hooks, or neither (returning the error code).
+    fn install() -> std::result::Result<Self, u32> {
+        // SAFETY: the hook procedures are valid for the life of the thread;
+        // the module handle is our own exe.
+        unsafe {
+            let hinst = GetModuleHandleW(std::ptr::null());
+            let hooks = Hooks {
+                mouse: SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), hinst, 0),
+                keyboard: SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), hinst, 0),
+            };
+            if hooks.mouse.is_null() || hooks.keyboard.is_null() {
+                let err = GetLastError();
+                hooks.remove();
+                return Err(err);
+            }
+            Ok(hooks)
         }
     }
-    fn has(&self, code: u32) -> bool {
-        self.0.get(code as usize / 64).is_some_and(|w| w & (1u64 << (code % 64)) != 0)
+
+    fn remove(self) {
+        for h in [self.mouse, self.keyboard] {
+            if !h.is_null() {
+                // SAFETY: a hook handle we installed. Fails harmlessly if
+                // Windows already removed it.
+                unsafe { UnhookWindowsHookEx(h) };
+            }
+        }
+    }
+}
+
+/// Whether the real (async) state says `vk` is down.
+fn async_down(vk: u16) -> bool {
+    // SAFETY: plain call.
+    unsafe { GetAsyncKeyState(i32::from(vk)) as u16 & 0x8000 != 0 }
+}
+
+/// Keys and buttons physically held right now, as evdev codes.
+fn async_held() -> Held {
+    // SAFETY: plain call.
+    let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
+    let mut held = Held::default();
+    for vk in 1u16..=0xFE {
+        if async_down(vk) {
+            // SAFETY: plain call.
+            let scan = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) };
+            if let Some(code) = vk_to_evdev(vk, scan, swapped) {
+                held.set(code, true);
+            }
+        }
+    }
+    held
+}
+
+/// Whether any mouse button is physically held right now.
+fn async_any_button() -> bool {
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2].into_iter().any(async_down)
+}
+
+/// Whether process `pid` runs elevated. `None` if that can't be told; a
+/// process we may not even query counts as elevated.
+fn process_elevated(pid: u32) -> Option<bool> {
+    // SAFETY: handles are checked and closed; the out-pointers are valid.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return (GetLastError() == ERROR_ACCESS_DENIED).then_some(true);
+        }
+        let mut token: HANDLE = std::ptr::null_mut();
+        let opened = OpenProcessToken(process, TOKEN_QUERY, &mut token) != 0;
+        let err = GetLastError();
+        CloseHandle(process);
+        if !opened {
+            return (err == ERROR_ACCESS_DENIED).then_some(true);
+        }
+        let mut info = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut len = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            (&mut info as *mut TOKEN_ELEVATION).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        ) != 0;
+        CloseHandle(token);
+        ok.then_some(info.TokenIsElevated != 0)
+    }
+}
+
+thread_local! {
+    /// `timeBeginPeriod(1)` is in effect (only while captured).
+    static HIRES: Cell<bool> = const { Cell::new(false) };
+}
+
+fn set_hires(on: bool) {
+    if HIRES.with(|h| h.replace(on)) != on {
+        // SAFETY: plain calls; begin and end are kept balanced by HIRES.
+        unsafe {
+            if on {
+                timeBeginPeriod(1);
+            } else {
+                timeEndPeriod(1);
+            }
+        }
     }
 }
 
@@ -225,6 +361,7 @@ fn capture_thread(
     tx: mpsc::UnboundedSender<Event>,
     mut cmds: mpsc::UnboundedReceiver<CaptureCmd>,
     shared: Arc<Mutex<Space>>,
+    controlled: Arc<Controlled>,
 ) -> Result<()> {
     set_thread_dpi_awareness();
     let space = shared.lock().map_err(|_| anyhow::anyhow!("state poisoned"))?.clone();
@@ -271,6 +408,19 @@ fn capture_thread(
         hwnd
     };
 
+    let hooks = match Hooks::install() {
+        Ok(h) => h,
+        Err(err) => {
+            // SAFETY: our window.
+            unsafe { DestroyWindow(hwnd) };
+            bail!(
+                "Windows refused to let one-mk watch the mouse and keyboard (error {err}); security software may be blocking it"
+            );
+        }
+    };
+    // SAFETY: plain call.
+    let self_elevated = process_elevated(unsafe { GetCurrentProcessId() }).unwrap_or(false);
+
     let (cmd_tx, cmd_rx) = std_mpsc::channel();
     STATE.with(|s| {
         *s.borrow_mut() = Some(State {
@@ -281,33 +431,19 @@ fn capture_thread(
             sides: Vec::new(),
             cmds: cmd_rx,
             captured: None,
+            next_id: 0,
             local: Held::default(),
+            fwd: SenderKeys::default(),
+            gate: EdgeGate::default(),
+            heading: Heading::default(),
+            controlled,
+            local_gate: LocalInputGate::default(),
+            hooks,
+            watchdog: HookWatchdog::default(),
+            self_elevated,
+            elevated_cache: None,
         })
     });
-
-    // SAFETY: the hook procedures are valid for the life of the thread; a
-    // null module handle is correct for low-level hooks in our own exe.
-    let (mouse, keyboard) = unsafe {
-        let hinst = GetModuleHandleW(std::ptr::null());
-        let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), hinst, 0);
-        let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), hinst, 0);
-        (mouse, keyboard)
-    };
-    let unhook = |h: HHOOK| {
-        if !h.is_null() {
-            // SAFETY: a hook handle we installed.
-            unsafe { UnhookWindowsHookEx(h) };
-        }
-    };
-    if mouse.is_null() || keyboard.is_null() {
-        // SAFETY: plain call.
-        let err = unsafe { GetLastError() };
-        unhook(mouse);
-        unhook(keyboard);
-        // SAFETY: our window.
-        unsafe { DestroyWindow(hwnd) };
-        bail!("Windows refused to let one-mk watch the mouse and keyboard (error {err}); security software may be blocking it");
-    }
     tracing::info!("input capture ready");
 
     // The daemon's command channel is async; forward it into the message
@@ -336,14 +472,16 @@ fn capture_thread(
         }
     }
 
-    unhook(mouse);
-    unhook(keyboard);
     // If we exit while captured, give the user their cursor back.
-    let restore = STATE.with(|s| s.borrow_mut().take().and_then(|st| st.captured.map(|c| c.entry)));
-    if let Some((x, y)) = restore {
-        // SAFETY: plain call.
-        unsafe { SetCursorPos(x, y) };
+    let state = STATE.with(|s| s.borrow_mut().take());
+    if let Some(st) = state {
+        st.hooks.remove();
+        if let Some(c) = st.captured {
+            // SAFETY: plain call.
+            unsafe { SetCursorPos(c.entry.0, c.entry.1) };
+        }
     }
+    set_hires(false);
     Ok(())
 }
 
@@ -359,12 +497,14 @@ fn apply(effect: Effect, hwnd: HWND) {
         match effect {
             Effect::None => {}
             Effect::Park((x, y)) => {
+                set_hires(true);
                 SetCursorPos(x, y);
                 PostMessageW(hwnd, WM_APP_OVERLAY, 1, 0);
             }
             Effect::Unpark((x, y)) => {
                 PostMessageW(hwnd, WM_APP_OVERLAY, 0, 0);
                 SetCursorPos(x, y);
+                set_hires(false);
             }
         }
     }
@@ -406,6 +546,17 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
 }
 
+/// What the guard timer found.
+enum Guard {
+    Rewarp((i32, i32)),
+    /// Reinstall these hooks, then re-park at the point.
+    Reinstall(Hooks, (i32, i32)),
+    /// Capture was ended; apply the effect, then reinstall the hooks so the
+    /// next crossing works.
+    GaveUp(Hooks, Effect),
+    Ended(Effect),
+}
+
 impl State {
     /// Sends to the daemon; if it is gone while captured, gives the pointer back.
     fn send(&mut self, ev: Event) -> Effect {
@@ -415,11 +566,56 @@ impl State {
         Effect::None
     }
 
+    /// Ends capture. Without a position the pointer goes back to where it
+    /// left, on the edge, so the edge waits for it to move off first.
     fn release(&mut self, to: Option<(i32, i32)>) -> Effect {
         match self.captured.take() {
-            Some(c) => Effect::Unpark(to.unwrap_or(c.entry)),
+            Some(c) => {
+                self.fwd.clear();
+                self.heading.reset();
+                if to.is_none() {
+                    self.gate.disarm();
+                }
+                Effect::Unpark(to.unwrap_or(c.entry))
+            }
             None => Effect::None,
         }
+    }
+
+    /// Ends capture on our own initiative, telling the daemon.
+    fn end(&mut self) -> Effect {
+        let Some(id) = self.captured.map(|c| c.id) else { return Effect::None };
+        let effect = self.release(None);
+        let _ = self.tx.send(Event::Deactivated { id });
+        effect
+    }
+
+    /// Real input happened here; tell the daemon if a peer is in control.
+    fn local_input(&mut self) {
+        if self.local_gate.check(now_ms(), self.controlled.last()) {
+            let _ = self.tx.send(Event::LocalInput);
+        }
+    }
+
+    fn activate(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
+        let pos = self.space.to_logical(x, y);
+        let id = self.next_id.wrapping_add(1);
+        if self.tx.send(Event::Activated { id, side, pos }).is_err() {
+            return (false, Effect::None);
+        }
+        self.next_id = id;
+        // Key-ups hidden by the lock screen, Ctrl+Alt+Del or a UAC prompt
+        // would leave stale entries; start from what is really held.
+        self.local = async_held();
+        self.fwd.clear();
+        self.watchdog.reset();
+        self.heading.reset();
+        // We control others now, so nobody controls us.
+        self.controlled.clear();
+        let park = self.space.park_point(x, y);
+        let entry = self.space.to_phys(pos);
+        self.captured = Some(Captured { id, park, entry });
+        (true, Effect::Park(park))
     }
 
     /// Returns whether to swallow the event, and what to do afterwards.
@@ -427,6 +623,8 @@ impl State {
         if info.dwExtraInfo == OUR_INPUT {
             return (false, Effect::None);
         }
+        let synthetic = is_synthetic_mouse(info.flags, info.dwExtraInfo);
+        let injected = info.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) != 0;
         let hi = (info.mouseData >> 16) as u16;
         let button = match msg {
             WM_LBUTTONDOWN | WM_LBUTTONUP => Some(BTN_LEFT),
@@ -446,26 +644,36 @@ impl State {
             if let Some(b) = button {
                 self.local.set(b, down);
             }
-            if msg == WM_MOUSEMOVE
-                && let Some(side) = self.space.edge_hit(&self.sides, x, y)
-            {
-                let pos = self.space.to_logical(x, y);
-                if self.tx.send(Event::Activated { side, pos }).is_ok() {
-                    let park = self.space.park_point(x, y);
-                    let entry = self.space.to_phys(pos);
-                    self.captured = Some(Captured { park, entry });
-                    return (true, Effect::Park(park));
-                }
+            if !injected {
+                self.local_input();
             }
-            return (false, Effect::None);
+            if msg != WM_MOUSEMOVE {
+                return (false, Effect::None);
+            }
+            if synthetic {
+                // Pen, touch or software: never a crossing.
+                self.heading.reset();
+                return (false, Effect::None);
+            }
+            let (dx, dy) = self.heading.update(x, y);
+            let hit = self.space.edge_hit(&self.sides, x, y, dx, dy);
+            // Only asked at an edge: a drag must not cross machines.
+            let dragging = hit.is_some() && async_any_button();
+            return match self.gate.check(hit, dragging) {
+                Some(side) => self.activate(side, x, y),
+                None => (false, Effect::None),
+            };
         };
 
+        if synthetic {
+            // Pen, touch or another program: not ours to forward, and it
+            // must not move the parked cursor either.
+            return (true, Effect::None);
+        }
         let effect = match msg {
             WM_MOUSEMOVE => {
-                // Absolute moves injected by other software (tablets, remote
-                // tools) are not deltas; drop them.
                 let (dx, dy) = (x - cap.park.0, y - cap.park.1);
-                if info.flags & LLMHF_INJECTED != 0 || (dx == 0 && dy == 0) {
+                if dx == 0 && dy == 0 {
                     Effect::None
                 } else {
                     let (dx, dy) = self.space.delta_to_logical(dx, dy);
@@ -493,12 +701,20 @@ impl State {
         if info.dwExtraInfo == OUR_INPUT {
             return (false, Effect::None);
         }
+        let injected = info.flags & LLKHF_INJECTED != 0;
         let down = info.flags & LLKHF_UP == 0;
         let code = hook_key_to_evdev(info.vkCode, info.scanCode, info.flags & LLKHF_EXTENDED != 0);
         if self.captured.is_none() {
             if let Some(c) = code {
                 self.local.set(c, down);
             }
+            if !injected {
+                self.local_input();
+            }
+            return (false, Effect::None);
+        }
+        if injected {
+            // Another program's keystrokes: leave them to this machine.
             return (false, Effect::None);
         }
         let Some(code) = code else {
@@ -514,6 +730,10 @@ impl State {
             self.local.set(code, false);
             return (false, Effect::None);
         }
+        // Auto-repeat (Caps Lock's too) is dropped; the peer repeats.
+        if !self.fwd.forward(code, down) {
+            return (true, Effect::None);
+        }
         (true, self.send(Event::Key { code, down }))
     }
 
@@ -523,9 +743,73 @@ impl State {
                 self.sides = sides;
                 Effect::None
             }
-            CaptureCmd::Release { pos } => {
+            CaptureCmd::Release { id, pos } => {
+                if !self.captured.is_some_and(|c| c.id == id) {
+                    return Effect::None; // stale
+                }
                 let to = pos.map(|p| self.space.to_phys(p));
                 self.release(to)
+            }
+        }
+    }
+
+    /// Whether the foreground window belongs to an elevated program, whose
+    /// input our low-level hooks can't see.
+    fn foreground_elevated(&mut self) -> bool {
+        if self.self_elevated {
+            return false;
+        }
+        // SAFETY: plain call.
+        let hwnd = unsafe { GetForegroundWindow() };
+        if hwnd.is_null() {
+            return false;
+        }
+        if let Some((h, elevated)) = self.elevated_cache
+            && h == hwnd as usize
+        {
+            return elevated;
+        }
+        let mut pid = 0u32;
+        // SAFETY: valid window handle (or a stale one, which just fails).
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        let elevated = pid != 0 && process_elevated(pid).unwrap_or(false);
+        self.elevated_cache = Some((hwnd as usize, elevated));
+        elevated
+    }
+
+    /// Runs every 200 ms while captured.
+    fn guard_tick(&mut self, cursor: Option<(i32, i32)>) -> Option<Guard> {
+        let cap = self.captured?;
+        if self.foreground_elevated() {
+            tracing::warn!("an elevated window is in front; giving the pointer back");
+            let effect = self.end();
+            let _ = self.tx.send(Event::Error(
+                "A program running as administrator is in front on this PC, and Windows hides its \
+                 keyboard and mouse from one-mk, so the pointer was brought back here. Switch to \
+                 another window (or run one-mk as administrator) to control your other computers."
+                    .into(),
+            ));
+            return Some(Guard::Ended(effect));
+        }
+        // Something else (an app, a remote tool) may have moved the cursor;
+        // if it keeps happening our hooks are probably gone.
+        let moved = cursor.is_some_and(|c| c != cap.park);
+        match self.watchdog.tick(moved) {
+            Watch::Fine => None,
+            Watch::Rewarp => Some(Guard::Rewarp(cap.park)),
+            Watch::Reinstall => {
+                tracing::warn!("the parked cursor keeps moving; reinstalling the input hooks");
+                Some(Guard::Reinstall(self.hooks, cap.park))
+            }
+            Watch::GiveUp => {
+                tracing::warn!("lost the input hooks; giving the pointer back");
+                let effect = self.end();
+                let _ = self.tx.send(Event::Error(
+                    "Windows stopped passing this PC's mouse and keyboard to one-mk (this can happen \
+                     when the computer is very busy), so the pointer was brought back here."
+                        .into(),
+                ));
+                Some(Guard::GaveUp(self.hooks, effect))
             }
         }
     }
@@ -547,13 +831,25 @@ impl State {
             *shared = space.clone();
         }
         self.space = space;
-        let mut effect = self.send(Event::Desktop(self.space.logical().clone()));
+        let effect = self.send(Event::Desktop(self.space.logical().clone()));
         // The park point may now be off-screen; start over cleanly.
-        if self.captured.is_some() {
-            effect = self.release(None);
-            let _ = self.tx.send(Event::Deactivated);
+        if self.captured.is_some() { self.end() } else { effect }
+    }
+}
+
+/// Replaces the hooks (they may have been removed by Windows already).
+fn reinstall_hooks(old: Hooks) -> bool {
+    old.remove();
+    match Hooks::install() {
+        Ok(h) => {
+            with_state(|s| s.hooks = h);
+            true
         }
-        effect
+        Err(err) => {
+            tracing::warn!(err, "reinstalling input hooks failed");
+            with_state(|s| s.hooks = Hooks { mouse: std::ptr::null_mut(), keyboard: std::ptr::null_mut() });
+            false
+        }
     }
 }
 
@@ -595,16 +891,37 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_TIMER if wparam == TIMER_GUARD => {
-            // Something else (an app, a remote tool) moved the cursor: put
-            // it back, or the next delta would be measured from the wrong
-            // place and the overlay would no longer hide it.
-            if let Some(Some((x, y))) = with_state(|s| s.captured.map(|c| c.park)) {
-                let mut p = POINT { x: 0, y: 0 };
-                // SAFETY: valid out-pointer.
-                if unsafe { GetCursorPos(&mut p) } != 0 && (p.x, p.y) != (x, y) {
-                    // SAFETY: plain call.
-                    unsafe { SetCursorPos(x, y) };
+            // A moved cursor is put back, or the next delta would be measured
+            // from the wrong place and the overlay would no longer hide it.
+            let mut p = POINT { x: 0, y: 0 };
+            // SAFETY: valid out-pointer.
+            let cursor = (unsafe { GetCursorPos(&mut p) } != 0).then_some((p.x, p.y));
+            let rewarp = |(x, y): (i32, i32)| {
+                // SAFETY: plain call.
+                unsafe { SetCursorPos(x, y) };
+            };
+            match with_state(|s| s.guard_tick(cursor)).flatten() {
+                None => {}
+                Some(Guard::Rewarp(park)) => rewarp(park),
+                Some(Guard::Reinstall(hooks, park)) => {
+                    if reinstall_hooks(hooks) {
+                        rewarp(park);
+                    } else if let Some(e) = with_state(|s| {
+                        let _ = s.tx.send(Event::Error(
+                            "Windows no longer lets one-mk watch this PC's mouse and keyboard, so it \
+                             can't control other computers until it is restarted."
+                                .into(),
+                        ));
+                        s.end()
+                    }) {
+                        apply(e, hwnd);
+                    }
                 }
+                Some(Guard::GaveUp(hooks, effect)) => {
+                    apply(effect, hwnd);
+                    reinstall_hooks(hooks);
+                }
+                Some(Guard::Ended(effect)) => apply(effect, hwnd),
             }
             0
         }
@@ -626,13 +943,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if matches!(wparam as u32, WTS_SESSION_LOCK | WTS_SESSION_LOGOFF | WTS_CONSOLE_DISCONNECT | WTS_REMOTE_CONNECT) {
                 // Hooks see nothing on the lock screen; hand the pointer
                 // back so it is not stuck hidden when the user returns.
-                let effect = with_state(|s| {
-                    let e = s.release(None);
-                    if matches!(e, Effect::Unpark(_)) {
-                        let _ = s.tx.send(Event::Deactivated);
-                    }
-                    e
-                });
+                let effect = with_state(State::end);
                 if let Some(e) = effect {
                     apply(e, hwnd);
                 }
@@ -656,44 +967,104 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 // --------------------------------------------------------------- injection
 
-fn inject_thread(tx: mpsc::UnboundedSender<Event>, mut rx: mpsc::UnboundedReceiver<Inject>, shared: Arc<Mutex<Space>>) {
+fn inject_thread(
+    tx: mpsc::UnboundedSender<Event>,
+    rx: mpsc::UnboundedReceiver<Inject>,
+    shared: Arc<Mutex<Space>>,
+    controlled: Arc<Controlled>,
+) {
     set_thread_dpi_awareness();
+    // A small runtime of its own, for the key repeat timer.
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_time().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = tx.send(Event::Error(format!("Other computers can't control this one: {e}")));
+            return;
+        }
+    };
     tracing::info!("input injection ready");
+    rt.block_on(inject_loop(tx, rx, shared, controlled));
+}
+
+/// The user's key repeat delay and rate (Control Panel > Keyboard).
+fn repeat_setting() -> Option<(Duration, Duration)> {
+    let (mut delay, mut speed) = (1u32, 31u32);
+    // SAFETY: both actions write one u32 to the valid out-pointer.
+    unsafe {
+        SystemParametersInfoW(SPI_GETKEYBOARDDELAY, 0, (&mut delay as *mut u32).cast(), 0);
+        SystemParametersInfoW(SPI_GETKEYBOARDSPEED, 0, (&mut speed as *mut u32).cast(), 0);
+    }
+    Some(repeat_timing(delay, speed))
+}
+
+async fn inject_loop(
+    tx: mpsc::UnboundedSender<Event>,
+    mut rx: mpsc::UnboundedReceiver<Inject>,
+    shared: Arc<Mutex<Space>>,
+    controlled: Arc<Controlled>,
+) {
     let mut scroll = SmoothScroll::default();
     let mut inputs: Vec<INPUT> = Vec::new();
+    let mut batch: Vec<Inject> = Vec::new();
+    // SendInput doesn't auto-repeat, and senders drop their repeats.
+    let mut repeat = KeyRepeat::new(repeat_setting());
     let mut failing = false;
-    while let Some(first) = rx.blocking_recv() {
-        // Apply everything already queued with one SendInput call.
-        {
-            let Ok(space) = shared.lock() else { return };
-            let mut next = Some(first);
-            while let Some(m) = next {
-                build(&mut inputs, m, &space, &mut scroll);
-                next = rx.try_recv().ok();
+    loop {
+        let deadline = repeat.deadline();
+        let wake = tokio::time::Instant::from_std(deadline.unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(3600)));
+        tokio::select! {
+            msg = rx.recv() => {
+                let Some(first) = msg else { return };
+                controlled.injected(now_ms());
+                // Everything already queued goes out in one SendInput call,
+                // without the moves that later ones make stale.
+                drain_coalesced(first, &mut rx, &mut batch);
+                let now = std::time::Instant::now();
+                let Ok(space) = shared.lock() else { return };
+                for m in batch.drain(..) {
+                    if let Inject::Key { code, down } = m {
+                        if down && is_repeatable(code) {
+                            repeat.set_timing(repeat_setting());
+                        }
+                        if !repeat.key(code, down, now) {
+                            continue;
+                        }
+                    }
+                    build(&mut inputs, m, &space, &mut scroll);
+                }
+            }
+            _ = tokio::time::sleep_until(wake), if deadline.is_some() => {
+                let Some(code) = repeat.poll(std::time::Instant::now()) else { continue };
+                let Ok(space) = shared.lock() else { return };
+                build(&mut inputs, Inject::Key { code, down: true }, &space, &mut scroll);
             }
         }
-        if inputs.is_empty() {
-            continue;
-        }
-        // SAFETY: `inputs` is a valid slice of initialized INPUTs.
-        let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
-        if (sent as usize) < inputs.len() {
-            if !failing {
-                // SAFETY: plain call.
-                let err = unsafe { GetLastError() };
-                tracing::warn!(sent, total = inputs.len(), err, "SendInput failed");
-                let _ = tx.send(Event::Error(
-                    "Windows blocked input from another computer. This happens on the lock screen, \
-                     on administrator (UAC) prompts, and in programs running as administrator."
-                        .into(),
-                ));
-                failing = true;
-            }
-        } else {
-            failing = false;
-        }
-        inputs.clear();
+        send_inputs(&mut inputs, &tx, &mut failing);
     }
+}
+
+fn send_inputs(inputs: &mut Vec<INPUT>, tx: &mpsc::UnboundedSender<Event>, failing: &mut bool) {
+    if inputs.is_empty() {
+        return;
+    }
+    // SAFETY: `inputs` is a valid slice of initialized INPUTs.
+    let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+    if (sent as usize) < inputs.len() {
+        if !*failing {
+            // SAFETY: plain call.
+            let err = unsafe { GetLastError() };
+            tracing::warn!(sent, total = inputs.len(), err, "SendInput failed");
+            let _ = tx.send(Event::Error(
+                "Windows blocked input from another computer. This happens on the lock screen, \
+                 on administrator (UAC) prompts, and in programs running as administrator."
+                    .into(),
+            ));
+            *failing = true;
+        }
+    } else {
+        *failing = false;
+    }
+    inputs.clear();
 }
 
 fn mouse(dx: i32, dy: i32, data: u32, flags: u32) -> INPUT {
@@ -718,15 +1089,7 @@ fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScro
         Inject::MoveTo(p) => {
             let (x, y) = space.to_phys(p);
             let (nx, ny) = space.normalize(x, y);
-            let mv = mouse(nx, ny, 0, ABS_MOVE);
-            // Consecutive moves in one batch: only the last one matters.
-            // SAFETY: reading the `mi` arm of an INPUT_MOUSE input.
-            match out.last_mut() {
-                Some(last) if last.r#type == INPUT_MOUSE && unsafe { last.Anonymous.mi.dwFlags } == ABS_MOVE => {
-                    *last = mv
-                }
-                _ => out.push(mv),
-            }
+            out.push(mouse(nx, ny, 0, ABS_MOVE));
         }
         Inject::Button { button, down } => {
             let (flags, data) = match (button, down) {

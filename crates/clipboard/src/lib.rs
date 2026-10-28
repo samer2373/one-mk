@@ -147,6 +147,17 @@ impl Raw {
         self.text.is_none() && self.html.is_none() && self.image.is_none()
     }
 
+    /// When text or HTML is present, drops the image: apps like Excel put a
+    /// rendered bitmap next to the text, which is huge and would be encoded
+    /// (or make the snapshot too large) for nothing. Writing prefers text
+    /// over an image anyway.
+    fn prefer_text(mut self) -> Self {
+        if self.text.is_some() || self.html.is_some() {
+            self.image = None;
+        }
+        self
+    }
+
     fn digest(&self) -> Digest {
         let mut h = blake3::Hasher::new();
         let mut field = |tag: u8, bytes: Option<&[u8]>| {
@@ -208,11 +219,17 @@ impl Backend {
                 let cb = open(cb)?;
                 let text = cb.get_text().ok();
                 let html = cb.get().html().ok();
-                let image = cb.get_image().ok().and_then(|i| {
-                    let rgba = i.bytes.into_owned();
-                    (i.width > 0 && i.height > 0 && rgba.len() == i.width * i.height * 4)
-                        .then_some(Image { width: i.width, height: i.height, rgba })
-                });
+                // Text wins over an image (see `Raw::prefer_text`), so don't
+                // even fetch a possibly huge bitmap (an Excel range).
+                let image = if text.is_some() || html.is_some() {
+                    None
+                } else {
+                    cb.get_image().ok().and_then(|i| {
+                        let rgba = i.bytes.into_owned();
+                        (i.width > 0 && i.height > 0 && rgba.len() == i.width * i.height * 4)
+                            .then_some(Image { width: i.width, height: i.height, rgba })
+                    })
+                };
                 Ok(Raw { text, html, image })
             }
         }
@@ -290,7 +307,7 @@ impl Worker {
     }
 
     fn backend_read(&mut self) -> Result<Raw> {
-        let r = self.backend.read();
+        let r = self.backend.read().map(Raw::prefer_text);
         if r.is_err()
             && let Backend::System(cb) = &mut self.backend
         {
@@ -427,6 +444,25 @@ mod tests {
         let (cb, mem) = Clipboard::memory();
         mem.set_text(&"x".repeat(MAX_BYTES + 1));
         assert!(matches!(cb.read(vec![]).await.unwrap(), Read::TooLarge { size, .. } if size == MAX_BYTES + 1));
+    }
+
+    #[tokio::test]
+    async fn text_wins_over_huge_image() {
+        let (cb, mem) = Clipboard::memory();
+        // Zeroed, so the allocation is lazy; it is over MAX_RGBA.
+        let big = Image { width: 16384, height: 4097, rgba: vec![0; 16384 * 4097 * 4] };
+        assert!(big.rgba.len() > MAX_RGBA);
+        mem.set(Raw { text: Some("cells".into()), html: Some("<td>cells</td>".into()), image: Some(big.clone()) });
+        let Read::Changed { digest, data } = cb.read(vec![]).await.unwrap() else { panic!("expected content, not TooLarge") };
+        assert_eq!(data.text.as_deref(), Some("cells"));
+        assert!(data.html.is_some());
+        assert!(data.png.is_none());
+        assert_eq!(cb.digest().await.unwrap(), Some(digest));
+
+        // An image alone is still carried.
+        mem.set(Raw { image: Some(image()), ..Raw::default() });
+        let Read::Changed { data, .. } = cb.read(vec![]).await.unwrap() else { panic!() };
+        assert!(data.png.is_some() && data.text.is_none());
     }
 
     /// Touches the real clipboard, so only on request:

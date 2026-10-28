@@ -1,7 +1,7 @@
 //! Compact little-endian binary encoding. Positions are fixed-point with
 //! 1/256 px precision.
 
-use crate::{Pos, Rect};
+use crate::{PROTOCOL_VERSION, Pos, Rect};
 use std::fmt;
 
 /// First byte of every QUIC stream, saying what the stream carries.
@@ -33,11 +33,11 @@ impl StreamKind {
 /// loss or reordering never corrupts state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Datagram {
-    /// Absolute pointer position on the receiver's desktop.
+    /// Absolute pointer position on the receiver's desktop. While the
+    /// pointer is remote and idle, the latest one is resent (same `seq`) as
+    /// a keepalive: it keeps Wi-Fi radios out of power save (which adds
+    /// 50-200 ms stalls) and tells the receiver the controller is alive.
     Motion { epoch: u16, seq: u32, pos: Pos },
-    /// Sent while the pointer is remote and idle, so Wi-Fi radios stay out
-    /// of power-save (which otherwise adds 50-200 ms stalls).
-    Keepalive,
     /// Latency measurement; the receiver echoes it back.
     Probe { id: u32, sent_ns: u64 },
     ProbeEcho { id: u32, sent_ns: u64 },
@@ -55,7 +55,6 @@ impl Datagram {
                 w.u32(seq);
                 w.pos(pos);
             }
-            Datagram::Keepalive => w.u8(2),
             Datagram::Probe { id, sent_ns } => {
                 w.u8(3);
                 w.u32(id);
@@ -77,7 +76,6 @@ impl Datagram {
         let mut r = Reader(b);
         let d = match r.u8()? {
             1 => Datagram::Motion { epoch: r.u16()?, seq: r.u32()?, pos: r.pos()? },
-            2 => Datagram::Keepalive,
             3 => Datagram::Probe { id: r.u32()?, sent_ns: r.u64()? },
             4 => Datagram::ProbeEcho { id: r.u32()?, sent_ns: r.u64()? },
             t => return Err(DecodeError::UnknownTag(t)),
@@ -86,13 +84,37 @@ impl Datagram {
     }
 }
 
+/// Operating system codes for [`Control::Hello`].
+pub mod os {
+    pub const UNKNOWN: u8 = 0;
+    pub const LINUX: u8 = 1;
+    pub const WINDOWS: u8 = 2;
+    pub const MACOS: u8 = 3;
+
+    /// This machine's OS.
+    pub const fn local() -> u8 {
+        if cfg!(target_os = "linux") {
+            LINUX
+        } else if cfg!(windows) {
+            WINDOWS
+        } else if cfg!(target_os = "macos") {
+            MACOS
+        } else {
+            UNKNOWN
+        }
+    }
+}
+
 /// Reliable, ordered messages on the control stream.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Control {
-    Hello { version: u16, name: String, screens: Vec<Rect> },
+    /// First message on a control stream. `nonce` is random per connection
+    /// and breaks ties between duplicate connections; `os` is one of [`os`].
+    Hello { version: u16, name: String, screens: Vec<Rect>, nonce: u64, os: u8 },
     /// The sender's monitors changed.
     Screens(Vec<Rect>),
-    /// The pointer enters the receiver's desktop at `pos`.
+    /// The pointer enters the receiver's desktop at `pos`. The receiver
+    /// answers `EnterAck` or, if another machine controls it, `Busy`.
     Enter { epoch: u16, pos: Pos },
     /// The pointer left; the receiver releases anything still held.
     Leave,
@@ -105,6 +127,14 @@ pub enum Control {
     /// Wheel clicks in 1/120ths of a detent (high-resolution wheels).
     ScrollDiscrete { dx: i32, dy: i32 },
     ScrollStop,
+    /// The receiver accepted `Enter { epoch }`; input may follow.
+    EnterAck { epoch: u16 },
+    /// The receiver is controlled by another machine and refused
+    /// `Enter { epoch }`; the sender takes its pointer back.
+    Busy { epoch: u16 },
+    /// The receiver ended visit `epoch` (someone used its own mouse or
+    /// keyboard, or the sender went silent); the sender takes its pointer back.
+    Revoked { epoch: u16 },
 }
 
 impl Control {
@@ -118,11 +148,13 @@ impl Control {
 
     fn encode_body(&self, w: &mut Writer) {
         match self {
-            Control::Hello { version, name, screens } => {
+            Control::Hello { version, name, screens, nonce, os } => {
                 w.u8(1);
                 w.u16(*version);
                 w.str(name);
                 w.rects(screens);
+                w.u64(*nonce);
+                w.u8(*os);
             }
             Control::Screens(screens) => {
                 w.u8(2);
@@ -157,14 +189,38 @@ impl Control {
                 w.i32(*dy);
             }
             Control::ScrollStop => w.u8(9),
+            Control::EnterAck { epoch } => {
+                w.u8(10);
+                w.u16(*epoch);
+            }
+            Control::Busy { epoch } => {
+                w.u8(11);
+                w.u16(*epoch);
+            }
+            Control::Revoked { epoch } => {
+                w.u8(12);
+                w.u16(*epoch);
+            }
         }
     }
 
-    /// Decodes a frame body (without the length prefix).
+    /// Decodes a frame body (without the length prefix). Everything a peer
+    /// sends is validated here, so nothing downstream can overflow or see
+    /// NaN. A `Hello` from another protocol version is
+    /// [`DecodeError::Version`], since the rest may be laid out differently.
     pub fn decode(b: &[u8]) -> Result<Self, DecodeError> {
         let mut r = Reader(b);
         let c = match r.u8()? {
-            1 => Control::Hello { version: r.u16()?, name: r.str()?, screens: r.rects()? },
+            1 => match r.u16()? {
+                PROTOCOL_VERSION => Control::Hello {
+                    version: PROTOCOL_VERSION,
+                    name: r.str()?,
+                    screens: r.rects()?,
+                    nonce: r.u64()?,
+                    os: r.u8()?,
+                },
+                v => return Err(DecodeError::Version(v)),
+            },
             2 => Control::Screens(r.rects()?),
             3 => Control::Enter { epoch: r.u16()?, pos: r.pos()? },
             4 => Control::Leave,
@@ -175,9 +231,12 @@ impl Control {
                 seq: r.u32()?,
                 pos: r.pos()?,
             },
-            7 => Control::Scroll { dx: f32::from_bits(r.u32()?), dy: f32::from_bits(r.u32()?) },
+            7 => Control::Scroll { dx: r.f32()?, dy: r.f32()? },
             8 => Control::ScrollDiscrete { dx: r.i32()?, dy: r.i32()? },
             9 => Control::ScrollStop,
+            10 => Control::EnterAck { epoch: r.u16()? },
+            11 => Control::Busy { epoch: r.u16()? },
+            12 => Control::Revoked { epoch: r.u16()? },
             t => return Err(DecodeError::UnknownTag(t)),
         };
         Ok(c)
@@ -189,6 +248,10 @@ pub enum DecodeError {
     Truncated,
     UnknownTag(u8),
     BadString,
+    /// Well-formed but out of range (bad rectangle, NaN, ...).
+    Invalid(&'static str),
+    /// A `Hello` from another protocol version.
+    Version(u16),
 }
 
 impl fmt::Display for DecodeError {
@@ -197,6 +260,8 @@ impl fmt::Display for DecodeError {
             DecodeError::Truncated => f.write_str("message truncated"),
             DecodeError::UnknownTag(t) => write!(f, "unknown message tag {t}"),
             DecodeError::BadString => f.write_str("invalid UTF-8 string"),
+            DecodeError::Invalid(what) => write!(f, "invalid {what}"),
+            DecodeError::Version(v) => write!(f, "protocol version {v} (we speak {PROTOCOL_VERSION})"),
         }
     }
 }
@@ -256,7 +321,7 @@ impl Writer {
         self.buf.extend_from_slice(b);
     }
     fn rects(&mut self, rects: &[Rect]) {
-        let n = rects.len().min(64);
+        let n = rects.len().min(MAX_SCREENS);
         self.u8(n as u8);
         for r in &rects[..n] {
             self.i32(r.x);
@@ -290,8 +355,16 @@ impl Reader<'_> {
     pub(crate) fn u64(&mut self) -> Result<u64, DecodeError> {
         Ok(u64::from_le_bytes(self.take()?))
     }
+    /// Fixed-point, so always finite.
     fn pos(&mut self) -> Result<Pos, DecodeError> {
         Ok(Pos::new(from_fixed(self.i32()?), from_fixed(self.i32()?)))
+    }
+    fn f32(&mut self) -> Result<f32, DecodeError> {
+        let v = f32::from_bits(self.u32()?);
+        if !v.is_finite() {
+            return Err(DecodeError::Invalid("number"));
+        }
+        Ok(v)
     }
     fn str(&mut self) -> Result<String, DecodeError> {
         let n = self.u8()? as usize;
@@ -311,11 +384,33 @@ impl Reader<'_> {
         self.0 = rest;
         String::from_utf8(s.to_vec()).map_err(|_| DecodeError::BadString)
     }
+    /// Monitors: positive sizes, at most [`MAX_SCREENS`], and every edge
+    /// and the overall span representable in `i32`.
     fn rects(&mut self) -> Result<Vec<Rect>, DecodeError> {
-        let n = self.u8()?;
-        (0..n).map(|_| Ok(Rect::new(self.i32()?, self.i32()?, self.i32()?, self.i32()?))).collect()
+        let n = usize::from(self.u8()?);
+        if n > MAX_SCREENS {
+            return Err(DecodeError::Invalid("screen count"));
+        }
+        let rects = (0..n)
+            .map(|_| Ok(Rect::new(self.i32()?, self.i32()?, self.i32()?, self.i32()?)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let bad = |r: &Rect| r.w <= 0 || r.h <= 0 || r.x.checked_add(r.w).is_none() || r.y.checked_add(r.h).is_none();
+        if rects.iter().any(bad) {
+            return Err(DecodeError::Invalid("screen"));
+        }
+        if let (Some(x), Some(y)) = (rects.iter().map(|r| r.x).min(), rects.iter().map(|r| r.y).min()) {
+            let right = rects.iter().map(Rect::right).max().unwrap_or(x);
+            let bottom = rects.iter().map(Rect::bottom).max().unwrap_or(y);
+            if right.checked_sub(x).is_none() || bottom.checked_sub(y).is_none() {
+                return Err(DecodeError::Invalid("screen layout"));
+            }
+        }
+        Ok(rects)
     }
 }
+
+/// Most monitors a desktop may have on the wire.
+pub const MAX_SCREENS: usize = 64;
 
 fn to_fixed(v: f64) -> i32 {
     (v * 256.0).round() as i32
@@ -333,7 +428,6 @@ mod tests {
     fn datagram_round_trip() {
         for d in [
             Datagram::Motion { epoch: 3, seq: 99, pos: Pos::new(1919.5, -20.25) },
-            Datagram::Keepalive,
             Datagram::Probe { id: 1, sent_ns: u64::MAX },
             Datagram::ProbeEcho { id: 2, sent_ns: 5 },
         ] {
@@ -347,9 +441,11 @@ mod tests {
     fn control_round_trip() {
         let msgs = [
             Control::Hello {
-                version: 1,
+                version: PROTOCOL_VERSION,
                 name: "desk".into(),
                 screens: vec![Rect::new(0, 0, 1920, 1080), Rect::new(-1440, 0, 1440, 900)],
+                nonce: 0x0123_4567_89ab_cdef,
+                os: os::MACOS,
             },
             Control::Screens(vec![]),
             Control::Enter { epoch: 9, pos: Pos::new(0.0, 540.0) },
@@ -359,6 +455,9 @@ mod tests {
             Control::Scroll { dx: 0.0, dy: -12.5 },
             Control::ScrollDiscrete { dx: 0, dy: -120 },
             Control::ScrollStop,
+            Control::EnterAck { epoch: 1 },
+            Control::Busy { epoch: 2 },
+            Control::Revoked { epoch: u16::MAX },
         ];
         let mut buf = Vec::new();
         for m in &msgs {
@@ -389,5 +488,51 @@ mod tests {
         assert_eq!(Datagram::decode(&[]), Err(DecodeError::Truncated));
         assert_eq!(Datagram::decode(&[1, 0]), Err(DecodeError::Truncated));
         assert_eq!(Control::decode(&[200]), Err(DecodeError::UnknownTag(200)));
+        assert_eq!(Datagram::decode(&[2]), Err(DecodeError::UnknownTag(2))); // the old Keepalive
+    }
+
+    fn screens_body(rects: &[[i32; 4]]) -> Vec<u8> {
+        let mut b = vec![2, rects.len() as u8];
+        for r in rects {
+            for v in r {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn rejects_out_of_range_values() {
+        let invalid = |b: &[u8]| matches!(Control::decode(b), Err(DecodeError::Invalid(_)));
+        assert!(Control::decode(&screens_body(&[[0, 0, 1920, 1080], [-1440, 0, 1440, 900]])).is_ok());
+        assert!(invalid(&screens_body(&[[0, 0, 0, 1080]])), "zero width");
+        assert!(invalid(&screens_body(&[[0, 0, 1920, -5]])), "negative height");
+        assert!(invalid(&screens_body(&[[i32::MAX - 10, 0, 1920, 1080]])), "right edge overflows");
+        assert!(invalid(&screens_body(&[[0, i32::MAX, 10, 10]])), "bottom edge overflows");
+        assert!(invalid(&screens_body(&[[i32::MIN, 0, 10, 10], [i32::MAX - 20, 0, 10, 10]])), "span overflows");
+        assert!(invalid(&screens_body(&vec![[0, 0, 10, 10]; MAX_SCREENS + 1])), "too many screens");
+        assert!(Control::decode(&screens_body(&vec![[0, 0, 10, 10]; MAX_SCREENS])).is_ok());
+
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut b = vec![7];
+            b.extend_from_slice(&0f32.to_bits().to_le_bytes());
+            b.extend_from_slice(&bad.to_bits().to_le_bytes());
+            assert!(invalid(&b), "{bad}");
+        }
+        // Positions are fixed-point, so even extreme ones decode as finite.
+        let mut b = vec![3, 0, 0];
+        b.extend_from_slice(&i32::MIN.to_le_bytes());
+        b.extend_from_slice(&i32::MAX.to_le_bytes());
+        let Ok(Control::Enter { pos, .. }) = Control::decode(&b) else { panic!() };
+        assert!(pos.x.is_finite() && pos.y.is_finite());
+    }
+
+    #[test]
+    fn hello_from_another_version() {
+        let mut buf = Vec::new();
+        Control::Hello { version: PROTOCOL_VERSION, name: "x".into(), screens: vec![], nonce: 1, os: 0 }
+            .encode_frame(&mut buf);
+        buf[3..5].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(Control::decode(&buf[2..]), Err(DecodeError::Version(1)));
     }
 }

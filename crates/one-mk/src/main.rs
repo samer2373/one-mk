@@ -8,78 +8,99 @@ mod pair;
 mod send;
 mod transfer;
 
-use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use anyhow::{Context, Result, bail};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use one_mk_net::{Identity, TrustStore};
 use one_mk_proto::{DEFAULT_PORT, Side};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "one-mk", version, about = "Share one mouse and keyboard across your computers")]
+#[command(
+    name = "one-mk",
+    version,
+    about = "Share one mouse and keyboard across your computers",
+    args_conflicts_with_subcommands = true
+)]
 struct Cli {
     /// Where settings and keys live (default: your config folder).
     #[arg(long, env = "ONE_MK_HOME", global = true)]
     home: Option<PathBuf>,
-    /// More logging (-v debug, -vv trace).
+    /// More detail: show full errors and debug logs (-vv for trace logs).
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
+    /// Options for `run`, which is what plain `one-mk` does.
+    #[command(flatten)]
+    run: RunArgs,
     #[command(subcommand)]
     cmd: Option<Cmd>,
+}
+
+#[derive(Args)]
+struct RunArgs {
+    /// UDP port to listen on.
+    #[arg(long, default_value_t = DEFAULT_PORT)]
+    port: u16,
+    /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
+    #[arg(long, value_name = "IP:PORT")]
+    connect: Vec<SocketAddr>,
+    /// Don't advertise or look for computers on the local network.
+    #[arg(long)]
+    no_discovery: bool,
+    /// Input backend.
+    #[arg(long, value_enum, default_value_t = Backend::Native)]
+    backend: Backend,
+    /// Don't share the clipboard.
+    #[arg(long)]
+    no_clipboard: bool,
+    /// Where received files go (default: Downloads/one-mk).
+    #[arg(long, value_name = "DIR")]
+    downloads: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
     /// Run the sharing service (the default).
-    Run {
-        #[arg(long, default_value_t = DEFAULT_PORT)]
-        port: u16,
-        /// Also try these addresses (for networks that block discovery).
-        #[arg(long)]
-        connect: Vec<SocketAddr>,
-        /// Don't advertise or look for computers on the local network.
-        #[arg(long)]
-        no_discovery: bool,
-        #[arg(long, value_enum, default_value_t = BackendArg::Native)]
-        backend: BackendArg,
-        /// Don't share the clipboard.
-        #[arg(long)]
-        no_clipboard: bool,
-        /// Where received files go (default: Downloads/one-mk).
-        #[arg(long, value_name = "DIR")]
-        downloads: Option<PathBuf>,
-    },
+    Run(RunArgs),
     /// Send files or folders to a paired computer running `one-mk run`.
     Send {
+        /// Files or folders to send.
         #[arg(required = true, value_name = "PATH")]
         paths: Vec<PathBuf>,
         /// Name or id of the paired computer (needed if there are several).
         #[arg(long, value_name = "DEVICE")]
         to: Option<String>,
-        /// Also try these addresses (for networks that block discovery).
-        #[arg(long)]
+        /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
+        #[arg(long, value_name = "IP:PORT")]
         connect: Vec<SocketAddr>,
     },
     /// Pair with another computer (run it on both).
     Pair {
-        /// Pair with this address instead of searching the network.
-        #[arg(long)]
+        /// Pair with the computer at this address instead of searching the
+        /// network, e.g. 192.168.1.20:40123 (the other side prints its pairing port).
+        #[arg(long, value_name = "IP:PORT")]
         connect: Option<SocketAddr>,
     },
     /// List paired computers.
     Devices,
     /// Say which side of this computer a paired computer is on.
     Layout {
-        /// Name or id of the paired computer.
+        /// Name or id of the paired computer (see `one-mk devices`).
         device: String,
+        /// Where it is: left, right, top or bottom.
         side: Side,
     },
     /// Unpair a computer.
-    Forget { device: String },
+    Forget {
+        /// Name or id of the paired computer (see `one-mk devices`).
+        device: String,
+    },
     /// Show this computer's name and id.
     Id,
     /// Measure latency and CPU cost.
     Bench {
+        /// Number of mouse events to send.
         #[arg(long, default_value_t = 5000)]
         count: u32,
         /// Events per second (gaming mice report 1000-8000).
@@ -88,22 +109,33 @@ enum Cmd {
         /// Echo for a bench on another machine.
         #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "24901")]
         serve: Option<u16>,
-        /// Measure against `one-mk bench --serve` on another machine.
-        #[arg(long)]
+        /// Measure against `one-mk bench --serve` on another machine, e.g. 192.168.1.20:24901.
+        #[arg(long, value_name = "IP:PORT")]
         connect: Option<SocketAddr>,
     },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum BackendArg {
+enum Backend {
+    /// This system's real mouse and keyboard.
     Native,
     /// No real input; for testing the network side.
     Null,
 }
 
-fn main() -> Result<()> {
+impl From<Backend> for one_mk_input::Kind {
+    fn from(b: Backend) -> Self {
+        match b {
+            Backend::Native => Self::Native,
+            Backend::Null => Self::Null,
+        }
+    }
+}
+
+fn main() -> ExitCode {
     let cli = Cli::parse();
-    let level = match cli.verbose {
+    let verbose = cli.verbose;
+    let level = match verbose {
         0 => "info,mdns_sd=warn,zbus=warn,quinn=warn,quinn_proto=warn",
         1 => "debug,mdns_sd=warn,zbus=info,quinn=info,quinn_proto=info,rustls=info",
         _ => "trace",
@@ -115,38 +147,39 @@ fn main() -> Result<()> {
         .with_target(false)
         .init();
 
+    match run(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            if verbose > 0 {
+                eprintln!("one-mk: {e:?}");
+            } else {
+                // One line; -v shows each cause on its own.
+                eprintln!("one-mk: {e:#}");
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
     let dir = match cli.home {
         Some(d) => d,
-        None => directories::ProjectDirs::from("", "", "one-mk")
-            .context("no home directory")?
-            .config_dir()
-            .to_path_buf(),
+        None => default_home()?,
     };
 
     // One thread for networking is plenty and keeps the footprint small;
     // input capture and injection have their own threads.
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     rt.block_on(async move {
-        match cli.cmd.unwrap_or(Cmd::Run {
-            port: DEFAULT_PORT,
-            connect: Vec::new(),
-            no_discovery: false,
-            backend: BackendArg::Native,
-            no_clipboard: false,
-            downloads: None,
-        }) {
-            Cmd::Run { port, connect, no_discovery, backend, no_clipboard, downloads } => {
-                let backend = match backend {
-                    BackendArg::Native => one_mk_input::Kind::Native,
-                    BackendArg::Null => one_mk_input::Kind::Null,
-                };
+        match cli.cmd.unwrap_or(Cmd::Run(cli.run)) {
+            Cmd::Run(r) => {
                 let opts = app::Options {
-                    backend,
-                    port,
-                    connect,
-                    discovery: !no_discovery,
-                    clipboard: (!no_clipboard).then(one_mk_clipboard::Clipboard::system),
-                    downloads: match downloads {
+                    backend: r.backend.into(),
+                    port: r.port,
+                    connect: r.connect,
+                    discovery: !r.no_discovery,
+                    clipboard: (!r.no_clipboard).then(one_mk_clipboard::Clipboard::system),
+                    downloads: match r.downloads {
                         Some(d) => d,
                         None => default_downloads()?,
                     },
@@ -155,7 +188,7 @@ fn main() -> Result<()> {
             }
             Cmd::Send { paths, to, connect } => send::run(&dir, paths, to, connect).await,
             Cmd::Pair { connect } => pair::run(&dir, connect).await,
-            Cmd::Devices => devices(&dir),
+            Cmd::Devices => devices(&dir, cli.verbose > 0),
             Cmd::Layout { device, side } => layout(&dir, &device, side),
             Cmd::Forget { device } => forget(&dir, &device),
             Cmd::Id => {
@@ -171,27 +204,84 @@ fn main() -> Result<()> {
     })
 }
 
+/// Where identity and paired devices live. On Windows this is the local
+/// (non-roaming) AppData: the identity belongs to this one computer, and a
+/// roaming profile would give every computer the same one.
+fn default_home() -> Result<PathBuf> {
+    let dirs = directories::ProjectDirs::from("", "", "one-mk").context("no home directory")?;
+    let dir = dirs.config_local_dir().to_path_buf();
+    #[cfg(windows)]
+    migrate_roaming(dirs.config_dir(), &dir);
+    Ok(dir)
+}
+
+/// Earlier versions kept their settings in the roaming AppData; move them
+/// to the local one the first time.
+#[cfg(windows)]
+fn migrate_roaming(old: &Path, new: &Path) {
+    if old == new || new.join("identity.key.der").exists() || !old.join("identity.key.der").exists() {
+        return;
+    }
+    let moved = new.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::rename(old, new));
+    if let Err(e) = moved {
+        // Different volumes or a partial new folder: copy file by file.
+        tracing::debug!("moving {} failed ({e}); copying", old.display());
+        let copy = || -> std::io::Result<()> {
+            std::fs::create_dir_all(new)?;
+            for entry in std::fs::read_dir(old)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file() {
+                    std::fs::copy(entry.path(), new.join(entry.file_name()))?;
+                }
+            }
+            std::fs::remove_dir_all(old)
+        };
+        if let Err(e) = copy() {
+            tracing::warn!("could not move settings from {} to {}: {e}", old.display(), new.display());
+            return;
+        }
+    }
+    tracing::info!("moved settings from {} to {}", old.display(), new.display());
+}
+
 fn default_downloads() -> Result<PathBuf> {
     let dirs = directories::UserDirs::new().context("no home directory")?;
     let downloads = dirs.download_dir().map_or_else(|| dirs.home_dir().join("Downloads"), |d| d.to_path_buf());
     Ok(downloads.join("one-mk"))
 }
 
-fn devices(dir: &std::path::Path) -> Result<()> {
+fn devices(dir: &Path, verbose: bool) -> Result<()> {
     let trust = TrustStore::load(dir)?;
     if trust.devices().is_empty() {
         println!("No paired computers. Run `one-mk pair` on this and the other computer.");
+        return Ok(());
+    }
+    if verbose {
+        println!("{:<24} {:<9}  {:<6}  ADDRESS", "NAME", "ID", "SIDE");
+    } else {
+        println!("{:<24} {:<9}  SIDE", "NAME", "ID");
     }
     for d in trust.devices() {
-        println!("{:<24} {}  {:<6}  {}", d.name, d.short_id(), d.side, d.addrs.first().map_or("", String::as_str));
+        let name = one_mk_proto::sanitize_name(&d.name);
+        if verbose {
+            println!("{name:<24} {:<9}  {:<6}  {}", d.short_id(), d.side, d.addrs.join(", "));
+        } else {
+            println!("{name:<24} {:<9}  {}", d.short_id(), d.side);
+        }
     }
     Ok(())
 }
 
-fn layout(dir: &std::path::Path, device: &str, side: Side) -> Result<()> {
+fn unknown_device(device: &str) -> anyhow::Error {
+    anyhow::anyhow!("no paired computer called {device:?}; see `one-mk devices` for names and ids")
+}
+
+fn layout(dir: &Path, device: &str, side: Side) -> Result<()> {
     let mut trust = TrustStore::load(dir)?;
-    let fp = trust.find(device).with_context(|| format!("no paired computer called {device:?}"))?.fingerprint()
-        .context("corrupt fingerprint")?;
+    let Some(fp) = trust.find(device).map(|d| d.fingerprint()) else {
+        return Err(unknown_device(device));
+    };
+    let Some(fp) = fp else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
     let dev = trust.get_mut(&fp).expect("found above");
     dev.side = side.to_string();
     let name = dev.name.clone();
@@ -201,9 +291,9 @@ fn layout(dir: &std::path::Path, device: &str, side: Side) -> Result<()> {
     Ok(())
 }
 
-fn forget(dir: &std::path::Path, device: &str) -> Result<()> {
+fn forget(dir: &Path, device: &str) -> Result<()> {
     let mut trust = TrustStore::load(dir)?;
-    let d = trust.remove(device).with_context(|| format!("no paired computer called {device:?}"))?;
+    let d = trust.remove(device).ok_or_else(|| unknown_device(device))?;
     trust.save()?;
     println!("Forgot {}.", d.name);
     Ok(())

@@ -120,7 +120,8 @@ impl Space {
         clamp_px(&self.phys, x, y)
     }
 
-    /// Which armed edge, if any, the physical pixel `(x, y)` is touching.
+    /// Which armed edge, if any, the physical pixel `(x, y)` is touching,
+    /// with `(dx, dy)` the pointer's recent direction of movement.
     ///
     /// Only edges on the outer boundary of the desktop count (the same rule
     /// as [`Desktop::outer_edges`]), and only along the span of the screen
@@ -128,15 +129,30 @@ impl Space {
     /// larger monitor never triggers. Windows keeps the cursor on the union
     /// of the monitors, so "touching" means sitting on the last pixel row or
     /// column; positions past the edge (if a hook reports them) count too.
-    pub(crate) fn edge_hit(&self, sides: &[Side], x: i32, y: i32) -> Option<Side> {
-        sides.iter().copied().find(|&side| {
+    /// In a corner, where two armed edges touch, the one the pointer is
+    /// moving towards more strongly wins.
+    pub(crate) fn edge_hit(&self, sides: &[Side], x: i32, y: i32, dx: f64, dy: f64) -> Option<Side> {
+        let touching = |side: Side| {
             self.phys.outer_edges(side).any(|r| match side {
                 Side::Left => x <= r.x && (r.y..r.bottom()).contains(&y),
                 Side::Right => x >= r.right() - 1 && (r.y..r.bottom()).contains(&y),
                 Side::Top => y <= r.y && (r.x..r.right()).contains(&x),
                 Side::Bottom => y >= r.bottom() - 1 && (r.x..r.right()).contains(&x),
             })
-        })
+        };
+        let towards = |side: Side| match side {
+            Side::Left => -dx,
+            Side::Right => dx,
+            Side::Top => -dy,
+            Side::Bottom => dy,
+        };
+        let mut best: Option<Side> = None;
+        for side in sides.iter().copied().filter(|&s| touching(s)) {
+            if best.is_none_or(|b| towards(side) > towards(b)) {
+                best = Some(side);
+            }
+        }
+        best
     }
 
     /// Where to park the hidden cursor while input is captured: the centre
@@ -187,6 +203,214 @@ fn clamp_px(d: &Desktop, x: i32, y: i32) -> (i32, i32) {
             dx * dx + dy * dy
         })
         .unwrap_or((x, y))
+}
+
+// -------------------------------------------------------------- crossing
+
+/// The pointer's recent direction of movement: a decaying sum of deltas,
+/// so that in a corner the edge it was heading for still wins after the
+/// cursor got pinned there (the pinned axis then reports no movement).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Heading {
+    dx: f64,
+    dy: f64,
+    last: Option<(i32, i32)>,
+}
+
+impl Heading {
+    pub(crate) fn update(&mut self, x: i32, y: i32) -> (f64, f64) {
+        if let Some((lx, ly)) = self.last {
+            self.dx = self.dx * 0.5 + f64::from(x - lx);
+            self.dy = self.dy * 0.5 + f64::from(y - ly);
+        }
+        self.last = Some((x, y));
+        (self.dx, self.dy)
+    }
+
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// Whether to activate at an edge: never while a mouse button is held (a
+/// drag towards the edge must not carry the pointer, and the dragged file,
+/// to another machine), and not again after a refused activation until the
+/// pointer has left the edge, or the cursor would flicker against it.
+#[derive(Debug)]
+pub(crate) struct EdgeGate {
+    armed: bool,
+}
+
+impl Default for EdgeGate {
+    fn default() -> Self {
+        Self { armed: true }
+    }
+}
+
+impl EdgeGate {
+    /// `hit` is [`Space::edge_hit`] for a local mouse move.
+    pub(crate) fn check(&mut self, hit: Option<Side>, buttons_held: bool) -> Option<Side> {
+        match hit {
+            None => {
+                self.armed = true;
+                None
+            }
+            Some(_) if !self.armed || buttons_held => None,
+            Some(side) => Some(side),
+        }
+    }
+
+    /// The pointer was handed back at the edge (refused, or capture ended
+    /// on its own): wait until it leaves the edge.
+    pub(crate) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+/// `MSLLHOOKSTRUCT::flags` bits.
+pub(crate) const LLMHF_INJECTED: u32 = 0x1;
+pub(crate) const LLMHF_LOWER_IL_INJECTED: u32 = 0x2;
+
+/// Mouse messages Windows synthesizes from pen and touch input carry this
+/// signature in `dwExtraInfo` (`MI_WP_SIGNATURE`, masked by
+/// `SIGNATURE_MASK`).
+const MI_WP_SIGNATURE: usize = 0xFF51_5700;
+
+/// Mouse input that is not from a mouse: injected by software, or made up
+/// from pen or touch. It must neither start a crossing nor be forwarded.
+pub(crate) fn is_synthetic_mouse(flags: u32, extra: usize) -> bool {
+    flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) != 0 || extra & !0xFF == MI_WP_SIGNATURE
+}
+
+/// What the capture guard timer should do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Watch {
+    /// The cursor is where we parked it.
+    Fine,
+    /// Something moved it; put it back.
+    Rewarp,
+    /// It keeps getting moved: our hooks were probably removed silently
+    /// (Windows does that to hooks that are slow under load). Install them
+    /// again.
+    Reinstall,
+    /// Still moving after reinstalling: give the pointer back for good.
+    GiveUp,
+}
+
+/// Watches the parked cursor on each guard tick while captured.
+#[derive(Debug, Default)]
+pub(crate) struct HookWatchdog {
+    strikes: u8,
+    reinstalled: bool,
+}
+
+impl HookWatchdog {
+    /// Consecutive ticks with the cursor off the park point before acting.
+    const STRIKES: u8 = 3;
+
+    pub(crate) fn tick(&mut self, moved_away: bool) -> Watch {
+        if !moved_away {
+            self.strikes = 0;
+            return Watch::Fine;
+        }
+        self.strikes += 1;
+        if self.strikes < Self::STRIKES {
+            return Watch::Rewarp;
+        }
+        self.strikes = 0;
+        if self.reinstalled {
+            Watch::GiveUp
+        } else {
+            self.reinstalled = true;
+            Watch::Reinstall
+        }
+    }
+
+    /// A new activation starts with a clean slate.
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+// --------------------------------------------------------------- held keys
+
+/// A set of evdev codes below 0x200 (all keys and mouse buttons we map).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Held([u64; 8]);
+
+impl Held {
+    pub(crate) fn set(&mut self, code: u32, down: bool) {
+        if let Some(word) = self.0.get_mut(code as usize / 64) {
+            let bit = 1u64 << (code % 64);
+            if down { *word |= bit } else { *word &= !bit }
+        }
+    }
+
+    pub(crate) fn has(&self, code: u32) -> bool {
+        self.0.get(code as usize / 64).is_some_and(|w| w & (1u64 << (code % 64)) != 0)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0 = [0; 8];
+    }
+}
+
+/// Keys forwarded to a peer while captured. Windows repeats a held key by
+/// sending more "down" events; those are dropped, and the receiver repeats
+/// by itself. That includes Caps Lock, whose repeats would toggle it on a
+/// peer over and over.
+#[derive(Debug, Default)]
+pub(crate) struct SenderKeys(Held);
+
+impl SenderKeys {
+    /// Whether to forward this key event.
+    pub(crate) fn forward(&mut self, code: u32, down: bool) -> bool {
+        if down && self.0.has(code) {
+            return false;
+        }
+        self.0.set(code, down);
+        true
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+pub(crate) const VK_LBUTTON: u16 = 0x01;
+pub(crate) const VK_RBUTTON: u16 = 0x02;
+pub(crate) const VK_MBUTTON: u16 = 0x04;
+pub(crate) const VK_XBUTTON1: u16 = 0x05;
+pub(crate) const VK_XBUTTON2: u16 = 0x06;
+
+/// A virtual key reported held by `GetAsyncKeyState` to an evdev code.
+/// `scan_ex` is `MapVirtualKeyW(vk, MAPVK_VK_TO_VSC_EX)`: the scan code
+/// with 0xE0/0xE1 in the high byte for extended keys. `swapped` is
+/// `SM_SWAPBUTTON`: `GetAsyncKeyState` reports physical buttons, the hooks
+/// logical ones.
+pub(crate) fn vk_to_evdev(vk: u16, scan_ex: u32, swapped: bool) -> Option<u32> {
+    match vk {
+        VK_LBUTTON => Some(if swapped { BTN_RIGHT } else { BTN_LEFT }),
+        VK_RBUTTON => Some(if swapped { BTN_LEFT } else { BTN_RIGHT }),
+        VK_MBUTTON => Some(BTN_MIDDLE),
+        VK_XBUTTON1 => Some(BTN_SIDE),
+        VK_XBUTTON2 => Some(BTN_EXTRA),
+        // Generic Shift/Ctrl/Alt: the left/right specific keys are read too.
+        0x10..=0x12 => None,
+        _ => {
+            let prefix = scan_ex >> 8;
+            hook_key_to_evdev(u32::from(vk), scan_ex & 0xFF, prefix == 0xE0 || prefix == 0xE1)
+        }
+    }
+}
+
+/// Key repeat delay and interval from `SPI_GETKEYBOARDDELAY` (0..=3:
+/// 250 ms to 1 s) and `SPI_GETKEYBOARDSPEED` (0..=31: about 2.5 to 30
+/// repeats per second).
+pub(crate) fn repeat_timing(delay: u32, speed: u32) -> (std::time::Duration, std::time::Duration) {
+    let delay_ms = 250 * (u64::from(delay.min(3)) + 1);
+    let hz = 2.5 + f64::from(speed.min(31)) * (27.5 / 31.0);
+    (std::time::Duration::from_millis(delay_ms), std::time::Duration::from_secs_f64(1.0 / hz))
 }
 
 // ----------------------------------------------------------------- scroll
@@ -554,25 +778,25 @@ mod tests {
         let s = Space::new(trio(), 96);
         let all = Side::ALL;
         // Right edge of the 2560 monitor.
-        assert_eq!(s.edge_hit(&all, 4479, 700), Some(Side::Right));
-        assert_eq!(s.edge_hit(&all, 4478, 700), None);
+        assert_eq!(s.edge_hit(&all, 4479, 700, 0.0, 0.0), Some(Side::Right));
+        assert_eq!(s.edge_hit(&all, 4478, 700, 0.0, 0.0), None);
         // Inner edge between primary and the right monitor: nothing.
-        assert_eq!(s.edge_hit(&[Side::Right], 1919, 500), None);
+        assert_eq!(s.edge_hit(&[Side::Right], 1919, 500, 0.0, 0.0), None);
         // Left edge of the left monitor, within its span only.
-        assert_eq!(s.edge_hit(&all, -1280, 600), Some(Side::Left));
+        assert_eq!(s.edge_hit(&all, -1280, 600, 0.0, 0.0), Some(Side::Left));
         // Top: the primary and right monitor are at y=0; the left one is not.
-        assert_eq!(s.edge_hit(&all, 100, 0), Some(Side::Top));
-        assert_eq!(s.edge_hit(&[Side::Top], -500, 200), None);
+        assert_eq!(s.edge_hit(&all, 100, 0, 0.0, 0.0), Some(Side::Top));
+        assert_eq!(s.edge_hit(&[Side::Top], -500, 200, 0.0, 0.0), None);
         // Bottom: the desktop ends at y=1440, so only the right monitor
         // counts; the bottoms of the primary (1080) and the left monitor
         // (1224) face gaps.
-        assert_eq!(s.edge_hit(&[Side::Bottom], 3000, 1439), Some(Side::Bottom));
-        assert_eq!(s.edge_hit(&[Side::Bottom], 500, 1079), None);
-        assert_eq!(s.edge_hit(&[Side::Bottom], -500, 1223), None);
+        assert_eq!(s.edge_hit(&[Side::Bottom], 3000, 1439, 0.0, 0.0), Some(Side::Bottom));
+        assert_eq!(s.edge_hit(&[Side::Bottom], 500, 1079, 0.0, 0.0), None);
+        assert_eq!(s.edge_hit(&[Side::Bottom], -500, 1223, 0.0, 0.0), None);
         // Unarmed sides never trigger.
-        assert_eq!(s.edge_hit(&[Side::Left], 4479, 700), None);
+        assert_eq!(s.edge_hit(&[Side::Left], 4479, 700, 0.0, 0.0), None);
         // Past the edge (unclipped hook positions) still counts.
-        assert_eq!(s.edge_hit(&[Side::Right], 4600, 700), Some(Side::Right));
+        assert_eq!(s.edge_hit(&[Side::Right], 4600, 700, 0.0, 0.0), Some(Side::Right));
     }
 
     #[test]
@@ -630,5 +854,147 @@ mod tests {
         assert_eq!(total, -2); // 1 px = 2.5 units
         s.stop();
         assert_eq!(s.push(12.0, 0.0), (30, 0));
+    }
+
+    #[test]
+    fn corner_picks_side_by_direction() {
+        let s = Space::new(trio(), 96);
+        let both = [Side::Top, Side::Right];
+        // Top-right corner of the right monitor.
+        assert_eq!(s.edge_hit(&both, 4479, 0, 5.0, -1.0), Some(Side::Right));
+        assert_eq!(s.edge_hit(&both, 4479, 0, 1.0, -5.0), Some(Side::Top));
+        // Order of the armed sides doesn't matter.
+        assert_eq!(s.edge_hit(&[Side::Right, Side::Top], 4479, 0, 1.0, -5.0), Some(Side::Top));
+        // Only one armed: that one, whatever the direction.
+        assert_eq!(s.edge_hit(&[Side::Right], 4479, 0, 0.0, -9.0), Some(Side::Right));
+    }
+
+    #[test]
+    fn heading_survives_a_pinned_axis() {
+        let s = Space::new(trio(), 96);
+        let both = [Side::Top, Side::Right];
+        // Moving up along the right edge (x pinned) into the corner: Top.
+        let mut h = Heading::default();
+        for y in [40, 30, 20, 10, 0] {
+            h.update(4479, y);
+        }
+        let (dx, dy) = h.update(4479, 0); // pinned in the corner
+        assert_eq!(s.edge_hit(&both, 4479, 0, dx, dy), Some(Side::Top));
+        // Moving right along the top edge into the corner: Right.
+        h.reset();
+        for x in [4440, 4450, 4460, 4470, 4479] {
+            h.update(x, 0);
+        }
+        let (dx, dy) = h.update(4479, 0);
+        assert_eq!(s.edge_hit(&both, 4479, 0, dx, dy), Some(Side::Right));
+    }
+
+    #[test]
+    fn no_crossing_while_dragging() {
+        let mut g = EdgeGate::default();
+        assert_eq!(g.check(Some(Side::Right), true), None);
+        // Dropped the file at the edge, then pushed again: now it crosses.
+        assert_eq!(g.check(Some(Side::Right), false), Some(Side::Right));
+    }
+
+    #[test]
+    fn refused_crossing_waits_for_the_pointer_to_leave() {
+        let mut g = EdgeGate::default();
+        assert_eq!(g.check(Some(Side::Left), false), Some(Side::Left));
+        // No peer took it: the pointer comes straight back.
+        g.disarm();
+        assert_eq!(g.check(Some(Side::Left), false), None);
+        assert_eq!(g.check(Some(Side::Left), false), None);
+        assert_eq!(g.check(None, false), None);
+        assert_eq!(g.check(Some(Side::Left), false), Some(Side::Left));
+    }
+
+    #[test]
+    fn pen_touch_and_injected_mouse_input() {
+        assert!(!is_synthetic_mouse(0, 0));
+        assert!(!is_synthetic_mouse(0, 0x316d_6b21));
+        assert!(is_synthetic_mouse(LLMHF_INJECTED, 0));
+        assert!(is_synthetic_mouse(LLMHF_LOWER_IL_INJECTED, 0));
+        // Pen (0xFF515700 | flags) and touch (bit 7 set) signatures.
+        assert!(is_synthetic_mouse(0, 0xFF51_5700));
+        assert!(is_synthetic_mouse(0, 0xFF51_5780));
+        assert!(!is_synthetic_mouse(0, 0xFF51_5600));
+    }
+
+    #[test]
+    fn watchdog_reinstalls_then_gives_up() {
+        let mut w = HookWatchdog::default();
+        assert_eq!(w.tick(false), Watch::Fine);
+        assert_eq!(w.tick(true), Watch::Rewarp);
+        assert_eq!(w.tick(true), Watch::Rewarp);
+        // A good tick in between starts the count over.
+        assert_eq!(w.tick(false), Watch::Fine);
+        assert_eq!(w.tick(true), Watch::Rewarp);
+        assert_eq!(w.tick(true), Watch::Rewarp);
+        assert_eq!(w.tick(true), Watch::Reinstall);
+        assert_eq!(w.tick(true), Watch::Rewarp);
+        assert_eq!(w.tick(true), Watch::Rewarp);
+        assert_eq!(w.tick(true), Watch::GiveUp);
+        w.reset();
+        for _ in 0..2 {
+            w.tick(true);
+        }
+        assert_eq!(w.tick(true), Watch::Reinstall);
+    }
+
+    #[test]
+    fn sender_drops_key_repeats_including_caps_lock() {
+        const CAPS: u32 = 58;
+        let mut k = SenderKeys::default();
+        assert!(k.forward(CAPS, true));
+        // Typematic repeats of Caps Lock (and every other key) are dropped.
+        assert!(!k.forward(CAPS, true));
+        assert!(!k.forward(CAPS, true));
+        assert!(k.forward(CAPS, false));
+        assert!(k.forward(CAPS, true));
+        assert!(k.forward(30, true));
+        assert!(!k.forward(30, true));
+        k.clear();
+        assert!(k.forward(30, true));
+    }
+
+    #[test]
+    fn held_set() {
+        let mut h = Held::default();
+        h.set(30, true);
+        h.set(BTN_SIDE, true);
+        assert!(h.has(30) && h.has(BTN_SIDE) && !h.has(31));
+        h.set(30, false);
+        assert!(!h.has(30));
+        h.set(0x1FF, true);
+        h.set(0x200, true); // out of range: ignored
+        assert!(h.has(0x1FF) && !h.has(0x200));
+        h.clear();
+        assert_eq!(h, Held::default());
+    }
+
+    #[test]
+    fn async_key_state_to_evdev() {
+        assert_eq!(vk_to_evdev(0xA0, 0x2A, false), Some(42)); // left Shift
+        assert_eq!(vk_to_evdev(0xA3, 0xE01D, false), Some(97)); // right Ctrl
+        assert_eq!(vk_to_evdev(0x5B, 0xE05B, false), Some(125)); // left Windows
+        assert_eq!(vk_to_evdev(0x2D, 0xE052, false), Some(110)); // Insert
+        assert_eq!(vk_to_evdev(0x60, 0x52, false), Some(82)); // keypad 0
+        assert_eq!(vk_to_evdev(VK_NUMLOCK, 0xE045, false), Some(69));
+        assert_eq!(vk_to_evdev(0x10, 0x2A, false), None); // generic Shift
+        assert_eq!(vk_to_evdev(VK_LBUTTON, 0, false), Some(BTN_LEFT));
+        assert_eq!(vk_to_evdev(VK_LBUTTON, 0, true), Some(BTN_RIGHT));
+        assert_eq!(vk_to_evdev(VK_XBUTTON2, 0, false), Some(BTN_EXTRA));
+    }
+
+    #[test]
+    fn keyboard_repeat_settings() {
+        let (d, i) = repeat_timing(1, 31);
+        assert_eq!(d.as_millis(), 500);
+        assert_eq!(i.as_millis(), 33);
+        let (d, i) = repeat_timing(0, 0);
+        assert_eq!(d.as_millis(), 250);
+        assert_eq!(i.as_millis(), 400);
+        assert_eq!(repeat_timing(9, 99), repeat_timing(3, 31));
     }
 }

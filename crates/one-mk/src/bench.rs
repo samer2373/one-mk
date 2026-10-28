@@ -13,6 +13,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct Options {
     pub count: u32,
     pub rate: u32,
@@ -27,8 +29,7 @@ pub async fn run(opts: Options) -> Result<()> {
 
     let ns = protocol_cost();
 
-    let client = Node::bind(Arc::new(Identity::ephemeral()?), "[::]:0".parse()?)
-        .or_else(|_| Node::bind(Arc::new(Identity::ephemeral()?), "0.0.0.0:0".parse().expect("valid")))?;
+    let client = Node::bind_any(Arc::new(Identity::ephemeral()?), 0)?;
     let (target, label) = match opts.connect {
         Some(addr) => (addr, format!("to {addr}")),
         None => {
@@ -38,7 +39,7 @@ pub async fn run(opts: Options) -> Result<()> {
             (addr, "loopback".to_owned())
         }
     };
-    let peer = client.connect(target).await?;
+    let peer = client.connect_timeout(target, DIAL_TIMEOUT).await?;
     let conn = peer.conn;
 
     println!("one-mk bench ({label}, {} events at {} Hz)", opts.count, opts.rate);
@@ -128,7 +129,7 @@ fn protocol_cost() -> f64 {
 }
 
 async fn serve(port: u16) -> Result<()> {
-    let node = Node::bind(Arc::new(Identity::ephemeral()?), SocketAddr::from(([0, 0, 0, 0], port)))?;
+    let node = Node::bind_any(Arc::new(Identity::ephemeral()?), port)?;
     println!("bench server on {}; on the other machine run: one-mk bench --connect <this-ip>:{}", node.local_addr()?, node.local_addr()?.port());
     echo(node).await;
     Ok(())

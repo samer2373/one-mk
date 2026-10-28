@@ -58,7 +58,7 @@ impl TrustStore {
 
     pub fn save(&self) -> Result<()> {
         if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir)?;
+            crate::identity::secure_dir(dir)?;
         }
         let tmp = self.path.with_extension("toml.tmp");
         std::fs::write(&tmp, toml::to_string_pretty(&self.file)?)?;

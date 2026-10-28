@@ -131,7 +131,9 @@ pub const KEYMAP: &[(u16, u32)] = &[
     (0x4B, 98),  // KeypadDivide -> KEY_KPSLASH
     (0x4C, 96),  // KeypadEnter
     (0x51, 117), // KeypadEquals -> KEY_KPEQUAL
-    (0x47, 69),  // KeypadClear -> KEY_NUMLOCK (same position)
+    // KeypadClear sits where PC keyboards have Num Lock, but sending Num
+    // Lock would toggle it on the peer and turn its keypad into arrows.
+    (0x47, 355), // KeypadClear -> KEY_CLEAR
     // Media keys that exist as plain keycodes.
     (0x48, 115), // VolumeUp
     (0x49, 114), // VolumeDown
@@ -241,6 +243,7 @@ pub fn modifier_down(kc: u16, event_flags: u64) -> Option<bool> {
 pub struct Modifiers {
     held: [bool; MODIFIERS.len()],
     caps: bool,
+    caps_held: bool,
 }
 
 impl Modifiers {
@@ -248,9 +251,12 @@ impl Modifiers {
     /// caps lock, which toggles on press).
     pub fn update(&mut self, evdev: u32, down: bool) -> bool {
         if evdev == KEY_CAPSLOCK {
-            if down {
+            // Only a real press toggles; repeated "down"s while it is held
+            // (PC keyboards auto-repeat Caps Lock) must not.
+            if down && !self.caps_held {
                 self.caps = !self.caps;
             }
+            self.caps_held = down;
             return true;
         }
         match MODIFIERS.iter().position(|m| m.0 == evdev) {
@@ -275,6 +281,31 @@ impl Modifiers {
         f
     }
 
+    /// Whether this Caps Lock event is a repeat of one already held, and
+    /// so must not be posted (each posted press toggles Caps Lock).
+    pub fn is_caps_repeat(&self, evdev: u32, down: bool) -> bool {
+        evdev == KEY_CAPSLOCK && down && self.caps_held
+    }
+}
+
+// ------------------------------------------------------------- key repeat
+
+/// macOS key repeat settings (`InitialKeyRepeat`, `KeyRepeat` in the global
+/// preferences domain) are in units of 15 ms.
+const REPEAT_UNIT_MS: u64 = 15;
+
+/// `(delay, interval)` for synthesized key repeat from the user's settings,
+/// or `None` if key repeat is turned off. Missing values use macOS's
+/// defaults.
+pub fn repeat_timing(initial: Option<i64>, rate: Option<i64>) -> Option<(std::time::Duration, std::time::Duration)> {
+    let initial = initial.unwrap_or(25);
+    let rate = rate.unwrap_or(6);
+    // "Off" in System Settings stores a huge value (300000).
+    if !(1..=1000).contains(&rate) || !(1..=1000).contains(&initial) {
+        return None;
+    }
+    let ms = |units: i64| std::time::Duration::from_millis(units as u64 * REPEAT_UNIT_MS);
+    Some((ms(initial), ms(rate)))
 }
 
 /// Flags real keyboards add to some keys: keypad keys and arrows carry
@@ -403,6 +434,19 @@ impl Accum {
 /// values (positive wheel1 = up, positive wheel2 = left): (wheel1, wheel2).
 pub fn wire_to_mac_scroll(dx: f64, dy: f64) -> (f64, f64) {
     (-dy, -dx)
+}
+
+/// Lines a synthesized line-scroll event moves per wheel notch from a peer.
+/// A posted line event skips macOS's wheel acceleration and moves one line
+/// (about 10 points), far less than a native notch, which goes through
+/// that acceleration. Three lines is what a notch scrolls on Windows and
+/// GNOME, and close to a native Mac notch at the default scroll speed.
+pub const LINES_PER_NOTCH: f64 = 3.0;
+
+/// Wire discrete scroll (120 per notch) to macOS line deltas (wheel1, wheel2).
+pub fn wire_discrete_to_mac_lines(dx: i32, dy: i32) -> (f64, f64) {
+    let notches = |v: i32| f64::from(v) / 120.0 * LINES_PER_NOTCH;
+    wire_to_mac_scroll(notches(dx), notches(dy))
 }
 
 /// A captured macOS scroll event, as read from its fields.
@@ -670,5 +714,58 @@ mod tests {
         // In a corner, the dominant direction wins.
         assert_eq!(edge_hit(&d, &all, Pos::new(1439.0, 899.0), 1.0, 5.0), Some(Side::Bottom));
         assert_eq!(edge_hit(&d, &all, Pos::new(1439.0, 899.0), 5.0, 1.0), Some(Side::Right));
+    }
+
+    #[test]
+    fn caps_lock_repeats_do_not_toggle() {
+        let mut m = Modifiers::default();
+        assert!(!m.is_caps_repeat(58, true));
+        m.update(58, true);
+        assert_ne!(m.flags() & flags::ALPHA_SHIFT, 0);
+        // A PC peer's auto-repeat: more downs while held.
+        assert!(m.is_caps_repeat(58, true));
+        m.update(58, true);
+        m.update(58, true);
+        assert_ne!(m.flags() & flags::ALPHA_SHIFT, 0);
+        assert!(!m.is_caps_repeat(58, false));
+        m.update(58, false);
+        assert!(!m.is_caps_repeat(58, true));
+        m.update(58, true);
+        assert_eq!(m.flags() & flags::ALPHA_SHIFT, 0);
+        assert!(!m.is_caps_repeat(30, true));
+    }
+
+    #[test]
+    fn keypad_clear_is_not_num_lock() {
+        // Sending Num Lock would toggle it on a PC peer.
+        assert_ne!(mac_to_evdev(0x47), Some(69));
+        assert_eq!(mac_to_evdev(0x47), Some(355));
+        // A PC's Num Lock doesn't type Clear on the Mac either.
+        assert_eq!(evdev_to_mac(69), None);
+        assert_eq!(evdev_to_mac(355), Some(0x47));
+    }
+
+    #[test]
+    fn mac_repeat_settings() {
+        use std::time::Duration;
+        assert_eq!(repeat_timing(Some(15), Some(2)), Some((Duration::from_millis(225), Duration::from_millis(30))));
+        assert_eq!(repeat_timing(None, None), Some((Duration::from_millis(375), Duration::from_millis(90))));
+        assert_eq!(repeat_timing(Some(25), Some(300_000)), None); // repeat off
+        assert_eq!(repeat_timing(Some(0), Some(2)), None);
+    }
+
+    #[test]
+    fn wheel_notch_scrolls_like_a_native_notch() {
+        // One notch down from a peer: three lines down (negative wheel1).
+        assert_eq!(wire_discrete_to_mac_lines(0, 120), (-3.0, -0.0));
+        assert_eq!(wire_discrete_to_mac_lines(-120, 0), (-0.0, 3.0));
+        // High-resolution wheels: an eighth of a notch accumulates.
+        let mut a = Accum::default();
+        let mut lines = 0;
+        for _ in 0..8 {
+            let (v, h) = wire_discrete_to_mac_lines(0, 15);
+            lines += a.take(h, v).1;
+        }
+        assert_eq!(lines, -3);
     }
 }

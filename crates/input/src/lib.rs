@@ -5,6 +5,7 @@
 //! over channels, so the daemon is identical on every OS.
 //! Key and button codes are Linux evdev codes on all platforms.
 
+mod common_logic;
 mod null;
 #[cfg(target_os = "macos")]
 mod macos;
