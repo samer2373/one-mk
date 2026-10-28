@@ -4,7 +4,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -19,8 +19,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: "${{ matrix.target }}" }
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: stable, targets: "${{ matrix.target }}" }
       - run: cargo build --release --locked --target ${{ matrix.target }} -p one-mk -p one-mk-tray -p one-mk-app
       - name: Package
         shell: bash
@@ -43,6 +44,8 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
