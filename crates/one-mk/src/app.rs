@@ -109,6 +109,8 @@ struct Connected {
 
 /// We control a peer.
 struct Remote {
+    /// The capture activation this visit belongs to.
+    activation: u32,
     peer: Fingerprint,
     /// Our edge the pointer left through.
     side: Side,
@@ -357,7 +359,7 @@ impl App {
                 self.local = Some(d);
                 self.update_sides();
             }
-            Event::Activated { side, pos } => self.enter_peer(side, pos),
+            Event::Activated { id, side, pos } => self.enter_peer(id, side, pos),
             Event::Motion { dx, dy } => {
                 let Some(r) = self.remote.as_mut() else { return };
                 match r.cursor.motion(dx, dy) {
@@ -394,8 +396,9 @@ impl App {
             Event::Scroll { dx, dy } => self.send_ctl(Control::Scroll { dx: dx as f32, dy: dy as f32 }),
             Event::ScrollDiscrete { dx, dy } => self.send_ctl(Control::ScrollDiscrete { dx, dy }),
             Event::ScrollStop => self.send_ctl(Control::ScrollStop),
-            Event::Deactivated => {
-                if let Some(r) = self.remote.take() {
+            Event::LocalInput => {}
+            Event::Deactivated { id } => {
+                if let Some(r) = self.remote.take_if(|r| r.activation == id) {
                     tracing::info!("capture ended by the system; pointer is home");
                     if let Some(p) = self.peers.get(&r.peer) {
                         p.ctl.send(Control::Leave);
@@ -407,14 +410,14 @@ impl App {
     }
 
     /// The pointer hit the `side` edge of our desktop.
-    fn enter_peer(&mut self, side: Side, pos: Pos) {
+    fn enter_peer(&mut self, activation: u32, side: Side, pos: Pos) {
         let target = self
             .peers
             .iter()
             .find(|(_, p)| p.side == side && p.desktop.is_some())
             .map(|(fp, p)| (*fp, p));
         let (Some(local), Some((fp, peer))) = (self.local.as_ref(), target) else {
-            let _ = self.capture.send(CaptureCmd::Release { pos: None });
+            let _ = self.capture.send(CaptureCmd::Release { id: activation, pos: None });
             return;
         };
         self.epoch = self.epoch.wrapping_add(1);
@@ -427,6 +430,7 @@ impl App {
             clip.push(fp, &peer.name, peer.conn.clone());
         }
         self.remote = Some(Remote {
+            activation,
             peer: fp,
             side,
             cursor,
@@ -445,7 +449,7 @@ impl App {
             p.ctl.send(Control::Leave);
         }
         let pos = self.local.as_ref().map(|d| d.point_on_edge(r.side, t, 2.0));
-        let _ = self.capture.send(CaptureCmd::Release { pos });
+        let _ = self.capture.send(CaptureCmd::Release { id: r.activation, pos });
         tracing::debug!("pointer is home");
     }
 
@@ -708,7 +712,7 @@ mod tests {
         assert_eq!(next_capture(&mut hb).await, CaptureCmd::SetSides(vec![Side::Left]));
 
         // Pointer hits A's right edge halfway down: it appears on B's left edge.
-        ha.events.send(Event::Activated { side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
         assert_eq!(next_inject(&mut hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
 
         ha.events.send(Event::Motion { dx: 100.0, dy: -40.0 }).unwrap();
@@ -724,7 +728,7 @@ mod tests {
         // Move back across the edge while Shift and the button are held.
         ha.events.send(Event::Motion { dx: -300.0, dy: 0.0 }).unwrap();
         match next_capture(&mut ha).await {
-            CaptureCmd::Release { pos: Some(p) } => {
+            CaptureCmd::Release { pos: Some(p), .. } => {
                 assert_eq!(p.x, 1917.0);
                 assert!((p.y - 500.0).abs() < 1.0, "{p:?}");
             }
@@ -794,14 +798,14 @@ mod tests {
 
         /// Moves the pointer from A onto B, and waits until B has it.
         async fn enter_b(&mut self) {
-            self.ha.events.send(Event::Activated { side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+            self.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
             assert_eq!(next_inject(&mut self.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
         }
 
         /// Moves the pointer back from B to A.
         async fn leave_b(&mut self) {
             self.ha.events.send(Event::Motion { dx: -100.0, dy: 0.0 }).unwrap();
-            assert!(matches!(next_capture(&mut self.ha).await, CaptureCmd::Release { pos: Some(_) }));
+            assert!(matches!(next_capture(&mut self.ha).await, CaptureCmd::Release { pos: Some(_), .. }));
         }
 
         async fn stop(self) {

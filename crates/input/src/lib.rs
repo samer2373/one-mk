@@ -31,15 +31,22 @@ pub enum Event {
     Desktop(Desktop),
     /// The pointer hit the `side` edge at `pos`; local input is now
     /// captured and delivered as the events below until released.
-    Activated { side: Side, pos: Pos },
+    /// `id` identifies this activation; later `Deactivated`/`Release`
+    /// carry it so stale ones can be ignored.
+    Activated { id: u32, side: Side, pos: Pos },
     Motion { dx: f64, dy: f64 },
     Button { button: u32, down: bool },
     Scroll { dx: f64, dy: f64 },
     ScrollDiscrete { dx: i32, dy: i32 },
     ScrollStop,
     Key { code: u32, down: bool },
-    /// Capture ended without us asking (session closed, permission revoked).
-    Deactivated,
+    /// Capture `id` ended without us asking (session closed, permission
+    /// revoked, monitors changed, backend failure).
+    Deactivated { id: u32 },
+    /// Real (not injected) input happened on this machine while it was
+    /// being controlled by a peer, so the person sitting here wants control
+    /// back. Only sent by backends that can tell injected input apart.
+    LocalInput,
     /// A part of the backend failed; the message is shown to the user.
     Error(String),
 }
@@ -49,8 +56,9 @@ pub enum Event {
 pub enum CaptureCmd {
     /// Edges that lead to a connected peer.
     SetSides(Vec<Side>),
-    /// Give the pointer back to this machine, placing it at `pos`.
-    Release { pos: Option<Pos> },
+    /// End activation `id` and give the pointer back to this machine,
+    /// placing it at `pos`. Ignored if `id` is not the current activation.
+    Release { id: u32, pos: Option<Pos> },
 }
 
 /// From the daemon to the injection side.

@@ -163,7 +163,9 @@ async fn capture(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedRece
     let _ = tx.send(Event::Desktop(cap.desktop.clone()));
     tracing::info!(screens = ?cap.desktop.screens, "input capture ready");
 
-    let mut activation: Option<u32> = None;
+    // Our activation id, and the portal's id for the same activation.
+    let mut next_id = 0u32;
+    let mut activation: Option<(u32, Option<u32>)> = None;
     loop {
         tokio::select! {
             cmd = cmds.recv() => match cmd {
@@ -171,33 +173,44 @@ async fn capture(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedRece
                     cap.sides = sides;
                     cap.apply_barriers().await?;
                 }
-                Some(CaptureCmd::Release { pos }) => {
-                    let opts = ReleaseOptions::default()
-                        .set_activation_id(activation.take())
-                        .set_cursor_position(pos.map(|p| (p.x, p.y)));
-                    cap.portal.release(&cap.session, opts).await?;
+                Some(CaptureCmd::Release { id, pos }) => {
+                    if activation.is_some_and(|(ours, _)| ours == id) {
+                        let portal_id = activation.take().and_then(|(_, p)| p);
+                        let opts = ReleaseOptions::default()
+                            .set_activation_id(portal_id)
+                            .set_cursor_position(pos.map(|p| (p.x, p.y)));
+                        cap.portal.release(&cap.session, opts).await?;
+                    }
                 }
                 None => return Ok(()),
             },
             Some(a) = activated.next() => {
-                activation = a.activation_id();
+                next_id = next_id.wrapping_add(1);
+                activation = Some((next_id, a.activation_id()));
                 let side = match a.barrier_id() {
                     Some(input_capture::ActivatedBarrier::Barrier(id)) => cap.barriers.get(&id.get()).copied(),
                     _ => None,
                 };
                 let pos = a.cursor_position().map(|(x, y)| Pos::new(f64::from(x), f64::from(y)));
                 match (side, pos) {
-                    (Some(side), Some(pos)) => { let _ = tx.send(Event::Activated { side, pos }); }
+                    (Some(side), Some(pos)) => { let _ = tx.send(Event::Activated { id: next_id, side, pos }); }
                     _ => {
                         // Not one of our barriers; hand the pointer straight back.
-                        let opts = ReleaseOptions::default().set_activation_id(activation.take());
+                        let portal_id = activation.take().and_then(|(_, p)| p);
+                        let opts = ReleaseOptions::default().set_activation_id(portal_id);
                         cap.portal.release(&cap.session, opts).await?;
                     }
                 }
             },
-            Some(_) = deactivated.next() => {
-                activation = None;
-                let _ = tx.send(Event::Deactivated);
+            Some(d) = deactivated.next() => {
+                // Only end the activation this signal is about; a late signal
+                // for an earlier one must not end a newer capture.
+                if let Some((ours, portal_id)) = activation
+                    && (d.activation_id().is_none() || d.activation_id() == portal_id)
+                {
+                    activation = None;
+                    let _ = tx.send(Event::Deactivated { id: ours });
+                }
             },
             Some(_) = zones_changed.next() => {
                 cap.refresh_zones().await?;
@@ -206,9 +219,10 @@ async fn capture(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedRece
             },
             Some(_) = disabled.next() => {
                 // The compositor dropped our barriers (e.g. monitors changed); set them up again.
-                activation = None;
+                if let Some((ours, _)) = activation.take() {
+                    let _ = tx.send(Event::Deactivated { id: ours });
+                }
                 cap.enabled = false;
-                let _ = tx.send(Event::Deactivated);
                 cap.refresh_zones().await?;
                 cap.apply_barriers().await?;
             },
