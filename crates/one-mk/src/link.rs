@@ -153,6 +153,7 @@ impl Link {
                         let _ = task_conn.send_datagram(bytes::Bytes::copy_from_slice(&b[..n]));
                     }
                     Ok(Datagram::ProbeEcho { .. }) => {}
+                    Ok(Datagram::MotionBy { .. }) => {} // gaming mode, not handled yet
                     Err(e) => tracing::trace!("bad datagram: {e}"),
                 }
             }

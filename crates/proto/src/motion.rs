@@ -19,6 +19,12 @@ pub enum Step {
 /// nothing is ever retransmitted, and the pointer cannot drift.
 /// It also means mouse acceleration is applied exactly once (by the machine
 /// the mouse is plugged into) and DPI scaling never distorts speed.
+///
+/// In relative mode (gaming) the deltas themselves are sent, as a running
+/// sum ([`Datagram::MotionBy`]), and the pointer never leaves through an
+/// edge: games capture the pointer and want raw movement, not a position
+/// pinned at the screen border. `pos` is then only an estimate (the peer's
+/// pointer clamped to its screens), used if absolute mode resumes.
 #[derive(Clone, Debug)]
 pub struct RemoteCursor {
     desktop: Desktop,
@@ -26,6 +32,9 @@ pub struct RemoteCursor {
     pos: Pos,
     epoch: u16,
     seq: u32,
+    relative: bool,
+    /// Every delta sent in relative mode during this visit, in pixels.
+    sum: (f64, f64),
 }
 
 impl RemoteCursor {
@@ -33,7 +42,32 @@ impl RemoteCursor {
     /// fraction `t` along that edge.
     pub fn enter(desktop: Desktop, home: Side, t: f64, epoch: u16) -> Self {
         let pos = desktop.point_on_edge(home, t, 0.0);
-        Self { desktop, home, pos, epoch, seq: 0 }
+        Self::enter_at(desktop, home, pos, epoch)
+    }
+
+    /// Enters `desktop` at `pos` without crossing an edge (`one-mk switch`);
+    /// `home` is still the edge that leads back.
+    pub fn enter_at(desktop: Desktop, home: Side, pos: Pos, epoch: u16) -> Self {
+        let pos = desktop.clamp(pos);
+        Self { desktop, home, pos, epoch, seq: 0, relative: false, sum: (0.0, 0.0) }
+    }
+
+    pub fn is_relative(&self) -> bool {
+        self.relative
+    }
+
+    /// Switches between absolute and relative motion. Returns true if that
+    /// changed anything; the peer must then be told
+    /// ([`Control::PointerMode`](crate::Control::PointerMode)) before the
+    /// next datagram. A new `seq` makes the next datagram (of the new kind)
+    /// supersede every one of the old kind still in flight.
+    pub fn set_relative(&mut self, on: bool) -> bool {
+        if self.relative == on {
+            return false;
+        }
+        self.relative = on;
+        self.seq = self.seq.wrapping_add(1);
+        true
     }
 
     pub fn pos(&self) -> Pos {
@@ -52,9 +86,15 @@ impl RemoteCursor {
         self.desktop.edge_fraction(self.home, self.pos)
     }
 
-    /// The latest position as a datagram; resending it is always safe.
+    /// The latest position (or relative sum) as a datagram; resending it
+    /// is always safe.
     pub fn current(&self) -> Datagram {
-        Datagram::Motion { epoch: self.epoch, seq: self.seq, pos: self.pos }
+        if self.relative {
+            let (sum_x, sum_y) = (wrapping_fixed(self.sum.0), wrapping_fixed(self.sum.1));
+            Datagram::MotionBy { epoch: self.epoch, seq: self.seq, sum_x, sum_y }
+        } else {
+            Datagram::Motion { epoch: self.epoch, seq: self.seq, pos: self.pos }
+        }
     }
 
     /// The peer's monitors changed while we control it. Returns the new
@@ -68,6 +108,15 @@ impl RemoteCursor {
 
     pub fn motion(&mut self, dx: f64, dy: f64) -> Step {
         let target = Pos::new(self.pos.x + dx, self.pos.y + dy);
+        if self.relative {
+            if dx == 0.0 && dy == 0.0 {
+                return Step::Still;
+            }
+            self.sum = (self.sum.0 + dx, self.sum.1 + dy);
+            self.pos = self.desktop.clamp(target);
+            self.seq = self.seq.wrapping_add(1);
+            return Step::Move(self.current());
+        }
         if self.crosses_home(target) {
             return Step::Leave { t: self.desktop.edge_fraction(self.home, target) };
         }
@@ -94,6 +143,13 @@ impl RemoteCursor {
     }
 }
 
+/// A running sum in 1/256 px, reduced to `i32` (wrapping). Differences of
+/// two such values are exact as long as they are less than 2^31 / 256 px
+/// apart, which consecutive datagrams always are.
+fn wrapping_fixed(v: f64) -> i32 {
+    ((v * 256.0).round() as i64) as i32
+}
+
 /// What to do with a received motion datagram.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Received {
@@ -106,18 +162,59 @@ pub enum Received {
     Stale,
 }
 
+/// What to do with a received relative-motion datagram.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelReceived {
+    /// Move the pointer by this many whole pixels (possibly zero: the sum
+    /// moved by less than half a pixel).
+    MoveBy { dx: i32, dy: i32 },
+    Repeat,
+    Stale,
+}
+
 /// The receiver's filter for motion datagrams: drops packets from a previous
 /// visit (epoch) and packets that arrive out of order.
 #[derive(Clone, Debug, Default)]
 pub struct MotionReceiver {
     epoch: Option<u16>,
     last_seq: u32,
+    rel: RelativeSum,
+}
+
+/// Turns the sender's running sums into whole-pixel moves. What has been
+/// moved is always the rounded sum, so rounding never accumulates into
+/// drift, and lost datagrams are made up by the next one.
+#[derive(Clone, Debug, Default)]
+struct RelativeSum {
+    /// The last wire sum applied (wrapping 1/256 px).
+    last: (i32, i32),
+    /// The same, unwrapped.
+    total: (i64, i64),
+    /// Whole pixels moved so far.
+    moved: (i64, i64),
+}
+
+impl RelativeSum {
+    fn apply(&mut self, sum: (i32, i32)) -> (i32, i32) {
+        let step = |last: &mut i32, total: &mut i64, moved: &mut i64, now: i32| {
+            *total += i64::from(now.wrapping_sub(*last));
+            *last = now;
+            let target = (*total + 128).div_euclid(256);
+            let d = target - *moved;
+            *moved = target;
+            i32::try_from(d).unwrap_or(if d < 0 { i32::MIN } else { i32::MAX })
+        };
+        let dx = step(&mut self.last.0, &mut self.total.0, &mut self.moved.0, sum.0);
+        let dy = step(&mut self.last.1, &mut self.total.1, &mut self.moved.1, sum.1);
+        (dx, dy)
+    }
 }
 
 impl MotionReceiver {
     pub fn enter(&mut self, epoch: u16) {
         self.epoch = Some(epoch);
         self.last_seq = 0;
+        self.rel = RelativeSum::default();
     }
 
     pub fn leave(&mut self) {
@@ -138,6 +235,21 @@ impl MotionReceiver {
             Received::Repeat
         } else {
             Received::Stale
+        }
+    }
+
+    /// A relative-motion datagram: the sender's running sums at `seq`.
+    pub fn accept_relative(&mut self, epoch: u16, seq: u32, sum: (i32, i32)) -> RelReceived {
+        if self.epoch != Some(epoch) {
+            RelReceived::Stale
+        } else if newer(seq, self.last_seq) {
+            self.last_seq = seq;
+            let (dx, dy) = self.rel.apply(sum);
+            RelReceived::MoveBy { dx, dy }
+        } else if seq == self.last_seq {
+            RelReceived::Repeat
+        } else {
+            RelReceived::Stale
         }
     }
 
@@ -231,6 +343,107 @@ mod tests {
         assert_eq!(c.motion(-10.0, 0.0), Step::Still);
         // Only past the desktop's outer left edge does it leave.
         assert!(matches!(c.motion(-1921.0, 0.0), Step::Leave { .. }));
+    }
+
+    /// Sends `deltas` through a cursor in relative mode, delivering only the
+    /// datagrams `deliver` picks, and returns the whole pixels the receiver
+    /// moved in all.
+    fn relay(deltas: &[(f64, f64)], mut deliver: impl FnMut(usize) -> bool) -> (i64, i64) {
+        let mut c = RemoteCursor::enter(desk(), Side::Left, 0.5, 2);
+        let mut r = MotionReceiver::default();
+        r.enter(2);
+        assert!(c.set_relative(true));
+        let mut moved = (0i64, 0i64);
+        let mut take = |r: &mut MotionReceiver, d: Datagram| {
+            let Datagram::MotionBy { epoch, seq, sum_x, sum_y } = d else { panic!("{d:?}") };
+            if let RelReceived::MoveBy { dx, dy } = r.accept_relative(epoch, seq, (sum_x, sum_y)) {
+                moved = (moved.0 + i64::from(dx), moved.1 + i64::from(dy));
+            }
+        };
+        for (i, &(dx, dy)) in deltas.iter().enumerate() {
+            match c.motion(dx, dy) {
+                Step::Move(d) if deliver(i) => take(&mut r, d),
+                Step::Move(_) | Step::Still => {}
+                Step::Leave { .. } => panic!("relative motion never leaves"),
+            }
+        }
+        // The idle resend of the last sum always gets through eventually.
+        take(&mut r, c.current());
+        moved
+    }
+
+    #[test]
+    fn relative_motion_rounds_without_drift() {
+        // 1000 moves of 0.3 px: each rounds to 0, the sum is 300 px.
+        assert_eq!(relay(&[(0.3, -0.3); 1000], |_| true), (300, -300));
+        // Back and forth by fractions ends exactly where it started.
+        let wobble: Vec<_> = (0..999).map(|i| if i % 3 == 2 { (-1.4, 0.7) } else { (0.7, -0.35) }).collect();
+        assert_eq!(relay(&wobble, |_| true), (0, 0));
+        // Large moves pass straight through (and are not clamped at the
+        // peer's screen edge: a game turning keeps turning).
+        assert_eq!(relay(&[(5000.0, 0.0); 20], |_| true), (100_000, 0));
+    }
+
+    #[test]
+    fn lost_relative_datagrams_are_made_up() {
+        let deltas: Vec<_> = (0..500).map(|i| (f64::from(i % 7) - 2.6, 1.25)).collect();
+        let exact = |v: f64| v.round() as i64;
+        let (sx, sy) = deltas.iter().fold((0.0, 0.0), |a, d| (a.0 + d.0, a.1 + d.1));
+        assert_eq!(relay(&deltas, |_| true), (exact(sx), exact(sy)));
+        // Two thirds lost: the same total.
+        assert_eq!(relay(&deltas, |i| i % 3 == 0), (exact(sx), exact(sy)));
+    }
+
+    #[test]
+    fn relative_sum_wraps_without_a_jump() {
+        // A sum that passes i32::MAX (in 1/256 px) after hours of turning.
+        let mut s = RelativeSum::default();
+        let start = i32::MAX - 1000;
+        s.apply((start, 0));
+        let (dx, _) = s.apply((start.wrapping_add(2560), 0)); // +10 px, wrapping
+        assert_eq!(dx, 10);
+        let (dx, _) = s.apply((start.wrapping_add(2560 - 512), 0)); // -2 px
+        assert_eq!(dx, -2);
+    }
+
+    #[test]
+    fn relative_repeats_and_stale_datagrams_move_nothing() {
+        let mut r = MotionReceiver::default();
+        r.enter(1);
+        assert_eq!(r.accept_relative(0, 1, (256, 0)), RelReceived::Stale, "previous visit");
+        assert_eq!(r.accept_relative(1, 1, (256, 0)), RelReceived::MoveBy { dx: 1, dy: 0 });
+        assert_eq!(r.accept_relative(1, 1, (256, 0)), RelReceived::Repeat);
+        assert_eq!(r.accept_relative(1, 3, (1024, 0)), RelReceived::MoveBy { dx: 3, dy: 0 });
+        assert_eq!(r.accept_relative(1, 2, (512, 0)), RelReceived::Stale, "reordered");
+        // An absolute datagram from before the switch is stale too.
+        assert_eq!(r.accept(1, 2, Pos::new(5.0, 5.0)), Received::Stale);
+    }
+
+    #[test]
+    fn switching_modes_mid_visit() {
+        let mut c = RemoteCursor::enter(desk(), Side::Left, 0.5, 1);
+        c.motion(100.0, 0.0);
+        assert!(c.set_relative(true));
+        assert!(!c.set_relative(true));
+        assert!(matches!(c.current(), Datagram::MotionBy { sum_x: 0, sum_y: 0, .. }));
+        // Pushing far past the home edge doesn't leave; the estimate clamps.
+        let Step::Move(Datagram::MotionBy { sum_x, .. }) = c.motion(-500.0, 0.0) else { panic!() };
+        assert_eq!(sum_x, -500 * 256);
+        assert_eq!(c.pos(), Pos::new(0.0, 540.0));
+        assert_eq!(c.motion(0.0, 0.0), Step::Still);
+        // Back to absolute: positions resume from the estimate, newer seq.
+        let seq = c.seq();
+        assert!(c.set_relative(false));
+        assert!(matches!(c.current(), Datagram::Motion { pos, seq: s, .. } if pos == Pos::new(0.0, 540.0) && s > seq));
+        assert!(matches!(c.motion(-1.0, 0.0), Step::Leave { .. }));
+    }
+
+    #[test]
+    fn enter_at_a_point() {
+        let c = RemoteCursor::enter_at(desk(), Side::Left, Pos::new(960.0, 540.0), 3);
+        assert_eq!(c.current(), Datagram::Motion { epoch: 3, seq: 0, pos: Pos::new(960.0, 540.0) });
+        let c = RemoteCursor::enter_at(desk(), Side::Left, Pos::new(5000.0, 540.0), 3);
+        assert!(desk().screen_at(c.pos()).is_some());
     }
 
     #[test]

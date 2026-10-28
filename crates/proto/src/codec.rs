@@ -42,6 +42,12 @@ pub enum Datagram {
     /// a keepalive: it keeps Wi-Fi radios out of power save (which adds
     /// 50-200 ms stalls) and tells the receiver the controller is alive.
     Motion { epoch: u16, seq: u32, pos: Pos },
+    /// Relative motion (gaming mode): the sum of every delta sent during
+    /// visit `epoch`, in 1/256 px, wrapping. Carrying the running sum, not
+    /// the step, makes it self-contained like `Motion`: a lost datagram is
+    /// made up by the next, so the pointer never drifts, and a resend (same
+    /// `seq`) moves nothing. Only sent to peers with [`caps::RELATIVE`].
+    MotionBy { epoch: u16, seq: u32, sum_x: i32, sum_y: i32 },
     /// Latency measurement; the receiver echoes it back.
     Probe { id: u32, sent_ns: u64 },
     ProbeEcho { id: u32, sent_ns: u64 },
@@ -58,6 +64,13 @@ impl Datagram {
                 w.u16(epoch);
                 w.u32(seq);
                 w.pos(pos);
+            }
+            Datagram::MotionBy { epoch, seq, sum_x, sum_y } => {
+                w.u8(5);
+                w.u16(epoch);
+                w.u32(seq);
+                w.i32(sum_x);
+                w.i32(sum_y);
             }
             Datagram::Probe { id, sent_ns } => {
                 w.u8(3);
@@ -82,6 +95,7 @@ impl Datagram {
             1 => Datagram::Motion { epoch: r.u16()?, seq: r.u32()?, pos: r.pos()? },
             3 => Datagram::Probe { id: r.u32()?, sent_ns: r.u64()? },
             4 => Datagram::ProbeEcho { id: r.u32()?, sent_ns: r.u64()? },
+            5 => Datagram::MotionBy { epoch: r.u16()?, seq: r.u32()?, sum_x: r.i32()?, sum_y: r.i32()? },
             t => return Err(DecodeError::UnknownTag(t)),
         };
         Ok(d)
@@ -107,6 +121,22 @@ pub mod os {
             UNKNOWN
         }
     }
+}
+
+/// Optional features, announced with [`Control::Caps`]. Each is additive
+/// within protocol 2: a peer that doesn't announce one never gets sent it
+/// (or, for messages that are safe to ignore, skips them as unknown tags).
+pub mod caps {
+    /// Understands [`Datagram::MotionBy`](crate::Datagram::MotionBy) and
+    /// [`Control::PointerMode`](crate::Control::PointerMode).
+    pub const RELATIVE: u32 = 1;
+    /// Understands [`Control::Lock`](crate::Control::Lock).
+    pub const LOCK: u32 = 2;
+    /// Answers [`Control::WatchFocus`](crate::Control::WatchFocus) with
+    /// [`Control::Focus`](crate::Control::Focus).
+    pub const FOCUS: u32 = 4;
+    /// What this build supports.
+    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS;
 }
 
 /// Reliable, ordered messages on the control stream.
@@ -142,6 +172,25 @@ pub enum Control {
     /// Layout sync: the sender sits on `side_of_you` of the receiver. The
     /// receiver adopts it if `version` is newer than the one it has stored.
     Layout { side_of_you: Side, version: u64 },
+    // Additive messages. Peers that predate them skip unknown tags (see
+    // `link.rs`), so they need no new protocol version.
+    /// The optional features the sender supports (bits of [`caps`]), sent
+    /// right after `Hello`.
+    Caps(u32),
+    /// The controller switches visit `epoch` to relative motion
+    /// ([`Datagram::MotionBy`]) or back to absolute positions. While
+    /// relative, a `Button`'s `pos` means nothing and is not applied.
+    PointerMode { epoch: u16, relative: bool },
+    /// Lock your screen. `id` names the lock event, so a computer that
+    /// passes it on never gets it back as a new one.
+    Lock { id: u64 },
+    /// From the controlled computer: its focused window is (or is no
+    /// longer) fullscreen, during visit `epoch`. Gaming mode `auto` uses it.
+    Focus { epoch: u16, fullscreen: bool },
+    /// From the controller: send `Focus` now and whenever it changes during
+    /// visit `epoch`. Only gaming mode `auto` asks, so nobody else pays for
+    /// looking at windows.
+    WatchFocus { epoch: u16 },
 }
 
 impl Control {
@@ -213,6 +262,28 @@ impl Control {
                 w.u8(Side::ALL.iter().position(|s| s == side_of_you).unwrap_or(0) as u8);
                 w.u64(*version);
             }
+            Control::Caps(bits) => {
+                w.u8(14);
+                w.u32(*bits);
+            }
+            Control::PointerMode { epoch, relative } => {
+                w.u8(15);
+                w.u16(*epoch);
+                w.u8(u8::from(*relative));
+            }
+            Control::Lock { id } => {
+                w.u8(16);
+                w.u64(*id);
+            }
+            Control::Focus { epoch, fullscreen } => {
+                w.u8(17);
+                w.u16(*epoch);
+                w.u8(u8::from(*fullscreen));
+            }
+            Control::WatchFocus { epoch } => {
+                w.u8(18);
+                w.u16(*epoch);
+            }
         }
     }
 
@@ -253,6 +324,11 @@ impl Control {
                 side_of_you: *Side::ALL.get(usize::from(r.u8()?)).ok_or(DecodeError::Invalid("side"))?,
                 version: r.u64()?,
             },
+            14 => Control::Caps(r.u32()?),
+            15 => Control::PointerMode { epoch: r.u16()?, relative: r.u8()? != 0 },
+            16 => Control::Lock { id: r.u64()? },
+            17 => Control::Focus { epoch: r.u16()?, fullscreen: r.u8()? != 0 },
+            18 => Control::WatchFocus { epoch: r.u16()? },
             t => return Err(DecodeError::UnknownTag(t)),
         };
         Ok(c)
@@ -446,11 +522,13 @@ mod tests {
             Datagram::Motion { epoch: 3, seq: 99, pos: Pos::new(1919.5, -20.25) },
             Datagram::Probe { id: 1, sent_ns: u64::MAX },
             Datagram::ProbeEcho { id: 2, sent_ns: 5 },
+            Datagram::MotionBy { epoch: 1, seq: 2, sum_x: i32::MIN, sum_y: -3 },
         ] {
             let (buf, n) = d.encode();
             assert_eq!(Datagram::decode(&buf[..n]).unwrap(), d);
         }
         assert_eq!(Datagram::Motion { epoch: 0, seq: 0, pos: Pos::default() }.encode().1, 15);
+        assert_eq!(Datagram::MotionBy { epoch: 0, seq: 0, sum_x: 0, sum_y: 0 }.encode().1, 15);
     }
 
     #[test]
@@ -475,6 +553,12 @@ mod tests {
             Control::Busy { epoch: 2 },
             Control::Revoked { epoch: u16::MAX },
             Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123 },
+            Control::Caps(caps::LOCAL),
+            Control::PointerMode { epoch: 3, relative: true },
+            Control::PointerMode { epoch: 3, relative: false },
+            Control::Lock { id: u64::MAX },
+            Control::Focus { epoch: 4, fullscreen: true },
+            Control::WatchFocus { epoch: 5 },
         ];
         let mut buf = Vec::new();
         for m in &msgs {
@@ -498,6 +582,34 @@ mod tests {
         assert_eq!(StreamKind::File as u8, 4);
         assert_eq!(StreamKind::from_u8(0), None);
         assert_eq!(StreamKind::from_u8(6), None);
+    }
+
+    /// The messages added within protocol 2 use tags that protocol-2 peers
+    /// built before them don't know, so they skip them (`UnknownTag`) and
+    /// keep the link: no version bump is needed. This pins the tag numbers
+    /// those older decoders saw as unknown.
+    #[test]
+    fn additive_messages_use_fresh_tags() {
+        let tag = |m: &Control| {
+            let mut b = Vec::new();
+            m.encode_frame(&mut b);
+            b[2]
+        };
+        let new = [
+            Control::Caps(0),
+            Control::PointerMode { epoch: 0, relative: true },
+            Control::Lock { id: 0 },
+            Control::Focus { epoch: 0, fullscreen: false },
+            Control::WatchFocus { epoch: 0 },
+        ];
+        assert_eq!(new.iter().map(tag).collect::<Vec<_>>(), [14, 15, 16, 17, 18]);
+        let (b, _) = Datagram::MotionBy { epoch: 0, seq: 0, sum_x: 0, sum_y: 0 }.encode();
+        assert_eq!(b[0], 5);
+        // A Hello is still the same bytes, so old peers still connect.
+        let mut hello = Vec::new();
+        Control::Hello { version: PROTOCOL_VERSION, name: "x".into(), screens: vec![], nonce: 0, os: 0 }
+            .encode_frame(&mut hello);
+        assert_eq!(hello.len(), 2 + 1 + 2 + 2 + 1 + 8 + 1);
     }
 
     #[test]
