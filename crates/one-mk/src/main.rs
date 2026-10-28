@@ -88,6 +88,10 @@ enum Cmd {
     Devices,
     /// Show whether one-mk is running, who is connected and who controls whom.
     Status,
+    /// Take this computer back from the computer controlling it (on Linux,
+    /// where using this computer's own mouse or keyboard can't be noticed;
+    /// bind it to a keyboard shortcut).
+    Takeback,
     /// Start one-mk automatically when you log in.
     Install,
     /// Stop starting one-mk automatically.
@@ -209,6 +213,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Pair { connect } => pair::run(&dir, connect).await,
             Cmd::Devices => devices(&dir, cli.verbose > 0),
             Cmd::Status => manage::status(&dir).await,
+            Cmd::Takeback => manage::takeback(&dir).await,
             Cmd::Install => install::install(&dir, custom_home).await,
             Cmd::Uninstall => install::uninstall(),
             Cmd::Layout { device, side, swap_ctrl_cmd } => manage::layout(&dir, &device, side, swap_ctrl_cmd).await,

@@ -21,6 +21,9 @@ pub enum Request {
     Status,
     /// `devices.toml` changed: apply it now.
     Reload,
+    /// End the control of whichever peer controls this machine, as if
+    /// this machine's own mouse or keyboard had been used.
+    TakeBack,
 }
 
 impl Request {
@@ -28,11 +31,12 @@ impl Request {
         match self {
             Request::Status => "status",
             Request::Reload => "reload",
+            Request::TakeBack => "takeback",
         }
     }
 
     fn parse(s: &str) -> Option<Self> {
-        [Request::Status, Request::Reload].into_iter().find(|r| r.name() == s)
+        [Request::Status, Request::Reload, Request::TakeBack].into_iter().find(|r| r.name() == s)
     }
 }
 

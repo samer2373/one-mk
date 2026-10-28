@@ -11,7 +11,7 @@
 use crate::clip::ClipSync;
 use crate::control::{self, Request};
 use crate::link::{self, Link, LinkEvent, Rank};
-use crate::manage::{PeerStatus, Status, on_your};
+use crate::manage::{PeerStatus, Status, on_your, takeback_hint};
 use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
 use one_mk_input::{Backend, CaptureCmd, Event, Inject};
@@ -41,6 +41,12 @@ const RESEND_AFTER: [Duration; 2] = [Duration::from_millis(4), Duration::from_mi
 /// this machine, and anything it held is released. Its keepalives arrive
 /// every 20 ms, so this only fires when something is really wrong.
 const LEASE: Duration = Duration::from_millis(750);
+/// A controller whose only traffic for this long is keepalives (no key,
+/// button, scroll or pointer movement) is let go: a forgotten session must
+/// not hold this machine forever, least of all on Linux, where using this
+/// machine's own mouse and keyboard can't be detected. The controller's
+/// pointer goes home, and its next movement enters again.
+const IDLE: Duration = Duration::from_secs(60);
 /// If a peer doesn't answer `Enter` within this, the pointer comes home.
 const ENTER_TIMEOUT: Duration = Duration::from_millis(750);
 const DIAL_INTERVAL: Duration = Duration::from_secs(2);
@@ -50,6 +56,13 @@ const FIRST_STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 /// Discovery announcements from unknown devices re-read the trusted device
 /// list (it may have been paired since) at most this often.
 const TRUST_RELOAD_INTERVAL: Duration = Duration::from_secs(5);
+/// Incoming connections still being set up (trust check, first stream,
+/// `Hello`), in all and from one device. More are closed at once.
+const MAX_PENDING: usize = 16;
+const MAX_PENDING_PER_PEER: usize = 4;
+/// At most this many queued motion events are merged into one send, so a
+/// burst can't hold off the safety deadlines for long.
+const MAX_COALESCE: usize = 256;
 
 /// evdev codes for the emergency "bring my pointer home" shortcut:
 /// Ctrl+Alt+Shift+Esc.
@@ -191,13 +204,44 @@ struct Owner {
     link: usize,
     epoch: u16,
     motion: MotionReceiver,
+    /// The newest position applied (by motion or a click), where a late
+    /// click must leave the pointer.
+    pos: Pos,
     held: HeldKeys,
     /// Last valid traffic from the owner for this visit.
     last_rx: Instant,
+    /// Last real input: a key, button, scroll or a new position (not a
+    /// keepalive repeating the same one).
+    last_input: Instant,
 }
 
 impl Owner {
+    fn new(peer: Fingerprint, link: usize, epoch: u16, pos: Pos) -> Self {
+        let mut motion = MotionReceiver::default();
+        motion.enter(epoch);
+        let now = Instant::now();
+        Self { peer, link, epoch, motion, pos, held: HeldKeys::new(), last_rx: now, last_input: now }
+    }
+
+    /// A motion datagram from the owner.
+    fn motion(&mut self, epoch: u16, seq: u32, pos: Pos, inject: &mpsc::UnboundedSender<Inject>) {
+        match self.motion.accept(epoch, seq, pos) {
+            Received::Move(p) => {
+                let now = Instant::now();
+                self.last_rx = now;
+                self.last_input = now;
+                self.pos = p;
+                let _ = inject.send(Inject::MoveTo(p));
+            }
+            Received::Repeat => self.last_rx = Instant::now(),
+            Received::Stale => {}
+        }
+    }
+
     fn input(&mut self, msg: Control, inject: &mpsc::UnboundedSender<Inject>) {
+        let now = Instant::now();
+        self.last_rx = now;
+        self.last_input = now;
         let inject = |i| {
             let _ = inject.send(i);
         };
@@ -208,10 +252,21 @@ impl Owner {
                 }
             }
             Control::Button { button, down, seq, pos } => {
-                self.motion.sync(seq);
-                inject(Inject::MoveTo(pos));
-                if self.held.update(button, down) {
+                if self.motion.sync(seq) {
+                    self.pos = pos;
+                    inject(Inject::MoveTo(pos));
+                    if self.held.update(button, down) {
+                        inject(Inject::Button { button, down });
+                    }
+                } else if self.held.update(button, down) {
+                    // A newer position overtook this click (datagrams
+                    // and the control stream race). Click where the user
+                    // clicked, then put the pointer back: the newer
+                    // position's resends count as repeats and would never
+                    // move it there again.
+                    inject(Inject::MoveTo(pos));
                     inject(Inject::Button { button, down });
+                    inject(Inject::MoveTo(self.pos));
                 }
             }
             Control::Scroll { dx, dy } => inject(Inject::Scroll { dx: f64::from(dx), dy: f64::from(dy) }),
@@ -255,6 +310,9 @@ struct App {
     extra_addrs: Vec<SocketAddr>,
     dialing: HashSet<SocketAddr>,
     services: Services,
+    /// Peers whose first time controlling this machine (this run) has been
+    /// announced with how to take control back.
+    announced: HashSet<Fingerprint>,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -296,7 +354,7 @@ pub async fn serve(
     let (link_tx, mut link_rx) = mpsc::unbounded_channel();
     let (local_screens, screens_rx) = watch::channel(Vec::new());
 
-    spawn_accept(node.clone(), dir.clone(), screens_rx.clone(), tx.clone(), services.clone());
+    spawn_accept(node.clone(), dir.clone(), screens_rx.clone(), tx.clone(), services.clone(), Pending::default());
     let _discovery = if opts.discovery {
         let (d, mut found) = Discovery::start(&identity, port, false)?;
         let tx = tx.clone();
@@ -333,6 +391,7 @@ pub async fn serve(
         extra_addrs: opts.connect,
         dialing: HashSet::new(),
         services,
+        announced: HashSet::new(),
     };
     app.dial_missing(&screens_rx);
 
@@ -342,6 +401,14 @@ pub async fn serve(
     tokio::pin!(shutdown);
 
     loop {
+        // Safety deadlines come first. The select below prefers events, so
+        // a steady stream of them (a peer flooding control messages, or
+        // just busy traffic) must not hold off a lease expiry, the release
+        // of held keys or an `Enter` timeout. Each pass handles one event
+        // (a run of motion at most `MAX_COALESCE`), then checks again.
+        if app.next_deadline().is_some_and(|d| d <= Instant::now()) {
+            app.on_timer();
+        }
         let deadline = app.next_deadline();
         tokio::select! {
             biased;
@@ -391,12 +458,59 @@ async fn shutdown_signal() {
     let _ = ctrl_c.await;
 }
 
+/// Counts incoming connections that are still being set up, so a peer
+/// that finishes TLS over and over but never opens its first stream can't
+/// pile up establishment tasks. Established connections are limited
+/// elsewhere: one input link per device (`App::peers`) and
+/// [`crate::transfer::MAX_CONNS_PER_PEER`] bulk connections.
+#[derive(Clone, Default)]
+struct Pending(Arc<std::sync::Mutex<PendingCounts>>);
+
+#[derive(Default)]
+struct PendingCounts {
+    total: usize,
+    per_peer: HashMap<Fingerprint, usize>,
+}
+
+/// One connection being set up; released on drop.
+struct PendingPermit {
+    pending: Pending,
+    fp: Fingerprint,
+}
+
+impl Pending {
+    fn admit(&self, fp: Fingerprint) -> Option<PendingPermit> {
+        let mut c = self.0.lock().expect("not poisoned");
+        let mine = c.per_peer.get(&fp).copied().unwrap_or(0);
+        if c.total >= MAX_PENDING || mine >= MAX_PENDING_PER_PEER {
+            return None;
+        }
+        c.total += 1;
+        c.per_peer.insert(fp, mine + 1);
+        Some(PendingPermit { pending: self.clone(), fp })
+    }
+}
+
+impl Drop for PendingPermit {
+    fn drop(&mut self) {
+        let mut c = self.pending.0.lock().expect("not poisoned");
+        c.total -= 1;
+        if let Some(n) = c.per_peer.get_mut(&self.fp) {
+            *n -= 1;
+            if *n == 0 {
+                c.per_peer.remove(&self.fp);
+            }
+        }
+    }
+}
+
 fn spawn_accept(
     node: Node,
     dir: PathBuf,
     screens: watch::Receiver<Vec<Rect>>,
     tx: mpsc::UnboundedSender<AppEvent>,
     services: Services,
+    pending: Pending,
 ) {
     tokio::spawn(async move {
         while let Some(res) = node.accept().await {
@@ -407,9 +521,14 @@ fn spawn_accept(
                     continue;
                 }
             };
+            let Some(permit) = pending.admit(peer.fingerprint) else {
+                tracing::debug!(peer = %peer.fingerprint.short(), "too many connections being set up; refusing");
+                peer.conn.close(4u32.into(), b"busy");
+                continue;
+            };
             let (node, dir, screens, tx, services) =
                 (node.clone(), dir.clone(), screens.clone(), tx.clone(), services.clone());
-            tokio::spawn(async move { establish(peer, &node, &dir, &screens, &tx, services).await });
+            tokio::spawn(async move { establish(peer, &node, &dir, &screens, &tx, services, Some(permit)).await });
         }
     });
 }
@@ -421,6 +540,9 @@ fn spawn_accept(
 /// bulk connection, used for clipboard snapshots (so they never share
 /// congestion control with input) or by `one-mk send` (which shares the
 /// peer service's identity). It never replaces the link.
+///
+/// `permit` (for incoming connections) is held until the connection is
+/// identified: handed to the app as a link, or to the bulk stream server.
 async fn establish(
     peer: Peer,
     node: &Node,
@@ -428,6 +550,7 @@ async fn establish(
     screens: &watch::Receiver<Vec<Rect>>,
     tx: &mpsc::UnboundedSender<AppEvent>,
     services: Services,
+    permit: Option<PendingPermit>,
 ) {
     // Re-read the store so devices paired while we run are accepted.
     let device = TrustStore::load(dir).ok().and_then(|t| t.get(&peer.fingerprint).map(|d| d.name.clone()));
@@ -444,6 +567,7 @@ async fn establish(
             Ok(Ok((StreamKind::Control, send, recv))) => Ok((send, recv)),
             Ok(Ok((kind @ (StreamKind::File | StreamKind::Clipboard), send, recv))) => {
                 tracing::debug!(peer = %device_name, %addr, "bulk connection");
+                drop(permit); // the transfer limits take over
                 serve_streams(peer.conn, peer.fingerprint, device_name, services, (kind, send, recv)).await;
                 return;
             }
@@ -459,6 +583,7 @@ async fn establish(
         }
         Err(e) => Err(e),
     };
+    drop(permit);
     match res {
         Ok(link) => {
             let _ = tx.send(AppEvent::Connected(link));
@@ -488,7 +613,7 @@ fn coalesce(
 ) -> Coalesced {
     let mut out = Coalesced::default();
     let mut step = cursor.motion(dx, dy);
-    loop {
+    for _ in 0..MAX_COALESCE {
         match step {
             Step::Move(d) => out.moved = Some(d),
             Step::Leave { t } => {
@@ -506,6 +631,13 @@ fn coalesce(
             Err(_) => return out,
         }
     }
+    // The rest of the run is handled next time round.
+    match step {
+        Step::Move(d) => out.moved = Some(d),
+        Step::Leave { t } => out.leave = Some(t),
+        Step::Still => {}
+    }
+    out
 }
 
 impl App {
@@ -657,7 +789,7 @@ impl App {
     // ----------------------------------------------------------------- timers
 
     fn next_deadline(&self) -> Option<Instant> {
-        let lease = self.owner.as_ref().map(|o| o.last_rx + LEASE);
+        let lease = self.owner.as_ref().map(|o| (o.last_rx + LEASE).min(o.last_input + IDLE));
         let visit = self.remote.as_ref().map(|r| {
             if r.acked {
                 let keepalive = r.last_send + KEEPALIVE;
@@ -673,6 +805,9 @@ impl App {
         let now = Instant::now();
         if self.owner.as_ref().is_some_and(|o| now >= o.last_rx + LEASE) {
             tracing::warn!("the controlling computer went silent; releasing held keys");
+            self.end_owner(true);
+        } else if self.owner.as_ref().is_some_and(|o| now >= o.last_input + IDLE) {
+            tracing::info!("no input from the controlling computer for {} s; it lets go", IDLE.as_secs());
             self.end_owner(true);
         }
         let Some(r) = self.remote.as_mut() else { return };
@@ -714,15 +849,16 @@ impl App {
         if let Some(mut old) = self.owner.take() {
             old.release_all(&self.inject); // same controller, new visit
         }
-        let mut motion = MotionReceiver::default();
-        motion.enter(epoch);
+        let _ = self.inject.send(Inject::Controlled(true));
         let _ = self.inject.send(Inject::MoveTo(pos));
         peer.ctl.send(Control::EnterAck { epoch });
         if let Some(clip) = &self.services.clip {
             clip.entered(fp, &peer.name);
         }
-        let held = HeldKeys::new();
-        self.owner = Some(Owner { peer: fp, link: id, epoch, motion, held, last_rx: Instant::now() });
+        if self.announced.insert(fp) {
+            println!("{} is controlling this computer. {}", peer.name, takeback_hint());
+        }
+        self.owner = Some(Owner::new(fp, id, epoch, pos));
     }
 
     /// Ends the current owner's control, releasing everything it held.
@@ -730,6 +866,7 @@ impl App {
     fn end_owner(&mut self, revoke: bool) {
         let Some(mut o) = self.owner.take() else { return };
         o.release_all(&self.inject);
+        let _ = self.inject.send(Inject::Controlled(false));
         if let Some(p) = self.peers.get(&o.peer).filter(|p| p.id == o.link) {
             if revoke {
                 p.ctl.send(Control::Revoked { epoch: o.epoch });
@@ -832,14 +969,8 @@ impl App {
         }
         match ev {
             LinkEvent::Motion { epoch, seq, pos } => {
-                let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id) else { return };
-                match o.motion.accept(epoch, seq, pos) {
-                    Received::Move(p) => {
-                        o.last_rx = Instant::now();
-                        let _ = self.inject.send(Inject::MoveTo(p));
-                    }
-                    Received::Repeat => o.last_rx = Instant::now(),
-                    Received::Stale => {}
+                if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id) {
+                    o.motion(epoch, seq, pos, &self.inject);
                 }
             }
             LinkEvent::Control(msg) => self.on_control(fp, id, msg),
@@ -873,16 +1004,32 @@ impl App {
                 }
             }
             Control::EnterAck { epoch } => {
-                let Some(r) = self.remote.as_mut().filter(|r| r.peer == fp && r.cursor.epoch() == epoch && !r.acked)
-                else {
+                let now = Instant::now();
+                // A late ack is ignored: the timeout has sent (or is about
+                // to send) the pointer home.
+                let Some(r) = self.remote.as_mut().filter(|r| {
+                    r.peer == fp && r.cursor.epoch() == epoch && !r.acked && now < r.entered_at + ENTER_TIMEOUT
+                }) else {
                     return;
                 };
                 r.acked = true;
                 let peer = &self.peers[&fp];
-                for m in r.queued.drain(..) {
-                    peer.ctl.send(m);
+                if r.queued.is_empty() {
+                    r.send_motion(&self.peers, r.cursor.current());
+                } else {
+                    // Input queued while waiting goes first, in order. It
+                    // travels on the control stream, which another task
+                    // writes, so the newest position follows a moment
+                    // later (the first resend) instead of overtaking a
+                    // queued click on the faster datagram path. (The
+                    // receiver copes with a late click anyway.)
+                    for m in r.queued.drain(..) {
+                        peer.ctl.send(m);
+                    }
+                    r.last_send = now;
+                    r.resends = 0;
+                    r.resend_at = Some(now + RESEND_AFTER[0]);
                 }
-                r.send_motion(&self.peers, r.cursor.current());
                 if let Some(clip) = &self.services.clip {
                     clip.push(fp, &peer.name, peer.conn.remote_address());
                 }
@@ -891,7 +1038,6 @@ impl App {
             Control::Revoked { epoch } => self.go_home_from(fp, epoch, "it took back control"),
             input => {
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id) {
-                    o.last_rx = Instant::now();
                     o.input(input, &self.inject);
                 }
             }
@@ -950,6 +1096,15 @@ impl App {
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
                 "ok\n".to_owned()
             }
+            Request::TakeBack => match self.owner.as_ref().map(|o| o.peer) {
+                Some(fp) => {
+                    let name = self.peers.get(&fp).map_or_else(String::new, |p| p.name.clone());
+                    tracing::info!(peer = %name, "control taken back with `one-mk takeback`");
+                    self.end_owner(true);
+                    format!("ok\n{name}\n")
+                }
+                None => "none\n".to_owned(),
+            },
         };
         let _ = reply.send(text);
     }
@@ -1063,7 +1218,7 @@ impl App {
                 (self.node.clone(), self.dir.clone(), screens.clone(), self.tx.clone(), self.services.clone());
             tokio::spawn(async move {
                 match node.connect_timeout(addr, DIAL_TIMEOUT).await {
-                    Ok(peer) => establish(peer, &node, &dir, &screens, &tx, services).await,
+                    Ok(peer) => establish(peer, &node, &dir, &screens, &tx, services, None).await,
                     Err(e) => tracing::trace!(%addr, "dial failed: {e:#}"),
                 }
                 let _ = tx.send(AppEvent::DialDone(addr));
@@ -1124,7 +1279,17 @@ mod tests {
         t.save().unwrap();
     }
 
+    /// The next injected event, skipping `Controlled` (see `next_raw_inject`).
     async fn next_inject(h: &mut NullHandles) -> Inject {
+        loop {
+            match next_raw_inject(h).await {
+                Inject::Controlled(_) => {}
+                other => return other,
+            }
+        }
+    }
+
+    async fn next_raw_inject(h: &mut NullHandles) -> Inject {
         tokio::time::timeout(Duration::from_secs(5), h.inject.recv()).await.expect("timed out").unwrap()
     }
 
@@ -1507,8 +1672,183 @@ mod tests {
         // A's input no longer reaches B.
         duo.ha.events.send(Event::Key { code: 30, down: true }).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(duo.hb.inject.try_recv().is_err());
+        let after: Vec<_> = std::iter::from_fn(|| duo.hb.inject.try_recv().ok()).collect();
+        assert_eq!(after, vec![Inject::Controlled(false)], "only the end of control");
         duo.stop().await;
+    }
+
+    /// `one-mk takeback` on B (for Linux, where B's own mouse can't be
+    /// noticed) works like using B's mouse: B releases what A held, and A
+    /// takes its pointer back. The backend is told when control starts and
+    /// ends, after the releases.
+    #[tokio::test]
+    async fn takeback_command_takes_control_back() {
+        let mut duo = Duo::start("takeback", None).await;
+        assert_eq!(control::request(&duo.db, Request::TakeBack).await.unwrap().as_deref(), Some("none\n"));
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        assert_eq!(next_raw_inject(&mut duo.hb).await, Inject::Controlled(true));
+        assert_eq!(next_raw_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
+        duo.ha.events.send(Event::Key { code: 42, down: true }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 42, down: true });
+
+        let reply = control::request(&duo.db, Request::TakeBack).await.unwrap().unwrap();
+        assert!(reply.starts_with("ok\n"), "{reply}");
+        let mut rest = Vec::new();
+        loop {
+            match next_raw_inject(&mut duo.hb).await {
+                Inject::MoveTo(_) => {}
+                Inject::Controlled(false) => break,
+                other => rest.push(other),
+            }
+        }
+        assert_eq!(rest, vec![Inject::Key { code: 42, down: false }]);
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(_) }));
+        let status = Status::decode(&control::request(&duo.db, Request::Status).await.unwrap().unwrap()).unwrap();
+        assert_eq!(status.controlled_by, None);
+        duo.stop().await;
+    }
+
+    fn owner_for_test() -> (Owner, mpsc::UnboundedReceiver<Inject>, mpsc::UnboundedSender<Inject>) {
+        let fp = Identity::ephemeral().unwrap().fingerprint;
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Owner::new(fp, 1, 7, Pos::new(0.0, 540.0)), rx, tx)
+    }
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<Inject>) -> Vec<Inject> {
+        std::iter::from_fn(|| rx.try_recv().ok()).collect()
+    }
+
+    /// A click that arrives after a newer position (it was queued until
+    /// the ack, while the newest position went out at once on the faster
+    /// path) happens where the user clicked, and the pointer then goes
+    /// back to the newer position. Before, it stayed at the click: the
+    /// newer position's resends were taken for repeats.
+    #[test]
+    fn late_click_does_not_rewind_the_pointer() {
+        let (mut o, mut rx, tx) = owner_for_test();
+        let (x, y) = (Pos::new(100.0, 500.0), Pos::new(900.0, 300.0));
+        o.motion(7, 5, y, &tx); // Y (seq 5) overtakes...
+        let click = |down| Control::Button { button: 0x110, down, seq: 2, pos: x };
+        o.input(click(true), &tx); // ...a click at X (seq 2)
+        o.input(click(false), &tx);
+        o.motion(7, 5, y, &tx); // Y's resends
+        let down = Inject::Button { button: 0x110, down: true };
+        let up = Inject::Button { button: 0x110, down: false };
+        let (mx, my) = (Inject::MoveTo(x), Inject::MoveTo(y));
+        assert_eq!(drain(&mut rx), vec![my, mx, down, my, mx, up, my]);
+
+        // An up-to-date click moves the pointer there and stays.
+        let z = Pos::new(10.0, 10.0);
+        o.input(Control::Button { button: 0x110, down: true, seq: 6, pos: z }, &tx);
+        o.motion(7, 5, y, &tx); // an older datagram still in flight
+        assert_eq!(drain(&mut rx), vec![Inject::MoveTo(z), down]);
+        assert_eq!(o.pos, z);
+    }
+
+    /// Only real input keeps a controller from being let go after `IDLE`;
+    /// keepalives (the same position again) only keep the lease.
+    #[test]
+    fn only_real_input_counts_against_idle() {
+        let (mut o, _rx, tx) = owner_for_test();
+        let start = o.last_input;
+        std::thread::sleep(Duration::from_millis(5));
+        o.motion(7, 0, Pos::new(0.0, 540.0), &tx); // keepalive of the Enter position
+        assert_eq!(o.last_input, start);
+        assert!(o.last_rx > start);
+        o.motion(7, 1, Pos::new(1.0, 540.0), &tx);
+        assert!(o.last_input > start, "a new position is input");
+        let moved = o.last_input;
+        std::thread::sleep(Duration::from_millis(5));
+        o.input(Control::Key { code: 30, down: true }, &tx);
+        assert!(o.last_input > moved, "a key is input");
+    }
+
+    /// A non-owner flooding B with control messages must not starve B's
+    /// timers: the silent owner still loses its lease on time, and the key
+    /// it held is released.
+    #[tokio::test]
+    async fn flood_does_not_delay_the_lease() {
+        let mut duo = Duo::start("starve", None).await;
+        let mut owner = RawPeer::connect("starve-c", &duo.db, duo.pb).await;
+        let mut flooder = RawPeer::connect("starve-d", &duo.db, duo.pb).await;
+        owner.send(Control::Enter { epoch: 1, pos: Pos::new(5.0, 5.0) }).await;
+        assert_eq!(owner.next().await, Control::EnterAck { epoch: 1 });
+        owner.send(Control::Key { code: 30, down: true }).await;
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(5.0, 5.0)));
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 30, down: true });
+        let held_at = Instant::now();
+
+        // Each of these makes B re-read its device list, so B handles them
+        // far slower than they arrive: its event queue never runs dry.
+        let mut flood = Vec::new();
+        for _ in 0..30_000 {
+            Control::Layout { side_of_you: Side::Bottom, version: 0 }.encode_frame(&mut flood);
+        }
+        let (tx_done, mut rx_done) = mpsc::unbounded_channel();
+        let send = async {
+            flooder.send.write_all(&flood).await.unwrap();
+            let _ = tx_done.send(());
+        };
+        let released = async {
+            assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 30, down: false });
+            held_at.elapsed()
+        };
+        let ((), took) = tokio::join!(send, released);
+        assert!(rx_done.try_recv().is_ok());
+        assert!(took < LEASE + Duration::from_millis(600), "the lease ran {took:?}");
+        assert_eq!(owner.next().await, Control::Revoked { epoch: 1 });
+        drop((owner, flooder));
+        duo.stop().await;
+    }
+
+    /// A paired device can't pile up connections that never say what they
+    /// are for: past the limit, new ones are closed at once.
+    #[tokio::test]
+    async fn connections_being_set_up_are_limited() {
+        let duo = Duo::start("pending", None).await;
+        let dir = temp_dir("pending-c");
+        let id = Identity::load_or_create(&dir).unwrap();
+        trust(&duo.db, &id, Side::Top);
+        let node = Node::bind(Arc::new(id), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let to = SocketAddr::from(([127, 0, 0, 1], duo.pb));
+        let mut held = Vec::new();
+        for _ in 0..MAX_PENDING_PER_PEER {
+            held.push(node.connect(to).await.unwrap());
+        }
+        let extra = node.connect(to).await.unwrap();
+        let closed = tokio::time::timeout(Duration::from_secs(3), extra.conn.closed()).await;
+        assert!(matches!(closed, Ok(quinn::ConnectionError::ApplicationClosed(_))), "{closed:?}");
+        for p in &held {
+            assert!(p.conn.close_reason().is_none(), "within the limit, still open");
+        }
+        // Once those are gone, the device may connect again.
+        for p in held.drain(..) {
+            p.conn.close(0u32.into(), b"");
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let again = node.connect(to).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(again.conn.close_reason().is_none());
+        drop((again, extra, node));
+        duo.stop().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pending_limits_and_release() {
+        let p = Pending::default();
+        let a = Identity::ephemeral().unwrap().fingerprint;
+        let mine: Vec<_> = (0..MAX_PENDING_PER_PEER).map(|_| p.admit(a).unwrap()).collect();
+        assert!(p.admit(a).is_none(), "per device");
+        let others: Vec<_> = (MAX_PENDING_PER_PEER..MAX_PENDING)
+            .map(|_| p.admit(Identity::ephemeral().unwrap().fingerprint).unwrap())
+            .collect();
+        assert!(p.admit(Identity::ephemeral().unwrap().fingerprint).is_none(), "in all");
+        drop(mine);
+        assert!(p.admit(a).is_some());
+        drop(others);
+        assert_eq!(p.0.lock().unwrap().total, 0);
+        assert!(p.0.lock().unwrap().per_peer.is_empty());
     }
 
     /// A hand-driven peer, trusted by B, speaking the control protocol.

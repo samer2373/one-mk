@@ -1,5 +1,5 @@
 //! The commands that talk to a running daemon or change its settings:
-//! `status` and `layout`.
+//! `status`, `takeback` and `layout`.
 
 use crate::control::{self, Request};
 use anyhow::{Result, bail};
@@ -19,6 +19,17 @@ pub fn on_your(side: Side) -> &'static str {
         Side::Right => "on your right",
         Side::Top => "above",
         Side::Bottom => "below",
+    }
+}
+
+/// How the person at this computer takes control back from a peer. On
+/// Linux the portals can't tell their own mouse and keyboard from injected
+/// input, so only the command (or the idle rule) works there.
+pub fn takeback_hint() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer)."
+    } else {
+        "To take it back, use this computer's mouse or keyboard, or run `one-mk takeback`."
     }
 }
 
@@ -100,7 +111,7 @@ impl Status {
         let mut out = format!("one-mk is running on {} (id {}).\n", self.name, self.id);
         out += &match (&self.controlling, &self.controlled_by) {
             (Some(p), _) => format!("The mouse and keyboard are controlling {p} right now.\n"),
-            (_, Some(p)) => format!("{p} is controlling this computer right now.\n"),
+            (_, Some(p)) => format!("{p} is controlling this computer right now. {}\n", takeback_hint()),
             _ => "The mouse and keyboard are on this computer.\n".to_owned(),
         };
         if self.peers.is_empty() {
@@ -123,6 +134,21 @@ pub async fn status(dir: &Path) -> Result<()> {
             println!("one-mk is not running.");
             println!("Start it with `one-mk run`, or make it start when you log in with `one-mk install`.");
         }
+    }
+    Ok(())
+}
+
+/// `one-mk takeback`: makes the computer controlling this one let go.
+pub async fn takeback(dir: &Path) -> Result<()> {
+    let reply = control::request(dir, Request::TakeBack).await?;
+    match reply.as_deref() {
+        None => println!("one-mk is not running."),
+        Some("none\n") => println!("No other computer is controlling this one."),
+        Some(r) => match r.strip_prefix("ok\n") {
+            Some(name) if !name.trim().is_empty() => println!("Took control back from {}.", name.trim()),
+            Some(_) => println!("Took control back."),
+            None => bail!("unexpected answer from one-mk: {r:?}"),
+        },
     }
     Ok(())
 }
@@ -206,5 +232,10 @@ mod tests {
         assert!(text.starts_with("one-mk is running on desk (id abcd-ef01).\n"), "{text}");
         assert!(text.contains("controlling mac mini right now"));
         assert!(text.contains("mac mini") && text.contains("macOS") && text.contains("on your right") && text.contains("online"));
+
+        let controlled = Status { controlling: None, controlled_by: Some("laptop".into()), ..s };
+        let text = controlled.render();
+        assert!(text.contains("laptop is controlling this computer right now."), "{text}");
+        assert!(text.contains("one-mk takeback"), "{text}");
     }
 }

@@ -33,6 +33,9 @@ const CHUNK: usize = 1 << 20;
 const DEPTH: usize = 4;
 /// Folder inside the download folder for partial files.
 pub const PARTIAL_DIR: &str = ".one-mk-partial";
+/// A transfer that receives nothing from the sender for this long is
+/// dropped (the partial file is kept).
+const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Parallel streams when sending many files.
 const STREAMS: usize = 4;
 
@@ -58,7 +61,7 @@ pub struct Inbox {
     root: PathBuf,
     /// Partial files being written, by id.
     active: Mutex<HashMap<String, Slot>>,
-    limits: Mutex<Limits>,
+    limits: Arc<Mutex<Limits>>,
     partial_cap: u64,
 }
 
@@ -67,6 +70,48 @@ struct Limits {
     conns: HashMap<Fingerprint, usize>,
     streams: HashMap<Fingerprint, usize>,
     total: usize,
+    /// Bytes still to be written by accepted transfers, all devices.
+    reserved_total: u64,
+    /// The same, per device.
+    reserved: HashMap<Fingerprint, u64>,
+}
+
+/// Room set aside for the bytes an accepted file still has to write, so
+/// concurrent offers can't all pass the quota and free-space checks against
+/// the same empty disk. Shrinks as bytes arrive; whatever is left is
+/// released on drop (finished, failed, cancelled or panicked).
+struct Reservation {
+    limits: Arc<Mutex<Limits>>,
+    fp: Fingerprint,
+    left: u64,
+}
+
+impl Reservation {
+    fn consume(&mut self, n: u64) {
+        let n = n.min(self.left);
+        self.left -= n;
+        self.give_back(n);
+    }
+
+    fn give_back(&self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        let mut l = self.limits.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        l.reserved_total = l.reserved_total.saturating_sub(n);
+        if let Some(r) = l.reserved.get_mut(&self.fp) {
+            *r = r.saturating_sub(n);
+            if *r == 0 {
+                l.reserved.remove(&self.fp);
+            }
+        }
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.give_back(self.left);
+    }
 }
 
 /// Admission of one transfer connection; see [`Inbox::admit`]. Dropping it
@@ -133,7 +178,7 @@ impl Inbox {
     }
 
     fn with_cap(root: PathBuf, partial_cap: u64) -> Arc<Self> {
-        let inbox = Arc::new(Self { root, active: Mutex::default(), limits: Mutex::default(), partial_cap });
+        let inbox = Arc::new(Self { root, active: Mutex::default(), limits: Arc::default(), partial_cap });
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let weak: Weak<Inbox> = Arc::downgrade(&inbox);
             rt.spawn(async move {
@@ -328,8 +373,9 @@ impl Inbox {
         cancel: &Notify,
     ) -> Result<()> {
         let (root, id, prefix, cap) = (self.root.clone(), id.to_owned(), fp_prefix(fp), self.partial_cap);
-        let opened = tokio::task::spawn_blocking(move || prepare(&root, &id, &prefix, size, cap)).await?;
-        let (file, part, offset) = match opened {
+        let limits = self.limits.clone();
+        let opened = tokio::task::spawn_blocking(move || prepare(&root, &id, &prefix, size, cap, &limits, fp)).await?;
+        let (file, part, offset, mut reservation) = match opened {
             Ok(x) => x,
             Err(e) => {
                 tracing::warn!("cannot save {path:?}: {e:#}");
@@ -352,17 +398,18 @@ impl Inbox {
                 let mut buf = vec![0u8; (remaining as usize).min(CHUNK)];
                 let mut filled = 0;
                 while filled < buf.len() {
-                    tokio::select! {
-                        n = recv.read(&mut buf[filled..]) => match n? {
-                            Some(n) => filled += n,
-                            None => bail!("stream ended in the middle of {path:?}"),
-                        },
-                        _ = cancel.notified() => bail!("{path:?} is being sent again; this copy stops"),
+                    match guarded(cancel, path, recv.read(&mut buf[filled..])).await?? {
+                        Some(n) => filled += n,
+                        None => bail!("stream ended in the middle of {path:?}"),
                     }
                 }
                 remaining -= filled as u64;
-                if tx.send(buf).await.is_err() {
-                    return Ok(false); // the writer failed; it says why
+                reservation.consume(filled as u64);
+                tokio::select! {
+                    sent = tx.send(buf) => if sent.is_err() {
+                        return Ok(false); // the writer failed; it says why
+                    },
+                    _ = cancel.notified() => bail!("{path:?} is being sent again; this copy stops"),
                 }
             }
             Ok(true)
@@ -380,7 +427,9 @@ impl Inbox {
                 bail!("writing {path:?}: {reason}");
             }
         };
-        let Some(FileMsg::End { hash: theirs }) = read_file_msg(recv).await? else {
+        // The writer is finished, so giving up here is safe; the partial
+        // file stays for a resume.
+        let Some(FileMsg::End { hash: theirs }) = guarded(cancel, path, read_file_msg(recv)).await?? else {
             bail!("expected the end of {path:?}");
         };
         if hash != theirs {
@@ -400,6 +449,20 @@ impl Inbox {
                 write_file_msg(send, &FileMsg::Failed { reason: format!("cannot save: {e}") }).await
             }
         }
+    }
+}
+
+/// Waits for `fut` unless the transfer is replaced by a newer one or the
+/// sender goes quiet for [`IDLE_TIMEOUT`].
+async fn guarded<T>(cancel: &Notify, path: &str, fut: impl Future<Output = T>) -> Result<T> {
+    tokio::select! {
+        r = tokio::time::timeout(IDLE_TIMEOUT, fut) => r.map_err(|_| {
+            anyhow::anyhow!(
+                "no data from the sender for {} s while receiving {path:?}; the partial file is kept",
+                IDLE_TIMEOUT.as_secs()
+            )
+        }),
+        _ = cancel.notified() => bail!("{path:?} is being sent again; this copy stops"),
     }
 }
 
@@ -515,32 +578,65 @@ fn human(n: u64) -> String {
 }
 
 /// Opens the partial file after checking there is room for the rest of
-/// it, and that this device has not left too much behind.
-fn prepare(root: &Path, id: &str, prefix: &str, size: u64, cap: u64) -> Result<(File, PathBuf, u64)> {
+/// it, and that this device has not left too much behind. Both checks count
+/// what other accepted transfers still have to write, and on success the
+/// rest of this file is reserved (check and reservation are one step under
+/// the limits lock).
+fn prepare(
+    root: &Path,
+    id: &str,
+    prefix: &str,
+    size: u64,
+    cap: u64,
+    limits: &Arc<Mutex<Limits>>,
+    fp: Fingerprint,
+) -> Result<(File, PathBuf, u64, Reservation)> {
     let (file, part, offset) = open_part(root, id, size)?;
-    let checked = check_room(root, prefix, id, size, offset, cap);
-    if let Err(e) = checked {
+    let need = size - offset;
+    let mut l = limits.lock().expect("poisoned");
+    let peer_reserved = l.reserved.get(&fp).copied().unwrap_or(0);
+    if let Err(e) = check_room(root, prefix, id, size, offset, cap, l.reserved_total, peer_reserved) {
+        drop(l);
         drop(file);
         if offset == 0 {
             let _ = fs::remove_file(&part);
         }
         return Err(e);
     }
-    Ok((file, part, offset))
+    l.reserved_total = l.reserved_total.saturating_add(need);
+    let r = l.reserved.entry(fp).or_default();
+    *r = r.saturating_add(need);
+    drop(l);
+    Ok((file, part, offset, Reservation { limits: limits.clone(), fp, left: need }))
 }
 
-fn check_room(root: &Path, prefix: &str, id: &str, size: u64, offset: u64, cap: u64) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn check_room(
+    root: &Path,
+    prefix: &str,
+    id: &str,
+    size: u64,
+    offset: u64,
+    cap: u64,
+    reserved_total: u64,
+    peer_reserved: u64,
+) -> Result<()> {
     let need = size - offset;
     match fs4::available_space(long(root)) {
-        Ok(free) if free < need => {
-            bail!("not enough free disk space: {} needed, {} free", human(need), human(free))
+        Ok(free) if free < need.saturating_add(reserved_total) => {
+            bail!(
+                "not enough free disk space: {} needed, {} free ({} already promised to other transfers)",
+                human(need),
+                human(free),
+                human(reserved_total)
+            )
         }
         Ok(_) => {}
         Err(e) => tracing::debug!("cannot read free disk space: {e}"),
     }
     let limit = cap.max(size.saturating_mul(2));
     let others = peer_partial_bytes(&root.join(PARTIAL_DIR), prefix, id);
-    if others.saturating_add(size) > limit {
+    if others.saturating_add(peer_reserved).saturating_add(size) > limit {
         bail!(
             "too many unfinished transfers from this device ({} kept in {PARTIAL_DIR}, limit {})",
             human(others),
@@ -967,13 +1063,14 @@ mod tests {
         let root = temp("space");
         let fp = Fingerprint([7; 32]);
         let id = part_id(fp, "big", u64::MAX / 2, 1);
-        let err = prepare(&root, &id, &fp_prefix(fp), u64::MAX / 2, PEER_PARTIAL_CAP).unwrap_err();
+        let lim = Arc::<Mutex<Limits>>::default();
+        let err = prepare(&root, &id, &fp_prefix(fp), u64::MAX / 2, PEER_PARTIAL_CAP, &lim, fp).err().unwrap();
         assert!(format!("{err:#}").contains("not enough free disk space"), "{err:#}");
         // The empty partial file was not left behind.
         assert!(!root.join(PARTIAL_DIR).join(&id).exists());
         // Something small fits.
         let id = part_id(fp, "small", 10, 1);
-        assert!(prepare(&root, &id, &fp_prefix(fp), 10, PEER_PARTIAL_CAP).is_ok());
+        assert!(prepare(&root, &id, &fp_prefix(fp), 10, PEER_PARTIAL_CAP, &lim, fp).is_ok());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1009,14 +1106,97 @@ mod tests {
         let pa = fp_prefix(a);
         let id = part_id(a, "new", 300, 1);
         // 600 + 300 <= 1000
-        assert!(prepare(&root, &id, &pa, 300, 1000).is_ok());
+        let lim = Arc::<Mutex<Limits>>::default();
+        assert!(prepare(&root, &id, &pa, 300, 1000, &lim, a).is_ok());
         let id2 = part_id(a, "new2", 500, 1);
         // 600 + 500 > 1000, and 2 x 500 does not save it either.
-        let err = prepare(&root, &id2, &pa, 500, 1000).unwrap_err();
+        let err = prepare(&root, &id2, &pa, 500, 1000, &lim, a).err().unwrap();
         assert!(format!("{err:#}").contains("too many unfinished"), "{err:#}");
         // A file bigger than the cap is still allowed on its own: 2 x size.
         let big = part_id(b, "big", 5000, 1);
-        assert!(prepare(&root, &big, &fp_prefix(b), 5000, 1000).is_ok()); // 900 + 5000 <= 2 x 5000
+        assert!(prepare(&root, &big, &fp_prefix(b), 5000, 1000, &lim, b).is_ok()); // 900 + 5000 <= 2 x 5000
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concurrent_offers_cannot_exceed_the_quota() {
+        let root = temp("reserve");
+        let fp = Fingerprint([9; 32]);
+        let lim = Arc::<Mutex<Limits>>::default();
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let (root, lim, barrier) = (root.clone(), lim.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let id = part_id(fp, &format!("f{i}"), 400, 1);
+                    barrier.wait();
+                    prepare(&root, &id, &fp_prefix(fp), 400, 1000, &lim, fp)
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        // 1000 holds two 400-byte files; the other six are refused.
+        let ok: Vec<_> = results.into_iter().filter_map(Result::ok).collect();
+        assert_eq!(ok.len(), 2);
+        assert_eq!(lim.lock().unwrap().reserved_total, 800);
+        assert_eq!(lim.lock().unwrap().reserved.get(&fp), Some(&800));
+        // Reservations shrink as bytes arrive and vanish when dropped.
+        let mut it = ok.into_iter();
+        let (.., mut first) = it.next().unwrap();
+        first.consume(300);
+        assert_eq!(lim.lock().unwrap().reserved_total, 500);
+        drop(first);
+        assert_eq!(lim.lock().unwrap().reserved_total, 400);
+        drop(it);
+        let l = lim.lock().unwrap();
+        assert_eq!(l.reserved_total, 0);
+        assert!(l.reserved.is_empty());
+        drop(l);
+        // Refused offers left no empty partial files; room is free again.
+        let id = part_id(fp, "again", 400, 1);
+        assert!(prepare(&root, &id, &fp_prefix(fp), 400, 1000, &lim, fp).is_ok());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn replacement_takes_over_a_stalled_transfer() {
+        use one_mk_net::{Identity, Node};
+        let node = || Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let (a, b) = (node(), node());
+        let addr = b.local_addr().unwrap();
+        let (pa, pb) = tokio::join!(a.connect(addr), async { b.accept().await.unwrap() });
+        let (pa, pb) = (pa.unwrap(), pb.unwrap());
+
+        let root = temp("stall");
+        let inbox = Inbox::new(root.clone());
+        let fp = pb.fingerprint;
+        let offer = FileMsg::Offer { path: "f.bin".into(), size: 10, mtime: 1 };
+        let serve = |inbox: Arc<Inbox>, send, recv| tokio::spawn(async move { inbox.receive_inner(None, fp, "t", send, recv).await });
+        let secs = |f| tokio::time::timeout(Duration::from_secs(5), f);
+
+        // First stream: all bytes, never End.
+        let (mut s1, mut r1) = open_stream(&pa.conn, StreamKind::File).await.unwrap();
+        let (_, ps1, pr1) = pb.accept_stream().await.unwrap();
+        let t1 = serve(inbox.clone(), ps1, pr1);
+        write_file_msg(&mut s1, &offer).await.unwrap();
+        assert!(matches!(secs(read_file_msg(&mut r1)).await.unwrap().unwrap(), Some(FileMsg::Accept { offset: 0 })));
+        s1.write_all(&[7; 10]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!t1.is_finished());
+
+        // Second stream offers the same file: it is accepted promptly and
+        // the stalled stream ends.
+        let (mut s2, mut r2) = open_stream(&pa.conn, StreamKind::File).await.unwrap();
+        let (_, ps2, pr2) = pb.accept_stream().await.unwrap();
+        let t2 = serve(inbox.clone(), ps2, pr2);
+        write_file_msg(&mut s2, &offer).await.unwrap();
+        let got = secs(read_file_msg(&mut r2)).await.expect("replacement hung").unwrap();
+        assert!(matches!(got, Some(FileMsg::Accept { offset: 10 })), "{got:?}");
+        tokio::time::timeout(Duration::from_secs(5), t1).await.expect("stalled stream did not end").unwrap();
+        assert!(root.join(PARTIAL_DIR).join(part_id(fp, "f.bin", 10, 1)).exists(), "partial kept");
+        // Its reservation is gone; the replacement holds none (nothing left).
+        assert_eq!(inbox.limits.lock().unwrap().reserved_total, 0);
+        t2.abort();
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -46,7 +46,9 @@ pub enum Event {
     Deactivated { id: u32 },
     /// Real (not injected) input happened on this machine while it was
     /// being controlled by a peer, so the person sitting here wants control
-    /// back. Only sent by backends that can tell injected input apart.
+    /// back. Only sent while the daemon has said `Inject::Controlled(true)`,
+    /// and only by backends that can tell injected input apart (Windows and
+    /// macOS; not the Linux portals).
     LocalInput,
     /// A part of the backend failed; the message is shown to the user.
     Error(String),
@@ -71,6 +73,11 @@ pub enum Inject {
     ScrollDiscrete { dx: i32, dy: i32 },
     ScrollStop,
     Key { code: u32, down: bool },
+    /// Whether a peer controls this machine from now on. The daemon sends
+    /// `true` when a peer takes control and `false` when it lets go (after
+    /// releasing what it held). Backends report `Event::LocalInput` only
+    /// while it is true. Backends that can't see local input ignore it.
+    Controlled(bool),
 }
 
 pub struct Backend {

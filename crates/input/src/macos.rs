@@ -227,7 +227,7 @@ struct Ctx {
     tx: mpsc::UnboundedSender<Event>,
     /// Accessibility granted; read by the injection thread.
     trusted: Arc<AtomicBool>,
-    /// When a peer last injected input here.
+    /// Whether a peer controls this Mac (set by the daemon).
     controlled: Arc<Controlled>,
     inbox: Arc<Inbox>,
     st: RefCell<State>,
@@ -611,7 +611,7 @@ impl Ctx {
         // peer is in control here.
         if CGEvent::integer_value_field(e, CGEventField::EventSourceStateID)
             == i64::from(CGEventSourceStateID::HIDSystemState.0)
-            && st.local_gate.check(now_ms(), self.controlled.last())
+            && st.local_gate.check(now_ms(), self.controlled.get())
         {
             let _ = self.tx.send(Event::LocalInput);
         }
@@ -650,8 +650,6 @@ impl Ctx {
                             st.id = id;
                             st.secure_reported = false;
                             st.activate();
-                            // We control others now, so nobody controls us.
-                            self.controlled.clear();
                             self.update_timer(st);
                             return false;
                         }
@@ -931,6 +929,9 @@ async fn inject_loop(
                 // Everything already queued, without the moves that later
                 // ones make stale: a burst costs one move, not latency.
                 drain_coalesced(first, &mut rx, &mut batch);
+                if controlled.apply(&mut batch) {
+                    repeat.clear();
+                }
                 if !trusted.load(Ordering::Relaxed) {
                     if !warned {
                         tracing::warn!("ignoring input from peers until Accessibility permission is granted");
@@ -941,7 +942,6 @@ async fn inject_loop(
                     continue;
                 }
                 warned = false;
-                controlled.injected(now_ms());
                 let now = Instant::now();
                 for m in batch.drain(..) {
                     if let Inject::Key { code, down } = m {
@@ -1055,6 +1055,8 @@ impl Injector {
                 self.scroll(CGScrollEventUnit::Line, v, h);
             }
             Inject::ScrollStop => self.smooth.reset(),
+            // Handled by the injection loop.
+            Inject::Controlled(_) => {}
             Inject::Key { code, down } => {
                 // Each posted Caps Lock press toggles it; a repeat must not.
                 if self.mods.is_caps_repeat(code, down) {

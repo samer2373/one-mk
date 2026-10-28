@@ -41,6 +41,7 @@ soon as they connect.
 | Command | What it does |
 |---|---|
 | `one-mk status` | Is it running? Who is paired, online, where, and who controls whom |
+| `one-mk takeback` | Take this computer back from the one controlling it |
 | `one-mk install` / `uninstall` | Start automatically at login / stop doing that |
 | `one-mk pair` | Pair with another computer (run on both) |
 | `one-mk layout <pc> <left\|right\|top\|bottom>` | Say where a paired computer sits |
@@ -75,6 +76,20 @@ for each device on the computer where you set it.
 **Emergency:** `Ctrl+Alt+Shift+Esc` always brings the pointer back to the
 computer you are sitting at.
 
+**Taking a computer back.** When someone else's pointer is on your computer,
+you can take it back:
+
+- On Windows and macOS, just use your computer's own mouse or keyboard.
+- On Linux this doesn't work: the Wayland portals one-mk uses can't tell
+  your own mouse and keyboard apart from the input one-mk injects, so one-mk
+  can't notice you. Run `one-mk takeback` instead. It's worth binding it to
+  a keyboard shortcut in your desktop's settings (GNOME: Settings >
+  Keyboard > Custom Shortcuts; KDE: System Settings > Shortcuts).
+- On every system, a computer that sends no input at all (no key, click,
+  scroll or pointer movement) for a minute is let go by itself; its pointer
+  goes home and its next movement comes back in. So a forgotten session
+  never locks you out for long.
+
 ## Why it feels good
 
 - **Smooth mouse.** Every mouse report is forwarded immediately at the
@@ -93,7 +108,8 @@ computer you are sitting at.
   computer the mouse is plugged into; positions are logical pixels, so mixed
   DPI and scaling work.
 - **No stuck keys.** Held keys are tracked and released when the pointer
-  leaves, a computer disconnects, or traffic stops for 750 ms.
+  leaves, a computer disconnects, traffic stops for 750 ms, or control is
+  taken back. However busy the network, these deadlines are checked first.
 - **Light.** No CPU use while idle: nothing polls, and the command-line
   tools reach the running program through a local socket it only wakes for.
   Networking runs on one thread, with one thread each for input capture and
@@ -109,7 +125,7 @@ computer you are sitting at.
 - Only paired computers can connect; others are rejected.
 - Received files can't escape the download folder or overwrite anything, and
   every file is checked with BLAKE3.
-- The control channel for `one-mk status`/`layout` is private to your user:
+- The control channel for `one-mk status`/`layout`/`takeback` is private to your user:
   a Unix socket with mode 0600 on Linux and macOS; on Windows a localhost
   port protected by a random token in a file in your private local
   settings folder.
@@ -143,7 +159,9 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
   real hardware.)
 - **A paired computer is on the wrong side.** `one-mk layout "<name>" <side>`.
 - **Another computer already controls this one.** Only one computer can
-  control another at a time; use the mouse or keyboard of the one you want.
+  control another at a time. Take it back with `one-mk takeback` on the
+  controlled computer (on Windows and macOS, using its mouse or keyboard
+  works too), or wait a minute without input from the other one.
 
 ## Layout of the code
 

@@ -143,10 +143,15 @@ impl MotionReceiver {
 
     /// A reliable event (click) carried the sender's position at `seq`;
     /// older datagrams still in flight must not move the pointer back.
-    pub fn sync(&mut self, seq: u32) {
+    ///
+    /// Returns false if the click is late: a newer position (a higher
+    /// `seq`) was already applied. The click then belongs at its own
+    /// position, after which the pointer must go back to the newer one.
+    pub fn sync(&mut self, seq: u32) -> bool {
         if newer(seq, self.last_seq) {
             self.last_seq = seq;
         }
+        !newer(self.last_seq, seq)
     }
 }
 
@@ -190,7 +195,9 @@ mod tests {
         assert_eq!(r.accept(1, 2, p), Received::Repeat); // idle resend
         assert_eq!(r.accept(1, 1, p), Received::Stale); // reordered
         assert_eq!(r.accept(0, 3, p), Received::Stale); // previous visit
-        r.sync(10);
+        assert!(r.sync(10));
+        assert!(r.sync(10), "same seq is not late");
+        assert!(!r.sync(4), "older than the latest position");
         assert_eq!(r.accept(1, 9, p), Received::Stale);
         assert_eq!(r.accept(1, 10, p), Received::Repeat);
         assert_eq!(r.accept(1, 11, p), Received::Move(p));

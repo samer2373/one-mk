@@ -8,7 +8,7 @@
 
 use crate::Inject;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -147,39 +147,45 @@ impl KeyRepeat {
 
 // ------------------------------------------------------------ local input
 
-/// How long after the last injected event this machine still counts as
-/// being controlled by a peer. The remote user may well stop moving for a
-/// while (reading, watching) and the person here should still get control
-/// back by touching the mouse.
-pub(crate) const CONTROLLED_FOR_MS: u64 = 15 * 60 * 1000;
-
 /// At most one `Event::LocalInput` per this many milliseconds.
 pub(crate) const LOCAL_INPUT_EVERY_MS: u64 = 100;
 
-/// Milliseconds since the first call; never 0, so 0 can mean "never".
+/// Milliseconds since the first call; never 0.
 pub(crate) fn now_ms() -> u64 {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
 }
 
-/// When input was last injected here (`now_ms`), shared between the
-/// injection thread (which stamps it) and the capture side (which reports
-/// local input only while a peer is in control).
+/// Whether a peer controls this machine right now, exactly as the daemon
+/// says with `Inject::Controlled`. Set by the injection thread, read by the
+/// capture side, which reports local input only while it is true. There is
+/// no timeout: however long the peer stays idle, touching this machine's
+/// own mouse or keyboard still takes control back.
 #[derive(Debug, Default)]
-pub(crate) struct Controlled(AtomicU64);
+pub(crate) struct Controlled(AtomicBool);
 
 impl Controlled {
-    pub(crate) fn injected(&self, now: u64) {
-        self.0.store(now, Ordering::Relaxed);
+    pub(crate) fn set(&self, controlled: bool) {
+        self.0.store(controlled, Ordering::Relaxed);
     }
 
-    /// This machine started controlling others, so nobody controls it.
-    pub(crate) fn clear(&self) {
-        self.0.store(0, Ordering::Relaxed);
-    }
-
-    pub(crate) fn last(&self) -> u64 {
+    pub(crate) fn get(&self) -> bool {
         self.0.load(Ordering::Relaxed)
+    }
+
+    /// Applies and removes the `Inject::Controlled` messages in `batch`.
+    /// Returns true if control ended, so the caller can forget key repeat.
+    pub(crate) fn apply(&self, batch: &mut Vec<Inject>) -> bool {
+        let mut ended = false;
+        batch.retain(|m| match *m {
+            Inject::Controlled(c) => {
+                self.set(c);
+                ended |= !c;
+                false
+            }
+            _ => true,
+        });
+        ended
     }
 }
 
@@ -190,9 +196,8 @@ pub(crate) struct LocalInputGate {
 }
 
 impl LocalInputGate {
-    /// Real input happened at `now`; `last_inject` is `Controlled::last`.
-    pub(crate) fn check(&mut self, now: u64, last_inject: u64) -> bool {
-        let controlled = last_inject != 0 && now.saturating_sub(last_inject) <= CONTROLLED_FOR_MS;
+    /// Real input happened at `now`; `controlled` is `Controlled::get`.
+    pub(crate) fn check(&mut self, now: u64, controlled: bool) -> bool {
         if !controlled || self.last_emit.is_some_and(|t| now.saturating_sub(t) < LOCAL_INPUT_EVERY_MS) {
             return false;
         }
@@ -313,20 +318,30 @@ mod tests {
     #[test]
     fn local_input_only_while_controlled_and_throttled() {
         let mut g = LocalInputGate::default();
-        // Never injected: not controlled.
-        assert!(!g.check(1000, 0));
-        // Injected a moment ago.
-        assert!(g.check(1000, 990));
-        assert!(!g.check(1050, 990));
-        assert!(g.check(1100, 990));
-        // Long after the last injection: no longer controlled.
-        assert!(!g.check(990 + CONTROLLED_FOR_MS + 1, 990));
-        let c = Controlled::default();
-        c.injected(5);
-        assert_eq!(c.last(), 5);
-        c.clear();
-        assert_eq!(c.last(), 0);
+        assert!(!g.check(1000, false));
+        assert!(g.check(1000, true));
+        assert!(!g.check(1050, true));
+        assert!(g.check(1100, true));
+        // No timeout: an hour later it still counts while controlled.
+        assert!(g.check(1100 + 3_600_000, true));
+        assert!(!g.check(1100 + 7_200_000, false));
         assert!(now_ms() >= 1);
+    }
+
+    #[test]
+    fn controlled_follows_the_daemon() {
+        let c = Controlled::default();
+        assert!(!c.get());
+        let key = Inject::Key { code: 30, down: false };
+        let mut batch = vec![Inject::Controlled(true), mv(1.0)];
+        assert!(!c.apply(&mut batch));
+        assert!(c.get());
+        assert_eq!(batch, vec![mv(1.0)]);
+        // Released keys first, then control ends.
+        let mut batch = vec![key, Inject::Controlled(false)];
+        assert!(c.apply(&mut batch));
+        assert!(!c.get());
+        assert_eq!(batch, vec![key]);
     }
 
     #[test]

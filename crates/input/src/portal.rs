@@ -16,6 +16,8 @@
 //! InputCapture only delivers input after a barrier activation, and libei
 //! senders (RemoteDesktop) never see input at all. Faking it (e.g. from
 //! cursor position changes we didn't cause) would misfire, so we don't.
+//! Instead the person here takes control back with `one-mk takeback`, and
+//! the daemon lets a controller that sent no real input for a minute go.
 
 use crate::common_logic::{Backoff, drain_coalesced};
 use crate::{Backend, CaptureCmd, Event, Inject};
@@ -638,6 +640,8 @@ fn apply(devices: &mut Devices, m: Inject, last: &mut Option<Pos>, warned_relati
             let state = if down { ei::keyboard::KeyState::Press } else { ei::keyboard::KeyState::Released };
             devices.with::<ei::Keyboard>(|d| d.key(code, state));
         }
+        // We can't see local input, so there is nothing to gate.
+        Inject::Controlled(_) => {}
     }
 }
 

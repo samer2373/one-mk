@@ -592,7 +592,7 @@ impl State {
 
     /// Real input happened here; tell the daemon if a peer is in control.
     fn local_input(&mut self) {
-        if self.local_gate.check(now_ms(), self.controlled.last()) {
+        if self.local_gate.check(now_ms(), self.controlled.get()) {
             let _ = self.tx.send(Event::LocalInput);
         }
     }
@@ -610,8 +610,6 @@ impl State {
         self.fwd.clear();
         self.watchdog.reset();
         self.heading.reset();
-        // We control others now, so nobody controls us.
-        self.controlled.clear();
         let park = self.space.park_point(x, y);
         let entry = self.space.to_phys(pos);
         self.captured = Some(Captured { id, park, entry });
@@ -1015,10 +1013,12 @@ async fn inject_loop(
         tokio::select! {
             msg = rx.recv() => {
                 let Some(first) = msg else { return };
-                controlled.injected(now_ms());
                 // Everything already queued goes out in one SendInput call,
                 // without the moves that later ones make stale.
                 drain_coalesced(first, &mut rx, &mut batch);
+                if controlled.apply(&mut batch) {
+                    repeat.clear();
+                }
                 let now = std::time::Instant::now();
                 let Ok(space) = shared.lock() else { return };
                 for m in batch.drain(..) {
@@ -1119,6 +1119,8 @@ fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScro
             push_wheel(out, h, v);
         }
         Inject::ScrollStop => scroll.stop(),
+        // Handled by the injection loop.
+        Inject::Controlled(_) => {}
         Inject::Key { code, down } => {
             let up = if down { 0 } else { KEYEVENTF_KEYUP };
             match evdev_to_win(code) {
