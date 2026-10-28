@@ -266,3 +266,12 @@ background apps, so there it goes through XWayland.
 5. Done: a small tray icon (status, sides, take back, start at login).
    **Next:** a drag-and-drop layout editor and "push toward it" layout learning
 6. Gaming mode (relative motion), connection doctor, auto-update
+
+## Contributing and license
+
+Issues and pull requests are welcome. Run `cargo test` before you open a
+PR; CI runs it on Linux, macOS and Windows.
+
+one-mk is licensed under either of [Apache-2.0](LICENSE-APACHE) or
+[MIT](LICENSE-MIT), at your option. Unless you say otherwise, any
+contribution you submit is licensed the same way, with no extra terms.
