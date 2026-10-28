@@ -967,6 +967,7 @@ mod tests {
                     swap: "auto".into(),
                 })
                 .collect(),
+            ..DaemonStatus::default()
         }
     }
 

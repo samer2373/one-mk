@@ -3139,6 +3139,7 @@ dependencies = [
  "clap",
  "directories",
  "fs4",
+ "futures-util",
  "if-addrs",
  "libc",
  "one-mk-clipboard",
@@ -3153,6 +3154,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
+ "zbus",
 ]
 
 [[package]]

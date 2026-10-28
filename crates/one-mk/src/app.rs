@@ -143,7 +143,7 @@ async fn serve_stream(
 ) {
     match (kind, &services.clip) {
         (StreamKind::File, _) => services.inbox.receive_on(permit, name, send, recv).await,
-        (StreamKind::Clipboard, Some(clip)) => clip.receive(permit.fp(), name, recv).await,
+        (StreamKind::Clipboard, Some(clip)) => clip.receive(permit.fp(), name, send, recv).await,
         _ => {
             // Includes clipboard streams when clipboard sharing is off here.
             tracing::debug!(peer = %name, "refused {kind:?} stream");
@@ -426,6 +426,9 @@ pub async fn serve(
         downloads = %opts.downloads.display(),
         "sharing"
     );
+    if let Err(e) = crate::clipctl::apply_settings(&dir, &services) {
+        tracing::warn!("settings.toml: {e:#}; using the defaults");
+    }
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (link_tx, mut link_rx) = mpsc::unbounded_channel();
@@ -472,7 +475,7 @@ pub async fn serve(
         announced: HashSet::new(),
         focus,
         locker,
-        settings: Settings::load(&dir_for_settings),
+        settings: Settings::load_or_default(&dir_for_settings),
         locked: opts.start_locked,
         mods: Mods::default(),
         approach: None,
@@ -1429,7 +1432,7 @@ impl App {
         let text = match req {
             Request::Status => self.status().encode(),
             Request::Reload => {
-                self.settings = Settings::load(&self.dir);
+                self.settings = Settings::load_or_default(&self.dir);
                 self.apply_pointer_mode();
                 self.sync_sides();
                 let fps: Vec<_> = self.peers.keys().copied().collect();
@@ -1462,6 +1465,10 @@ impl App {
                 println!("Locking this computer{}.", if n > 0 { " and the connected ones" } else { "" });
                 self.lock_screen();
                 format!("ok\n{n}\n")
+            }
+            req @ (Request::Settings | Request::ClipSend(_) | Request::ClipGet(_) | Request::Transfer { .. }) => {
+                let online = self.peers.iter().map(|(fp, p)| crate::clipctl::Online { fp: *fp, name: p.name.clone(), addr: canonical(p.conn.remote_address()) });
+                return crate::clipctl::handle(&self.dir, &self.services, online.collect(), &self.trust, req, reply);
             }
             Request::TakeBack => match self.owner.as_ref().map(|o| o.peer) {
                 Some(fp) => {
@@ -1503,6 +1510,7 @@ impl App {
             relative: self.remote.as_ref().is_some_and(|r| r.cursor.is_relative()),
             lock_sync: self.settings.lock_sync,
             edges: self.settings.edge.describe(),
+            transfers: self.services.inbox.transfers().snapshot(),
         }
     }
 
@@ -2608,7 +2616,7 @@ mod tests {
 
     /// Changes `dir`'s settings and has its daemon apply them.
     async fn set(dir: &std::path::Path, change: impl FnOnce(&mut Settings)) {
-        let mut s = Settings::load(dir);
+        let mut s = Settings::load_or_default(dir);
         change(&mut s);
         s.save(dir).unwrap();
         assert_eq!(ask(dir, Request::Reload).await, "ok\n");

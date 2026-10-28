@@ -1,10 +1,13 @@
-//! Settings that are not about one paired computer: the edge rules, gaming
-//! mode and lock sync. They live in `settings.toml` next to `devices.toml`,
-//! are changed with `one-mk edge`, `one-mk gaming` and `one-mk lock-sync`,
-//! and a running daemon applies them at once (like `one-mk layout`).
+//! Settings that are not about one paired computer: what the clipboard
+//! shares, whether received files raise a notification, the edge rules,
+//! gaming mode and lock sync. They live in `settings.toml` next to
+//! `devices.toml`; the command line (`one-mk clipboard`, `notify`, `edge`,
+//! `gaming`, `lock-sync`) edits the file and a running daemon applies it at
+//! once (like `one-mk layout`).
 
 use crate::control::{self, Request};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use one_mk_clipboard::{CEILING_BYTES, DEFAULT_MAX_BYTES, Filter};
 use one_mk_proto::{EdgeGuard, Modifier, Side};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -15,13 +18,86 @@ const FILE: &str = "settings.toml";
 pub const MAX_CORNER: u32 = 500;
 pub const MAX_DWELL_MS: u32 = 5000;
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub clipboard: ClipSettings,
+    /// Show a desktop notification when files arrive.
+    pub notify_files: bool,
     pub edge: EdgeSettings,
     pub gaming: Gaming,
     /// Locking any computer locks the others.
     pub lock_sync: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            clipboard: ClipSettings::default(),
+            notify_files: true,
+            edge: EdgeSettings::default(),
+            gaming: Gaming::default(),
+            lock_sync: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClipSettings {
+    /// Share plain text.
+    pub text: bool,
+    /// Share HTML (rich text).
+    pub html: bool,
+    /// Share images.
+    pub image: bool,
+    /// Largest clipboard to send or accept, in MB (1 MB = 2^20 bytes).
+    pub max_mb: u32,
+    /// Don't share what a password manager marked as sensitive.
+    pub skip_sensitive: bool,
+    /// Let a paired computer fetch this clipboard (`one-mk clip-get` there).
+    pub allow_pull: bool,
+}
+
+impl Default for ClipSettings {
+    fn default() -> Self {
+        Self {
+            text: true,
+            html: true,
+            image: true,
+            max_mb: (DEFAULT_MAX_BYTES >> 20) as u32,
+            skip_sensitive: true,
+            allow_pull: true,
+        }
+    }
+}
+
+impl ClipSettings {
+    /// The most `max_mb` can be set to.
+    pub const MAX_MB_LIMIT: u32 = (CEILING_BYTES >> 20) as u32;
+
+    pub fn filter(&self) -> Filter {
+        Filter {
+            text: self.text,
+            html: self.html,
+            image: self.image,
+            max_bytes: (self.max_mb.clamp(1, Self::MAX_MB_LIMIT) as usize) << 20,
+            skip_concealed: self.skip_sensitive,
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        let on = |b: bool| if b { "on" } else { "off" };
+        format!(
+            "text {}, html {}, images {}, size limit {} MB, skip password managers {}, others may fetch it {}",
+            on(self.text),
+            on(self.html),
+            on(self.image),
+            self.max_mb.clamp(1, Self::MAX_MB_LIMIT),
+            on(self.skip_sensitive),
+            on(self.allow_pull)
+        )
+    }
 }
 
 /// Rules for crossing edges: for every edge, and optionally overridden for
@@ -183,16 +259,26 @@ fn path(dir: &Path) -> PathBuf {
 }
 
 impl Settings {
-    /// The saved settings; defaults if there are none. A file that can't be
-    /// read is reported and ignored, so a bad hand edit never stops one-mk.
-    pub fn load(dir: &Path) -> Settings {
-        match std::fs::read_to_string(path(dir)) {
-            Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
-                tracing::warn!("ignoring {}: {e}", path(dir).display());
-                Settings::default()
-            }),
-            Err(_) => Settings::default(),
+    /// Reads `settings.toml`; a missing file means the defaults. A file that
+    /// can't be read is an error, so the command line never overwrites a
+    /// hand edit it didn't understand.
+    pub fn load(dir: &Path) -> Result<Settings> {
+        let path = path(dir);
+        match std::fs::read_to_string(&path) {
+            Ok(s) => toml::from_str(&s).with_context(|| format!("reading {}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
+            Err(e) => Err(e.into()),
         }
+    }
+
+    /// The saved settings, or the defaults if there are none. A file that
+    /// can't be read is reported and ignored, so a bad hand edit never
+    /// stops one-mk.
+    pub fn load_or_default(dir: &Path) -> Settings {
+        Self::load(dir).unwrap_or_else(|e| {
+            tracing::warn!("ignoring {}: {e:#}", path(dir).display());
+            Settings::default()
+        })
     }
 
     pub fn save(&self, dir: &Path) -> Result<()> {
@@ -326,7 +412,7 @@ async fn save_and_apply(dir: &Path, settings: &Settings) -> Result<()> {
 
 /// `one-mk edge [...]`: shows the edge rules, or changes them.
 pub async fn edge(dir: &Path, args: EdgeArgs) -> Result<()> {
-    let mut settings = Settings::load(dir);
+    let mut settings = Settings::load(dir)?;
     if !args.changes_anything() {
         let d = settings.edge.describe();
         if d.is_empty() {
@@ -357,7 +443,7 @@ const FULLSCREEN_LINUX: &str = "Note: on Wayland only programs running through X
 
 /// `one-mk gaming on|off|auto`.
 pub async fn gaming(dir: &Path, mode: Gaming) -> Result<()> {
-    let mut settings = Settings::load(dir);
+    let mut settings = Settings::load(dir)?;
     settings.gaming = mode;
     match mode {
         Gaming::Off => println!("Gaming mode is off: the pointer moves by position, and edges lead back."),
@@ -375,7 +461,7 @@ pub async fn gaming(dir: &Path, mode: Gaming) -> Result<()> {
 
 /// `one-mk lock-sync on|off`.
 pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
-    let mut settings = Settings::load(dir);
+    let mut settings = Settings::load(dir)?;
     settings.lock_sync = on;
     if on {
         println!("Lock sync is on: locking this computer locks the connected ones (if they run one-mk too).");
@@ -468,21 +554,65 @@ mod tests {
     #[test]
     fn saved_and_loaded() {
         let dir = temp_dir("roundtrip");
-        assert_eq!(Settings::load(&dir), Settings::default(), "no file");
+        assert_eq!(Settings::load(&dir).unwrap(), Settings::default(), "no file");
         let mut s = Settings { gaming: Gaming::Auto, lock_sync: true, ..Settings::default() };
         EdgeArgs { corner: Some(8), side: Some(Side::Top), ..EdgeArgs::default() }.apply(&mut s.edge).unwrap();
         EdgeArgs { dwell: Some(250), fullscreen_guard: Some(true), ..EdgeArgs::default() }.apply(&mut s.edge).unwrap();
         s.save(&dir).unwrap();
         let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
         assert!(text.contains("gaming = \"auto\"") && text.contains("[edge.top]"), "{text}");
-        assert_eq!(Settings::load(&dir), s);
+        assert_eq!(Settings::load(&dir).unwrap(), s);
         // A broken file is ignored, not fatal.
         std::fs::write(dir.join(FILE), "gaming = 7\n[[[").unwrap();
-        assert_eq!(Settings::load(&dir), Settings::default());
+        assert_eq!(Settings::load_or_default(&dir), Settings::default());
         // A hand-written bad modifier means none.
         std::fs::write(dir.join(FILE), "[edge]\nmodifier = \"hyper\"\ncorner = 99999\n").unwrap();
-        let s = Settings::load(&dir);
+        let s = Settings::load_or_default(&dir);
         assert_eq!(s.edge.guard(Side::Left), EdgeGuard { corner: MAX_CORNER, ..EdgeGuard::default() });
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn clipboard_defaults_share_everything_up_to_25_mb() {
+        let s = Settings::default();
+        assert!(s.clipboard.text && s.clipboard.html && s.clipboard.image && s.notify_files);
+        assert_eq!(s.clipboard.filter(), Filter::default());
+        assert_eq!(s.clipboard.max_mb, 25);
+    }
+
+    #[test]
+    fn clipboard_settings_roundtrip_next_to_the_edge_rules() {
+        let dir = temp_dir("clip-round");
+        let mut s = Settings {
+            clipboard: ClipSettings { image: false, max_mb: 3, allow_pull: false, ..Default::default() },
+            notify_files: false,
+            gaming: Gaming::On,
+            ..Settings::default()
+        };
+        EdgeArgs { corner: Some(8), ..EdgeArgs::default() }.apply(&mut s.edge).unwrap();
+        s.save(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).unwrap(), s);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn partial_and_future_files_still_load() {
+        let dir = temp_dir("partial");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[clipboard]\nmax_mb = 5\nsome_future_key = 1\n").unwrap();
+        let s = Settings::load(&dir).unwrap();
+        assert_eq!(s.clipboard.max_mb, 5);
+        assert!(s.clipboard.text && s.notify_files, "what the file doesn't say keeps its default");
+        std::fs::write(dir.join(FILE), "clipboard = [").unwrap();
+        assert!(Settings::load(&dir).is_err(), "a broken file is reported, not silently reset");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_clipboard_size_limit_is_kept_sane() {
+        let f = |mb| ClipSettings { max_mb: mb, ..Default::default() }.filter().max_bytes();
+        assert_eq!(f(0), 1 << 20, "never zero");
+        assert_eq!(f(25), 25 << 20);
+        assert_eq!(f(u32::MAX), CEILING_BYTES);
     }
 }

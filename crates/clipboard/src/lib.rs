@@ -26,8 +26,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use tokio::sync::oneshot;
 
-/// Largest clipboard content we send or accept, in bytes (all formats).
-pub const MAX_BYTES: usize = 32 << 20;
+/// Default for the largest clipboard content we send or accept, in bytes
+/// (all formats together).
+pub const DEFAULT_MAX_BYTES: usize = 25 << 20;
+/// The most [`Filter::max_bytes`] can be set to: received data is held in
+/// memory, so the limit is bounded whatever the settings say.
+pub const CEILING_BYTES: usize = 256 << 20;
 /// Largest decoded image we handle (RGBA bytes), about a 16K x 4K screen.
 const MAX_RGBA: usize = 256 << 20;
 
@@ -55,15 +59,61 @@ impl ClipData {
     }
 }
 
+/// What the user lets us share, applied when reading the clipboard (and
+/// by the caller to what arrives). It can be changed while running with
+/// [`Clipboard::set_filter`]; a change makes the clipboard look "changed",
+/// since the digests are over what passes the filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Filter {
+    pub text: bool,
+    pub html: bool,
+    pub image: bool,
+    /// Largest content to carry, all formats together (as sent: images
+    /// count as PNG). At most [`CEILING_BYTES`].
+    pub max_bytes: usize,
+    /// Don't share what the source marked as sensitive (a password
+    /// manager's copy). See [`Raw::concealed`] for what is detected.
+    pub skip_concealed: bool,
+}
+
+impl Default for Filter {
+    fn default() -> Self {
+        Self { text: true, html: true, image: true, max_bytes: DEFAULT_MAX_BYTES, skip_concealed: true }
+    }
+}
+
+impl Filter {
+    pub fn max_bytes(&self) -> usize {
+        self.max_bytes.min(CEILING_BYTES)
+    }
+
+    /// Drops the formats that are switched off.
+    pub fn apply(&self, mut data: ClipData) -> ClipData {
+        if !self.text {
+            data.text = None;
+        }
+        if !self.html {
+            data.html = None;
+        }
+        if !self.image {
+            data.png = None;
+        }
+        data
+    }
+}
+
 /// Result of [`Clipboard::read`].
 #[derive(Debug)]
 pub enum Read {
     /// Content matches one of the digests the caller already knows.
     Unchanged(Digest),
-    /// Nothing we can carry is on the clipboard.
+    /// Nothing we may carry is on the clipboard (empty, or only formats
+    /// that are switched off).
     Empty,
-    /// Content is larger than [`MAX_BYTES`].
+    /// Content is larger than [`Filter::max_bytes`].
     TooLarge { digest: Digest, size: usize },
+    /// The source marked the content as sensitive and the filter skips it.
+    Concealed(Digest),
     Changed { digest: Digest, data: Arc<ClipData> },
 }
 
@@ -71,10 +121,11 @@ pub enum Read {
 #[derive(Clone)]
 pub struct Clipboard {
     tx: mpsc::Sender<Cmd>,
+    filter: Arc<Mutex<Filter>>,
 }
 
 enum Cmd {
-    Read { skip: Vec<Digest>, reply: oneshot::Sender<Result<Read>> },
+    Read { skip: Vec<Digest>, explicit: bool, reply: oneshot::Sender<Result<Read>> },
     Digest { reply: oneshot::Sender<Result<Option<Digest>>> },
     Write { data: ClipData, reply: oneshot::Sender<Result<Digest>> },
 }
@@ -95,17 +146,35 @@ impl Clipboard {
 
     fn spawn(backend: Backend) -> Self {
         let (tx, rx) = mpsc::channel();
+        let filter = Arc::new(Mutex::new(Filter::default()));
+        let shared = filter.clone();
         std::thread::Builder::new()
             .name("one-mk-clipboard".into())
-            .spawn(move || Worker { backend, cache: None }.run(rx))
+            .spawn(move || Worker { backend, cache: None, filter: shared }.run(rx))
             .expect("spawn clipboard thread");
-        Self { tx }
+        Self { tx, filter }
+    }
+
+    /// Changes what is shared, from the next read on.
+    pub fn set_filter(&self, filter: Filter) {
+        *self.filter.lock().expect("poisoned") = filter;
+    }
+
+    pub fn filter(&self) -> Filter {
+        *self.filter.lock().expect("poisoned")
     }
 
     /// Reads the clipboard. Content whose digest is in `skip` is not
     /// encoded or copied, so asking "has it changed?" is cheap.
     pub async fn read(&self, skip: Vec<Digest>) -> Result<Read> {
-        self.call(|reply| Cmd::Read { skip, reply }).await
+        self.call(|reply| Cmd::Read { skip, explicit: false, reply }).await
+    }
+
+    /// Like [`read`](Self::read), for when the user asked for this copy to
+    /// be sent: sensitive content is carried too. The formats and size
+    /// limit still apply.
+    pub async fn read_explicit(&self, skip: Vec<Digest>) -> Result<Read> {
+        self.call(|reply| Cmd::Read { skip, explicit: true, reply }).await
     }
 
     /// The digest of the current content, or `None` if empty.
@@ -132,6 +201,17 @@ pub struct Raw {
     pub text: Option<String>,
     pub html: Option<String>,
     pub image: Option<Image>,
+    /// The source marked this as sensitive (what password managers do:
+    /// `x-kde-passwordManagerHint` on Linux, `org.nspasteboard.ConcealedType`
+    /// on macOS, `ExcludeClipboardContentFromMonitorProcessing` on Windows).
+    ///
+    /// **Limitation:** [arboard](https://docs.rs/arboard) does not let us
+    /// read which formats or MIME types a clipboard offers (it can only set
+    /// the exclusion hints, not see them), so the system clipboard never
+    /// reports this and the skip does not trigger on a real clipboard yet.
+    /// The rest is in place: set this where a backend can learn it, and the
+    /// content is neither digested, encoded nor sent.
+    pub concealed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +225,20 @@ pub struct Image {
 impl Raw {
     fn is_empty(&self) -> bool {
         self.text.is_none() && self.html.is_none() && self.image.is_none()
+    }
+
+    /// Drops the formats that are switched off.
+    fn filtered(mut self, f: &Filter) -> Self {
+        if !f.text {
+            self.text = None;
+        }
+        if !f.html {
+            self.html = None;
+        }
+        if !f.image {
+            self.image = None;
+        }
+        self
     }
 
     /// When text or HTML is present, drops the image: apps like Excel put a
@@ -194,6 +288,10 @@ impl MemoryClipboard {
     pub fn set_text(&self, text: &str) {
         self.set(Raw { text: Some(text.to_owned()), ..Raw::default() });
     }
+    /// Marks what is on the clipboard as sensitive, as a password manager would.
+    pub fn set_concealed(&self, concealed: bool) {
+        self.raw.lock().expect("poisoned").concealed = concealed;
+    }
     pub fn get(&self) -> Raw {
         self.raw.lock().expect("poisoned").clone()
     }
@@ -212,16 +310,18 @@ enum Backend {
 }
 
 impl Backend {
-    fn read(&mut self) -> Result<Raw> {
+    /// Reads what `filter` lets through; a format that is switched off is
+    /// not even fetched.
+    fn read(&mut self, filter: &Filter) -> Result<Raw> {
         match self {
-            Backend::Memory(m) => Ok(m.get()),
+            Backend::Memory(m) => Ok(m.get().filtered(filter)),
             Backend::System(cb) => {
                 let cb = open(cb)?;
-                let text = cb.get_text().ok();
-                let html = cb.get().html().ok();
+                let text = if filter.text { cb.get_text().ok() } else { None };
+                let html = if filter.html { cb.get().html().ok() } else { None };
                 // Text wins over an image (see `Raw::prefer_text`), so don't
                 // even fetch a possibly huge bitmap (an Excel range).
-                let image = if text.is_some() || html.is_some() {
+                let image = if !filter.image || text.is_some() || html.is_some() {
                     None
                 } else {
                     cb.get_image().ok().and_then(|i| {
@@ -230,7 +330,7 @@ impl Backend {
                             .then_some(Image { width: i.width, height: i.height, rgba })
                     })
                 };
-                Ok(Raw { text, html, image })
+                Ok(Raw { text, html, image, concealed: false })
             }
         }
     }
@@ -242,8 +342,8 @@ impl Backend {
         match self {
             Backend::Memory(m) => {
                 let raw = match raw {
-                    Raw { text: None, html: None, image: Some(i) } => Raw { image: Some(i), ..Raw::default() },
-                    Raw { text, html, .. } => Raw { text, html, image: None },
+                    Raw { text: None, html: None, image: Some(i), .. } => Raw { image: Some(i), ..Raw::default() },
+                    Raw { text, html, .. } => Raw { text, html, ..Raw::default() },
                 };
                 m.set(raw);
                 m.writes.fetch_add(1, Ordering::SeqCst);
@@ -252,7 +352,7 @@ impl Backend {
             Backend::System(cb) => {
                 let cb = open(cb)?;
                 let res = match raw {
-                    Raw { text: None, html: None, image: Some(i) } => cb.set_image(arboard::ImageData {
+                    Raw { text: None, html: None, image: Some(i), .. } => cb.set_image(arboard::ImageData {
                         width: i.width,
                         height: i.height,
                         bytes: i.rgba.into(),
@@ -279,6 +379,7 @@ struct Worker {
     /// The last content we encoded, so repeated sends of one big image
     /// encode it only once.
     cache: Option<(Digest, Arc<ClipData>)>,
+    filter: Arc<Mutex<Filter>>,
 }
 
 impl Worker {
@@ -289,8 +390,8 @@ impl Worker {
             queue.extend(rx.try_iter());
             while let Some(cmd) = queue.pop_front() {
                 match cmd {
-                    Cmd::Read { skip, reply } => {
-                        let r = self.read(&skip);
+                    Cmd::Read { skip, explicit, reply } => {
+                        let r = self.read(&skip, explicit);
                         let _ = reply.send(r);
                     }
                     Cmd::Digest { reply } => {
@@ -306,8 +407,13 @@ impl Worker {
         }
     }
 
+    fn filter(&self) -> Filter {
+        *self.filter.lock().expect("poisoned")
+    }
+
     fn backend_read(&mut self) -> Result<Raw> {
-        let r = self.backend.read().map(Raw::prefer_text);
+        let filter = self.filter();
+        let r = self.backend.read(&filter).map(Raw::prefer_text);
         if r.is_err()
             && let Backend::System(cb) = &mut self.backend
         {
@@ -316,7 +422,9 @@ impl Worker {
         r
     }
 
-    fn read(&mut self, skip: &[Digest]) -> Result<Read> {
+    fn read(&mut self, skip: &[Digest], explicit: bool) -> Result<Read> {
+        let max = self.filter().max_bytes();
+        let skip_concealed = self.filter().skip_concealed;
         let raw = self.backend_read()?;
         if raw.is_empty() {
             return Ok(Read::Empty);
@@ -325,25 +433,28 @@ impl Worker {
         if skip.contains(&digest) {
             return Ok(Read::Unchanged(digest));
         }
+        if raw.concealed && skip_concealed && !explicit {
+            return Ok(Read::Concealed(digest));
+        }
         if let Some((d, data)) = &self.cache
             && *d == digest
         {
-            return Ok(sized(digest, data.clone()));
+            return Ok(sized(digest, data.clone(), max));
         }
         let text_len = raw.text.as_ref().map_or(0, String::len) + raw.html.as_ref().map_or(0, String::len);
-        if text_len > MAX_BYTES || raw.image.as_ref().is_some_and(|i| i.rgba.len() > MAX_RGBA) {
+        if text_len > max || raw.image.as_ref().is_some_and(|i| i.rgba.len() > MAX_RGBA) {
             let size = text_len + raw.image.as_ref().map_or(0, |i| i.rgba.len());
             return Ok(Read::TooLarge { digest, size });
         }
         let png = raw.image.as_ref().map(encode_png).transpose()?;
         let data = Arc::new(ClipData { text: raw.text, html: raw.html, png });
         self.cache = Some((digest, data.clone()));
-        Ok(sized(digest, data))
+        Ok(sized(digest, data, max))
     }
 
     fn write(&mut self, data: ClipData) -> Result<Digest> {
         let image = data.png.as_deref().map(decode_png).transpose()?;
-        let raw = Raw { text: data.text, html: data.html, image };
+        let raw = Raw { text: data.text, html: data.html, image, concealed: false };
         if let Err(e) = self.backend.write(raw) {
             if let Backend::System(cb) = &mut self.backend {
                 *cb = None;
@@ -355,9 +466,9 @@ impl Worker {
     }
 }
 
-fn sized(digest: Digest, data: Arc<ClipData>) -> Read {
+fn sized(digest: Digest, data: Arc<ClipData>, max: usize) -> Read {
     let size = data.len();
-    if size > MAX_BYTES { Read::TooLarge { digest, size } } else { Read::Changed { digest, data } }
+    if size > max { Read::TooLarge { digest, size } } else { Read::Changed { digest, data } }
 }
 
 pub fn encode_png(i: &Image) -> Result<Vec<u8>> {
@@ -442,8 +553,95 @@ mod tests {
     #[tokio::test]
     async fn too_large_is_reported() {
         let (cb, mem) = Clipboard::memory();
-        mem.set_text(&"x".repeat(MAX_BYTES + 1));
-        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::TooLarge { size, .. } if size == MAX_BYTES + 1));
+        mem.set_text(&"x".repeat(DEFAULT_MAX_BYTES + 1));
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::TooLarge { size, .. } if size == DEFAULT_MAX_BYTES + 1));
+    }
+
+    #[tokio::test]
+    async fn size_cap_is_configurable_and_live() {
+        let (cb, mem) = Clipboard::memory();
+        mem.set_text(&"x".repeat(3 << 20));
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }), "under the default cap");
+
+        cb.set_filter(Filter { max_bytes: 2 << 20, ..Filter::default() });
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::TooLarge { size, .. } if size == 3 << 20));
+
+        cb.set_filter(Filter { max_bytes: 4 << 20, ..Filter::default() });
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
+
+        // The cap on an image counts its PNG, not the RGBA behind it.
+        let i = image();
+        mem.set(Raw { image: Some(i.clone()), ..Raw::default() });
+        let png_len = encode_png(&i).unwrap().len();
+        cb.set_filter(Filter { max_bytes: png_len, ..Filter::default() });
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
+        cb.set_filter(Filter { max_bytes: png_len - 1, ..Filter::default() });
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::TooLarge { .. }));
+
+        // Whatever the setting, it is bounded.
+        let huge = Filter { max_bytes: usize::MAX, ..Filter::default() };
+        assert_eq!(huge.max_bytes(), CEILING_BYTES);
+    }
+
+    #[tokio::test]
+    async fn formats_can_be_switched_off() {
+        let (cb, mem) = Clipboard::memory();
+        mem.set(Raw { text: Some("t".into()), html: Some("<b>t</b>".into()), ..Raw::default() });
+
+        cb.set_filter(Filter { html: false, ..Filter::default() });
+        let Read::Changed { digest: no_html, data } = cb.read(vec![]).await.unwrap() else { panic!() };
+        assert_eq!((data.text.as_deref(), data.html.as_deref()), (Some("t"), None));
+
+        cb.set_filter(Filter { text: false, html: false, ..Filter::default() });
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Empty), "nothing allowed is left");
+        assert_eq!(cb.digest().await.unwrap(), None);
+
+        // The digest is over what passes the filter, so a baseline taken
+        // with the same filter matches and a changed filter looks like a change.
+        cb.set_filter(Filter { html: false, ..Filter::default() });
+        assert_eq!(cb.digest().await.unwrap(), Some(no_html));
+        assert!(matches!(cb.read(vec![no_html]).await.unwrap(), Read::Unchanged(_)));
+        cb.set_filter(Filter::default());
+        assert!(matches!(cb.read(vec![no_html]).await.unwrap(), Read::Changed { .. }));
+
+        // Images off: an image-only clipboard is empty; with text off and
+        // image on, the image of a text+bitmap copy (Excel) is what is shared.
+        mem.set(Raw { image: Some(image()), ..Raw::default() });
+        cb.set_filter(Filter { image: false, ..Filter::default() });
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Empty));
+        mem.set(Raw { text: Some("cells".into()), image: Some(image()), ..Raw::default() });
+        cb.set_filter(Filter { text: false, ..Filter::default() });
+        let Read::Changed { data, .. } = cb.read(vec![]).await.unwrap() else { panic!() };
+        assert!(data.png.is_some() && data.text.is_none());
+    }
+
+    #[test]
+    fn filter_applies_to_received_data() {
+        let all = ClipData { text: Some("t".into()), html: Some("h".into()), png: Some(vec![1]) };
+        let f = Filter { html: false, image: false, ..Filter::default() };
+        assert_eq!(f.apply(all.clone()), ClipData { text: Some("t".into()), ..Default::default() });
+        assert_eq!(Filter::default().apply(all.clone()), all);
+    }
+
+    #[tokio::test]
+    async fn concealed_content_is_skipped_unless_asked_for() {
+        let (cb, mem) = Clipboard::memory();
+        mem.set_text("hunter2");
+        mem.set_concealed(true);
+        let Read::Concealed(d) = cb.read(vec![]).await.unwrap() else { panic!("a password manager's copy was read") };
+        // The digest is still given so callers can tell it from the next copy.
+        assert_eq!(cb.digest().await.unwrap(), Some(d));
+
+        // The user asking to send it explicitly overrides.
+        let Read::Changed { data, .. } = cb.read_explicit(vec![]).await.unwrap() else { panic!() };
+        assert_eq!(data.text.as_deref(), Some("hunter2"));
+
+        // And the skip can be turned off.
+        cb.set_filter(Filter { skip_concealed: false, ..Filter::default() });
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
+        cb.set_filter(Filter::default());
+        mem.set_concealed(false);
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
     }
 
     #[tokio::test]
@@ -452,7 +650,7 @@ mod tests {
         // Zeroed, so the allocation is lazy; it is over MAX_RGBA.
         let big = Image { width: 16384, height: 4097, rgba: vec![0; 16384 * 4097 * 4] };
         assert!(big.rgba.len() > MAX_RGBA);
-        mem.set(Raw { text: Some("cells".into()), html: Some("<td>cells</td>".into()), image: Some(big.clone()) });
+        mem.set(Raw { text: Some("cells".into()), html: Some("<td>cells</td>".into()), image: Some(big.clone()), concealed: false });
         let Read::Changed { digest, data } = cb.read(vec![]).await.unwrap() else { panic!("expected content, not TooLarge") };
         assert_eq!(data.text.as_deref(), Some("cells"));
         assert!(data.html.is_some());

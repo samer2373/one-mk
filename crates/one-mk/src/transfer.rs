@@ -14,9 +14,11 @@
 //! side by small bounded channels of 1 MiB buffers, so the runtime thread
 //! only moves memory.
 
+use crate::notify::Notifier;
+use crate::track::{FileTicket, Transfers};
 use anyhow::{Context, Result, bail, ensure};
 use one_mk_net::{Fingerprint, open_stream, read_file_msg, write_file_msg};
-use one_mk_proto::{FileMsg, StreamKind};
+use one_mk_proto::{Batch, FileMsg, StreamKind};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read as _, Seek, SeekFrom, Write as _};
@@ -56,6 +58,15 @@ pub const PEER_PARTIAL_CAP: u64 = 50 << 30;
 
 // ---------------------------------------------------------------- receiving
 
+/// Notifies nobody.
+#[cfg(test)]
+struct Quiet;
+
+#[cfg(test)]
+impl Notifier for Quiet {
+    fn files_received(&self, _: crate::notify::FilesReceived) {}
+}
+
 /// Receives files from trusted peers into one folder.
 pub struct Inbox {
     root: PathBuf,
@@ -63,6 +74,8 @@ pub struct Inbox {
     active: Mutex<HashMap<String, Slot>>,
     limits: Arc<Mutex<Limits>>,
     partial_cap: u64,
+    /// Progress of what is arriving, and the "files received" notification.
+    transfers: Arc<Transfers>,
 }
 
 #[derive(Default)]
@@ -174,11 +187,27 @@ impl Inbox {
     /// Also, if called inside a tokio runtime, deletes stale partial files
     /// now and then once a day (see [`Inbox::sweep_partials`]).
     pub fn new(root: PathBuf) -> Arc<Self> {
-        Self::with_cap(root, PEER_PARTIAL_CAP)
+        // Tests must not pop up notifications on the developer's desktop.
+        #[cfg(not(test))]
+        let notifier: Arc<dyn Notifier> = Arc::new(crate::notify::Desktop);
+        #[cfg(test)]
+        let notifier: Arc<dyn Notifier> = Arc::new(Quiet);
+        Self::with_notifier(root, notifier)
     }
 
-    fn with_cap(root: PathBuf, partial_cap: u64) -> Arc<Self> {
-        let inbox = Arc::new(Self { root, active: Mutex::default(), limits: Arc::default(), partial_cap });
+    /// An inbox that tells `notifier` about each finished transfer.
+    pub fn with_notifier(root: PathBuf, notifier: Arc<dyn Notifier>) -> Arc<Self> {
+        Self::build(root, PEER_PARTIAL_CAP, notifier)
+    }
+
+    /// Progress of transfers in flight, and settings for notifying about them.
+    pub fn transfers(&self) -> &Arc<Transfers> {
+        &self.transfers
+    }
+
+    fn build(root: PathBuf, partial_cap: u64, notifier: Arc<dyn Notifier>) -> Arc<Self> {
+        let transfers = Transfers::new(root.clone(), notifier);
+        let inbox = Arc::new(Self { root, active: Mutex::default(), limits: Arc::default(), partial_cap, transfers });
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let weak: Weak<Inbox> = Arc::downgrade(&inbox);
             rt.spawn(async move {
@@ -290,8 +319,8 @@ impl Inbox {
         let _ = send.set_priority(-1);
         loop {
             let res = match read_file_msg(&mut recv).await {
-                Ok(Some(FileMsg::Offer { path, size, mtime })) => {
-                    self.receive_file(fp, peer, &mut send, &mut recv, &path, size, mtime).await
+                Ok(Some(FileMsg::Offer { path, size, mtime, batch })) => {
+                    self.receive_file(fp, peer, &mut send, &mut recv, &path, (size, mtime, batch)).await
                 }
                 Ok(None) => break,
                 Ok(Some(other)) => Err(anyhow::anyhow!("expected a file offer, got {other:?}")),
@@ -314,9 +343,10 @@ impl Inbox {
         send: &mut quinn::SendStream,
         recv: &mut quinn::RecvStream,
         path: &str,
-        size: u64,
-        mtime: u64,
+        (size, mtime, batch): (u64, u64, Batch),
     ) -> Result<()> {
+        // Counts toward the transfer's progress and end, also when refused.
+        let ticket = self.transfers.begin(fp, peer, batch, size);
         let parts = match sanitize(path) {
             Ok(p) => p,
             Err(reason) => {
@@ -329,7 +359,7 @@ impl Inbox {
         // takes over from the old one.
         let id = part_id(fp, path, size, mtime);
         let (guard, cancel) = self.claim(&id).await;
-        let res = self.receive_claimed(fp, peer, send, recv, path, parts, size, &id, &cancel).await;
+        let res = self.receive_claimed(fp, peer, send, recv, path, parts, size, &id, &cancel, ticket).await;
         self.release(&id, guard);
         res
     }
@@ -371,6 +401,7 @@ impl Inbox {
         size: u64,
         id: &str,
         cancel: &Notify,
+        mut ticket: FileTicket,
     ) -> Result<()> {
         let (root, id, prefix, cap) = (self.root.clone(), id.to_owned(), fp_prefix(fp), self.partial_cap);
         let limits = self.limits.clone();
@@ -383,6 +414,7 @@ impl Inbox {
             }
         };
         write_file_msg(send, &FileMsg::Accept { offset }).await?;
+        ticket.resumed(offset);
         if offset > 0 {
             tracing::info!(%peer, ?path, offset, "resuming");
         }
@@ -405,6 +437,7 @@ impl Inbox {
                 }
                 remaining -= filled as u64;
                 reservation.consume(filled as u64);
+                ticket.bytes(filled as u64);
                 tokio::select! {
                     sent = tx.send(buf) => if sent.is_err() {
                         return Ok(false); // the writer failed; it says why
@@ -442,6 +475,7 @@ impl Inbox {
         match placed {
             Ok(name) => {
                 println!("Received {name} from {peer} (saved to {}).", self.root.join(&name).display());
+                ticket.saved(name.clone());
                 write_file_msg(send, &FileMsg::Saved { name }).await
             }
             Err(e) => {
@@ -877,8 +911,29 @@ pub enum Outcome {
 
 /// Sends `files` over `conn`, using up to [`STREAMS`] streams at once.
 /// Returns the outcome for each file, in the order given.
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn send_files(conn: &quinn::Connection, files: Vec<Outgoing>, progress: Arc<Progress>) -> Vec<(Outgoing, Outcome)> {
-    progress.total.store(files.iter().map(|f| f.size).sum(), Ordering::Relaxed);
+    send_files_as(conn, files, progress, new_batch_id()).await
+}
+
+/// A random id for one send; never 0, which means "unknown".
+pub fn new_batch_id() -> u64 {
+    use std::hash::{BuildHasher, RandomState};
+    // std seeds RandomState from the OS and changes its keys on every call.
+    RandomState::new().hash_one(0u8).max(1)
+}
+
+/// [`send_files`] with the batch id chosen by the caller, who may want to
+/// show it (as the id of the transfer) too.
+pub async fn send_files_as(
+    conn: &quinn::Connection,
+    files: Vec<Outgoing>,
+    progress: Arc<Progress>,
+    id: u64,
+) -> Vec<(Outgoing, Outcome)> {
+    let bytes = files.iter().map(|f| f.size).sum();
+    progress.total.store(bytes, Ordering::Relaxed);
+    let batch = Batch { id, files: u32::try_from(files.len()).unwrap_or(u32::MAX), bytes };
     let n = files.len();
     let queue = Arc::new(Mutex::new(files.into_iter().enumerate().collect::<VecDeque<_>>()));
     let results = Arc::new(Mutex::new(Vec::with_capacity(n)));
@@ -896,7 +951,7 @@ pub async fn send_files(conn: &quinn::Connection, files: Vec<Outgoing>, progress
             let _ = send.set_priority(-1);
             loop {
                 let Some((i, file)) = queue.lock().expect("poisoned").pop_front() else { break };
-                let res = send_one(&mut send, &mut recv, &file, &progress).await;
+                let res = send_one(&mut send, &mut recv, &file, batch, &progress).await;
                 let broken = res.is_err();
                 let outcome = res.unwrap_or_else(|e| Outcome::Failed(format!("{e:#}")));
                 results.lock().expect("poisoned").push((i, file, outcome));
@@ -922,9 +977,10 @@ async fn send_one(
     send: &mut quinn::SendStream,
     recv: &mut quinn::RecvStream,
     file: &Outgoing,
+    batch: Batch,
     progress: &Progress,
 ) -> Result<Outcome> {
-    write_file_msg(send, &FileMsg::Offer { path: file.rel.clone(), size: file.size, mtime: file.mtime }).await?;
+    write_file_msg(send, &FileMsg::Offer { path: file.rel.clone(), size: file.size, mtime: file.mtime, batch }).await?;
     let offset = match read_file_msg(recv).await? {
         Some(FileMsg::Accept { offset }) => offset,
         Some(FileMsg::Reject { reason }) => {
@@ -1170,7 +1226,7 @@ mod tests {
         let root = temp("stall");
         let inbox = Inbox::new(root.clone());
         let fp = pb.fingerprint;
-        let offer = FileMsg::Offer { path: "f.bin".into(), size: 10, mtime: 1 };
+        let offer = FileMsg::Offer { path: "f.bin".into(), size: 10, mtime: 1, batch: Batch::default() };
         let serve = |inbox: Arc<Inbox>, send, recv| tokio::spawn(async move { inbox.receive_inner(None, fp, "t", send, recv).await });
         let secs = |f| tokio::time::timeout(Duration::from_secs(5), f);
 
@@ -1245,6 +1301,144 @@ mod tests {
         g.clear();
         assert!(inbox.start_stream(Fingerprint([4; 32]), Some(&other)).is_ok());
         assert_eq!(inbox.limits.lock().unwrap().total, 0);
+    }
+
+    /// Two connected nodes: the sender's connection and the receiving side's.
+    async fn linked() -> (one_mk_net::Peer, one_mk_net::Peer, one_mk_net::Node, one_mk_net::Node) {
+        use one_mk_net::{Identity, Node};
+        let node = || Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let (a, b) = (node(), node());
+        let addr = b.local_addr().unwrap();
+        let (pa, pb) = tokio::join!(a.connect(addr), async { b.accept().await.unwrap() });
+        (pa.unwrap(), pb.unwrap(), a, b)
+    }
+
+    async fn eventually(what: &str, mut ok: impl FnMut() -> bool) {
+        for _ in 0..200 {
+            if ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    /// A folder sent with `send_files` is one transfer on the receiving
+    /// side: one notification, naming what arrived, once the last file is in.
+    #[tokio::test]
+    async fn a_received_folder_raises_one_notification() {
+        use crate::track::tests::Recorder;
+        let (pa, pb, _a, _b) = linked().await;
+        let src = temp("notify-src");
+        for (rel, len) in [("photos/a.jpg", 1000usize), ("photos/sub/b.jpg", 2000), ("photos/c.jpg", 3000), ("notes.txt", 10)] {
+            let path = src.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, vec![7u8; len]).unwrap();
+        }
+        let files = collect(&[src.join("photos"), src.join("notes.txt")]).unwrap();
+        assert_eq!(files.len(), 4);
+
+        let root = temp("notify-dst");
+        let rec = Arc::new(Recorder::default());
+        let inbox = Inbox::with_notifier(root.clone(), rec.clone());
+        let fp = pb.fingerprint;
+        let conn = pb.conn.clone();
+        let server = {
+            let inbox = inbox.clone();
+            tokio::spawn(async move {
+                let permit = Arc::new(inbox.admit(fp).unwrap());
+                while let Ok((send, mut recv)) = conn.accept_bi().await {
+                    let (inbox, permit) = (inbox.clone(), permit.clone());
+                    tokio::spawn(async move {
+                        let _ = one_mk_net::read_stream_kind(&mut recv).await;
+                        inbox.receive_on(&permit, "laptop", send, recv).await;
+                    });
+                }
+            })
+        };
+
+        let results = send_files(&pa.conn, files, Arc::new(Progress::default())).await;
+        assert!(results.iter().all(|(_, o)| matches!(o, Outcome::Saved { .. })), "{results:?}");
+
+        let got = rec.all();
+        assert_eq!(got.len(), 1, "one transfer, one notification: {got:?}");
+        let n = &got[0];
+        assert_eq!(n.peer, "laptop");
+        assert_eq!(n.bytes, 6010);
+        assert_eq!(n.folder, root);
+        let mut names = n.names.clone();
+        names.sort();
+        assert_eq!(names, ["notes.txt", "photos/a.jpg", "photos/c.jpg", "photos/sub/b.jpg"]);
+        assert_eq!(n.title(), "4 files received from laptop");
+        assert_eq!(n.reveal(), root, "a folder and a file: the download folder");
+        assert!(inbox.transfers().snapshot().is_empty(), "nothing is in flight any more");
+
+        // Sending again is a new transfer: a new notification (the files get new names).
+        let files = collect(&[src.join("notes.txt")]).unwrap();
+        send_files(&pa.conn, files, Arc::new(Progress::default())).await;
+        let got = rec.all();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[1].names, ["notes (1).txt"]);
+        assert_eq!(got[1].title(), "notes (1).txt received from laptop");
+
+        // The setting turns it off at once.
+        inbox.transfers().set_notify(false);
+        let files = collect(&[src.join("notes.txt")]).unwrap();
+        send_files(&pa.conn, files, Arc::new(Progress::default())).await;
+        assert_eq!(rec.all().len(), 2);
+        server.abort();
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The receiving side reports bytes done and the whole send's total
+    /// while a transfer is in flight, across files and streams.
+    #[tokio::test]
+    async fn progress_of_a_transfer_in_flight_is_visible() {
+        use crate::track::tests::Recorder;
+        let (pa, pb, _a, _b) = linked().await;
+        let root = temp("progress");
+        let rec = Arc::new(Recorder::default());
+        let inbox = Inbox::with_notifier(root.clone(), rec.clone());
+        let fp = pb.fingerprint;
+        // Bytes are counted a buffer (CHUNK) at a time.
+        let size = 2 * CHUNK as u64;
+        let batch = Batch { id: 42, files: 2, bytes: 2 * size };
+
+        let (mut s, mut r) = open_stream(&pa.conn, StreamKind::File).await.unwrap();
+        let (_, ps, pr) = pb.accept_stream().await.unwrap();
+        let inbox2 = inbox.clone();
+        let task = tokio::spawn(async move { inbox2.receive_inner(None, fp, "desk", ps, pr).await });
+
+        let data: Vec<u8> = (0..4 * CHUNK).map(|i| (i % 251) as u8).collect();
+        for (i, name) in ["one.bin", "two.bin"].into_iter().enumerate() {
+            let body = &data[i * 2 * CHUNK..(i + 1) * 2 * CHUNK];
+            let offer = FileMsg::Offer { path: name.into(), size, mtime: 1, batch };
+            write_file_msg(&mut s, &offer).await.unwrap();
+            assert!(matches!(tokio::time::timeout(Duration::from_secs(5), read_file_msg(&mut r)).await.unwrap().unwrap(), Some(FileMsg::Accept { offset: 0 })));
+            s.write_all(&body[..CHUNK]).await.unwrap();
+            // Half-way into the file, so half or three quarters of the whole send.
+            let want = (i as u64) * size + CHUNK as u64;
+            eventually("the bytes to show", || inbox.transfers().snapshot().first().is_some_and(|t| t.done == want)).await;
+            let t = inbox.transfers().snapshot().remove(0);
+            assert_eq!((t.id, t.sending, t.peer.as_str(), t.files, t.total), (42, false, "desk", 2, 2 * size), "{t:?}");
+            assert_eq!(inbox.transfers().snapshot().len(), 1, "one line for the whole send");
+
+            s.write_all(&body[CHUNK..]).await.unwrap();
+            write_file_msg(&mut s, &FileMsg::End { hash: blake3::hash(body).into() }).await.unwrap();
+            assert!(matches!(tokio::time::timeout(Duration::from_secs(5), read_file_msg(&mut r)).await.unwrap().unwrap(), Some(FileMsg::Saved { .. })));
+            if i == 0 {
+                assert!(rec.all().is_empty(), "the second file is still to come");
+            }
+        }
+        // The last file of the batch ends it.
+        eventually("the notification", || !rec.all().is_empty()).await;
+        assert_eq!(rec.all().len(), 1);
+        assert_eq!(rec.all()[0].names, ["one.bin", "two.bin"]);
+        assert!(inbox.transfers().snapshot().is_empty());
+        s.finish().unwrap();
+        let _ = tokio::time::timeout(Duration::from_secs(5), task).await;
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -3,18 +3,22 @@
 mod app;
 mod bench;
 mod clip;
+mod clipctl;
 mod control;
 mod doctor;
 mod install;
 mod link;
 mod manage;
+mod notify;
 mod pair;
 mod send;
 mod settings;
 mod steer;
+mod track;
 mod transfer;
 
 use anyhow::{Context, Result};
+use clipctl::OnOff;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use one_mk_net::{Identity, Swap, TrustStore};
 use one_mk_proto::{DEFAULT_PORT, Side};
@@ -65,6 +69,9 @@ struct RunArgs {
     /// Start with the pointer locked to this computer (see `lock-pointer`).
     #[arg(long)]
     start_locked: bool,
+    /// Don't show a notification when files arrive (for this run; `one-mk notify off` is permanent).
+    #[arg(long)]
+    no_notify: bool,
 }
 
 #[derive(Subcommand)]
@@ -82,6 +89,45 @@ enum Cmd {
         /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
         #[arg(long, value_name = "IP:PORT")]
         connect: Vec<SocketAddr>,
+    },
+    /// Show or change what the clipboard shares: which formats, and how much (applies at once).
+    Clipboard {
+        /// Share plain text.
+        #[arg(long, value_name = "on|off")]
+        text: Option<OnOff>,
+        /// Share HTML (rich text).
+        #[arg(long, value_name = "on|off")]
+        html: Option<OnOff>,
+        /// Share images.
+        #[arg(long, value_name = "on|off")]
+        image: Option<OnOff>,
+        /// Largest clipboard to send or accept, in MB (default 25).
+        #[arg(long, value_name = "N")]
+        max_mb: Option<u32>,
+        /// Skip what a password manager marked as sensitive (default on; not
+        /// detectable on every system yet, see the README).
+        #[arg(long, value_name = "on|off")]
+        skip_sensitive: Option<OnOff>,
+        /// Let other computers fetch this clipboard with `one-mk clip-get` (default on).
+        #[arg(long, value_name = "on|off")]
+        allow_fetch: Option<OnOff>,
+    },
+    /// Send this computer's clipboard to one paired computer now, without moving the pointer.
+    ClipSend {
+        /// Name or id of the paired computer (needed if several are connected).
+        #[arg(long, value_name = "DEVICE")]
+        to: Option<String>,
+    },
+    /// Copy a paired computer's clipboard to this one now.
+    ClipGet {
+        /// Name or id of the paired computer (needed if several are connected).
+        #[arg(long, value_name = "DEVICE")]
+        from: Option<String>,
+    },
+    /// Show or set whether a notification appears when files arrive.
+    Notify {
+        /// on or off; leave out to see the current setting.
+        state: Option<OnOff>,
     },
     /// Pair with another computer (run it on both).
     Pair {
@@ -242,6 +288,9 @@ fn run(cli: Cli) -> Result<()> {
     rt.block_on(async move {
         match cli.cmd.unwrap_or(Cmd::Run(cli.run)) {
             Cmd::Run(r) => {
+                if r.no_notify {
+                    notify::disable();
+                }
                 let opts = app::Options {
                     backend: r.backend.into(),
                     port: r.port,
@@ -256,6 +305,12 @@ fn run(cli: Cli) -> Result<()> {
                 };
                 app::run(dir, opts).await
             }
+            Cmd::Clipboard { text, html, image, max_mb, skip_sensitive, allow_fetch } => {
+                clipctl::clipboard(&dir, clipctl::ClipChange { text, html, image, max_mb, skip_sensitive, allow_fetch }).await
+            }
+            Cmd::ClipSend { to } => clipctl::move_clipboard(&dir, to, true).await,
+            Cmd::ClipGet { from } => clipctl::move_clipboard(&dir, from, false).await,
+            Cmd::Notify { state } => clipctl::notify(&dir, state).await,
             Cmd::Send { paths, to, connect } => send::run(&dir, paths, to, connect).await,
             Cmd::Pair { connect, machine } => pair::run(&dir, connect, pair::Out::new(machine)).await,
             Cmd::Devices => devices(&dir, cli.verbose > 0),
