@@ -61,10 +61,17 @@ impl Ctx {
         Ok(())
     }
 
+    /// Opens the settings window (`one-mk-app`, installed next to the tray).
+    fn open_app(&self) -> std::io::Result<()> {
+        let app = install::sibling(&self.tray, "one-mk-app").unwrap_or_else(|| PathBuf::from("one-mk-app"));
+        proc::spawn_detached(&app, &self.home_args(), None)
+    }
+
     /// Does what a menu item says. Failures go to stderr (there is no
     /// window to show them in); the menu is rebuilt afterwards either way.
     pub fn perform(&self, action: &Action) {
         let result: anyhow::Result<()> = match action {
+            Action::OpenApp => self.open_app().map_err(Into::into),
             Action::StartDaemon => self.start_daemon().map_err(Into::into),
             Action::TakeBack => client::request(&self.dir, Request::TakeBack, Duration::from_secs(5)).map(drop),
             Action::SetSide { peer, side } => self.set_side(peer, &side.to_string()),

@@ -5,7 +5,7 @@
 //! to refresh (`AboutToShow`) every time the menu is opened: no polling.
 
 use crate::core::Ctx;
-use crate::icon;
+use crate::icon::{self, IconState};
 use crate::model::{self, Entry, Snapshot};
 use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 use ksni::{Icon, MenuItem, ToolTip, Tray, blocking::TrayMethods};
@@ -17,8 +17,8 @@ struct OneMk {
 }
 
 /// ARGB32 in network byte order, as the specification wants it.
-fn pixmap(size: u32, connected: bool) -> Icon {
-    let data = icon::rgba(size, connected).as_chunks::<4>().0.iter().flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
+fn pixmap(size: u32, state: IconState) -> Icon {
+    let data = icon::rgba(size, state).as_chunks::<4>().0.iter().flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
     Icon { width: size as i32, height: size as i32, data }
 }
 
@@ -45,7 +45,7 @@ fn item(e: &Entry) -> MenuItem<OneMk> {
 }
 
 impl Tray for OneMk {
-    const MENU_ON_ACTIVATE: bool = true;
+    const MENU_ON_ACTIVATE: bool = false;
 
     fn id(&self) -> String {
         "one-mk".into()
@@ -56,8 +56,13 @@ impl Tray for OneMk {
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        let c = self.snap.connected();
-        vec![pixmap(22, c), pixmap(32, c), pixmap(64, c)]
+        let st = self.snap.icon_state();
+        vec![pixmap(22, st), pixmap(32, st), pixmap(64, st)]
+    }
+
+    /// A left click opens the settings window; the menu is on right click.
+    fn activate(&mut self, _x: i32, _y: i32) {
+        self.ctx.perform(&model::Action::OpenApp);
     }
 
     fn tool_tip(&self) -> ToolTip {

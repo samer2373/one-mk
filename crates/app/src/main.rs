@@ -1,0 +1,57 @@
+//! `one-mk-app`: the one·mk window. It shows your computers on a desk,
+//! lets you arrange them, pair new ones and send files by dropping them on
+//! a computer. It only talks to the running `one-mk` (through its control
+//! channel and the `one-mk` program), so closing it changes nothing, and it
+//! costs nothing when it isn't open.
+//!
+//! `one-mk-app [--home DIR]`
+
+// No console window on Windows.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
+mod app;
+mod daemon;
+mod pairing;
+mod scene;
+mod style;
+
+use std::path::PathBuf;
+
+fn parse_args() -> Result<Option<PathBuf>, String> {
+    let mut home = std::env::var_os("ONE_MK_HOME").map(PathBuf::from);
+    let mut it = std::env::args_os().skip(1);
+    while let Some(a) = it.next() {
+        match a.to_str() {
+            Some("--home") => home = Some(it.next().ok_or("--home needs a folder")?.into()),
+            _ => return Err(format!("unknown option {a:?}\nusage: one-mk-app [--home DIR]")),
+        }
+    }
+    Ok(home)
+}
+
+fn main() {
+    let home = match parse_args() {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("one-mk-app: {e}");
+            std::process::exit(2);
+        }
+    };
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("one·mk")
+            .with_app_id("one-mk")
+            .with_inner_size([980.0, 660.0])
+            .with_min_inner_size([760.0, 540.0]),
+        ..Default::default()
+    };
+    let result = eframe::run_native(
+        "one-mk",
+        options,
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, home).map_err(|e| e.to_string())?))),
+    );
+    if let Err(e) = result {
+        eprintln!("one-mk-app: {e}");
+        std::process::exit(1);
+    }
+}

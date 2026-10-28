@@ -1,6 +1,7 @@
 //! What the menu says and does, independent of the platform that draws it.
 
 use one_mk_ctl::status::{Status, on_your};
+use crate::icon::IconState;
 use one_mk_proto::Side;
 
 /// What the menu is built from: a fresh look at the daemon and the login settings.
@@ -13,6 +14,7 @@ pub struct Snapshot {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    OpenApp,
     StartDaemon,
     TakeBack,
     SetSide { peer: String, side: Side },
@@ -35,9 +37,14 @@ impl Snapshot {
         self.status.is_some()
     }
 
-    /// Any paired computer connected right now?
-    pub fn connected(&self) -> bool {
-        self.status.as_ref().is_some_and(|s| s.peers.iter().any(|p| p.online))
+    /// Which icon to draw.
+    pub fn icon_state(&self) -> IconState {
+        match &self.status {
+            None => IconState::Off,
+            Some(s) if s.controlling.is_some() || s.controlled_by.is_some() => IconState::Controlling,
+            Some(s) if s.peers.iter().any(|p| p.online) => IconState::Connected,
+            Some(_) => IconState::Idle,
+        }
     }
 
     /// The first line of the menu, and the icon's tooltip.
@@ -69,7 +76,12 @@ pub fn side_label(side: Side) -> &'static str {
 }
 
 pub fn menu(snap: &Snapshot) -> Vec<Entry> {
-    let mut m = vec![Entry::Label(snap.headline()), Entry::Separator];
+    let mut m = vec![
+        Entry::Label(snap.headline()),
+        Entry::Separator,
+        Entry::Item { label: "Open one·mk…".into(), action: Action::OpenApp, checked: None },
+        Entry::Separator,
+    ];
     match &snap.status {
         Some(s) => {
             for p in &s.peers {
@@ -106,7 +118,7 @@ mod tests {
     use one_mk_ctl::status::PeerStatus;
 
     fn peer(name: &str, side: Side, online: bool) -> PeerStatus {
-        PeerStatus { id: format!("{name}-id"), name: name.into(), side, os: 0, online }
+        PeerStatus { id: format!("{name}-id"), name: name.into(), side, os: 0, online, swap: "auto".into() }
     }
 
     fn snap(peers: Vec<PeerStatus>) -> Snapshot {
@@ -123,6 +135,26 @@ mod tests {
         let mut s = snap(vec![peer("a", Side::Right, true)]);
         s.status.as_mut().unwrap().controlled_by = Some("a".into());
         assert_eq!(s.headline(), "a is controlling this computer");
+    }
+
+    #[test]
+    fn icon_states() {
+        assert_eq!(Snapshot::default().icon_state(), IconState::Off);
+        assert_eq!(snap(vec![]).icon_state(), IconState::Idle);
+        assert_eq!(snap(vec![peer("a", Side::Left, false)]).icon_state(), IconState::Idle);
+        let mut s = snap(vec![peer("a", Side::Left, true)]);
+        assert_eq!(s.icon_state(), IconState::Connected);
+        s.status.as_mut().unwrap().controlling = Some("a".into());
+        assert_eq!(s.icon_state(), IconState::Controlling);
+    }
+
+    #[test]
+    fn open_app_comes_right_after_the_headline() {
+        for s in [Snapshot::default(), snap(vec![peer("a", Side::Left, true)])] {
+            let m = menu(&s);
+            assert!(matches!(m[1], Entry::Separator));
+            assert!(matches!(m[2], Entry::Item { action: Action::OpenApp, .. }), "{m:?}");
+        }
     }
 
     #[test]

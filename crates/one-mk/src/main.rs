@@ -83,6 +83,9 @@ enum Cmd {
         /// network, e.g. 192.168.1.20:40123 (the other side prints its pairing port).
         #[arg(long, value_name = "IP:PORT")]
         connect: Option<SocketAddr>,
+        /// One event per line for a program to read (the app window uses this).
+        #[arg(long, hide = true)]
+        machine: bool,
     },
     /// List paired computers.
     Devices,
@@ -213,7 +216,7 @@ fn run(cli: Cli) -> Result<()> {
                 app::run(dir, opts).await
             }
             Cmd::Send { paths, to, connect } => send::run(&dir, paths, to, connect).await,
-            Cmd::Pair { connect } => pair::run(&dir, connect).await,
+            Cmd::Pair { connect, machine } => pair::run(&dir, connect, pair::Out::new(machine)).await,
             Cmd::Devices => devices(&dir, cli.verbose > 0),
             Cmd::Status => manage::status(&dir).await,
             Cmd::Takeback => manage::takeback(&dir).await,

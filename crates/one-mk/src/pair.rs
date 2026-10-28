@@ -3,6 +3,18 @@
 //!
 //! One candidate is handled at a time. If a session fails or stalls, we go
 //! back to waiting for the next one; only an explicit "no" ends pairing.
+//!
+//! With `--machine` (what the app window uses) the output is one event per
+//! line, tab-separated, and the answer is `yes` or `no` on stdin:
+//!
+//! ```text
+//! me <name> <id> <port>       searching          hint
+//! peer <id> <ip>              code <name> <code> waiting
+//! paired <id> <name> <side>   cancelled          declined
+//! retry <reason>
+//! ```
+//!
+//! Names are sanitized and never contain tabs or newlines.
 
 use anyhow::{Context, Result, bail};
 use one_mk_net::{Device, Discovery, Fingerprint, Identity, Node, Pairing, Peer, TrustStore};
@@ -25,7 +37,26 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
 /// Show troubleshooting hints if nothing turned up by then.
 const HINT_AFTER: Duration = Duration::from_secs(60);
 
-pub async fn run(dir: &Path, connect: Option<SocketAddr>) -> Result<()> {
+/// How pairing talks to whoever started it.
+#[derive(Clone, Copy)]
+pub struct Out {
+    machine: bool,
+}
+
+impl Out {
+    pub fn new(machine: bool) -> Self {
+        Self { machine }
+    }
+
+    /// Prints the sentence for a person, or the event line for a program.
+    fn say(self, human: impl FnOnce() -> String, event: impl FnOnce() -> String) {
+        let line = if self.machine { event() } else { human() };
+        println!("{line}");
+        let _ = std::io::stdout().flush();
+    }
+}
+
+pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out) -> Result<()> {
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let mut trust = TrustStore::load(dir)?;
     let node = Node::bind_any(identity.clone(), 0)?;
@@ -40,13 +71,19 @@ pub async fn run(dir: &Path, connect: Option<SocketAddr>) -> Result<()> {
         Err(e) => return Err(e.context("could not start network discovery (try --connect <ip:port>)")),
     };
 
-    println!("This computer: {} ({}), pairing port {port}", identity.name, me.short());
-    match connect {
-        Some(addr) => println!("Connecting to {addr}..."),
-        None => println!("Looking for another computer... run `one-mk pair` on it too."),
-    }
+    out.say(
+        || format!("This computer: {} ({}), pairing port {port}", identity.name, me.short()),
+        || format!("me\t{}\t{}\t{port}", identity.name, me.short()),
+    );
+    out.say(
+        || match connect {
+            Some(addr) => format!("Connecting to {addr}..."),
+            None => "Looking for another computer... run `one-mk pair` on it too.".into(),
+        },
+        || "searching".into(),
+    );
 
-    let mut answers = Answers::spawn();
+    let mut answers = Answers::spawn(out);
     let (tx, mut peers) = mpsc::channel::<Peer>(4);
     {
         let (node, tx) = (node.clone(), tx.clone());
@@ -97,12 +134,13 @@ pub async fn run(dir: &Path, connect: Option<SocketAddr>) -> Result<()> {
                 }
                 hinted = true;
                 let short = peer.fingerprint.short();
-                match session(peer, &identity, &mut trust, &mut answers).await {
+                match session(peer, &identity, &mut trust, &mut answers, out).await {
                     Ok(()) => break,
                     Err(e) => {
-                        println!();
-                        println!("Pairing with {short} did not complete: {e:#}");
-                        println!("Waiting for another try... (Ctrl+C to stop)");
+                        out.say(
+                            || format!("\nPairing with {short} did not complete: {e:#}\nWaiting for another try... (Ctrl+C to stop)"),
+                            || format!("retry\t{}", one_line(&format!("{e:#}"))),
+                        );
                         answers.clear();
                         // Try the known candidates again, giving the other
                         // side a moment to go back to waiting too.
@@ -127,7 +165,7 @@ pub async fn run(dir: &Path, connect: Option<SocketAddr>) -> Result<()> {
             _ = &mut hint, if !hinted => {
                 hinted = true;
                 if candidates.is_empty() {
-                    print_hints(port);
+                    out.say(|| hints(port), || "hint".into());
                 }
             }
         }
@@ -139,19 +177,21 @@ pub async fn run(dir: &Path, connect: Option<SocketAddr>) -> Result<()> {
 
 /// One pairing attempt. `Ok` once pairing is over for good (saved, or a
 /// person said no); `Err` if it failed and we should keep waiting.
-async fn session(peer: Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers) -> Result<()> {
+async fn session(peer: Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
     let fingerprint = peer.fingerprint;
-    let remote = peer.conn.remote_address();
-    println!();
-    println!("Pairing with a computer at {} (id {})...", remote.ip().to_canonical(), fingerprint.short());
-    let res = exchange(&peer, identity, trust, answers).await;
+    let ip = peer.conn.remote_address().ip().to_canonical();
+    out.say(
+        || format!("\nPairing with a computer at {ip} (id {})...", fingerprint.short()),
+        || format!("peer\t{}\t{ip}", fingerprint.short()),
+    );
+    let res = exchange(&peer, identity, trust, answers, out).await;
     if res.is_err() {
         peer.conn.close(0u32.into(), b"pairing failed");
     }
     res
 }
 
-async fn exchange(peer: &Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers) -> Result<()> {
+async fn exchange(peer: &Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
     let fingerprint = peer.fingerprint;
     // Remember the address with the service port (not this temporary one),
     // for networks where discovery is blocked.
@@ -162,11 +202,10 @@ async fn exchange(peer: &Peer, identity: &Identity, trust: &mut TrustStore, answ
     // Everything the other computer chose (its name) comes first; the code
     // comes last, on its own line, so nothing printed after it can
     // disguise it.
-    println!("  The other computer says its name is: {name}");
-    println!("  Check that it shows this same code:");
-    println!();
-    println!("      {}", pairing.sas);
-    println!();
+    out.say(
+        || format!("  The other computer says its name is: {name}\n  Check that it shows this same code:\n\n      {}\n", pairing.sas),
+        || format!("code\t{name}\t{}", pairing.sas),
+    );
     let ok = match answers.ask("  Do the codes match? [y/N] ", ANSWER_TIMEOUT).await {
         Some(ok) => ok,
         None => {
@@ -176,16 +215,16 @@ async fn exchange(peer: &Peer, identity: &Identity, trust: &mut TrustStore, answ
     };
     if !ok {
         let _ = tokio::time::timeout(Duration::from_secs(2), pairing.confirm(false)).await;
-        println!("Pairing cancelled.");
+        out.say(|| "Pairing cancelled.".into(), || "cancelled".into());
         return Ok(());
     }
-    println!("  Waiting for the other computer to confirm...");
+    out.say(|| "  Waiting for the other computer to confirm...".into(), || "waiting".into());
     let confirmed = tokio::time::timeout(ANSWER_TIMEOUT, pairing.confirm(true))
         .await
         .context("the other computer did not answer in time")?
         .context("the other computer went away")?;
     if !confirmed {
-        println!("The other computer did not confirm. Nothing was saved.");
+        out.say(|| "The other computer did not confirm. Nothing was saved.".into(), || "declined".into());
         return Ok(());
     }
 
@@ -194,20 +233,33 @@ async fn exchange(peer: &Peer, identity: &Identity, trust: &mut TrustStore, answ
     trust.upsert(Device { name: name.clone(), fingerprint: fingerprint.to_string(), side: side.to_string(), addrs: vec![addr.to_string()], ..Device::default() });
     trust.save()?;
     let side = trust.get(&fingerprint).map_or(side, |d| d.side());
-    println!();
-    println!("Paired with {name}. It is set to the {side} of this computer.");
-    println!("If that's wrong:  one-mk layout \"{name}\" {}", side.opposite());
-    println!("Start sharing:    one-mk run   (on both computers)");
+    out.say(
+        || {
+            format!(
+                "\nPaired with {name}. It is set to the {side} of this computer.\n\
+                 If that's wrong:  one-mk layout \"{name}\" {}\n\
+                 Start sharing:    one-mk run   (on both computers)",
+                side.opposite()
+            )
+        },
+        || format!("paired\t{fingerprint}\t{name}\t{side}"),
+    );
     Ok(())
 }
 
-fn print_hints(port: u16) {
-    println!();
-    println!("Nothing found yet. If `one-mk pair` is running on the other computer:");
-    println!("  - check that both are on the same network (not a guest or isolated Wi-Fi)");
-    println!("  - check that a firewall allows one-mk (UDP, and mDNS on port 5353)");
-    println!("  - or connect directly; on the other computer run:");
-    println!("        one-mk pair --connect <this computer's IP>:{port}");
+fn hints(port: u16) -> String {
+    format!(
+        "\nNothing found yet. If `one-mk pair` is running on the other computer:\n\
+         \x20 - check that both are on the same network (not a guest or isolated Wi-Fi)\n\
+         \x20 - check that a firewall allows one-mk (UDP, and mDNS on port 5353)\n\
+         \x20 - or connect directly; on the other computer run:\n\
+         \x20       one-mk pair --connect <this computer's IP>:{port}"
+    )
+}
+
+/// Error text for a machine event: one line, no tabs.
+fn one_line(s: &str) -> String {
+    s.replace(['\t', '\n', '\r'], " ")
 }
 
 /// Dials a discovered candidate, trying its addresses in order (one
@@ -280,10 +332,11 @@ fn dial_explicit_after(
 /// thread, which would keep the process alive at exit).
 struct Answers {
     rx: mpsc::UnboundedReceiver<String>,
+    out: Out,
 }
 
 impl Answers {
-    fn spawn() -> Self {
+    fn spawn(out: Out) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let _ = std::thread::Builder::new().name("one-mk-stdin".into()).spawn(move || {
             let mut line = String::new();
@@ -293,14 +346,16 @@ impl Answers {
                 }
             }
         });
-        Self { rx }
+        Self { rx, out }
     }
 
     /// Asks a yes/no question. `None` if nobody answered in time; end of
     /// input counts as "no".
     async fn ask(&mut self, prompt: &str, timeout: Duration) -> Option<bool> {
-        print!("{prompt}");
-        let _ = std::io::stdout().flush();
+        if !self.out.machine {
+            print!("{prompt}");
+            let _ = std::io::stdout().flush();
+        }
         match tokio::time::timeout(timeout, self.rx.recv()).await {
             Ok(Some(line)) => Some(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")),
             Ok(None) => {

@@ -1,0 +1,16 @@
+[package]
+name = "one-mk-app"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "one-mk-app"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+one-mk-ctl = { version = "0.1.0", path = "../ctl" }
+one-mk-proto = { version = "0.1.0", path = "../proto" }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "wayland", "x11"] }
+egui = "0.37.0"
+directories = "6.0.0"

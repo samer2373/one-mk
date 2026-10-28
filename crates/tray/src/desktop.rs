@@ -8,7 +8,7 @@
 //! daemon is running. Nothing else wakes the process.
 
 use crate::core::Ctx;
-use crate::icon;
+use crate::icon::{self, IconState};
 use crate::model::{self, Action, Entry, Snapshot};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,8 +29,20 @@ enum Ev {
     Snapshot(Snapshot),
 }
 
-fn icon(connected: bool) -> Icon {
-    Icon::from_rgba(icon::rgba(32, connected), 32, 32).expect("a 32x32 RGBA buffer")
+fn icon(state: IconState) -> Icon {
+    Icon::from_rgba(icon::rgba(32, state), 32, 32).expect("a 32x32 RGBA buffer")
+}
+
+/// Sets the icon. On macOS the plain states are a template image (the menu
+/// bar recolours it); the amber ones keep their colour.
+fn set_icon(tray: &TrayIcon, state: IconState) {
+    #[cfg(target_os = "macos")]
+    if matches!(state, IconState::Off | IconState::Idle) {
+        let t = Icon::from_rgba(icon::template_rgba(32), 32, 32).expect("a 32x32 RGBA buffer");
+        let _ = tray.set_icon_templated(Some(t));
+        return;
+    }
+    let _ = tray.set_icon(Some(icon(state)));
 }
 
 /// Builds the native menu, and remembers which item does what.
@@ -120,11 +132,15 @@ pub fn run(ctx: Arc<Ctx>, start_daemon: bool) -> anyhow::Result<()> {
                 let menu = build(&model::menu(&first), &mut actions);
                 tray = TrayIconBuilder::new()
                     .with_menu(Box::new(menu))
-                    .with_icon(icon(first.connected()))
+                    .with_icon(icon(first.icon_state()))
                     .with_tooltip(first.headline())
                     .build()
                     .map_err(|e| eprintln!("one-mk-tray: cannot create the tray icon: {e}"))
                     .ok();
+                #[cfg(target_os = "macos")]
+                if let Some(t) = &tray {
+                    set_icon(t, first.icon_state());
+                }
                 if tray.is_none() {
                     *flow = ControlFlow::Exit;
                     return;
@@ -159,7 +175,7 @@ pub fn run(ctx: Arc<Ctx>, start_daemon: bool) -> anyhow::Result<()> {
                 if let (Some(t), true) = (&tray, s != snap) {
                     actions.clear();
                     t.set_menu(Some(Box::new(build(&model::menu(&s), &mut actions))));
-                    let _ = t.set_icon(Some(icon(s.connected())));
+                    set_icon(t, s.icon_state());
                     let _ = t.set_tooltip(Some(s.headline()));
                 }
                 snap = s;

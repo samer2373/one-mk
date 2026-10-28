@@ -101,6 +101,11 @@ impl Pairing {
         self.send.finish()?;
         let mut theirs = [0u8; 1];
         self.recv.read_exact(&mut theirs).await?;
+        // Make sure our answer arrived before the caller drops the
+        // connection (which would discard it, and the other side would see
+        // "went away" after saving nothing). Bounded: a peer that never
+        // acknowledges can't hold us here.
+        let _ = tokio::time::timeout(Duration::from_secs(3), self.send.stopped()).await;
         Ok(accept && theirs[0] == 1)
     }
 }

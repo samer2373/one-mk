@@ -1133,6 +1133,7 @@ impl App {
                 side: live.map_or_else(|| d.side(), |p| p.side),
                 os: live.map_or(d.os, |p| p.os),
                 online: live.is_some(),
+                swap: d.swap_ctrl_cmd.to_string(),
             })
         });
         Status {

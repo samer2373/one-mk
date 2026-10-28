@@ -27,7 +27,7 @@ compiled on Linux.
 
 ```sh
 cd ~/.t3/projects/one-mk && cargo build --release -j 4
-cp target/release/one-mk target/release/one-mk-tray ~/.local/bin/
+cp target/release/one-mk target/release/one-mk-tray target/release/one-mk-app ~/.local/bin/
 ```
 
 ## 3. Pair (both computers on the same network)
@@ -108,6 +108,17 @@ Write ✅ or ❌ (plus a note) for each.
 - [ ] `one-mk-tray` on both: the icon appears and the menu shows the status.
       Changing a side in the menu works.
 - [ ] `one-mk install`, then log out and back in: one-mk starts by itself.
+
+**The window**
+- [ ] "Open one·mk…" in the tray opens the window; both computers stand
+      on the desk on the right sides.
+- [ ] Move the mouse to the other computer: the window draws the pointer
+      crossing over, and the headline says "Controlling …".
+- [ ] Drag the other computer to the opposite side: the headline changes,
+      and the mouse now crosses at that edge (both computers).
+- [ ] Drop a file onto the other computer: it arrives in Downloads/one-mk.
+- [ ] Pair a device from the window, against `one-mk pair` (or the window)
+      on another computer: both show the same code; confirming pairs them.
 
 **Lightness**
 - [ ] With nothing happening, Activity Monitor on the Mac and `top` on Linux

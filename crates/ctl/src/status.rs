@@ -52,6 +52,8 @@ pub struct PeerStatus {
     pub side: Side,
     pub os: u8,
     pub online: bool,
+    /// Ctrl/Cmd swapping for keys sent to it: `auto`, `on` or `off`.
+    pub swap: String,
 }
 
 impl Status {
@@ -65,7 +67,7 @@ impl Status {
             }
         }
         for p in &self.peers {
-            out += &format!("peer\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.name);
+            out += &format!("peer\t{}\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.swap, p.name);
         }
         out
     }
@@ -77,19 +79,20 @@ impl Status {
         }
         let mut s = Status::default();
         for line in lines {
-            let f: Vec<&str> = line.splitn(6, '\t').collect();
+            let f: Vec<&str> = line.splitn(7, '\t').collect();
             match f[..] {
                 ["name", v] => s.name = v.into(),
                 ["id", v] => s.id = v.into(),
                 ["port", v] => s.port = v.parse().ok()?,
                 ["controlling", v] => s.controlling = Some(v.into()),
                 ["controlled_by", v] => s.controlled_by = Some(v.into()),
-                ["peer", id, side, os, online, name] => s.peers.push(PeerStatus {
+                ["peer", id, side, os, online, swap, name] => s.peers.push(PeerStatus {
                     id: id.into(),
                     name: name.into(),
                     side: side.parse().ok()?,
                     os: os.parse().ok()?,
                     online: online == "1",
+                    swap: swap.into(),
                 }),
                 _ => {}
             }
@@ -128,8 +131,8 @@ mod tests {
             controlling: Some("mac mini".into()),
             controlled_by: None,
             peers: vec![
-                PeerStatus { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true },
-                PeerStatus { id: "9999-0000".into(), name: "old pc".into(), side: Side::Top, os: 0, online: false },
+                PeerStatus { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into() },
+                PeerStatus { id: "9999-0000".into(), name: "old pc".into(), side: Side::Top, os: 0, online: false, swap: "off".into() },
             ],
         };
         assert_eq!(Status::decode(&s.encode()), Some(s));
@@ -144,7 +147,7 @@ mod tests {
             port: 24900,
             controlling: Some("mac mini".into()),
             controlled_by: None,
-            peers: vec![PeerStatus { id: "1".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true }],
+            peers: vec![PeerStatus { id: "1".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into() }],
         };
         let text = s.render();
         assert!(text.starts_with("one-mk is running on desk (id abcd-ef01).\n"), "{text}");

@@ -117,6 +117,26 @@ you can take it back:
 - **Easy.** No server/client roles, no IP addresses (mDNS discovery), no
   certificates to copy, no root and no udev rules on Linux.
 
+## The window (optional)
+
+`one-mk-app` shows your computers standing on a desk, as they are arranged.
+Open it from the tray ("Open one·mk…", or a left click on Linux) or run
+`one-mk-app`. In it you can:
+
+- drag a computer to the side it is really on (right-click it for above or
+  below); the change applies at once, on both computers;
+- pair a new computer: the code appears on both screens of the desk and in
+  a panel with **Codes match, pair** and **They don't match**;
+- drop files or folders onto a computer to send them;
+- see how fast the connection is (measured, not estimated: click a computer
+  to measure again);
+- choose Ctrl/Cmd swapping per computer, and turn on start at login.
+
+When the mouse and keyboard move to another computer, the pointer is drawn
+crossing to it. The window only talks to the running `one-mk`, so closing
+it changes nothing, and it costs nothing when it is not open. It must sit
+in the same folder as `one-mk`.
+
 ## Tray icon (optional)
 
 `one-mk-tray` is a small separate program that puts a one-mk icon in the
@@ -129,6 +149,7 @@ The menu shows:
   (on your right)");
 - each paired computer, with a submenu to move it left, right, above or
   below (applied at once, like `one-mk layout`);
+- **Open one·mk…**, which opens the window;
 - **Take back control**, **Start one-mk** (when it is not running) and
   **Start at login**;
 - **Quit tray**, which closes only the tray, not one-mk.
@@ -207,13 +228,14 @@ crates/input      platform input: Linux (XDG portals + libei), Windows, macOS
 crates/clipboard  system clipboard on its own thread (arboard)
 crates/ctl        client for the daemon's control channel, status format, login settings
 crates/tray       one-mk-tray: the optional tray icon
+crates/app        one-mk-app: the optional window (egui)
 crates/one-mk     the daemon and CLI
 ```
 
 ## Building
 
 ```bash
-cargo build --release      # target/release/one-mk and one-mk-tray
+cargo build --release      # target/release/one-mk, one-mk-tray and one-mk-app
 cargo test
 ```
 
