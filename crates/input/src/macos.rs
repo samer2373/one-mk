@@ -42,7 +42,7 @@ use objc2_core_graphics::{
     CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGSessionCopyCurrentDictionary,
     CGWarpMouseCursorPosition, kCGNullDirectDisplay,
 };
-use one_mk_proto::{Desktop, Pos, Rect, Side};
+use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void};
 use std::panic::AssertUnwindSafe;
@@ -76,6 +76,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let trusted = Arc::new(AtomicBool::new(ax_trusted(false)));
     let controlled = Arc::new(Controlled::default());
 
+    let (focus, locker) = crate::system::native(&ev_tx);
     let (tx, t, c) = (ev_tx.clone(), trusted.clone(), controlled.clone());
     std::thread::Builder::new()
         .name("one-mk-capture".into())
@@ -83,7 +84,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, trusted, controlled))?;
-    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx })
+    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 // ------------------------------------------------------------ permissions
@@ -185,6 +186,8 @@ enum Msg {
     Displays,
     /// The screen was locked.
     Locked,
+    /// The screen was unlocked.
+    Unlocked,
     Quit,
 }
 
@@ -380,17 +383,22 @@ fn capture_thread(
     // Screen lock. Delivery depends on run loops we don't control, so the
     // check timer also polls the session while captured.
     if let Some(center) = CFNotificationCenter::distributed_center() {
-        let name = CFString::from_static_str("com.apple.screenIsLocked");
-        // SAFETY: the callback matches the signature; `inbox_ptr` is never
-        // freed, so the observer stays valid for the life of the process.
-        unsafe {
-            center.add_observer(
-                inbox_ptr,
-                Some(on_screen_locked),
-                Some(&name),
-                std::ptr::null(),
-                CFNotificationSuspensionBehavior::DeliverImmediately,
-            );
+        for (name, callback) in [
+            ("com.apple.screenIsLocked", on_screen_locked as Callback),
+            ("com.apple.screenIsUnlocked", on_screen_unlocked),
+        ] {
+            let name = CFString::from_static_str(name);
+            // SAFETY: the callback matches the signature; `inbox_ptr` is never
+            // freed, so the observer stays valid for the life of the process.
+            unsafe {
+                center.add_observer(
+                    inbox_ptr,
+                    Some(callback),
+                    Some(&name),
+                    std::ptr::null(),
+                    CFNotificationSuspensionBehavior::DeliverImmediately,
+                );
+            }
         }
     }
 
@@ -576,7 +584,22 @@ impl Ctx {
                 }
             }
             Msg::Displays => st.refresh_desktop(&self.tx),
-            Msg::Locked => self.end(&mut st),
+            Msg::Locked => {
+                let _ = self.tx.send(Event::ScreenLocked(true));
+                self.end(&mut st);
+            }
+            Msg::Unlocked => {
+                let _ = self.tx.send(Event::ScreenLocked(false));
+            }
+            Msg::Cmd(CaptureCmd::Activate { side }) => {
+                let at = CGEvent::new(None).map(|e| CGEvent::location(Some(&e)));
+                if !st.active
+                    && st.tap.is_some()
+                    && let (Some(desktop), Some(at)) = (st.desktop.clone(), at)
+                {
+                    self.start(&mut st, side, desktop.clamp(Pos::new(at.x, at.y)));
+                }
+            }
             Msg::Quit => {
                 if st.active || st.cursor_hidden {
                     st.deactivate(None);
@@ -645,12 +668,7 @@ impl Ctx {
                     }
                     Some(side) if st.armed => {
                         let pos = desktop.clamp(p);
-                        let id = st.id.wrapping_add(1);
-                        if self.tx.send(Event::Activated { id, side, pos }).is_ok() {
-                            st.id = id;
-                            st.secure_reported = false;
-                            st.activate();
-                            self.update_timer(st);
+                        if self.start(st, side, pos) {
                             return false;
                         }
                     }
@@ -660,6 +678,22 @@ impl Ctx {
             }
             _ => {}
         }
+        true
+    }
+
+    /// Starts capturing for `side`, telling the daemon which modifiers are
+    /// held (for modifier-to-cross). False if the daemon is gone.
+    fn start(&self, st: &mut State, side: Side, pos: Pos) -> bool {
+        let held = (0..128u16).filter(|&k| st.local_keys[usize::from(k)]).filter_map(logic::mac_to_evdev);
+        let _ = self.tx.send(Event::Modifiers(Mods::from_keys(held)));
+        let id = st.id.wrapping_add(1);
+        if self.tx.send(Event::Activated { id, side, pos }).is_err() {
+            return false;
+        }
+        st.id = id;
+        st.secure_reported = false;
+        st.activate();
+        self.update_timer(st);
         true
     }
 
@@ -784,6 +818,26 @@ unsafe extern "C-unwind" fn on_timer(_timer: *mut CFRunLoopTimer, info: *mut c_v
     // SAFETY: `info` is the leaked `Ctx`, which lives forever.
     let ctx: &'static Ctx = unsafe { &*(info as *const Ctx) };
     let _ = std::panic::catch_unwind(AssertUnwindSafe(|| ctx.tick()));
+}
+
+type Callback = unsafe extern "C-unwind" fn(
+    *mut CFNotificationCenter,
+    *mut c_void,
+    *const CFNotificationName,
+    *const c_void,
+    *const CFDictionary,
+);
+
+unsafe extern "C-unwind" fn on_screen_unlocked(
+    _center: *mut CFNotificationCenter,
+    observer: *mut c_void,
+    _name: *const CFNotificationName,
+    _object: *const c_void,
+    _info: *const CFDictionary,
+) {
+    // SAFETY: `observer` is a leaked `Arc<Inbox>`; `Inbox` is Sync.
+    let inbox = unsafe { &*(observer as *const Inbox) };
+    inbox.post(Msg::Unlocked);
 }
 
 unsafe extern "C-unwind" fn on_screen_locked(
@@ -1006,22 +1060,37 @@ impl Injector {
         Some(ev)
     }
 
+    /// A move to `self.pos` that moved by `(dx, dy)`.
+    fn post_move(&self, dx: f64, dy: f64) {
+        // With a button held, apps expect drags, not moves
+        // (selection, drag and drop).
+        let held = (0..32).find(|n| self.buttons & (1 << n) != 0);
+        let (ty, button) = match held {
+            Some(n) => (logic::mouse_event_types(n).2, n),
+            None => (CGEventType::MouseMoved.0, 0),
+        };
+        let Some(ev) = self.mouse_event(ty, button) else { return };
+        CGEvent::set_double_value_field(Some(&ev), CGEventField::MouseEventDeltaX, dx);
+        CGEvent::set_double_value_field(Some(&ev), CGEventField::MouseEventDeltaY, dy);
+        self.post(&ev, 0);
+    }
+
     fn apply(&mut self, msg: Inject) {
         match msg {
             Inject::MoveTo(p) => {
                 let (dx, dy) = (p.x - self.pos.x, p.y - self.pos.y);
                 self.pos = CGPoint::new(p.x, p.y);
-                // With a button held, apps expect drags, not moves
-                // (selection, drag and drop).
-                let held = (0..32).find(|n| self.buttons & (1 << n) != 0);
-                let (ty, button) = match held {
-                    Some(n) => (logic::mouse_event_types(n).2, n),
-                    None => (CGEventType::MouseMoved.0, 0),
-                };
-                let Some(ev) = self.mouse_event(ty, button) else { return };
-                CGEvent::set_double_value_field(Some(&ev), CGEventField::MouseEventDeltaX, dx);
-                CGEvent::set_double_value_field(Some(&ev), CGEventField::MouseEventDeltaY, dy);
-                self.post(&ev, 0);
+                self.post_move(dx, dy);
+            }
+            // Games read the delta fields; the location is clamped by macOS
+            // and read back, so later absolute moves start from the truth.
+            Inject::MoveBy { dx, dy } => {
+                let (dx, dy) = (f64::from(dx), f64::from(dy));
+                self.pos = CGPoint::new(self.pos.x + dx, self.pos.y + dy);
+                self.post_move(dx, dy);
+                if let Some(e) = CGEvent::new(None) {
+                    self.pos = CGEvent::location(Some(&e));
+                }
             }
             Inject::Button { button, down } => {
                 let Some(n) = logic::evdev_to_mac_button(button) else {

@@ -3146,7 +3146,9 @@ dependencies = [
  "one-mk-net",
  "one-mk-proto",
  "quinn",
+ "serde",
  "tokio",
+ "toml 1.1.8+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
@@ -3200,6 +3202,7 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
+ "x11rb",
 ]
 
 [[package]]

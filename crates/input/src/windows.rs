@@ -38,7 +38,7 @@ use crate::win_logic::{
 };
 use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::{Result, bail};
-use one_mk_proto::{Rect, Side};
+use one_mk_proto::{Mods, Rect, Side};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
@@ -77,7 +77,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
     WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT,
-    WTS_SESSION_LOCK, WTS_SESSION_LOGOFF,
+    WTS_SESSION_LOCK, WTS_SESSION_LOGOFF, WTS_SESSION_UNLOCK,
 };
 
 /// Tag in `dwExtraInfo` of everything we inject, so our own hooks let it
@@ -123,6 +123,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let shared = Arc::new(Mutex::new(space));
     let controlled = Arc::new(Controlled::default());
 
+    let (focus, locker) = crate::system::native(&ev_tx);
     let (tx, sh, ctl) = (ev_tx.clone(), shared.clone(), controlled.clone());
     std::thread::Builder::new().name("one-mk-capture".into()).spawn(move || {
         if let Err(e) = capture_thread(tx.clone(), cap_rx, sh, ctl) {
@@ -133,7 +134,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, shared, controlled))?;
-    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx })
+    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 fn set_thread_dpi_awareness() {
@@ -600,13 +601,16 @@ impl State {
     fn activate(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
         let pos = self.space.to_logical(x, y);
         let id = self.next_id.wrapping_add(1);
+        // Key-ups hidden by the lock screen, Ctrl+Alt+Del or a UAC prompt
+        // would leave stale entries; start from what is really held. The
+        // modifiers among them go first, for the daemon's modifier-to-cross.
+        let held = async_held();
+        let _ = self.tx.send(Event::Modifiers(Mods::from_keys(Mods::KEYS.into_iter().filter(|&k| held.has(k)))));
         if self.tx.send(Event::Activated { id, side, pos }).is_err() {
             return (false, Effect::None);
         }
         self.next_id = id;
-        // Key-ups hidden by the lock screen, Ctrl+Alt+Del or a UAC prompt
-        // would leave stale entries; start from what is really held.
-        self.local = async_held();
+        self.local = held;
         self.fwd.clear();
         self.watchdog.reset();
         self.heading.reset();
@@ -747,6 +751,17 @@ impl State {
                 }
                 let to = pos.map(|p| self.space.to_phys(p));
                 self.release(to)
+            }
+            CaptureCmd::Activate { side } => {
+                if self.captured.is_some() {
+                    return Effect::None;
+                }
+                let mut p = POINT { x: 0, y: 0 };
+                // SAFETY: valid out-pointer.
+                if unsafe { GetCursorPos(&mut p) } == 0 {
+                    return Effect::None;
+                }
+                self.activate(side, p.x, p.y).1
             }
         }
     }
@@ -938,6 +953,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_WTSSESSION_CHANGE => {
+            match wparam as u32 {
+                WTS_SESSION_LOCK => with_state(|s| s.tx.send(Event::ScreenLocked(true))),
+                WTS_SESSION_UNLOCK => with_state(|s| s.tx.send(Event::ScreenLocked(false))),
+                _ => None,
+            };
             if matches!(wparam as u32, WTS_SESSION_LOCK | WTS_SESSION_LOGOFF | WTS_CONSOLE_DISCONNECT | WTS_REMOTE_CONNECT) {
                 // Hooks see nothing on the lock screen; hand the pointer
                 // back so it is not stuck hidden when the user returns.
@@ -1002,6 +1022,7 @@ async fn inject_loop(
     controlled: Arc<Controlled>,
 ) {
     let mut scroll = SmoothScroll::default();
+    let mut rel = (0.0, 0.0);
     let mut inputs: Vec<INPUT> = Vec::new();
     let mut batch: Vec<Inject> = Vec::new();
     // SendInput doesn't auto-repeat, and senders drop their repeats.
@@ -1030,13 +1051,13 @@ async fn inject_loop(
                             continue;
                         }
                     }
-                    build(&mut inputs, m, &space, &mut scroll);
+                    build(&mut inputs, m, &space, &mut scroll, &mut rel);
                 }
             }
             _ = tokio::time::sleep_until(wake), if deadline.is_some() => {
                 let Some(code) = repeat.poll(std::time::Instant::now()) else { continue };
                 let Ok(space) = shared.lock() else { return };
-                build(&mut inputs, Inject::Key { code, down: true }, &space, &mut scroll);
+                build(&mut inputs, Inject::Key { code, down: true }, &space, &mut scroll, &mut rel);
             }
         }
         send_inputs(&mut inputs, &tx, &mut failing);
@@ -1083,13 +1104,26 @@ fn key(vk: u16, scan: u16, flags: u32) -> INPUT {
     }
 }
 
-fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScroll) {
+/// `rel` keeps the fraction of a physical pixel that relative moves (in
+/// logical pixels) did not use yet, so scaling never drifts.
+fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScroll, rel: &mut (f64, f64)) {
     const ABS_MOVE: u32 = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
     match m {
         Inject::MoveTo(p) => {
             let (x, y) = space.to_phys(p);
             let (nx, ny) = space.normalize(x, y);
             out.push(mouse(nx, ny, 0, ABS_MOVE));
+        }
+        // A plain relative move: what games reading raw input see. (Windows
+        // applies the pointer speed setting to it for the desktop cursor.)
+        Inject::MoveBy { dx, dy } => {
+            let fx = rel.0 + f64::from(dx) * space.scale();
+            let fy = rel.1 + f64::from(dy) * space.scale();
+            let (px, py) = (fx.round(), fy.round());
+            *rel = (fx - px, fy - py);
+            if px != 0.0 || py != 0.0 {
+                out.push(mouse(px as i32, py as i32, 0, MOUSEEVENTF_MOVE));
+            }
         }
         Inject::Button { button, down } => {
             let (flags, data) = match (button, down) {

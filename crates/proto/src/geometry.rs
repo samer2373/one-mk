@@ -39,6 +39,9 @@ impl Rect {
             && p.y >= f64::from(self.y)
             && p.y < f64::from(self.bottom())
     }
+    pub fn center(&self) -> Pos {
+        Pos::new(f64::from(self.x) + f64::from(self.w) / 2.0, f64::from(self.y) + f64::from(self.h) / 2.0)
+    }
     /// Nearest point inside the rect (upper bounds are exclusive).
     pub fn clamp(&self, p: Pos) -> Pos {
         const IN: f64 = 1.0 / 256.0;
@@ -113,6 +116,13 @@ impl Desktop {
         let r = self.screens.iter().map(Rect::right).max().unwrap_or(0);
         let b = self.screens.iter().map(Rect::bottom).max().unwrap_or(0);
         Rect::new(x, y, r - x, b - y)
+    }
+
+    /// The main monitor. It isn't on the wire, so this is the one at the
+    /// origin, which is where Windows and macOS always put it (and where
+    /// Linux desktops put it unless arranged otherwise), else the first.
+    pub fn primary(&self) -> &Rect {
+        self.screens.iter().find(|r| r.contains(Pos::new(0.0, 0.0))).unwrap_or(&self.screens[0])
     }
 
     pub fn screen_at(&self, p: Pos) -> Option<&Rect> {
@@ -206,6 +216,16 @@ mod tests {
         assert_eq!(d.outer_edges(Side::Right).count(), 1);
         assert_eq!(d.outer_edges(Side::Top).count(), 2);
         assert_eq!(d.outer_edges(Side::Bottom).count(), 1);
+    }
+
+    #[test]
+    fn primary_is_the_screen_at_the_origin() {
+        let d = Desktop::new(vec![Rect::new(-1440, 0, 1440, 900), Rect::new(0, 0, 1920, 1080)]);
+        assert_eq!(d.primary(), &Rect::new(0, 0, 1920, 1080));
+        assert_eq!(d.primary().center(), Pos::new(960.0, 540.0));
+        // Nothing at the origin: the first one.
+        let d = Desktop::new(vec![Rect::new(100, 100, 800, 600), Rect::new(900, 100, 800, 600)]);
+        assert_eq!(d.primary().center(), Pos::new(500.0, 400.0));
     }
 
     #[test]

@@ -4,15 +4,22 @@
 //! every platform backend.
 
 mod codec;
+mod edge;
 mod geometry;
 mod keys;
+mod lock;
 mod motion;
 mod transfer;
 
-pub use codec::{Control, Datagram, DecodeError, MAX_SCREENS, StreamKind, os};
+pub use codec::{Control, Datagram, DecodeError, MAX_SCREENS, StreamKind, caps, os};
+pub use edge::{
+    AWAY, Approach, EdgeGuard, Focus, Modifier, Mods, Next, Refusal, Start, app_matches, cycle_next, fullscreen_blocks,
+    in_dead_corner,
+};
 pub use geometry::{Desktop, Pos, Rect, Side};
 pub use keys::{HeldKeys, swap_ctrl_meta};
-pub use motion::{MotionReceiver, Received, RemoteCursor, Step};
+pub use lock::{CAUSE_WINDOW, LockSync, OnRemote};
+pub use motion::{MotionReceiver, Received, RelReceived, RemoteCursor, Step};
 pub use transfer::{ClipFormat, ClipHeader, FileMsg};
 
 /// Bumped on any incompatible wire change; peers refuse mismatched versions.

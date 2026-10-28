@@ -9,6 +9,8 @@ mod link;
 mod manage;
 mod pair;
 mod send;
+mod settings;
+mod steer;
 mod transfer;
 
 use anyhow::{Context, Result};
@@ -59,6 +61,9 @@ struct RunArgs {
     /// Where received files go (default: Downloads/one-mk).
     #[arg(long, value_name = "DIR")]
     downloads: Option<PathBuf>,
+    /// Start with the pointer locked to this computer (see `lock-pointer`).
+    #[arg(long)]
+    start_locked: bool,
 }
 
 #[derive(Subcommand)]
@@ -115,6 +120,34 @@ enum Cmd {
     Forget {
         /// Name or id of the paired computer (see `one-mk devices`).
         device: String,
+    },
+    /// Move the mouse and keyboard to another computer without crossing an
+    /// edge: a paired computer's name or id, `here`, or `next` (round and round).
+    Switch {
+        /// Name or id, `here` or `next`.
+        #[arg(value_name = "COMPUTER|here|next")]
+        to: String,
+    },
+    /// Keep the pointer on this computer: edges lead nowhere while on.
+    LockPointer {
+        #[arg(value_name = "on|off|toggle", value_parser = ["on", "off", "toggle"])]
+        state: String,
+    },
+    /// Show or change the rules for crossing edges: dead corners, a dwell
+    /// time, a key to hold, and not leaving a fullscreen window.
+    Edge(settings::EdgeArgs),
+    /// Gaming mode: on another computer, send raw mouse movement (for games)
+    /// instead of positions.
+    Gaming {
+        #[arg(value_enum)]
+        mode: settings::Gaming,
+    },
+    /// Lock this computer's screen and every connected computer's.
+    LockAll,
+    /// Whether locking this computer locks the connected ones too: on or off.
+    LockSync {
+        #[arg(value_name = "on|off", value_parser = settings::parse_on_off, action = clap::ArgAction::Set)]
+        state: bool,
     },
     /// Show this computer's name and id.
     Id,
@@ -212,6 +245,7 @@ fn run(cli: Cli) -> Result<()> {
                         Some(d) => d,
                         None => default_downloads()?,
                     },
+                    start_locked: r.start_locked,
                 };
                 app::run(dir, opts).await
             }
@@ -224,6 +258,14 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Uninstall => install::uninstall(),
             Cmd::Layout { device, side, swap_ctrl_cmd } => manage::layout(&dir, &device, side, swap_ctrl_cmd).await,
             Cmd::Forget { device } => forget(&dir, &device),
+            Cmd::Switch { to } => steer::switch(&dir, &to).await,
+            Cmd::LockPointer { state } => {
+                steer::lock_pointer(&dir, steer::Toggle::parse(&state).context("on, off or toggle")?).await
+            }
+            Cmd::Edge(args) => settings::edge(&dir, args).await,
+            Cmd::Gaming { mode } => settings::gaming(&dir, mode).await,
+            Cmd::LockAll => steer::lock_all(&dir).await,
+            Cmd::LockSync { state } => settings::lock_sync(&dir, state).await,
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;
                 println!("{} ({})", id.name, id.fingerprint.short());
