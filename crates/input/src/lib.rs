@@ -6,6 +6,7 @@
 //! Key and button codes are Linux evdev codes on all platforms.
 
 mod common_logic;
+pub mod hotkeys;
 mod null;
 pub mod system;
 #[cfg(target_os = "macos")]
@@ -63,6 +64,10 @@ pub enum Event {
     /// tells us: logind's `LockedHint` on Linux, session notifications on
     /// Windows, the screen lock notifications on macOS.
     ScreenLocked(bool),
+    /// A keyboard shortcut was pressed (from [`hotkeys::listen`]'s receiver).
+    Hotkey(hotkeys::Action),
+    /// Whether the system's shortcut service works (from the same receiver).
+    Hotkeys(hotkeys::Availability),
     /// A part of the backend failed; the message is shown to the user.
     Error(String),
 }

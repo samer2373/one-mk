@@ -835,6 +835,7 @@ impl App {
                 }
             }
             Event::Error(msg) => tracing::error!("{msg}"),
+            Event::Hotkey(_) | Event::Hotkeys(_) => {}
         }
     }
 
