@@ -11,6 +11,39 @@ use x11rb::protocol::xproto::GrabStatus;
 const W: i16 = 1280;
 const H: i16 = 800;
 
+#[tokio::test]
+async fn partial_right_edge_does_not_capture_the_wall() {
+    for barriers in [true, false] {
+        let Some(server) = Xvfb::start_sized(900) else { return };
+        let observer = server.observer();
+        observer.move_to(600, 100);
+        let (mut backend, _locked) = open_target(Target { display: Some(server.display.clone()), barriers }).unwrap();
+        assert!(matches!(next(&mut backend.events).await, Event::Desktop(_)));
+        backend.capture.send(CaptureCmd::SetSides(vec![crate::Armed { side: Side::Right, spans: Some(vec![(300.0, 800.0)]) }])).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        for y in [100, 299, 800, 850] {
+            observer.move_to(600, y);
+            observer.move_to(W - 1, y);
+            observer.move_by(10, 0);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(backend.events.try_recv().is_err(), "wall captured (barriers={barriers}, y={y})");
+            assert!(observer.can_grab());
+        }
+        observer.move_to(600, 500);
+        observer.move_to(W - 1, 500);
+        observer.move_by(10, 0);
+        let (id, side, pos) = activated(&mut backend.events).await;
+        assert_eq!((side, pos), (Side::Right, Pos::new(f64::from(W - 1), 500.0)));
+        backend.capture.send(CaptureCmd::Release { id, pos: Some(Pos::new(600.0, 500.0)) }).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        for _ in 0..100 {
+            if observer.can_grab() { break; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(observer.can_grab(), "partial-edge grab not released (barriers={barriers}, pointer={:?}, event={:?})", observer.pointer(), backend.events.try_recv());
+    }
+}
+
 /// A private X server on a free display, killed when dropped.
 struct Xvfb {
     child: Child,
@@ -19,9 +52,13 @@ struct Xvfb {
 
 impl Xvfb {
     fn start() -> Option<Xvfb> {
+        Self::start_sized(H)
+    }
+
+    fn start_sized(height: i16) -> Option<Xvfb> {
         // Xvfb picks a free display itself and tells us which.
         let child = Command::new("Xvfb")
-            .args(["-displayfd", "1", "-screen", "0", &format!("{W}x{H}x24"), "-nolisten", "tcp", "-noreset"])
+            .args(["-displayfd", "1", "-screen", "0", &format!("{W}x{height}x24"), "-nolisten", "tcp", "-noreset"])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn();

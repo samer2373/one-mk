@@ -194,9 +194,16 @@ pub struct Portals {
     pub remote_desktop: Option<Result<(), String>>,
     pub input_capture: Option<Result<(), String>>,
     pub token: bool,
-    /// The input backend `native` picks here (`portal`, `wlroots` or
-    /// `x11`), and why.
+    /// The running backend when known, otherwise what `native` picks.
     pub backend: Option<(String, String)>,
+}
+
+impl Portals {
+    fn use_running_backend(&mut self, backend: one_mk_ctl::status::InputBackend) {
+        if !backend.as_str().is_empty() {
+            self.backend = Some((backend.as_str().to_owned(), "reported by the running daemon".into()));
+        }
+    }
 }
 
 /// An address on an up network interface.
@@ -829,7 +836,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
             .map(|p| p.id.clone()),
     );
 
-    let (port_facts, mdns, firewall, portals, addrs, shortcuts) = tokio::join!(
+    let (port_facts, mdns, firewall, mut portals, addrs, shortcuts) = tokio::join!(
         blocking(move || probe_port(port), PortFacts { port, bind: Bind::Error("probe failed".into()), holder: None },),
         probe_mdns(wanted),
         probe_firewall(os),
@@ -837,6 +844,9 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         blocking(probe_addrs, Vec::new()),
         probe_shortcuts(os),
     );
+    if let (Some(status), Some(portals)) = (daemon.status(), portals.as_mut()) {
+        portals.use_running_backend(status.backend);
+    }
 
     let mut checks = vec![daemon_check(&daemon)];
     checks.extend(config_checks(&config, dir));
@@ -1369,6 +1379,17 @@ mod tests {
             input_capture: ic.map(|r| r.map_err(str::to_owned)),
             token,
             backend: None,
+        }
+    }
+
+    #[test]
+    fn running_backend_overrides_session_inference() {
+        for name in ["null", "native", "portal", "x11", "wlroots"] {
+            let mut facts = portals(None, None, true, false);
+            facts.backend = Some(("x11".into(), "inferred".into()));
+            facts.use_running_backend(name.into());
+            assert_eq!(facts.backend.as_ref().unwrap().0, name);
+            assert!(facts.backend.as_ref().unwrap().1.contains("running daemon"));
         }
     }
 

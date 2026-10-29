@@ -116,6 +116,7 @@ pub enum InputBackend {
     Portal,
     Native,
     X11,
+    Wlroots,
 }
 
 impl InputBackend {
@@ -126,6 +127,7 @@ impl InputBackend {
             Self::Portal => "portal",
             Self::Native => "native",
             Self::X11 => "x11",
+            Self::Wlroots => "wlroots",
         }
     }
 }
@@ -137,6 +139,7 @@ impl From<&str> for InputBackend {
             "portal" => Self::Portal,
             "native" => Self::Native,
             "x11" => Self::X11,
+            "wlroots" => Self::Wlroots,
             _ => Self::Unknown,
         }
     }
@@ -463,6 +466,16 @@ impl Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_backend_roundtrips() {
+        for name in ["", "null", "portal", "native", "x11", "wlroots"] {
+            let backend = InputBackend::from(name);
+            assert_eq!(backend.as_str(), name);
+            let status = Status { backend, ..Status::default() };
+            assert_eq!(Status::decode(&status.encode()).unwrap().backend, backend);
+        }
+    }
 
     #[test]
     fn status_survives_the_wire() {

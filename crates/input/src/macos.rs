@@ -88,7 +88,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, trusted, controlled))?;
-    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 // ------------------------------------------------------------ permissions
@@ -651,6 +651,16 @@ impl Ctx {
     fn on_idle(&self, st: &mut State, ty: CGEventType, ev: &CGEvent) -> bool {
         let e = Some(ev);
         match ty {
+            CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp => {
+                let number = match ty {
+                    CGEventType::LeftMouseUp => 0,
+                    CGEventType::RightMouseUp => 1,
+                    _ => CGEvent::integer_value_field(e, CGEventField::MouseEventButtonNumber) as u32,
+                };
+                if let Some(code) = logic::mac_to_evdev_button(number) {
+                    let _ = self.tx.send(Event::LocalKeyUp { code });
+                }
+            }
             CGEventType::KeyDown | CGEventType::KeyUp => st.set_local_key(keycode(ev), ty == CGEventType::KeyDown),
             CGEventType::FlagsChanged => {
                 let kc = keycode(ev);

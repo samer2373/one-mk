@@ -123,11 +123,14 @@ changes, and keeps the wire state in a bitset. So:
   repeats that output's key (if it is down on the wire); a pending,
   swallowed or layer key ignores repeats; sequences and actions never
   repeat;
-* **typed once** (a tap, a sequence step) is a pulse, not a holder: the
-  key goes down and up even if something already holds it (it is let go
-  of first and pressed again after, so `["a", "a"]` with A held types two
-  a's), and the chord's modifiers are down for it even while a combo
-  hides them, then back as they were;
+* **typed once** (a tap, a sequence step) produces exactly one fresh key
+  press, even if something already holds that key. A held key is released
+  before its first pulse; intermediate pulses go down/up, and the final
+  pulse's down also restores the original holder (no extra press after
+  each step). Thus `["a", "a"]` with A held produces exactly two A-down
+  transitions, remains held afterward, and is released by its original
+  holder. The chord's modifiers are down even while a combo hides them,
+  then back as they were;
 * **actions** are emitted as the action itself (shared with the keymap,
   no copy), not an index into the keymap, so one emitted just before a
   reload still runs as the old keymap had it.

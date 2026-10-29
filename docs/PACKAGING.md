@@ -219,7 +219,7 @@ and the whole thing is one readable file. `scripts/package-windows.sh`
 - optionally adds the folder to the machine's `PATH`, as one whole entry and
   only if it is not there already; when it adds it, it records that in
   `HKLM\SOFTWARE\one-mk` (`PathEntry`);
-- on uninstall runs `one-mk.exe uninstall` (removes the `Run` entry and the
+- on uninstall runs `one-mk.exe uninstall` (removes its own `Run` entry and the
   SendTo entries of the account running the uninstaller), stops any running
   one-mk, deletes both firewall rules and takes the folder out of `PATH`, **only
   if the install recorded that it put it there, and only the entry equal to the
@@ -240,6 +240,13 @@ and the whole thing is one readable file. `scripts/package-windows.sh`
   at install, which would need code run as the original user and a way to hand
   the answer to the elevated Setup, the uninstaller matches the value's data
   against its own folder: no value that points somewhere else is touched.)
+
+The CLI also checks ownership before removing the current account's `Run\\one-mk`
+value: its executable must be in the running executable's folder. Quoted paths,
+case differences, slash direction, and trailing folder separators are handled;
+an unrelated portable install is preserved. Windows 8.3 short-name aliases are
+not resolved by this comparison. Windows registry behavior is review-only here;
+the ownership comparison has platform-independent unit coverage.
 
 The PATH and startup-value logic is `packaging/windows/path-entries.pas`,
 included by the `.iss`; `scripts/check-windows-path.sh` (run by

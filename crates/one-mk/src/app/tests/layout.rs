@@ -307,12 +307,13 @@ async fn input_caught_at_a_wall_is_typed_here() {
         Event::Key { code: 30, down: false },
         Event::Button { button: 0x110, down: true },
         Event::ScrollDiscrete { dx: 0, dy: 1 },
+        Event::Button { button: 0x110, down: false },
     ] {
         duo.ha.events.send(ev).unwrap();
     }
     assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: None });
     let mut got = Vec::new();
-    for _ in 0..6 {
+    for _ in 0..5 {
         got.push(next_inject(&mut duo.ha).await);
     }
     assert_eq!(
@@ -320,10 +321,9 @@ async fn input_caught_at_a_wall_is_typed_here() {
         [
             Inject::Key { code: 30, down: true },
             Inject::Key { code: 30, down: false },
-            Inject::Key { code: 30, down: false },
             Inject::Button { button: 0x110, down: true },
-            Inject::Button { button: 0x110, down: false },
             Inject::ScrollDiscrete { dx: 0, dy: 1 },
+            Inject::Button { button: 0x110, down: false },
         ]
     );
     assert!(injected(&mut duo.hb).is_empty(), "nothing went to B");

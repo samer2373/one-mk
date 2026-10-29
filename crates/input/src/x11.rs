@@ -34,11 +34,11 @@
 
 use crate::common_logic::{Backoff, LocalInputGate, drain_coalesced, now_ms};
 use crate::linux_logic::{
-    Held, Notches, Pressed, ScrollAxis, XButton, absolute_delta, barrier_line, barrier_open_directions, edge_strip,
+    Held, Notches, Pressed, ScrollAxis, XButton, absolute_delta, barrier_line, barrier_open_directions, edge_strips,
     evdev_to_x_button, evdev_to_xkeycode, fp1616, fp3232, notch_buttons, set_bits, x_button, xkeycode_to_evdev,
 };
 use crate::linux_rt::{Socket, forward_lock, lock_changed, spawn_thread};
-use crate::{Backend, CaptureCmd, Event, Inject};
+use crate::{Armed, Backend, CaptureCmd, Event, Inject};
 use anyhow::{Context, Result, bail};
 use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
 use std::collections::HashMap;
@@ -69,7 +69,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let (cap_tx, cap_rx) = mpsc::unbounded_channel();
     let (inj_tx, inj_rx) = mpsc::unbounded_channel();
     spawn_thread("one-mk-x11", move || run(Some(first), Target::default(), ev_tx, cap_rx, inj_rx, locked))?;
-    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { name: "x11", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 /// Which X server, and (for tests) whether pointer barriers may be used.
@@ -88,7 +88,7 @@ impl Default for Target {
 /// State that outlives one X connection.
 struct Shared {
     tx: mpsc::UnboundedSender<Event>,
-    sides: Vec<Side>,
+    sides: Vec<Armed>,
     next_id: u32,
     /// Injected keys and buttons held down.
     held: Held,
@@ -171,7 +171,7 @@ async fn run(
             tokio::select! {
                 _ = &mut sleep => break,
                 cmd = cmds.recv() => match cmd {
-                    Some(CaptureCmd::SetSides(s)) => st.sides = s.iter().map(|a| a.side).collect(),
+                    Some(CaptureCmd::SetSides(s)) => st.sides = s,
                     Some(CaptureCmd::Activate { .. }) => st.send(Event::Error(NO_CAPTURE.into())),
                     Some(CaptureCmd::Release { .. }) => {}
                     None => return,
@@ -217,7 +217,7 @@ enum Edges {
     Barriers(Vec<(xfixes::Barrier, Side)>),
     /// Input-only windows; `ignore` is one the daemon put the pointer
     /// into (on release), which must not capture again until it leaves.
-    Windows { windows: Vec<(xproto::Window, Side)>, ignore: Option<xproto::Window> },
+    Windows { windows: Vec<(xproto::Window, Side, Rect)>, ignore: Option<xproto::Window> },
 }
 
 struct X {
@@ -301,7 +301,7 @@ impl X {
             failed_hit: None,
         };
         x.desktop = x.read_desktop()?;
-        x.select(false);
+        x.select(false, false);
         x.conn.flush()?;
         tracing::info!(barriers, randr, screens = ?x.desktop.screens, "X11 input ready");
         Ok(x)
@@ -324,13 +324,14 @@ impl X {
     }
 
     /// Selects the XInput events needed now on the root window.
-    fn select(&mut self, controlled: bool) {
+    fn select(&mut self, controlled: bool, held: bool) {
         let mut mask = if self.barriers { BARRIER_HIT | BARRIER_LEAVE } else { 0 };
         if self.grab.is_some() {
             mask |= RAW_CAPTURE;
         } else if controlled {
             mask |= RAW_LOCAL;
         }
+        if held { mask |= 1 << 16; }
         if mask == self.selected {
             return;
         }
@@ -342,52 +343,48 @@ impl X {
     }
 
     /// Puts barriers (or edge windows) on the outer edges of `sides`.
-    fn set_edges(&mut self, sides: &[Side]) -> Result<()> {
+    fn set_edges(&mut self, sides: &[Armed]) -> Result<()> {
         let c = &self.conn;
+        let strips = edge_strips(sides, &self.desktop);
         match &mut self.edges {
             Edges::Barriers(old) => {
                 for (b, _) in old.drain(..) {
                     c.xfixes_delete_pointer_barrier(b)?;
                 }
-                for &side in sides {
-                    for r in self.desktop.outer_edges(side) {
-                        let (x1, y1, x2, y2) = barrier_line(side, r);
-                        let id = c.generate_id()?;
-                        let dirs = barrier_open_directions(side).into();
-                        let xy = |v: i32| v.clamp(0, i32::from(u16::MAX)) as u16;
-                        c.xfixes_create_pointer_barrier(id, self.root, xy(x1), xy(y1), xy(x2), xy(y2), dirs, &[])?;
-                        old.push((id, side));
-                    }
+                for (side, _, strip) in &strips {
+                    let (x1, y1, x2, y2) = barrier_line(*side, strip);
+                    let id = c.generate_id()?;
+                    let dirs = barrier_open_directions(*side).into();
+                    let xy = |v: i32| v.clamp(0, i32::from(u16::MAX)) as u16;
+                    c.xfixes_create_pointer_barrier(id, self.root, xy(x1), xy(y1), xy(x2), xy(y2), dirs, &[])?;
+                    old.push((id, *side));
                 }
             }
             Edges::Windows { windows, ignore } => {
-                for (w, _) in windows.drain(..) {
+                for (w, _, _) in windows.drain(..) {
                     c.destroy_window(w)?;
                 }
                 *ignore = None;
-                for &side in sides {
-                    for r in self.desktop.outer_edges(side) {
-                        let s = edge_strip(side, r);
-                        let w = c.generate_id()?;
-                        let aux = xproto::CreateWindowAux::new()
-                            .override_redirect(1)
-                            .event_mask(xproto::EventMask::ENTER_WINDOW | xproto::EventMask::LEAVE_WINDOW);
-                        c.create_window(
-                            0,
-                            w,
-                            self.root,
-                            s.x as i16,
-                            s.y as i16,
-                            s.w as u16,
-                            s.h as u16,
-                            0,
-                            xproto::WindowClass::INPUT_ONLY,
-                            0,
-                            &aux,
-                        )?;
-                        c.map_window(w)?;
-                        windows.push((w, side));
-                    }
+                for (side, _, s) in strips {
+                    let w = c.generate_id()?;
+                    let aux = xproto::CreateWindowAux::new()
+                        .override_redirect(1)
+                        .event_mask(xproto::EventMask::ENTER_WINDOW | xproto::EventMask::LEAVE_WINDOW);
+                    c.create_window(
+                        0,
+                        w,
+                        self.root,
+                        s.x as i16,
+                        s.y as i16,
+                        s.w as u16,
+                        s.h as u16,
+                        0,
+                        xproto::WindowClass::INPUT_ONLY,
+                        0,
+                        &aux,
+                    )?;
+                    c.map_window(w)?;
+                    windows.push((w, side, s));
                 }
             }
         }
@@ -403,7 +400,7 @@ impl X {
     /// Ignores the edge window at `p` until the pointer leaves it.
     fn ignore_strip_at(&mut self, p: Pos) {
         let under = match &self.edges {
-            Edges::Windows { windows, .. } => windows.iter().find(|(w, _)| self.strip_contains(*w, p)).map(|(w, _)| *w),
+            Edges::Windows { windows, .. } => windows.iter().find(|(w, _, _)| self.strip_contains(*w, p)).map(|(w, _, _)| *w),
             Edges::Barriers(_) => None,
         };
         if let Edges::Windows { ignore, .. } = &mut self.edges {
@@ -439,7 +436,7 @@ impl X {
         self.grab = Some(Grab { id: st.next_id, window });
         self.devices.clear();
         self.pressed.clear();
-        self.select(st.controlled);
+        self.select(st.controlled, !st.held.is_empty());
         self.conn.flush()?;
         st.send(Event::Modifiers(Mods::from_xkb(u32::from(mask))));
         st.send(Event::Activated { id: st.next_id, side, pos: at });
@@ -453,7 +450,7 @@ impl X {
         self.conn.ungrab_keyboard(CURRENT_TIME)?;
         self.conn.ungrab_pointer(CURRENT_TIME)?;
         self.conn.destroy_window(g.window)?;
-        self.select(st.controlled);
+        self.select(st.controlled, !st.held.is_empty());
         Ok(())
     }
 
@@ -480,8 +477,7 @@ impl X {
 
     fn strip_contains(&self, w: xproto::Window, p: Pos) -> bool {
         let Edges::Windows { windows, .. } = &self.edges else { return false };
-        let Some(&(_, side)) = windows.iter().find(|(x, _)| *x == w) else { return false };
-        self.desktop.outer_edges(side).map(|r| edge_strip(side, r)).any(|s| s.contains(p))
+        windows.iter().any(|(window, _, strip)| *window == w && strip.contains(p))
     }
 
     async fn session(
@@ -499,7 +495,7 @@ impl X {
         // are those of an injector that died (XTest keeps them pressed).
         self.let_go(st)?;
         self.release_leftovers()?;
-        self.select(st.controlled);
+        self.select(st.controlled, !st.held.is_empty());
         st.show(None);
         let mut batch = Vec::new();
         loop {
@@ -511,7 +507,7 @@ impl X {
                 r = socket.readable() => r?,
                 cmd = cmds.recv() => match cmd {
                     Some(CaptureCmd::SetSides(sides)) => {
-                        st.sides = sides.iter().map(|a| a.side).collect();
+                        st.sides = sides;
                         self.set_edges(&st.sides.clone())?;
                     }
                     Some(CaptureCmd::Release { id, pos }) => self.release(st, id, pos)?,
@@ -577,11 +573,15 @@ impl X {
             E::XinputBarrierLeave(_) => self.failed_hit = None,
             E::EnterNotify(e) => {
                 let Edges::Windows { windows, ignore } = &self.edges else { return Ok(()) };
-                if self.grab.is_some() || st.locked || st.controlled || *ignore == Some(e.event) {
+                if e.mode != xproto::NotifyMode::NORMAL || self.grab.is_some() || st.locked || st.controlled || *ignore == Some(e.event) {
                     return Ok(());
                 }
-                if let Some(&(_, side)) = windows.iter().find(|(w, _)| *w == e.event) {
-                    self.grab(st, side, Pos::new(e.root_x.into(), e.root_y.into()))?;
+                if let Some(&(_, side, _)) = windows.iter().find(|(w, _, _)| *w == e.event) {
+                    let pointer = self.conn.query_pointer(self.root)?.reply()?;
+                    let at = Pos::new(pointer.root_x.into(), pointer.root_y.into());
+                    if self.strip_contains(e.event, at) {
+                        self.grab(st, side, at)?;
+                    }
                 }
             }
             E::LeaveNotify(e) => {
@@ -641,6 +641,11 @@ impl X {
     }
 
     fn raw_button(&mut self, st: &mut Shared, source: u16, button: u32, down: bool, emulated: bool) -> Result<()> {
+        if self.grab.is_none() && !down && !emulated && !self.xtest_devices.contains(&source)
+            && let Some(XButton::Button(code)) = x_button(button)
+        {
+            st.send(Event::LocalKeyUp { code });
+        }
         if self.local(st, source) || emulated {
             return Ok(());
         }
@@ -767,9 +772,10 @@ impl X {
             },
             Inject::Controlled(c) => {
                 st.controlled = c;
-                self.select(c);
+                self.select(st.controlled, !st.held.is_empty());
             }
         }
+        self.select(st.controlled, !st.held.is_empty());
         Ok(())
     }
 
@@ -840,7 +846,7 @@ fn open_target(target: Target) -> Result<(Backend, watch::Sender<bool>)> {
     spawn_thread("one-mk-x11", move || run(Some(first), target, ev_tx, cap_rx, inj_rx, locked))?;
     let focus = Box::new(crate::system::Unknown);
     let locker = Box::new(NoLock);
-    Ok((Backend { events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker }, locked_tx))
+    Ok((Backend { name: "x11", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker }, locked_tx))
 }
 
 #[cfg(test)]

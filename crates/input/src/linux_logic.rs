@@ -8,7 +8,7 @@
 // On other OSes only the tests use this module.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use crate::{Event, Inject};
+use crate::{Armed, Event, Inject};
 use one_mk_proto::{Desktop, Pos, Rect, Side};
 
 pub(crate) const BTN_LEFT: u32 = 0x110;
@@ -332,6 +332,28 @@ fn axis_index(axis: u32) -> usize {
 }
 
 // --------------------------------------------------------------- geometry
+
+pub(crate) fn layer_strips(armed: &[Armed], desktop: &Desktop) -> Vec<(Side, Rect, Rect)> {
+    let rounded: Vec<Armed> = armed.iter().map(|edge| Armed {
+        side: edge.side,
+        spans: edge.spans.as_ref().map(|spans| spans.iter().filter(|(start, end)| start < end).map(|(start, end)| (start.floor(), end.ceil())).collect()),
+    }).collect();
+    edge_strips(&rounded, desktop)
+}
+
+pub(crate) fn edge_strips(armed: &[Armed], desktop: &Desktop) -> Vec<(Side, Rect, Rect)> {
+    armed.iter().flat_map(|edge| edge.segments(desktop).map(move |(output, first, last)| {
+        let mut strip = edge_strip(edge.side, &output);
+        if edge.side.along_x() {
+            strip.x = first;
+            strip.w = last - first + 1;
+        } else {
+            strip.y = first;
+            strip.h = last - first + 1;
+        }
+        (edge.side, output, strip)
+    })).collect()
+}
 
 /// A pointer barrier on the `side` edge of monitor `r`, as XFixes wants it
 /// `(x1, y1, x2, y2)`: XFixes blocks motion across the line between pixel
@@ -697,6 +719,40 @@ mod tests {
         assert_eq!(barrier_open_directions(Side::Bottom), 1 | 4 | 8);
         assert_eq!(edge_strip(Side::Right, &r), Rect::new(3359, 0, 1, 2560));
         assert_eq!(edge_strip(Side::Bottom, &r), Rect::new(1920, 2559, 1440, 1));
+    }
+
+    #[test]
+    fn partial_edge_strips_clip_and_preserve_output_origins() {
+        let desktop = Desktop::new(vec![Rect::new(-800, -200, 800, 900), Rect::new(0, -200, 1200, 600)]);
+        let armed = [Armed { side: Side::Top, spans: Some(vec![(-100.25, 300.5), (5000.0, 6000.0)]) }];
+        let strips = edge_strips(&armed, &desktop);
+        assert_eq!(strips, vec![
+            (Side::Top, desktop.screens[0], Rect::new(-100, -200, 100, 1)),
+            (Side::Top, desktop.screens[1], Rect::new(0, -200, 301, 1)),
+        ]);
+        for (side, output, strip) in &strips {
+            assert_eq!(strip.y - output.y, 0);
+            assert!(strip.x >= output.x && strip.right() <= output.right());
+            assert!(f64::from(strip.x) >= -100.25 && f64::from(strip.right() - 1) < 300.5);
+            assert_eq!(barrier_line(*side, strip), (strip.x, -200, strip.right() - 1, -200));
+        }
+        let right = [Armed { side: Side::Right, spans: Some(vec![(300.0, 800.0)]) }];
+        assert_eq!(edge_strips(&right, &desktop), vec![(Side::Right, desktop.screens[1], Rect::new(1199, 300, 1, 100))]);
+        let bottom = edge_strips(&[Armed::whole(Side::Bottom)], &desktop);
+        assert_eq!(bottom.len(), 1);
+        assert_eq!(bottom[0].2, Rect::new(-800, 699, 800, 1));
+        assert_eq!(edge_strips(&[Armed { side: Side::Right, spans: Some(vec![]) }], &desktop), vec![]);
+    }
+
+    #[test]
+    fn fractional_layer_strips_round_outward_but_activation_stays_in_span() {
+        let desktop = Desktop::new(vec![Rect::new(0, 0, 800, 600)]);
+        let edge = Armed { side: Side::Right, spans: Some(vec![(300.25, 500.5)]) };
+        assert_eq!(layer_strips(std::slice::from_ref(&edge), &desktop), vec![(Side::Right, desktop.screens[0], Rect::new(799, 300, 1, 201))]);
+        assert!(!edge.covers(Pos::new(799.0, 300.0)));
+        assert!(edge.covers(Pos::new(799.0, 300.25)));
+        assert!(!edge.covers(Pos::new(799.0, 500.5)));
+        assert!(layer_strips(&[Armed { side: Side::Right, spans: Some(vec![(300.25, 300.25)]) }], &desktop).is_empty());
     }
 
     #[test]
