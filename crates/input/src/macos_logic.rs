@@ -525,9 +525,39 @@ pub fn edge_hit(desktop: &Desktop, sides: &[Side], p: Pos, dx: f64, dy: f64) -> 
     })
 }
 
+// ------------------------------------------------------- relative motion
+
+/// Where a relative move (gaming mode) leaves the cursor: moved by the
+/// delta, and if that is off every display, stopped at the edge of the one
+/// it was on, as macOS stops it. Tracked here rather than read back after
+/// posting, since `CGEventPost` is asynchronous and the location read
+/// right after can still be the old one.
+pub fn moved_by(desktop: Option<&Desktop>, from: Pos, dx: f64, dy: f64) -> Pos {
+    let to = Pos::new(from.x + dx, from.y + dy);
+    let Some(d) = desktop.filter(|d| d.screen_at(to).is_none()) else { return to };
+    d.screen_at(from).map_or_else(|| d.clamp(to), |r| r.clamp(to))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_moves_stay_on_the_displays() {
+        use one_mk_proto::Rect;
+        // A 1440x900 display with a 1920x1080 one to its right, tops aligned.
+        let d = Desktop::new(vec![Rect::new(0, 0, 1440, 900), Rect::new(1440, 0, 1920, 1080)]);
+        let p = moved_by(Some(&d), Pos::new(100.0, 100.0), 10.0, -5.0);
+        assert_eq!(p, Pos::new(110.0, 95.0));
+        // Pushing past the left edge stops on it; the deltas still go out.
+        assert_eq!(moved_by(Some(&d), p, -500.0, 0.0), Pos::new(0.0, 95.0));
+        // Onto the other display, and below the first one's bottom only there.
+        assert_eq!(moved_by(Some(&d), Pos::new(1400.0, 800.0), 100.0, 200.0), Pos::new(1500.0, 1000.0));
+        let q = moved_by(Some(&d), Pos::new(1400.0, 800.0), 0.0, 200.0);
+        assert!(q.y < 900.0 && q.y > 899.0 && q.x == 1400.0, "stopped at its display's bottom, {q:?}");
+        // Unknown displays: just the sum.
+        assert_eq!(moved_by(None, Pos::new(1.0, 2.0), 3.0, 4.0), Pos::new(4.0, 6.0));
+    }
     use one_mk_proto::Rect;
     use std::collections::HashSet;
 
