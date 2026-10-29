@@ -152,10 +152,55 @@ Known gaps:
 | 3B | Drag files across the screen edge | transfer code (1B) | Hardest of the list. Deskflow and Synergy both removed theirs as broken. Linux GNOME and Windows first. | todo |
 | 3C | Auto-update with signed releases | none | | todo |
 | 3D | Packaging: `.deb`, AppImage or Flatpak, MSI, `.dmg` or Homebrew | none | Probably matters most for adoption. | todo |
-| 3E | wlroots (Sway/Hyprland) backend | none | | todo |
-| 3F | X11 capture backend | none | | todo |
+| 3E | wlroots (Sway/Hyprland) backend | none | Branch `t3/60bf24e6`. `input/wlroots.rs`: layer-shell edge strips (capture on outward relative motion), full-screen keyboard-exclusive capture surface + pointer lock, virtual pointer/keyboard with the seat's keymap, xdg-output monitors; one thread, no timers. `--backend wlroots`; `native` picks it on Wayland without portals. See 3E/3F notes. | done (compiled only) |
+| 3F | X11 capture backend | none | Branch `t3/60bf24e6`. `input/x11.rs`: XFixes barriers (edge input-only windows without XI 2.3), pointer+keyboard grab, XI2 raw events, XTest injection, RandR monitors, `LocalInput` from non-XTest raw events. `--backend x11`; `native` picks it in X11 sessions. See 3E/3F notes. | done (Xvfb verified) |
 | 3G | "Send to <computer>" file-manager entries | 1B | Nautilus, Dolphin, Explorer, Finder. | todo |
 | 3H | Pairing without sitting at both screens (QR or link) | none | | todo |
+
+### 3E/3F notes (branch `t3/60bf24e6`)
+
+- **Choice** (`linux_logic::choose`, shared by `native` and doctor): an X11
+  session (no `WAYLAND_DISPLAY`) is always X11, even where GNOME/KDE
+  portals answer (their input capture is Wayland-only); on Wayland the
+  portals if both answer, else wlroots if the compositor has the four
+  protocols, else the portals (which then report what is missing).
+  Doctor's input check says which backend and why.
+- **X11.** Barriers sit on outer edges (right/bottom one past the last
+  pixel); a hit grabs pointer (confined to a 1x1 input-only window, blank
+  cursor) and keyboard; data from XI2 raw events on the master devices,
+  selected only while capturing or controlled (0 CPU ticks over 6 s idle
+  in a real `one-mk run` on Xvfb). Absolute devices (tablets, VM pointers)
+  are turned into deltas; smooth-scroll valuators become 120ths and their
+  emulated wheel buttons are dropped. A failed grab is not retried until
+  the pointer leaves the barrier. XTest keeps keys down after its client
+  dies, so injected keys are let go of on exit/lock (with a round trip, or
+  the server can drop them with the closing connection) and at every
+  start whatever the XTEST devices still hold is released.
+- **wlroots.** Edge strips are overlay layer surfaces, `exclusive_zone`
+  -1; capture starts when relative motion pushes outward on one (a pointer
+  put back onto the edge does not re-capture), and is ignored while a
+  peer controls this machine (injected motion makes relative events too).
+  The capture surface is keyboard-exclusive and pointer-locked (sway only
+  activates a lock on the keyboard-focused surface); without pointer
+  constraints it covers every output. Capture ends on keyboard leave,
+  `unlocked`, layer `closed`, output changes, lock, daemon exit. The
+  virtual keyboard gets the seat's keymap (re-sent when it changes) and
+  modifiers computed here (wlroots takes them from the client).
+- **Verified here (Xvfb, `x11_tests.rs`):** injection observed from a
+  second client (absolute/relative motion, clamping, keys, buttons, wheel
+  clicks), Shift released when the daemon goes away; capture by pushing
+  against a barrier (not along it, not on a side without a peer),
+  motion/keys/buttons/wheel delivered and nothing reaching local windows,
+  the keyboard really grabbed, stale `Release` ignored, release warps and
+  ungrabs, `Activate`, lock ends capture and blocks it, a client holding
+  the keyboard blocks capture until the pointer leaves the edge;
+  edge-window fallback with barriers off; RandR change ends capture and
+  reports the new desktop; `kill -9` of a capturing process frees the
+  grab, and the next start lets go of the key it held. Real binary: `run`
+  under an X11-only environment picks x11; doctor on GNOME Wayland picks
+  the portals. **Only compiled + unit-tested:** the whole wlroots backend
+  (no wlroots compositor on the dev box); X11 `LocalInput` from a real
+  (non-XTest) device and real mice/tablets (Xvfb only has XTest).
 
 ## UI and design (after waves 1 and 2)
 

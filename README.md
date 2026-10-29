@@ -9,7 +9,8 @@ clipboard and files follow. Setup takes about a minute.
 > **Status: early.** Linux (Wayland: GNOME 45+ or KDE Plasma 6.1+) is tested
 > end to end on real hardware. The Windows and macOS backends compile and
 > are unit-tested, but have **not yet run on real Windows or macOS
-> machines**: expect rough edges there.
+> machines**: expect rough edges there. The X11 and wlroots (Sway,
+> Hyprland) backends are new: see [Supported desktops](#supported-desktops).
 
 ## Quick start
 
@@ -53,6 +54,33 @@ starts, in pixels (see [Arranging the computers](#arranging-the-computers)):
 one-mk layout "laptop" bottom --offset 300   # its left edge 300 px right of yours
 one-mk layout "laptop" bottom --offset center
 ```
+
+## Supported desktops
+
+| Desktop | Backend | Edges and capture | Being controlled | Tested |
+|---|---|---|---|---|
+| GNOME 45+, KDE Plasma 6.1+ (Wayland) | `portal` | InputCapture portal (pointer barriers) | RemoteDesktop portal | On real hardware |
+| Sway, Hyprland, labwc, river, Wayfire (wlroots) | `wlroots` | Invisible layer-shell strips on the edges, pointer lock, relative pointer | Virtual pointer and keyboard | Compiled and unit-tested only |
+| X11: Xfce, MATE, Cinnamon, i3, Openbox, GNOME or KDE on X11 | `x11` | XFixes pointer barriers, pointer and keyboard grab, XInput2 raw events | XTest | Against a virtual X server (Xvfb) |
+| Windows 10 and 11 | native | Low-level hooks | `SendInput` | Compiled and unit-tested only |
+| macOS | native | Event tap | `CGEvent` | Compiled and unit-tested only |
+
+On Linux one-mk picks the backend by itself: on Wayland the desktop
+portals where the desktop has them, else the wlroots protocols; in an X11
+session, X11. `one-mk doctor` says which one it picks and why;
+`one-mk run --backend wlroots` or `--backend x11` forces one of those
+(the default, `native`, picks). Notes:
+
+- **X11** asks for no permission. X11 has no display scaling, so the
+  desktop is measured in real pixels (a HiDPI setup with `Xft.dpi` or
+  `GDK_SCALE` only makes programs draw larger). Scrolling arrives in whole
+  wheel clicks. Using this computer's own mouse or keyboard takes it back
+  from a computer controlling it, as on Windows and macOS.
+- **wlroots** needs the compositor to offer `zwlr_layer_shell_v1`,
+  `zwlr_virtual_pointer_manager_v1`, `zwp_virtual_keyboard_manager_v1` and
+  `zwp_relative_pointer_manager_v1` (doctor names any that are missing);
+  `zwp_pointer_constraints_v1` keeps the pointer still while it is away.
+  Typing uses this computer's keyboard layout.
 
 ## Everyday use
 
@@ -531,7 +559,11 @@ and exits with status 1 if something failed.
   restart, session bus restart, a monitor change that closes the session),
   when the screen locks and before the computer sleeps; it then reconnects
   in the background (after 1, 2, 4 ... up to 30 seconds). `one-mk status`
-  shows a line while it is reconnecting or waiting for you.
+  shows a line while it is reconnecting or waiting for you. With the X11
+  and wlroots backends, stopping one-mk in any way (even `kill -9`) lets go
+  of the pointer and keyboard; on X11, keys a killed one-mk was pressing on
+  a peer's behalf stay down until one-mk starts again, which lets go of
+  them.
 - **macOS.** Allow one-mk under System Settings > Privacy & Security >
   Accessibility and Input Monitoring, then start it again. (Not yet tested on
   real hardware.)
@@ -549,7 +581,7 @@ and exits with status 1 if something failed.
 ```
 crates/proto      wire format + pure pointer/edge/key logic (no I/O, unit-tested)
 crates/net        identity, QUIC, pairing, trusted devices, mDNS discovery
-crates/input      platform input: Linux (XDG portals + libei), Windows, macOS
+crates/input      platform input: Linux (XDG portals + libei, wlroots, X11), Windows, macOS
 crates/clipboard  system clipboard on its own thread (arboard)
 crates/ctl        client for the daemon's control channel, status format, login settings
 crates/tray       one-mk-tray: the optional tray icon
@@ -565,7 +597,8 @@ cargo build --release      # target/release/one-mk, one-mk-tray and one-mk-app
 cargo test
 ```
 
-On Linux you need GNOME 45+ or KDE Plasma 6.1+ on Wayland. Clipboard sharing
+On Linux you need GNOME 45+ or KDE Plasma 6.1+ on Wayland, a wlroots
+compositor, or an X11 session (see [Supported desktops](#supported-desktops)). Clipboard sharing
 uses the Wayland data-control protocol where the compositor has it (KDE,
 wlroots) and X11 otherwise; GNOME has no Wayland clipboard access for
 background apps, so there it goes through XWayland.
