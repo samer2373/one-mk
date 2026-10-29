@@ -43,6 +43,14 @@ const STREAMS: usize = 4;
 
 /// Transfer connections one device may have open at once.
 pub const MAX_CONNS_PER_PEER: usize = 2;
+/// What a receiver says when [`MAX_CONNS_PER_PEER`] is reached.
+const TOO_MANY_CONNS: &str = "too many concurrent transfer connections from this device";
+
+/// Whether `reason` (a file's failure) is a receiver at its connection limit,
+/// which passes as soon as an earlier connection is seen closing.
+pub fn is_busy(reason: &str) -> bool {
+    reason.contains(TOO_MANY_CONNS)
+}
 /// File streams served at once on one connection.
 pub const MAX_STREAMS_PER_CONN: usize = 4;
 /// File streams served at once for all devices together.
@@ -256,7 +264,7 @@ impl Inbox {
         let mut l = self.limits.lock().expect("poisoned");
         let n = l.conns.entry(fp).or_default();
         if *n >= MAX_CONNS_PER_PEER {
-            return Err("too many concurrent transfer connections from this device");
+            return Err(TOO_MANY_CONNS);
         }
         *n += 1;
         Ok(ConnPermit { inbox: self.clone(), fp, streams: Arc::default() })

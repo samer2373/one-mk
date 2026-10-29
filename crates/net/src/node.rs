@@ -131,6 +131,14 @@ impl Node {
         self.endpoint.close(0u32.into(), b"bye");
     }
 
+    /// Closes the node and waits (at most `grace`) until the close notice
+    /// has gone out, so a program that exits right after still tells its
+    /// peers instead of leaving them to time out.
+    pub async fn shutdown(&self, grace: Duration) {
+        self.close();
+        let _ = tokio::time::timeout(grace, self.endpoint.wait_idle()).await;
+    }
+
     fn peer(conn: quinn::Connection, initiator: bool) -> Result<Peer> {
         let certs = conn
             .peer_identity()
