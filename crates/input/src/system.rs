@@ -9,7 +9,7 @@
 //! | | focused window | lock | lock noticed |
 //! |---|---|---|---|
 //! | Linux | X11/XWayland windows only; Wayland-native ones are unknown | logind `Session.Lock` | logind `LockedHint` |
-//! | Windows | foreground window vs. its monitor | `LockWorkStation` | session notifications |
+//! | Windows | foreground window: borderless, covering its monitor | `LockWorkStation` | session notifications |
 //! | macOS | not yet (unknown) | `CGSession -suspend`, else display sleep | screen lock notifications |
 
 use crate::Event;
