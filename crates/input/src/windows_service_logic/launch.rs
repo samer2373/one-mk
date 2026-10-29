@@ -14,6 +14,7 @@ pub fn command_line(arguments: &[&str]) -> Result<String, LogicError> {
     let mut units = 0;
     for (index, argument) in arguments.iter().enumerate() {
         if argument.contains('\0') { return Err(LogicError::Invalid); }
+        if index == 0 && (argument.is_empty() || argument.contains('"')) { return Err(LogicError::Invalid); }
         if index > 0 { append(&mut output, &mut units, ' ')?; }
         let quoted = argument.is_empty() || argument.chars().any(|character| character.is_whitespace() || character == '"');
         if !quoted {
@@ -21,6 +22,11 @@ pub fn command_line(arguments: &[&str]) -> Result<String, LogicError> {
             continue;
         }
         append(&mut output, &mut units, '"')?;
+        if index == 0 {
+            for character in argument.chars() { append(&mut output, &mut units, character)?; }
+            append(&mut output, &mut units, '"')?;
+            continue;
+        }
         let mut slashes = 0;
         for character in argument.chars() {
             if character == '\\' {
@@ -59,6 +65,12 @@ pub fn helper_command_line(path: &str, request: StartRequest) -> Result<String, 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn program_name_uses_literal_backslashes_and_rejects_quotes() {
+        assert_eq!(super::command_line(&["bad\"program"]), Err(super::LogicError::Invalid));
+        assert_eq!(super::command_line(&[r"C:\two words\"]), Ok("\"C:\\two words\\\"".into()));
+    }
+
     use super::*;
 
     #[test]
@@ -71,7 +83,7 @@ mod tests {
             (r"C:\two words\\", r#""C:\two words\\\\""#),
             ("العربية 🐧", "\"العربية 🐧\""), ("🦀", "🦀"),
         ] {
-            assert_eq!(command_line(&[argument]).unwrap(), expected, "{argument:?}");
+            assert_eq!(command_line(&["program", argument]).unwrap(), format!("program {expected}"), "{argument:?}");
         }
         assert_eq!(command_line(&["one", "", "two words", "three"]).unwrap(), "one \"\" \"two words\" three");
     }

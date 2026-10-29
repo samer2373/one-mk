@@ -1,7 +1,7 @@
 use crate::{Event, Inject};
 use one_mk_proto::Pos;
 
-pub const IPC_VERSION: u16 = 1;
+pub const IPC_VERSION: u16 = 2;
 pub const MAX_FRAME: usize = 192;
 pub const MAX_BODY: usize = MAX_FRAME - 4;
 
@@ -14,7 +14,7 @@ pub enum LogicError {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
     Challenge { serial: u64, nonce: [u8; 32] },
-    Proof([u8; 32]),
+    Proof { nonce: [u8; 32], signature: [u8; 32] },
     Accepted([u8; 32]),
     Input(Inject),
     ReleaseAll,
@@ -53,16 +53,21 @@ pub fn body_length(prefix: [u8; 4]) -> Result<usize, LogicError> {
 pub fn encode(message: &Message) -> Result<Frame, LogicError> {
     let mut frame = Frame { bytes: [0; MAX_FRAME], len: 8 };
     frame.bytes[4..6].copy_from_slice(&IPC_VERSION.to_le_bytes());
-    let mut payload = [0u8; 40];
+    let mut payload = [0u8; 64];
     let (kind, length) = match message {
         Message::Challenge { serial, nonce } => {
             payload[..8].copy_from_slice(&serial.to_le_bytes());
-            payload[8..].copy_from_slice(nonce);
+            payload[8..40].copy_from_slice(nonce);
             (1, 40)
         }
-        Message::Proof(tag) | Message::Accepted(tag) => {
+        Message::Proof { nonce, signature } => {
+            payload[..32].copy_from_slice(nonce);
+            payload[32..].copy_from_slice(signature);
+            (2, 64)
+        }
+        Message::Accepted(tag) => {
             payload[..32].copy_from_slice(tag);
-            (if matches!(message, Message::Proof(_)) { 2 } else { 3 }, 32)
+            (3, 32)
         }
         Message::ReleaseAll => (4, 0),
         Message::LocalInput => (5, 0),
@@ -132,7 +137,7 @@ pub fn decode(bytes: &[u8]) -> Result<Message, LogicError> {
     if reserved != 0 { return Err(LogicError::Invalid); }
     let message = match kind {
         1 => Message::Challenge { serial: u64::from_le_bytes(reader.array()?), nonce: reader.array()? },
-        2 => Message::Proof(reader.array()?),
+        2 => Message::Proof { nonce: reader.array()?, signature: reader.array()? },
         3 => Message::Accepted(reader.array()?),
         4 => Message::ReleaseAll,
         5 => Message::LocalInput,
@@ -168,7 +173,7 @@ mod tests {
 
     fn messages() -> Vec<Message> {
         vec![
-            Message::Challenge { serial: u64::MAX, nonce: [42; 32] }, Message::Proof([3; 32]),
+            Message::Challenge { serial: u64::MAX, nonce: [42; 32] }, Message::Proof { nonce: [2; 32], signature: [3; 32] },
             Message::Accepted([4; 32]), Message::ReleaseAll, Message::LocalInput,
             Message::ScreenLocked(false), Message::ScreenLocked(true),
             Message::Input(Inject::MoveTo(Pos { x: -2.5, y: 100.125 })),
@@ -206,7 +211,7 @@ mod tests {
         }
         for length in 0u32..4 { assert_eq!(body_length(length.to_le_bytes()), Err(LogicError::Invalid)); }
         let original = encode(&Message::ScreenLocked(true)).unwrap();
-        for (index, value, error) in [(4, 2, LogicError::Version), (6, 255, LogicError::Invalid),
+        for (index, value, error) in [(4, 3, LogicError::Version), (6, 255, LogicError::Invalid),
             (7, 1, LogicError::Invalid), (8, 2, LogicError::Invalid)] {
             let mut bytes = original.as_bytes().to_vec();
             bytes[index] = value;

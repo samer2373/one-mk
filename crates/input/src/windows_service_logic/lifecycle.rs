@@ -8,6 +8,9 @@ pub const STABLE_INTERVAL: Duration = Duration::from_secs(60);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DesktopKind { Unknown, Default, Winlogon, Screensaver }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SecureDesktopPolicy { #[default] Off, LockScreenOnly, UacAndLockScreen }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionSnapshot {
     pub session: Option<u32>,
@@ -72,6 +75,7 @@ enum HelperState {
 /// Event-driven policy for one provisioned user session. No polling or I/O.
 pub struct SessionMachine {
     session: u32,
+    secure_desktop: SecureDesktopPolicy,
     facts: SessionSnapshot,
     desired: HelperKind,
     changed_at: Duration,
@@ -85,8 +89,12 @@ pub struct SessionMachine {
 
 impl SessionMachine {
     pub fn new(session: u32, now: Duration) -> Self {
+        Self::with_policy(session, now, SecureDesktopPolicy::Off)
+    }
+
+    pub fn with_policy(session: u32, now: Duration, secure_desktop: SecureDesktopPolicy) -> Self {
         Self {
-            session,
+            session, secure_desktop,
             facts: SessionSnapshot { session: None, logged_on: false, locked: true,
                 console_connected: false, desktop: DesktopKind::Unknown },
             desired: HelperKind::None, changed_at: now, retry_at: now, failures: 0,
@@ -102,7 +110,8 @@ impl SessionMachine {
         }
         match self.facts.desktop {
             DesktopKind::Default if !self.facts.locked => HelperKind::UserDesktop,
-            DesktopKind::Winlogon => HelperKind::SecureDesktop,
+            DesktopKind::Winlogon if self.secure_desktop == SecureDesktopPolicy::UacAndLockScreen
+                || (self.secure_desktop == SecureDesktopPolicy::LockScreenOnly && self.facts.locked) => HelperKind::SecureDesktop,
             _ => HelperKind::None,
         }
     }
@@ -204,6 +213,15 @@ impl SessionMachine {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn secure_desktop_is_off_by_default() {
+        let mut machine = super::SessionMachine::new(10, std::time::Duration::ZERO);
+        let mut snapshot = facts();
+        snapshot.desktop = super::DesktopKind::Winlogon;
+        machine.step(std::time::Duration::ZERO, super::SessionEvent::Snapshot(snapshot));
+        assert_eq!(machine.desired(), super::HelperKind::None);
+    }
+
     use super::*;
 
     fn facts() -> SessionSnapshot {
@@ -242,6 +260,7 @@ mod tests {
     #[test]
     fn uac_switch_stops_immediately_but_starts_only_after_exit_and_debounce() {
         let (mut machine, request, now) = running();
+        machine.secure_desktop = SecureDesktopPolicy::UacAndLockScreen;
         assert_eq!(machine.step(now, SessionEvent::DesktopChanged { session: 10, desktop: DesktopKind::Winlogon }).decision,
             Some(Decision::StopAndRelease { generation: request.generation }));
         assert_eq!(machine.desired(), HelperKind::SecureDesktop);
@@ -257,6 +276,7 @@ mod tests {
     #[test]
     fn rapid_desktop_changes_coalesce() {
         let (mut machine, request, now) = running();
+        machine.secure_desktop = SecureDesktopPolicy::UacAndLockScreen;
         machine.step(now, SessionEvent::DesktopChanged { session: 10, desktop: DesktopKind::Winlogon });
         machine.step(now, SessionEvent::HelperExited { generation: request.generation });
         for millis in 1..100 {
@@ -295,7 +315,7 @@ mod tests {
 
     #[test]
     fn session_events_recover_only_with_known_facts() {
-        let mut machine = SessionMachine::new(10, Duration::ZERO);
+        let mut machine = SessionMachine::with_policy(10, Duration::ZERO, SecureDesktopPolicy::LockScreenOnly);
         for event in [SessionEvent::Logon(10), SessionEvent::ConsoleConnect(10), SessionEvent::Unlock(10)] {
             assert_eq!(machine.step(Duration::ZERO, event).decision, None);
             assert_eq!(machine.desired(), HelperKind::None);
@@ -354,5 +374,33 @@ mod tests {
         assert_eq!(machine.step(Duration::from_secs(100), SessionEvent::Snapshot(facts())), Update { decision: None, wake_at: None });
         let (mut idle, _, now) = running();
         assert_eq!(idle.step(now + STABLE_INTERVAL, SessionEvent::Timer).wake_at, None);
+    }
+
+    #[test]
+    fn every_secure_policy_lock_and_desktop_combination() {
+        for policy in [SecureDesktopPolicy::Off, SecureDesktopPolicy::LockScreenOnly, SecureDesktopPolicy::UacAndLockScreen] {
+            for locked in [false, true] {
+                for desktop in [DesktopKind::Unknown, DesktopKind::Default, DesktopKind::Winlogon, DesktopKind::Screensaver] {
+                    let mut machine = SessionMachine::with_policy(10, Duration::ZERO, policy);
+                    machine.step(Duration::ZERO, SessionEvent::Snapshot(SessionSnapshot { locked, desktop, ..facts() }));
+                    let expected = match desktop {
+                        DesktopKind::Default if !locked => HelperKind::UserDesktop,
+                        DesktopKind::Winlogon if policy == SecureDesktopPolicy::UacAndLockScreen
+                            || (policy == SecureDesktopPolicy::LockScreenOnly && locked) => HelperKind::SecureDesktop,
+                        _ => HelperKind::None,
+                    };
+                    assert_eq!(machine.desired(), expected, "{policy:?} {locked} {desktop:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn first_snapshot_after_logon_is_authoritative_without_unlock() {
+        let mut machine = SessionMachine::new(10, Duration::ZERO);
+        machine.step(Duration::ZERO, SessionEvent::Logon(10));
+        assert_eq!(machine.desired(), HelperKind::None);
+        machine.step(Duration::ZERO, SessionEvent::Snapshot(facts()));
+        assert_eq!(start(&mut machine, DESKTOP_DEBOUNCE).kind, HelperKind::UserDesktop);
     }
 }

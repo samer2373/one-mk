@@ -7,11 +7,12 @@
 //! Checked against the RFC 4231 test vectors below.
 
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 const BLOCK: usize = 64;
 
 /// An HMAC-SHA256 key, already padded to the block size.
-#[derive(Clone)]
 pub struct Key {
     ipad: [u8; BLOCK],
     opad: [u8; BLOCK],
@@ -31,8 +32,13 @@ impl Key {
             ipad[i] = block[i] ^ 0x36;
             opad[i] = block[i] ^ 0x5c;
         }
+        block.zeroize();
         Key { ipad, opad }
     }
+}
+
+impl Drop for Key {
+    fn drop(&mut self) { self.ipad.zeroize(); self.opad.zeroize(); }
 }
 
 /// The 32-byte tag for `data`.
@@ -56,7 +62,7 @@ pub fn verify(key: &Key, data: &[u8], tag: &[u8]) -> bool {
     if tag.len() != expected.len() {
         return false;
     }
-    expected.iter().zip(tag).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+    bool::from(expected.ct_eq(tag))
 }
 
 #[cfg(test)]

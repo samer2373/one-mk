@@ -3214,6 +3214,7 @@ dependencies = [
  "one-mk-proto",
  "reis",
  "sha2",
+ "subtle",
  "tokio",
  "tracing",
  "wayland-client",
@@ -3225,6 +3226,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "x11rb",
  "zbus",
+ "zeroize",
 ]
 
 [[package]]

@@ -14,6 +14,12 @@ clipboard and files follow. Setup takes about a minute.
 
 **File edge drops:** hold a file drag over the thin peer-facing edge zone and release to copy into the other computer's Downloads inbox; X11 is verified with scripted XDND on private Xvfb, Windows/macOS adapters are compile-checked only, and Wayland edge drops are **not available on this desktop** (use `one-mk send`); configure with `one-mk drag --on|--off` / `one-mk drag --zone 12` or `[drag] enabled = true, zone_px = 12` in settings (defaults on only for supported desktops). See [feasibility and limits](docs/DRAG-FILES.md).
 
+X11 edge drops reject XTEST/virtual-device arming but cannot establish user
+intent against hostile local X clients; disable them in an untrusted X session.
+The future Windows helper's pure policy defaults secure-desktop input **off**;
+UAC opt-in carries a local-malware elevation risk. No service ships yet; see
+[the Windows helper threat model](docs/WINDOWS-SERVICE.md#threat-model-secure-desktop-is-privileged-authority).
+
 ## Quick start
 
 Get it first. Every release has a package for each system (the

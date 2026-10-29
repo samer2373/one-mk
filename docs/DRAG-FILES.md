@@ -44,20 +44,47 @@ network delivery happens afterwards and may fail. Never advertise move.
 
 ## Safety and lifecycle
 
-Only user-dropped local absolute filesystem paths are accepted. Reject remote
+Intake is intended for user-dropped local absolute filesystem paths (the X11
+trust limit below is important). Reject remote
 URI hosts, non-file schemes, malformed percent escapes, query/fragment parts,
 NULs, symlinks (including ancestor components), special files, unreadable files,
 and paths the existing receiver rules cannot represent. Bound URI data before
 allocation, recursion depth, file count (10,000) and total bytes (1 TiB).
-Deduplicate inputs. Revalidate at transfer collection; filesystem mutation by
-the same user remains a race, not a sandbox boundary against that user.
+Deduplicate inputs. Revalidate at transfer collection and open: Unix opens use
+`O_NOFOLLOW | O_NONBLOCK`, then fstat the opened handle for regular-file type
+and the declared size, and clear O_NONBLOCK only afterwards. Windows opens use
+`FILE_FLAG_OPEN_REPARSE_POINT` and inspect the opened handle's attributes/type
+and size. This rejects a final-component symlink/reparse-point or FIFO swapped
+in after inspection without blocking a worker. It does not freeze file contents
+or pin ancestor directories: same-user mutation of ancestors or same-size
+regular-file contents remains outside this sandbox boundary.
+
+### X11 trust limit
+
+Raw button/motion input is admitted only from enabled slave devices whose
+XIQueryDevice name is neither XTEST nor virtual; unknown devices fail closed
+until a hierarchy-change refresh. Synthetic SendEvent input is ignored. An
+XdndEnter must occur while that physical-button drag is held, and XdndDrop's
+source must own XdndSelection and have entered/positioned in the armed zone.
+X errors (including a destroyed/forged source window) abort only that drop.
+
+**X11 is not a boundary against hostile local X clients.** XDND ClientMessages
+and selection ownership can still be synthesized or stolen during a genuine
+physical drag, and device names are not hardware attestation. Recognised file
+manager classes would also be spoofable. No pre-send confirmation or Cancel
+delay is implemented; post-transfer notifications are not consent. Device
+filtering prevents the entirely XTEST-driven attack, but does
+not prove user intent. Disable edge drops (`one-mk drag --off`) or use an
+isolated trusted X session if local X clients are untrusted. There is no
+`confirm_x11` setting or implied confirmation guarantee.
 
 Arming is event-driven: primary button held in a connected peer-facing span
 shows a thin zone; leaving/canceling/disconnecting hides it. Repeated motion
 in the same span produces no repeated map/unmap. A drop is single-use. A
 bounded release grace allows the source's asynchronous `XdndDrop` to arrive
 after the raw button-up. No periodic timer, motion subscription, or mapped
-zone is needed while idle. Existing resumable transfer and progress tracking
+zone is needed while idle. Windows/macOS also hide immediately on a new click
+and arm a 30-second safety deadline only while shown. Existing resumable transfer and progress tracking
 are used rather than a second network protocol. Completion must say
 `Sent N files to <computer>` only after all files are acknowledged.
 
@@ -88,14 +115,20 @@ the daemon to reload. Defaults enable only supported desktops. `doctor`
 explains Wayland unavailability; explicitly enabling the setting cannot make
 an unsupported backend work. No window/tray editor has been added.
 
-- **X11 implemented and tested:** a private Xvfb with XTest input and a
-  scripted XDND source verified raw-button/motion arming, actual target-window
+- **X11 implemented and tested:** private Xvfb rejects XTEST-driven arming;
+  pure fake-device filtering and scripted non-XTEST device IDs exercise the
+  accepted path (no physical Xvfb device is available). A scripted XDND source verifies actual target-window
   mapping, URI offer negotiation, selection conversion after drop, two file
   URLs, copy acknowledgement, and unmapping. This is not evidence of manual
   Nautilus/Dolphin/Thunar interoperability. INCR selection streaming is not
   implemented; oversized, incremental, non-file, and non-copy offers fail
   closed. Drop onto the zone before crossing the pointer-handoff boundary;
   this does not turn an ordinary remote pointer visit into a file drag.
+  XI motion uses its root coordinates directly. XI raw motion has **no root
+  coordinates**: during grabs where cooked motion is unavailable, an armed,
+  one-shot 16 ms fallback coalesces raw samples into one pointer query rather
+  than a synchronous query for each event. XISelectEvents is sent once per
+  drag transition without a synchronous check on each click; no idle sampling.
 - **Windows implemented, compile-checked only:** a separate OLE STA owns a
   topmost no-activate edge window, `IDropTarget`, and chained input hooks.
   Native Explorer drop, DPI/multi-monitor behavior, permissions, and interplay
@@ -106,6 +139,9 @@ an unsupported backend work. No window/tray editor has been added.
   owns an accessory window/view, global/local event monitors and file-URL
   `NSDraggingDestination`. Finder interoperability, permissions, display
   scaling/multiple screens, and pointer handoff require real macOS verification.
+  File-reference URLs from pasteboard items are resolved through
+  `NSURL.filePathURL` before URI validation; Finder reference-URL behavior still
+  requires a real Mac, not a claim of reproduced runtime failure here.
   Missing permission/monitor initialization fails gracefully. Neither adapter
   reads the clipboard or promises delivery before the transfer acknowledgements.
 - **Wayland:** deliberately no edge adapter, no XWayland fallback, no
