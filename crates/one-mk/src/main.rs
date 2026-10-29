@@ -290,7 +290,9 @@ fn main() -> ExitCode {
     let verbose = cli.verbose;
     let level = match verbose {
         0 => "warn,mdns_sd=error,zbus=error",
-        1 => "debug,mdns_sd=warn,zbus=info,quinn=info,quinn_proto=info,rustls=info",
+        // arboard says "Time-out hit while reading the clipboard" at info every few
+        // seconds while another program holds the selection and doesn't answer.
+        1 => "debug,mdns_sd=warn,zbus=info,quinn=info,quinn_proto=info,rustls=info,arboard=warn",
         _ => "trace",
     };
     let log = tracing_subscriber::fmt()
