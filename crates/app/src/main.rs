@@ -58,7 +58,7 @@ fn main() {
             .with_app_id("one-mk")
             .with_inner_size(size)
             .with_icon(window_icon())
-            .with_min_inner_size([760.0, 540.0]),
+            .with_min_inner_size([820.0, 540.0]),
         ..Default::default()
     };
     let result = eframe::run_native(

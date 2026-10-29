@@ -150,6 +150,14 @@ pub fn draw_refresh(p: &Painter, rect: Rect, col: Color32, turn: f32) {
     p.add(egui::Shape::convex_polygon(vec![end + tangent * 3.2, end + out * 2.8, end - out * 2.8], col, Stroke::NONE));
 }
 
+/// A cross: remove.
+pub fn draw_cross(p: &Painter, rect: Rect, col: Color32) {
+    let (c, r) = (rect.center(), 4.0);
+    let st = Stroke::new(1.5, col);
+    p.line_segment([c + vec2(-r, -r), c + vec2(r, r)], st);
+    p.line_segment([c + vec2(-r, r), c + vec2(r, -r)], st);
+}
+
 /// A tick drawn as two strokes; `t` draws it in.
 pub fn draw_check(p: &Painter, c: Pos2, size: f32, col: Color32, t: f32) {
     let a = c + vec2(-0.42, 0.02) * size;

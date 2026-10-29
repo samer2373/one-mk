@@ -1,6 +1,6 @@
 //! What `one-mk status` shows, as the daemon reports it, and its wire format.
 
-use one_mk_proto::{Align, Rect, Side, os};
+use one_mk_proto::{Rect, Side, os};
 
 /// Where a computer sits, for sentences like "Connected to B (on your right)."
 pub fn on_your(side: Side) -> &'static str {
@@ -12,42 +12,14 @@ pub fn on_your(side: Side) -> &'static str {
     }
 }
 
-/// Where a computer sits and how its edge lines up with ours, for
-/// sentences like "B is now below, its left edge 300 px right of yours."
-pub fn placement(side: Side, align: Align) -> String {
-    let (edge, after, before) = match side {
-        Side::Left | Side::Right => ("top", "below", "above"),
-        Side::Top | Side::Bottom => ("left", "right of", "left of"),
-    };
-    let lined = match align {
-        Align::Stretch => return on_your(side).to_owned(),
-        Align::Center => "centred on yours".to_owned(),
-        Align::Offset(0) => format!("its {edge} edge level with yours"),
-        Align::Offset(o) if o > 0 => format!("its {edge} edge {o} px {after} yours"),
-        Align::Offset(o) => format!("its {edge} edge {} px {before} yours", o.unsigned_abs()),
-    };
-    format!("{}, {lined}", on_your(side))
-}
-
-/// Monitors as `x,y,w,h;x,y,w,h` (empty for none).
-pub fn encode_rects(rects: &[Rect]) -> String {
-    rects.iter().map(|r| format!("{},{},{},{}", r.x, r.y, r.w, r.h)).collect::<Vec<_>>().join(";")
-}
-
-/// The inverse of [`encode_rects`]; `None` if anything doesn't parse.
-pub fn decode_rects(text: &str) -> Option<Vec<Rect>> {
-    if text.is_empty() {
-        return Some(Vec::new());
+/// Where a computer sits and, if it was placed, where its (0,0) is in
+/// ours, for sentences like "B is now below, its (0,0) at 300,1080 of
+/// yours."
+pub fn placement(side: Side, offset: Option<(i32, i32)>) -> String {
+    match offset {
+        None => on_your(side).to_owned(),
+        Some((x, y)) => format!("{}, its (0,0) at {x},{y} of yours", on_your(side)),
     }
-    text.split(';')
-        .map(|r| {
-            let v: Vec<i32> = r.split(',').map(|n| n.parse().ok()).collect::<Option<_>>()?;
-            match v[..] {
-                [x, y, w, h] if w > 0 && h > 0 => Some(Rect::new(x, y, w, h)),
-                _ => None,
-            }
-        })
-        .collect()
 }
 
 /// How the person at this computer takes control back from a peer. On
@@ -112,6 +84,12 @@ pub struct Status {
     /// Where the computers are, in detail (boxed: most readers never look,
     /// and it would double the size of every `Status`).
     pub layout: Box<LayoutStatus>,
+    /// This computer's monitors, in its logical pixels.
+    pub screens: Vec<Rect>,
+    /// (peer id, offset): where a peer's (0,0) sits in this computer's
+    /// pixels, for the peers that have one. Kept here rather than on
+    /// [`PeerStatus`] so its literals elsewhere stay valid.
+    pub offsets: Vec<(String, (i32, i32))>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -151,20 +129,15 @@ impl From<&str> for InputBackend {
     }
 }
 
-/// Everything a layout editor needs to draw where the computers are,
-/// beyond each peer's side ([`PeerStatus::side`]). Empty from daemons that
-/// predate it.
+/// About the layout, beyond where the computers are (each peer's side
+/// and monitors, [`Status::screens`] and [`Status::offsets`]). Empty from
+/// daemons that predate it.
 ///
-/// To change it: `one-mk layout <id> <side> --offset <PX|center|stretch>`
-/// (which applies at once and syncs the mirror image to the peer), and
+/// To change it: `one-mk layout <id> <side> --offset DX,DY|none` (which
+/// applies at once and syncs the mirror image to the peer), and
 /// `one-mk profile save|use|list|delete|auto`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LayoutStatus {
-    /// This computer's monitors, in logical pixels (empty until the input
-    /// backend has said).
-    pub screens: Vec<Rect>,
-    /// One per paired computer, in the order of [`Status::peers`].
-    pub places: Vec<Place>,
     /// The layout profile last put in place (`one-mk profile use`, or
     /// switched to automatically), if any.
     pub profile: Option<String>,
@@ -173,25 +146,6 @@ pub struct LayoutStatus {
     /// Problems with the layout, one line each (two computers claiming the
     /// same stretch of edge, one whose edge doesn't face ours anywhere).
     pub warnings: Vec<String>,
-}
-
-impl LayoutStatus {
-    /// The place of the peer with id `id` ([`PeerStatus::id`]).
-    pub fn place(&self, id: &str) -> Option<&Place> {
-        self.places.iter().find(|p| p.id == id)
-    }
-}
-
-/// How a paired computer's edge lines up with ours, and its monitors.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Place {
-    /// [`PeerStatus::id`].
-    pub id: String,
-    /// How its edge lines up with ours along its side.
-    pub align: Align,
-    /// Its monitors, in its own logical pixels, while it is online (empty
-    /// otherwise).
-    pub screens: Vec<Rect>,
 }
 
 /// One file transfer in flight (a whole `one-mk send`, not a single file).
@@ -271,6 +225,8 @@ pub struct PeerStatus {
     pub online: bool,
     /// Ctrl/Cmd swapping for keys sent to it: `auto`, `on` or `off`.
     pub swap: String,
+    /// Its monitors, in its own logical pixels; empty while it is offline.
+    pub screens: Vec<Rect>,
 }
 
 /// What to do where the desktop has no global shortcuts.
@@ -303,14 +259,22 @@ impl Status {
         for p in &self.peers {
             out += &format!("peer\t{}\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.swap, p.name);
         }
+        // Monitors go on lines of their own, after the peers they belong
+        // to: older readers skip lines they don't know.
+        let screen = |who: &str, r: &Rect| format!("screen\t{who}\t{}\t{}\t{}\t{}\n", r.x, r.y, r.w, r.h);
+        for r in &self.screens {
+            out += &screen("me", r);
+        }
+        for p in &self.peers {
+            for r in &p.screens {
+                out += &screen(&p.id, r);
+            }
+        }
+        for (id, (x, y)) in &self.offsets {
+            out += &format!("offset\t{id}\t{x}\t{y}\n");
+        }
         // Lines of their own, which readers from before them skip.
         let l = &self.layout;
-        for p in &l.places {
-            out += &format!("place\t{}\t{}\t{}\n", p.id, p.align, encode_rects(&p.screens));
-        }
-        if !l.screens.is_empty() {
-            out += &format!("screens\t{}\n", encode_rects(&l.screens));
-        }
         if let Some(p) = &l.profile {
             out += &format!("profile\t{p}\n");
         }
@@ -360,6 +324,11 @@ impl Status {
         out
     }
 
+    /// Where `peer`'s (0,0) sits in this computer's pixels, if it was placed.
+    pub fn offset_of(&self, peer: &str) -> Option<(i32, i32)> {
+        self.offsets.iter().find(|(id, _)| id == peer).map(|(_, o)| *o)
+    }
+
     pub fn decode(text: &str) -> Option<Self> {
         let mut lines = text.lines();
         if lines.next()? != "ok" {
@@ -388,12 +357,6 @@ impl Status {
                 ["edges", v] => s.edges = v.into(),
                 ["hotkeys", state, detail] => (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into()),
                 ["profile", v] => s.layout.profile = Some(v.into()),
-                ["screens", v] => s.layout.screens = decode_rects(v).unwrap_or_default(),
-                ["place", id, align, screens] => s.layout.places.push(Place {
-                    id: id.into(),
-                    align: align.parse().unwrap_or_default(),
-                    screens: decode_rects(screens).unwrap_or_default(),
-                }),
                 ["input", v] => s.input.push(v.into()),
                 ["warning", v] => s.layout.warnings.push(v.into()),
                 ["tuning", v] => s.tuning.push(v.into()),
@@ -416,7 +379,21 @@ impl Status {
                     os: os.parse().ok()?,
                     online: online == "1",
                     swap: swap.into(),
+                    screens: vec![],
                 }),
+                ["screen", who, x, y, w, h] => {
+                    // A line this reader can't make sense of only costs a monitor.
+                    let (Ok(x), Ok(y), Ok(w), Ok(h)) = (x.parse(), y.parse(), w.parse(), h.parse()) else { continue };
+                    let screens = if who == "me" { Some(&mut s.screens) } else { s.peers.iter_mut().find(|p| p.id == who).map(|p| &mut p.screens) };
+                    if let Some(screens) = screens {
+                        screens.push(Rect::new(x, y, w, h));
+                    }
+                }
+                ["offset", id, x, y] => {
+                    if let (Ok(x), Ok(y)) = (x.parse(), y.parse()) {
+                        s.offsets.push((id.into(), (x, y)));
+                    }
+                }
                 _ => {}
             }
         }
@@ -467,8 +444,8 @@ impl Status {
         for p in &self.peers {
             let state = if p.online { "online" } else { "offline" };
             out += &format!("  {:<24} {:<10} {:<14} {state}\n", p.name, os_name(p.os), on_your(p.side));
-            if let Some(place) = self.layout.place(&p.id).filter(|l| l.align != Align::Stretch) {
-                out += &format!("  {:<24} {}\n", "", placement(p.side, place.align));
+            if let Some(offset) = self.offset_of(&p.id) {
+                out += &format!("  {:<24} {}\n", "", placement(p.side, Some(offset)));
             }
         }
         for t in &self.transfers {
@@ -501,12 +478,19 @@ mod tests {
             controlling: Some("mac mini".into()),
             controlled_by: None,
             peers: vec![
-                PeerStatus { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into() },
-                PeerStatus { id: "9999-0000".into(), name: "old pc".into(), side: Side::Top, os: 0, online: false, swap: "off".into() },
+                PeerStatus { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into(), screens: vec![Rect::new(0, 0, 1920, 1080)] },
+                PeerStatus { id: "9999-0000".into(), name: "old pc".into(), side: Side::Top, os: 0, online: false, swap: "off".into(), screens: vec![] },
             ],
+            screens: vec![Rect::new(0, 0, 1920, 1080), Rect::new(-2592, 98, 1512, 982), Rect::new(-1080, -840, 1080, 1920), Rect::new(1920, 0, 1920, 1080)],
+            offsets: vec![("1234-5678".into(), (3840, -98))],
             ..Status::default()
         };
         assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
+        assert_eq!(s.offset_of("1234-5678"), Some((3840, -98)));
+        assert_eq!(s.offset_of("9999-0000"), None);
+        // A line this reader can't make sense of only costs that offset.
+        let text = s.encode() + "offset\t9999-0000\tleft\t0\n";
+        assert_eq!(Status::decode(&text).unwrap().offsets, s.offsets);
         let s = Status {
             pointer_locked: true,
             screen_locked: true,
@@ -536,21 +520,18 @@ mod tests {
         assert!(warned.render().contains("does not overlap"));
     }
 
-    /// The layout a layout editor reads: our monitors, each peer's
-    /// monitors and alignment, and the profiles.
+    /// What a layout editor reads: our monitors, each peer's monitors and
+    /// offset, and the profiles.
     #[test]
     fn layout_survives_the_wire_and_old_readers_skip_it() {
-        let laptop = PeerStatus { id: "1234-5678".into(), name: "laptop".into(), side: Side::Bottom, os: os::LINUX, online: true, swap: "auto".into() };
-        let old = PeerStatus { id: "9999-0000".into(), name: "old pc".into(), online: false, ..laptop.clone() };
+        let laptop = PeerStatus { id: "1234-5678".into(), name: "laptop".into(), side: Side::Bottom, os: os::LINUX, online: true, swap: "auto".into(), screens: vec![Rect::new(0, 0, 1280, 800)] };
+        let old = PeerStatus { id: "9999-0000".into(), name: "old pc".into(), online: false, screens: vec![], ..laptop.clone() };
         let s = Status {
             name: "desk".into(),
             peers: vec![laptop, old],
+            screens: vec![Rect::new(0, 0, 2560, 1440), Rect::new(-1920, 200, 1920, 1080)],
+            offsets: vec![("1234-5678".into(), (300, 1440))],
             layout: Box::new(LayoutStatus {
-                screens: vec![Rect::new(0, 0, 2560, 1440), Rect::new(-1920, 200, 1920, 1080)],
-                places: vec![
-                    Place { id: "1234-5678".into(), align: Align::Offset(-300), screens: vec![Rect::new(0, 0, 1280, 800)] },
-                    Place { id: "9999-0000".into(), align: Align::Center, screens: vec![] },
-                ],
                 profile: Some("home office".into()),
                 profiles: vec!["home office".into(), "café".into()],
                 warnings: vec![],
@@ -560,19 +541,14 @@ mod tests {
         let encoded = s.encode();
         assert_eq!(Status::decode(&encoded), Some(s.clone()));
         let text = s.render();
-        assert!(text.contains("below, its left edge 300 px left of yours"), "{text}");
+        assert!(text.contains("below, its (0,0) at 300,1440 of yours"), "{text}");
         assert!(text.contains("Layout profile: home office."), "{text}");
         // What a reader from before these lines makes of it: the rest.
         let before: Vec<&str> = encoded.lines().filter(|l| l.starts_with("ok") || l.starts_with("name") || l.starts_with("peer\t")).collect();
         let older = Status::decode(&(before.join("\n") + "\n")).unwrap();
-        assert_eq!((older.peers.len(), older.layout.places.len()), (2, 0));
-        assert_eq!(s.layout.place("9999-0000").unwrap().align, Align::Center);
-        assert_eq!(decode_rects("1,2,3"), None);
-        assert_eq!(decode_rects("0,0,0,5"), None, "empty monitors are refused");
-        assert_eq!(placement(Side::Right, Align::Offset(0)), "on your right, its top edge level with yours");
-        assert_eq!(placement(Side::Left, Align::Offset(40)), "on your left, its top edge 40 px below yours");
-        assert_eq!(placement(Side::Top, Align::Center), "above, centred on yours");
-        assert_eq!(placement(Side::Top, Align::Stretch), "above");
+        assert_eq!((older.peers.len(), older.offsets.len(), older.layout.profile), (2, 0, None));
+        assert_eq!(placement(Side::Top, None), "above");
+        assert_eq!(placement(Side::Left, Some((-1920, 40))), "on your left, its (0,0) at -1920,40 of yours");
     }
 
     #[test]
@@ -592,6 +568,17 @@ mod tests {
     }
 
     #[test]
+    fn status_from_an_older_daemon_still_reads() {
+        let old = "ok\nname\tdesk\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t3\t1\tauto\tMacBook Air\n";
+        let s = Status::decode(old).unwrap();
+        assert!(s.screens.is_empty());
+        assert_eq!(s.peers.len(), 1);
+        assert!(s.peers[0].screens.is_empty());
+        assert!(s.offsets.is_empty());
+        assert_eq!(s.peers[0].name, "MacBook Air");
+    }
+
+    #[test]
     fn status_reads_plainly() {
         let s = Status {
             name: "desk".into(),
@@ -599,7 +586,7 @@ mod tests {
             port: 24900,
             controlling: Some("mac mini".into()),
             controlled_by: None,
-            peers: vec![PeerStatus { id: "1".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into() }],
+            peers: vec![PeerStatus { id: "1".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into(), screens: vec![] }],
             ..Status::default()
         };
         let text = s.render();

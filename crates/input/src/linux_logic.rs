@@ -8,8 +8,8 @@
 // On other OSes only the tests use this module.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-use crate::{Armed, Event, Inject};
-use one_mk_proto::{Desktop, Pos, Rect, Side};
+use crate::{Event, Inject};
+use one_mk_proto::{Desktop, Edge, Pos, Rect, Side};
 
 pub(crate) const BTN_LEFT: u32 = 0x110;
 pub(crate) const BTN_RIGHT: u32 = 0x111;
@@ -333,26 +333,53 @@ fn axis_index(axis: u32) -> usize {
 
 // --------------------------------------------------------------- geometry
 
-pub(crate) fn layer_strips(armed: &[Armed], desktop: &Desktop) -> Vec<(Side, Rect, Rect)> {
-    let rounded: Vec<Armed> = armed.iter().map(|edge| Armed {
-        side: edge.side,
-        spans: edge.spans.as_ref().map(|spans| spans.iter().filter(|(start, end)| start < end).map(|(start, end)| (start.floor(), end.ceil())).collect()),
-    }).collect();
-    edge_strips(&rounded, desktop)
+/// Where the armed `edges` lie on `desktop`'s monitors: for each segment
+/// and each monitor whose `side` edge is on the segment's line, that
+/// monitor and the one-pixel strip just inside it along the part of the
+/// segment on it. Inner exposed edges (a monitor's edge with no monitor
+/// beyond it, set back from the bounding box) work like outer ones; a
+/// segment on no monitor's edge gets nothing.
+pub(crate) fn edge_strips(edges: &[Edge], desktop: &Desktop) -> Vec<(Side, Rect, Rect)> {
+    let mut out = Vec::new();
+    for e in edges {
+        for r in &desktop.screens {
+            let whole = Edge::of(e.side, r);
+            let (lo, hi) = (e.lo.max(whole.lo), e.hi.min(whole.hi));
+            if whole.at != e.at || lo >= hi {
+                continue;
+            }
+            let mut strip = edge_strip(e.side, r);
+            if e.side.along_x() {
+                (strip.x, strip.w) = (lo, hi - lo);
+            } else {
+                (strip.y, strip.h) = (lo, hi - lo);
+            }
+            out.push((e.side, *r, strip));
+        }
+    }
+    out
 }
 
-pub(crate) fn edge_strips(armed: &[Armed], desktop: &Desktop) -> Vec<(Side, Rect, Rect)> {
-    armed.iter().flat_map(|edge| edge.segments(desktop).map(move |(output, first, last)| {
-        let mut strip = edge_strip(edge.side, &output);
-        if edge.side.along_x() {
-            strip.x = first;
-            strip.w = last - first + 1;
-        } else {
-            strip.y = first;
-            strip.h = last - first + 1;
-        }
-        (edge.side, output, strip)
-    })).collect()
+/// Whether the pointer at `p`, on the one-pixel strip just inside the
+/// `side` edge, is on an armed segment of that side.
+pub(crate) fn armed_at(edges: &[Edge], side: Side, p: Pos) -> bool {
+    let (across, along) = if side.along_x() { (p.y, p.x) } else { (p.x, p.y) };
+    edges.iter().any(|e| {
+        let line = f64::from(e.at);
+        e.side == side && along >= f64::from(e.lo) && along < f64::from(e.hi) && (across - line).abs() <= 1.0
+    })
+}
+
+/// The middle pixel of `e`, on the monitor just inside it: where the
+/// pointer goes for a switch (`CaptureCmd::Activate`) to that side.
+pub(crate) fn segment_point(e: &Edge) -> Pos {
+    let mid = f64::from(e.lo + e.hi - 1) / 2.0;
+    match e.side {
+        Side::Left => Pos::new(f64::from(e.at), mid),
+        Side::Right => Pos::new(f64::from(e.at - 1), mid),
+        Side::Top => Pos::new(mid, f64::from(e.at)),
+        Side::Bottom => Pos::new(mid, f64::from(e.at - 1)),
+    }
 }
 
 /// A pointer barrier on the `side` edge of monitor `r`, as XFixes wants it
@@ -722,10 +749,11 @@ mod tests {
     }
 
     #[test]
-    fn partial_edge_strips_clip_and_preserve_output_origins() {
+    fn edge_strips_follow_segments_and_preserve_output_origins() {
         let desktop = Desktop::new(vec![Rect::new(-800, -200, 800, 900), Rect::new(0, -200, 1200, 600)]);
-        let armed = [Armed { side: Side::Top, spans: Some(vec![(-100.25, 300.5), (5000.0, 6000.0)]) }];
-        let strips = edge_strips(&armed, &desktop);
+        // A segment across both monitors' top edges is cut at the seam.
+        let top = [Edge { side: Side::Top, at: -200, lo: -100, hi: 301 }];
+        let strips = edge_strips(&top, &desktop);
         assert_eq!(strips, vec![
             (Side::Top, desktop.screens[0], Rect::new(-100, -200, 100, 1)),
             (Side::Top, desktop.screens[1], Rect::new(0, -200, 301, 1)),
@@ -733,26 +761,50 @@ mod tests {
         for (side, output, strip) in &strips {
             assert_eq!(strip.y - output.y, 0);
             assert!(strip.x >= output.x && strip.right() <= output.right());
-            assert!(f64::from(strip.x) >= -100.25 && f64::from(strip.right() - 1) < 300.5);
+            assert!(strip.x >= -100 && strip.right() <= 301);
             assert_eq!(barrier_line(*side, strip), (strip.x, -200, strip.right() - 1, -200));
         }
-        let right = [Armed { side: Side::Right, spans: Some(vec![(300.0, 800.0)]) }];
+        let right = [Edge { side: Side::Right, at: 1200, lo: 300, hi: 800 }];
         assert_eq!(edge_strips(&right, &desktop), vec![(Side::Right, desktop.screens[1], Rect::new(1199, 300, 1, 100))]);
-        let bottom = edge_strips(&[Armed::whole(Side::Bottom)], &desktop);
+        assert_eq!(barrier_line(Side::Right, &Rect::new(1199, 300, 1, 100)), (1200, 300, 1200, 399));
+        let outer: Vec<Edge> = desktop.outer_edges(Side::Bottom).map(|r| Edge::of(Side::Bottom, r)).collect();
+        let bottom = edge_strips(&outer, &desktop);
         assert_eq!(bottom.len(), 1);
         assert_eq!(bottom[0].2, Rect::new(-800, 699, 800, 1));
-        assert_eq!(edge_strips(&[Armed { side: Side::Right, spans: Some(vec![]) }], &desktop), vec![]);
+        assert_eq!(edge_strips(&[Edge { side: Side::Right, at: 1200, lo: 5, hi: 5 }], &desktop), vec![]);
+        // Not on any monitor's edge line: nothing.
+        assert_eq!(edge_strips(&[Edge { side: Side::Right, at: 1100, lo: 0, hi: 100 }], &desktop), vec![]);
+    }
+
+    /// An exposed edge set back from the bounding box (the shorter
+    /// monitor's bottom) gets a strip and a barrier like an outer one.
+    #[test]
+    fn inner_exposed_edges_get_strips() {
+        let desktop = Desktop::new(vec![Rect::new(-800, -200, 800, 900), Rect::new(0, -200, 1200, 600)]);
+        let inner: Vec<Edge> = desktop.exposed_edges(Side::Bottom).into_iter().filter(|e| e.at == 400).collect();
+        assert_eq!(inner, vec![Edge { side: Side::Bottom, at: 400, lo: 0, hi: 1200 }]);
+        let strips = edge_strips(&inner, &desktop);
+        assert_eq!(strips, vec![(Side::Bottom, desktop.screens[1], Rect::new(0, 399, 1200, 1))]);
+        assert_eq!(barrier_line(Side::Bottom, &strips[0].2), (0, 400, 1199, 400));
+        // The left monitor's right edge faces the right monitor for y
+        // -200..400 and is exposed below that: only that part.
+        let right: Vec<Edge> = desktop.exposed_edges(Side::Right).into_iter().filter(|e| e.at == 0).collect();
+        assert_eq!(edge_strips(&right, &desktop), vec![(Side::Right, desktop.screens[0], Rect::new(-1, 400, 1, 300))]);
     }
 
     #[test]
-    fn fractional_layer_strips_round_outward_but_activation_stays_in_span() {
-        let desktop = Desktop::new(vec![Rect::new(0, 0, 800, 600)]);
-        let edge = Armed { side: Side::Right, spans: Some(vec![(300.25, 500.5)]) };
-        assert_eq!(layer_strips(std::slice::from_ref(&edge), &desktop), vec![(Side::Right, desktop.screens[0], Rect::new(799, 300, 1, 201))]);
-        assert!(!edge.covers(Pos::new(799.0, 300.0)));
-        assert!(edge.covers(Pos::new(799.0, 300.25)));
-        assert!(!edge.covers(Pos::new(799.0, 500.5)));
-        assert!(layer_strips(&[Armed { side: Side::Right, spans: Some(vec![(300.25, 300.25)]) }], &desktop).is_empty());
+    fn activation_stays_in_the_armed_segment() {
+        let edges = [Edge { side: Side::Right, at: 800, lo: 300, hi: 501 }];
+        assert!(!armed_at(&edges, Side::Right, Pos::new(799.0, 299.5)));
+        assert!(armed_at(&edges, Side::Right, Pos::new(799.0, 300.0)));
+        assert!(armed_at(&edges, Side::Right, Pos::new(799.5, 500.75)));
+        assert!(!armed_at(&edges, Side::Right, Pos::new(799.0, 501.0)));
+        assert!(!armed_at(&edges, Side::Left, Pos::new(799.0, 400.0)), "another side");
+        assert!(!armed_at(&edges, Side::Right, Pos::new(500.0, 400.0)), "away from the line");
+        assert_eq!(segment_point(&edges[0]), Pos::new(799.0, 400.0));
+        let top = Edge { side: Side::Top, at: -200, lo: 0, hi: 1200 };
+        assert_eq!(segment_point(&top), Pos::new(599.5, -200.0));
+        assert!(armed_at(&[top], Side::Top, segment_point(&top)));
     }
 
     #[test]

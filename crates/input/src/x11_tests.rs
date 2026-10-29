@@ -11,6 +11,11 @@ use x11rb::protocol::xproto::GrabStatus;
 const W: i16 = 1280;
 const H: i16 = 800;
 
+/// All of the right edge of the default `Xvfb` screen.
+fn right_edge() -> Edge {
+    Edge::of(Side::Right, &Rect::new(0, 0, i32::from(W), i32::from(H)))
+}
+
 #[tokio::test]
 async fn partial_right_edge_does_not_capture_the_wall() {
     for barriers in [true, false] {
@@ -19,7 +24,7 @@ async fn partial_right_edge_does_not_capture_the_wall() {
         observer.move_to(600, 100);
         let (mut backend, _locked) = open_target(Target { display: Some(server.display.clone()), barriers }).unwrap();
         assert!(matches!(next(&mut backend.events).await, Event::Desktop(_)));
-        backend.capture.send(CaptureCmd::SetSides(vec![crate::Armed { side: Side::Right, spans: Some(vec![(300.0, 800.0)]) }])).unwrap();
+        backend.capture.send(CaptureCmd::SetEdges(vec![Edge { side: Side::Right, at: i32::from(W), lo: 300, hi: 800 }])).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         for y in [100, 299, 800, 850] {
             observer.move_to(600, y);
@@ -256,7 +261,7 @@ async fn pushing_against_an_edge_captures_until_released() {
     let o = x.observer();
     let (mut b, locked) = open_on(&x.display).unwrap();
     assert!(matches!(next(&mut b.events).await, Event::Desktop(_)));
-    b.capture.send(CaptureCmd::SetSides(vec![crate::Armed::whole(Side::Right)])).unwrap();
+    b.capture.send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
 
     // Along the edge without pushing out: nothing.
     o.move_to(W - 1, 400);
@@ -356,7 +361,7 @@ async fn without_barriers_an_edge_window_captures() {
     let (mut b, _locked) = open_target(Target { display: Some(x.display.clone()), barriers: false }).unwrap();
     assert!(matches!(next(&mut b.events).await, Event::Desktop(_)));
     o.move_to(W - 1, 400);
-    b.capture.send(CaptureCmd::SetSides(vec![crate::Armed::whole(Side::Right)])).unwrap();
+    b.capture.send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(b.events.try_recv().is_err(), "the pointer was there before: no capture");
     o.move_to(600, 400);

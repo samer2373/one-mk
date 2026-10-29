@@ -35,13 +35,14 @@
 
 use crate::common_logic::{Backoff, drain_coalesced};
 use crate::linux_logic::{
-    AxisFrame, EdgePush, Held, Notches, OutputGeometry, Pressed, absolute_motion, layer_strips, pushes_out, wlr_missing,
+    AxisFrame, EdgePush, Held, Notches, OutputGeometry, Pressed, absolute_motion, armed_at, edge_strips, pushes_out,
+    segment_point, wlr_missing,
 };
 use crate::linux_rt::{Socket, forward_lock, lock_changed, spawn_thread};
 use crate::xkb::{KeyboardMods, Modifiers};
-use crate::{Armed, Backend, CaptureCmd, Event, Inject};
+use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::{Context, Result, anyhow, bail};
-use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
+use one_mk_proto::{Desktop, Edge, Mods, Pos, Rect, Side};
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -120,7 +121,7 @@ async fn run(
     mut inj: mpsc::UnboundedReceiver<Inject>,
     mut locked: watch::Receiver<bool>,
 ) {
-    let mut keep = Keep { sides: Vec::new(), next_id: 0, locked: *locked.borrow_and_update(), reported: None };
+    let mut keep = Keep { edges: Vec::new(), next_id: 0, locked: *locked.borrow_and_update(), reported: None };
     let mut first = Some(first);
     let mut backoff = Backoff::default();
     let mut shown = None::<String>;
@@ -163,7 +164,7 @@ async fn run(
             tokio::select! {
                 _ = &mut sleep => break,
                 cmd = cmds.recv() => match cmd {
-                    Some(CaptureCmd::SetSides(s)) => keep.sides = s,
+                    Some(CaptureCmd::SetEdges(e)) => keep.edges = e,
                     Some(CaptureCmd::Activate { .. }) => { let _ = tx.send(Event::Error(NO_CAPTURE.into())); }
                     Some(CaptureCmd::Release { .. }) => {}
                     None => return,
@@ -177,7 +178,7 @@ async fn run(
 
 /// What outlives one connection.
 struct Keep {
-    sides: Vec<Armed>,
+    edges: Vec<Edge>,
     next_id: u32,
     locked: bool,
     reported: Option<Desktop>,
@@ -394,8 +395,8 @@ impl State {
                 cmd = cmds.recv() => {
                     drop(guard);
                     match cmd {
-                        Some(CaptureCmd::SetSides(sides)) => {
-                            self.keep.sides = sides;
+                        Some(CaptureCmd::SetEdges(edges)) => {
+                            self.keep.edges = edges;
                             self.set_edges();
                         }
                         Some(CaptureCmd::Release { id, pos }) => {
@@ -482,8 +483,9 @@ impl State {
         self.outputs.iter().find(|o| o.name == name)?.geometry.rect()
     }
 
-    /// Puts edge surfaces on the outer edges of the sides that lead to
-    /// peers, replacing the old ones.
+    /// Puts edge surfaces on the armed edge segments (inner exposed edges
+    /// too: a layer surface sits on its own output's edge), replacing the
+    /// old ones.
     fn set_edges(&mut self) {
         let old: Vec<Layer> = {
             let (edges, rest) = std::mem::take(&mut self.layers).into_iter().partition(|l| matches!(l.role, Role::Edge(_)));
@@ -493,7 +495,7 @@ impl State {
         old.into_iter().for_each(Layer::destroy);
         self.edge.leave();
         let Some(desktop) = self.desktop.clone() else { return };
-        for (side, output, strip) in layer_strips(&self.keep.sides, &desktop) {
+        for (side, output, strip) in edge_strips(&self.keep.edges, &desktop) {
             let Some(o) = self.outputs.iter().find(|o| o.geometry.rect() == Some(output)) else { continue };
             let (anchor, size) = match side {
                 Side::Left => (Anchor::Left | Anchor::Top, (1, strip.h as u32)),
@@ -581,7 +583,10 @@ impl State {
         if self.capture.is_some() {
             return;
         }
-        let at = self.desktop.as_ref().map(|d| d.point_on_edge(side, 0.5, 0.0));
+        // The middle of the first armed segment of that side, else the
+        // middle of the side.
+        let first = self.keep.edges.iter().find(|e| e.side == side && e.lo < e.hi).map(segment_point);
+        let at = first.or_else(|| self.desktop.as_ref().map(|d| d.point_on_edge(side, 0.5, 0.0)));
         match at {
             Some(at) if !self.keep.locked => {
                 // Onto the output that gets the capture surface.
@@ -878,7 +883,7 @@ impl State {
         }
         if let Some((side, at)) = self.edge.push(dx, dy) {
             debug_assert!(pushes_out(side, dx, dy));
-            if self.keep.sides.iter().any(|edge| edge.side == side && edge.covers(at)) {
+            if armed_at(&self.keep.edges, side, at) {
                 self.activate(side, at);
             }
         }

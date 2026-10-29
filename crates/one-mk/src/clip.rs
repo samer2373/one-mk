@@ -544,7 +544,9 @@ mod tests {
             let inbox = Inbox::new(std::env::temp_dir().join("one-mk-clip-test-unused"));
             tokio::spawn(async move {
                 while let Some(Ok(peer)) = node.accept().await {
-                    let services = Services { clip: Some(clip.clone()), inbox: inbox.clone() };
+                    // Every peer of the test counts as paired.
+                    let trusted = tokio::sync::watch::channel(std::collections::HashSet::from([peer.fingerprint])).0;
+                    let services = Services { clip: Some(clip.clone()), inbox: inbox.clone(), trusted };
                     tokio::spawn(async move {
                         let fp = peer.fingerprint;
                         if let Ok(first) = peer.accept_stream().await {

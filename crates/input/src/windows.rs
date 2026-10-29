@@ -2,9 +2,10 @@
 //!
 //! - Capture runs on its own thread with a Win32 message loop. `WH_MOUSE_LL`
 //!   and `WH_KEYBOARD_LL` callbacks run on that thread while it waits for
-//!   messages. When the pointer touches an armed outer edge of the desktop,
-//!   the hooks start swallowing local input: the cursor is parked in the
-//!   middle of a screen under a tiny invisible window that hides it, and
+//!   messages. When the pointer touches an armed edge segment (outer or
+//!   an inner exposed edge, see `CaptureCmd::SetEdges`), the hooks start
+//!   swallowing local input: the cursor is parked in the middle of a
+//!   screen under a tiny invisible window that hides it, and
 //!   each mouse event's distance from the park point is the motion delta.
 //!   Because the swallowed event never moves the cursor, that distance is
 //!   exactly the post-acceleration movement Windows would have applied.
@@ -36,9 +37,9 @@ use crate::win_logic::{
     VK_XBUTTON2, Watch, WinKey, evdev_to_win, hook_key_to_evdev, is_synthetic_mouse, repeat_timing, vk_to_evdev,
     wheel_to_wire, wire_to_wheel,
 };
-use crate::{Armed, Backend, CaptureCmd, Event, Inject};
+use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::{Result, bail};
-use one_mk_proto::{Mods, Rect, Side};
+use one_mk_proto::{Edge, Mods, Rect, Side};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
@@ -198,7 +199,7 @@ struct State {
     hwnd: HWND,
     shared: Arc<Mutex<Space>>,
     space: Space,
-    sides: Vec<Armed>,
+    edges: Vec<Edge>,
     cmds: std_mpsc::Receiver<CaptureCmd>,
     captured: Option<Captured>,
     /// The last activation id handed out.
@@ -429,7 +430,7 @@ fn capture_thread(
             hwnd,
             shared,
             space,
-            sides: Vec::new(),
+            edges: Vec::new(),
             cmds: cmd_rx,
             captured: None,
             next_id: 0,
@@ -658,9 +659,8 @@ impl State {
                 return (false, Effect::None);
             }
             let (dx, dy) = self.heading.update(x, y);
-            // Only the parts of an edge that face a peer.
-            let (open, n) = crate::open_sides(&self.sides, self.space.to_logical(x, y));
-            let hit = self.space.edge_hit(&open[..n], x, y, dx, dy);
+            // Only the armed segments: the parts of edges that face a peer.
+            let hit = self.space.edge_hit(&self.edges, x, y, dx, dy);
             // Only asked at an edge: a drag must not cross machines.
             let dragging = hit.is_some() && async_any_button();
             return match self.gate.check(hit, dragging) {
@@ -748,8 +748,8 @@ impl State {
 
     fn command(&mut self, cmd: CaptureCmd) -> Effect {
         match cmd {
-            CaptureCmd::SetSides(sides) => {
-                self.sides = sides;
+            CaptureCmd::SetEdges(edges) => {
+                self.edges = edges;
                 Effect::None
             }
             CaptureCmd::Release { id, pos } => {

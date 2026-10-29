@@ -1,9 +1,10 @@
 //! macOS backend built on Quartz Event Services.
 //!
 //! - Capture: a `CGEventTap` at the HID level on its own thread with a
-//!   CFRunLoop. When the pointer pushes against an armed outer edge, the
-//!   cursor is frozen and hidden and every input event is swallowed and
-//!   sent to the daemon until it releases the pointer.
+//!   CFRunLoop. When the pointer pushes against an armed edge segment
+//!   (outer or an inner exposed edge), the cursor is frozen and hidden and
+//!   every input event is swallowed and sent to the daemon until it
+//!   releases the pointer.
 //! - Injection: `CGEventPost` on a second thread, with events from our own
 //!   `CGEventSource` (tagged so our tap ignores them).
 //! - Permissions: Accessibility and Input Monitoring. While either is
@@ -26,7 +27,7 @@
 
 use crate::common_logic::{Controlled, KeyRepeat, LocalInputGate, drain_coalesced, is_repeatable, now_ms};
 use crate::macos_logic::{self as logic, MacScroll};
-use crate::{Armed, Backend, CaptureCmd, Event, Inject};
+use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::Result;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_core_foundation::{
@@ -43,7 +44,7 @@ use objc2_core_graphics::{
     CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGSessionCopyCurrentDictionary,
     CGWarpMouseCursorPosition, kCGNullDirectDisplay,
 };
-use one_mk_proto::{Desktop, Mods, Pos, Rect, Side, mediakeys};
+use one_mk_proto::{Desktop, Edge, Mods, Pos, Rect, Side, mediakeys};
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void};
 use std::panic::AssertUnwindSafe;
@@ -242,7 +243,7 @@ struct Ctx {
 
 struct State {
     desktop: Option<Desktop>,
-    sides: Vec<Armed>,
+    edges: Vec<Edge>,
     /// Input goes to a peer: events are swallowed and the cursor is frozen.
     active: bool,
     /// The current (or last) activation id.
@@ -272,7 +273,7 @@ impl State {
     fn new() -> Self {
         Self {
             desktop: None,
-            sides: Vec::new(),
+            edges: Vec::new(),
             active: false,
             id: 0,
             timer: None,
@@ -581,7 +582,7 @@ impl Ctx {
             return;
         };
         match msg {
-            Msg::Cmd(CaptureCmd::SetSides(sides)) => st.sides = sides,
+            Msg::Cmd(CaptureCmd::SetEdges(edges)) => st.edges = edges,
             Msg::Cmd(CaptureCmd::Release { id, pos }) => {
                 // A release for an earlier activation is stale.
                 if st.active && st.id == id {
@@ -664,9 +665,8 @@ impl Ctx {
                 let loc = CGEvent::location(e);
                 let p = Pos::new(loc.x, loc.y);
                 let (dx, dy) = mouse_delta(ev);
-                // Only the parts of an edge that face a peer.
-                let (open, n) = crate::open_sides(&st.sides, p);
-                match logic::edge_hit(desktop, &open[..n], p, dx, dy) {
+                // Only the armed segments: the parts of edges that face a peer.
+                match logic::edge_hit(&st.edges, p, dx, dy) {
                     Some(_) if st.armed && secure_input() => {
                         // Keys wouldn't reach the peer; don't cross.
                         st.armed = false;
@@ -1018,8 +1018,14 @@ async fn inject_loop(
                 // Everything already queued, without the moves that later
                 // ones make stale: a burst costs one move, not latency.
                 drain_coalesced(first, &mut rx, &mut batch);
+                let was = controlled.get();
                 if controlled.apply(&mut batch) {
                     repeat.clear();
+                }
+                // A Mac with no mouse of its own can leave the pointer
+                // undrawn: ask for it at the start of each visit.
+                if !was && controlled.get() {
+                    let _ = CGDisplayShowCursor(kCGNullDirectDisplay);
                 }
                 if !trusted.load(Ordering::Relaxed) {
                     if !warned {

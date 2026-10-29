@@ -40,14 +40,14 @@ pub enum Job {
     Layout { id: String, name: String, side: one_mk_proto::Side },
     Swap { id: String, name: String, swap: String },
     TakeBack,
+    Stop,
+    Forget(String),
     /// Turning start at login on (true) or off.
     Autostart(bool),
     Send { to: String, count: usize },
     /// Measuring the computer with this id.
     Measure(String),
     Open,
-    /// Lining a computer's edge up with ours.
-    Align { id: String, name: String, side: one_mk_proto::Side, align: one_mk_proto::Align },
     /// `one-mk profile <verb> <name>`.
     Profile { verb: &'static str, name: String },
     /// Switching automatically to a profile on a Wi-Fi network (`None`: off).
@@ -141,10 +141,17 @@ impl Link {
         let link = self.clone();
         std::thread::spawn(move || {
             link.send(Event::Autostart(install::is_installed()));
+            link.show_tray();
             let mut last: Option<Option<Status>> = None;
             let mut gone = 0;
             let mut stamp = None;
+            let opened = std::time::SystemTime::now();
             loop {
+                // The tray's "Quit one·mk" writes this file: the window goes too.
+                let quit = std::fs::metadata(link.dir.join(client::QUIT_FILE)).and_then(|m| m.modified());
+                if quit.is_ok_and(|t| t > opened) {
+                    link.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
                 // Settings live in files, not in the status: look at them
                 // whenever they change (a stat per look).
                 let now = link.prefs_stamp();
@@ -233,21 +240,18 @@ impl Link {
         });
     }
 
-    pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side) {
+    /// Moves a peer to `side`: with an offset, to that exact place; without,
+    /// anywhere along it.
+    pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side, offset: Option<(i32, i32)>) {
         let (id, word) = (peer.to_owned(), side.to_string());
-        self.job(Job::Layout { id: peer.into(), name: name.into(), side }, move |l| l.one_mk(&["layout", &id, &word]).map(drop));
+        let at = offset.map_or_else(|| "--offset=none".to_owned(), |(x, y)| format!("--offset={x},{y}"));
+        self.job(Job::Layout { id: peer.into(), name: name.into(), side }, move |l| l.one_mk(&["layout", &id, &word, &at]).map(drop));
     }
 
     pub fn set_swap(&self, peer: &str, name: &str, swap: &str) {
         let (id, value) = (peer.to_owned(), swap.to_owned());
         let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into() };
         self.job(what, move |l| l.one_mk(&["layout", &id, "--swap-ctrl-cmd", &value]).map(drop));
-    }
-
-    pub fn set_align(&self, peer: &str, name: &str, side: one_mk_proto::Side, align: one_mk_proto::Align) {
-        let (id, word, offset) = (peer.to_owned(), side.to_string(), align.to_string());
-        let what = Job::Align { id: peer.into(), name: name.into(), side, align };
-        self.job(what, move |l| l.one_mk(&["layout", &id, &word, "--offset", &offset]).map(drop));
     }
 
     /// `one-mk profile use|save|delete <name>`.
@@ -429,6 +433,31 @@ impl Link {
             Some(e) => anyhow::bail!("{}", e.trim_start_matches([' ', ':'])),
             None => Ok(()),
         }
+    }
+
+    /// Puts the menu-bar / tray icon up if it isn't, so the window is never
+    /// the only way in. The tray exits by itself when one is already there.
+    fn show_tray(&self) {
+        if let Some(tray) = &self.tray {
+            let _ = proc::spawn_detached(tray, &self.home_args(), None);
+        }
+    }
+
+    /// Forgets a paired computer; a running daemon lets go of it at once.
+    pub fn forget(&self, id: &str, name: &str) {
+        let id = id.to_owned();
+        self.job(Job::Forget(name.to_owned()), move |l| {
+            l.one_mk(&["forget", &id])?;
+            client::request(&l.dir, Request::Reload, Duration::from_secs(5)).map(drop)
+        });
+    }
+
+    pub fn stop(&self) {
+        self.job(Job::Stop, |l| match client::request(&l.dir, Request::Stop, Duration::from_secs(5))? {
+            // One started before an update answers "unknown request".
+            Some(r) if !r.starts_with("ok") => anyhow::bail!("this one·mk is older than the app"),
+            _ => Ok(()),
+        });
     }
 
     pub fn take_back(&self) {

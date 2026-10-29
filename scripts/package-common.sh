@@ -1,4 +1,5 @@
-# Shared by scripts/package-*.sh (sourced, not run).
+# Shared by scripts/package-{appimage,flatpak,homebrew}.sh and
+# scripts/check-packaging.sh (sourced, not run).
 #
 # Sets ROOT, VERSION, BIN_DIR (where the release build is), OUT_DIR (where
 # packages are written) and SOURCE_DATE_EPOCH (the commit's time, so that
@@ -6,6 +7,9 @@
 #   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app
 # (add --target T and set TARGET=T for a cross build); package scripts never
 # build the programs themselves, so CI and a developer use the same bits.
+# The .deb, the macOS app/.dmg and the Windows installer are not made here:
+# scripts/bundle-deb.sh, scripts/bundle-mac.sh and installer/one-mk.iss do
+# that (docs/PACKAGING.md).
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -26,37 +30,8 @@ need_binaries() {
     done
 }
 
-# RFC 3339 date of the commit, for release notes and metainfo.
+# RFC 3339 date of the commit, for the metainfo.
 release_date() { date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%d 2>/dev/null || date -u -r "$SOURCE_DATE_EPOCH" +%Y-%m-%d; }
-
-# linux_tree DEST BINDIR: lays out what every Linux package ships under
-# DEST, for programs that will live in BINDIR (an absolute path such as
-# /usr/bin; the service and autostart files name it).
-linux_tree() {
-    dest=$1 bindir=$2
-    mkdir -p "$dest/usr/bin"
-    for b in one-mk one-mk-tray one-mk-app; do
-        install -m 0755 "$BIN_DIR/$b" "$dest/usr/bin/$b"
-    done
-    # The service and the desktop entries come from the same code as
-    # `one-mk install`, so they cannot drift apart.
-    cargo run -q --locked -p one-mk-ctl --example packaging-files -- "$dest" "$bindir" >/dev/null
-    install -Dm 0644 "$ROOT/packaging/linux/one-mk.desktop" "$dest/usr/share/applications/one-mk.desktop"
-    sed -e "s/@VERSION@/$VERSION/" -e "s/@DATE@/$(release_date)/" "$ROOT/packaging/linux/io.github.onemk.OneMk.metainfo.xml" \
-        > "$dest/io.github.onemk.OneMk.metainfo.xml.tmp"
-    install -Dm 0644 "$dest/io.github.onemk.OneMk.metainfo.xml.tmp" "$dest/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml"
-    rm "$dest/io.github.onemk.OneMk.metainfo.xml.tmp"
-    icons=$ROOT/docs/brand/app-icon/windows-linux/hicolor
-    (cd "$icons" && find . -type f \( -name '*.png' -o -name '*.svg' \)) | while read -r f; do
-        install -Dm 0644 "$icons/$f" "$dest/usr/share/icons/hicolor/$f"
-    done
-    gzip -9n < "$ROOT/packaging/linux/one-mk.1" > "$dest/one-mk.1.gz.tmp"
-    install -Dm 0644 "$dest/one-mk.1.gz.tmp" "$dest/usr/share/man/man1/one-mk.1.gz"
-    rm "$dest/one-mk.1.gz.tmp"
-    ln -sf one-mk.1.gz "$dest/usr/share/man/man1/one-mk-tray.1.gz"
-    ln -sf one-mk.1.gz "$dest/usr/share/man/man1/one-mk-app.1.gz"
-    install -Dm 0644 "$ROOT/packaging/linux/copyright" "$dest/usr/share/doc/one-mk/copyright"
-}
 
 # Same permissions whatever the builder's umask, and every file's time
 # clamped, so the archive does not depend on who built it or when.

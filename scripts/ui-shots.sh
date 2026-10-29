@@ -10,12 +10,13 @@ OUT=${1:-/tmp/omk-shots}
 # Shots for docs/screens are stored small (see shot()); elsewhere exact.
 case "$(realpath -m "$OUT")" in */docs/screens) SMALL=1 ;; *) SMALL= ;; esac
 W=/tmp/omk-shots-work-$$
-cargo build -q -p one-mk -p one-mk-app -j 3
+cargo build -q -p one-mk -p one-mk-app -p one-mk-tray -j 2
 B=$PWD/target/debug/one-mk
 APP=$PWD/target/debug/one-mk-app
 rm -rf "$W" && mkdir -p "$OUT" && mkdir -m 700 -p "$W/a" "$W/b" "$W/c" "$W/e" "$W/off" "$W/fx"
 PIDS=()
-cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; rm -rf "$W"; }
+# The window puts up the tray icon (one per settings folder); end those too.
+cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; pkill -f "one-mk-tray --home $W/" || true; rm -rf "$W"; }
 trap cleanup EXIT
 
 shot() { # name after-seconds home [extra env...]
@@ -66,6 +67,7 @@ shot 24-layout-two-daemons 3 "$W/a" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="Stu
 shot 25-health-two-daemons 8 "$W/a" ONE_MK_APP_TAB=health
 shot 26-advanced-defaults 3 "$W/a" ONE_MK_APP_TAB=advanced
 shot 14-mid-drag 2.4 "$W/a" ONE_MK_APP_DRAG=1
+shot 31-layout-mid-drag 2.4 "$W/a" ONE_MK_APP_TAB=layout ONE_MK_APP_DRAG=1
 shot 15-keyboard-focus 2 "$W/a" ONE_MK_APP_FOCUS=1
 shot 16-error-toast 1.6 "$W/a" ONE_MK_APP_TOAST=1
 kill "$B_PID"; sleep 3
@@ -103,10 +105,15 @@ printf 'ok\nname\tsamer-Victus\nid\tabcd-ef01\nport\t24800\n' >"$X"
 printf 'peer\t1111-2222\tleft\t3\t1\tauto\tMacBook Air\n' >>"$X"
 printf 'peer\t3333-4444\tbottom\t1\t1\tauto\tStudio PC\n' >>"$X"
 printf 'peer\t5555-6666\tright\t2\t0\toff\tGaming PC\n' >>"$X"
-printf 'place\t1111-2222\t120\t0,0,1470,956\n' >>"$X"
-printf 'place\t3333-4444\tcenter\t0,0,1920,1080;1920,-300,1080,1920\n' >>"$X"
-printf 'place\t5555-6666\tstretch\t\n' >>"$X"
-printf 'screens\t0,0,2560,1440;2560,180,1920,1080\n' >>"$X"
+# Monitors (this computer's, then each peer's) and offsets, as the daemon
+# reports them: the MacBook beside the left monitor, 120 px lower; the
+# Studio PC below but 360 px clear of it (its screens touch nothing);
+# the Gaming PC anywhere along the right.
+printf 'screen\tme\t0\t0\t2560\t1440\nscreen\tme\t2560\t180\t1920\t1080\n' >>"$X"
+printf 'screen\t1111-2222\t0\t0\t1470\t956\n' >>"$X"
+printf 'screen\t3333-4444\t0\t0\t1920\t1080\nscreen\t3333-4444\t1920\t-300\t1080\t1920\n' >>"$X"
+printf 'offset\t1111-2222\t-1470\t120\noffset\t3333-4444\t320\t2100\n' >>"$X"
+printf "warning\tlayout of Studio PC does not overlap yours: none of its screens touches this computer's on its bottom, so the pointer can't cross to it\n" >>"$X"
 printf 'profile\thome office\nprofiles\thome office\tcafé, 2nd floor\tStudio\n' >>"$X"
 printf 'gaming\tauto\nlock_sync\t1\npointer_locked\t1\n' >>"$X"
 printf 'edges\tdead corners 20 px, dwell 300 ms, hold shift, fullscreen guard; left edge: no dwell\n' >>"$X"
@@ -172,7 +179,6 @@ JSON
 shot 28-desk-quick-actions-transfer 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air"
 shot 29-layout-offset-multi-monitor 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air"
 shot 30-layout-edges-dont-meet 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="Studio PC" ONE_MK_APP_PROFILE="home office"
-shot 31-layout-mid-drag 2.4 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="Studio PC" ONE_MK_APP_PLAN_DRAG=-1500
 shot 32-layout-keyboard-focus 2 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_FOCUS=1
 shot 33-files-transfers-clipboard 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files
 shot 34-health-failing 3 "$W/fx" ONE_MK_APP_STATUS="$XI" ONE_MK_APP_TAB=health ONE_MK_APP_DOCTOR="$D"

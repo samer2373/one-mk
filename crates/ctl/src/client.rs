@@ -11,6 +11,10 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Written in the settings folder when the tray quits one·mk: an open
+/// window closes when it finds one newer than itself.
+pub const QUIT_FILE: &str = "quit";
+
 use crate::status::TransferStatus;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +45,8 @@ pub enum Request {
     /// A running `one-mk send` reports how far it is, so `status` and the
     /// window can show it. `finished` ends the report.
     Transfer { t: TransferStatus, finished: bool },
+    /// Shut the daemon down, as if it had been sent Ctrl-C.
+    Stop,
 }
 
 /// Where `one-mk switch` sends the mouse and keyboard.
@@ -125,6 +131,7 @@ impl Request {
             Request::ClipSend(_) => "clip-send",
             Request::ClipGet(_) => "clip-get",
             Request::Transfer { .. } => "transfer",
+            Request::Stop => "stop",
         }
     }
 
@@ -161,6 +168,7 @@ impl Request {
             "reload" if arg.is_empty() => Some(Request::Reload),
             "takeback" if arg.is_empty() => Some(Request::TakeBack),
             "lock-all" if arg.is_empty() => Some(Request::LockAll),
+            "stop" if arg.is_empty() => Some(Request::Stop),
             "switch" => SwitchTo::parse(arg).map(Request::Switch),
             "lock-pointer" => Toggle::parse(arg).map(Request::LockPointer),
             "settings" if arg.is_empty() => Some(Request::Settings),
@@ -296,6 +304,7 @@ mod tests {
             Request::Status,
             Request::Reload,
             Request::TakeBack,
+            Request::Stop,
             Request::LockAll,
             Request::Switch(SwitchTo::Here),
             Request::Switch(SwitchTo::Next),

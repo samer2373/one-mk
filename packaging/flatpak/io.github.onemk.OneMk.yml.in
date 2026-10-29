@@ -2,8 +2,8 @@
 # hand. `sh scripts/package-flatpak.sh` fills in the checksums and writes the
 # result, with every file it names under sources/ next to it, to
 # dist/flatpak/, and packs that folder as the self-contained source bundle
-# one-mk-<version>-flatpak-sources.tar.gz (nothing in it points at the
-# builder's checkout). See docs/PACKAGING.md for what cannot work inside a
+# one-mk-flatpak-sources.tar.gz (nothing in it points at the builder's
+# checkout). See docs/PACKAGING.md for what cannot work inside a
 # sandbox.
 app-id: io.github.onemk.OneMk
 runtime: org.freedesktop.Platform

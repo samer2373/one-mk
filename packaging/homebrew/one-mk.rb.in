@@ -1,16 +1,17 @@
 # Homebrew cask for one-mk (UNTESTED: written without a Mac).
-# `sh scripts/package-homebrew.sh` fills in the version and checksums from
-# the release's .dmg files. Put the result in a tap, e.g. samer2373/homebrew-tap/Casks/one-mk.rb:
+# `sh scripts/package-homebrew.sh` fills in the version and the checksums of
+# the two .dmg files the release publishes (made by scripts/bundle-mac.sh).
+# Put the result in a tap, e.g. samer2373/homebrew-tap/Casks/one-mk.rb:
 #   brew install --cask samer2373/tap/one-mk
 cask "one-mk" do
-  arch arm: "arm64", intel: "x64"
+  arch arm: "aarch64", intel: "x86_64"
 
   version "@VERSION@"
   sha256 arm:   "@SHA256_ARM64@",
          intel: "@SHA256_X64@"
 
-  url "https://github.com/samer2373/one-mk/releases/download/v#{version}/one-mk-#{version}-#{arch}.dmg"
-  name "one-mk"
+  url "https://github.com/samer2373/one-mk/releases/download/v#{version}/one-mk-#{arch}-apple-darwin.dmg"
+  name "one·mk"
   desc "Share one mouse and keyboard between computers"
   homepage "https://github.com/samer2373/one-mk"
 
@@ -36,11 +37,8 @@ cask "one-mk" do
   ]
 
   caveats <<~EOS
-    one-mk is not notarised yet. If macOS says it cannot be opened, allow it in
-    System Settings > Privacy & Security, or run:
-      xattr -dr com.apple.quarantine "#{appdir}/one-mk.app"
-    Then grant Accessibility and Input Monitoring when asked, and run
-      one-mk install
-    to start it at login.
+    Open one·mk from Applications, click Start and turn on "Start at login"
+    in the window. macOS asks for Accessibility permission the first time:
+    turn on one·mk in System Settings > Privacy & Security > Accessibility.
   EOS
 end

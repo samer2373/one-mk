@@ -4,12 +4,13 @@
 # installed. UNTESTED end to end (no flatpak-builder here).
 #   sh scripts/package-flatpak.sh [URL_OR_FILE_OF_THE_TARBALL]
 # Without an argument it uses dist/one-mk-x86_64-unknown-linux-gnu.tar.gz
-# (what the release workflow builds). With a URL, the manifest downloads the
+# (the plain Linux archive the release workflow's "Package" step makes and
+# publishes, the one install.sh downloads). With a URL, the manifest downloads the
 # tarball from there (and its checksum is taken from a download made here);
 # with a file, the tarball is copied into the bundle.
 #
-# Writes dist/flatpak/ (manifest.yml and sources/) and
-# dist/one-mk-<version>-flatpak-sources.tar.gz: that folder, packed with
+# Writes dist/flatpak/ (io.github.onemk.OneMk.yml and sources/) and
+# dist/one-mk-flatpak-sources.tar.gz: that folder, packed with
 # relative paths only and a sha256 for every source, so it builds anywhere.
 # The release publishes the bundle, never the bare manifest.
 . "$(dirname "$0")/package-common.sh"
@@ -57,7 +58,7 @@ Every source in the manifest has a sha256; paths are relative to the manifest.
 README
 
 # The bundle: a folder named for the version, files in sorted order, the same bytes every time.
-bundle=$OUT_DIR/one-mk-$VERSION-flatpak-sources.tar.gz
+bundle=$OUT_DIR/one-mk-flatpak-sources.tar.gz
 work=$(mktemp -d)
 trap 'rm -rf "$work" "${tmp:-}"' EXIT
 mkdir "$work/one-mk-flatpak-$VERSION"
@@ -74,8 +75,8 @@ echo "$bundle"
 if command -v flatpak-builder >/dev/null; then
     (cd "$dir" && flatpak-builder --force-clean --user --install-deps-from=flathub \
         --repo="$dir/repo" "$dir/build" "$dir/io.github.onemk.OneMk.yml")
-    flatpak build-bundle "$dir/repo" "$OUT_DIR/one-mk-$VERSION.flatpak" io.github.onemk.OneMk
-    echo "$OUT_DIR/one-mk-$VERSION.flatpak"
+    flatpak build-bundle "$dir/repo" "$OUT_DIR/one-mk-x86_64-unknown-linux-gnu.flatpak" io.github.onemk.OneMk
+    echo "$OUT_DIR/one-mk-x86_64-unknown-linux-gnu.flatpak"
 else
     echo "flatpak-builder not found: wrote the manifest and the source bundle only." >&2
 fi

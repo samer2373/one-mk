@@ -1,6 +1,6 @@
 use crate::identity::Fingerprint;
 use anyhow::{Context, Result};
-use one_mk_proto::{Align, Side};
+use one_mk_proto::Side;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -51,12 +51,7 @@ pub struct Device {
     /// Last addresses it was reached at, for networks that block discovery.
     #[serde(default)]
     pub addrs: Vec<String>,
-    /// How its facing edge lines up with ours along that side
-    /// ([`Align`] as text: `stretch`, `center` or pixels); empty is
-    /// stretch, the default.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub align: String,
-    /// When `side` (or `align`) was last chosen (milliseconds since 1970,
+    /// When `side` (or `offset`) was last chosen (milliseconds since 1970,
     /// but always above the previous value, and above any version received
     /// from the device). Both computers keep the newer layout; a tie is
     /// broken by the larger fingerprint (`one_mk::manage::resolve_layout`).
@@ -68,6 +63,11 @@ pub struct Device {
     /// The device's OS when last connected (see `one_mk_proto::os`).
     #[serde(default)]
     pub os: u8,
+    /// Where the device's desktop origin sits in this machine's logical
+    /// pixels; the pointer crosses only where the screens then touch.
+    /// None: anywhere along `side`, scaled to fit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<(i32, i32)>,
 }
 
 fn default_side() -> String {
@@ -78,14 +78,6 @@ impl Device {
     pub fn side(&self) -> Side {
         self.side.parse().unwrap_or(Side::Right)
     }
-    /// A value that doesn't parse (a bad hand edit) is the default.
-    pub fn align(&self) -> Align {
-        bounded_align(self.align.parse().unwrap_or_default())
-    }
-    pub fn set_align(&mut self, align: Align) {
-        let align = bounded_align(align);
-        self.align = if align == Align::Stretch { String::new() } else { align.to_string() };
-    }
     pub fn fingerprint(&self) -> Option<Fingerprint> {
         self.fingerprint.parse().ok()
     }
@@ -94,11 +86,13 @@ impl Device {
     }
 }
 
-fn bounded_align(align: Align) -> Align {
-    match align {
-        Align::Offset(offset) => Align::Offset(offset.clamp(-100000, 100000)),
-        other => other,
-    }
+/// Largest offset (either axis) kept from `devices.toml`, as on the wire
+/// (`Control::Layout`): far beyond any desktop, and small enough that the
+/// geometry never overflows. A hand edit past it is cut down to it.
+pub const MAX_OFFSET: i32 = 1 << 24;
+
+fn bounded_offset((x, y): (i32, i32)) -> (i32, i32) {
+    (x.clamp(-MAX_OFFSET, MAX_OFFSET), y.clamp(-MAX_OFFSET, MAX_OFFSET))
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -122,7 +116,7 @@ impl TrustStore {
             Err(e) => return Err(e.into()),
         };
         for device in &mut file.devices {
-            if let Ok(Align::Offset(offset)) = device.align.parse() { device.set_align(Align::Offset(offset)); }
+            device.offset = device.offset.map(bounded_offset);
         }
         Ok(Self { path, file })
     }
@@ -159,9 +153,9 @@ impl TrustStore {
     pub fn upsert(&mut self, mut device: Device) {
         if let Some(existing) = self.file.devices.iter_mut().find(|d| d.fingerprint == device.fingerprint) {
             device.side = std::mem::take(&mut existing.side);
-            device.align = std::mem::take(&mut existing.align);
             device.layout_version = existing.layout_version;
             device.swap_ctrl_cmd = existing.swap_ctrl_cmd;
+            device.offset = existing.offset;
             *existing = device;
         } else {
             self.file.devices.push(device);
@@ -169,12 +163,13 @@ impl TrustStore {
     }
 
     /// Finds a device by name (case-insensitive) or fingerprint prefix.
+    /// A query that fits two devices finds neither: a computer's name is its
+    /// own to choose, and must not stand in for another's ID.
     pub fn find(&self, query: &str) -> Option<&Device> {
         let q = query.replace('-', "").to_ascii_lowercase();
-        self.file
-            .devices
-            .iter()
-            .find(|d| d.name.eq_ignore_ascii_case(query) || (q.len() >= 4 && d.fingerprint.starts_with(&q)))
+        let mut hits = self.file.devices.iter().filter(|d| d.name.eq_ignore_ascii_case(query) || (q.len() >= 4 && d.fingerprint.starts_with(&q)));
+        let first = hits.next()?;
+        hits.next().is_none().then_some(first)
     }
 
     pub fn remove(&mut self, query: &str) -> Option<Device> {
@@ -186,25 +181,37 @@ impl TrustStore {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// A hand-edited offset too large for the geometry is cut down on load;
+    /// the `align` of builds before the placement model is ignored (it was
+    /// never released), so that device has no offset.
     #[test]
     fn hand_edited_offsets_are_normalized_on_load() {
         let dir = std::env::temp_dir().join(format!("one-mk-trust-offset-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("devices.toml"), format!("[[device]]\nname = 'peer'\nfingerprint = '{}'\nside = 'left'\nalign = '{}'\n", "ab".repeat(32), i32::MIN)).unwrap();
+        let fp = "ab".repeat(32);
+        let text = format!("[[device]]\nname = 'peer'\nfingerprint = '{fp}'\nside = 'left'\noffset = [{}, 5]\n[[device]]\nname = 'old'\nfingerprint = '{}'\nalign = '300'\n", i32::MIN, "cd".repeat(32));
+        std::fs::write(dir.join("devices.toml"), text).unwrap();
         let trust = TrustStore::load(&dir).unwrap();
-        assert_eq!(trust.devices()[0].align, "-100000");
+        assert_eq!(trust.devices()[0].offset, Some((-MAX_OFFSET, 5)));
+        assert_eq!(trust.devices()[1].offset, None);
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    /// A name that is also another computer's ID never picks either.
     #[test]
-    fn hostile_alignment_is_bounded() {
-        for (raw, expected) in [(i32::MAX, 100000), (i32::MIN, -100000)] {
-            let mut device = Device { align: raw.to_string(), ..Device::default() };
-            assert_eq!(device.align(), Align::Offset(expected));
-            device.set_align(Align::Offset(raw));
-            assert_eq!(device.align, expected.to_string());
-        }
+    fn an_ambiguous_query_finds_nothing() {
+        let dev = |name: &str, fp: &str| Device { name: name.into(), fingerprint: fp.into(), ..Default::default() };
+        let dir = std::env::temp_dir().join(format!("one-mk-trust-find-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut t = TrustStore::load(&dir).unwrap();
+        t.upsert(dev("abcd1234", &"ee".repeat(32)));
+        t.upsert(dev("victim", &format!("abcd1234{}", "00".repeat(28))));
+        assert!(t.find("abcd1234").is_none());
+        assert_eq!(t.find("victim").unwrap().name, "victim");
+        assert_eq!(t.find("eeeeeeee").unwrap().name, "abcd1234");
     }
-    use super::*;
 
     /// A `devices.toml` from before layout versions and Ctrl/Cmd settings
     /// still loads, with defaults.
@@ -217,17 +224,19 @@ mod tests {
         let mut t = TrustStore::load(&dir).unwrap();
         let d = &t.devices()[0];
         assert_eq!((d.side(), d.layout_version, d.swap_ctrl_cmd, d.os), (Side::Left, 0, Swap::Auto, 0));
-        assert_eq!(d.align(), Align::Stretch);
+        assert_eq!(d.offset, None);
         t.get_mut(&fp.parse().unwrap()).unwrap().swap_ctrl_cmd = Swap::Off;
         t.save().unwrap();
-        assert!(!std::fs::read_to_string(dir.join("devices.toml")).unwrap().contains("align"), "the default isn't written");
+        assert!(!std::fs::read_to_string(dir.join("devices.toml")).unwrap().contains("offset"), "the default isn't written");
         assert_eq!(TrustStore::load(&dir).unwrap().devices()[0].swap_ctrl_cmd, Swap::Off);
-        t.get_mut(&fp.parse().unwrap()).unwrap().set_align(Align::Offset(-300));
+        assert_eq!(t.devices()[0].offset, None);
+        t.get_mut(&fp.parse().unwrap()).unwrap().offset = Some((-3000, -900));
         t.save().unwrap();
+        assert_eq!(TrustStore::load(&dir).unwrap().devices()[0].offset, Some((-3000, -900)));
         // Pairing again keeps the layout.
         let mut t = TrustStore::load(&dir).unwrap();
         t.upsert(Device { name: "old".into(), fingerprint: fp.clone(), ..Device::default() });
-        assert_eq!(t.devices()[0].align(), Align::Offset(-300));
+        assert_eq!(t.devices()[0].offset, Some((-3000, -900)));
         assert_eq!("ON".parse::<Swap>(), Ok(Swap::On));
         assert!("maybe".parse::<Swap>().is_err());
         let _ = std::fs::remove_dir_all(dir);

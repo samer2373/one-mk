@@ -33,7 +33,7 @@
 // On other OSes only the tests use this module.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use one_mk_proto::{Desktop, Pos, Rect, Side, mediakeys};
+use one_mk_proto::{Desktop, Edge, Pos, Rect, Side, mediakeys};
 
 // ------------------------------------------------------------ evdev codes
 
@@ -123,21 +123,29 @@ impl Space {
     /// Which armed edge, if any, the physical pixel `(x, y)` is touching,
     /// with `(dx, dy)` the pointer's recent direction of movement.
     ///
-    /// Only edges on the outer boundary of the desktop count (the same rule
-    /// as [`Desktop::outer_edges`]), and only along the span of the screen
-    /// that owns that edge, so a monitor edge that faces a gap next to a
-    /// larger monitor never triggers. Windows keeps the cursor on the union
-    /// of the monitors, so "touching" means sitting on the last pixel row or
-    /// column; positions past the edge (if a hook reports them) count too.
-    /// In a corner, where two armed edges touch, the one the pointer is
-    /// moving towards more strongly wins.
-    pub(crate) fn edge_hit(&self, sides: &[Side], x: i32, y: i32, dx: f64, dy: f64) -> Option<Side> {
-        let touching = |side: Side| {
-            self.phys.outer_edges(side).any(|r| match side {
-                Side::Left => x <= r.x && (r.y..r.bottom()).contains(&y),
-                Side::Right => x >= r.right() - 1 && (r.y..r.bottom()).contains(&y),
-                Side::Top => y <= r.y && (r.x..r.right()).contains(&x),
-                Side::Bottom => y >= r.bottom() - 1 && (r.x..r.right()).contains(&x),
+    /// `edges` are in the reported space; each belongs to the screen whose
+    /// reported rect has that edge line, and counts only along its span
+    /// (half a reported pixel of slack for rounding). Windows keeps the
+    /// cursor on the union of the monitors, so "touching" means sitting on
+    /// the last pixel row or column; positions past the edge (if a hook
+    /// reports them) count too, unless they are on another screen. In a
+    /// corner, where two armed edges touch, the one the pointer is moving
+    /// towards more strongly wins.
+    pub(crate) fn edge_hit(&self, edges: &[Edge], x: i32, y: i32, dx: f64, dy: f64) -> Option<Side> {
+        let on = |r: &Rect| (r.x..r.right()).contains(&x) && (r.y..r.bottom()).contains(&y);
+        let along = |e: &Edge, v: i32| {
+            let v = f64::from(v) / self.scale;
+            v >= f64::from(e.lo) - 0.5 && v < f64::from(e.hi) + 0.5
+        };
+        let touching = |e: &Edge| {
+            self.phys.screens.iter().zip(&self.logical.screens).any(|(r, l)| {
+                let at = match e.side {
+                    Side::Left => l.x == e.at && x <= r.x && (r.y..r.bottom()).contains(&y) && along(e, y),
+                    Side::Right => l.right() == e.at && x >= r.right() - 1 && (r.y..r.bottom()).contains(&y) && along(e, y),
+                    Side::Top => l.y == e.at && y <= r.y && (r.x..r.right()).contains(&x) && along(e, x),
+                    Side::Bottom => l.bottom() == e.at && y >= r.bottom() - 1 && (r.x..r.right()).contains(&x) && along(e, x),
+                };
+                at && !self.phys.screens.iter().any(|s| s != r && on(s))
             })
         };
         let towards = |side: Side| match side {
@@ -147,7 +155,7 @@ impl Space {
             Side::Bottom => dy,
         };
         let mut best: Option<Side> = None;
-        for side in sides.iter().copied().filter(|&s| touching(s)) {
+        for side in edges.iter().filter(|e| touching(e)).map(|e| e.side) {
             if best.is_none_or(|b| towards(side) > towards(b)) {
                 best = Some(side);
             }
@@ -664,6 +672,26 @@ pub(crate) fn is_fullscreen(class: &str, style: u32, rect: Ltrb, monitor: Ltrb) 
 mod tests {
     use super::*;
 
+    /// What the daemon arms for peers without an offset: the outer edges.
+    fn armed(s: &Space, sides: &[Side]) -> Vec<Edge> {
+        let d = s.logical();
+        sides.iter().flat_map(|&side| d.outer_edges(side).map(move |r| Edge::of(side, r))).collect()
+    }
+
+    #[test]
+    fn segments_in_a_scaled_space() {
+        // At 150%: a laptop (1920x1200 reported) and a monitor right of it
+        // (1280x720 reported). Arm the laptop's right edge below the monitor.
+        let s = Space::new(vec![Rect::new(0, 0, 2880, 1800), Rect::new(2880, 0, 1920, 1080)], 144);
+        let e = [Edge { side: Side::Right, at: 1920, lo: 720, hi: 1200 }];
+        assert_eq!(s.edge_hit(&e, 2879, 1500, 1.0, 0.0), Some(Side::Right));
+        assert_eq!(s.edge_hit(&e, 2879, 1799, 1.0, 0.0), Some(Side::Right));
+        // Beside the monitor the pointer just moves over to it.
+        assert_eq!(s.edge_hit(&e, 2879, 500, 1.0, 0.0), None);
+        // The monitor's own right edge is not armed.
+        assert_eq!(s.edge_hit(&e, 4799, 500, 1.0, 0.0), None);
+    }
+
     #[test]
     fn fullscreen_is_a_borderless_window_covering_its_monitor() {
         const POPUP: u32 = 0x8000_0000;
@@ -865,27 +893,27 @@ mod tests {
     #[test]
     fn edges_only_on_outer_boundary() {
         let s = Space::new(trio(), 96);
-        let all = Side::ALL;
+        let all = armed(&s, &Side::ALL);
         // Right edge of the 2560 monitor.
         assert_eq!(s.edge_hit(&all, 4479, 700, 0.0, 0.0), Some(Side::Right));
         assert_eq!(s.edge_hit(&all, 4478, 700, 0.0, 0.0), None);
         // Inner edge between primary and the right monitor: nothing.
-        assert_eq!(s.edge_hit(&[Side::Right], 1919, 500, 0.0, 0.0), None);
+        assert_eq!(s.edge_hit(&armed(&s, &[Side::Right]), 1919, 500, 0.0, 0.0), None);
         // Left edge of the left monitor, within its span only.
         assert_eq!(s.edge_hit(&all, -1280, 600, 0.0, 0.0), Some(Side::Left));
         // Top: the primary and right monitor are at y=0; the left one is not.
         assert_eq!(s.edge_hit(&all, 100, 0, 0.0, 0.0), Some(Side::Top));
-        assert_eq!(s.edge_hit(&[Side::Top], -500, 200, 0.0, 0.0), None);
+        assert_eq!(s.edge_hit(&armed(&s, &[Side::Top]), -500, 200, 0.0, 0.0), None);
         // Bottom: the desktop ends at y=1440, so only the right monitor
         // counts; the bottoms of the primary (1080) and the left monitor
         // (1224) face gaps.
-        assert_eq!(s.edge_hit(&[Side::Bottom], 3000, 1439, 0.0, 0.0), Some(Side::Bottom));
-        assert_eq!(s.edge_hit(&[Side::Bottom], 500, 1079, 0.0, 0.0), None);
-        assert_eq!(s.edge_hit(&[Side::Bottom], -500, 1223, 0.0, 0.0), None);
+        assert_eq!(s.edge_hit(&armed(&s, &[Side::Bottom]), 3000, 1439, 0.0, 0.0), Some(Side::Bottom));
+        assert_eq!(s.edge_hit(&armed(&s, &[Side::Bottom]), 500, 1079, 0.0, 0.0), None);
+        assert_eq!(s.edge_hit(&armed(&s, &[Side::Bottom]), -500, 1223, 0.0, 0.0), None);
         // Unarmed sides never trigger.
-        assert_eq!(s.edge_hit(&[Side::Left], 4479, 700, 0.0, 0.0), None);
+        assert_eq!(s.edge_hit(&armed(&s, &[Side::Left]), 4479, 700, 0.0, 0.0), None);
         // Past the edge (unclipped hook positions) still counts.
-        assert_eq!(s.edge_hit(&[Side::Right], 4600, 700, 0.0, 0.0), Some(Side::Right));
+        assert_eq!(s.edge_hit(&armed(&s, &[Side::Right]), 4600, 700, 0.0, 0.0), Some(Side::Right));
     }
 
     #[test]
@@ -948,20 +976,20 @@ mod tests {
     #[test]
     fn corner_picks_side_by_direction() {
         let s = Space::new(trio(), 96);
-        let both = [Side::Top, Side::Right];
+        let both = armed(&s, &[Side::Top, Side::Right]);
         // Top-right corner of the right monitor.
         assert_eq!(s.edge_hit(&both, 4479, 0, 5.0, -1.0), Some(Side::Right));
         assert_eq!(s.edge_hit(&both, 4479, 0, 1.0, -5.0), Some(Side::Top));
         // Order of the armed sides doesn't matter.
-        assert_eq!(s.edge_hit(&[Side::Right, Side::Top], 4479, 0, 1.0, -5.0), Some(Side::Top));
+        assert_eq!(s.edge_hit(&armed(&s, &[Side::Right, Side::Top]), 4479, 0, 1.0, -5.0), Some(Side::Top));
         // Only one armed: that one, whatever the direction.
-        assert_eq!(s.edge_hit(&[Side::Right], 4479, 0, 0.0, -9.0), Some(Side::Right));
+        assert_eq!(s.edge_hit(&armed(&s, &[Side::Right]), 4479, 0, 0.0, -9.0), Some(Side::Right));
     }
 
     #[test]
     fn heading_survives_a_pinned_axis() {
         let s = Space::new(trio(), 96);
-        let both = [Side::Top, Side::Right];
+        let both = armed(&s, &[Side::Top, Side::Right]);
         // Moving up along the right edge (x pinned) into the corner: Top.
         let mut h = Heading::default();
         for y in [40, 30, 20, 10, 0] {

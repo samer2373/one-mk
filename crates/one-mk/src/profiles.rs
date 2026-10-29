@@ -3,7 +3,7 @@
 //! one command, or by itself when it joins that network.
 //!
 //! A profile holds, for every paired computer when it was saved, its side
-//! and alignment (`devices.toml`'s `side` and `align`). Nothing else: edge
+//! and offset (`devices.toml`'s `side` and `offset`). Nothing else: edge
 //! rules, gaming mode and the rest of `settings.toml` describe how you like
 //! crossing to feel, not where the computers stand, so they stay the same
 //! everywhere. Putting a profile in place goes through
@@ -30,7 +30,7 @@ use crate::control::{self, Request};
 use crate::manage;
 use anyhow::{Context, Result, bail};
 use one_mk_net::TrustStore;
-use one_mk_proto::{Align, Side, sanitize_name};
+use one_mk_proto::{Side, sanitize_name};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::net::IpAddr;
@@ -74,8 +74,11 @@ pub struct Placed {
     #[serde(default)]
     pub name: String,
     pub side: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub align: String,
+    /// Where its (0,0) sat in ours, if it was placed exactly (see
+    /// `Device::offset`). An `align` from builds before the placement
+    /// model is ignored: that computer goes anywhere along its side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<(i32, i32)>,
 }
 
 /// What a network-change notification found out about the networks this
@@ -243,7 +246,7 @@ impl Profiles {
     }
 }
 
-/// Every paired computer's side and alignment now.
+/// Every paired computer's side and offset now.
 pub fn snapshot(trust: &TrustStore) -> Vec<Placed> {
     trust
         .devices()
@@ -252,7 +255,7 @@ pub fn snapshot(trust: &TrustStore) -> Vec<Placed> {
             fingerprint: d.fingerprint.clone(),
             name: d.name.clone(),
             side: d.side().to_string(),
-            align: if d.align() == Align::Stretch { String::new() } else { d.align().to_string() },
+            offset: d.offset,
         })
         .collect()
 }
@@ -267,9 +270,9 @@ pub fn apply(dir: &Path, profile: &Profile) -> Result<Vec<String>> {
         let Some(fp) = p.fingerprint.parse().ok() else { continue };
         let Some(dev) = trust.get_mut(&fp) else { continue };
         let side: Side = p.side.parse().unwrap_or_else(|_| dev.side());
-        let align = if p.align.is_empty() { Align::Stretch } else { manage::parse_align(&p.align).map_err(anyhow::Error::msg)? };
-        if (dev.side(), dev.align()) != (side, align) {
-            manage::place(dev, side, align);
+        let offset = p.offset.map(|(x, y)| (x.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET), y.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET)));
+        if (dev.side(), dev.offset) != (side, offset) {
+            manage::place(dev, side, offset);
             moved.push(sanitize_name(&dev.name));
         }
     }
@@ -453,7 +456,7 @@ fn render(all: &Profiles) -> String {
         }
         for d in &p.devices {
             let side = d.side.parse().unwrap_or(Side::Right);
-            out += &format!("  {:<24} {}\n", sanitize_name(&d.name), manage::placement(side, d.align.parse().unwrap_or_default()));
+            out += &format!("  {:<24} {}\n", sanitize_name(&d.name), manage::placement(side, d.offset));
         }
     }
     out
@@ -488,10 +491,10 @@ mod tests {
         id.fingerprint.to_string()
     }
 
-    fn place_of(dir: &Path, fp: &str) -> (Side, Align, u64) {
+    fn place_of(dir: &Path, fp: &str) -> (Side, Option<(i32, i32)>, u64) {
         let t = TrustStore::load(dir).unwrap();
         let d = t.find(&fp[..8]).unwrap();
-        (d.side(), d.align(), d.layout_version)
+        (d.side(), d.offset, d.layout_version)
     }
 
     /// Save at home, rearrange for work, save that, then switch back and
@@ -501,9 +504,9 @@ mod tests {
         let dir = temp_dir("round");
         let laptop = pair(&dir, "laptop", Side::Left);
         let tv = pair(&dir, "tv", Side::Top);
-        manage::set_layout(&dir, &laptop[..8], None, Some(Align::Offset(-120)), None).unwrap();
+        manage::set_layout(&dir, &laptop[..8], None, Some(Some((-1280, -120))), None).unwrap();
         run(&dir, ProfileCmd::Save { name: "home".into() }).await.unwrap();
-        manage::set_layout(&dir, &laptop[..8], Some(Side::Bottom), Some(Align::Center), None).unwrap();
+        manage::set_layout(&dir, &laptop[..8], Some(Side::Bottom), Some(Some((320, 1080))), None).unwrap();
         manage::set_layout(&dir, &tv[..8], Some(Side::Right), None, None).unwrap();
         run(&dir, ProfileCmd::Save { name: "work".into() }).await.unwrap();
 
@@ -511,8 +514,8 @@ mod tests {
         let (name, moved) = use_profile(&dir, "HOME").unwrap();
         assert_eq!(name, "home");
         assert_eq!(moved, vec!["laptop".to_owned(), "tv".to_owned()]);
-        let (side, align, version) = place_of(&dir, &laptop);
-        assert_eq!((side, align), (Side::Left, Align::Offset(-120)));
+        let (side, offset, version) = place_of(&dir, &laptop);
+        assert_eq!((side, offset), (Side::Left, Some((-1280, -120))));
         assert!(version > before, "a profile is a new change: it wins against the peer's older one");
         assert_eq!(place_of(&dir, &tv).0, Side::Top);
         assert_eq!(Profiles::load(&dir).unwrap().active.as_deref(), Some("home"));
@@ -522,7 +525,7 @@ mod tests {
 
         use_profile(&dir, "work").unwrap();
         assert_eq!(place_of(&dir, &laptop).0, Side::Bottom);
-        assert_eq!(place_of(&dir, &laptop).1, Align::Center);
+        assert_eq!(place_of(&dir, &laptop).1, Some((320, 1080)));
         assert_eq!(place_of(&dir, &tv).0, Side::Right);
 
         // A computer paired later stays put; one forgotten is skipped.
@@ -533,7 +536,7 @@ mod tests {
         assert!(use_profile(&dir, "nowhere").is_err());
 
         let text = render(&Profiles::load(&dir).unwrap());
-        assert!(text.contains("home (in use)") && text.contains("on your left, its top edge 120 px above yours"), "{text}");
+        assert!(text.contains("home (in use)") && text.contains("on your left, its (0,0) at -1280,-120 of yours"), "{text}");
         run(&dir, ProfileCmd::Delete { name: "home".into() }).await.unwrap();
         let all = Profiles::load(&dir).unwrap();
         assert_eq!((all.names(), all.active), (vec!["work".to_owned()], None));
@@ -543,16 +546,16 @@ mod tests {
     /// `one-mk layout <pc> <side>` alone keeps the offset on the same side
     /// and drops it on another, where it would mean something else.
     #[test]
-    fn a_new_side_starts_stretched() {
+    fn a_new_side_drops_the_offset() {
         let dir = temp_dir("new-side");
         let laptop = pair(&dir, "laptop", Side::Bottom);
-        manage::set_layout(&dir, &laptop[..8], None, Some(Align::Offset(300)), None).unwrap();
+        manage::set_layout(&dir, &laptop[..8], None, Some(Some((300, 1080))), None).unwrap();
         manage::set_layout(&dir, &laptop[..8], Some(Side::Bottom), None, None).unwrap();
-        assert_eq!(place_of(&dir, &laptop).1, Align::Offset(300));
+        assert_eq!(place_of(&dir, &laptop).1, Some((300, 1080)));
         manage::set_layout(&dir, &laptop[..8], Some(Side::Right), None, None).unwrap();
-        assert_eq!(place_of(&dir, &laptop).1, Align::Stretch);
-        manage::set_layout(&dir, &laptop[..8], Some(Side::Left), Some(Align::Center), None).unwrap();
-        assert_eq!(place_of(&dir, &laptop).1, Align::Center);
+        assert_eq!(place_of(&dir, &laptop).1, None);
+        manage::set_layout(&dir, &laptop[..8], Some(Side::Left), Some(Some((-1280, 140))), None).unwrap();
+        assert_eq!(place_of(&dir, &laptop).1, Some((-1280, 140)));
         let _ = std::fs::remove_dir_all(dir);
     }
 

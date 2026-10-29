@@ -18,6 +18,11 @@ use std::sync::{Arc, Mutex};
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 
 type Opts = HashMap<String, OwnedValue>;
+
+/// All of the right edge of the fake desktop's one 1920x1080 zone.
+fn right_edge() -> Edge {
+    Edge::of(Side::Right, &Rect::new(0, 0, 1920, 1080))
+}
 type Results = HashMap<&'static str, Value<'static>>;
 
 // ------------------------------------------------------------ unit tests
@@ -724,7 +729,7 @@ impl Harness {
     /// Both sides set up, with a barrier on the right and the injector's
     /// devices ready.
     async fn ready(&mut self) {
-        self.capture().send(CaptureCmd::SetSides(vec![Armed::whole(Side::Right)])).unwrap();
+        self.capture().send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
         self.until("injection", |w| w.emulating >= 2).await;
         self.until("barriers", |w| !w.barriers.is_empty() && w.count("ic.Enable") > 0).await;
     }
@@ -824,7 +829,7 @@ async fn first_start_waits_for_the_dialog_then_the_token_is_reused() {
     let (ev_tx, events) = mpsc::unbounded_channel();
     let (capture, inject) = start(env, ev_tx, h.dir.clone()).unwrap();
     (h.events, h.capture, h.inject, h.power) = (events, Some(capture), Some(inject), power);
-    h.capture().send(CaptureCmd::SetSides(vec![Armed::whole(Side::Right)])).unwrap();
+    h.capture().send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
     h.until("started again", |w| w.count("rd.ConnectToEIS") == 2 && w.count("ic.Enable") == 2).await;
     assert_eq!(h.count("rd.Start dialog=false"), 1, "{:#?}", h.log());
     assert_eq!(h.token().as_deref(), Some("tok-2"));
@@ -1017,17 +1022,18 @@ async fn input_capture_version_2_restores_its_permission_too() {
 /// Barriers are line segments: with only part of an edge leading to a
 /// peer (an offset layout), only that part gets one, so the rest is a wall
 /// that never activates capture. `Activate` (`one-mk switch`) pushes the
-/// pointer into the middle of that part.
+/// pointer into the middle of the first segment of that side.
 #[tokio::test]
 async fn barriers_cover_only_the_armed_part_of_an_edge() {
     let Some(mut h) = Harness::start(&[], |_| {}).await else { return };
     h.ready().await;
     assert_eq!(h.world().positions, [(1920, 0, 1920, 1079)], "all of the right edge");
-    let part = Armed { side: Side::Right, spans: Some(vec![(300.0, 1080.0)]) };
-    let bottom = Armed { side: Side::Bottom, spans: Some(vec![(100.5, 200.0), (5000.0, 6000.0)]) };
-    h.capture().send(CaptureCmd::SetSides(vec![part, bottom])).unwrap();
+    let part = Edge { side: Side::Right, at: 1920, lo: 300, hi: 1080 };
+    let bottom = Edge { side: Side::Bottom, at: 1080, lo: 101, hi: 200 };
+    h.capture().send(CaptureCmd::SetEdges(vec![part, bottom])).unwrap();
     h.until("partial barriers", |w| w.positions.len() == 2).await;
     assert_eq!(h.world().positions, [(1920, 300, 1920, 1079), (101, 1080, 199, 1080)]);
-    h.capture().send(CaptureCmd::SetSides(vec![Armed { side: Side::Left, spans: Some(vec![]) }])).unwrap();
+    // An empty segment gets no barrier, and with none capture is off.
+    h.capture().send(CaptureCmd::SetEdges(vec![Edge { side: Side::Left, at: 0, lo: 10, hi: 10 }])).unwrap();
     h.until("no barriers", |w| w.positions.is_empty()).await;
 }

@@ -3,7 +3,7 @@
 //! Nothing here touches macOS APIs, so it is unit-tested on every OS.
 
 use crate::Event;
-use one_mk_proto::{Desktop, Pos, Side};
+use one_mk_proto::{Desktop, Edge, Pos, Side};
 
 // ------------------------------------------------------------------- keys
 
@@ -550,35 +550,31 @@ pub fn scroll_to_wire(s: &MacScroll) -> [Option<Event>; 2] {
 const EDGE_SLOP: f64 = 1.0;
 
 /// Whether the pointer at `p` (after moving by `dx, dy`) is pushing against
-/// one of the armed `sides`. Only outer edges of the whole desktop count,
-/// matching the Linux backend's pointer barriers, so moving between
-/// monitors or into the gap beside a smaller monitor never triggers.
-pub fn edge_hit(desktop: &Desktop, sides: &[Side], p: Pos, dx: f64, dy: f64) -> Option<Side> {
+/// one of the armed `edges` (the daemon arms only edges with no monitor
+/// beyond them), so moving between monitors never triggers.
+pub fn edge_hit(edges: &[Edge], p: Pos, dx: f64, dy: f64) -> Option<Side> {
     // Prefer the axis the pointer is mostly moving along (matters in corners).
     let horizontal_first = dx.abs() >= dy.abs();
-    let is_horizontal = |s: &Side| matches!(s, Side::Left | Side::Right);
-    let first = sides.iter().filter(|s| is_horizontal(s) == horizontal_first);
-    let second = sides.iter().filter(|s| is_horizontal(s) != horizontal_first);
-    first.chain(second).copied().find(|&side| {
-        let pushing = match side {
+    let is_horizontal = |e: &&Edge| matches!(e.side, Side::Left | Side::Right);
+    let first = edges.iter().filter(|e| is_horizontal(e) == horizontal_first);
+    let second = edges.iter().filter(|e| is_horizontal(e) != horizontal_first);
+    first.chain(second).find(|e| {
+        let pushing = match e.side {
             Side::Left => dx < 0.0,
             Side::Right => dx > 0.0,
             Side::Top => dy < 0.0,
             Side::Bottom => dy > 0.0,
         };
-        pushing
-            && desktop.outer_edges(side).any(|r| {
-                let (x, y, right, bottom) = (f64::from(r.x), f64::from(r.y), f64::from(r.right()), f64::from(r.bottom()));
-                let along_y = p.y >= y && p.y < bottom;
-                let along_x = p.x >= x && p.x < right;
-                match side {
-                    Side::Left => along_y && p.x < x + EDGE_SLOP,
-                    Side::Right => along_y && p.x >= right - EDGE_SLOP,
-                    Side::Top => along_x && p.y < y + EDGE_SLOP,
-                    Side::Bottom => along_x && p.y >= bottom - EDGE_SLOP,
-                }
-            })
+        let (at, lo, hi) = (f64::from(e.at), f64::from(e.lo), f64::from(e.hi));
+        let (across, along) = match e.side {
+            Side::Left | Side::Right => (p.x, p.y),
+            Side::Top | Side::Bottom => (p.y, p.x),
+        };
+        // Near the line on both sides: a screen further out, past a gap,
+        // must not count as being at this edge.
+        pushing && along >= lo && along < hi && across >= at - EDGE_SLOP && across < at + EDGE_SLOP
     })
+    .map(|e| e.side)
 }
 
 // ------------------------------------------------------- relative motion
@@ -800,6 +796,23 @@ mod tests {
         assert_eq!(scroll_to_wire(&momentum), [None, None]);
     }
 
+    /// What the daemon arms for peers without an offset: the outer edges.
+    fn armed(d: &Desktop, sides: &[Side]) -> Vec<Edge> {
+        sides.iter().flat_map(|&s| d.outer_edges(s).map(move |r| Edge::of(s, r))).collect()
+    }
+
+    #[test]
+    fn segments() {
+        // The portrait monitor's left edge above its neighbour, x=-1080, y -840..98.
+        let e = [Edge { side: Side::Left, at: -1080, lo: -840, hi: 98 }];
+        assert_eq!(edge_hit(&e, Pos::new(-1080.0, -500.0), -2.0, 0.0), Some(Side::Left));
+        assert_eq!(edge_hit(&e, Pos::new(-1080.0, 97.0), -2.0, 0.0), Some(Side::Left));
+        // Below the segment the pointer just moves on to the next monitor.
+        assert_eq!(edge_hit(&e, Pos::new(-1080.0, 98.0), -2.0, 0.0), None);
+        // A screen further left, past a gap, is not at this edge.
+        assert_eq!(edge_hit(&e, Pos::new(-2000.0, -500.0), -2.0, 0.0), None);
+    }
+
     fn mac_dual() -> Desktop {
         // Main 1440x900 at the origin; a taller external monitor to its
         // left (negative x), its top 300 points higher.
@@ -809,28 +822,28 @@ mod tests {
     #[test]
     fn edges() {
         let d = mac_dual();
-        let all = Side::ALL;
+        let all = armed(&d, &Side::ALL);
         // Pushing right at the right edge of the main display.
-        assert_eq!(edge_hit(&d, &all, Pos::new(1439.0, 450.0), 3.0, 0.0), Some(Side::Right));
-        assert_eq!(edge_hit(&d, &all, Pos::new(1439.5, 450.0), 3.0, 0.0), Some(Side::Right));
+        assert_eq!(edge_hit(&all, Pos::new(1439.0, 450.0), 3.0, 0.0), Some(Side::Right));
+        assert_eq!(edge_hit(&all, Pos::new(1439.5, 450.0), 3.0, 0.0), Some(Side::Right));
         // At the edge but moving away.
-        assert_eq!(edge_hit(&d, &all, Pos::new(1439.0, 450.0), -3.0, 0.0), None);
+        assert_eq!(edge_hit(&all, Pos::new(1439.0, 450.0), -3.0, 0.0), None);
         // Not armed.
-        assert_eq!(edge_hit(&d, &[Side::Left], Pos::new(1439.0, 450.0), 3.0, 0.0), None);
+        assert_eq!(edge_hit(&armed(&d, &[Side::Left]), Pos::new(1439.0, 450.0), 3.0, 0.0), None);
         // Left edge of the external monitor.
-        assert_eq!(edge_hit(&d, &all, Pos::new(-1920.0, 0.0), -1.0, 0.0), Some(Side::Left));
+        assert_eq!(edge_hit(&all, Pos::new(-1920.0, 0.0), -1.0, 0.0), Some(Side::Left));
         // Moving between monitors is not an edge.
-        assert_eq!(edge_hit(&d, &all, Pos::new(0.0, 450.0), -2.0, 0.0), None);
+        assert_eq!(edge_hit(&all, Pos::new(0.0, 450.0), -2.0, 0.0), None);
         // Top of the main display is below the desktop's top: not an outer edge.
-        assert_eq!(edge_hit(&d, &all, Pos::new(700.0, 0.0), 0.0, -2.0), None);
+        assert_eq!(edge_hit(&all, Pos::new(700.0, 0.0), 0.0, -2.0), None);
         // Top of the external monitor is.
-        assert_eq!(edge_hit(&d, &all, Pos::new(-700.0, -300.0), 0.0, -2.0), Some(Side::Top));
+        assert_eq!(edge_hit(&all, Pos::new(-700.0, -300.0), 0.0, -2.0), Some(Side::Top));
         // Bottom of the main display (900) is the desktop's bottom (780 for the external).
-        assert_eq!(edge_hit(&d, &all, Pos::new(700.0, 899.0), 0.0, 1.0), Some(Side::Bottom));
-        assert_eq!(edge_hit(&d, &all, Pos::new(-700.0, 779.0), 0.0, 1.0), None);
+        assert_eq!(edge_hit(&all, Pos::new(700.0, 899.0), 0.0, 1.0), Some(Side::Bottom));
+        assert_eq!(edge_hit(&all, Pos::new(-700.0, 779.0), 0.0, 1.0), None);
         // In a corner, the dominant direction wins.
-        assert_eq!(edge_hit(&d, &all, Pos::new(1439.0, 899.0), 1.0, 5.0), Some(Side::Bottom));
-        assert_eq!(edge_hit(&d, &all, Pos::new(1439.0, 899.0), 5.0, 1.0), Some(Side::Right));
+        assert_eq!(edge_hit(&all, Pos::new(1439.0, 899.0), 1.0, 5.0), Some(Side::Bottom));
+        assert_eq!(edge_hit(&all, Pos::new(1439.0, 899.0), 5.0, 1.0), Some(Side::Right));
     }
 
     #[test]

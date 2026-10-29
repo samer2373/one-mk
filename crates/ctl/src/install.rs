@@ -224,8 +224,10 @@ fn desktop_entry(name: &str, exe: &Path, args: &[String]) -> String {
 /// The files a Linux package ships, as (path relative to the package root,
 /// text), for the program installed at `bindir` (`/usr/bin`). Built from
 /// the same text `one-mk install` writes into the home folder, so the two
-/// cannot drift apart. Used by `scripts/package-*.sh` through the
-/// `packaging-files` example.
+/// cannot drift apart. Packagers can write them with the
+/// `packaging-files` example (the release's `.deb` from
+/// `scripts/bundle-deb.sh` doesn't ship them yet: `one-mk install` writes
+/// them for the user instead).
 pub fn packaged_files(bindir: &Path) -> Vec<(String, String)> {
     let launch = Launch { exe: bindir.join("one-mk"), tray: Some(bindir.join("one-mk-tray")), home: None, start_now: false };
     let daemon_entry = desktop_entry("one-mk", &launch.exe, &launch.args()).replace("X-GNOME-Autostart-enabled=true\n", "") + "NoDisplay=true\n";

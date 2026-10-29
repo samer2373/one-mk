@@ -46,7 +46,7 @@ use anyhow::{Context, Result};
 use clipctl::OnOff;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use one_mk_net::{Identity, Swap, TrustStore};
-use one_mk_proto::{Align, DEFAULT_PORT, Side};
+use one_mk_proto::{DEFAULT_PORT, Side};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -243,23 +243,19 @@ enum Cmd {
         #[arg(long)]
         remove: bool,
     },
-    /// Say which side of this computer a paired computer is on and how its
-    /// edge lines up with this one's (applies at once if one-mk is
-    /// running), and how Ctrl/Cmd are treated.
+    /// Say which side of this computer a paired computer is on, and
+    /// optionally exactly where (applies at once if one-mk is running), and
+    /// how Ctrl/Cmd are treated.
     Layout {
         /// Name or id of the paired computer (see `one-mk devices`).
         device: String,
         /// Where it is: left, right, top or bottom.
         side: Option<Side>,
-        /// How its edge lines up with this computer's, in logical pixels:
-        /// how far its top (for left and right) or left (for top and
-        /// bottom) edge starts after this one's, negative for before;
-        /// `center` to centre the two; `stretch` (the default) to map the
-        /// whole edges onto each other. With a number or `center` the
-        /// pointer only crosses where the edges overlap. Numbers must be
-        /// between -100000 and 100000 logical pixels.
-        #[arg(long, value_name = "PX|center|stretch", allow_hyphen_values = true, value_parser = manage::parse_align)]
-        offset: Option<Align>,
+        /// Where its (0,0) sits in this computer's screen coordinates, so the
+        /// pointer crosses only where the screens touch; `none` crosses
+        /// anywhere along the side.
+        #[arg(long, value_name = "DX,DY|none", allow_hyphen_values = true, value_parser = manage::offset_arg)]
+        offset: Option<String>,
         /// Swap Ctrl and Cmd for keys sent to it, so copy and paste feel the same
         /// between a Mac and a PC (default: auto, which swaps only between a Mac and another computer).
         #[arg(long, value_name = "on|off|auto")]
@@ -505,11 +501,16 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Uninstall => install::uninstall(),
             Cmd::Integrate { remove } => integrate::run(&dir, custom_home, remove),
             Cmd::Layout { device, side, offset, swap_ctrl_cmd } => {
-                manage::layout(&dir, &device, side, offset, swap_ctrl_cmd).await
+                manage::layout(&dir, &device, side, offset.as_deref(), swap_ctrl_cmd).await
             }
             Cmd::Profile { cmd } => profiles::run(&dir, cmd).await,
             Cmd::Forget { device } => {
                 forget(&dir, &device)?;
+                // A running daemon lets go of it at once: its input link
+                // and any clipboard or file connection.
+                if control::request(&dir, control::Request::Reload).await.is_ok_and(|r| r.is_some()) {
+                    println!("one-mk let go of it right away.");
+                }
                 integrate::refresh(&dir, custom_home);
                 Ok(())
             }
@@ -602,10 +603,11 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
     }
     for d in trust.devices() {
         let name = one_mk_proto::sanitize_name(&d.name);
+        let side = d.offset.map_or_else(|| d.side.clone(), |(x, y)| format!("{} at {x},{y}", d.side));
         if verbose {
-            println!("{name:<24} {:<9}  {:<6}  {}", d.short_id(), d.side, d.addrs.join(", "));
+            println!("{name:<24} {:<9}  {:<6}  {}", d.short_id(), side, d.addrs.join(", "));
         } else {
-            println!("{name:<24} {:<9}  {}", d.short_id(), d.side);
+            println!("{name:<24} {:<9}  {}", d.short_id(), side);
         }
     }
     Ok(())
@@ -625,10 +627,10 @@ mod tests {
 
     #[test]
     fn layout_offset_bounds_and_empty_values() {
-        for offset in ["", "99999999", "-99999999", "2147483647", "-2147483648"] {
+        for offset in ["", "10", "99999999,0", "0,-99999999", "2147483648,0", "center", "1,2,3"] {
             assert!(Cli::try_parse_from(["one-mk", "layout", "peer", "--offset", offset]).is_err(), "accepted {offset:?}");
         }
-        for offset in ["-100000", "100000", "center", "stretch", "0"] {
+        for offset in ["-1920,0", "16777216,-16777216", "none", "None", "0,0", "-2592, 98"] {
             assert!(Cli::try_parse_from(["one-mk", "layout", "peer", "--offset", offset]).is_ok(), "rejected {offset:?}");
         }
     }

@@ -2,6 +2,7 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,15 +14,17 @@ jobs:
       matrix:
         include:
           - { os: macos-14,        target: aarch64-apple-darwin }
-          - { os: macos-15-intel,  target: x86_64-apple-darwin }
+          - { os: macos-14,        target: x86_64-apple-darwin }
           - { os: ubuntu-22.04,    target: x86_64-unknown-linux-gnu }
           - { os: windows-latest,  target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
-      # The tag has to be the version in Cargo.toml: the one place versions come from.
+      # The tag has to be the version in Cargo.toml, the one place versions
+      # come from. A manual run without a tag has nothing to check.
       - name: Check the tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: sh scripts/version.sh --check "$GITHUB_REF_NAME"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -40,75 +43,111 @@ jobs:
             cp $d/one-mk $d/one-mk-tray $d/one-mk-app "$name"/
             tar czf "$name.tar.gz" "$name"
           fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: one-mk-*.*
-
-      # Installers, built from the programs just compiled (docs/PACKAGING.md).
-      # Linux: .deb and AppImage. appimagetool is pinned by version and checksum.
-      - name: Linux packages
-        if: runner.os == 'Linux'
+      - name: Mac app
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+        run: |
+          if [ -n "$MACOS_CERT_P12" ]; then
+            kc=$RUNNER_TEMP/sign.keychain-db
+            pw=$(uuidgen)
+            echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security create-keychain -p "$pw" "$kc"
+            security set-keychain-settings -lut 21600 "$kc"
+            security unlock-keychain -p "$pw" "$kc"
+            security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc" >/dev/null
+            security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+            rm "$RUNNER_TEMP/cert.p12"
+            export SIGN_IDENTITY="Developer ID Application"
+          fi
+          sh scripts/bundle-mac.sh target/${{ matrix.target }}/release one-mk-${{ matrix.target }}.app.zip
+      - name: Windows installer
+        if: runner.os == 'Windows'
         shell: bash
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          choco install innosetup -y --no-progress >/dev/null
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "//DAppVersion=$v" "//DReleaseDir=..\\target\\${{ matrix.target }}\\release" installer/one-mk.iss
+          ./one-mk-${{ matrix.target }}-setup.exe //VERYSILENT //SUPPRESSMSGBOXES //NORESTART "//DIR=$(cygpath -w "$PWD/installed")"
+          "$PWD/installed/one-mk.exe" id
+      - name: Linux .deb
+        if: runner.os == 'Linux'
+        run: |
+          sh scripts/bundle-deb.sh target/${{ matrix.target }}/release one-mk-${{ matrix.target }}.deb
+          sudo dpkg -i one-mk-${{ matrix.target }}.deb
+          one-mk id
+      # AppImage (docs/PACKAGING.md). appimagetool is pinned by version and
+      # checksum. The script runs `AppRun --version` on the AppDir before
+      # packing it.
+      - name: Linux AppImage
+        if: runner.os == 'Linux'
         env:
           TARGET: ${{ matrix.target }}
           APPIMAGETOOL_SHA256: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1
         run: |
-          sh scripts/package-deb.sh
           mkdir -p "$RUNNER_TEMP/appimagetool"
           curl -fsSL -o "$RUNNER_TEMP/appimagetool/appimagetool" \
             https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
           echo "$APPIMAGETOOL_SHA256  $RUNNER_TEMP/appimagetool/appimagetool" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/appimagetool/appimagetool"
-          APPIMAGETOOL="$RUNNER_TEMP/appimagetool/appimagetool" sh scripts/package-appimage.sh
-          rm -rf dist/one-mk.AppDir
-      # macOS: one-mk.app in a .dmg (ad-hoc signed unless MACOS_SIGN_IDENTITY is set up).
-      - name: macOS package
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: sh scripts/package-macos.sh
-      # Windows: Inno Setup installer.
-      - name: Windows package
-        if: runner.os == 'Windows'
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          choco install innosetup --version 6.4.3 --no-progress -y
-          sh scripts/package-windows.sh
+          OUT_DIR="$RUNNER_TEMP/appimage" APPIMAGETOOL="$RUNNER_TEMP/appimagetool/appimagetool" sh scripts/package-appimage.sh
+          mv "$RUNNER_TEMP/appimage/one-mk-${{ matrix.target }}.AppImage" .
+          "./one-mk-${{ matrix.target }}.AppImage" --appimage-extract-and-run --version
       - uses: actions/upload-artifact@v4
         with:
-          name: packages-${{ matrix.target }}
-          path: |
-            dist/*.deb
-            dist/*.AppImage
-            dist/*.dmg
-            dist/*-setup.exe
+          name: ${{ matrix.target }}
+          path: one-mk-*.*
 
   publish:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      # The scripts that write the Homebrew and Flatpak files.
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
-      - run: cd dist && sha256sum one-mk* > SHA256SUMS
+      - run: cd dist && sha256sum one-mk-* > SHA256SUMS
+      - name: Notes
+        run: |
+          cat > notes.md <<'MD'
+          ## Download
+
+          | System | File |
+          |---|---|
+          | macOS, Apple silicon (M1 and later) | `one-mk-aarch64-apple-darwin.dmg` |
+          | macOS, Intel | `one-mk-x86_64-apple-darwin.dmg` |
+          | Windows 10/11, 64-bit | `one-mk-x86_64-pc-windows-msvc-setup.exe` |
+          | Debian, Ubuntu and relatives, 64-bit (Wayland) | `one-mk-x86_64-unknown-linux-gnu.deb` |
+          | Other Linux, 64-bit, nothing to install (AppImage) | `one-mk-x86_64-unknown-linux-gnu.AppImage` |
+          | Other Linux, 64-bit | `one-mk-x86_64-unknown-linux-gnu.tar.gz` |
+
+          On macOS and Linux the one-line installer picks the right file:
+          `curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh`
+
+          On macOS, open the `.dmg` and drag one·mk onto Applications (the `.app.zip` is what the installer uses). The AppImage runs where it is: make it executable and open it (`./one-mk-x86_64-unknown-linux-gnu.AppImage pair` and the other commands work too). The `.zip` and `.tar.gz` files hold only the programs, for people who prefer to unpack them by hand. `SHA256SUMS` lists checksums for every file.
+
+          For packagers: `one-mk.rb` (Homebrew cask), `one-mk-source.rb` (Homebrew formula, builds from source) and `one-mk-flatpak-sources.tar.gz` (Flatpak manifest and the files it names) are attached too.
+          MD
       - env:
           GH_TOKEN: ${{ github.token }}
         run: >
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY"
-          --title "$GITHUB_REF_NAME" --generate-notes
+          --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes
       # Package-manager files that need the published release: the Homebrew
-      # cask and formula (checksums of the .dmg files and source tarball) and
-      # the Flatpak source bundle (the manifest with the Linux tarball's URL and
-      # checksum, and every other file it names, relative to it, so it builds
-      # anywhere). They are attached to the release; putting them in a tap or
-      # on Flathub is by hand.
+      # cask and formula (checksums of the two .dmg files and of the tag's
+      # source tarball) and the Flatpak source bundle (the manifest with the
+      # Linux tarball's release URL and checksum, and every other file it
+      # names, relative to it, so it builds anywhere). They are attached to
+      # the release; putting them in a tap or on Flathub is by hand.
       - name: Homebrew and Flatpak files
         env:
           GH_TOKEN: ${{ github.token }}
@@ -117,5 +156,5 @@ jobs:
           src=$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" | sha256sum | cut -d' ' -f1)
           SOURCE_SHA256=$src sh scripts/package-homebrew.sh
           sh scripts/package-flatpak.sh "$base/one-mk-x86_64-unknown-linux-gnu.tar.gz"
-          cp dist/one-mk-*-flatpak-sources.tar.gz dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb "$RUNNER_TEMP/"
-          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/one-mk-*-flatpak-sources.tar.gz "$RUNNER_TEMP/one-mk.rb" "$RUNNER_TEMP/one-mk-source.rb" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$GITHUB_REF_NAME" dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb \
+            dist/one-mk-flatpak-sources.tar.gz --repo "$GITHUB_REPOSITORY"

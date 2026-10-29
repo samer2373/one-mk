@@ -10,7 +10,6 @@ mod edge;
 mod geometry;
 mod keys;
 pub mod keynames;
-mod layout;
 mod lock;
 pub mod mediakeys;
 mod motion;
@@ -26,9 +25,8 @@ pub use edge::{
     AWAY, Approach, EdgeGuard, Focus, Modifier, Mods, Next, Refusal, Start, app_matches, cycle_next, fullscreen_blocks,
     in_dead_corner,
 };
-pub use geometry::{Desktop, Pos, Rect, Side};
+pub use geometry::{Desktop, Edge, Pos, Rect, Side, touching};
 pub use keys::{HeldKeys, swap_ctrl_meta};
-pub use layout::{Align, Seam, overlaps};
 pub use lock::{CAUSE_WINDOW, LockSync, OnRemote};
 pub use motion::{HOME_INSET, MotionReceiver, Received, RelReceived, RemoteCursor, Step};
 pub use sleep::{OnRemoteSleep, SleepSync};

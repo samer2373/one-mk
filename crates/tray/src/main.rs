@@ -43,6 +43,15 @@ fn parse_args() -> Result<Args, String> {
 fn main() {
     let result = parse_args().map_err(anyhow::Error::msg).and_then(|args| {
         let ctx = Arc::new(core::Ctx::new(args.home)?);
+        // One icon per settings folder: the login entry and the window both
+        // start the tray, and the second copy just leaves.
+        std::fs::create_dir_all(&ctx.dir)?;
+        let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(ctx.dir.join("tray.lock"))?;
+        if lock.try_lock().is_err() {
+            return Ok(());
+        }
+        // Held until the process ends, which is when the system lets go of it.
+        std::mem::forget(lock);
         #[cfg(target_os = "linux")]
         return linux::run(ctx, args.start_daemon);
         #[cfg(any(windows, target_os = "macos"))]

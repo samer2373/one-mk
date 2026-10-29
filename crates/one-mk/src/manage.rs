@@ -2,8 +2,9 @@
 //! `status`, `takeback` and `layout`.
 //!
 //! Layout data lives in `devices.toml`, one record per paired computer:
-//! `side` ([`Side`]), `align` ([`Align`], how its edge lines up with ours
-//! along that side) and `layout_version` (when either was last chosen).
+//! `side` ([`Side`]), `offset` (where its (0,0) sits in our pixels, if it
+//! was placed exactly: the pointer then crosses only where the screens
+//! touch) and `layout_version` (when either was last chosen).
 //! [`set_layout`] is the one way to change them here: it bumps the version,
 //! so the change wins when the two computers compare layouts (a tie is
 //! broken by [`resolve_layout`]), and a running
@@ -13,24 +14,13 @@
 use crate::control::{self, Request};
 use anyhow::{Result, bail};
 use one_mk_net::{Device, Fingerprint, Swap, TrustStore};
-use one_mk_proto::{Align, Side};
-pub use one_mk_ctl::status::{LayoutStatus, PeerStatus, Place, Status, on_your, placement, takeback_hint};
+use one_mk_proto::Side;
+pub use one_mk_ctl::status::{LayoutStatus, PeerStatus, Status, on_your, placement, takeback_hint};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn unknown_device(device: &str) -> anyhow::Error {
     anyhow::anyhow!("no paired computer called {device:?}; see `one-mk devices` for names and ids")
-}
-
-pub fn parse_align(value: &str) -> Result<Align, String> {
-    if value.trim().is_empty() {
-        return Err("--offset cannot be empty; use center, stretch or a number from -100000 to 100000 logical pixels".into());
-    }
-    let align: Align = value.parse()?;
-    if matches!(align, Align::Offset(offset) if !(-100_000..=100_000).contains(&offset)) {
-        return Err("--offset must be between -100000 and 100000 logical pixels".into());
-    }
-    Ok(align)
 }
 
 pub async fn status(dir: &Path) -> Result<()> {
@@ -71,30 +61,68 @@ pub async fn takeback(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Changes a paired device's side, alignment and/or Ctrl/Cmd setting in
-/// `devices.toml`. A new side or alignment gets a version newer than any
-/// seen, so it wins when the two computers compare layouts. A new side
-/// without an alignment is stretched; the same side keeps its alignment.
-pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>) -> Result<Device> {
-    set_layout_at(dir, device, side, align, swap, now_ms())
+/// `DX,DY` or `none`, for `one-mk layout --offset`.
+pub fn parse_offset(s: &str) -> Result<Option<(i32, i32)>> {
+    if s.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    let parsed = s.split_once(',').and_then(|(x, y)| Some((x.trim().parse::<i32>().ok()?, y.trim().parse::<i32>().ok()?)));
+    let Some((x, y)) = parsed else { bail!("expected --offset DX,DY (e.g. -1920,0) or none, not {s:?}") };
+    let max = one_mk_net::MAX_OFFSET;
+    if x.max(y) > max || x.min(y) < -max {
+        bail!("--offset must be within -{max} and {max} pixels on each axis");
+    }
+    Ok(Some((x, y)))
+}
+
+/// Checks `--offset` when the command line is read (see [`parse_offset`]).
+pub fn offset_arg(s: &str) -> Result<String, String> {
+    parse_offset(s).map(|_| s.to_owned()).map_err(|e| e.to_string())
+}
+
+/// Changes a paired device's side, offset and/or Ctrl/Cmd setting in
+/// `devices.toml`. A new side or offset gets a version newer than any
+/// seen, so it wins when the two computers compare layouts; a new side
+/// also drops an offset that was meant for the old side, unless a new
+/// one is given.
+pub fn set_layout(
+    dir: &Path,
+    device: &str,
+    side: Option<Side>,
+    offset: Option<Option<(i32, i32)>>,
+    swap: Option<Swap>,
+) -> Result<Device> {
+    set_layout_at(dir, device, side, offset, swap, now_ms())
 }
 
 /// [`set_layout`] with the clock (milliseconds since 1970) given, so a test
 /// can make two computers choose under the same version.
-pub fn set_layout_at(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>, now: u64) -> Result<Device> {
-    if let Some(align) = align {
-        parse_align(&align.to_string()).map_err(anyhow::Error::msg)?;
-    }
+pub fn set_layout_at(
+    dir: &Path,
+    device: &str,
+    side: Option<Side>,
+    offset: Option<Option<(i32, i32)>>,
+    swap: Option<Swap>,
+    now: u64,
+) -> Result<Device> {
     let mut trust = TrustStore::load(dir)?;
     let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
     let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
     let dev = trust.get_mut(&fp).expect("found above");
-    if side.is_some() || align.is_some() {
-        // An offset chosen for one side means something else on another,
-        // so a new side without one starts stretched.
+    if side.is_some() || offset.is_some() {
         let new_side = side.unwrap_or_else(|| dev.side());
-        let keep = if new_side == dev.side() { dev.align() } else { Align::Stretch };
-        place_at(dev, new_side, align.unwrap_or(keep), now);
+        // An offset chosen for one side means something else on another.
+        let keep = if new_side == dev.side() { dev.offset } else { None };
+        place_at(dev, new_side, offset.unwrap_or(keep), now);
+    }
+    if let Some(side) = side {
+        if dev.side() != side {
+            dev.offset = None;
+        }
+        dev.side = side.to_string();
+    }
+    if let Some(offset) = offset {
+        dev.offset = offset;
     }
     if let Some(swap) = swap {
         dev.swap_ctrl_cmd = swap;
@@ -142,36 +170,36 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
-/// Puts `dev` on `side`, lined up as `align`, under a new layout version:
+/// Puts `dev` on `side`, at `offset`, under a new layout version:
 /// `now`, but always above the one it has. A layout received from the peer
 /// is stored under its version, so a change made after receiving it is
 /// above that too.
-pub fn place(dev: &mut Device, side: Side, align: Align) {
-    place_at(dev, side, align, now_ms());
+pub fn place(dev: &mut Device, side: Side, offset: Option<(i32, i32)>) {
+    place_at(dev, side, offset, now_ms());
 }
 
 /// [`place`] with the clock given.
-pub fn place_at(dev: &mut Device, side: Side, align: Align, now: u64) {
+pub fn place_at(dev: &mut Device, side: Side, offset: Option<(i32, i32)>, now: u64) {
     dev.side = side.to_string();
-    dev.set_align(align);
+    dev.offset = offset;
     dev.layout_version = now.max(dev.layout_version.saturating_add(1));
 }
 
-pub async fn layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>) -> Result<()> {
-    if side.is_none() && align.is_none() && swap.is_none() {
-        bail!(
-            "say where {device:?} is (left, right, top or bottom), how it lines up (--offset PX, center or stretch) \
-             and/or use --swap-ctrl-cmd on|off|auto"
-        );
+pub async fn layout(dir: &Path, device: &str, side: Option<Side>, offset: Option<&str>, swap: Option<Swap>) -> Result<()> {
+    if side.is_none() && offset.is_none() && swap.is_none() {
+        bail!("say where {device:?} is (left, right, top or bottom), and/or use --offset DX,DY|none or --swap-ctrl-cmd on|off|auto");
     }
-    let dev = set_layout(dir, device, side, align, swap)?;
+    let offset = offset.map(parse_offset).transpose()?;
+    let dev = set_layout(dir, device, side, offset, swap)?;
     let name = one_mk_proto::sanitize_name(&dev.name);
-    let moved = side.is_some() || align.is_some();
-    if moved {
-        println!("{name} is now {}.", placement(dev.side(), dev.align()));
-        if dev.align().is_exact() {
-            println!("The pointer crosses only where your edges overlap, like between two monitors.");
-        }
+    let moved = side.is_some() || offset.is_some();
+    if let Some(side) = side {
+        println!("{name} is now {}.", on_your(side));
+    }
+    match offset {
+        Some(Some((x, y))) => println!("{name}'s (0,0) sits at {x},{y} of yours; the pointer crosses where the screens touch."),
+        Some(None) => println!("{name} has no offset; the pointer crosses anywhere along its side."),
+        None => {}
     }
     match swap {
         Some(Swap::On) => println!("Ctrl and Cmd are swapped for keys sent to {name}."),
@@ -228,6 +256,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_offset() {
+        assert_eq!(super::parse_offset("-2592, 98").unwrap(), Some((-2592, 98)));
+        assert_eq!(super::parse_offset("None").unwrap(), None);
+        assert!(super::parse_offset("10").is_err());
+        assert!(super::parse_offset("16777217,0").is_err(), "beyond what the wire carries");
+    }
+
+    #[test]
     fn a_tie_with_the_same_layout_settles_nothing() {
         let (small, big) = (fp(1), fp(2));
         assert_eq!(resolve_layout(7, 7, true, &small, &big), Keep);
@@ -238,11 +274,11 @@ mod tests {
     #[test]
     fn a_change_after_receiving_is_above_the_peers_version() {
         let mut dev = Device { layout_version: 1_000, ..Device::default() };
-        place_at(&mut dev, Side::Left, Align::Stretch, 10); // the clock is behind
+        place_at(&mut dev, Side::Left, None, 10); // the clock is behind
         assert_eq!(dev.layout_version, 1_001);
-        place_at(&mut dev, Side::Left, Align::Center, 5_000);
-        assert_eq!(dev.layout_version, 5_000);
-        place_at(&mut dev, Side::Top, Align::Stretch, 5_000); // same millisecond
+        place_at(&mut dev, Side::Left, Some((-1920, 0)), 5_000);
+        assert_eq!((dev.layout_version, dev.offset), (5_000, Some((-1920, 0))));
+        place_at(&mut dev, Side::Top, None, 5_000); // same millisecond
         assert_eq!(dev.layout_version, 5_001);
     }
 }

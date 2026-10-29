@@ -1165,6 +1165,7 @@ mod tests {
                     os: 0,
                     online: *online,
                     swap: "auto".into(),
+                    screens: vec![],
                 })
                 .collect(),
             ..DaemonStatus::default()

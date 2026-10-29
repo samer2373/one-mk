@@ -1,140 +1,169 @@
 # Packaging
 
-How one-mk is packaged for each system, how to build each package, and what
-has and has not been tried on real systems.
+How one-mk is packaged for each system, which file is built how and by which
+step of `.github/workflows/release.yml`, and what has and has not been tried.
 
-| Format | Script | Output | Built where | Status |
+| Format | Made by | Release step | File published | Status |
 |---|---|---|---|---|
-| plain `.tar.gz` / `.zip` | the "Package" step of `.github/workflows/release.yml`, or `scripts/package-tarball.sh` | `one-mk-<target>.tar.gz` / `.zip` | CI, any | in use since the first release; what `install.sh` downloads |
-| Debian `.deb` | `scripts/package-deb.sh` | `one-mk_<version>-1_amd64.deb` | Linux with `dpkg-deb` | **built and checked here** |
-| AppImage | `scripts/package-appimage.sh` | `one-mk-<version>-x86_64.AppImage` | Linux with `appimagetool` | AppDir built and run here; the `.AppImage` file itself **not built here** |
-| Flatpak | `scripts/package-flatpak.sh` + `packaging/flatpak/` | manifest (and a bundle with `flatpak-builder`) | Linux with `flatpak-builder` | **written, untested** |
-| Windows installer | `scripts/package-windows.sh` + `packaging/windows/one-mk.iss` | `one-mk-<version>-x64-setup.exe` | Windows with Inno Setup | **written, untested** |
-| macOS `.app` / `.dmg` | `scripts/package-macos.sh` + `packaging/macos/` | `one-mk-<version>-arm64.dmg`, `-x64.dmg` | macOS | **written, untested** (the `.app` layout is built on Linux with `APP_ONLY=1`) |
-| Homebrew cask and formula | `scripts/package-homebrew.sh` + `packaging/homebrew/` | `one-mk.rb`, `one-mk-source.rb` | anywhere | **written, untested** |
+| plain `.tar.gz` / `.zip` | inline in the workflow | build: "Package" | `one-mk-<target>.tar.gz` (macOS, Linux), `one-mk-x86_64-pc-windows-msvc.zip` | in use since the first release; `install.sh` downloads the Linux `.tar.gz` |
+| macOS `.app` and `.dmg` | `scripts/bundle-mac.sh` | build: "Mac app" | `one-mk-<target>.app.zip` and `one-mk-<target>.dmg`, for `aarch64-apple-darwin` and `x86_64-apple-darwin` | released since 0.1.1; signed and notarized when the signing secrets are set; `install.sh` uses the `.app.zip` |
+| Windows installer | `installer/one-mk.iss` (Inno Setup) | build: "Windows installer" | `one-mk-x86_64-pc-windows-msvc-setup.exe` | released since 0.1.2; CI installs it silently and runs `one-mk id` from the install |
+| Debian `.deb` | `scripts/bundle-deb.sh` | build: "Linux .deb" | `one-mk-x86_64-unknown-linux-gnu.deb` | released since 0.1.1; CI installs it with `dpkg -i` and runs `one-mk id` |
+| AppImage | `scripts/package-appimage.sh` + `packaging/linux/` | build: "Linux AppImage" | `one-mk-x86_64-unknown-linux-gnu.AppImage` | AppDir built and run here and in CI; the `.AppImage` file is built in CI only, **not yet released** |
+| Flatpak source bundle | `scripts/package-flatpak.sh` + `packaging/flatpak/` | publish: "Homebrew and Flatpak files" | `one-mk-flatpak-sources.tar.gz` | **written, untested** (`flatpak-builder` never run) |
+| Homebrew cask and formula | `scripts/package-homebrew.sh` + `packaging/homebrew/` | publish: "Homebrew and Flatpak files" | `one-mk.rb`, `one-mk-source.rb` | **written, untested** (no Mac) |
 
-Everything lands in `dist/` (or `$OUT_DIR`). The scripts never build the
-programs themselves, so CI and a developer package exactly the same
-binaries:
+`<target>` is the Rust target triple. File names carry no version, so
+`https://github.com/samer2373/one-mk/releases/latest/download/<file>` always
+gets the newest one (that is how `install.sh` works). `SHA256SUMS` in each
+release lists the checksums of the files made by the build job.
+
+The scripts never build the programs themselves, so CI and a developer
+package exactly the same binaries:
 
 ```sh
 cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app
-sh scripts/package-deb.sh
-sh scripts/check-packaging.sh        # builds and checks the Linux packages in /tmp
+sh scripts/bundle-deb.sh target/release one-mk-x86_64-unknown-linux-gnu.deb   # Linux, from the checkout
+sh scripts/bundle-mac.sh target/release one-mk-aarch64-apple-darwin.app.zip   # macOS, also writes the .dmg
+sh scripts/package-appimage.sh      # dist/, see below
+sh scripts/check-packaging.sh       # builds and checks the Linux packages in /tmp
 ```
 
-With `TARGET=<triple>` the scripts look in `target/<triple>/release`
-(the release workflow builds with `--target`). On a machine short of memory
-the release profile's fat LTO can run out of it; for a local check build with
-`CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`
-(the packages are then bigger and a little slower, but otherwise the same).
+`bundle-deb.sh` and `bundle-mac.sh` take the release folder and the output
+file and must run from the top of the checkout. The `package-*.sh` scripts
+write into `dist/` (or `$OUT_DIR`) and, with `TARGET=<triple>`, look in
+`target/<triple>/release` (the release workflow builds with `--target`;
+`BIN_DIR=` overrides). On a machine short of memory the release profile's fat
+LTO can run out of it; for a local check build with
+`CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`, or
+check a debug build: `BIN_DIR=target/debug sh scripts/check-packaging.sh`.
 
 ## One version
 
 The version is `[workspace.package] version` in the root `Cargo.toml`; every
 crate says `version.workspace = true`. Nothing else holds a version:
 
-- `sh scripts/version.sh` prints it; every package script uses it.
-- The release workflow starts with `scripts/version.sh --check $GITHUB_REF_NAME`,
-  so tagging `v0.2.0` while `Cargo.toml` says `0.1.0` stops before anything is
-  built.
+- `sh scripts/version.sh` prints it; the `package-*.sh` scripts use it.
+  `bundle-deb.sh`, `bundle-mac.sh` and the workflow's Windows step read the
+  first `version = "..."` line of the root `Cargo.toml`, which is the same
+  value.
+- The release workflow's build job starts with
+  `sh scripts/version.sh --check $GITHUB_REF_NAME` on a tag push, so tagging
+  `v0.2.0` while `Cargo.toml` says `0.1.11` stops before anything is built. A
+  manual run (`workflow_dispatch`) has no tag, skips the check, builds
+  everything and publishes nothing.
 - To release: change the version, commit, tag `vX.Y.Z`, push the tag.
-  A pre-release version such as `0.2.0-rc1` becomes `0.2.0~rc1-1` in the
-  `.deb` so that it sorts before `0.2.0`.
 - `one-mk --version` prints `one-mk <version>` (clap reads it from the crate).
   `one-mk-app` and `one-mk-tray` have no `--version`; they print their usage
   for an unknown option.
 
-## Shared files
+## Checking
 
-The systemd user unit and the desktop entries are not copied into the
-packaging folder: `one_mk_ctl::install::packaged_files` produces them from the
-same functions `one-mk install` uses to write them into the home folder, and
-`scripts/package-common.sh` runs them through the `packaging-files` example
-(`cargo run -p one-mk-ctl --example packaging-files -- ROOT /usr/bin`). A
-unit test checks that the packaged unit is the installed unit with another
-program path. Hand-written, static files are in `packaging/linux/`:
-the window's `.desktop`, the AppStream metainfo, the man page, the copyright
-file and the maintainer scripts. Icons come from
-`docs/brand/app-icon/` (hicolor PNGs and SVG for Linux, `.icns` for macOS,
-`.ico` for the Windows installer).
+`scripts/check-packaging.sh` (also the `packaging` job of `ci.yml`, on a debug
+build) builds into a scratch folder and checks, installing nothing:
+
+- the `.deb` from `bundle-deb.sh`: the files in it, the control version,
+  `one-mk --version` from an unpacked copy, no world-writable or setuid files,
+  `desktop-file-validate`;
+- the AppDir: `AppRun --version`, the files appimagetool wants at the top,
+  `desktop-file-validate`, `appstreamcli validate --no-net`;
+- the Flatpak source bundle: unpacked elsewhere, every `path:` resolves and
+  matches its `sha256`, no checkout path or placeholder left;
+- the Homebrew files, filled in from stand-in `.dmg` files named like the
+  release's: no placeholder left, the right checksum, the right file names
+  (and `ruby -c` when Ruby is installed).
+
+Optional tools are reported as skipped when missing. The macOS app and the
+Windows installer are checked by the release workflow itself (it signs,
+installs and runs them).
+
+## macOS `.app` and `.dmg`
+
+`scripts/bundle-mac.sh <release dir> <out.app.zip>` builds `one-mk.app` (the
+`Info.plist` is written inline: bundle id `com.one-mk.app`, version from
+`Cargo.toml`, `one-mk-app` as the executable, `LSMinimumSystemVersion` 11.0),
+zips it with `ditto` and writes the matching `.dmg` (with an `Applications`
+link) next to it.
+
+```
+one-mk.app/Contents/Info.plist
+              MacOS/one-mk-app        the window (CFBundleExecutable)
+              MacOS/one-mk            the command line and the service
+              MacOS/one-mk-tray       the menu bar icon
+              Resources/onemk.icns    from docs/brand/app-icon/macos
+```
+
+- The three programs sit side by side, so `one-mk install` (which looks for
+  `one-mk-tray` next to itself) registers LaunchAgents that point inside the
+  app.
+- With `SIGN_IDENTITY` set (the workflow imports the `MACOS_CERT_P12`
+  certificate into a throwaway keychain) it is signed with the Developer ID
+  and the hardened runtime; with `NOTARY_APPLE_ID`, `NOTARY_PASSWORD` and
+  `NOTARY_TEAM_ID` also set it is notarized and stapled, and the `.dmg` is
+  signed too. Without the secrets it is signed ad hoc.
+- Both architectures are built on the `macos-14` (Apple silicon) runner; the
+  Intel build is a cross build (`--target x86_64-apple-darwin`), because the
+  `macos-13` Intel runner never started. One `.dmg` per architecture, no
+  universal binary.
+
+## Windows installer
+
+`installer/one-mk.iss` is an Inno Setup script. The workflow installs Inno
+Setup with Chocolatey and runs
+`ISCC.exe /DAppVersion=<version> /DReleaseDir=..\target\<target>\release installer/one-mk.iss`,
+which writes `one-mk-x86_64-pc-windows-msvc-setup.exe` at the top of the
+checkout; then it installs it silently into a scratch folder and runs
+`one-mk.exe id` from there. The installer:
+
+- installs for the current user only, into `%LOCALAPPDATA%\Programs\one-mk`
+  (no administrator rights);
+- adds a Start menu shortcut to the window, and optionally one on the desktop;
+- optionally (a task, on by default) appends the folder to the user's `PATH`
+  if that exact entry is not there yet;
+- offers to open the window at the end.
+
+It does not open the firewall, run `one-mk install` (start at sign-in, the
+*Send to* entries) or take the folder out of `PATH` on uninstall. Start at
+sign-in is turned on from the window (or `one-mk install`); `one-mk integrate`
+adds the *Send to* entries. The installer is not code-signed, so SmartScreen will warn.
 
 ## Debian `.deb`
 
-`scripts/package-deb.sh` uses `dpkg-deb` directly (no debhelper, no
-cargo-deb). The package contains:
-
-| Path | What |
-|---|---|
-| `/usr/bin/one-mk`, `one-mk-tray`, `one-mk-app` | the programs |
-| `/usr/lib/systemd/user/one-mk.service` | the user service (`systemctl --user enable --now one-mk`) |
-| `/usr/share/applications/one-mk.desktop` | the window's launcher |
-| `/usr/share/applications/io.github.onemk.OneMk.desktop` | hidden entry that gives the daemon its app id for the GlobalShortcuts portal |
-| `/etc/xdg/autostart/one-mk-tray.desktop` | starts the tray icon at login (a conffile; see below) |
-| `/usr/share/icons/hicolor/*/apps/one-mk.*` | icons, 16 px to scalable |
-| `/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml` | AppStream |
-| `/usr/share/man/man1/one-mk.1.gz` (+ symlinks for the tray and the app) | man page |
-| `/usr/share/doc/one-mk/{copyright,changelog.Debian.gz}` | licence (MIT or Apache-2.0) and changelog |
-
-Design choices:
-
-- **Installing starts nothing, enables nothing.** The maintainer scripts
-  (`packaging/linux/postinst`, `postrm`) only refresh the icon and desktop
-  caches; there is no `systemctl`, `deb-systemd-helper` or `adduser` in them,
-  and nothing runs as root that a user's login depends on. Starting at login
-  stays a per-user decision: `one-mk install`, or
-  `systemctl --user enable --now one-mk`. `scripts/check-packaging.sh`
-  fails if a maintainer script mentions `systemctl`, `start` or `enable`.
-- **The tray autostarts, the daemon does not.** The tray only shows the state
-  of the service the user turned on, and offers to turn it on; it does not
-  capture input. To stop it, copy the file to `~/.config/autostart/` with
-  `Hidden=true`, or use the desktop's startup applications.
-  `one-mk install` writes `~/.config/autostart/one-mk-tray.desktop`, which
-  overrides the packaged one by name, so it never starts twice. The same goes
-  for the unit: `~/.config/systemd/user/one-mk.service` wins over the packaged one.
-- **Depends** comes from `dpkg-shlibdeps` when it is installed (libc6 and
-  libgcc-s1 today). The window opens OpenGL, xkbcommon and Wayland at run time,
-  so those are `Recommends`, which keeps the command-line part installable on a
-  server. Build on the oldest distribution you support (the release workflow
-  uses ubuntu-22.04, glibc 2.35), because the glibc dependency is the version
-  of the build machine's.
-- **Reproducible.** File times and modes are normalised and
-  `SOURCE_DATE_EPOCH` is the commit's time; two builds give the same bytes
-  (`check-packaging.sh` compares the checksums). The builder's time zone does
-  not matter: `touch -t` reads its stamp in local time, so it runs with
-  `TZ=UTC0` (`SOURCE_DATE_EPOCH=1700000000` gave mtime 1699989200 under
-  `Asia/Amman` before), and `check-packaging.sh` builds the `.deb` under two
-  other zones and compares checksums.
-
-Verified here (Debian-family host, release build with LTO off): contents with
-`dpkg-deb -c`, fields with `dpkg-deb -I`, extraction with `dpkg-deb -x` into a
-throwaway root and `usr/bin/one-mk --version` run from there,
-`desktop-file-validate` (clean on the three entries), `appstreamcli validate
---no-net` (clean), `systemd-analyze --user verify` on the unit (clean, and it
-does flag a deliberately broken copy), no world-writable or setuid files.
-**Not run:** `lintian` (not installed here), an `apt install` on a real
-system, and an upgrade or removal. Known lintian-style points worth checking
-when it is available: the changelog is a one-line pointer to the GitHub
-release notes, and there is no separate upstream changelog.
+`scripts/bundle-deb.sh <release dir> <out.deb>` uses `dpkg-deb` directly. The
+package (version exactly as in `Cargo.toml`, `amd64`) contains the three
+programs in `/usr/bin`, the window's launcher
+`/usr/share/applications/one-mk.desktop` (written inline by the script) and
+the 256 px icon. It has no maintainer scripts, starts and enables nothing,
+and ships no systemd unit or autostart entry: `one-mk install`, run as
+yourself, writes the user service, the tray's autostart entry and the hidden
+`io.github.onemk.OneMk.desktop` entry the GlobalShortcuts portal needs into
+the home folder. It is built on ubuntu-22.04 (glibc 2.35), the oldest
+distribution it is meant for.
 
 ## AppImage
 
-`scripts/package-appimage.sh` lays out `dist/one-mk.AppDir`, runs
-`AppRun --version` to prove the layout works, and then calls `appimagetool`
-if it can find one (`APPIMAGETOOL=/path`, or on `PATH`).
+`scripts/package-appimage.sh` lays out `dist/one-mk.AppDir` (the three
+programs, `packaging/linux/one-mk.desktop`, the AppStream metainfo with the
+version and the commit date filled in, the hicolor icons, the copyright file
+and `packaging/linux/AppRun`), runs `AppRun --version` to prove the layout
+works, and then calls `appimagetool` if it can find one (`APPIMAGETOOL=/path`,
+or on `PATH`). The output is `one-mk-<arch>-unknown-linux-gnu.AppImage`, named
+like the release's other Linux files.
 
 - `AppRun` (`packaging/linux/AppRun`): with no arguments it starts the window;
   `app` and `tray` start the window and the tray explicitly; anything else goes
-  to `one-mk`, so `./one-mk-0.1.0-x86_64.AppImage pair` works.
+  to `one-mk`, so `./one-mk-x86_64-unknown-linux-gnu.AppImage pair` works.
 - Inside an AppImage the running copy is in a temporary mount. When one-mk is
   started from one, `one-mk install` and `one-mk integrate` therefore write the
   path of the `.AppImage` file (from `$APPIMAGE`), not the mount, into the
   login service and the file manager entries, and no tray entry (the tray is
   not next to that path). Keep the file where it is after installing.
-- The release workflow downloads appimagetool 1.9.0 and checks it against
-  a pinned SHA-256 (`46fdd785...`). That hash is of the file as downloaded
-  while writing this, not independently verified; compare it with the
-  project's release page before trusting it.
+- The workflow downloads appimagetool 1.9.0 and checks it against a pinned
+  SHA-256 (`46fdd785...`). That hash is of the file as downloaded while
+  writing this, not independently verified; compare it with the project's
+  release page before trusting it. After packing, the workflow runs the
+  AppImage once (`--appimage-extract-and-run --version`, since the runner has
+  no FUSE).
 - The `.desktop` file inside names `one-mk-app`; AppImageLauncher and similar
   tools rewrite the `Exec` line to the file.
 - Not done: an update mechanism (zsync), and an AppImage for ARM (the script
@@ -143,8 +172,9 @@ if it can find one (`APPIMAGETOOL=/path`, or on `PATH`).
 ## Flatpak (untested)
 
 `packaging/flatpak/io.github.onemk.OneMk.yml.in` is a manifest that repackages
-the release tarball (a `simple` module), so the Rust build does not have to
-work offline inside the sandbox. `scripts/package-flatpak.sh [URL_OR_FILE]`
+the release's Linux tarball, `one-mk-x86_64-unknown-linux-gnu.tar.gz` (a
+`simple` module), so the Rust build does not have to work offline inside the
+sandbox. `scripts/package-flatpak.sh [URL_OR_FILE]`
 fills it in; with `flatpak-builder` installed it also builds a bundle. Nothing
 in it has been run: `flatpak-builder` is not available here. Runtime
 `org.freedesktop.Platform//25.08` is the newest at the time of writing;
@@ -153,11 +183,12 @@ adjust it to what exists.
 **What is published is a source bundle, not the bare manifest.** The script
 copies the desktop file, the metainfo and the two icons the manifest installs
 into `sources/` next to it (each with its `sha256:`), writes relative `path:`s
-only, and packs the folder as `one-mk-<version>-flatpak-sources.tar.gz`
+only, and packs the folder as `one-mk-flatpak-sources.tar.gz`
 (sorted, clamped times, so the same bytes every time). Given a URL, the
 tarball source is that URL with its checksum (from a download made by the
 script); given a file, the tarball is copied into the bundle too. The release
-workflow uploads the bundle; extract it anywhere and run `flatpak-builder` in
+workflow's publish job makes it from the tarball's release URL after the
+release exists, and uploads it; extract it anywhere and run `flatpak-builder` in
 the folder (`README.txt` has the command). `check-packaging.sh` builds a
 bundle, extracts it in another folder after deleting the original and checks
 that every `path:` resolves there and matches its checksum, with no checkout
@@ -193,125 +224,63 @@ What cannot work (or will not work as it does on the host):
   On GNOME Wayland the portals do the work (first-run permission dialog as
   usual); how well, in a sandbox, is exactly what is untested.
 - The app id (`io.github.onemk.OneMk`) is the same one `one-mk` registers
-  with the GlobalShortcuts portal, which is why Flatpak and the `.deb`'s hidden
-  desktop entry agree.
+  with the GlobalShortcuts portal, which is why Flatpak and the hidden
+  desktop entry `one-mk install` writes agree.
 
-## Windows installer (untested)
+## Homebrew (untested)
 
-`packaging/windows/one-mk.iss` is an Inno Setup script, chosen over WiX
-because it needs no extra extension for a firewall rule or a custom action
-and the whole thing is one readable file. `scripts/package-windows.sh`
-(Git Bash, with `iscc` installed; CI installs it with Chocolatey) builds
-`one-mk-<version>-x64-setup.exe`. It:
-
-- installs the three programs to `C:\Program Files\one-mk` (it needs an
-  administrator for that and for the firewall; the per-user part below runs as
-  the person who started Setup);
-- adds a Start menu shortcut to the window;
-- adds two inbound firewall rules for `one-mk.exe`, **private and domain
-  networks only**: UDP for the program (its link on port 24900, and the
-  pairing port, which is picked at random so it cannot be named), and mDNS on
-  UDP 5353. A network Windows calls *Public* stays closed; `one-mk doctor` says
-  what to do there;
-- optionally (a checkbox, on by default) runs `one-mk.exe install` as the
-  original user, which writes the per-user `Run` entry (the tray starts the
-  daemon hidden) and the *Send to* entries;
-- optionally adds the folder to the machine's `PATH`, as one whole entry and
-  only if it is not there already; when it adds it, it records that in
-  `HKLM\SOFTWARE\one-mk` (`PathEntry`);
-- on uninstall runs `one-mk.exe uninstall` (removes its own `Run` entry and the
-  SendTo entries of the account running the uninstaller), stops any running
-  one-mk, deletes both firewall rules and takes the folder out of `PATH`, **only
-  if the install recorded that it put it there, and only the entry equal to the
-  install folder (ignoring case)**. A neighbour such as
-  `C:\Program Files\one-mk-tools` is never cut (the old code searched for the
-  folder as a prefix and turned that entry into `C:\Windows-tools`-style
-  garbage). The identity and paired computers in `%LOCALAPPDATA%\one-mk` are
-  left, deliberately;
-- on uninstall also removes the start-at-sign-in value `one-mk` from every
-  *loaded* user registry (`HKEY_USERS\<SID>\Software\Microsoft\Windows\CurrentVersion\Run`)
-  whose data starts a program inside the install folder. This matters when a
-  standard user installs with another administrator's credentials: Setup writes
-  the entry as the original user, but the elevated uninstaller's own
-  `HKEY_CURRENT_USER` is the administrator's. The SIDs come from the machine's
-  `ProfileList`; for a profile whose registry is not loaded (that user is signed
-  out) the uninstall log (`/LOG`) names the SID and says to delete the value by
-  hand or run `one-mk uninstall` as them. (Instead of recording the user's SID
-  at install, which would need code run as the original user and a way to hand
-  the answer to the elevated Setup, the uninstaller matches the value's data
-  against its own folder: no value that points somewhere else is touched.)
-
-The CLI also checks ownership before removing the current account's `Run\\one-mk`
-value: its executable must be in the running executable's folder. Quoted paths,
-case differences, slash direction, and trailing folder separators are handled;
-an unrelated portable install is preserved. Windows 8.3 short-name aliases are
-not resolved by this comparison. Windows registry behavior is review-only here;
-the ownership comparison has platform-independent unit coverage.
-
-The PATH and startup-value logic is `packaging/windows/path-entries.pas`,
-included by the `.iss`; `scripts/check-windows-path.sh` (run by
-`check-packaging.sh`) runs the same steps in awk on 26 cases, among them the
-corrupting PATH above. **That is all that was run:** the Pascal itself, the
-registry access and the whole installer are written on Linux and have never
-run on Windows (the Pascal is a statement-for-statement twin of the awk, not
-the thing tested).
-
-Things to check on a real machine: that `runasoriginaluser` really lands the
-`Run` entry in the signed-in user's registry when Setup is started by
-"Run as administrator" from another account; the firewall rules
-(`netsh advfirewall firewall show rule name=all | findstr one-mk`); that
-`CloseApplications=force` stops a running tray during an upgrade; that the
-installer's `AppId` stays the same across releases. The installer is not
-code-signed, so SmartScreen will warn.
-
-## macOS `.app` and `.dmg` (untested)
-
-`scripts/package-macos.sh` builds `one-mk.app` and wraps it in a `.dmg` (with an
-`Applications` link) using `hdiutil`. The bundle:
-
-```
-one-mk.app/Contents/Info.plist        com.one-mk.app, version from Cargo.toml
-              MacOS/one-mk-app        the window (CFBundleExecutable)
-              MacOS/one-mk            the command line and the service
-              MacOS/one-mk-tray       the menu bar icon
-              Resources/onemk.icns    from docs/brand/app-icon/macos
-```
-
-The three programs sit side by side, so `one-mk install` (which looks for
-`one-mk-tray` next to itself) registers LaunchAgents that point inside the
-app, and the permission grants macOS keeps per program (Accessibility, Input
-Monitoring) stay put as long as the app does. The cask links
-`one-mk` onto `PATH`.
-
-- Signing is ad hoc (`codesign --sign -`) unless `MACOS_SIGN_IDENTITY` names a
-  Developer ID; there is **no notarisation**, so the first launch needs
-  right-click, Open, or `xattr -dr com.apple.quarantine one-mk.app`. The cask
-  says so in its caveats.
-- There is one `.dmg` per architecture (the runners build natively) rather than
-  a universal binary. Joining them with `lipo` is a later step.
 - `packaging/homebrew/one-mk.rb.in` is the cask (the normal way to install by
-  Homebrew), `one-mk-source.rb.in` a formula that builds from source.
-  `scripts/package-homebrew.sh` fills in checksums; the release workflow attaches
-  both files to the release, and putting them in a tap
-  (`samer2373/homebrew-tap`) is by hand.
-- The workflow's Intel runner is `macos-15-intel`; the old `macos-13` image was
-  retired. If GitHub renames it again, change it in the matrix.
+  Homebrew): it downloads `one-mk-aarch64-apple-darwin.dmg` or
+  `one-mk-x86_64-apple-darwin.dmg` from the tag's release, installs
+  `one-mk.app`, links `one-mk` onto `PATH`, and on uninstall unloads the
+  `com.one-mk.daemon` and `com.one-mk.tray` LaunchAgents.
+- `packaging/homebrew/one-mk-source.rb.in` is a formula that builds the three
+  programs from the tag's source tarball.
+- `scripts/package-homebrew.sh` fills in the version and the checksums (of the
+  two `.dmg` files in `dist/` and of the source tarball, `SOURCE_SHA256` or
+  `git archive` of `HEAD`). The publish job attaches both files to the
+  release; putting them in a tap (`samer2373/homebrew-tap`) is by hand.
 
 ## The release workflow
 
-On a `v*` tag, `release.yml`:
+`.github/workflows/release.yml` runs on a `v*` tag push, or by hand
+(`workflow_dispatch`, which builds and tests everything but publishes nothing):
 
-1. checks the tag against `Cargo.toml`;
-2. per OS, builds the three programs, makes the plain archive as before, and
-   then the platform packages: `.deb` and AppImage on ubuntu-22.04, `.dmg` on
-   the two macOS runners, the installer on Windows. They are uploaded as
-   `packages-<target>` artifacts;
-3. `publish` collects everything into one release with a `SHA256SUMS`, then
-   adds the Homebrew cask and formula and the Flatpak source bundle (they need
-   the release's own URLs and checksums).
+1. `build`, one leg per target (`aarch64-apple-darwin` and
+   `x86_64-apple-darwin` on `macos-14`, `x86_64-unknown-linux-gnu` on
+   `ubuntu-22.04`, `x86_64-pc-windows-msvc` on `windows-latest`): checks the
+   tag against `Cargo.toml` (tag pushes only), builds the three programs, makes
+   the plain archive, then the platform's files: the signed `.app.zip` and
+   `.dmg` on macOS; the installer on Windows (installed and run); the `.deb`
+   (installed and run) and the AppImage (run) on Linux. Every `one-mk-*.*`
+   file at the top of the checkout is uploaded as one artifact named after the
+   target.
+2. `publish` (tag pushes only) collects every artifact into `dist/`, writes
+   `SHA256SUMS` and the download table of the release notes, creates the
+   release, and then writes and attaches the Homebrew cask and formula and the
+   Flatpak source bundle (they need the release's own URLs and checksums).
 
-None of the new steps has run in CI yet (the workflow was edited without being
-able to run it); the first tag is the test. Packages are unsigned throughout.
+`ci.yml` runs `cargo test` on Linux, macOS and Windows for every push to
+`main` and every pull request, and `scripts/check-packaging.sh` on a debug
+build on Linux.
+
+## What the merge with the 0.1.11 release dropped
+
+Two packaging efforts met: the released one (`bundle-mac.sh`, `bundle-deb.sh`,
+`installer/one-mk.iss`, all built and tested by the release workflow) and an
+unreleased one (`scripts/package-*.sh`, `packaging/`). Where both made the same
+file, the released, CI-tested one was kept:
+
+| Dropped | Replaced by | Lost with it |
+|---|---|---|
+| `scripts/package-windows.sh`, `packaging/windows/one-mk.iss`, `packaging/windows/path-entries.pas`, `scripts/check-windows-path.sh` | `installer/one-mk.iss` | an all-users install in Program Files, firewall rules for private networks, running `one-mk install` at setup and `one-mk uninstall` at removal, taking the folder out of `PATH` on uninstall |
+| `scripts/package-macos.sh`, `packaging/macos/Info.plist.in` | `scripts/bundle-mac.sh` | nothing of note (the released script also signs and notarizes) |
+| `scripts/package-deb.sh`, `packaging/linux/postinst`, `postrm`, `one-mk.1` | `scripts/bundle-deb.sh` | the packaged systemd user unit, tray autostart and hidden app-id entry (`one-mk install` writes them per user instead), the man page, the copyright file, the full hicolor icon set, the AppStream file, `Depends`/`Recommends`, a reproducible build, `~` for pre-release versions |
+| `scripts/package-tarball.sh` | the workflow's "Package" step | a reproducible archive (sorted, time-clamped) |
+
+The AppImage, the Flatpak bundle, the Homebrew files and the checks were kept,
+renamed to the release's file names (`one-mk-<target>.<ext>`, no version in
+the name) and pointed at the released files.
 
 ## File manager entries ("Send to <computer>")
 

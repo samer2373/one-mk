@@ -6,6 +6,53 @@ status column when something changes. Started 2026-10-29.
 Goals every feature is judged against: lowest latency, zero idle CPU, tiny
 footprint, setup as easy as possible, no stuck keys.
 
+## Merged with the owner's releases (2026-10-29, branch `merge-origin-main`)
+
+`origin/main` (releases 0.1.1 to 0.1.11, made in parallel) is merged into
+this work with a true merge commit. Where both sides built the same thing,
+origin's design won; what origin lacked was re-applied on top of it.
+
+- **One layout model: origin's placement.** A paired computer has a side
+  and optionally an `offset` (where its (0,0) sits in our pixels,
+  `devices.toml`), synced as `Control::Layout`'s trailing offset. The
+  pointer crosses only where the screens touch (`proto::touching` over
+  `Desktop::exposed_edges`, inner monitor edges included); without an
+  offset, anywhere along the side's outer edges. CLI: `one-mk layout <pc>
+  <side> --offset DX,DY|none` (bounded to ±2^24 when read). Our `Align` /
+  `Seam` / `--offset PX|center|stretch` and the trailing `align` field are
+  gone (never released; an old `align` in `devices.toml` or `profiles.toml`
+  is ignored: that computer goes anywhere along its side).
+- **Re-applied on origin's model:** layout profiles and switching by
+  network (profiles store side + offset), the version tie-break for
+  simultaneous changes (`manage::resolve_layout`: larger fingerprint wins,
+  loser adopts, winner re-sends once), the "does not overlap yours" warning
+  in status/log/window and the always-a-way-home rule (a switch to a peer
+  whose screens touch nowhere gets the whole facing side as its way back),
+  edge guards and switching, gaming (relative) mode on the remote cursor.
+- **One edge mechanism: origin's `CaptureCmd::SetEdges(Vec<Edge>)`** in
+  every backend: portal, Windows and macOS as origin wrote them, our X11
+  (barriers / edge windows) and wlroots (layer strips) ported to edge
+  segments, including inner exposed edges. `Armed`/`SetSides` are gone.
+- **Window:** origin's drag-to-place editor and monitor wall now also fill
+  the Layout tab (its panel: side, exact place / "Anywhere along the
+  side", warnings, profiles); origin's Stop button, remove-computer, tray
+  icon from the window and start-after-pairing kept with all our tabs. Our
+  2-D plan (`app/plan.rs`) and its view-model helpers were dropped.
+- **Forgetting a computer** ends its input link and its clipboard and file
+  connections (origin's `Services::trusted` watch) and refreshes the
+  Send-to menus; the CLI `one-mk forget` now also tells a running daemon.
+- **Packaging:** origin's CI-tested Windows installer, signed/notarized
+  macOS app and `.dmg`, and `.deb` win; ours stays only where origin had
+  nothing (AppImage, Flatpak, Homebrew, check scripts). One release
+  workflow; one workspace version (0.1.11) inherited by every crate. See
+  docs/PACKAGING.md.
+- **Validated together:** `cargo test --workspace` (739 passed, 0 failed),
+  clippy clean on Linux, Windows and macOS targets, a two-daemon
+  null-backend smoke in a private network namespace (pair by invitation,
+  `layout --offset`, switch, clip-send, folder send, profile save/use,
+  forget ending connections, Stop), and `scripts/ui-shots.sh` on a private
+  Xvfb.
+
 ## Where things stand (updated 2026-10-29, end of the second batch)
 
 Everything below is merged into `main` and was validated together (full
@@ -27,9 +74,8 @@ findings were fixed with tests that fail without the fix:
   review.
 
 Not tested on real hardware (compile and unit-test only): everything for Windows
-and macOS, the wlroots backend, the real tray, a screen reader, the AppImage,
-Flatpak, Windows installer and macOS `.dmg`, and the first run of the new CI
-release jobs.
+and macOS, the wlroots backend, the real tray, a screen reader, the AppImage and
+Flatpak, and the first run of the AppImage, Homebrew and Flatpak release steps.
 
 Waiting on the user: 3C auto-update (where releases are published and how they
 are signed); the privileged part of 2C (the system service: to be written and
@@ -122,7 +168,7 @@ Known gaps:
 | 2A | Global hotkeys: jump to computer N, cycle, toggle lock-to-here | 1C `switch` | Branch `t3/global-keyboard-hotkeys`. `one-mk hotkeys`, `[hotkeys]` in settings.toml, status and doctor lines. Linux: GlobalShortcuts portal (needs `one-mk install` for an app id); Windows `RegisterHotKey`; macOS session event tap; captured keys matched in the daemon while away. See 2A notes. | done |
 | 2B | Wayland hardening: persist the portal and RemoteDesktop token, release capture on every failure path | none | Branch `t3/wayland-portal-recovery`. Tokens 0600 + atomic, refused token replaced; InputCapture v2 restore token (GNOME 50 is v1: still asks each start). Per-session D-Bus connection, call timeouts, owner-change watch, panic guard, held-key release, sleep/lock pause, backoff 1-2-4-8-16-30 s. `Event::Status` → `one-mk status`, doctor, one printed line. Fake-portal + fake-EIS tests for each path; real GNOME: only the first-run dialog line (smoke). | done |
 | 2C | Windows service for the login screen and UAC | none | `t3/windows-service-pure-logic`: pure bounded/versioned IPC for `Inject` + allowlisted events, boot-token HMAC handshake with expiry/attempt/replay gates, session/helper decisions with debounce/backoff, fixed-path validation and Windows argument quoting; Linux unit tests, no runtime wiring. [WINDOWS-SERVICE.md](WINDOWS-SERVICE.md). **Pure parts only, 2026-10-29:** no code runs on real Windows in this task; cross-target compilation is not runtime validation. Hand-write/review privileged authority, OS session/desktop observation, authenticated pipe/access policy, credential provisioning, helper lifecycle/input cleanup and installer/service integration later. Phase 1: user-session lock/UAC with the per-user daemon; phase 2: sign-in without a daemon needs a separate identity/admission design. | partial: pure only |
-| 2D | Layout editor: several monitors per computer, unaligned edges, push-toward-it learning | 1C edge work | Logic and CLI done on `t3/400c47de`: `layout --offset PX\|center\|stretch`, 1:1 crossing only where edges overlap, per-monitor crossing on L-shaped and mixed-size desktops, several computers per side, mirror sync as an additive `Layout` field. Still to do: the window's editor (UI task, reads `Status.layout`) and push-toward-it learning. | done (logic) |
+| 2D | Layout editor: several monitors per computer, unaligned edges, push-toward-it learning | 1C edge work | Since the merge with origin: origin's placement model (`layout --offset DX,DY\|none`, crossing only where screens touch, edge segments in every backend) and origin's drag-to-place editor in the window, with our profiles, tie-break and no-overlap warning on top. Our `Align`/`Seam` model was dropped. Still to do: push-toward-it learning. | done (origin's model) |
 | 2E | Location profiles: layout switches by Wi-Fi network | 2D | `profile save\|use\|list\|delete\|auto`, `profiles.toml`. Linux auto-switch through NetworkManager signals; Windows and macOS are logged stubs. | done |
 | 2F | Screensaver and sleep sync; block screensaver on peers | 1C lock sync | `[power]`, `one-mk power`; `Control::Inhibit`/`Sleep` + `caps::POWER`; `proto/sleep.rs`, `one-mk/power.rs`, `input/system` (`Inhibitor`, `DisplaySleeper`). Linux verified against the real session bus (read-only); Windows/macOS compile-only. macOS can't notice its own display sleep. | done (Linux verified) |
 | 2G | Multimedia keys across computers | none | `crates/proto/src/mediakeys.rs` is the table (evdev / Windows VK / macOS NX_KEYTYPE); Windows types by VK, macOS captures and posts `NX_SYSDEFINED`; only volume/brightness repeat. Windows/macOS compile-only, not tested on real hardware. | done (Linux/null verified) |
@@ -156,7 +202,11 @@ Known gaps:
   clippy-clean only, not tested on real hardware. After `one-mk install`
   the running daemon must be restarted to register.
 
-### 2D/2E notes (branch `t3/400c47de`)
+### 2D/2E notes (branch `t3/400c47de`; superseded by the merge above)
+
+The alignment model below was replaced by origin's placement model when
+`origin/main` was merged; profiles, the tie-break and the warnings were
+ported to it. Kept for history.
 
 - **Model.** `proto::Align` per paired computer (`Stretch`, the default and
   the old behaviour; `Offset(px)`; `Center`), stored as `align` in
@@ -193,7 +243,7 @@ Known gaps:
 | 3A | Pointer drawn on a computer with no mouse attached | none | Known gap in Lan Mouse and Mouse Without Borders. Findings per OS in [NO-MOUSE-POINTER.md](NO-MOUSE-POINTER.md). Decision with hysteresis in `proto/overlay.rs`; lifecycle (`InjectTx`, created on control, gone after, nothing idle) and renderers in `input/cursoroverlay*.rs`; `[pointer] draw_when_no_mouse = auto\|always\|never`, `one-mk pointer-overlay`, a `status` line and a `doctor` check. **Verified here:** decision and lifecycle tests with a fake renderer (failing first), X11 `always` overlay on Xvfb (arrow shape, empty input shape, follows moves, removed, 20 cycles), real CLI/daemon run with a throwaway home. **Compiled only:** Windows layered window and probe, macOS helper window and IOKit probe. Wayland: not available (compositor draws the pointer). | done (Win/mac compiled only) |
 | 3B | Drop files on a peer-facing edge zone | transfer code (1B) | Copy to receiver Downloads via existing resumable transfer; no remote file-manager drop injection. X11 scripted XDND verified on private Xvfb; Windows OLE/macOS AppKit adapters compile-checked only (native runtime validation pending). GNOME/KDE/wlroots Wayland unavailable without compositor cooperation. See [DRAG-FILES.md](DRAG-FILES.md). | implemented; native runtime validation pending |
 | 3C | Auto-update with signed releases | none | | todo |
-| 3D | Packaging: `.deb`, AppImage or Flatpak, MSI, `.dmg` or Homebrew | none | Probably matters most for adoption. See `docs/PACKAGING.md`. **Verified here (Linux):** reproducible `.deb` built with `scripts/package-deb.sh`; contents, control, unpacked `one-mk --version`, `desktop-file-validate`, `appstreamcli validate`, `systemd-analyze --user verify` of the unit (`scripts/check-packaging.sh`); AppDir layout runs `AppRun --version`. **Written, untested:** AppImage file (needs appimagetool; pinned in CI), Flatpak manifest, Inno Setup installer, macOS `.app`/`.dmg` and Homebrew cask/formula; lintian not run (not installed); release CI jobs not run. Versions now come from `[workspace.package]` only. | done (Linux verified) |
+| 3D | Packaging: `.deb`, AppImage or Flatpak, MSI, `.dmg` or Homebrew | none | Probably matters most for adoption. See `docs/PACKAGING.md`. Merged with the 0.1.11 release: its CI-built and CI-installed `.dmg` (signed, notarized), Windows Inno Setup installer and `.deb` (`scripts/bundle-mac.sh`, `installer/one-mk.iss`, `scripts/bundle-deb.sh`) replaced ours. Kept from ours: AppImage (`scripts/package-appimage.sh`, built in the release workflow with a pinned appimagetool), Flatpak source bundle and Homebrew cask/formula (attached by the publish job), `scripts/check-packaging.sh` (also a CI job). **Verified here (Linux):** the `.deb` contents and control version, AppDir runs `AppRun --version`, `desktop-file-validate`, `appstreamcli validate`, the Flatpak bundle resolves, the Homebrew files fill in. **Untested:** the AppImage file itself and the new release steps (never run in CI yet), `flatpak-builder`, the Homebrew cask/formula. Versions come from `[workspace.package]` only; the release checks the tag against it. | done (Linux verified) |
 | 3E | wlroots (Sway/Hyprland) backend | none | Branch `t3/60bf24e6`. `input/wlroots.rs`: layer-shell edge strips (capture on outward relative motion), full-screen keyboard-exclusive capture surface + pointer lock, virtual pointer/keyboard with the seat's keymap, xdg-output monitors; one thread, no timers. `--backend wlroots`; `native` picks it on Wayland without portals. See 3E/3F notes. | done (compiled only) |
 | 3F | X11 capture backend | none | Branch `t3/60bf24e6`. `input/x11.rs`: XFixes barriers (edge input-only windows without XI 2.3), pointer+keyboard grab, XI2 raw events, XTest injection, RandR monitors, `LocalInput` from non-XTest raw events. `--backend x11`; `native` picks it in X11 sessions. See 3E/3F notes. | done (Xvfb verified) |
 | 3G | "Send to <computer>" file-manager entries | 1B | Nautilus, Dolphin, Explorer, Finder. `one-mk install`/`integrate` write them, pair/forget refresh them, `uninstall` removes them; `send --notify-errors` reports failures. **Verified here:** unit tests of every generated file and of quoting with hostile file and computer names, a real `sh` run of the generated script against a stub `one-mk` with odd file names, a real `integrate`/`forget`/`--remove` cycle in a scratch `$HOME`, failure notification through a stub `notify-send`. **Compiled only:** Windows `.cmd`, macOS Quick Action (plist parses; not seen in Finder). | done (Linux verified) |

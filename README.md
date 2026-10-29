@@ -22,21 +22,35 @@ UAC opt-in carries a local-malware elevation risk. No service ships yet; see
 
 ## Quick start
 
-Get it first. Every release has a package for each system (the
+Get it first. Every release has a file for each system (the
 [latest release](https://github.com/samer2373/one-mk/releases/latest)):
 
-| System | Get it | Notes |
+| System | File | Notes |
 |---|---|---|
-| Debian, Ubuntu | `sudo apt install ./one-mk_*_amd64.deb` | Installs nothing into your login; run `one-mk install` as yourself |
-| Any Linux | `one-mk-*-x86_64.AppImage` | `chmod +x` it and run it; with no arguments it opens the window, otherwise it is `one-mk` |
-| macOS | `one-mk-*-arm64.dmg` or `-x64.dmg` | Drag `one-mk.app` to Applications; or `brew install --cask samer2373/tap/one-mk` |
-| Windows | `one-mk-*-x64-setup.exe` | Installs to Program Files, opens the firewall for private networks, optionally starts at sign-in |
-| macOS, Linux, Windows | the plain `.tar.gz` / `.zip` | `curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh \| sh` installs it into `~/.local/bin` |
+| macOS, Apple silicon / Intel | `one-mk-aarch64-apple-darwin.dmg` / `one-mk-x86_64-apple-darwin.dmg` | Open it and drag one·mk onto Applications |
+| Windows 10/11, 64-bit | `one-mk-x86_64-pc-windows-msvc-setup.exe` | Installs for you alone, into `%LOCALAPPDATA%\Programs\one-mk` |
+| Debian, Ubuntu and relatives | `one-mk-x86_64-unknown-linux-gnu.deb` | `sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb`, then `one-mk install` as yourself |
+| Any Linux | `one-mk-x86_64-unknown-linux-gnu.AppImage` | `chmod +x` it and run it; with no arguments it opens the window, otherwise it is `one-mk` |
+| Other Linux, by hand | `one-mk-x86_64-unknown-linux-gnu.tar.gz` (and `.zip` on Windows) | Just the programs |
 
-Or build it yourself (see Building). How each package is made, and which are
-untested, is in [docs/PACKAGING.md](docs/PACKAGING.md).
+On macOS and Linux the one-line installer picks the right file:
 
-Install once, pair once, done. On **each** computer:
+```bash
+curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh
+```
+
+On a Mac this installs **one·mk** into Applications and opens it. Click
+Start and turn on "Start at login" in the window, pair from the window, and
+you never need the terminal. macOS asks for Accessibility permission the
+first time: turn on one·mk in System Settings > Privacy & Security >
+Accessibility. If an update was not signed with an Apple Developer ID,
+macOS may ask again after it: remove one·mk from that list and add it back.
+
+Or build it yourself (see Building). How each package is made, and which
+are untested, is in [docs/PACKAGING.md](docs/PACKAGING.md).
+
+The commands below do the same from a terminal (on Linux, run
+`one-mk-app` to open the window). On **each** computer:
 
 ```bash
 one-mk install     # start one-mk automatically whenever you log in
@@ -62,12 +76,12 @@ millisecond, the one with the larger certificate fingerprint wins and the
 other adopts its layout, so they always end up as mirror images (a computer
 that predates this rule converges too, as long as one side is up to date).
 
-Screens of different sizes, or not lined up? Say where the other edge
-starts, in pixels (see [Arranging the computers](#arranging-the-computers)):
+Screens of different sizes, or not lined up? Drag the computer next to one
+of your monitors in the window's Layout tab, or say where its top-left
+corner sits, in your pixels (see [Arranging the computers](#arranging-the-computers)):
 
 ```bash
-one-mk layout "laptop" bottom --offset 300   # its left edge 300 px right of yours
-one-mk layout "laptop" bottom --offset center
+one-mk layout "laptop" bottom --offset 300,1080   # below, its left edge 300 px right of yours
 ```
 
 ## Supported desktops
@@ -87,9 +101,11 @@ session, X11. Running status reports the backend actually opened (including
 `one-mk run --backend wlroots` or `--backend x11` forces one of those
 (the default, `native`, picks). Notes:
 
-X11 barriers (or fallback edge windows) and wlroots edge surfaces cover only
-the spans facing a peer, clipped to each outer monitor boundary. A wall beside
-a partially overlapping peer stays local, including after re-arming.
+Every backend (portal barriers, X11 barriers or fallback edge windows,
+wlroots edge surfaces, the Windows and macOS hooks) arms only the edge
+segments that lead to a peer, including inner monitor edges with nothing of
+yours beyond them. A wall beside a partly touching peer stays local,
+including after re-arming.
 
 - **X11** asks for no permission. X11 has no display scaling, so the
   desktop is measured in real pixels (a HiDPI setup with `Xft.dpi` or
@@ -144,7 +160,7 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 | `one-mk install` / `uninstall` | Start automatically at login (and add the file manager's "Send to" entries) / stop doing that |
 | `one-mk integrate [--remove]` | Add or remove "Send to <computer>" in the file manager only (see below) |
 | `one-mk pair` | Pair with another computer (run on both) |
-| `one-mk layout <pc> <left\|right\|top\|bottom> [--offset PX\|center\|stretch]` | Say where a paired computer sits, and how its edge lines up with yours |
+| `one-mk layout <pc> <left\|right\|top\|bottom> [--offset DX,DY\|none]` | Say where a paired computer sits, and where its (0,0) is in your screen coordinates |
 | `one-mk profile save\|use\|list\|delete <name>` | Named layouts, e.g. "home" and "office" |
 | `one-mk profile auto <name> --ssid <wifi> --network <router-mac\|subnet>` | Switch layout by itself when this computer joins that network |
 | `one-mk layout <pc> --swap-ctrl-cmd on\|off\|auto` | Ctrl/Cmd swapping (see below) |
@@ -237,50 +253,47 @@ computer you are sitting at.
 
 ### Arranging the computers
 
-Each paired computer sits on one side of this one. By default its whole
-facing edge is stretched over yours: wherever you leave your screen, you
+Each paired computer sits on one side of this one. By default the pointer
+crosses anywhere along that side: wherever you leave your screen, you
 arrive at the same fraction of the way along its edge, whatever the two
 sizes.
 
-With `--offset` the two edges sit against each other pixel for pixel, like
-two monitors of one computer, and the pointer only crosses where they
-really overlap. Next to the overlap the edge is a wall, as beside a real
-monitor:
+To place it exactly, drag it in the window's **Layout** tab next to one of
+your monitors, or give `--offset`: where its (0,0), its top-left corner,
+sits in your screen coordinates (logical pixels, what your display settings
+call the resolution after scaling). The pointer then crosses only where
+its screens touch yours, pixel for pixel, like two monitors of one
+computer; beside that the edge is a wall, as beside a real monitor:
 
 ```bash
-one-mk layout laptop bottom --offset 300    # laptop below, its left edge 300 px right of yours
-one-mk layout laptop right --offset -200    # laptop on the right, its top edge 200 px above yours
-one-mk layout laptop right --offset center  # the two edges centred on each other
-one-mk layout laptop --offset stretch       # back to stretching (the side stays)
+one-mk layout laptop bottom --offset 300,1080   # below a 1080-high screen, its left edge 300 px right of yours
+one-mk layout laptop right --offset 1920,-200   # right of a 1920-wide screen, its top 200 px above yours
+one-mk layout laptop --offset none              # anywhere along its side again (the side stays)
 ```
 
-Moving a computer to another side without `--offset` starts it stretched
-again (an offset means something else on another side).
+Moving a computer to another side without `--offset` drops its offset (it
+means something else on another side). Offsets must be within
+**-16777216 and 16777216** on each axis. `one-mk devices` shows each
+offset. The other computer gets the mirror image (`1920,-200` here is
+`-1920,200` there), and as with sides the newer change wins. A computer
+whose screens touch yours nowhere is warned about in `one-mk status` and in
+the window; `one-mk switch` still goes there, and all of its facing edge
+leads back.
 
-The offset is in logical pixels (what your display settings call the
-resolution after scaling), measured from the start of your edge to the start
-of the other: the top for left and right, the left end for top and bottom;
-negative means before yours. Offsets must be between **-100000 and 100000**
-logical pixels; an empty value is rejected (use `stretch` explicitly).
-The other computer gets the mirror image
-(`--offset 300` here is `-300` there), and as with sides the newer change
-wins. Both computers need this version of one-mk for the offset to work
-both ways: an older one keeps stretching the edges for the pointer it sends.
-
-Several computers can share one side if their edges don't overlap, for
-example two laptops below a wide monitor:
+Several computers can share one side if their screens touch different
+parts of it, for example two laptops below a wide monitor:
 
 ```bash
-one-mk layout laptop-a bottom --offset 0
-one-mk layout laptop-b bottom --offset 1920
+one-mk layout laptop-a bottom --offset 0,1440
+one-mk layout laptop-b bottom --offset 1920,1440
 ```
 
-**Several monitors.** Only the outer edge of the whole desktop leads to
-another computer, and only where a monitor actually reaches it: with an
-L-shaped arrangement, or a smaller monitor beside a taller one, the part of
-the edge with no monitor on it leads nowhere. The pointer arrives on the
-monitor of the other computer that faces the point you left from, whichever
-monitor that is, and comes back to the same point.
+**Several monitors.** The pointer crosses only through a monitor edge with
+no monitor of yours beyond it: without an offset, the outer edge of the
+whole desktop where a monitor reaches it; with an offset, wherever the
+other computer's screens touch such an edge, even one set back from the
+outer boundary. The pointer arrives where it left, measured along the
+monitors of that edge, and comes back to the same point.
 
 **Profiles.** Save the arrangement under a name and switch between them:
 
@@ -665,12 +678,12 @@ Open it from the tray ("Open one·mk…", or a left click on Linux) or run
 - move the mouse and keyboard to a computer (**Switch to it**), send it this
   clipboard or get its clipboard, keep the pointer here and lock every
   screen;
-- **Layout:** see every computer's real monitors on a flat plan; drag one
-  along the edge it shares with this one to line them up (it snaps to the
-  ends and the middle), or type an offset in pixels, or stretch the edges
-  end to end. The part of the edge the pointer crosses is drawn in amber,
-  dashed where the pointer stops. Save, use and delete layout profiles, and let one
-  switch in by itself on a Wi-Fi network;
+- **Layout:** every computer's real monitors as a monitor wall; drag a
+  computer next to one of your monitors and it snaps there, crossing only
+  where the screens touch (the placement syncs to the other computer).
+  Choose a side to let it cross anywhere along that side again. Save, use
+  and delete layout profiles, and let one switch in by itself on a Wi-Fi
+  network;
 - **Clipboard & files:** what the clipboard shares and whether others may
   get it, notifications, the received files folder, the clipboard's size
   limit, and each transfer with a progress bar;
@@ -817,9 +830,10 @@ and exits with status 1 if something failed.
   Accessibility and Input Monitoring, then start it again. (Not yet tested on
   real hardware.)
 - **A paired computer is on the wrong side.** `one-mk layout "<name>" <side>`.
-- **The pointer won't cross part of an edge.** With an `--offset`, only the
-  part facing the other computer's screen leads there (`one-mk status` shows
-  the offset). `--offset stretch` makes all of the edge lead there again.
+- **The pointer won't cross part of an edge.** With an offset, only where
+  the other computer's screens touch yours leads there (`one-mk status` and
+  `one-mk devices` show the offset). `--offset none` makes all of the edge
+  lead there again.
 - **Another computer already controls this one.** Only one computer can
   control another at a time. Take it back with `one-mk takeback` on the
   controlled computer (on Windows and macOS, using its mouse or keyboard
@@ -861,9 +875,20 @@ background apps, so there it goes through XWayland.
 4. Done: clipboard (text, HTML, images), file transfer, live layout sync,
    Ctrl/Cmd swapping, start at login
 5. Done: a small tray icon (status, sides, take back, start at login).
-   Done: offsets and per-monitor crossing, layout profiles that switch by
-   Wi-Fi network. **Next:** a drag-and-drop layout editor and "push toward
-   it" layout learning
+   Done: a drag-to-place layout editor in the window (each computer's real
+   monitors; drop a computer beside a monitor and it crosses only where the
+   screens touch), offsets (`one-mk layout --offset DX,DY`), layout
+   profiles that switch by Wi-Fi network. **Next:** "push toward it"
+   layout learning
 6. Done: gaming mode (relative motion), switching without an edge, edge
    rules, lock sync, connection doctor (`one-mk doctor`), keyboard shortcuts
    (on Linux through the GlobalShortcuts portal). **Next:** auto-update
+
+## Contributing and license
+
+Issues and pull requests are welcome. Run `cargo test` before you open a
+PR; CI runs it on Linux, macOS and Windows.
+
+one-mk is licensed under either of [Apache-2.0](LICENSE-APACHE) or
+[MIT](LICENSE-MIT), at your option. Unless you say otherwise, any
+contribution you submit is licensed the same way, with no extra terms.

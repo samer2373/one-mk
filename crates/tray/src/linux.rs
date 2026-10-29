@@ -29,10 +29,10 @@ fn item(e: &Entry) -> MenuItem<OneMk> {
         Entry::Item { label, action, checked } => {
             let action = action.clone();
             let run = move |t: &mut OneMk| {
+                t.ctx.perform(&action);
                 if action == model::Action::Quit {
                     std::process::exit(0);
                 }
-                t.ctx.perform(&action);
                 t.snap = t.ctx.snapshot();
             };
             match checked {

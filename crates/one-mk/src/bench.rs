@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use one_mk_net::{Identity, Node, TrustStore};
-use one_mk_proto::{Align, Datagram, StreamKind, Desktop, MotionReceiver, Pos, Rect, RemoteCursor, Seam, Side, Step};
+use one_mk_proto::{Datagram, StreamKind, Desktop, MotionReceiver, Rect, RemoteCursor, Side, Step};
 use std::hint::black_box;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -130,8 +130,7 @@ pub async fn run(dir: &Path, opts: Options) -> Result<()> {
 /// Average time for one pointer event through all of our own code.
 fn protocol_cost() -> f64 {
     let desk = Desktop::new(vec![Rect::new(0, 0, 3840, 2160)]);
-    let seam = Seam::new(desk.clone(), desk, Side::Right, Align::Stretch);
-    let mut cursor = RemoteCursor::cross(seam, Pos::new(3839.0, 1080.0), 1).expect("on the edge");
+    let mut cursor = RemoteCursor::enter(desk, Side::Left, 0.5, 1);
     let mut rx = MotionReceiver::default();
     rx.enter(1);
     const N: u32 = 2_000_000;

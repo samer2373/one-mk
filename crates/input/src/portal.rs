@@ -38,7 +38,7 @@
 //! the daemon lets a controller that sent no real input for a minute go.
 
 use crate::common_logic::{Backoff, drain_coalesced};
-use crate::{Armed, Backend, CaptureCmd, Event, Inject};
+use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::{Context, Result, anyhow, bail};
 use ashpd::desktop::input_capture::{
     self, Barrier, Capabilities, InputCapture, ReleaseOptions, SetPointerBarriersOptions,
@@ -47,7 +47,7 @@ use ashpd::desktop::remote_desktop::{DeviceType, RemoteDesktop, SelectDevicesOpt
 use ashpd::desktop::{PersistMode, ResponseError, Session};
 use ashpd::zbus;
 use futures::{FutureExt, StreamExt};
-use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
+use one_mk_proto::{Desktop, Edge, Mods, Pos, Rect, Side};
 use reis::ei;
 use reis::event::{DeviceCapability, EiEvent};
 use std::collections::HashMap;
@@ -511,7 +511,7 @@ impl Sleep {
 /// Capture state that outlives a portal session.
 struct CaptureState {
     tx: mpsc::UnboundedSender<Event>,
-    sides: Vec<Armed>,
+    edges: Vec<Edge>,
     /// The desktop last reported to the daemon.
     reported: Option<Desktop>,
     next_id: u32,
@@ -562,28 +562,22 @@ impl Capture<'_> {
         Ok(())
     }
 
-    /// Barriers are line segments: only the parts of each edge that lead
-    /// to a peer get one (`Armed::spans`), so touching the rest never
-    /// activates capture.
-    async fn apply_barriers(&mut self, sides: &[Armed]) -> Result<()> {
+    /// Barriers are line segments, one per armed edge segment (inner
+    /// exposed edges too), so touching the rest of an edge never activates
+    /// capture.
+    async fn apply_barriers(&mut self, edges: &[Edge]) -> Result<()> {
         let mut barriers = Vec::new();
         self.barriers.clear();
-        for armed in sides {
-            let side = armed.side;
-            for (r, first, last) in armed.segments(&self.desktop) {
-                let id = side as u32 * 64 + barriers.len() as u32 + 1;
-                let (x, y, right, bottom) = (r.x, r.y, r.right(), r.bottom());
-                // Barriers lie on the zone edge; right/bottom edges are one
-                // past the last pixel, as the portal spec requires.
-                let pos = match side {
-                    Side::Left => (x, first, x, last),
-                    Side::Right => (right, first, right, last),
-                    Side::Top => (first, y, last, y),
-                    Side::Bottom => (first, bottom, last, bottom),
-                };
-                barriers.push(Barrier::new(NonZeroU32::new(id).expect("nonzero"), pos));
-                self.barriers.insert(id, side);
-            }
+        for e in edges.iter().filter(|e| e.lo < e.hi) {
+            let id = e.side as u32 * 64 + barriers.len() as u32 + 1;
+            // Barriers lie on the zone edge; right/bottom edges are one
+            // past the last pixel, as the portal spec requires.
+            let pos = match e.side {
+                Side::Left | Side::Right => (e.at, e.lo, e.at, e.hi - 1),
+                Side::Top | Side::Bottom => (e.lo, e.at, e.hi - 1, e.at),
+            };
+            barriers.push(Barrier::new(NonZeroU32::new(id).expect("nonzero"), pos));
+            self.barriers.insert(id, e.side);
         }
         let opts = SetPointerBarriersOptions::default();
         let set = self.portal.set_pointer_barriers(self.session, &barriers, self.zone_set, opts);
@@ -606,11 +600,11 @@ impl Capture<'_> {
     /// Re-reads the zones and re-applies the barriers. Failures are logged
     /// and otherwise ignored: the old layout stays in use, and a session
     /// that is really gone shows up as a closed libei connection.
-    async fn refresh(&mut self, sides: &[Armed]) {
+    async fn refresh(&mut self, edges: &[Edge]) {
         if let Err(e) = self.refresh_zones().await {
             tracing::warn!("reading the screen layout: {e:#}");
         }
-        if let Err(e) = self.apply_barriers(sides).await {
+        if let Err(e) = self.apply_barriers(edges).await {
             tracing::warn!("setting pointer barriers: {e:#}");
         }
     }
@@ -618,7 +612,7 @@ impl Capture<'_> {
     /// Hands the pointer back. If the portal refuses, disabling capture
     /// also ends it; only if that fails too is the session given up (which
     /// closes it, and closing always releases).
-    async fn release(&mut self, portal_id: Option<u32>, pos: Option<Pos>, sides: &[Armed]) -> Result<()> {
+    async fn release(&mut self, portal_id: Option<u32>, pos: Option<Pos>, edges: &[Edge]) -> Result<()> {
         let opts = ReleaseOptions::default()
             .set_activation_id(portal_id)
             .set_cursor_position(pos.map(|p| (p.x, p.y)));
@@ -630,7 +624,7 @@ impl Capture<'_> {
             .await
             .context("couldn't release the pointer")?;
         self.enabled = false;
-        if let Err(e) = self.apply_barriers(sides).await {
+        if let Err(e) = self.apply_barriers(edges).await {
             tracing::warn!("setting pointer barriers: {e:#}");
         }
         Ok(())
@@ -644,7 +638,7 @@ async fn capture(
     warp: mpsc::UnboundedSender<Inject>,
     state_dir: PathBuf,
 ) {
-    let mut st = CaptureState { tx: tx.clone(), sides: Vec::new(), reported: None, next_id: 0, activation: None, warp };
+    let mut st = CaptureState { tx: tx.clone(), edges: Vec::new(), reported: None, next_id: 0, activation: None, warp };
     let mut retry = Retry::new(
         tx,
         "capture",
@@ -661,7 +655,7 @@ async fn capture(
         st.deactivated();
         let Next::Retry(delay) = retry.after(result, started.elapsed()) else { return };
         let follow = wait_retry(delay, &mut cmds, |cmd| match cmd {
-            CaptureCmd::SetSides(sides) => st.sides = sides,
+            CaptureCmd::SetEdges(edges) => st.edges = edges,
             CaptureCmd::Release { .. } => {}
             CaptureCmd::Activate { .. } => {
                 let _ = st.tx.send(Event::Error(NO_CAPTURE.into()));
@@ -746,7 +740,7 @@ async fn run_capture(
     cap.refresh_zones().await?;
     st.report_desktop(&cap.desktop);
     // A re-created session starts with no barriers.
-    if let Err(e) = cap.apply_barriers(&st.sides).await {
+    if let Err(e) = cap.apply_barriers(&st.edges).await {
         tracing::warn!("setting pointer barriers: {e:#}");
     }
     retry.ready();
@@ -757,9 +751,9 @@ async fn run_capture(
     loop {
         tokio::select! {
             cmd = cmds.recv() => match cmd {
-                Some(CaptureCmd::SetSides(sides)) => {
-                    st.sides = sides;
-                    if let Err(e) = cap.apply_barriers(&st.sides).await {
+                Some(CaptureCmd::SetEdges(edges)) => {
+                    st.edges = edges;
+                    if let Err(e) = cap.apply_barriers(&st.edges).await {
                         tracing::warn!("setting pointer barriers: {e:#}");
                     }
                 }
@@ -768,12 +762,12 @@ async fn run_capture(
                         && ours == id
                     {
                         st.activation = None;
-                        cap.release(portal_id, pos, &st.sides).await?;
+                        cap.release(portal_id, pos, &st.edges).await?;
                     }
                 }
                 Some(CaptureCmd::Activate { side }) => {
                     if st.activation.is_none() && !was.paused() {
-                        push_into_barrier(&cap.desktop, st, side);
+                        push_into_barrier(st, side);
                     } else if was.paused() {
                         let _ = st.tx.send(Event::Error(NO_CAPTURE.into()));
                     }
@@ -796,7 +790,7 @@ async fn run_capture(
                     }
                     // Not one of our barriers, or the screen is locked or
                     // going to sleep: hand the pointer straight back.
-                    _ => cap.release(a.activation_id(), None, &st.sides).await?,
+                    _ => cap.release(a.activation_id(), None, &st.edges).await?,
                 }
             },
             Some(d) = deactivated.next() => {
@@ -809,14 +803,14 @@ async fn run_capture(
                 }
             },
             Some(_) = zones_changed.next() => {
-                cap.refresh(&st.sides).await;
+                cap.refresh(&st.edges).await;
                 st.report_desktop(&cap.desktop);
             },
             Some(_) = disabled.next() => {
                 // The compositor dropped our barriers (e.g. monitors changed); set them up again.
                 st.deactivated();
                 cap.enabled = false;
-                cap.refresh(&st.sides).await;
+                cap.refresh(&st.edges).await;
                 st.report_desktop(&cap.desktop);
             },
             now = power_changed(&mut power) => {
@@ -825,14 +819,14 @@ async fn run_capture(
                 {
                     tracing::info!("screen locked or going to sleep: the pointer comes home");
                     st.deactivated();
-                    cap.release(portal_id, None, &st.sides).await?;
+                    cap.release(portal_id, None, &st.edges).await?;
                 }
                 if was.asleep && !now.asleep {
                     // Monitors may have changed while asleep. A session
                     // that can't say where the screens are is no good.
                     cap.refresh_zones().await.context("after waking up")?;
                     st.report_desktop(&cap.desktop);
-                    if let Err(e) = cap.apply_barriers(&st.sides).await {
+                    if let Err(e) = cap.apply_barriers(&st.edges).await {
                         tracing::warn!("setting pointer barriers: {e:#}");
                     }
                 }
@@ -879,21 +873,19 @@ const NO_CAPTURE: &str = "Can't move the pointer to another computer right now: 
 /// capturing, only barriers, so this pushes the pointer into the barrier
 /// with our own injector; the compositor then activates capture as if the
 /// mouse had done it. Needs a barrier on `side` (the daemon arms it).
-fn push_into_barrier(desktop: &Desktop, st: &CaptureState, side: Side) {
-    // The middle of the first part of the edge with a barrier.
-    let segment = st.sides.iter().filter(|a| a.side == side).flat_map(|a| a.segments(desktop)).next();
-    let Some((r, first, last)) = segment else {
+fn push_into_barrier(st: &CaptureState, side: Side) {
+    // The middle of the first armed segment of that side.
+    let Some(e) = st.edges.iter().find(|e| e.side == side && e.lo < e.hi) else {
         let _ = st.tx.send(Event::Error(NO_CAPTURE.into()));
         return;
     };
-    let mid = f64::from(first + last) / 2.0;
-    let c = if side.along_x() { Pos::new(mid, r.center().y) } else { Pos::new(r.center().x, mid) };
-    let (x, y, right, bottom) = (f64::from(r.x), f64::from(r.y), f64::from(r.right()), f64::from(r.bottom()));
+    let mid = f64::from(e.lo + e.hi - 1) / 2.0;
+    let line = f64::from(e.at);
     let (at, dx, dy) = match side {
-        Side::Left => (Pos::new(x + 1.0, c.y), -64, 0),
-        Side::Right => (Pos::new(right - 2.0, c.y), 64, 0),
-        Side::Top => (Pos::new(c.x, y + 1.0), 0, -64),
-        Side::Bottom => (Pos::new(c.x, bottom - 2.0), 0, 64),
+        Side::Left => (Pos::new(line + 1.0, mid), -64, 0),
+        Side::Right => (Pos::new(line - 2.0, mid), 64, 0),
+        Side::Top => (Pos::new(mid, line + 1.0), 0, -64),
+        Side::Bottom => (Pos::new(mid, line - 2.0), 0, 64),
     };
     let _ = st.warp.send(Inject::MoveTo(at));
     let _ = st.warp.send(Inject::MoveBy { dx, dy });

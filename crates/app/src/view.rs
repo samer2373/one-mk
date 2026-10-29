@@ -4,8 +4,7 @@
 //! snaps, and transfers in words. Everything here is plain data in, plain
 //! data out, so it is tested without a window.
 
-use one_mk_ctl::status::{TransferStatus, human_bytes, human_duration, placement};
-use one_mk_proto::{Align, Desktop, Rect, Seam, Side};
+use one_mk_ctl::status::{TransferStatus, human_bytes, human_duration};
 use std::collections::HashMap;
 
 // ---------- a small reader for the TOML one-mk writes ----------
@@ -629,138 +628,6 @@ impl JsonParser<'_> {
     }
 }
 
-// ---------- the layout plan ----------
-
-/// Where an edge lines up, as the window offers it: one end, the middle,
-/// the other end, or somewhere else.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Snap {
-    Start,
-    Middle,
-    End,
-}
-
-/// The three names for where a computer's edge can line up with ours.
-pub fn snap_names(side: Side) -> [&'static str; 3] {
-    if side.along_x() { ["Left", "Middle", "Right"] } else { ["Top", "Middle", "Bottom"] }
-}
-
-/// How long our edge and the neighbour's facing edge are, in pixels.
-pub fn edge_lengths(local: Rect, remote: Rect, side: Side) -> (i32, i32) {
-    if side.along_x() { (local.w, remote.w) } else { (local.h, remote.h) }
-}
-
-/// The offset, in pixels, of the neighbour's edge from the start of ours
-/// for an alignment (a stretched one is drawn centred).
-pub fn offset_px(align: Align, local_len: i32, remote_len: i32) -> i32 {
-    match align {
-        Align::Offset(o) => o,
-        Align::Center | Align::Stretch => (local_len - remote_len) / 2,
-    }
-}
-
-/// The alignment for an offset of a snap point.
-pub fn snap_align(snap: Snap, local_len: i32, remote_len: i32) -> Align {
-    match snap {
-        Snap::Start => Align::Offset(0),
-        Snap::Middle => Align::Center,
-        Snap::End => Align::Offset(local_len - remote_len),
-    }
-}
-
-/// Which snap point an alignment is, if any.
-pub fn snap_of(align: Align, local_len: i32, remote_len: i32) -> Option<Snap> {
-    match align {
-        Align::Stretch => None,
-        Align::Center => Some(Snap::Middle),
-        Align::Offset(0) => Some(Snap::Start),
-        Align::Offset(o) if o == local_len - remote_len => Some(Snap::End),
-        Align::Offset(o) if o == (local_len - remote_len) / 2 => Some(Snap::Middle),
-        Align::Offset(_) => None,
-    }
-}
-
-/// A drag along the edge let go at `raw` pixels: the alignment it means,
-/// pulled to the start, the middle or the end when within `pull` pixels.
-/// Offsets keep the edges touching by at least one pixel.
-pub fn snap_offset(raw: f64, local_len: i32, remote_len: i32, pull: f64) -> Align {
-    for snap in [Snap::Start, Snap::Middle, Snap::End] {
-        let at = offset_px(snap_align(snap, local_len, remote_len), local_len, remote_len);
-        if (raw - f64::from(at)).abs() <= pull {
-            return snap_align(snap, local_len, remote_len);
-        }
-    }
-    let lo = 1 - remote_len;
-    let hi = local_len - 1;
-    Align::Offset((raw.round() as i64).clamp(i64::from(lo.min(hi)), i64::from(hi.max(lo))) as i32)
-}
-
-/// "On your left, its top edge 120 px below yours."
-pub fn placement_sentence(side: Side, align: Align) -> String {
-    let text = placement(side, align);
-    let mut c = text.chars();
-    let text = c.next().map_or_else(String::new, |f| f.to_uppercase().chain(c).collect());
-    format!("{text}.")
-}
-
-/// A computer drawn on the plan: its monitors in our coordinates.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Placed {
-    pub screens: Vec<Rect>,
-    /// Its monitors aren't known (offline, or an older version): a
-    /// stand-in size is drawn.
-    pub guessed: bool,
-}
-
-/// A monitor size to draw when the real one isn't known.
-pub const GUESS: Rect = Rect { x: 0, y: 0, w: 1920, h: 1080 };
-
-/// Where a neighbour's monitors go on the plan, from its side and
-/// alignment, in our desktop's coordinates.
-pub fn place(local: &[Rect], remote: &[Rect], side: Side, align: Align) -> Placed {
-    let guessed = remote.is_empty();
-    let remote = if guessed { vec![GUESS] } else { remote.to_vec() };
-    let local = if local.is_empty() { vec![GUESS] } else { local.to_vec() };
-    let (l, r) = (Desktop::new(local).bounds(), Desktop::new(remote.clone()).bounds());
-    let (ll, rl) = edge_lengths(l, r, side);
-    let along = offset_px(align, ll, rl);
-    let (x, y) = match side {
-        Side::Left => (l.x - r.w, l.y + along),
-        Side::Right => (l.right(), l.y + along),
-        Side::Top => (l.x + along, l.y - r.h),
-        Side::Bottom => (l.x + along, l.bottom()),
-    };
-    let screens = remote.iter().map(|s| Rect::new(s.x - r.x + x, s.y - r.y + y, s.w, s.h)).collect();
-    Placed { screens, guessed }
-}
-
-/// `[start, end)` ranges along an edge.
-pub type Spans = Vec<(f64, f64)>;
-
-/// The parts of our `side` edge that lead to the neighbour (`shared`), and
-/// the parts that are walls, as ranges along the edge.
-pub fn seam_parts(local: &[Rect], remote: &[Rect], side: Side, align: Align) -> (Spans, Spans) {
-    let local = if local.is_empty() { vec![GUESS] } else { local.to_vec() };
-    let remote = if remote.is_empty() { vec![GUESS] } else { remote.to_vec() };
-    let desk = Desktop::new(local);
-    let spans = desk.edge_spans(side);
-    let shared = Seam::new(desk, Desktop::new(remote), side, align).shared();
-    let mut walls = vec![];
-    for (a, b) in spans {
-        let mut at = f64::from(a);
-        for &(s, e) in shared.iter().filter(|(s, e)| *e > f64::from(a) && *s < f64::from(b)) {
-            if s > at {
-                walls.push((at, s));
-            }
-            at = at.max(e);
-        }
-        if at < f64::from(b) {
-            walls.push((at, f64::from(b)));
-        }
-    }
-    (shared, walls)
-}
-
 // ---------- transfers ----------
 
 /// A transfer as two lines and a bar: "Sending 3 files to desk" and
@@ -929,63 +796,6 @@ name = "Café, 2nd floor"
         assert_eq!(hotkeys_note("off", ""), None);
         assert_eq!(parse_doctor("one-mk: error"), None);
         assert_eq!(parse_doctor("{\"checks\": [1, }"), None);
-    }
-
-    #[test]
-    fn offsets_snap_to_the_ends_and_the_middle() {
-        // Our edge 1080 long, theirs 800: the end is at 280, the middle at 140.
-        assert_eq!(snap_offset(6.0, 1080, 800, 12.0), Align::Offset(0));
-        assert_eq!(snap_offset(133.0, 1080, 800, 12.0), Align::Center);
-        assert_eq!(snap_offset(290.0, 1080, 800, 12.0), Align::Offset(280));
-        assert_eq!(snap_offset(200.4, 1080, 800, 12.0), Align::Offset(200));
-        // Never so far that the edges stop touching.
-        assert_eq!(snap_offset(5000.0, 1080, 800, 12.0), Align::Offset(1079));
-        assert_eq!(snap_offset(-5000.0, 1080, 800, 12.0), Align::Offset(-799));
-        assert_eq!(snap_of(Align::Offset(280), 1080, 800), Some(Snap::End));
-        assert_eq!(snap_of(Align::Offset(140), 1080, 800), Some(Snap::Middle));
-        assert_eq!(snap_of(Align::Offset(7), 1080, 800), None);
-        assert_eq!(snap_of(Align::Stretch, 1080, 800), None);
-        assert_eq!(snap_names(Side::Left), ["Top", "Middle", "Bottom"]);
-        assert_eq!(snap_names(Side::Bottom), ["Left", "Middle", "Right"]);
-    }
-
-    #[test]
-    fn placement_reads_as_a_sentence() {
-        assert_eq!(placement_sentence(Side::Left, Align::Offset(120)), "On your left, its top edge 120 px below yours.");
-        assert_eq!(placement_sentence(Side::Top, Align::Center), "Above, centred on yours.");
-        assert_eq!(placement_sentence(Side::Right, Align::Stretch), "On your right.");
-    }
-
-    #[test]
-    fn neighbours_are_placed_against_our_edge() {
-        let me = [Rect::new(0, 0, 2560, 1440)];
-        let laptop = [Rect::new(0, 0, 1280, 800)];
-        let p = place(&me, &laptop, Side::Bottom, Align::Offset(300));
-        assert_eq!(p.screens, vec![Rect::new(300, 1440, 1280, 800)]);
-        let p = place(&me, &laptop, Side::Left, Align::Center);
-        assert_eq!(p.screens, vec![Rect::new(-1280, 320, 1280, 800)]);
-        // Two monitors keep their arrangement.
-        let dual = [Rect::new(0, 0, 1920, 1080), Rect::new(1920, 200, 1280, 1024)];
-        let p = place(&me, &dual, Side::Right, Align::Offset(0));
-        assert_eq!(p.screens, vec![Rect::new(2560, 0, 1920, 1080), Rect::new(4480, 200, 1280, 1024)]);
-        assert!(!p.guessed);
-        assert!(place(&me, &[], Side::Top, Align::Stretch).guessed);
-    }
-
-    #[test]
-    fn the_shared_edge_and_the_walls_split_our_edge() {
-        let me = [Rect::new(0, 0, 1920, 1080)];
-        let laptop = [Rect::new(0, 0, 1280, 800)];
-        let (shared, walls) = seam_parts(&me, &laptop, Side::Bottom, Align::Offset(300));
-        assert_eq!(shared, vec![(300.0, 1580.0)]);
-        assert_eq!(walls, vec![(0.0, 300.0), (1580.0, 1920.0)]);
-        // Stretched, all of the edge leads there.
-        let (shared, walls) = seam_parts(&me, &laptop, Side::Bottom, Align::Stretch);
-        assert_eq!((shared, walls), (vec![(0.0, 1920.0)], vec![]));
-        // Past the end: nothing shared, all wall.
-        let (shared, walls) = seam_parts(&me, &laptop, Side::Right, Align::Offset(2000));
-        assert!(shared.is_empty());
-        assert_eq!(walls, vec![(0.0, 1080.0)]);
     }
 
     #[test]

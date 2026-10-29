@@ -38,9 +38,9 @@ use crate::linux_logic::{
     evdev_to_x_button, evdev_to_xkeycode, fp1616, fp3232, notch_buttons, set_bits, x_button, xkeycode_to_evdev,
 };
 use crate::linux_rt::{Socket, forward_lock, lock_changed, spawn_thread};
-use crate::{Armed, Backend, CaptureCmd, Event, Inject};
+use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::{Context, Result, bail};
-use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
+use one_mk_proto::{Desktop, Edge, Mods, Pos, Rect, Side};
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
@@ -88,7 +88,7 @@ impl Default for Target {
 /// State that outlives one X connection.
 struct Shared {
     tx: mpsc::UnboundedSender<Event>,
-    sides: Vec<Armed>,
+    edges: Vec<Edge>,
     next_id: u32,
     /// Injected keys and buttons held down.
     held: Held,
@@ -134,7 +134,7 @@ async fn run(
 ) {
     let mut st = Shared {
         tx,
-        sides: Vec::new(),
+        edges: Vec::new(),
         next_id: 0,
         held: Held::default(),
         notches: Notches::default(),
@@ -171,7 +171,7 @@ async fn run(
             tokio::select! {
                 _ = &mut sleep => break,
                 cmd = cmds.recv() => match cmd {
-                    Some(CaptureCmd::SetSides(s)) => st.sides = s,
+                    Some(CaptureCmd::SetEdges(e)) => st.edges = e,
                     Some(CaptureCmd::Activate { .. }) => st.send(Event::Error(NO_CAPTURE.into())),
                     Some(CaptureCmd::Release { .. }) => {}
                     None => return,
@@ -342,10 +342,12 @@ impl X {
         }
     }
 
-    /// Puts barriers (or edge windows) on the outer edges of `sides`.
-    fn set_edges(&mut self, sides: &[Armed]) -> Result<()> {
+    /// Puts barriers (or edge windows) on the armed edge segments, inner
+    /// exposed edges too: barriers are line segments anywhere on the root
+    /// window, and edge windows one-pixel strips on the monitor's edge.
+    fn set_edges(&mut self, edges: &[Edge]) -> Result<()> {
         let c = &self.conn;
-        let strips = edge_strips(sides, &self.desktop);
+        let strips = edge_strips(edges, &self.desktop);
         match &mut self.edges {
             Edges::Barriers(old) => {
                 for (b, _) in old.drain(..) {
@@ -490,7 +492,7 @@ impl X {
         // SAFETY: the connection, which owns the socket, outlives this.
         let socket = unsafe { Socket::new(self.conn.stream().as_raw_fd())? };
         st.report_desktop(&self.desktop.clone());
-        self.set_edges(&st.sides.clone())?;
+        self.set_edges(&st.edges.clone())?;
         // Keys held through a connection that broke are still down, and so
         // are those of an injector that died (XTest keeps them pressed).
         self.let_go(st)?;
@@ -506,9 +508,9 @@ impl X {
             tokio::select! {
                 r = socket.readable() => r?,
                 cmd = cmds.recv() => match cmd {
-                    Some(CaptureCmd::SetSides(sides)) => {
-                        st.sides = sides;
-                        self.set_edges(&st.sides.clone())?;
+                    Some(CaptureCmd::SetEdges(edges)) => {
+                        st.edges = edges;
+                        self.set_edges(&st.edges.clone())?;
                     }
                     Some(CaptureCmd::Release { id, pos }) => self.release(st, id, pos)?,
                     Some(CaptureCmd::Activate { side }) => {
@@ -598,7 +600,7 @@ impl X {
                     self.desktop = desktop;
                     self.deactivate(st)?;
                     st.report_desktop(&self.desktop.clone());
-                    self.set_edges(&st.sides.clone())?;
+                    self.set_edges(&st.edges.clone())?;
                 }
             }
             E::XinputRawKeyPress(e) => self.raw_key(st, e.sourceid, e.detail, true),

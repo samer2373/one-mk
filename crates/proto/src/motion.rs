@@ -1,4 +1,4 @@
-use crate::{Datagram, Desktop, Pos, Seam};
+use crate::{Datagram, Desktop, Edge, Pos, Side};
 
 /// How far inside our edge the pointer comes home, so the edge barrier
 /// doesn't fire again at once.
@@ -9,10 +9,9 @@ pub const HOME_INSET: f64 = 2.0;
 pub enum Step {
     /// The pointer moved; send this datagram.
     Move(Datagram),
-    /// The pointer was pushed past the edge that leads back home, where
-    /// that edge faces ours: it comes home at `at`, a point of our desktop
-    /// just inside the shared edge.
-    Leave { at: Pos },
+    /// The pointer was pushed past the edge that leads back home, at
+    /// fraction `t` along that edge.
+    Leave { t: f64 },
     /// Pinned against an edge; nothing to send.
     Still,
 }
@@ -32,31 +31,43 @@ pub enum Step {
 /// pointer clamped to its screens), used if absolute mode resumes.
 #[derive(Clone, Debug)]
 pub struct RemoteCursor {
-    /// The edge between our desktop and the peer's that the pointer comes
-    /// home through.
-    seam: Seam,
+    desktop: Desktop,
+    home: Side,
     pos: Pos,
     epoch: u16,
     seq: u32,
+    /// Where the pointer leaves for home, if not the whole home side.
+    exits: Option<Vec<Edge>>,
     relative: bool,
     /// Every delta sent in relative mode during this visit, in pixels.
     sum: (f64, f64),
 }
 
 impl RemoteCursor {
-    /// The pointer left our desktop through the seam's edge at `at`: it
-    /// enters the peer's at the matching point of its facing edge. `None`
-    /// if that part of our edge doesn't face the peer (see [`Seam::enter`]).
-    pub fn cross(seam: Seam, at: Pos, epoch: u16) -> Option<Self> {
-        let pos = seam.enter(at)?;
-        Some(Self::enter_at(seam, pos, epoch))
+    /// Enters `desktop` through its `home` edge (the side facing us) at
+    /// fraction `t` along that edge.
+    pub fn enter(desktop: Desktop, home: Side, t: f64, epoch: u16) -> Self {
+        let pos = desktop.point_on_edge(home, t, 0.0);
+        Self::new(desktop, home, pos, None, epoch)
     }
 
-    /// Enters the peer's desktop at `pos` without crossing an edge
-    /// (`one-mk switch`); the seam's edge still leads back.
-    pub fn enter_at(seam: Seam, pos: Pos, epoch: u16) -> Self {
-        let pos = seam.remote().clamp(pos);
-        Self { seam, pos, epoch, seq: 0, relative: false, sum: (0.0, 0.0) }
+    /// Enters `desktop` at the point nearest `pos` (in its coordinates);
+    /// the pointer leaves for home only through `exits`.
+    pub fn enter_at(desktop: Desktop, home: Side, pos: Pos, exits: Vec<Edge>, epoch: u16) -> Self {
+        let pos = desktop.place(pos, home, 0.0);
+        Self::new(desktop, home, pos, Some(exits), epoch)
+    }
+
+    /// Enters `desktop` at `pos` without crossing an edge (`one-mk
+    /// switch`, a shortcut). It leaves for home through `exits`, or with
+    /// `None` through the whole outer `home` edge.
+    pub fn jump_to(desktop: Desktop, home: Side, pos: Pos, exits: Option<Vec<Edge>>, epoch: u16) -> Self {
+        let pos = desktop.clamp(pos);
+        Self::new(desktop, home, pos, exits, epoch)
+    }
+
+    fn new(desktop: Desktop, home: Side, pos: Pos, exits: Option<Vec<Edge>>, epoch: u16) -> Self {
+        Self { desktop, home, pos, epoch, seq: 0, exits, relative: false, sum: (0.0, 0.0) }
     }
 
     pub fn is_relative(&self) -> bool {
@@ -86,15 +97,17 @@ impl RemoteCursor {
     pub fn seq(&self) -> u32 {
         self.seq
     }
-    pub fn seam(&self) -> &Seam {
-        &self.seam
+    pub fn desktop(&self) -> &Desktop {
+        &self.desktop
+    }
+    pub fn home(&self) -> Side {
+        self.home
     }
 
-    /// Where the pointer comes home if it is brought back without crossing
-    /// (a shortcut, a timeout, the peer letting go): the point of our edge
-    /// facing it, or the nearest one that faces the peer at all.
-    pub fn home_pos(&self) -> Pos {
-        self.seam.home_near(self.pos, HOME_INSET)
+    /// Where the pointer is along the home edge, in [0, 1]; used to bring
+    /// it back to the matching spot on the sender's edge.
+    pub fn home_fraction(&self) -> f64 {
+        self.desktop.edge_fraction(self.home, self.pos)
     }
 
     /// The latest position (or relative sum) as a datagram; resending it
@@ -112,14 +125,14 @@ impl RemoteCursor {
     /// position, under a new `seq` so the receiver applies it; send it.
     pub fn set_desktop(&mut self, desktop: Desktop) -> Datagram {
         self.pos = desktop.clamp(self.pos);
-        self.seam.set_remote(desktop);
+        self.desktop = desktop;
         self.seq = self.seq.wrapping_add(1);
         self.current()
     }
 
-    /// Our own monitors changed: the pointer comes home onto the new ones.
-    pub fn set_local(&mut self, desktop: Desktop) {
-        self.seam.set_local(desktop);
+    /// Where the pointer now leaves for home (either desktop changed).
+    pub fn set_exits(&mut self, exits: Option<Vec<Edge>>) {
+        self.exits = exits;
     }
 
     pub fn motion(&mut self, dx: f64, dy: f64) -> Step {
@@ -129,16 +142,14 @@ impl RemoteCursor {
                 return Step::Still;
             }
             self.sum = (self.sum.0 + dx, self.sum.1 + dy);
-            self.pos = self.seam.remote().clamp(target);
+            self.pos = self.desktop.clamp(target);
             self.seq = self.seq.wrapping_add(1);
             return Step::Move(self.current());
         }
-        if self.crosses_home(target)
-            && let Some(at) = self.seam.exit(target, HOME_INSET)
-        {
-            return Step::Leave { at };
+        if self.crosses_home(target) {
+            return Step::Leave { t: self.desktop.edge_fraction(self.home, target) };
         }
-        let next = self.seam.remote().clamp(target);
+        let next = self.desktop.clamp(target);
         if next == self.pos {
             return Step::Still;
         }
@@ -147,17 +158,19 @@ impl RemoteCursor {
         Step::Move(self.current())
     }
 
-    /// Only pushing past the outer edge of the whole desktop can lead
-    /// home; an inner edge between two monitors (or a gap beside a smaller
-    /// one) just clamps. Where that outer edge doesn't face our desktop,
-    /// [`Seam::exit`] says no and it clamps too.
+    /// Only pushing past the outer edge of the whole desktop (or through one
+    /// of the `exits`) leads home; an inner edge between two monitors (or a
+    /// gap beside a smaller one) just clamps.
     fn crosses_home(&self, target: Pos) -> bool {
-        let r = self.seam.remote().bounds();
-        match self.seam.home() {
-            crate::Side::Left => target.x < f64::from(r.x),
-            crate::Side::Right => target.x >= f64::from(r.right()),
-            crate::Side::Top => target.y < f64::from(r.y),
-            crate::Side::Bottom => target.y >= f64::from(r.bottom()),
+        if let Some(exits) = &self.exits {
+            return exits.iter().any(|e| e.crossed(self.pos, target));
+        }
+        let r = self.desktop.bounds();
+        match self.home {
+            Side::Left => target.x < f64::from(r.x),
+            Side::Right => target.x >= f64::from(r.right()),
+            Side::Top => target.y < f64::from(r.y),
+            Side::Bottom => target.y >= f64::from(r.bottom()),
         }
     }
 }
@@ -293,7 +306,7 @@ fn newer(seq: u32, last: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Align, Rect, Side};
+    use crate::{Rect, touching};
 
     fn desk() -> Desktop {
         Desktop::new(vec![Rect::new(0, 0, 1920, 1080)])
@@ -303,12 +316,7 @@ mod tests {
     /// left edge leads home); the pointer crosses at fraction `t` down our
     /// right edge.
     fn enter(remote: Desktop, t: f64, epoch: u16) -> RemoteCursor {
-        let seam = Seam::new(desk(), remote, Side::Right, Align::Stretch);
-        RemoteCursor::cross(seam, Pos::new(1919.0, t * 1080.0), epoch).unwrap()
-    }
-
-    fn enter_at(remote: Desktop, pos: Pos, epoch: u16) -> RemoteCursor {
-        RemoteCursor::enter_at(Seam::new(desk(), remote, Side::Right, Align::Stretch), pos, epoch)
+        RemoteCursor::enter(remote, Side::Left, t, epoch)
     }
 
     #[test]
@@ -323,9 +331,8 @@ mod tests {
         // Pushing against the far edge just pins the pointer.
         c.motion(5000.0, 0.0);
         assert_eq!(c.motion(5.0, 0.0), Step::Still);
-        // Going all the way back leaves through the home edge, and comes
-        // home just inside ours.
-        assert_eq!(c.motion(-5000.0, 0.0), Step::Leave { at: Pos::new(1917.0, 535.0) });
+        // Going all the way back leaves through the home edge.
+        assert_eq!(c.motion(-5000.0, 0.0), Step::Leave { t: 535.0 / 1080.0 });
     }
 
     #[test]
@@ -364,7 +371,7 @@ mod tests {
     fn leaves_only_through_the_outer_home_edge() {
         // A 1080p monitor and a taller 1440p one to its right; home is left.
         let d = Desktop::new(vec![Rect::new(0, 0, 1920, 1080), Rect::new(1920, 0, 2560, 1440)]);
-        let mut c = enter(d, 0.5, 1);
+        let mut c = RemoteCursor::enter(d, Side::Left, 0.5, 1);
         let y = 1440.0 - 1.0 / 256.0;
         assert!(matches!(c.motion(1980.0, 1000.0), Step::Move(_)));
         assert_eq!(c.pos(), Pos::new(1980.0, y));
@@ -373,47 +380,57 @@ mod tests {
         assert!(matches!(c.motion(-100.0, 0.0), Step::Move(_)), "left from the middle of the desktop");
         assert_eq!(c.pos(), Pos::new(1920.0, y));
         assert_eq!(c.motion(-10.0, 0.0), Step::Still);
-        // Past the desktop's outer left edge, but below the short monitor:
-        // no monitor of the peer's touches our edge there, so it stays.
-        assert!(matches!(c.motion(-1921.0, 0.0), Step::Move(_)));
-        assert!(c.seam().remote().screen_at(c.pos()).is_some());
-        assert_eq!(c.pos().x, 0.0);
-        // Only past the outer left edge of a monitor that is on it does it
-        // leave, at the matching point of our edge (the peer's left edge,
-        // 1080 px of it, stretched over our 1080).
-        c.motion(0.0, -500.0);
-        let Step::Leave { at } = c.motion(-1.0, 0.0) else { panic!() };
-        assert_eq!(at.x, 1917.0);
-        assert!((at.y - c.pos().y).abs() < 1e-9);
+        // Only past the desktop's outer left edge does it leave.
+        assert!(matches!(c.motion(-1921.0, 0.0), Step::Leave { .. }));
     }
 
+    /// A small laptop to our right, its top 300 px below ours: with an
+    /// offset the pointer arrives 1:1 and leaves only where the screens
+    /// touch (what the daemon computes with [`touching`]).
     #[test]
-    fn offset_edges_cross_only_where_they_overlap() {
-        // A small laptop to our right, its top edge 300 px below ours.
+    fn offset_leaves_only_where_the_screens_touch() {
         let laptop = Desktop::new(vec![Rect::new(0, 0, 1280, 800)]);
-        let seam = Seam::new(desk(), laptop, Side::Right, Align::Offset(300));
-        assert!(RemoteCursor::cross(seam.clone(), Pos::new(1919.0, 100.0), 1).is_none(), "above the laptop");
-        let mut c = RemoteCursor::cross(seam, Pos::new(1919.0, 1000.0), 1).unwrap();
+        let offset = (1920, 300);
+        assert_eq!(touching(&desk(), &laptop, Side::Right, offset), vec![Edge { side: Side::Right, at: 1920, lo: 300, hi: 1080 }]);
+        let exits = touching(&laptop, &desk(), Side::Left, (-offset.0, -offset.1));
+        assert_eq!(exits, vec![Edge { side: Side::Left, at: 0, lo: 0, hi: 780 }]);
+        // Crossing at our y=1000 lands at the laptop's y=700.
+        let mut c = RemoteCursor::enter_at(laptop, Side::Left, Pos::new(1919.0 - 1920.0, 1000.0 - 300.0), exits, 1);
         assert_eq!(c.pos(), Pos::new(0.0, 700.0));
         // At the laptop's bottom-left, below the end of our edge (1080 =
         // 780 on the laptop): pushing left is a wall.
         c.motion(0.0, 99.0);
         assert_eq!(c.motion(-5.0, 0.0), Step::Still);
         assert_eq!(c.pos(), Pos::new(0.0, 799.0));
-        // Higher up it leaves, 1:1.
+        // Higher up it leaves.
         c.motion(0.0, -100.0);
-        assert_eq!(c.motion(-5.0, 0.0), Step::Leave { at: Pos::new(1917.0, 999.0) });
-        // A shortcut home from the wall comes back to the nearest point of
-        // our edge that leads to the laptop.
-        c.motion(0.0, 100.0);
-        assert_eq!(c.home_pos(), Pos::new(1917.0, 1080.0 - 1.0 / 256.0));
+        assert!(matches!(c.motion(-5.0, 0.0), Step::Leave { .. }));
     }
 
-    /// Random walks over random multi-monitor desktops: the pointer is
-    /// always on a monitor, never jumps further than the mouse moved it
-    /// (clamping into the nearest monitor can at most double that), and
-    /// leaves only from the home edge, arriving on one of our monitors at
-    /// the matching point.
+    /// A layout whose screens touch nowhere (an offset past the end of the
+    /// edge) can't be crossed into, but a switch can still go there; the
+    /// daemon then gives the visit the whole home side as its way back.
+    #[test]
+    fn a_switch_with_no_touching_edge_still_leads_home() {
+        let laptop = Desktop::new(vec![Rect::new(0, 0, 1280, 800)]);
+        assert!(touching(&laptop, &desk(), Side::Left, (-1920, -5000)).is_empty());
+        let mut c = RemoteCursor::jump_to(laptop, Side::Left, Pos::new(640.0, 400.0), None, 1);
+        assert!(matches!(c.motion(-700.0, 0.0), Step::Leave { .. }));
+        // Whereas no exits at all would trap it.
+        let laptop = Desktop::new(vec![Rect::new(0, 0, 1280, 800)]);
+        let mut c = RemoteCursor::jump_to(laptop, Side::Left, Pos::new(640.0, 400.0), Some(vec![]), 1);
+        assert!(matches!(c.motion(-700.0, 0.0), Step::Move(_)));
+        assert_eq!(c.motion(-5.0, 0.0), Step::Still);
+    }
+
+    /// Random walks over random multi-monitor desktops, placed by offset
+    /// or not: the pointer is always on a monitor, never jumps further
+    /// than the mouse moved it (clamping into the nearest monitor can at
+    /// most double that), and leaves only through the home edge. With an
+    /// offset it leaves only where the screens touch, and comes home (the
+    /// way the daemon brings it back: translated, then onto our nearest
+    /// screen) at a point of our edge that crosses straight back to where
+    /// it left.
     #[test]
     fn random_walks_never_teleport() {
         let mut seed = 0x2545_F491_4F6C_DD1Du64;
@@ -426,7 +443,7 @@ mod tests {
         let sizes = [(1920, 1080), (2560, 1440), (1280, 800), (1080, 1920)];
         let mut leaves = 0;
         for _ in 0..400 {
-            // Two or three monitors in a row or an L, of mixed sizes.
+            // Two monitors in a row or an L, of mixed sizes.
             let mut screens = vec![];
             let (w, h) = sizes[rnd(4) as usize];
             screens.push(Rect::new(0, 0, w, h));
@@ -435,29 +452,51 @@ mod tests {
             let next = if below { Rect::new(rnd(w as u64) as i32 - w2 / 2, h, w2, h2) } else { Rect::new(w, rnd(h as u64) as i32 - h2 / 2, w2, h2) };
             screens.push(next);
             let remote = Desktop::new(screens);
-            let align = match rnd(3) {
-                0 => Align::Stretch,
-                1 => Align::Center,
-                _ => Align::Offset(rnd(2000) as i32 - 1000),
+            // Its left edge against our right one, somewhere from 1000 px
+            // above to 1000 px below; or no offset (stretched).
+            let rb = remote.bounds();
+            let offset = (rnd(3) > 0).then(|| (1920 - rb.x, rnd(2000) as i32 - 1000));
+            let (mut c, armed) = match offset {
+                Some((dx, dy)) => {
+                    let armed = touching(&desk(), &remote, Side::Right, (dx, dy));
+                    let Some(e) = armed.first() else { continue };
+                    let exits = touching(&remote, &desk(), Side::Left, (-dx, -dy));
+                    let at = Pos::new(1919.0 - f64::from(dx), f64::from(e.lo + e.hi) / 2.0 - f64::from(dy));
+                    (RemoteCursor::enter_at(remote.clone(), Side::Left, at, exits.clone(), 1), armed)
+                }
+                None => (RemoteCursor::enter(remote.clone(), Side::Left, 0.5, 1), vec![Edge::of(Side::Right, &desk().screens[0])]),
             };
-            let seam = Seam::new(desk(), remote.clone(), Side::Right, align);
-            let Some(start) = seam.shared().first().map(|&(a, b)| (a + b) / 2.0) else { continue };
-            let mut c = RemoteCursor::cross(seam.clone(), Pos::new(1919.0, start), 1).expect("shared part crosses");
             for _ in 0..300 {
                 let (dx, dy) = (rnd(401) as f64 - 220.0, rnd(401) as f64 - 200.0);
                 let before = c.pos();
                 match c.motion(dx, dy) {
-                    Step::Leave { at } => {
+                    Step::Leave { t } => {
                         leaves += 1;
-                        assert!(desk().screen_at(at).is_some());
-                        assert_eq!(at.x, 1917.0);
-                        assert!(before.x + dx < 0.0, "leaves through the home edge");
-                        // Coming straight back arrives where it left (within
-                        // the 1/256 px that keeps a point inside a monitor,
-                        // scaled by a stretched edge).
-                        let again = RemoteCursor::cross(seam.clone(), Pos::new(1919.0, at.y), 1).unwrap();
-                        assert!((again.pos().y - (before.y + dy)).abs() < 0.01, "{before:?} {dy} {at:?} {:?}", again.pos());
-                        c = again;
+                        assert!(before.x + dx < f64::from(remote.bounds().x), "leaves through the home edge");
+                        let home = match offset {
+                            Some((ox, oy)) => desk().place(Pos::new(before.x + f64::from(ox), before.y + f64::from(oy)), Side::Right, HOME_INSET),
+                            None => desk().point_on_edge(Side::Right, t, HOME_INSET),
+                        };
+                        assert!(desk().screen_at(home).is_some());
+                        assert!((1920.0 - 1.0 - HOME_INSET..1920.0 - HOME_INSET).contains(&home.x), "{home:?}");
+                        // Home is where the pointer was before the step
+                        // that left, so it is off the armed edge by at
+                        // most that step's vertical part.
+                        let off = armed.iter().map(|e| e.dist(Pos::new(1920.0, home.y))).fold(f64::INFINITY, f64::min);
+                        assert!(off <= dy.abs() + 1.0, "home near an armed edge: {home:?} {armed:?}");
+                        // Unless that point was off our screens (and moved
+                        // onto them), it crosses straight back to where it left.
+                        let exact = offset.is_some_and(|(_, oy)| (home.y - before.y - f64::from(oy)).abs() < 1e-6);
+                        if let Some((ox, oy)) = offset.filter(|_| off < 1e-9 && exact) {
+                            // Coming straight back arrives where it left.
+                            let exits = touching(&remote, &desk(), Side::Left, (-ox, -oy));
+                            let at = Pos::new(1919.0 - f64::from(ox), home.y - f64::from(oy));
+                            let again = RemoteCursor::enter_at(remote.clone(), Side::Left, at, exits, 1);
+                            assert!((again.pos().y - before.y).abs() < 0.01, "{before:?} {home:?} {:?}", again.pos());
+                            c = again;
+                        } else if offset.is_none() {
+                            c = RemoteCursor::enter(remote.clone(), Side::Left, desk().edge_fraction(Side::Right, home), 1);
+                        }
                     }
                     _ => {
                         let moved = ((c.pos().x - before.x).powi(2) + (c.pos().y - before.y).powi(2)).sqrt();
@@ -564,11 +603,24 @@ mod tests {
     }
 
     #[test]
-    fn enter_at_a_point() {
-        let c = enter_at(desk(), Pos::new(960.0, 540.0), 3);
+    fn jump_to_a_point() {
+        let c = RemoteCursor::jump_to(desk(), Side::Left, Pos::new(960.0, 540.0), None, 3);
         assert_eq!(c.current(), Datagram::Motion { epoch: 3, seq: 0, pos: Pos::new(960.0, 540.0) });
-        let c = enter_at(desk(), Pos::new(5000.0, 540.0), 3);
+        let c = RemoteCursor::jump_to(desk(), Side::Left, Pos::new(5000.0, 540.0), None, 3);
         assert!(desk().screen_at(c.pos()).is_some());
+    }
+
+    #[test]
+    fn leaves_only_through_the_exits() {
+        // Home is left, but only y 100..200 of the left edge touches it.
+        let exit = Edge { side: Side::Left, at: 0, lo: 100, hi: 200 };
+        let mut c = RemoteCursor::enter_at(desk(), Side::Left, Pos::new(-1.0, 150.0), vec![exit], 1);
+        assert_eq!(c.pos(), Pos::new(0.0, 150.0));
+        assert!(matches!(c.motion(10.0, 200.0), Step::Move(_)));
+        assert!(matches!(c.motion(-20.0, 0.0), Step::Move(_)), "y 350 is outside the exit");
+        assert_eq!(c.motion(-5.0, 0.0), Step::Still);
+        assert!(matches!(c.motion(5.0, -200.0), Step::Move(_)));
+        assert!(matches!(c.motion(-10.0, 0.0), Step::Leave { .. }));
     }
 
     #[test]

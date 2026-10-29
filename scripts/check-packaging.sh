@@ -1,17 +1,24 @@
 #!/bin/sh
-# Builds the Linux packages from an existing release build into a scratch
-# folder under /tmp and checks them without installing anything:
-#   - the .deb: contents, control, runs `one-mk --version` from an unpacked copy,
-#     builds twice, and under two other time zones, and compares checksums, validates the desktop files, the
-#     AppStream file and the systemd user unit;
-#   - the AppDir: `AppRun --version`;
-#   - the Flatpak source bundle: unpacked elsewhere, every path in the manifest resolves.
-# Optional tools (lintian, desktop-file-validate, appstreamcli, systemd-analyze)
-# are used when present and reported as skipped when not.
+# Builds the Linux packages from an existing build into a scratch folder
+# under /tmp and checks them without installing anything:
+#   - the .deb (scripts/bundle-deb.sh, as the release makes it): contents,
+#     control version, runs `one-mk --version` from an unpacked copy;
+#   - the AppDir (scripts/package-appimage.sh): `AppRun --version`, top-level
+#     files, the desktop file and the AppStream metainfo validate;
+#   - the Flatpak source bundle: unpacked elsewhere, every path in the
+#     manifest resolves and matches its checksum;
+#   - the Homebrew cask and formula: filled in from stand-in .dmg files named
+#     like the release's, no placeholder left.
+# Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby) are
+# used when present and reported as skipped when not.
 #   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app
 #   sh scripts/check-packaging.sh
+# A debug build is enough for these checks: BIN_DIR=target/debug sh scripts/check-packaging.sh
 . "$(dirname "$0")/package-common.sh"
 
+need_binaries one-mk one-mk-tray one-mk-app
+BIN_DIR=$(cd "$BIN_DIR" && pwd)
+export BIN_DIR   # the package scripts run below use the same build
 scratch=$(mktemp -d /tmp/one-mk-pkg-check.XXXXXX)
 trap 'rm -rf "$scratch"' EXIT
 fail=0
@@ -20,68 +27,49 @@ bad()  { echo "FAILED  $*"; fail=1; }
 skip() { echo "skipped $*"; }
 check() { desc=$1; shift; if "$@" >/dev/null 2>&1; then ok "$desc"; else bad "$desc"; fi; }
 
-OUT_DIR=$scratch/a sh "$ROOT/scripts/package-deb.sh" >/dev/null
-OUT_DIR=$scratch/b sh "$ROOT/scripts/package-deb.sh" >/dev/null
-deb=$(ls "$scratch"/a/*.deb)
-[ "$(sha256sum < "$deb")" = "$(sha256sum < "$(ls "$scratch"/b/*.deb)")" ] && ok "the .deb is byte for byte reproducible" || bad "the .deb differs between two builds"
+# The .deb, made the way the release makes it (bundle-deb.sh reads Cargo.toml
+# and the icon relative to the checkout, so it runs from there).
+if command -v dpkg-deb >/dev/null; then
+    deb=$scratch/one-mk-x86_64-unknown-linux-gnu.deb
+    (cd "$ROOT" && sh scripts/bundle-deb.sh "$BIN_DIR" "$deb") >/dev/null
+    root=$scratch/root
+    mkdir -p "$root/DEBIAN"
+    dpkg-deb -x "$deb" "$root"
+    dpkg-deb -e "$deb" "$root/DEBIAN"
+    for f in usr/bin/one-mk usr/bin/one-mk-tray usr/bin/one-mk-app usr/share/applications/one-mk.desktop \
+             usr/share/icons/hicolor/256x256/apps/one-mk.png; do
+        [ -e "$root/$f" ] && ok ".deb contains /$f" || bad ".deb is missing /$f"
+    done
+    [ -z "$(find "$root" -not -path "$root/DEBIAN*" \( -perm -002 -o -perm -4000 \) -not -type l)" ] && ok ".deb has no world-writable or setuid files" || bad ".deb has world-writable or setuid files"
+    grep -q "^Version: $VERSION$" "$root/DEBIAN/control" && ok ".deb control version matches Cargo.toml ($VERSION)" || bad ".deb control version"
+    got=$("$root/usr/bin/one-mk" --version) && [ "$got" = "one-mk $VERSION" ] && ok "unpacked one-mk --version: $got" || bad "one-mk --version said '$got'"
+    check "unpacked one-mk-app starts (prints its usage and refuses an unknown option)" sh -c "! '$root/usr/bin/one-mk-app' --help"
+    check "unpacked one-mk-tray starts (prints its usage and refuses an unknown option)" sh -c "! '$root/usr/bin/one-mk-tray' --help"
+    if command -v desktop-file-validate >/dev/null; then
+        check ".deb desktop file validates" desktop-file-validate "$root/usr/share/applications/one-mk.desktop"
+    else skip "desktop-file-validate not installed"; fi
+else skip ".deb checks: dpkg-deb not installed"; fi
 
-# The builder's time zone must not matter (touch -t reads its stamp in local time).
-for zone in Asia/Amman Pacific/Honolulu; do
-    TZ=$zone OUT_DIR=$scratch/tz sh "$ROOT/scripts/package-deb.sh" >/dev/null
-    [ "$(sha256sum < "$deb")" = "$(sha256sum < "$(ls "$scratch"/tz/*.deb)")" ] && ok "the .deb is the same built under TZ=$zone" || bad "the .deb built under TZ=$zone differs from the one built under the default time zone"
-    rm -rf "$scratch/tz"
-done
-
-root=$scratch/root
-mkdir -p "$root/DEBIAN"
-dpkg-deb -x "$deb" "$root"
-dpkg-deb -e "$deb" "$root/DEBIAN"
-for f in usr/bin/one-mk usr/bin/one-mk-tray usr/bin/one-mk-app usr/lib/systemd/user/one-mk.service \
-         etc/xdg/autostart/one-mk-tray.desktop usr/share/applications/one-mk.desktop \
-         usr/share/applications/io.github.onemk.OneMk.desktop usr/share/icons/hicolor/256x256/apps/one-mk.png \
-         usr/share/icons/hicolor/scalable/apps/one-mk.svg usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml \
-         usr/share/doc/one-mk/copyright; do
-    [ -e "$root/$f" ] && ok "contains /$f" || bad "missing /$f"
-done
-# Files in the package must not be writable by others, and nothing sets uid.
-[ -z "$(find "$root" -not -path "$root/DEBIAN*" \( -perm -002 -o -perm -4000 \) -not -type l)" ] && ok "no world-writable or setuid files" || bad "world-writable or setuid files"
-grep -q "^Version: $(echo "$VERSION" | sed 's/-/~/')-1$" "$root/DEBIAN/control" && ok "control version matches Cargo.toml ($VERSION)" || bad "control version"
-# The maintainer scripts must never start or enable a service.
-if grep -E 'systemctl|service |start|enable' "$root/DEBIAN/postinst" "$root/DEBIAN/postrm" | grep -v '^\S*:#' >/dev/null; then bad "a maintainer script starts or enables something"; else ok "maintainer scripts start nothing"; fi
-got=$("$root/usr/bin/one-mk" --version) && [ "$got" = "one-mk $VERSION" ] && ok "unpacked one-mk --version: $got" || bad "one-mk --version said '$got'"
-check "unpacked one-mk-app starts (prints its usage and refuses an unknown option)" sh -c "! '$root/usr/bin/one-mk-app' --help"
-check "unpacked one-mk-tray starts (prints its usage and refuses an unknown option)" sh -c "! '$root/usr/bin/one-mk-tray' --help"
-
+# The AppDir (appimagetool is not needed for this part).
+OUT_DIR=$scratch/c APPIMAGETOOL= sh "$ROOT/scripts/package-appimage.sh" >/dev/null 2>&1
+appdir=$scratch/c/one-mk.AppDir
+got=$("$appdir/AppRun" --version) && [ "$got" = "one-mk $VERSION" ] && ok "AppDir: AppRun --version: $got" || bad "AppDir AppRun --version"
+[ -f "$appdir/one-mk.desktop" ] && [ -f "$appdir/one-mk.png" ] && [ -L "$appdir/.DirIcon" ] && ok "AppDir has desktop file and icons at the top" || bad "AppDir top level"
 if command -v desktop-file-validate >/dev/null; then
-    check "desktop files validate" desktop-file-validate "$root/usr/share/applications/one-mk.desktop" \
-        "$root/usr/share/applications/io.github.onemk.OneMk.desktop" "$root/etc/xdg/autostart/one-mk-tray.desktop"
+    check "AppDir desktop file validates" desktop-file-validate "$appdir/one-mk.desktop"
 else skip "desktop-file-validate not installed"; fi
 if command -v appstreamcli >/dev/null; then
-    check "AppStream metainfo validates" appstreamcli validate --no-net "$root/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml"
+    check "AppStream metainfo validates" appstreamcli validate --no-net "$appdir/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml"
 else skip "appstreamcli not installed"; fi
-if command -v systemd-analyze >/dev/null; then
-    # The unit names /usr/bin/one-mk; point a copy at the unpacked one so verify can see the program.
-    sed "s#\"/usr/bin/#\"$root/usr/bin/#" "$root/usr/lib/systemd/user/one-mk.service" > "$scratch/one-mk.service"
-    if (cd "$scratch" && systemd-analyze --user verify "$scratch/one-mk.service" 2>&1 | grep -v "spice-vdagent" | grep -q "one-mk.service"); then
-        bad "systemd-analyze --user verify complains about the unit"
-    else ok "systemd user unit verifies"; fi
-else skip "systemd-analyze not installed"; fi
-if command -v lintian >/dev/null; then
-    lintian --no-tag-display-limit "$deb" && ok "lintian" || bad "lintian"
-else skip "lintian not installed"; fi
 
-OUT_DIR=$scratch/c APPIMAGETOOL= sh "$ROOT/scripts/package-appimage.sh" >/dev/null 2>&1
-got=$("$scratch/c/one-mk.AppDir/AppRun" --version) && [ "$got" = "one-mk $VERSION" ] && ok "AppDir: AppRun --version: $got" || bad "AppDir AppRun --version"
-[ -f "$scratch/c/one-mk.AppDir/one-mk.desktop" ] && [ -f "$scratch/c/one-mk.AppDir/one-mk.png" ] && [ -L "$scratch/c/one-mk.AppDir/.DirIcon" ] && ok "AppDir has desktop file and icons at the top" || bad "AppDir top level"
-
-# The Windows installer's PATH and startup logic (the installer itself cannot run here).
-check "Windows installer PATH and startup logic" sh "$ROOT/scripts/check-windows-path.sh"
-
-# The Flatpak source bundle: built here, unpacked somewhere else, and every
-# path in the manifest must resolve there and match its checksum.
-OUT_DIR=$scratch/t sh "$ROOT/scripts/package-tarball.sh" >/dev/null
-OUT_DIR=$scratch/f sh "$ROOT/scripts/package-flatpak.sh" "$(ls "$scratch"/t/*.tar.gz)" >/dev/null 2>&1
-bundle=$(ls "$scratch"/f/*-flatpak-sources.tar.gz 2>/dev/null) || bundle=
+# The Flatpak source bundle: built here from a tarball laid out like the
+# release's (the "Package" step of release.yml), unpacked somewhere else, and
+# every path in the manifest must resolve there and match its checksum.
+mkdir -p "$scratch/t/one-mk-x86_64-unknown-linux-gnu"
+cp "$BIN_DIR/one-mk" "$BIN_DIR/one-mk-tray" "$BIN_DIR/one-mk-app" "$scratch/t/one-mk-x86_64-unknown-linux-gnu/"
+(cd "$scratch/t" && tar czf one-mk-x86_64-unknown-linux-gnu.tar.gz one-mk-x86_64-unknown-linux-gnu)
+OUT_DIR=$scratch/f sh "$ROOT/scripts/package-flatpak.sh" "$scratch/t/one-mk-x86_64-unknown-linux-gnu.tar.gz" >/dev/null 2>&1
+bundle=$(ls "$scratch"/f/one-mk-flatpak-sources.tar.gz 2>/dev/null) || bundle=
 if [ -n "$bundle" ]; then
     mkdir -p "$scratch/elsewhere"
     tar -xzf "$bundle" -C "$scratch/elsewhere"
@@ -98,5 +86,20 @@ if [ -n "$bundle" ]; then
     done
     grep -q "$ROOT\|$scratch\|@[A-Z0-9_]*@" "$manifest" && bad "flatpak manifest holds a checkout path or a placeholder" || ok "flatpak manifest holds no checkout path or placeholder"
 else bad "no flatpak source bundle was written"; fi
+
+# The Homebrew files, from stand-ins named like the release's .dmg files.
+mkdir -p "$scratch/h"
+echo arm > "$scratch/h/one-mk-aarch64-apple-darwin.dmg"
+echo x64 > "$scratch/h/one-mk-x86_64-apple-darwin.dmg"
+if OUT_DIR=$scratch/h SOURCE_SHA256=0000000000000000000000000000000000000000000000000000000000000000 \
+        sh "$ROOT/scripts/package-homebrew.sh" >/dev/null 2>&1; then
+    cask=$scratch/h/homebrew/one-mk.rb formula=$scratch/h/homebrew/one-mk-source.rb
+    grep -q '@[A-Z0-9_]*@' "$cask" "$formula" && bad "a placeholder is left in the Homebrew files" || ok "Homebrew cask and formula hold no placeholder"
+    grep -q "\"$(sha256sum < "$scratch/h/one-mk-aarch64-apple-darwin.dmg" | cut -d' ' -f1)\"" "$cask" && ok "cask has the Apple silicon .dmg's checksum" || bad "cask checksum"
+    grep -q 'one-mk-#{arch}-apple-darwin.dmg' "$cask" && ok "cask downloads the .dmg names the release publishes" || bad "cask .dmg URL"
+    if command -v ruby >/dev/null; then
+        check "Homebrew files are valid Ruby" sh -c "ruby -c '$cask' && ruby -c '$formula'"
+    else skip "ruby not installed"; fi
+else bad "package-homebrew.sh failed"; fi
 
 [ "$fail" = 0 ] && echo "all checks passed" || { echo "some checks failed"; exit 1; }
