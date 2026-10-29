@@ -253,7 +253,8 @@ impl Pills<'_> {
                 picked = Some(k);
             }
             let lit = tween(&ctx, self.id.with(("on", k)), f32::from(on), motion::fade(0.15), motion::linear);
-            let base = if !enabled { mix(INK2, RAISED, 0.5) } else if r.hovered() { INK_HOVER } else { INK2 };
+            // Disabled choices stay readable (4:1), just clearly quieter than INK2.
+            let base = if !enabled { mix(INK2, RAISED, 0.3) } else if r.hovered() { INK_HOVER } else { INK2 };
             let font = if on { semibold(self.font) } else { regular(self.font) };
             let text = fit(&p, self.labels[k], &font, cell.width() - 8.0);
             p.text(cell.center(), Align2::CENTER_CENTER, text, font, mix(base, INK, lit));

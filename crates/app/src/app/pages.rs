@@ -1,13 +1,15 @@
 //! Two full pages without the desk: Health (`one-mk doctor`, run on open
 //! and on Recheck, off the window's thread, plus what the daemon says
-//! right now) and Advanced (edge rules, power and locking, keyboard
-//! shortcuts, hooks).
+//! right now) and Advanced (edge rules, power and locking, gaming mode,
+//! keyboard shortcuts, Ctrl and Cmd, commands to run).
 
 use super::*;
-use crate::view::{self, Verdict};
+use crate::view::{self, Check, Verdict};
 
 /// Doctor results older than this are run again when Health opens.
 const STALE: f64 = 30.0;
+/// A row of the Crossing edges card.
+const EDGE_ROW: f32 = 38.0;
 const MODS: [(&str, &str); 4] = [("none", "None"), ("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
 
 /// A card: a raised panel with a title.
@@ -19,6 +21,13 @@ fn card(ui: &Ui, r: Rect, title: &str) -> Rect {
     Rect::from_min_max(r.min + vec2(18.0, 48.0), r.max - vec2(18.0, 14.0))
 }
 
+/// What the window can do itself about a failed check.
+#[derive(Clone, Copy)]
+enum Fix {
+    Start,
+    Pair,
+}
+
 fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
     match v {
         Verdict::Pass => widgets::draw_check(p, c, 12.0, INK2, 1.0),
@@ -26,7 +35,12 @@ fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
             p.line_segment([c - vec2(4.0, 0.0), c + vec2(4.0, 0.0)], Stroke::new(1.5, OFF));
         }
         Verdict::Warn => {
-            p.circle_stroke(c, 5.0, Stroke::new(2.0, INK));
+            // A triangle with a bar and a dot: not a ring, which reads as an
+            // empty radio button.
+            let (top, l, r) = (c + vec2(0.0, -6.5), c + vec2(-7.0, 5.5), c + vec2(7.0, 5.5));
+            p.add(egui::Shape::closed_line(vec![top, r, l], Stroke::new(1.5, INK)));
+            p.line_segment([c + vec2(0.0, -2.0), c + vec2(0.0, 1.5)], Stroke::new(1.5, INK));
+            p.circle_filled(c + vec2(0.0, 3.6), 0.9, INK);
         }
         Verdict::Fail => {
             p.circle_filled(c, 6.0, ERROR);
@@ -49,6 +63,20 @@ impl App {
         let stale = self.doctor.as_ref().is_none_or(|(_, at)| self.now - at > STALE);
         if stale && !self.busy.contains(&Job::Doctor) {
             self.recheck();
+        }
+    }
+
+    /// A check the window itself can fix: the button to show instead of
+    /// copying a command.
+    fn window_fix(&self, c: &Check) -> Option<(&'static str, Fix)> {
+        if c.verdict == Verdict::Pass {
+            return None;
+        }
+        match c.id.as_str() {
+            "daemon" if self.off() => Some(("Start one·mk", Fix::Start)),
+            // Pairing works with one·mk off too; it connects once started.
+            "pairing" if self.running().is_none_or(|s| s.peers.is_empty()) => Some(("Pair a computer", Fix::Pair)),
+            _ => None,
         }
     }
 
@@ -130,6 +158,8 @@ impl App {
         };
         let copied = self.copied;
         let mut copy = None;
+        let fixes: Vec<_> = checks.iter().map(|c| self.window_fix(c)).collect();
+        let mut fix_now = None;
         let mut child = ui.new_child(UiBuilder::new().max_rect(list));
         child.set_clip_rect(list);
         egui::ScrollArea::vertical().id_salt("health-checks").auto_shrink([false, false]).show(&mut child, |ui| {
@@ -144,6 +174,7 @@ impl App {
                 };
                 let dh = lay(&c.detail, regular(T_BODY), inner);
                 let (cmd, is_cmd) = c.fix.as_deref().map(view::fix_command).unwrap_or_default();
+                let here = fixes[k];
                 let copy_label = if copied.as_ref().is_some_and(|(i, t)| *i == k && now - t < 1.5) {
                     "Copied"
                 } else if is_cmd {
@@ -152,7 +183,9 @@ impl App {
                     "Copy"
                 };
                 let cw = button_width(ui, "Copy command") - 4.0;
-                let fh = c.fix.as_ref().map_or(0.0, |f| lay(f, regular(T_BODY), inner - cw - 12.0).max(28.0) + 8.0);
+                // Fixed here: one button says what to do, without the command.
+                let fix_text = if let Some((label, _)) = &here { Some(format!("Choose {label}.")) } else { c.fix.clone() };
+                let fh = fix_text.as_ref().map_or(0.0, |f| lay(f, regular(T_BODY), inner - cw - 12.0).max(28.0) + 8.0);
                 let h = 14.0 + 20.0 + dh + fh + 14.0;
                 let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
                 let rx = row.left() + 8.0;
@@ -163,16 +196,22 @@ impl App {
                 let wc = if c.verdict == Verdict::Fail { INK } else { INK2 };
                 p.text(pos2(row.right() - 8.0, ty + 10.0), Align2::RIGHT_CENTER, word, regular(T_META), wc);
                 widgets::para_code(ui, pos2(rx + 26.0, ty + 22.0), inner, &c.detail, regular(T_BODY), INK2);
-                if let Some(fix) = &c.fix {
+                if let Some(fix) = &fix_text {
                     let fy = ty + 22.0 + dh + 8.0;
                     widgets::para_code(ui, pos2(rx + 26.0, fy + 4.0), inner - cw - 12.0, fix, regular(T_BODY), INK);
                     let br = Rect::from_min_size(pos2(row.right() - 8.0 - cw, fy), vec2(cw, 28.0));
-                    let name = format!("Copy the fix for {}: {cmd}", c.title);
-                    if button(ui, br, Id::unique(("copy-fix", k)), copy_label, Look::Quiet, true, Some(&name)).clicked() {
-                        copy = Some((k, cmd.clone()));
+                    if let Some((label, job)) = &here {
+                        if button(ui, br, Id::unique(("fix-here", k)), label, Look::Quiet, !running, None).clicked() {
+                            fix_now = Some(*job);
+                        }
+                    } else {
+                        let name = format!("Copy the fix for {}: {cmd}", c.title);
+                        if button(ui, br, Id::unique(("copy-fix", k)), copy_label, Look::Quiet, true, Some(&name)).clicked() {
+                            copy = Some((k, cmd.clone()));
+                        }
                     }
                 }
-                let label = format!("{}: {}. {}{}", c.title, word, c.detail, c.fix.as_ref().map_or(String::new(), |f| format!(" Fix: {f}")));
+                let label = format!("{}: {}. {}{}", c.title, word, c.detail, fix_text.as_ref().map_or(String::new(), |f| format!(" Fix: {f}")));
                 a11y_text(ui, Id::unique(("check", k)), row, Role::ListItem, &label, None);
                 if k + 1 < checks.len() {
                     p.hline(row.x_range().shrink(8.0), row.bottom() - 0.5, Stroke::new(1.0, LINE));
@@ -184,6 +223,14 @@ impl App {
             self.copied = Some((k, now));
             ui.ctx().request_repaint_after_secs(1.6);
         }
+        match fix_now {
+            Some(Fix::Start) if !self.busy.contains(&Job::Start) => {
+                self.busy.push(Job::Start);
+                self.link.start();
+            }
+            Some(Fix::Pair) => self.start_pairing(now),
+            _ => {}
+        }
     }
 
     pub(super) fn advanced(&mut self, ui: &mut Ui, rect: Rect) {
@@ -191,50 +238,57 @@ impl App {
         let two = area.width() >= 700.0;
         let gap = 16.0;
         let col_w = if two { (area.width() - gap) / 2.0 } else { area.width() };
-        let (h_edges, h_power, h_keys, h_hooks) = (256.0, 176.0, 256.0, 176.0);
-        let total = if two { (h_edges + gap + h_power).max(h_keys + gap + h_hooks) } else { h_edges + h_power + h_keys + h_hooks + gap * 3.0 };
+        // Each card as tall as what it holds: a title (48), rows, a margin (14).
+        let s = self.running();
+        let per_side = s.is_some_and(|s| s.edges.contains(" edge: "));
+        let peers = s.map_or(0, |s| s.peers.len());
+        let keys = self.prefs.hotkeys.len() + 1;
+        let note = s.is_some_and(|s| view::hotkeys_note(&s.hotkeys, &s.hotkeys_detail).is_some());
+        let hooks = self.prefs.hooks.len() + usize::from(self.prefs.unreadable);
+        let heights = [
+            48.0 + 4.0 * EDGE_ROW - 4.0 + if per_side { 22.0 } else { 0.0 } + 14.0,
+            48.0 + 3.0 * 36.0 - 6.0 + 14.0,
+            48.0 + 36.0 - 6.0 + 14.0,
+            48.0 + 44.0 + 22.0 * keys as f32 + if note { 40.0 } else { 0.0 } + 14.0,
+            48.0 + 22.0 + (SWAP_ROW * peers as f32).max(40.0) + 14.0,
+            48.0 + if hooks == 0 { 44.0 } else { 22.0 * hooks as f32 + 20.0 } + 14.0,
+        ];
+        // Two columns: crossing, power and games on the left; keys and
+        // commands on the right. One column below 700 points.
+        let mut at = [(0usize, 0.0f32); 6];
+        let mut ys = [0.0f32; 2];
+        for (k, h) in heights.iter().enumerate() {
+            let col = if two { usize::from(k >= 3) } else { 0 };
+            at[k] = (col, ys[col]);
+            ys[col] += h + gap;
+        }
+        let total = ys[0].max(ys[1]) - gap;
         let mut child = ui.new_child(UiBuilder::new().max_rect(area.expand2(vec2(6.0, 0.0))));
         child.set_clip_rect(area.expand2(vec2(8.0, 4.0)));
         egui::ScrollArea::vertical().id_salt("advanced").auto_shrink([false, false]).show(&mut child, |ui| {
             let (all, _) = ui.allocate_exact_size(vec2(area.width(), total), Sense::hover());
-            let at = |col: usize, y: f32, h: f32| Rect::from_min_size(pos2(all.left() + col as f32 * (col_w + gap), all.top() + y), vec2(col_w, h));
-            let (e, pw, k, hk) = if two {
-                (at(0, 0.0, h_edges), at(0, h_edges + gap, h_power), at(1, 0.0, h_keys), at(1, h_keys + gap, h_hooks))
-            } else {
-                let mut y = 0.0;
-                let mut next = |h: f32| {
-                    let r = at(0, y, h);
-                    y += h + gap;
-                    r
-                };
-                (next(h_edges), next(h_power), next(h_keys), next(h_hooks))
-            };
-            self.edges_card(ui, e);
-            self.power_card(ui, pw);
-            self.keys_card(ui, k);
-            self.hooks_card(ui, hk);
+            let r = |k: usize| Rect::from_min_size(pos2(all.left() + at[k].0 as f32 * (col_w + gap), all.top() + at[k].1), vec2(col_w, heights[k]));
+            self.edges_card(ui, r(0));
+            self.power_card(ui, r(1));
+            let c = card(ui, r(2), "Games");
+            self.gaming_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0), vec2(c.width(), 36.0)));
+            self.keys_card(ui, r(3));
+            let c = card(ui, r(4), "Ctrl and Cmd");
+            ui.painter().text(pos2(c.left(), c.top() + 2.0), Align2::LEFT_CENTER, fit(ui.painter(), "Auto swaps them only between a Mac and a PC.", &regular(T_META), c.width()), regular(T_META), INK2);
+            self.swaps(ui, Rect::from_min_max(pos2(c.left(), c.top() + 18.0), c.max));
+            self.hooks_card(ui, r(5));
         });
     }
 
     fn edges_card(&mut self, ui: &mut Ui, r: Rect) {
         let c = card(ui, r, "Crossing edges");
         let p = self.prefs.clone();
-        let summary = match self.running() {
-            Some(s) if !s.edges.is_empty() => format!("Now: {}.", s.edges),
-            Some(_) => "No rules: the pointer crosses as soon as it reaches an edge.".into(),
-            None => "These apply when one·mk runs.".into(),
-        };
-        let shown = fit(ui.painter(), &summary, &regular(T_META), c.width());
-        ui.painter().text(pos2(c.left(), c.top() + 2.0), Align2::LEFT_CENTER, &shown, regular(T_META), INK2);
-        if shown != summary {
-            ui.interact(Rect::from_center_size(pos2(c.center().x, c.top() + 2.0), vec2(c.width(), 16.0)), Id::unique("edges-summary"), Sense::hover()).on_hover_text(&summary);
-        }
-        let row_h = 38.0;
-        let top = c.top() + 16.0;
-        let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
-        // Numbers with a unit, typed.
+        let top = c.top() - 4.0;
+        let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + EDGE_ROW * k as f32), vec2(c.width(), EDGE_ROW));
+        // Numbers with a unit, typed; the fields line up whatever the unit.
+        let uw = text_width(ui, "px", regular(T_META)).max(text_width(ui, "ms", regular(T_META))) + 8.0;
         for (k, (key, label, unit, cur, max, flag)) in [
-            ("corner", "Dead corners", "px", p.edge_corner, 500u32, "--corner"),
+            ("corner", "Don't cross near corners", "px", p.edge_corner, 500u32, "--corner"),
             ("dwell", "Wait at the edge", "ms", p.edge_dwell_ms, 5000, "--dwell"),
         ]
         .into_iter()
@@ -242,7 +296,6 @@ impl App {
         {
             let rr = row(k);
             ui.painter().text(rr.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
-            let uw = text_width(ui, unit, regular(T_META)) + 8.0;
             let fr = Rect::from_min_size(pos2(rr.right() - 72.0 - uw, rr.center().y - 13.0), vec2(72.0, 26.0));
             ui.painter().text(pos2(rr.right(), rr.center().y), Align2::RIGHT_CENTER, unit, regular(T_META), INK2);
             let a11y = format!("{label}, in {}", if unit == "px" { "pixels (0: off)" } else { "milliseconds (0: off)" });
@@ -255,11 +308,15 @@ impl App {
                     _ => self.toast_error(format!("{label}: type a whole number from 0 to {max}."), None, self.now),
                 }
             }
+            let tip = if key == "corner" { "The pointer stays here within this distance of a corner, so corners and close buttons stay easy to hit." } else { "The pointer has to rest against the edge this long before it crosses." };
+            let lw = text_width(ui, label, regular(T_BODY));
+            ui.interact(Rect::from_min_size(rr.min, vec2(lw, rr.height())), Id::unique(("edge-tip", key)), Sense::hover()).on_hover_text(tip);
         }
         let rr = row(2);
-        ui.painter().text(rr.left_center(), Align2::LEFT_CENTER, "Hold a key", regular(T_BODY), INK);
-        let lw = text_width(ui, "Hold a key", regular(T_BODY)) + 16.0;
-        let seg_w = 230.0f32.min(rr.width() - lw);
+        let word = "Hold a key to cross";
+        ui.painter().text(rr.left_center(), Align2::LEFT_CENTER, word, regular(T_BODY), INK);
+        let lw = text_width(ui, word, regular(T_BODY)) + 16.0;
+        let seg_w = 200.0f32.min(rr.width() - lw);
         let track = Rect::from_min_size(pos2(rr.right() - seg_w, rr.center().y - 13.0), vec2(seg_w, 26.0));
         let labels: Vec<&str> = MODS.iter().map(|(_, l)| *l).collect();
         let pills = Pills {
@@ -287,7 +344,7 @@ impl App {
         let per_side = self.running().is_some_and(|s| s.edges.contains(" edge: "));
         if per_side {
             let note = "Some edges have rules of their own: see `one-mk edge`.";
-            widgets::para_code(ui, pos2(c.left(), row(4).top()), c.width(), note, regular(T_META), INK2);
+            widgets::para_code(ui, pos2(c.left(), row(4).top() + 4.0), c.width(), note, regular(T_META), INK2);
         }
     }
 
@@ -346,13 +403,13 @@ impl App {
     }
 
     fn hooks_card(&mut self, ui: &mut Ui, r: Rect) {
-        let c = card(ui, r, "Hooks");
+        let c = card(ui, r, "Run commands");
         let p = self.prefs.clone();
         let label = "Edit settings.toml";
         let bw = button_width(ui, label) - 4.0;
         let b = Rect::from_min_size(pos2(r.right() - 18.0 - bw, r.top() + 12.0), vec2(bw, 28.0));
         let busy = self.busy.contains(&Job::EditSettings);
-        if button(ui, b, Id::unique("edit-settings"), label, Look::Quiet, !busy, Some("Open settings.toml to edit hooks")).clicked() {
+        if button(ui, b, Id::unique("edit-settings"), label, Look::Quiet, !busy, Some("Open settings.toml to edit the commands")).clicked() {
             self.busy.push(Job::EditSettings);
             self.link.edit_settings();
         }
@@ -362,7 +419,7 @@ impl App {
             y += 22.0;
         }
         if p.hooks.is_empty() {
-            let text = "Commands to run when the pointer arrives or leaves, or a computer connects. None are set.";
+            let text = "When the pointer arrives or leaves, or a computer connects. None are set yet.";
             para(ui, pos2(c.left(), y - 8.0), c.width(), text, regular(T_BODY), INK2);
             return;
         }

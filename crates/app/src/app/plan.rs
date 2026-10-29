@@ -251,8 +251,9 @@ impl App {
             for s in it_screens {
                 let r = xf.rect(*s).shrink(1.0);
                 if guessed {
-                    p.rect_filled(r, CornerRadius::same(5), PANEL);
-                    p.add(egui::Shape::dashed_line(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], Stroke::new(1.0, OFF), 5.0, 4.0));
+                    // A plain hairline: dashes on the plan mean a wall, and a
+                    // brighter edge means chosen.
+                    p.rect(r, CornerRadius::same(5), PANEL, Stroke::new(1.0, LINE), StrokeKind::Inside);
                 } else {
                     // A quiet wallpaper: lighter at the top, as on the desk.
                     let mut m = egui::Mesh::default();
@@ -270,7 +271,15 @@ impl App {
                 }
                 let size = format!("{} × {}", s.w, s.h);
                 if Some(*s) != largest && text_width(ui, &size, mono(T_META)) + 12.0 < r.width() && r.height() > 30.0 {
-                    p.text(r.center(), Align2::CENTER_CENTER, size, mono(T_META), INK2);
+                    // Whose monitor it is, when there is room: the colour
+                    // alone doesn't say.
+                    if r.height() > 52.0 {
+                        let owner = fit(&p, name, &regular(T_META), r.width() - 16.0);
+                        p.text(r.center() - vec2(0.0, 9.0), Align2::CENTER_CENTER, owner, regular(T_META), INK2);
+                        p.text(r.center() + vec2(0.0, 10.0), Align2::CENTER_CENTER, size, mono(T_META), INK2);
+                    } else {
+                        p.text(r.center(), Align2::CENTER_CENTER, size, mono(T_META), INK2);
+                    }
                 }
             }
             if let Some(big) = largest {
@@ -363,7 +372,7 @@ impl App {
         let tx = p.text(key + vec2(26.0, 0.0), Align2::LEFT_CENTER, "The pointer crosses here", regular(T_META), INK2).right();
         let wall = key + vec2(tx - key.x + 22.0, 0.0);
         p.add(egui::Shape::dashed_line(&[wall, wall + vec2(18.0, 0.0)], Stroke::new(2.0, OFF), 4.0, 4.0));
-        p.text(wall + vec2(26.0, 0.0), Align2::LEFT_CENTER, "Wall", regular(T_META), INK2);
+        p.text(wall + vec2(26.0, 0.0), Align2::LEFT_CENTER, "The pointer stops here", regular(T_META), INK2);
         let hint = if items.is_empty() { "Pair a computer to arrange it here." } else { "Drag a computer along an edge to line it up." };
         p.text(pos2(area.right(), rect.bottom() - 24.0), Align2::RIGHT_CENTER, hint, regular(T_META), INK2);
     }
@@ -503,7 +512,7 @@ impl App {
         let Some(status) = self.running().cloned() else { return };
         let Some(peer) = status.peers.iter().find(|p| Some(&p.id) == sel.as_ref()).cloned() else {
             para(ui, c.left_top(), c.width(), "Line up edges", semibold(T_TITLE), INK);
-            let text = "Choose a computer to line its edge up with this one's: stretched end to end, or 1:1 like two monitors side by side.";
+            let text = "Choose a computer on the plan to line its edge up with this one's: stretched end to end, or side by side like two monitors.";
             para(ui, c.left_top() + vec2(0.0, 26.0), c.width(), text, regular(T_BODY), INK2);
             return;
         };
@@ -518,6 +527,12 @@ impl App {
             self.choose_align(&peer.id, side, if stretch { Align::Center } else { Align::Stretch });
         }
         ui.painter().hline(c.x_range(), top + 36.0, Stroke::new(1.0, LINE));
+        // Stretched, there is nothing to line up: the choices show once it's off.
+        if stretch {
+            let text = "Every point of your edge leads to its edge, scaled to fit. Turn this off to line the two up like monitors side by side.";
+            para(ui, pos2(c.left(), top + 48.0), c.width(), text, regular(T_META), INK2);
+            return;
+        }
         let names = view::snap_names(side);
         let track = Rect::from_min_size(pos2(c.left(), top + 46.0), vec2(c.width(), 26.0));
         let pills = Pills {
@@ -527,7 +542,7 @@ impl App {
             labels: &names,
             names: names.iter().map(|n| format!("Line up {} at the {}", peer.name, n.to_lowercase())).collect(),
             chosen: view::snap_of(align, ll, rl).map(|s| s as usize),
-            enabled: vec![!stretch; 3],
+            enabled: vec![true; 3],
             role: Role::RadioButton,
             font: T_BODY,
             radius: 6,
@@ -537,15 +552,15 @@ impl App {
             self.choose_align(&peer.id, side, view::snap_align(snap, ll, rl));
         }
         let y = top + 84.0;
-        ui.painter().text(pos2(c.left(), y + 14.0), Align2::LEFT_CENTER, "Offset", regular(T_BODY), if stretch { INK2 } else { INK });
+        ui.painter().text(pos2(c.left(), y + 14.0), Align2::LEFT_CENTER, "Offset", regular(T_BODY), INK);
         let fw = 92.0;
         let unit_w = text_width(ui, "px", regular(T_META)) + 8.0;
         let fr = Rect::from_min_size(pos2(c.right() - fw - unit_w, y), vec2(fw, 28.0));
         ui.painter().text(pos2(c.right(), y + 14.0), Align2::RIGHT_CENTER, "px", regular(T_META), INK2);
-        let current = if stretch { String::new() } else { view::offset_px(align, ll, rl).to_string() };
+        let current = view::offset_px(align, ll, rl).to_string();
         let (from, to) = if side.along_x() { ("left", "left") } else { ("top", "top") };
         let label = format!("Offset of {}'s {to} edge from this computer's {from} edge, in pixels", peer.name);
-        if let Some(text) = self.edit_field(ui, fr, &format!("offset-{}", peer.id), &current, if stretch { "—" } else { "0" }, &label, !stretch, true) {
+        if let Some(text) = self.edit_field(ui, fr, &format!("offset-{}", peer.id), &current, "0", &label, true, true) {
             match text.trim_end_matches("px").trim().parse::<i32>() {
                 Ok(o) => {
                     let a = view::snap_offset(f64::from(o), ll, rl, 0.0);
@@ -554,12 +569,10 @@ impl App {
                 Err(_) => self.toast_error(format!("“{text}” isn't a number of pixels."), None, self.now),
             }
         }
-        let hint = if stretch {
-            "Every point of your edge leads there, scaled to fit."
-        } else if side.along_x() {
-            "From your left edge to its left edge. 1:1, like two monitors."
+        let hint = if side.along_x() {
+            "From your left edge to its left edge, in pixels, at the same scale."
         } else {
-            "From your top edge to its top edge. 1:1, like two monitors."
+            "From your top edge to its top edge, in pixels, at the same scale."
         };
         para(ui, pos2(c.left(), y + 38.0), c.width(), hint, regular(T_META), INK2);
     }
@@ -659,7 +672,7 @@ impl App {
                         r
                     };
                     let del = place(bw("Delete"));
-                    let off = auto_text.is_some().then(|| place(bw("Off")));
+                    let off = auto_text.is_some().then(|| place(bw("Turn off")));
                     let set = place(bw("Set"));
                     let fr = Rect::from_min_max(pos2(row.left(), y), pos2(x, y + 28.0));
                     let key = format!("ssid-{n}");
@@ -674,7 +687,7 @@ impl App {
                         self.drafts.remove(&key);
                     }
                     if let Some(or) = off
-                        && button(ui, or, Id::unique(("profile-auto-off", n)), "Off", Look::Quiet, true, Some(&format!("Stop switching to {n} by itself"))).clicked()
+                        && button(ui, or, Id::unique(("profile-auto-off", n)), "Turn off", Look::Quiet, true, Some(&format!("Stop switching to {n} by itself"))).clicked()
                     {
                         auto = Some((n.clone(), None));
                     }

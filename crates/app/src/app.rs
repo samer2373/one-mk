@@ -36,16 +36,15 @@ enum Tab {
     Desk,
     Layout,
     Files,
-    Keyboard,
     Health,
     Advanced,
 }
-/// Each tab, and a shorter name for narrow windows.
-const TABS: [(Tab, &str, &str); 6] = [
+/// Each tab, and a shorter name for narrow windows. Settings most people
+/// never change (Ctrl and Cmd, gaming mode, edge rules) live in Advanced.
+const TABS: [(Tab, &str, &str); 5] = [
     (Tab::Desk, "Desk", "Desk"),
     (Tab::Layout, "Layout", "Layout"),
     (Tab::Files, "Clipboard & files", "Files"),
-    (Tab::Keyboard, "Keyboard", "Keyboard"),
     (Tab::Health, "Health", "Health"),
     (Tab::Advanced, "Advanced", "Advanced"),
 ];
@@ -53,7 +52,7 @@ const TABS: [(Tab, &str, &str); 6] = [
 impl Tab {
     /// Tabs that show the desk of computers.
     fn desk(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Files | Tab::Keyboard)
+        matches!(self, Tab::Desk | Tab::Files)
     }
     /// Tabs that mean something while one·mk is off.
     fn when_off(self) -> bool {
@@ -62,6 +61,8 @@ impl Tab {
 }
 const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"), (Side::Top, "Above"), (Side::Bottom, "Below")];
 const SWAPS: [(&str, &str); 3] = [("auto", "Auto"), ("on", "Always swap"), ("off", "Never swap")];
+/// One computer's row in the Ctrl and Cmd card.
+const SWAP_ROW: f32 = 36.0;
 
 enum Drag {
     Device { i: usize, start: Pos2, x0: f32 },
@@ -134,7 +135,6 @@ enum Cell {
     Controls,
     FilesHead(String, String),
     FilesSettings,
-    Swaps,
     Arrange(Option<String>),
     LineUp(Option<String>),
     Profiles,
@@ -352,7 +352,7 @@ impl App {
         #[cfg(debug_assertions)]
         match std::env::var("ONE_MK_APP_TAB").as_deref() {
             Ok("files") => tab = Tab::Files,
-            Ok("keyboard") => tab = Tab::Keyboard,
+            Ok("keyboard") => tab = Tab::Advanced,
             Ok("layout") => tab = Tab::Layout,
             Ok("health") => tab = Tab::Health,
             Ok("advanced") => tab = Tab::Advanced,
@@ -746,23 +746,14 @@ impl App {
     }
 
     /// The second line on a computer's screen says what matters in the
-    /// open tab: its system, that files can go there, or its keys.
+    /// open tab: its system, or that files can go there.
     fn subtitle_for(&self, p: &PeerStatus) -> String {
         if !p.online {
             return "Offline".into();
         }
-        let swap = self.pending_swap.get(&p.id).unwrap_or(&p.swap);
         match self.tab {
-            Tab::Desk | Tab::Layout | Tab::Health | Tab::Advanced => os_name(p.os).into(),
             Tab::Files => "Drop files here".into(),
-            Tab::Keyboard => {
-                let swapped = match swap.as_str() {
-                    "on" => true,
-                    "off" => false,
-                    _ => p.os != 0 && (p.os == os::MACOS) != (me_os() == os::MACOS),
-                };
-                if swapped { "Ctrl/Cmd swapped".into() } else { "Keys as typed".into() }
-            }
+            _ => os_name(p.os).into(),
         }
     }
 
@@ -1392,10 +1383,6 @@ impl App {
                 };
                 vec![(Cell::FilesHead("Drop files on a computer".into(), sub.into()), cell(0, 1)), (Cell::Clipboard, cell(1, 2)), (Cell::FilesSettings, cell(2, 3))]
             }
-            Tab::Keyboard => {
-                let sub = "Swap them for keys sent to another computer, so shortcuts like copy and paste use the same keys everywhere. Auto swaps only between a Mac and a PC.";
-                vec![(Cell::Head("Ctrl and Cmd".into(), sub.into()), cell(0, 1)), (Cell::Swaps, cell(1, 3))]
-            }
         }
     }
 
@@ -1436,7 +1423,10 @@ impl App {
                 continue;
             }
             let Some((c, r)) = cell else { continue };
-            let delay = if opening && at < 1.0 { 0.25 + 0.04 * k as f64 } else if self.slots[k].was.is_some() { out + 0.03 * k as f64 } else { 0.0 };
+            // Staggered arrivals are movement too: with reduced motion the
+            // cells fade in together, at once.
+            let stagger = |secs: f32| f64::from(motion::space(secs));
+            let delay = if opening && at < 1.0 { stagger(0.25 + 0.04 * k as f32) } else if self.slots[k].was.is_some() { out + stagger(0.03 * k as f32) } else { 0.0 };
             let e = motion::progress(now, at + delay, motion::fade(if opening { 0.2 } else { 0.18 }), motion::out_cubic);
             if e < 1.0 {
                 ui.ctx().request_repaint();
@@ -1462,7 +1452,6 @@ impl App {
             Cell::Controls => self.controls(ui, r),
             Cell::FilesHead(t, s) => self.files_head(ui, r, t, s),
             Cell::FilesSettings => self.files_settings(ui, r),
-            Cell::Swaps => self.swaps(ui, r),
             Cell::Arrange(sel) => self.arrange_cell(ui, r, sel.clone()),
             Cell::LineUp(sel) => self.line_up_cell(ui, r, sel.clone()),
             Cell::Profiles => self.profiles_cell(ui, r),
@@ -1559,53 +1548,50 @@ impl App {
         }
     }
 
-    /// Ctrl and Cmd for every paired computer: a list that scrolls when
-    /// there are more than fit.
-    fn swaps(&mut self, ui: &mut Ui, c: Rect) {
+    /// Ctrl and Cmd for every paired computer, a row each, from the top of
+    /// `c` (the Advanced card sizes itself to fit them).
+    pub(super) fn swaps(&mut self, ui: &mut Ui, c: Rect) {
         let peers: Vec<_> = self.running().map(|s| s.peers.clone()).unwrap_or_default();
         if peers.is_empty() {
             para(ui, c.left_top(), c.width(), "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), INK2);
             return;
         }
         let arrowed = self.arrowed;
-        let mut child = ui.new_child(UiBuilder::new().max_rect(c.expand2(vec2(4.0, 8.0))));
         let mut changes = vec![];
-        egui::ScrollArea::vertical().id_salt("swaps").auto_shrink([false, false]).show(&mut child, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for peer in &peers {
-                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
-                let row = row.shrink2(vec2(4.0, 0.0));
-                let p = ui.painter().clone();
-                let seg_w = 288.0f32.min(row.width() * 0.62);
-                let seg = Rect::from_min_size(pos2(row.right() - seg_w, row.center().y - 14.0), vec2(seg_w, 28.0));
-                let os_label = os_name(peer.os);
-                let ow = text_width(ui, os_label, regular(T_META));
-                let name = fit(&p, &peer.name, &regular(T_BODY), seg.left() - row.left() - ow - 20.0);
-                let nw = text_width(ui, &name, regular(T_BODY));
-                p.text(pos2(row.left(), row.center().y), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
-                p.text(pos2(row.left() + nw + 8.0, row.center().y), Align2::LEFT_CENTER, os_label, regular(T_META), INK2);
-                if name != peer.name {
-                    ui.interact(Rect::from_min_max(row.min, pos2(row.left() + nw, row.max.y)), Id::unique(("swap-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
-                }
-                let current = self.pending_swap.get(&peer.id).unwrap_or(&peer.swap);
-                let labels: Vec<&str> = SWAPS.iter().map(|(_, l)| *l).collect();
-                let pills = Pills {
-                    id: Id::unique(("swap", &peer.id)),
-                    track: seg,
-                    cells: Pills::even(seg, 3, 2.0),
-                    labels: &labels,
-                    names: SWAPS.iter().map(|(_, l)| format!("Ctrl and Cmd for {}: {l}", peer.name)).collect(),
-                    chosen: SWAPS.iter().position(|(v, _)| v == current),
-                    enabled: vec![true; 3],
-                    role: Role::RadioButton,
-                    font: if seg.width() >= 270.0 { T_BODY } else { T_META },
-                    radius: 6,
-                };
-                if let Some(k) = pills.show(ui, arrowed) {
-                    changes.push((peer.id.clone(), peer.name.clone(), SWAPS[k].0));
-                }
+        for (k, peer) in peers.iter().enumerate() {
+            let row = Rect::from_min_size(pos2(c.left(), c.top() + SWAP_ROW * k as f32), vec2(c.width(), SWAP_ROW));
+            let p = ui.painter().clone();
+            let seg_w = 264.0f32.min(row.width() * 0.6);
+            let seg = Rect::from_min_size(pos2(row.right() - seg_w, row.center().y - 13.0), vec2(seg_w, 26.0));
+            let os_label = os_name(peer.os);
+            let ow = text_width(ui, os_label, regular(T_META));
+            let name = fit(&p, &peer.name, &regular(T_BODY), seg.left() - row.left() - ow - 20.0);
+            let nw = text_width(ui, &name, regular(T_BODY));
+            p.text(pos2(row.left(), row.center().y), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
+            p.text(pos2(row.left() + nw + 8.0, row.center().y), Align2::LEFT_CENTER, os_label, regular(T_META), INK2);
+            if name != peer.name {
+                ui.interact(Rect::from_min_max(row.min, pos2(row.left() + nw, row.max.y)), Id::unique(("swap-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
             }
-        });
+            let current = self.pending_swap.get(&peer.id).unwrap_or(&peer.swap);
+            // Shorter words when the full ones would be cut.
+            let full = seg_w >= 240.0;
+            let labels: Vec<&str> = if full { SWAPS.iter().map(|(_, l)| *l).collect() } else { vec!["Auto", "Swap", "No swap"] };
+            let pills = Pills {
+                id: Id::unique(("swap", &peer.id)),
+                track: seg,
+                cells: Pills::even(seg, 3, 2.0),
+                labels: &labels,
+                names: SWAPS.iter().map(|(_, l)| format!("Ctrl and Cmd for {}: {l}", peer.name)).collect(),
+                chosen: SWAPS.iter().position(|(v, _)| v == current),
+                enabled: vec![true; 3],
+                role: Role::RadioButton,
+                font: T_META,
+                radius: 6,
+            };
+            if let Some(k) = pills.show(ui, arrowed) {
+                changes.push((peer.id.clone(), peer.name.clone(), SWAPS[k].0));
+            }
+        }
         for (id, name, val) in changes {
             self.pending_swap.insert(id.clone(), val.to_owned());
             self.busy.push(Job::Swap { id: id.clone(), name: name.clone(), swap: val.to_owned() });

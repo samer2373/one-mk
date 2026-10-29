@@ -1,5 +1,5 @@
 //! Panel cells for the newer controls: this computer's switches (pointer
-//! lock, gaming mode, lock all), a computer's quick actions (switch to it,
+//! lock, lock all; gaming mode is drawn here for Advanced), a computer's quick actions (switch to it,
 //! its clipboard), the clipboard and file settings, and transfers as they
 //! run.
 
@@ -44,8 +44,9 @@ impl App {
         }
     }
 
-    /// This computer: start at login, the pointer kept here, gaming mode,
-    /// and locking every screen.
+    /// This computer: start at login, the pointer kept here, and locking
+    /// every screen. Until another computer is paired (or while one·mk is
+    /// off) only Start at login means anything, so only it shows.
     pub(super) fn controls(&mut self, ui: &mut Ui, c: Rect) {
         let row_h = 36.0;
         let top = c.top() - 8.0;
@@ -61,8 +62,11 @@ impl App {
             self.autostart = Some(!on);
             self.link.set_autostart(!on);
         }
+        if self.running().is_none_or(|s| s.peers.is_empty()) {
+            return;
+        }
         let locked = self.pointer_locked();
-        let r = switch(ui, row(1), Id::unique("lock-pointer"), "Keep the pointer here", locked, self.running().is_some());
+        let r = switch(ui, row(1), Id::unique("lock-pointer"), "Keep the pointer here", locked, true);
         if r.clicked() {
             self.pending_lock = Some((!locked, self.now));
             self.busy.push(Job::LockPointer(!locked));
@@ -72,9 +76,22 @@ impl App {
         for k in 1..3 {
             ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
         }
-        // Gaming mode: a label and three choices.
-        let g = row(2);
-        let word = if g.width() < 240.0 { "Gaming" } else { "Gaming mode" };
+        // Every screen, locked at once.
+        let l = row(2);
+        ui.painter().text(l.left_center(), Align2::LEFT_CENTER, "Lock every screen", regular(T_BODY), INK);
+        let label = "Lock all";
+        let bw = button_width(ui, label) - 4.0;
+        let b = Rect::from_min_size(pos2(l.right() - bw, l.center().y - 14.0), vec2(bw, 28.0));
+        let busy = self.busy.contains(&Job::LockAll);
+        if button(ui, b, Id::unique("lock-all"), label, Look::Quiet, !busy, Some("Lock this computer and every connected one")).clicked() {
+            self.busy.push(Job::LockAll);
+            self.link.lock_all();
+        }
+    }
+
+    /// Gaming mode: a label and three choices (in Advanced).
+    pub(super) fn gaming_row(&mut self, ui: &mut Ui, g: Rect) {
+        let word = "Gaming mode";
         ui.painter().text(g.left_center(), Align2::LEFT_CENTER, word, regular(T_BODY), INK);
         let lw = text_width(ui, word, regular(T_BODY)) + 12.0;
         let seg_w = 150.0f32.min(g.width() - lw);
@@ -99,18 +116,6 @@ impl App {
         let tip = Rect::from_min_size(g.min, vec2(lw, g.height()));
         ui.interact(tip, Id::unique("gaming-tip"), Sense::hover())
             .on_hover_text("On another computer, send raw mouse movement (for games). Auto: while it shows a fullscreen window.");
-        ui.painter().hline(c.x_range(), top + row_h * 3.0, Stroke::new(1.0, LINE));
-        // Every screen, locked at once.
-        let l = row(3);
-        ui.painter().text(l.left_center(), Align2::LEFT_CENTER, "Lock every screen", regular(T_BODY), INK);
-        let label = "Lock all";
-        let bw = button_width(ui, label) - 4.0;
-        let b = Rect::from_min_size(pos2(l.right() - bw, l.center().y - 14.0), vec2(bw, 28.0));
-        let busy = self.busy.contains(&Job::LockAll);
-        if button(ui, b, Id::unique("lock-all"), label, Look::Quiet, self.running().is_some() && !busy, Some("Lock this computer and every connected one")).clicked() {
-            self.busy.push(Job::LockAll);
-            self.link.lock_all();
-        }
     }
 
     /// Under the inspector: move the mouse and keyboard there (or back),
@@ -120,7 +125,7 @@ impl App {
         let away = s.controlling.is_some() || s.controlled_by.is_some();
         let switch_job = match peer {
             Some(p) if p.online && s.controlling.as_ref() != Some(&p.name) => Some((Job::Switch { to: p.id.clone(), name: p.name.clone() }, "Switch to it", format!("Move the mouse and keyboard to {}", p.name))),
-            None if away => Some((Job::Switch { to: "here".into(), name: s.name.clone() }, "Switch here", "Bring the mouse and keyboard back to this computer".to_owned())),
+            None if away => Some((Job::Switch { to: "here".into(), name: s.name.clone() }, "Switch back here", "Bring the mouse and keyboard back to this computer".to_owned())),
             _ => None,
         };
         if let Some((job, label, name)) = switch_job {
@@ -205,10 +210,9 @@ impl App {
         });
     }
 
-    /// What the clipboard shares, and how much.
+    /// What the clipboard shares, and whether others may take it.
     pub(super) fn clipboard_cell(&mut self, ui: &mut Ui, c: Rect) {
-        let room = 0.0;
-        title_row(ui, c, "Clipboard", room);
+        title_row(ui, c, "Clipboard", 0.0);
         let row_h = 30.0;
         let top = c.top() + 24.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
@@ -224,9 +228,40 @@ impl App {
                 });
             }
         }
+        let r = switch(ui, row(3), Id::unique("allow-fetch"), "Others can get this clipboard", p.clip_allow_fetch, true);
+        if r.clicked() {
+            let v = if p.clip_allow_fetch { "off" } else { "on" };
+            self.set_pref("who can get this clipboard", &["clipboard", "--allow-fetch", v], |p| p.clip_allow_fetch = !p.clip_allow_fetch);
+        }
+        r.on_hover_text("Any paired computer can copy this clipboard with Get clipboard, including passwords you copied.");
+    }
+
+    /// Notifications, the received files folder, and the clipboard's size limit.
+    pub(super) fn files_settings(&mut self, ui: &mut Ui, c: Rect) {
+        let row_h = 36.0;
+        let top = c.top() - 8.0;
+        let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
+        let p = self.prefs.clone();
+        if switch(ui, row(0), Id::unique("notify"), "Notify when files arrive", p.notify_files, true).clicked() {
+            let v = if p.notify_files { "off" } else { "on" };
+            self.set_pref("notifications", &["notify", v], |p| p.notify_files = !p.notify_files);
+        }
+        for k in 1..3 {
+            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
+        }
+        let r1 = row(1);
+        ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), INK);
+        let label = "Open";
+        let bw = button_width(ui, label) - 4.0;
+        let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 14.0), vec2(bw, 28.0));
+        let busy = self.busy.contains(&Job::Open);
+        if button(ui, b, Id::unique("open-dl"), label, Look::Quiet, !busy, Some("Open received files folder")).clicked() {
+            self.busy.push(Job::Open);
+            self.link.open_downloads();
+        }
         // The size limit: a number to type, in MB.
-        let r = row(3);
-        ui.painter().text(r.left_center(), Align2::LEFT_CENTER, "Size limit", regular(T_BODY), INK);
+        let r = row(2);
+        ui.painter().text(r.left_center(), Align2::LEFT_CENTER, "Largest clipboard", regular(T_BODY), INK);
         let unit = "MB";
         let uw = text_width(ui, unit, regular(T_META)) + 8.0;
         let fr = Rect::from_min_size(pos2(r.right() - 64.0 - uw, r.center().y - 13.0), vec2(64.0, 26.0));
@@ -240,35 +275,6 @@ impl App {
                 }
                 _ => self.toast_error(format!("“{text}” isn't a size one·mk can use. Type a whole number of MB, like 25."), None, self.now),
             }
-        }
-    }
-
-    /// Notifications, fetching, and the received files folder.
-    pub(super) fn files_settings(&mut self, ui: &mut Ui, c: Rect) {
-        let row_h = 36.0;
-        let top = c.top() - 8.0;
-        let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
-        let p = self.prefs.clone();
-        if switch(ui, row(0), Id::unique("notify"), "Notify when files arrive", p.notify_files, true).clicked() {
-            let v = if p.notify_files { "off" } else { "on" };
-            self.set_pref("notifications", &["notify", v], |p| p.notify_files = !p.notify_files);
-        }
-        let r = switch(ui, row(1), Id::unique("allow-fetch"), "Others can get this clipboard", p.clip_allow_fetch, true);
-        if r.clicked() {
-            let v = if p.clip_allow_fetch { "off" } else { "on" };
-            self.set_pref("who can get this clipboard", &["clipboard", "--allow-fetch", v], |p| p.clip_allow_fetch = !p.clip_allow_fetch);
-        }
-        r.on_hover_text("Any paired computer can copy this clipboard with Get clipboard, including passwords you copied.");
-        ui.painter().hline(c.x_range(), top + row_h * 2.0, Stroke::new(1.0, LINE));
-        let r1 = row(2);
-        ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), INK);
-        let label = "Open";
-        let bw = button_width(ui, label) - 4.0;
-        let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 14.0), vec2(bw, 28.0));
-        let busy = self.busy.contains(&Job::Open);
-        if button(ui, b, Id::unique("open-dl"), label, Look::Quiet, !busy, Some("Open received files folder")).clicked() {
-            self.busy.push(Job::Open);
-            self.link.open_downloads();
         }
     }
 }
