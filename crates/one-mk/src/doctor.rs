@@ -99,7 +99,7 @@ fn check(id: &str, title: &str, outcome: Outcome) -> Check {
 /// The daemon, as the control channel answered.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Daemon {
-    Running(DaemonStatus),
+    Running(Box<DaemonStatus>),
     NotRunning,
     /// Something is there but did not answer sensibly.
     Broken(String),
@@ -111,7 +111,7 @@ impl Daemon {
         match reply {
             Ok(None) => Self::NotRunning,
             Ok(Some(text)) => match DaemonStatus::decode(&text) {
-                Some(s) => Self::Running(s),
+                Some(s) => Self::Running(Box::new(s)),
                 None => Self::Broken("it gave an answer we could not read".into()),
             },
             Err(e) => Self::Broken(e),
@@ -120,7 +120,7 @@ impl Daemon {
 
     fn status(&self) -> Option<&DaemonStatus> {
         match self {
-            Self::Running(s) => Some(s),
+            Self::Running(s) => Some(s.as_ref()),
             _ => None,
         }
     }
@@ -533,6 +533,33 @@ fn linux_portals(p: &Portals) -> Outcome {
     }
 }
 
+/// Keyboard shortcuts, as the running daemon reports them; with none
+/// running, whether the desktop offers them (`portal`: Linux only).
+pub fn hotkey_check(d: &Daemon, portal: Option<&Result<u32, String>>) -> Check {
+    let mut fallback = one_mk_ctl::status::HOTKEYS_FALLBACK.to_owned() + ".";
+    fallback[..1].make_ascii_uppercase();
+    let away = "They work only while the pointer is on another computer";
+    let out = match d.status() {
+        Some(s) => match s.hotkeys.as_str() {
+            "on" => Outcome::pass(format!("They work {}.", s.hotkeys_detail)),
+            "unavailable" => Outcome::warn(format!("{away}: {}.", s.hotkeys_detail), &fallback),
+            "starting" => Outcome::skip(format!("Being set up: {}.", s.hotkeys_detail)),
+            "off" if s.hotkeys_detail.is_empty() => Outcome::skip("Turned off (`one-mk hotkeys --on` turns them on)."),
+            "off" => Outcome::warn(
+                format!("They are off: {}.", s.hotkeys_detail),
+                "Fix them with `one-mk hotkeys`, or the [hotkeys] table in settings.toml.",
+            ),
+            _ => Outcome::skip("This one-mk is too old to report them."),
+        },
+        None => match portal {
+            Some(Ok(_)) => Outcome::pass("The desktop offers global shortcuts (the GlobalShortcuts portal)."),
+            Some(Err(e)) => Outcome::warn(format!("{away}: {e}."), &fallback),
+            None => Outcome::skip("Checked while one-mk runs."),
+        },
+    };
+    check("hotkeys", "Keyboard shortcuts", out)
+}
+
 pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
     let port = port_of(d);
     paired
@@ -735,12 +762,13 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
             .map(|p| p.id.clone()),
     );
 
-    let (port_facts, mdns, firewall, portals, addrs) = tokio::join!(
+    let (port_facts, mdns, firewall, portals, addrs, shortcuts) = tokio::join!(
         blocking(move || probe_port(port), PortFacts { port, bind: Bind::Error("probe failed".into()), holder: None },),
         probe_mdns(wanted),
         probe_firewall(os),
         probe_portals(os, dir.to_owned()),
         blocking(probe_addrs, Vec::new()),
+        probe_shortcuts(os),
     );
 
     let mut checks = vec![daemon_check(&daemon)];
@@ -749,6 +777,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.push(mdns_check(&daemon, &mdns));
     checks.push(firewall_check(os, &firewall, port));
     checks.push(portal_check(os, portals.as_ref()));
+    checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
     checks.push(network_check(&addrs));
     let seen = mdns.seen.as_deref().unwrap_or_default();
     checks.extend(peer_checks(&daemon, &paired, seen));
@@ -954,6 +983,20 @@ async fn probe_portals(os: Os, dir: std::path::PathBuf) -> Option<Portals> {
     Some(Portals { wayland, remote_desktop, input_capture, token: dir.join("remote-desktop.token").is_file() })
 }
 
+#[cfg(target_os = "linux")]
+async fn probe_shortcuts(os: Os) -> Option<Result<u32, String>> {
+    if os != Os::Linux {
+        return None;
+    }
+    let probe = tokio::time::timeout(PORTAL_TIMEOUT, one_mk_input::hotkeys::probe()).await;
+    Some(probe.unwrap_or_else(|_| Err("the desktop portal did not answer in time".into())))
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn probe_shortcuts(_os: Os) -> Option<Result<u32, String>> {
+    None
+}
+
 #[cfg(not(target_os = "linux"))]
 async fn probe_portals(_os: Os, _dir: std::path::PathBuf) -> Option<Portals> {
     None
@@ -1005,7 +1048,7 @@ mod tests {
     }
 
     fn running() -> Daemon {
-        Daemon::Running(status("aaaa-aaaa", 24900, &[]))
+        Daemon::Running(Box::new(status("aaaa-aaaa", 24900, &[])))
     }
 
     fn st(c: &Check) -> Status {
@@ -1027,7 +1070,7 @@ mod tests {
         assert!(matches!(Daemon::from_reply(Err("boom".into())), Daemon::Broken(_)));
         assert!(matches!(Daemon::from_reply(Ok(Some("garbage".into()))), Daemon::Broken(_)));
         let s = status("aaaa-aaaa", 24900, &[("bbbb-bbbb", true)]);
-        assert_eq!(Daemon::from_reply(Ok(Some(s.encode()))), Daemon::Running(s));
+        assert_eq!(Daemon::from_reply(Ok(Some(s.encode()))), Daemon::Running(Box::new(s)));
     }
 
     fn cfg(dir: bool, id: bool, paired: Result<Vec<Paired>, String>) -> Vec<Check> {
@@ -1246,6 +1289,26 @@ mod tests {
     }
 
     #[test]
+    fn hotkey_decisions() {
+        let with = |state: &str, detail: &str| {
+            let mut s = status("aaaa-aaaa", 24900, &[]);
+            (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into());
+            hotkey_check(&Daemon::Running(Box::new(s)), None)
+        };
+        assert_eq!(st(&with("on", "through Windows")), Status::Pass);
+        let c = with("unavailable", "this desktop has no GlobalShortcuts portal");
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.fix.as_deref().unwrap().starts_with("Bind `one-mk switch next`"), "{c:?}");
+        assert_eq!(st(&with("off", "")), Status::Skip);
+        assert_eq!(st(&with("off", "settings.toml: \"hyper+x\" is not a shortcut")), Status::Warn);
+        assert_eq!(st(&with("", "")), Status::Skip, "an older daemon");
+        // Not running: the desktop is asked (Linux), or nothing is said.
+        assert_eq!(st(&hotkey_check(&Daemon::NotRunning, Some(&Ok(1)))), Status::Pass);
+        assert_eq!(st(&hotkey_check(&Daemon::NotRunning, Some(&Err("no portal".into())))), Status::Warn);
+        assert_eq!(st(&hotkey_check(&Daemon::NotRunning, None)), Status::Skip);
+    }
+
+    #[test]
     fn portal_decisions() {
         let ok = Some(Ok(()));
         let c = portal_check(Os::Linux, Some(&portals(ok, ok, true, true)));
@@ -1268,12 +1331,12 @@ mod tests {
     #[test]
     fn peer_decisions() {
         let paired = vec![paired("bbbb-bbbb")];
-        let up = Daemon::Running(status("aaaa-aaaa", 24900, &[("bbbb-bbbb", true)]));
+        let up = Daemon::Running(Box::new(status("aaaa-aaaa", 24900, &[("bbbb-bbbb", true)])));
         let c = peer_checks(&up, &paired, &[]);
         assert_eq!(st(&c[0]), Status::Pass);
         assert_eq!(c[0].id, "peer:bbbb-bbbb");
 
-        let down = Daemon::Running(status("aaaa-aaaa", 24900, &[("bbbb-bbbb", false)]));
+        let down = Daemon::Running(Box::new(status("aaaa-aaaa", 24900, &[("bbbb-bbbb", false)])));
         let c = peer_checks(&down, &paired, &[seen("bbbb-bbbb")]);
         assert_eq!(st(&c[0]), Status::Warn);
         assert!(c[0].outcome.detail.contains("192.168.1.5:24900"));
@@ -1296,7 +1359,7 @@ mod tests {
     /// Advice to connect directly names the port one-mk really uses.
     #[test]
     fn connect_advice_uses_the_real_port() {
-        let on = |port| Daemon::Running(status("aaaa-aaaa", port, &[("bbbb-bbbb", false)]));
+        let on = |port| Daemon::Running(Box::new(status("aaaa-aaaa", port, &[("bbbb-bbbb", false)])));
         let fixes = |d: &Daemon| {
             let mut all = vec![mdns_check(d, &mdns(Ok(()), Ok(vec![seen("bbbb-bbbb")]))), mdns_check(d, &mdns(Err("no"), Ok(vec![])))];
             all.extend(peer_checks(d, &[paired("bbbb-bbbb")], &[]));

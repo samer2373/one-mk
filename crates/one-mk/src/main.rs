@@ -6,6 +6,7 @@ mod clip;
 mod clipctl;
 mod control;
 mod doctor;
+mod hotkeys;
 mod install;
 mod link;
 mod manage;
@@ -233,6 +234,9 @@ enum Cmd {
         #[arg(value_enum)]
         mode: settings::Gaming,
     },
+    /// Show or change the keyboard shortcuts: jump to computer N, the next
+    /// one, lock the pointer, come back here.
+    Hotkeys(hotkeys::HotkeyArgs),
     /// Lock this computer's screen and every connected computer's.
     LockAll,
     /// Whether locking this computer locks the connected ones too: on or off.
@@ -382,6 +386,7 @@ fn run(cli: Cli) -> Result<()> {
             }
             Cmd::Edge(args) => settings::edge(&dir, args).await,
             Cmd::Gaming { mode } => settings::gaming(&dir, mode).await,
+            Cmd::Hotkeys(args) => hotkeys::hotkeys(&dir, args).await,
             Cmd::LockAll => steer::lock_all(&dir).await,
             Cmd::LockSync { state } => settings::lock_sync(&dir, state).await,
             Cmd::Id => {

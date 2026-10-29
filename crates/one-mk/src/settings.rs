@@ -1,9 +1,9 @@
 //! Settings that are not about one paired computer: what the clipboard
 //! shares, whether received files raise a notification, the edge rules,
-//! gaming mode and lock sync. They live in `settings.toml` next to
-//! `devices.toml`; the command line (`one-mk clipboard`, `notify`, `edge`,
-//! `gaming`, `lock-sync`) edits the file and a running daemon applies it at
-//! once (like `one-mk layout`).
+//! gaming mode, lock sync and keyboard shortcuts. They live in
+//! `settings.toml` next to `devices.toml`; the command line (`one-mk
+//! clipboard`, `notify`, `edge`, `gaming`, `lock-sync`, `hotkeys`) edits the
+//! file and a running daemon applies it at once (like `one-mk layout`).
 
 use crate::control::{self, Request};
 use anyhow::{Context, Result, bail};
@@ -32,6 +32,7 @@ pub struct Settings {
     pub gaming: Gaming,
     /// Locking any computer locks the others.
     pub lock_sync: bool,
+    pub hotkeys: crate::hotkeys::HotkeySettings,
 }
 
 impl Default for Settings {
@@ -42,6 +43,7 @@ impl Default for Settings {
             edge: EdgeSettings::default(),
             gaming: Gaming::default(),
             lock_sync: false,
+            hotkeys: Default::default(),
         }
     }
 }
@@ -436,7 +438,7 @@ impl EdgeArgs {
 }
 
 /// Asks a running daemon to apply the saved settings.
-async fn apply(dir: &Path) -> Result<()> {
+pub(crate) async fn apply(dir: &Path) -> Result<()> {
     if control::request(dir, Request::Reload).await?.is_some() {
         println!("Applied right away.");
     } else {
