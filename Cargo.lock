@@ -3213,7 +3213,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "one-mk-proto",
  "reis",
- "ring",
+ "sha2",
  "tokio",
  "tracing",
  "wayland-client",

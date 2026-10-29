@@ -1,6 +1,7 @@
 //! Pure contracts only: no pipe, process, service, session or desktop operations.
 
 mod auth;
+mod hmac_sha256;
 mod framing;
 mod lifecycle;
 mod launch;

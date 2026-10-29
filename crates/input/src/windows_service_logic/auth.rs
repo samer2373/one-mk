@@ -1,5 +1,5 @@
 use super::{LogicError, Message, decode};
-use ring::hmac;
+use super::hmac_sha256 as hmac;
 use std::time::Duration;
 
 pub const AUTH_ATTEMPTS: u8 = 3;
@@ -47,17 +47,14 @@ fn data(domain: &[u8], context: AuthContext, challenge: Challenge) -> [u8; 160] 
 }
 
 fn tag(key: &hmac::Key, domain: &[u8], context: AuthContext, challenge: Challenge) -> [u8; 32] {
-    let signature = hmac::sign(key, &data(domain, context, challenge));
-    let mut result = [0; 32];
-    result.copy_from_slice(signature.as_ref());
-    result
+    hmac::sign(key, &data(domain, context, challenge))
 }
 
 /// Client-side credential; not a network certificate or private key.
 pub struct ClientCredential(hmac::Key);
 
 impl ClientCredential {
-    pub fn new(per_boot_token: [u8; 32]) -> Self { Self(hmac::Key::new(hmac::HMAC_SHA256, &per_boot_token)) }
+    pub fn new(per_boot_token: [u8; 32]) -> Self { Self(hmac::Key::new(&per_boot_token)) }
 
     pub fn proof(&self, context: AuthContext, challenge: Challenge) -> Message {
         Message::Proof(tag(&self.0, PROOF_DOMAIN, context, challenge))
@@ -65,7 +62,7 @@ impl ClientCredential {
 
     pub fn verify_accepted(&self, context: AuthContext, challenge: Challenge, message: &Message) -> Result<(), LogicError> {
         let Message::Accepted(signature) = message else { return Err(LogicError::State); };
-        hmac::verify(&self.0, &data(ACCEPT_DOMAIN, context, challenge), signature).map_err(|_| LogicError::Unauthorized)
+        if hmac::verify(&self.0, &data(ACCEPT_DOMAIN, context, challenge), signature) { Ok(()) } else { Err(LogicError::Unauthorized) }
     }
 }
 
@@ -94,7 +91,7 @@ impl Authenticator {
     pub fn new(per_boot_token: [u8; 32], context: AuthContext, now: Duration) -> Result<Self, LogicError> {
         if context.helper == HelperKind::None { return Err(LogicError::Invalid); }
         Ok(Self {
-            key: hmac::Key::new(hmac::HMAC_SHA256, &per_boot_token), context,
+            key: hmac::Key::new(&per_boot_token), context,
             expires: now.checked_add(BOOT_TOKEN_TTL).ok_or(LogicError::Clock)?,
             last_time: now, serial: 0, attempts: 0, state: State::Idle,
         })
@@ -140,7 +137,7 @@ impl Authenticator {
             Ok(Message::Proof(signature)) => signature,
             _ => { self.state = State::Idle; return Err(LogicError::Unauthorized); }
         };
-        if hmac::verify(&self.key, &data(PROOF_DOMAIN, self.context, challenge), &signature).is_err() {
+        if !hmac::verify(&self.key, &data(PROOF_DOMAIN, self.context, challenge), &signature) {
             self.state = State::Idle;
             return Err(LogicError::Unauthorized);
         }
