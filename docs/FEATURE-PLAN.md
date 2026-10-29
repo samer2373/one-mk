@@ -16,9 +16,13 @@ core (4A) and its window editor (4B), window and tray UI and its design review,
 and every fix round so far (D, E, F1, F2, G, the Codex rounds for the
 cross-review findings, and the run:-action permission fix).
 
-In flight: a Claude review of the last two Codex rounds
-(`t3/fix-input-edge-regressions`, `t3/harden-hooks-pairing`), the last step of
-the cross-review rule for this batch.
+Nothing is in flight. The last Codex rounds were reviewed by Claude and their
+findings fixed (guarded-edge click replay is a whole click again; permission
+checks, pairing admission, hook ordering, the Windows startup entry). The final
+full validation passed: 256 tests in the `one-mk` crate and none failing,
+clippy clean on Linux, Windows and macOS targets. The fixes made after that
+last review were small and each has tests, but they have not had a third review.
+Nothing has been merged into `main`: the work is on `worktree-features-wave1`.
 
 Not started: 3A pointer drawn on a computer with no mouse, 3B drag files across
 the edge, 4C local-only remap on Windows/macOS, 4D per-app rules.
