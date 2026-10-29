@@ -167,8 +167,15 @@ impl ScrollTune {
         (self.cfg.smooth.mode != Mode::Discrete).then_some(ScrollOut::Stop)
     }
 
-    /// Modifiers, direction and speed.
+    /// Direction (of the wheel or fingers, before a modifier turns it),
+    /// modifiers, then speed.
     fn shape(&self, mut dx: f64, mut dy: f64, p: &Params, held: u8) -> (f64, f64, u8) {
+        if p.reverse_x {
+            dx = -dx;
+        }
+        if p.reverse_y {
+            dy = -dy;
+        }
         let mut used = 0;
         for (g, m) in self.cfg.modifiers.iter().enumerate() {
             let bits = held & sides(1 << g);
@@ -182,12 +189,6 @@ impl ScrollTune {
                 ModScroll::Vertical => dx = 0.0,
                 ModScroll::Multiply(k) => (dx, dy) = (dx * k, dy * k),
             }
-        }
-        if p.reverse_x {
-            dx = -dx;
-        }
-        if p.reverse_y {
-            dy = -dy;
         }
         (dx * p.speed_x, dy * p.speed_y, used)
     }
@@ -294,6 +295,12 @@ mod tests {
             t.smooth(1.0, 2.0, LSHIFT | LALT),
             Tuned { out: Some(ScrollOut::Smooth { dx: 10.0, dy: 5.0 }), used: LSHIFT | LALT }
         );
+        // A reversed wheel stays reversed when Shift turns it sideways.
+        let mut r = tune(|c| {
+            c.wheel.reverse_y = true;
+            c.modifiers[1] = ModScroll::Horizontal;
+        });
+        assert_eq!(r.discrete(0, 120, LSHIFT).out, Some(ScrollOut::Discrete { dx: -120, dy: 0 }));
         let mut v = tune(|c| c.modifiers[0] = ModScroll::Vertical);
         assert_eq!(v.smooth(3.0, 2.0, LCTRL).out, Some(ScrollOut::Smooth { dx: 0.0, dy: 2.0 }));
         assert_eq!(v.smooth(3.0, 0.0, LCTRL).out, None);
