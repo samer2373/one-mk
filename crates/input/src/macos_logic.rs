@@ -174,6 +174,55 @@ pub fn evdev_to_mac(code: u32) -> Option<u16> {
         .or_else(|| EVDEV_ALIASES.iter().find(|&&(e, _)| e == code).map(|&(_, m)| m))
 }
 
+// ------------------------------------------------------------- media keys
+
+/// `NX_SUBTYPE_AUX_CONTROL_BUTTONS`: the `NX_SYSDEFINED` subtype that
+/// carries media keys (volume, brightness, play, eject, ...). They are not
+/// key events on a Mac, and have no `kVK_*` code.
+pub const NX_SUBTYPE_AUX_CONTROL_BUTTONS: i16 = 8;
+const NX_KEYSTATE_DOWN: i64 = 0xA;
+const NX_KEYSTATE_UP: i64 = 0xB;
+
+/// A media key event as the HID system reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MediaEvent {
+    /// `NX_KEYTYPE_*`.
+    pub nx: u8,
+    pub down: bool,
+    /// An auto-repeat: the receiving side repeats by itself, so these are dropped.
+    pub repeat: bool,
+}
+
+/// Decodes the `data1` of an `NX_SYSDEFINED` event: key type in bits 16-31,
+/// key state (0xA down, 0xB up) in bits 8-15, bit 0 set for auto-repeat.
+pub fn parse_media(subtype: i16, data1: i64) -> Option<MediaEvent> {
+    if subtype != NX_SUBTYPE_AUX_CONTROL_BUTTONS {
+        return None;
+    }
+    let nx = u8::try_from((data1 >> 16) & 0xFFFF).ok()?;
+    let down = match (data1 >> 8) & 0xFF {
+        NX_KEYSTATE_DOWN => true,
+        NX_KEYSTATE_UP => false,
+        _ => return None,
+    };
+    Some(MediaEvent { nx, down, repeat: data1 & 1 != 0 })
+}
+
+/// The `data1` for a media key event to post (the inverse of [`parse_media`]).
+pub fn media_data1(nx: u8, down: bool, repeat: bool) -> i64 {
+    let state = if down { NX_KEYSTATE_DOWN } else { NX_KEYSTATE_UP };
+    (i64::from(nx) << 16) | (state << 8) | i64::from(repeat)
+}
+
+/// The canonical key for a media key event, if it is a key we forward.
+/// Repeats give `None`.
+pub fn media_to_evdev(ev: MediaEvent) -> Option<(u32, bool)> {
+    if ev.repeat {
+        return None;
+    }
+    one_mk_proto::mediakeys::from_mac_nx(ev.nx).map(|code| (code, ev.down))
+}
+
 // -------------------------------------------------------------- modifiers
 
 /// `CGEventFlags` bits. The device-dependent bits (from IOKit's
@@ -607,6 +656,29 @@ mod tests {
         assert_eq!(evdev_to_mac(86), Some(0x0A)); // ISO section
         assert_eq!(mac_to_evdev(0x7A), Some(59)); // F1
         assert_eq!(mac_to_evdev(0x24), Some(28)); // Return
+    }
+
+    #[test]
+    fn media_key_events() {
+        // Volume up pressed and released, as the HID system reports it.
+        assert_eq!(parse_media(8, 0x0000_0A00), Some(MediaEvent { nx: 0, down: true, repeat: false }));
+        assert_eq!(parse_media(8, 0x0000_0B00), Some(MediaEvent { nx: 0, down: false, repeat: false }));
+        // Play (16), pressed, the repeat flag set.
+        assert_eq!(parse_media(8, 0x0010_0A01), Some(MediaEvent { nx: 16, down: true, repeat: true }));
+        // Other subtypes and states are not media keys.
+        assert_eq!(parse_media(7, 0x0010_0A00), None);
+        assert_eq!(parse_media(8, 0x0010_0C00), None);
+        for nx in 0..=40u8 {
+            for (down, repeat) in [(true, false), (false, false), (true, true)] {
+                let d = media_data1(nx, down, repeat);
+                assert_eq!(parse_media(8, d), Some(MediaEvent { nx, down, repeat }), "nx {nx}");
+            }
+        }
+        // To the canonical code: volume up, play/pause; repeats and caps lock are dropped.
+        assert_eq!(media_to_evdev(parse_media(8, 0x0000_0A00).unwrap()), Some((115, true)));
+        assert_eq!(media_to_evdev(parse_media(8, 0x0010_0B00).unwrap()), Some((164, false)));
+        assert_eq!(media_to_evdev(parse_media(8, 0x0010_0A01).unwrap()), None);
+        assert_eq!(media_to_evdev(parse_media(8, media_data1(4, true, false)).unwrap()), None);
     }
 
     #[test]

@@ -2089,6 +2089,31 @@ mod tests {
         panic!("timed out waiting for {what}");
     }
 
+    /// Media keys cross like any key, and one still held when the pointer
+    /// leaves is released on the other side: it can never stay pressed.
+    #[tokio::test]
+    async fn media_keys_cross_and_are_never_left_held() {
+        let mut duo = Duo::start("media", None).await;
+        duo.enter_b().await;
+        // Play/pause, a tap: down, up. Volume up and brightness stay held.
+        for (code, down) in [(164, true), (164, false), (115, true), (225, true)] {
+            duo.ha.events.send(Event::Key { code, down }).unwrap();
+            assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code, down });
+        }
+        duo.leave_b().await;
+        let mut released = Vec::new();
+        while released.len() < 2 {
+            match next_inject(&mut duo.hb).await {
+                Inject::Key { code, down: false } => released.push(code),
+                Inject::MoveTo(_) => {}
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        released.sort();
+        assert_eq!(released, vec![115, 225]);
+        duo.stop().await;
+    }
+
     /// The clipboard follows the pointer to B, is not echoed back, and comes
     /// back to A only when the user copied something on B.
     #[tokio::test]

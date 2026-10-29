@@ -65,9 +65,10 @@ const KEY_LEFTMETA: u32 = 125;
 const KEY_RIGHTMETA: u32 = 126;
 const KEY_FN: u32 = 464;
 
-/// Modifiers and lock keys never auto-repeat.
+/// Modifiers and lock keys never auto-repeat, nor do media keys that act
+/// once per press (play/pause, mute, ...); volume and brightness do.
 pub(crate) fn is_repeatable(code: u32) -> bool {
-    !matches!(
+    let modifier_or_lock = matches!(
         code,
         KEY_LEFTCTRL
             | KEY_LEFTSHIFT
@@ -81,7 +82,8 @@ pub(crate) fn is_repeatable(code: u32) -> bool {
             | KEY_LEFTMETA
             | KEY_RIGHTMETA
             | KEY_FN
-    )
+    );
+    !modifier_or_lock && one_mk_proto::mediakeys::repeats(code)
 }
 
 /// Receiver-side key auto-repeat. Senders drop their OS's repeats (they
@@ -286,6 +288,21 @@ mod tests {
         drain_coalesced(mv(1.0), &mut rx, &mut out);
         assert_eq!(out, vec![mv(3.0), Inject::ScrollStop, mv(4.0)]);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn media_keys_repeat_only_when_they_step() {
+        assert!(is_repeatable(115) && is_repeatable(114)); // volume
+        assert!(is_repeatable(225)); // brightness
+        assert!(!is_repeatable(164) && !is_repeatable(113) && !is_repeatable(163)); // play/pause, mute, next
+        assert!(is_repeatable(30));
+        let mut r = KeyRepeat::new(Some((Duration::from_millis(500), Duration::from_millis(50))));
+        let t = Instant::now();
+        assert!(r.key(164, true, t));
+        assert_eq!(r.deadline(), None, "play/pause must not repeat");
+        assert!(r.key(164, false, t));
+        assert!(r.key(115, true, t));
+        assert!(r.deadline().is_some());
     }
 
     #[test]

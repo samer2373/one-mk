@@ -33,7 +33,7 @@
 // On other OSes only the tests use this module.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use one_mk_proto::{Desktop, Pos, Rect, Side};
+use one_mk_proto::{Desktop, Pos, Rect, Side, mediakeys};
 
 // ------------------------------------------------------------ evdev codes
 
@@ -578,6 +578,14 @@ pub(crate) fn evdev_to_win(code: u32) -> Option<WinKey> {
         KEY_NUMLOCK => return Some(WinKey::Vk { vk: VK_NUMLOCK, scan: 0x45, extended: true }),
         _ => {}
     }
+    // Media keys are typed by virtual key: that is what a media key is to
+    // the shell, whatever scan code the keyboard layout maps it to.
+    if let Some(vk) = mediakeys::to_win_vk(code) {
+        let scan = mediakeys::from_win_vk(vk)
+            .and_then(|c| KEY_TABLE.iter().find(|&&(_, _, k)| k == c))
+            .map_or(0, |&(scan, _, _)| scan);
+        return Some(WinKey::Vk { vk, scan, extended: true });
+    }
     if let Ok(scan) = u16::try_from(code)
         && is_identity_scan(scan)
     {
@@ -603,36 +611,19 @@ pub(crate) fn hook_key_to_evdev(vk: u32, scan: u32, extended: bool) -> Option<u3
         VK_NUMLOCK => return Some(KEY_NUMLOCK),
         _ => {}
     }
+    // Media keys are told by virtual key: some keyboards and drivers give
+    // them scan codes that are not the standard E0 ones.
+    if let Some(code) = vk_media_to_evdev(vk as u16) {
+        return Some(code);
+    }
     if scan != 0 {
         return scan_to_evdev(scan as u16, extended);
     }
-    // Some keyboards (and HID consumer-control buttons on some drivers)
-    // deliver media keys with no scan code.
-    vk_media_to_evdev(vk as u16)
+    None
 }
 
 fn vk_media_to_evdev(vk: u16) -> Option<u32> {
-    Some(match vk {
-        0xA6 => 158, // VK_BROWSER_BACK
-        0xA7 => 159, // VK_BROWSER_FORWARD
-        0xA8 => 173, // VK_BROWSER_REFRESH
-        0xA9 => 128, // VK_BROWSER_STOP
-        0xAA => 217, // VK_BROWSER_SEARCH
-        0xAB => 156, // VK_BROWSER_FAVORITES
-        0xAC => 172, // VK_BROWSER_HOME
-        0xAD => 113, // VK_VOLUME_MUTE
-        0xAE => 114, // VK_VOLUME_DOWN
-        0xAF => 115, // VK_VOLUME_UP
-        0xB0 => 163, // VK_MEDIA_NEXT_TRACK
-        0xB1 => 165, // VK_MEDIA_PREV_TRACK
-        0xB2 => 166, // VK_MEDIA_STOP
-        0xB3 => 164, // VK_MEDIA_PLAY_PAUSE
-        0xB4 => 155, // VK_LAUNCH_MAIL
-        0xB5 => 226, // VK_LAUNCH_MEDIA_SELECT
-        0xB6 => 157, // VK_LAUNCH_APP1 (My Computer)
-        0xB7 => 140, // VK_LAUNCH_APP2 (Calculator)
-        _ => return None,
-    })
+    mediakeys::from_win_vk(vk)
 }
 
 // ------------------------------------------------------------- fullscreen
@@ -800,13 +791,47 @@ mod tests {
         let expect = [
             (42, 0x2A, false), (54, 0x36, false), (29, 0x1D, false), (97, 0x1D, true),
             (56, 0x38, false), (100, 0x38, true), (125, 0x5B, true), (126, 0x5C, true),
-            (113, 0x20, true), (114, 0x2E, true), (115, 0x30, true), (164, 0x22, true),
-            (163, 0x19, true), (165, 0x10, true), (166, 0x24, true), (99, 0x37, true),
+            (99, 0x37, true),
         ];
         for (code, scan, extended) in expect {
             assert_eq!(evdev_to_win(code), Some(WinKey::Scan { scan, extended }), "key {code}");
         }
+        // Media keys are typed by virtual key, with their usual scan code.
+        let media = [
+            (113, 0xAD, 0x20), (114, 0xAE, 0x2E), (115, 0xAF, 0x30), (164, 0xB3, 0x22),
+            (163, 0xB0, 0x19), (165, 0xB1, 0x10), (166, 0xB2, 0x24),
+        ];
+        for (code, vk, scan) in media {
+            assert_eq!(evdev_to_win(code), Some(WinKey::Vk { vk, scan, extended: true }), "key {code}");
+        }
         assert_eq!(evdev_to_win(0x110), None); // buttons are not keys
+    }
+
+    /// Every media key the table gives Windows is captured from its virtual
+    /// key, with any scan code or none, and typed back as the same key.
+    #[test]
+    fn media_keys_match_the_canonical_table() {
+        for k in mediakeys::MEDIA_KEYS {
+            let Some(vk) = k.win_vk else {
+                // No Windows key: only a stand-in (or nothing) is typed.
+                if let Some(WinKey::Vk { vk, .. }) = evdev_to_win(k.evdev) {
+                    assert_eq!(mediakeys::to_win_vk(k.evdev), Some(vk));
+                }
+                continue;
+            };
+            let Some(WinKey::Vk { vk: sent, scan, extended }) = evdev_to_win(k.evdev) else {
+                panic!("{} is not typed by virtual key", k.name)
+            };
+            assert_eq!((sent, extended), (vk, true), "{}", k.name);
+            for s in [0, u32::from(scan), 0x123] {
+                let ext = hook_key_to_evdev(u32::from(vk), s, true);
+                assert_eq!(ext, Some(k.evdev), "{} scan {s:#x}", k.name);
+            }
+            assert_eq!(vk_to_evdev(vk, 0xE000 | u32::from(scan), false), Some(k.evdev), "{}", k.name);
+        }
+        // What a Mac or Linux keyboard has beyond Windows.
+        assert_eq!(evdev_to_win(208), Some(WinKey::Vk { vk: 0xB0, scan: 0x19, extended: true }));
+        assert_eq!(evdev_to_win(225), None); // brightness: no Windows key
     }
 
     #[test]

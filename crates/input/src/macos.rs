@@ -28,6 +28,7 @@ use crate::common_logic::{Controlled, KeyRepeat, LocalInputGate, drain_coalesced
 use crate::macos_logic::{self as logic, MacScroll};
 use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::Result;
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_core_foundation::{
     CFAbsoluteTimeGetCurrent, CFBoolean, CFDictionary, CFMachPort, CFNotificationCenter, CFNotificationName,
     CFNotificationSuspensionBehavior, CFNumber, CFPreferencesCopyAppValue, CFRetained, CFRunLoop, CFRunLoopSource,
@@ -42,7 +43,7 @@ use objc2_core_graphics::{
     CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGSessionCopyCurrentDictionary,
     CGWarpMouseCursorPosition, kCGNullDirectDisplay,
 };
-use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
+use one_mk_proto::{Desktop, Mods, Pos, Rect, Side, mediakeys};
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void};
 use std::panic::AssertUnwindSafe;
@@ -52,6 +53,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+/// `NX_SYSDEFINED`: the `CGEventType` of media keys.
+const NX_SYSDEFINED: u32 = 14;
 
 /// Stamped on every event we post (`kCGEventSourceUserData`) so our own
 /// tap lets them through untouched.
@@ -547,7 +551,9 @@ impl Ctx {
         // Trackpad gestures (rotate, begin/end, gesture, magnify, swipe,
         // smart magnify, pressure), swallowed while the pointer is away.
         let gestures = [18u32, 19, 20, 29, 30, 31, 32, 34];
-        let mask = types.iter().map(|t| t.0).chain(gestures).fold(0u64, |m, t| m | (1u64 << t));
+        // Media keys (volume, brightness, play, ...) are system-defined
+        // events, not key events.
+        let mask = types.iter().map(|t| t.0).chain(gestures).chain([NX_SYSDEFINED]).fold(0u64, |m, t| m | (1u64 << t));
         // SAFETY: `on_tap` matches CGEventTapCallBack; `self` is 'static.
         let tap = unsafe {
             CGEvent::tap_create(
@@ -758,10 +764,28 @@ impl Ctx {
                     }
                 }
             }
+            t if t.0 == NX_SYSDEFINED => {
+                if let Some(media) = read_media(ev) {
+                    // Everything else system-defined (power button, ...) is swallowed
+                    // with the rest; so is a repeat, as the receiver repeats by itself.
+                    if let Some((code, down)) = logic::media_to_evdev(media) {
+                        send(Event::Key { code, down });
+                    }
+                }
+            }
             _ => {}
         }
         false
     }
+}
+
+/// The media key event in an `NX_SYSDEFINED` event, if it is one.
+fn read_media(ev: &CGEvent) -> Option<logic::MediaEvent> {
+    let ns = NSEvent::eventWithCGEvent(ev)?;
+    if ns.r#type() != NSEventType::SystemDefined {
+        return None;
+    }
+    logic::parse_media(ns.subtype().0, ns.data1() as i64)
 }
 
 fn keycode(ev: &CGEvent) -> u16 {
@@ -1147,6 +1171,16 @@ impl Injector {
                 if code == KEY_CAPSLOCK && !down {
                     return; // a toggle: one event per press
                 }
+                // Media keys are system-defined events; key events for the
+                // volume and brightness keys do nothing.
+                if let Some(nx) = mediakeys::to_mac_nx(code) {
+                    self.media_key(nx, down, false);
+                    return;
+                }
+                if mediakeys::is_media(code) {
+                    tracing::debug!(code, "no Mac media key for this key code");
+                    return;
+                }
                 let Some(kc) = logic::evdev_to_mac(code) else {
                     tracing::debug!(code, "no Mac key for this key code");
                     return;
@@ -1162,10 +1196,36 @@ impl Injector {
 
     /// Another "down" for a held key, marked as auto-repeat like a real one.
     fn repeat_key(&self, code: u32) {
+        if let Some(nx) = mediakeys::to_mac_nx(code) {
+            self.media_key(nx, true, true);
+            return;
+        }
         let Some(kc) = logic::evdev_to_mac(code) else { return };
         let Some(ev) = CGEvent::new_keyboard_event(Some(&self.source), kc, true) else { return };
         CGEvent::set_integer_value_field(Some(&ev), CGEventField::KeyboardEventAutorepeat, 1);
         self.post(&ev, logic::key_extra_flags(kc));
+    }
+
+    /// Posts a media key press or release (`NX_SYSDEFINED`, subtype 8).
+    fn media_key(&self, nx: u8, down: bool, repeat: bool) {
+        let state = if down { 0xA00 } else { 0xB00 };
+        let Some(ns) = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
+            NSEventType::SystemDefined,
+            CGPoint::new(0.0, 0.0),
+            NSEventModifierFlags(state),
+            0.0,
+            0,
+            None,
+            logic::NX_SUBTYPE_AUX_CONTROL_BUTTONS,
+            logic::media_data1(nx, down, repeat) as isize,
+            -1,
+        ) else {
+            return;
+        };
+        let Some(ev) = ns.CGEvent() else { return };
+        // Our own tap must let it through, and see it is not local input.
+        CGEvent::set_integer_value_field(Some(&ev), CGEventField::EventSourceUserData, OUR_EVENTS);
+        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&ev));
     }
 
     fn scroll(&self, unit: CGScrollEventUnit, vertical: i32, horizontal: i32) {

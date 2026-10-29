@@ -8,6 +8,7 @@ mod edge;
 mod geometry;
 mod keys;
 mod lock;
+pub mod mediakeys;
 mod motion;
 mod transfer;
 
