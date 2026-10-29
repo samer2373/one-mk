@@ -26,7 +26,7 @@ enum Ev {
     Menu(MenuEvent),
     /// The pointer touched the icon: look at the daemon.
     Touched,
-    Snapshot(Snapshot),
+    Snapshot(Box<Snapshot>),
 }
 
 fn icon(state: IconState) -> Icon {
@@ -99,7 +99,7 @@ fn refresh(ctx: &Arc<Ctx>, proxy: &EventLoopProxy<Ev>, after: Option<Action>) {
         if let Some(a) = after {
             ctx.perform(&a);
         }
-        let _ = proxy.send_event(Ev::Snapshot(ctx.snapshot()));
+        let _ = proxy.send_event(Ev::Snapshot(Box::new(ctx.snapshot())));
     });
 }
 
@@ -171,6 +171,7 @@ pub fn run(ctx: Arc<Ctx>, start_daemon: bool) -> anyhow::Result<()> {
                 None => {}
             },
             Event::UserEvent(Ev::Snapshot(s)) => {
+                let s = *s;
                 last_look = Instant::now();
                 if let (Some(t), true) = (&tray, s != snap) {
                     actions.clear();

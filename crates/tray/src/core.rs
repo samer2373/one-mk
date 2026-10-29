@@ -2,7 +2,7 @@
 //! uses: the control socket, the `one-mk` program and the login settings.
 
 use crate::model::{Action, Snapshot};
-use one_mk_ctl::client::{self, Request};
+use one_mk_ctl::client::{self, Request, SwitchTo, Toggle};
 use one_mk_ctl::install::{self, Launch};
 use one_mk_ctl::proc;
 use one_mk_ctl::status::Status;
@@ -75,11 +75,28 @@ impl Ctx {
             Action::StartDaemon => self.start_daemon().map_err(Into::into),
             Action::TakeBack => client::request(&self.dir, Request::TakeBack, Duration::from_secs(5)).map(drop),
             Action::SetSide { peer, side } => self.set_side(peer, &side.to_string()),
+            Action::Switch(to) => {
+                let to = if to == "here" { SwitchTo::Here } else { SwitchTo::Device(to.clone()) };
+                self.ask(Request::Switch(to))
+            }
+            Action::LockPointer(on) => self.ask(Request::LockPointer(if *on { Toggle::On } else { Toggle::Off })),
+            Action::LockAll => self.ask(Request::LockAll),
+            Action::ClipSend(to) => self.ask(Request::ClipSend(Some(to.clone()))),
             Action::ToggleAutostart => self.toggle_autostart(),
             Action::Quit => Ok(()),
         };
         if let Err(e) = result {
             eprintln!("one-mk-tray: {e:#}");
+        }
+    }
+
+    /// One request to the daemon; its refusal as an error.
+    fn ask(&self, req: Request) -> anyhow::Result<()> {
+        let timeout = req.reply_timeout();
+        match client::request(&self.dir, req, timeout)? {
+            None => anyhow::bail!("one-mk is not running"),
+            Some(r) if r.starts_with("error") => anyhow::bail!("{}", r.trim_start_matches("error").trim()),
+            Some(_) => Ok(()),
         }
     }
 
