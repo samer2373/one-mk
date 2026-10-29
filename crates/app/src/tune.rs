@@ -185,7 +185,7 @@ pub struct KeyRule {
     pub layer: Option<String>,
     pub timeout_ms: Option<u32>,
     pub scope: Scope,
-    /// Per-app rules are not used yet (plan 4D).
+    /// Only while this app has the focus on the computer typed on.
     pub app: Option<String>,
 }
 
@@ -216,12 +216,11 @@ impl KeyRule {
         Ok(RuleSpec { from, layer: self.layer.as_ref().map(|l| l.to_ascii_lowercase()), what })
     }
 
-    /// The same key, layer and scope (what `one-mk keymap add` replaces).
+    /// The same key, layer, scope and app (what `one-mk keymap add` replaces).
     fn same_place(&self, other: &KeyRule) -> bool {
         let layer = |r: &KeyRule| r.layer.as_ref().map(|l| l.to_ascii_lowercase());
         self.scope == other.scope
-            && self.app.is_none()
-            && other.app.is_none()
+            && same_app(&self.app, &other.app)
             && layer(self) == layer(other)
             && matches!((self.from.parse::<Trigger>(), other.from.parse::<Trigger>()), (Ok(a), Ok(b)) if a == b)
     }
@@ -650,8 +649,27 @@ fn out_noun(o: &Output) -> String {
     }
 }
 
-/// A rule in one sentence: "Caps Lock → Esc when tapped, Ctrl when held";
-/// `Err` with the rule as written and why it can't be used.
+/// Whether two rules' apps are the same (as `one-mk` compares them).
+pub fn same_app(a: &Option<String>, b: &Option<String>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.trim().eq_ignore_ascii_case(b.trim()),
+        _ => false,
+    }
+}
+
+/// A rule's app in words: "only in Code", "in every app except Code".
+pub fn app_text(app: &str) -> String {
+    let app = app.trim();
+    match app.strip_prefix('!') {
+        Some(not) => format!("in every app except {}", not.trim_start()),
+        None => format!("only in {app}"),
+    }
+}
+
+/// A rule in one sentence: "Caps Lock → Esc when tapped, Ctrl when held",
+/// "Ctrl+Space → F13, only in Code"; `Err` with the rule as written and
+/// why it can't be used.
 pub fn sentence(input: &Input, r: &KeyRule) -> Result<String, String> {
     let spec = r.spec()?;
     let from = trigger_text(&spec.from);
@@ -669,7 +687,8 @@ pub fn sentence(input: &Input, r: &KeyRule) -> Result<String, String> {
             format!("{} when tapped, {} when held{after}", out_noun(tap), out_noun(hold))
         }
     };
-    Ok(format!("{from} → {what}"))
+    let app = r.app.as_deref().map_or(String::new(), |a| format!(", {}", app_text(a)));
+    Ok(format!("{from} → {what}{app}"))
 }
 
 /// A rule as written, for one that can't be read.
@@ -866,6 +885,7 @@ pub fn add_args(r: &KeyRule) -> Vec<String> {
         a.push(format!("--layer={l}"));
     }
     a.extend(r.scope.args());
+    a.extend(r.app.as_ref().map(|app| format!("--app={app}")));
     a.push("--".into());
     a.push(r.from.clone());
     if let Some(to) = &r.to {
@@ -874,13 +894,14 @@ pub fn add_args(r: &KeyRule) -> Vec<String> {
     a
 }
 
-/// `one-mk keymap remove`, for the rule's key, layer and scope.
+/// `one-mk keymap remove`, for the rule's key, layer, scope and app.
 pub fn remove_args(r: &KeyRule) -> Vec<String> {
     let mut a = vec!["keymap".to_owned(), "remove".into()];
     if let Some(l) = &r.layer {
         a.push(format!("--layer={l}"));
     }
     a.extend(r.scope.args());
+    a.extend(r.app.as_ref().map(|app| format!("--app={app}")));
     a.extend(["--".into(), r.from.clone()]);
     a
 }
@@ -1729,6 +1750,15 @@ os = "mac"
         let orphan = KeyRule { layer: Some("fn".into()), ..KeyRule::to("j", "down") };
         assert_eq!(sentence(&i, &orphan).unwrap(), "In “fn”: J → Down");
         assert!(sentence(&i, &KeyRule::to("capslok", "esc")).unwrap_err().contains("\"capslok\" is not a key name"));
+        let in_app = KeyRule { app: Some("Code".into()), ..KeyRule::to("ctrl+space", "f13") };
+        assert_eq!(sentence(&i, &in_app).unwrap(), "Ctrl+Space → F13, only in Code");
+        let but = KeyRule { app: Some("!code".into()), ..KeyRule::to("a", "b") };
+        assert_eq!(sentence(&i, &but).unwrap(), "A → B, in every app except code");
+        assert_eq!(add_args(&in_app), ["keymap", "add", "--app=Code", "--", "ctrl+space", "f13"]);
+        assert_eq!(remove_args(&in_app), ["keymap", "remove", "--app=Code", "--", "ctrl+space"]);
+        // A rule for an app is a rule of its own.
+        assert!(!in_app.same_place(&KeyRule::to("ctrl+space", "f12")));
+        assert!(in_app.same_place(&KeyRule { app: Some(" code ".into()), ..KeyRule::to("ctrl+space", "f12") }));
         assert_eq!(as_written(&KeyRule::to("capslok", "esc")), "capslok → esc");
         assert_eq!(cap_target(&i.keys[0].spec().unwrap().what), "Esc/Ctrl");
         assert_eq!(cap_target(&What::To("ctrl+shift+esc".parse().unwrap())), "+Esc");

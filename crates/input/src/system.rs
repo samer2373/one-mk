@@ -1,5 +1,6 @@
 //! What the daemon needs from the OS besides input: what the focused window
-//! is (the fullscreen guard, gaming mode `auto`) and locking the screen
+//! is (the fullscreen guard, gaming mode `auto`, per-app input rules on the
+//! computer controlling this one) and locking the screen
 //! (`one-mk lock-all`, lock sync). Each sits behind a trait so the daemon's
 //! decisions are tested with fakes; only the calls here are per OS.
 //!
@@ -10,14 +11,14 @@
 //! move it, and every few seconds while a fullscreen window has it. Windows
 //! also says when another window comes to the front ([`FocusProbe::watch`]).
 //! Linux has no such signal for X11 focus short of an X event loop; macOS
-//! doesn't probe the focus at all yet, so there is nothing to watch (an
-//! `NSWorkspace` activation observer would come with that probe).
+//! would need an AppKit run loop for `NSWorkspace` activation
+//! notifications, so both are looked at again after input only.
 //!
-//! | | focused window | lock | lock noticed |
-//! |---|---|---|---|
-//! | Linux | X11/XWayland windows only; Wayland-native ones are unknown | logind `Session.Lock` | logind `LockedHint` |
-//! | Windows | foreground window: borderless, covering its monitor | `LockWorkStation` | session notifications |
-//! | macOS | not yet (unknown) | `CGSession -suspend`, else `SACLockScreenImmediate`, else an error | screen lock notifications |
+//! | | focused window | its app's names ([`Focus::apps`]) | lock | lock noticed |
+//! |---|---|---|---|---|
+//! | Linux | X11/XWayland windows only; Wayland-native ones are unknown | `WM_CLASS` (X11 only) | logind `Session.Lock` | logind `LockedHint` |
+//! | Windows | foreground window: borderless, covering its monitor | program file (`chrome.exe`), window class | `LockWorkStation` | session notifications |
+//! | macOS | the focused app (Accessibility); fullscreen not yet | bundle id, app name | `CGSession -suspend`, else `SACLockScreenImmediate`, else an error | screen lock notifications |
 //!
 //! Power (see [`Power`]): keeping the screensaver and idle sleep off while a
 //! peer controls this computer, putting the display to sleep when a peer's
@@ -132,7 +133,7 @@ pub(crate) fn native(events: &mpsc::UnboundedSender<Event>) -> (Box<dyn FocusPro
     #[cfg(target_os = "macos")]
     {
         let _ = events;
-        (Box::new(Unknown), Box::new(macos::Suspend))
+        (Box::new(macos::Frontmost), Box::new(macos::Suspend))
     }
     #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {

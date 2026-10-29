@@ -13,7 +13,9 @@ Everything runs on the **controller** (the computer the mouse and keyboard
 are plugged into), in the send path of a visit, before anything reaches
 the network. The computer being controlled receives ordinary keys,
 buttons, positions and scrolling, so it needs no new version and nothing
-about it changes: an older peer gets remapped input like any other.
+about it changes: an older peer gets remapped input like any other. (The
+one exception is per-app rules: there the controlled computer says which
+app has its focus, which an older one doesn't; see below.)
 
 ```
 backend Event ─┬─ Key/Button ─► hotkeys (PHYSICAL keys) ─► key mapper ─► Ctrl/Cmd swap ─► Control::Key/Button
@@ -53,9 +55,76 @@ buttons) or per field (pointer and scroll):
 | one computer | `scope = { peer = "laptop" }` | a paired computer, by name or id (prefix) |
 
 `peer` beats `os` beats `global`. Rules are resolved when a visit starts
-and again when `settings.toml` is reloaded. A rule may also carry `app =
-"..."`: reserved for per-app rules (plan 4D); such a rule is not used yet,
-and `one-mk keymap check` says so.
+and again when `settings.toml` is reloaded. Any rule may also carry `app =
+"..."` (next section): it then applies only while that app has the focus.
+
+## Per-app rules (plan 4D)
+
+`app = "code"` on a key, button, pointer or scroll rule makes it apply only
+while that app has the focus **on the computer the input goes to** (where
+the keys land): `Ctrl+Space = F13 only in the editor on the Mac` is a rule
+with `scope = { os = "mac" }` and `app = "com.microsoft.VSCode"`.
+
+```
+controller (rules)                              controlled computer (focus probe)
+visit starts, rules name apps ──WatchFocus{app}──► looks at the focus now,
+                                                   then FOCUS_SETTLE after a click or a
+                                                   window-switching chord from the controller,
+                                                   and when Windows says another window came
+                                                   to the front (no timer)
+re-resolve the rules, ◄──Focus{apps}────────────── only when the names change
+Mapper::set_keymap (as a reload)
+```
+
+* **Names per OS** (`one_mk_proto::appmatch`, `FocusProbe` in
+  `crates/input/src/system*`):
+
+  | target | names reported | how | status |
+  |---|---|---|---|
+  | Windows | program file (`chrome.exe`) and window class | `GetForegroundWindow`, `QueryFullProcessImageNameW`, `GetClassNameW`; `EVENT_SYSTEM_FOREGROUND` hook says when it changes | compile-checked; unit-tested logic |
+  | macOS | bundle id (`com.apple.Terminal`) and app name (`Terminal`) | Accessibility `AXFocusedApplication` → pid → `NSRunningApplication` (`NSWorkspace.frontmostApplication` goes stale in a process without an AppKit run loop) | compile-checked only |
+  | Linux, X11 and XWayland windows | both parts of `WM_CLASS` (`code`, `Code`) | `_NET_ACTIVE_WINDOW` on a worker thread | runs on X11 |
+  | Linux, Wayland-native windows | nothing | GNOME and KDE don't tell a background program which Wayland window has the focus (no protocol for it) | unknown: the rules for apps don't apply |
+
+* **Matching**: case-insensitive; `.exe`/`.app` may be left off (`chrome`
+  names `chrome.exe`); `*` stands for any run of characters
+  (`com.jetbrains.*`); a leading `!` means every app but that one. A
+  pattern matches if it names any of the names reported. Patterns with
+  control or invisible characters, a folder (`C:\...`, `/usr/bin/...`),
+  more than 128 characters, or `!*` are refused (the rule is skipped and
+  `keymap check` says why); names from a peer are cleaned (control and
+  invisible characters removed, at most 4 names of 128 characters).
+* **Precedence**: a rule for the focused app beats every rule without an
+  app; among rules for the app, `peer` beats `os` beats `global` as usual.
+  Pointer and scroll rules for an app override field by field on top.
+* **Unknown means off (fail safe).** A peer that can't tell (a Wayland
+  window), hasn't said yet (the first moments of a visit), or runs a
+  one-mk from before 4D: no rule with `app` applies, `!` rules included.
+  `one-mk status` then says, once per computer, `Rule for app X not
+  active: <computer> does not report its focused app (why)`.
+* **Switching rules keeps the key-state invariant.** A change of app
+  re-resolves the rules and hands the new keymap to `Mapper::set_keymap`,
+  the same path a reload takes: a held key is released as the code it was
+  pressed as, a tap/hold key not decided yet counts as held, layers end
+  (releasing what was typed in them); identical rules change nothing. The
+  mapper's random-stream property test switches between keymaps and their
+  per-app variants mid-stream; `tuning::tests::app_changes_never_leave_a_key_stuck`
+  does the same through `TuningSettings::resolve`; a two-daemon test
+  (`app::tests::tuning::per_app_rules_follow_the_peers_focused_app`) holds
+  a key through a change of app.
+* **Wire** (additive, protocol 2): capability `FOCUS_APP` (32).
+  `WatchFocus` gets a trailing byte (bit 0: also the app's names, bit 1:
+  not the fullscreen state; absent: fullscreen only, as before). `Focus`
+  gets a trailing count and names (absent: unknown). Older peers read the
+  fields they know and skip the rest; a peer without `FOCUS_APP` is never
+  asked for apps.
+* **Privacy and cost.** The controller asks only while rules for that
+  computer name an app; the names go only to the computer controlling this
+  one, only while it asks, and are logged at debug level at most. Watching
+  for apps alone sends no fullscreen repeats, and nothing polls: the focus
+  is looked at only after input that may move it (and on Windows when the
+  foreground changes). So keys typed in the first ~100 ms after a click
+  that changed the app still use the previous app's rules.
 
 ## The key mapper (`crates/proto/src/remap.rs`)
 
@@ -297,6 +366,16 @@ scope = { os = "windows" }
 [[input.button]]
 from = 4
 to = "back"
+
+[[input.keymap.rule]]              # only while VS Code has the focus on a Mac
+from = "ctrl+space"
+to = "f13"
+scope = { os = "mac" }
+app = "com.microsoft.VSCode"
+
+[[input.pointer]]                  # slower in games on any computer
+speed = 0.6
+app = "*game*"
 ```
 
 Values are validated when loaded; out-of-range numbers are clamped and
@@ -305,23 +384,35 @@ reported by `one-mk keymap check` and `one-mk doctor`.
 ## Command line
 
 * `one-mk keymap [list]`, `keymap add FROM TO [--tap K --hold K] [--layer L]
-  [--peer P | --os O]`, `keymap remove FROM [--layer L] [--peer P | --os
-  O]`, `keymap clear`, `keymap check`.
-* `one-mk pointer [--speed X] [--accel system|off|curve] [--peer P | --os O]`.
+  [--peer P | --os O] [--app NAME]`, `keymap remove FROM [--layer L]
+  [--peer P | --os O] [--app NAME]`, `keymap clear`, `keymap check`.
+* `one-mk pointer [--speed X] [--accel system|off|curve] [--peer P | --os O]
+  [--app NAME]`.
 * `one-mk scroll [--reverse-vertical on|off] [--reverse-horizontal on|off]
   [--speed X] [--mode auto|smooth|discrete] [--natural on|off|auto]
   [--modifier shift=horizontal]... [--device wheel|touchpad] [--peer P |
-  --os O]`.
-* `one-mk buttons [list]`, `buttons map N TO [--peer P | --os O]`, `buttons
-  preset side-back-forward`, `buttons clear`.
+  --os O] [--app NAME]`.
+* `one-mk buttons [list]`, `buttons map N TO [--peer P | --os O] [--app
+  NAME]`, `buttons unmap N [...]`, `buttons preset side-back-forward`,
+  `buttons clear`.
+
+`--app` is checked like `app =` in the file; with `--os`, a name that
+can't occur on that OS (`chrome.exe` for a Mac) is refused. `keymap list`,
+`buttons list`, `pointer` and `scroll` show it ("only in app code").
+`keymap check` also reports an app that never matches on its rule's OS
+(by `--os`, or the paired computer's OS for `--peer`), and checks each
+plainly named app's rules together (conflicts, layers).
 
 Each shows the current values when run bare, changes `settings.toml`
 through `Settings::update` (file lock), refuses invalid input with a
 precise message, and applies at once through the running daemon (`Reload`).
-`one-mk status` adds one line when any rule is set; `one-mk doctor` has an
+`one-mk status` adds one line when any rule is set, and one per computer
+whose rules for apps aren't in force (see above); `one-mk doctor` has an
 "Input tuning" check (skip when nothing is set; warns about rules that can
 never apply, conflicting rules for one key in one scope, unknown computers
-in scopes, and acceleration modes this computer can't do).
+in scopes, apps that can't match, and acceleration modes this computer
+can't do; with rules for apps and a Linux computer paired, it notes that
+Wayland windows there don't say which app they are).
 
 ## Limits per OS
 
@@ -333,6 +424,8 @@ in scopes, and acceleration modes this computer can't do).
   too; that is plan 4C.
 * Pointer acceleration `off`/`curve`: see the table above.
 * Natural scrolling assumes this computer uses its OS default direction.
+* Per-app rules: see the table under "Per-app rules"; on GNOME and KDE
+  Wayland only X11 (XWayland) windows can be named.
 
 ## The window (4B)
 
@@ -356,6 +449,12 @@ line can't disagree. It uses:
   whole keymap still builds) and shows the message inline;
 * problems: `one-mk keymap check` (exit status 1 and one line per problem),
   run after every change and shown above the rule list;
+* per-app rules (4D): a rule's sentence ends with its app ("Caps Lock →
+  Ctrl, only in Code", "…, in every app except code"); the key editor has
+  an **Only in app** field (empty: every app). Typing an app there moves
+  the key's rule to that app, or, with no rule yet, makes the next change
+  for that app. The drawn keyboard and the Test it box show the rules for
+  every app (the focused app isn't known in the window);
 * the **Test it** box: the rules that apply to the computers chosen in
   **For:**, resolved like the daemon does (a computer beats an OS beats
   everything) and compiled with `remap::Keymap::compile`, go through a

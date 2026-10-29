@@ -1508,24 +1508,45 @@ mod tests {
         ]
     }
 
+    /// Each config with rules for an app on top (per-app rules): the same
+    /// keys mean something else while that app has the focus, which comes
+    /// and goes mid-stream (`set_keymap`, as the daemon does when the
+    /// computer in use says another app has the focus).
+    fn in_app(base: &[RuleSpec]) -> Vec<RuleSpec> {
+        let mut over = vec![
+            rule("capslock", "lctrl"),
+            dual("ralt", "esc", "layer:nav"),
+            in_layer("nav", "h", "lshift"),
+            dual("h", "h", "lalt"),
+            rule("lshift", "layer:deep"),
+            in_layer("deep", "j", "ctrl+c"),
+            RuleSpec { from: "f1".parse().unwrap(), layer: None, what: What::To(Output::sequence(&["lctrl", "a"]).unwrap()) },
+        ];
+        let replaced: Vec<_> = over.iter().map(|r| (r.from, r.layer.clone())).collect();
+        over.extend(base.iter().filter(|r| !replaced.contains(&(r.from, r.layer.clone()))).cloned());
+        over
+    }
+
     /// Random presses, releases, repeats, timeouts (in time and late),
-    /// clicks, modifier-lifts, keymap reloads and visit ends, about a
-    /// million in all: every emitted down gets exactly one up, and once
-    /// every physical key is up nothing is left down.
+    /// clicks, modifier-lifts, keymap reloads, app changes and visit ends,
+    /// about a million in all: every emitted down gets exactly one up, and
+    /// once every physical key is up nothing is left down.
     #[test]
     fn no_stuck_keys_under_random_streams() {
         let keys = [CAPS, LALT, LMETA, LCTRL, RCTRL, LSHIFT, H, J, Q, A, C, RALT, 57, 59, 60, 88, 183, 0x112, 0x110];
         let maps: Vec<Keymap> = configs().iter().map(|c| map(c)).collect();
+        let app_maps: Vec<Keymap> = configs().iter().map(|c| map(&in_app(c))).collect();
         let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
         for stream in 0..10_000 {
-            let mut m = Mapper::new(maps[stream % maps.len()].clone());
+            let family = stream % maps.len();
+            let mut m = Mapper::new(maps[family].clone());
             let mut wire = Wire::default();
             let mut phys = std::collections::BTreeSet::new();
             let mut now = Instant::now();
             for _ in 0..rng.below(200) + 1 {
                 let mut emitted = Vec::new();
                 let mut repeat = false;
-                match rng.below(20) {
+                match rng.below(22) {
                     0..=11 => {
                         let k = keys[rng.below(keys.len())];
                         let down = rng.below(2) == 0;
@@ -1546,6 +1567,11 @@ mod tests {
                     15 => m.interrupt(&mut |e| emitted.push(e)),
                     16 => m.lift(rng.next() as u8, &mut |e| emitted.push(e)),
                     17 | 18 => m.set_keymap(maps[rng.below(maps.len())].clone(), &mut |e| emitted.push(e)),
+                    // The app with the focus changes (or is the same again).
+                    19 | 20 => {
+                        let to = if rng.below(3) != 0 { &app_maps[family] } else { &maps[family] };
+                        m.set_keymap(to.clone(), &mut |e| emitted.push(e));
+                    }
                     _ => m.release_all(&mut |e| emitted.push(e)),
                 }
                 for e in emitted {

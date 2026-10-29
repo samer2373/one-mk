@@ -1,10 +1,15 @@
-//! macOS: locking the screen (`CGSession`, else the login framework),
-//! keeping it awake (`caffeinate`) and putting the display to sleep
-//! (`pmset`). Compiled only; not yet run on a real Mac.
-//! (What has the focus is not probed yet, so the fullscreen guard and
-//! gaming mode `auto` treat it as unknown.)
+//! macOS: which app has the focus (the Accessibility API, then
+//! `NSRunningApplication`), locking the screen (`CGSession`, else the login
+//! framework), keeping it awake (`caffeinate`) and putting the display to
+//! sleep (`pmset`). Compiled only; not yet run on a real Mac.
+//! (Whether the focused window is fullscreen is not probed yet, so the
+//! fullscreen guard and gaming mode `auto` see "not fullscreen".)
 
-use super::{DisplaySleeper, Inhibitor, ScreenLocker};
+use super::{DisplaySleeper, FocusProbe, Inhibitor, ScreenLocker};
+use objc2_app_kit::NSRunningApplication;
+use objc2_core_foundation::CFString;
+use one_mk_proto::Focus;
+use std::ffi::c_void;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -120,5 +125,62 @@ impl DisplaySleeper for DisplaySleepNow {
             let _ = child.wait();
         })?;
         Ok(())
+    }
+}
+
+/// The app with the keyboard focus, by its bundle id and name. Asked of
+/// the Accessibility API (which one-mk needs anyway to type here): unlike
+/// `NSWorkspace.frontmostApplication`, which a process without an AppKit
+/// run loop never sees change, it is right whenever asked. Unknown (`None`)
+/// without the permission.
+pub(super) struct Frontmost;
+
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXUIElementCreateSystemWide() -> *const c_void;
+    fn AXUIElementCopyAttributeValue(element: *const c_void, attribute: *const c_void, value: *mut *const c_void) -> i32;
+    fn AXUIElementGetPid(element: *const c_void, pid: *mut i32) -> i32;
+    fn AXUIElementSetMessagingTimeout(element: *const c_void, seconds: f32) -> i32;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(cf: *const c_void);
+}
+
+/// The process with the keyboard focus.
+fn focused_pid() -> Option<i32> {
+    // The value of kAXFocusedApplicationAttribute (a literal: no data symbol).
+    let attr = CFString::from_static_str("AXFocusedApplication");
+    // SAFETY: AX calls with valid pointers; each object created or copied
+    // here is released once, and only if non-null.
+    unsafe {
+        let wide = AXUIElementCreateSystemWide();
+        if wide.is_null() {
+            return None;
+        }
+        // An app that doesn't answer must not stall the daemon.
+        AXUIElementSetMessagingTimeout(wide, 0.1);
+        let mut app: *const c_void = std::ptr::null();
+        let err = AXUIElementCopyAttributeValue(wide, (&*attr as *const CFString).cast(), &mut app);
+        CFRelease(wide);
+        if err != 0 || app.is_null() {
+            return None;
+        }
+        let mut pid = 0;
+        let err = AXUIElementGetPid(app, &mut pid);
+        CFRelease(app);
+        (err == 0 && pid > 0).then_some(pid)
+    }
+}
+
+impl FocusProbe for Frontmost {
+    fn focus(&mut self) -> Option<Focus> {
+        let pid = focused_pid()?;
+        objc2::rc::autoreleasepool(|_| {
+            let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
+            let apps: Vec<String> = [app.bundleIdentifier(), app.localizedName()].into_iter().flatten().map(|s| s.to_string()).collect();
+            Some(Focus { fullscreen: false, apps })
+        })
     }
 }
