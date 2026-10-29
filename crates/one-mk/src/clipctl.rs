@@ -177,27 +177,28 @@ impl ClipChange {
 /// `one-mk clipboard`: shows the settings, or changes them and applies
 /// the change to the running daemon.
 pub async fn clipboard(dir: &Path, change: ClipChange) -> Result<()> {
-    let mut s = Settings::load(dir)?;
     if change.is_empty() {
+        let s = Settings::load(dir)?;
         println!("Clipboard sharing: {}.", s.clipboard.summary());
         println!("Change it with `one-mk clipboard --text|--html|--image on|off --max-mb N`.");
         return Ok(());
     }
-    change.apply(&mut s.clipboard)?;
-    s.save(dir)?;
-    println!("Clipboard sharing: {}.", s.clipboard.summary());
+    let summary = Settings::update(dir, |s| {
+        change.apply(&mut s.clipboard)?;
+        Ok(s.clipboard.summary())
+    })?;
+    println!("Clipboard sharing: {summary}.");
     applied(dir).await
 }
 
 /// `one-mk notify [on|off]`: whether a received transfer raises a desktop notification.
 pub async fn notify(dir: &Path, state: Option<OnOff>) -> Result<()> {
-    let mut s = Settings::load(dir)?;
     let Some(OnOff(on)) = state else {
+        let s = Settings::load(dir)?;
         println!("A notification when files arrive: {}.", if s.notify_files { "on" } else { "off" });
         return Ok(());
     };
-    s.notify_files = on;
-    s.save(dir)?;
+    Settings::update(dir, |s| Ok(s.notify_files = on))?;
     println!("A notification when files arrive: {}.", if on { "on" } else { "off" });
     applied(dir).await
 }

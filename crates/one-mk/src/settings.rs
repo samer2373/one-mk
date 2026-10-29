@@ -11,9 +11,13 @@ use one_mk_clipboard::{CEILING_BYTES, DEFAULT_MAX_BYTES, Filter};
 use one_mk_proto::{EdgeGuard, Modifier, Side};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 const FILE: &str = "settings.toml";
+/// Held while settings are changed (see [`Settings::update`]).
+const LOCK_FILE: &str = "settings.toml.lock";
 /// Bounds for the edge rules; larger values are almost surely typos.
 pub const MAX_CORNER: u32 = 500;
 pub const MAX_DWELL_MS: u32 = 5000;
@@ -281,12 +285,44 @@ impl Settings {
         })
     }
 
+    /// Writes the settings to `settings.toml` through a file of its own that
+    /// is then renamed over it, so a reader never sees half a file and two
+    /// writers never share one. To change settings use [`Settings::update`]:
+    /// this alone would lose a change made by someone else in between.
     pub fn save(&self, dir: &Path) -> Result<()> {
+        static N: AtomicU32 = AtomicU32::new(0);
         std::fs::create_dir_all(dir)?;
-        let tmp = path(dir).with_extension("toml.tmp");
-        std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
-        std::fs::rename(&tmp, path(dir))?;
-        Ok(())
+        let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let write = || -> Result<()> {
+            std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
+            std::fs::rename(&tmp, path(dir))?;
+            Ok(())
+        };
+        write().inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+    }
+
+    /// Changes the saved settings: waits for its turn (an exclusive lock on a
+    /// file next to `settings.toml`, so `one-mk edge` and `one-mk gaming`
+    /// run at the same moment both land), loads what is there (a file that
+    /// can't be read is an error, as with [`Settings::load`]), applies
+    /// `change` and saves. If `change` fails nothing is written.
+    pub fn update<R>(dir: &Path, change: impl FnOnce(&mut Settings) -> Result<R>) -> Result<R> {
+        std::fs::create_dir_all(dir)?;
+        let lock_path = dir.join(LOCK_FILE);
+        let lock = File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .with_context(|| format!("opening {}", lock_path.display()))?;
+        lock.lock().with_context(|| format!("locking {}", lock_path.display()))?;
+        // Unlocked when `lock` is dropped (also if this fails or panics).
+        let mut settings = Settings::load(dir)?;
+        let out = change(&mut settings)?;
+        settings.save(dir)?;
+        Ok(out)
     }
 }
 
@@ -399,9 +435,8 @@ impl EdgeArgs {
     }
 }
 
-/// Saves `settings` and asks a running daemon to apply them.
-async fn save_and_apply(dir: &Path, settings: &Settings) -> Result<()> {
-    settings.save(dir)?;
+/// Asks a running daemon to apply the saved settings.
+async fn apply(dir: &Path) -> Result<()> {
     if control::request(dir, Request::Reload).await?.is_some() {
         println!("Applied right away.");
     } else {
@@ -412,30 +447,31 @@ async fn save_and_apply(dir: &Path, settings: &Settings) -> Result<()> {
 
 /// `one-mk edge [...]`: shows the edge rules, or changes them.
 pub async fn edge(dir: &Path, args: EdgeArgs) -> Result<()> {
-    let mut settings = Settings::load(dir)?;
-    if !args.changes_anything() {
-        let d = settings.edge.describe();
+    let describe = |e: &EdgeSettings| {
+        let d = e.describe();
         if d.is_empty() {
             println!("No edge rules: the pointer crosses as soon as it reaches an edge.");
         } else {
             println!("Edges: {d}.");
         }
+    };
+    if !args.changes_anything() {
+        let settings = Settings::load(dir)?;
+        describe(&settings.edge);
         if settings.edge.guard(Side::Left).fullscreen && cfg!(target_os = "linux") {
             println!("{}", FULLSCREEN_LINUX);
         }
         return Ok(());
     }
-    args.apply(&mut settings.edge)?;
-    let d = settings.edge.describe();
-    if d.is_empty() {
-        println!("No edge rules: the pointer crosses as soon as it reaches an edge.");
-    } else {
-        println!("Edges: {d}.");
-    }
+    let edge = Settings::update(dir, |s| {
+        args.apply(&mut s.edge)?;
+        Ok(s.edge.clone())
+    })?;
+    describe(&edge);
     if args.fullscreen_guard == Some(true) && cfg!(target_os = "linux") {
         println!("{}", FULLSCREEN_LINUX);
     }
-    save_and_apply(dir, &settings).await
+    apply(dir).await
 }
 
 const FULLSCREEN_LINUX: &str = "Note: on Wayland only programs running through XWayland (most games) can be seen as fullscreen; \
@@ -443,8 +479,7 @@ const FULLSCREEN_LINUX: &str = "Note: on Wayland only programs running through X
 
 /// `one-mk gaming on|off|auto`.
 pub async fn gaming(dir: &Path, mode: Gaming) -> Result<()> {
-    let mut settings = Settings::load(dir)?;
-    settings.gaming = mode;
+    Settings::update(dir, |s| Ok(s.gaming = mode))?;
     match mode {
         Gaming::Off => println!("Gaming mode is off: the pointer moves by position, and edges lead back."),
         Gaming::On => println!(
@@ -456,19 +491,18 @@ pub async fn gaming(dir: &Path, mode: Gaming) -> Result<()> {
              (where it can tell). Come back with `one-mk switch here` (or Ctrl+Alt+Shift+Esc)."
         ),
     }
-    save_and_apply(dir, &settings).await
+    apply(dir).await
 }
 
 /// `one-mk lock-sync on|off`.
 pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
-    let mut settings = Settings::load(dir)?;
-    settings.lock_sync = on;
+    Settings::update(dir, |s| Ok(s.lock_sync = on))?;
     if on {
         println!("Lock sync is on: locking this computer locks the connected ones (if they run one-mk too).");
     } else {
         println!("Lock sync is off. (`one-mk lock-all` still locks every computer.)");
     }
-    save_and_apply(dir, &settings).await
+    apply(dir).await
 }
 
 #[cfg(test)]
@@ -614,5 +648,66 @@ mod tests {
         assert_eq!(f(0), 1 << 20, "never zero");
         assert_eq!(f(25), 25 << 20);
         assert_eq!(f(u32::MAX), CEILING_BYTES);
+    }
+
+    /// Commands run at the same moment (a script, or a window and a
+    /// terminal) must all land, whichever field they change.
+    #[test]
+    fn concurrent_updates_all_survive() {
+        let dir = temp_dir("concurrent");
+        const THREADS: usize = 8;
+        const EACH: usize = 6;
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    for i in 0..EACH {
+                        Settings::update(&dir, |s| {
+                            s.edge.fullscreen_allow.push(format!("app-{t}-{i}"));
+                            match t {
+                                0 => s.clipboard.max_mb = 3,
+                                1 => s.clipboard.image = false,
+                                2 => s.gaming = Gaming::Auto,
+                                3 => s.lock_sync = true,
+                                4 => s.notify_files = false,
+                                5 => s.edge.all.corner = Some(7),
+                                6 => s.edge.all.dwell_ms = Some(250),
+                                _ => s.clipboard.allow_pull = false,
+                            }
+                            Ok(())
+                        })
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        handles.into_iter().for_each(|h| h.join().unwrap());
+        let s = Settings::load(&dir).unwrap();
+        assert_eq!(s.edge.fullscreen_allow.len(), THREADS * EACH, "an update was lost: {:?}", s.edge.fullscreen_allow);
+        assert_eq!(s.clipboard.max_mb, 3);
+        assert!(!s.clipboard.image && !s.notify_files && !s.clipboard.allow_pull);
+        assert!(s.lock_sync);
+        assert_eq!((s.gaming, s.edge.all.corner, s.edge.all.dwell_ms), (Gaming::Auto, Some(7), Some(250)));
+        let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert!(leftovers.iter().all(|n| n == FILE || n == LOCK_FILE), "stray files: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_update_or_a_bad_file_changes_nothing() {
+        let dir = temp_dir("failed-update");
+        Settings::update(&dir, |s| Ok(s.lock_sync = true)).unwrap();
+        let before = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        let refused = Settings::update(&dir, |s| -> Result<()> {
+            s.lock_sync = false;
+            bail!("no")
+        });
+        assert!(refused.is_err());
+        assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), before);
+        // A hand edit that doesn't parse is not overwritten by a command line change.
+        std::fs::write(dir.join(FILE), "clipboard = [").unwrap();
+        assert!(Settings::update(&dir, |s| Ok(s.lock_sync = true)).is_err());
+        assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), "clipboard = [");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
