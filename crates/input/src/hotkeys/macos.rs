@@ -5,7 +5,9 @@
 //! doesn't run.
 //!
 //! While the pointer is on another computer the capture tap swallows every
-//! key first, so these fire only at home. The tap is idle between key
+//! key first, so these fire only at home. Keys we inject (a peer typing
+//! here) never fire them, and while a peer controls this computer
+//! (`pause`) no key does: a chord typed for a program here reaches it. The tap is idle between key
 //! presses; it lives as long as the process (a tap that couldn't be created
 //! is tried again when the bindings change).
 
@@ -31,6 +33,8 @@ struct Shared {
     swallowed: Mutex<HeldKeys>,
     events: mpsc::UnboundedSender<Event>,
     running: AtomicBool,
+    /// A peer controls this computer: let every key through.
+    paused: AtomicBool,
     /// The tap, while its thread runs (to turn it back on when macOS turns
     /// it off for being slow).
     tap: AtomicPtr<CFMachPort>,
@@ -45,6 +49,10 @@ impl Platform for Tap {
             spawn(self.0.clone());
         }
     }
+
+    fn pause(&mut self, paused: bool) {
+        self.0.paused.store(paused, Ordering::Release);
+    }
 }
 
 pub(super) fn start(bindings: Bindings, events: mpsc::UnboundedSender<Event>) -> Tap {
@@ -53,6 +61,7 @@ pub(super) fn start(bindings: Bindings, events: mpsc::UnboundedSender<Event>) ->
         swallowed: Mutex::new(HeldKeys::new()),
         events,
         running: AtomicBool::new(false),
+        paused: AtomicBool::new(false),
         tap: AtomicPtr::new(null_mut()),
     });
     spawn(shared.clone());
@@ -115,6 +124,14 @@ fn on_event(shared: &Shared, ty: CGEventType, ev: &CGEvent) -> bool {
         return true;
     };
     let mut swallowed = shared.swallowed.lock().unwrap_or_else(|e| e.into_inner());
+    if !logic::hotkey_applies(
+        CGEvent::integer_value_field(e, CGEventField::EventSourceUserData) == crate::macos::OUR_EVENTS,
+        shared.paused.load(Ordering::Acquire),
+    ) {
+        // Still let the release of a key that fired go: it was swallowed
+        // when it went down, and the program here must not see it alone.
+        return !(ty == CGEventType::KeyUp && swallowed.update(code, false));
+    }
     if ty == CGEventType::KeyUp {
         // `update` says whether it was held, i.e. whether it fired.
         return !swallowed.update(code, false);

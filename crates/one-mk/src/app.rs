@@ -493,7 +493,8 @@ pub async fn serve(
     };
 
     let settings = Settings::load_or_default(&dir);
-    let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys);
+    let computers = crate::hotkeys::numbered_from(&identity, &trust).len();
+    let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys, computers);
     let mut app = App {
         dir,
         node: node.clone(),
@@ -583,6 +584,7 @@ pub async fn serve(
         }
         app.sync_hooks();
         app.sync_power();
+        app.shortcuts.set_controlled(app.owner.is_some());
     }
 
     app.go_home();
@@ -1312,9 +1314,7 @@ impl App {
                     // It may have been paired since we started.
                     if self.trust_reloaded.is_none_or(|t| t.elapsed() >= TRUST_RELOAD_INTERVAL) {
                         self.trust_reloaded = Some(Instant::now());
-                        if let Ok(t) = TrustStore::load(&self.dir) {
-                            self.trust = t;
-                        }
+                        self.reload_trust();
                     }
                     if !self.trust.is_trusted(&f.fingerprint) {
                         return;
@@ -1517,6 +1517,8 @@ impl App {
     fn reload_trust(&mut self) {
         if let Ok(t) = TrustStore::load(&self.dir) {
             self.trust = t;
+            let computers = crate::hotkeys::numbered_from(self.node.identity(), &self.trust).len();
+            self.shortcuts.set_computers(computers);
         }
     }
 
@@ -3398,6 +3400,29 @@ mod tests {
         duo.enter_b().await;
         duo.ha.events.send(Event::Key { code: KEY_H, down: true }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: KEY_H, down: true });
+        duo.stop().await;
+    }
+
+    /// While A controls B, B's own shortcuts don't run: its system reports
+    /// the chords typed on A as if pressed on B (they come through B's
+    /// injector), and they are for programs on B. Once A lets go they work.
+    #[tokio::test]
+    async fn a_controlled_computer_ignores_its_own_shortcuts() {
+        use one_mk_input::hotkeys::Action;
+        let mut duo = Duo::start("shortcuts-controlled", None).await;
+        duo.enter_b().await;
+        eventually_async("B to be controlled", || async { status(&duo.db).await.controlled_by.is_some() }).await;
+        duo.hb.events.send(Event::Hotkey(Action::LockPointer)).unwrap();
+        duo.hb.events.send(Event::Hotkey(Action::Home)).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let st = status(&duo.db).await;
+        assert!(!st.pointer_locked && st.controlled_by.is_some(), "neither locked nor took control back");
+        assert!(duo.ha.capture.try_recv().is_err(), "A still has the pointer on B");
+
+        duo.leave_b().await;
+        eventually_async("B to be free", || async { status(&duo.db).await.controlled_by.is_none() }).await;
+        duo.hb.events.send(Event::Hotkey(Action::LockPointer)).unwrap();
+        eventually_async("B's shortcut to work again", || async { status(&duo.db).await.pointer_locked }).await;
         duo.stop().await;
     }
 

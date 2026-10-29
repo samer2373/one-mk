@@ -269,6 +269,13 @@ fn modifier_bits(evdev: u32) -> Option<(u64, u64)> {
     MODIFIERS.iter().find(|m| m.0 == evdev).map(|m| (m.1, m.2))
 }
 
+/// Whether the shortcut tap may act on a key: not one we injected (a peer
+/// typing here: its chords are for programs here, or were the peer's own
+/// shortcuts already), and not while a peer controls this computer at all.
+pub fn hotkey_applies(injected_by_us: bool, controlled: bool) -> bool {
+    !injected_by_us && !controlled
+}
+
 /// Whether a mac keycode is a modifier, which macOS reports and expects as
 /// `FlagsChanged` events rather than key down/up.
 pub fn is_mac_modifier(kc: u16) -> bool {
@@ -590,6 +597,14 @@ pub fn moved_by(desktop: Option<&Desktop>, from: Pos, dx: f64, dy: f64) -> Pos {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcuts_ignore_injected_keys_and_controlled_time() {
+        assert!(hotkey_applies(false, false), "the user's own keys at home");
+        assert!(!hotkey_applies(true, false), "our injected keys");
+        assert!(!hotkey_applies(false, true), "anything while a peer controls this computer");
+        assert!(!hotkey_applies(true, true));
+    }
 
     #[test]
     fn relative_moves_stay_on_the_displays() {

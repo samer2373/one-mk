@@ -5,6 +5,11 @@
 //!
 //! While the pointer is on another computer the capture hook swallows every
 //! key before Windows looks for shortcuts, so these fire only at home.
+//! While a peer controls this computer they are unregistered (`pause`):
+//! `RegisterHotKey` fires on keys `SendInput` injects too, and can't be
+//! told to ignore them, so a chord typed on the peer for a program here
+//! would otherwise run one of this computer's shortcuts (and never reach
+//! the program).
 
 use super::{Action, Availability, Bindings, Platform};
 use crate::Event;
@@ -20,6 +25,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 const ERROR_HOTKEY_ALREADY_REGISTERED: u32 = 1409;
 /// "The bindings changed."
 const WM_RELOAD: u32 = WM_APP + 1;
+/// "Pause" (`wParam` 1) or "resume" (0).
+const WM_PAUSE: u32 = WM_APP + 2;
 
 pub(super) struct Thread {
     id: u32,
@@ -31,6 +38,11 @@ impl Platform for Thread {
         *self.bindings.lock().unwrap_or_else(|e| e.into_inner()) = bindings;
         // SAFETY: posting to a thread id is safe; it fails if the thread is gone.
         unsafe { PostThreadMessageW(self.id, WM_RELOAD, 0, 0) };
+    }
+
+    fn pause(&mut self, paused: bool) {
+        // SAFETY: as above.
+        unsafe { PostThreadMessageW(self.id, WM_PAUSE, usize::from(paused), 0) };
     }
 }
 
@@ -55,10 +67,11 @@ pub(super) fn start(bindings: Bindings, events: mpsc::UnboundedSender<Event>) ->
         };
         let _ = id_tx.send(id);
         let mut registered = register(&shared, &events);
+        let mut paused = false;
         // SAFETY: as above; `msg` is valid for every call.
         while unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) } > 0 {
             match msg.message {
-                WM_HOTKEY => {
+                WM_HOTKEY if !paused => {
                     let action = registered.get(msg.wParam).copied().flatten();
                     if let Some(a) = action
                         && events.send(Event::Hotkey(a)).is_err()
@@ -66,9 +79,16 @@ pub(super) fn start(bindings: Bindings, events: mpsc::UnboundedSender<Event>) ->
                         break;
                     }
                 }
-                WM_RELOAD => {
+                WM_RELOAD if !paused => {
                     unregister(&registered);
                     registered = register(&shared, &events);
+                }
+                WM_PAUSE if (msg.wParam != 0) != paused => {
+                    paused = msg.wParam != 0;
+                    unregister(&registered);
+                    // Registered again (with the bindings as they are now)
+                    // once nobody controls this computer.
+                    registered = if paused { Vec::new() } else { register(&shared, &events) };
                 }
                 _ => {}
             }

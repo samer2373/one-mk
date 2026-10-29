@@ -35,7 +35,7 @@ impl Default for HotkeySettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            jump: "ctrl+alt+{n}".into(),
+            jump: default_jump(cfg!(windows)).into(),
             // Not Ctrl+Alt+Right (GNOME's workspaces) nor Ctrl+Alt+N
             // (AltGr+N types ń on Polish keyboards).
             cycle: "ctrl+alt+pagedown".into(),
@@ -45,6 +45,16 @@ impl Default for HotkeySettings {
     }
 }
 
+/// The jump shortcuts' default: Ctrl+Alt+1..9, but Ctrl+Alt+Shift+1..9 on
+/// Windows, whose `RegisterHotKey` can't tell AltGr (which Windows reports
+/// as Ctrl+Alt) from Ctrl+Alt: AltGr+digit types `{ [ ] }` on German
+/// keyboards and most of the digit row's symbols on French AZERTY ones.
+/// (The matcher used while the pointer is away counts only the left Alt,
+/// so elsewhere AltGr is no problem.)
+fn default_jump(windows: bool) -> &'static str {
+    if windows { "ctrl+alt+shift+{n}" } else { "ctrl+alt+{n}" }
+}
+
 /// `""` and `none` mean no chord.
 fn chord_or_none<T: FromStr<Err = String>>(s: &str) -> Result<Option<T>, String> {
     let s = s.trim();
@@ -52,7 +62,18 @@ fn chord_or_none<T: FromStr<Err = String>>(s: &str) -> Result<Option<T>, String>
 }
 
 impl HotkeySettings {
-    /// The shortcuts in force, or why these settings can't be used.
+    /// The shortcuts in force with `computers` computers (counting this
+    /// one): no jump to a computer that doesn't exist, so Ctrl+Alt+3..9
+    /// stay free for programs with two computers. Every chord is checked
+    /// all the same.
+    pub fn bindings_for(&self, computers: usize) -> Result<Bindings, String> {
+        let max = computers.min(9);
+        let all = self.bindings()?;
+        Bindings::new(all.iter().filter(|(a, _)| !matches!(a, Action::Jump(n) if usize::from(*n) > max)).collect())
+    }
+
+    /// Every shortcut these settings ask for (all nine jumps), or why they
+    /// can't be used.
     pub fn bindings(&self) -> Result<Bindings, String> {
         if !self.enabled {
             return Ok(Bindings::default());
@@ -270,12 +291,45 @@ mod tests {
     fn defaults_are_valid_and_distinct() {
         let b = HotkeySettings::default().bindings().unwrap();
         assert_eq!(b.iter().count(), 12);
-        assert_eq!(b.action("ctrl+alt+5".parse().unwrap()), Some(Action::Jump(5)));
+        let jump: JumpChords = HotkeySettings::default().jump.parse().unwrap();
+        assert_eq!(b.action(jump.chord(5)), Some(Action::Jump(5)));
         assert_eq!(b.action("ctrl+alt+h".parse().unwrap()), Some(Action::Home));
         let off = HotkeySettings { enabled: false, ..HotkeySettings::default() };
         assert!(off.bindings().unwrap().is_empty());
         let some = HotkeySettings { jump: "none".into(), cycle: String::new(), ..HotkeySettings::default() };
         assert_eq!(some.bindings().unwrap().iter().count(), 2);
+    }
+
+    /// Windows can't tell AltGr from Ctrl+Alt, so its jump default adds
+    /// Shift; elsewhere it is Ctrl+Alt+digit. Both parse, and differ.
+    #[test]
+    fn the_jump_default_avoids_altgr_on_windows() {
+        use one_mk_input::hotkeys::ChordMods;
+        let (win, other): (JumpChords, JumpChords) = (default_jump(true).parse().unwrap(), default_jump(false).parse().unwrap());
+        assert!(win.0.contains(ChordMods::SHIFT) && win.0.contains(ChordMods::CTRL) && win.0.contains(ChordMods::ALT));
+        assert_eq!(other.chord(7), "ctrl+alt+7".parse().unwrap());
+        assert_eq!(win.chord(7), "ctrl+alt+shift+7".parse().unwrap());
+        assert_eq!(win.to_string(), "ctrl+alt+shift+{n}", "printed as written");
+        assert_eq!(HotkeySettings::default().jump, default_jump(cfg!(windows)));
+    }
+
+    /// Only jumps to computers that exist are bound: with two computers
+    /// Ctrl+Alt+3..9 stay free. A clash with a jump that isn't bound is
+    /// still an error (it would be one once more computers are paired).
+    #[test]
+    fn jumps_only_to_computers_that_exist() {
+        let s = HotkeySettings::default();
+        let jumps = |b: &Bindings| b.iter().filter(|(a, _)| matches!(a, Action::Jump(_))).count();
+        let jump: JumpChords = s.jump.parse().unwrap();
+        let two = s.bindings_for(2).unwrap();
+        assert_eq!(jumps(&two), 2);
+        assert_eq!(two.action(jump.chord(2)), Some(Action::Jump(2)));
+        assert_eq!(two.action(jump.chord(3)), None, "no third computer");
+        assert_eq!(jumps(&s.bindings_for(1).unwrap()), 1);
+        assert_eq!(jumps(&s.bindings_for(30).unwrap()), 9);
+        assert_eq!(two.iter().count(), 5, "and cycle, lock, home");
+        let clash = HotkeySettings { home: jump.chord(7).to_string(), ..s };
+        assert!(clash.bindings_for(2).is_err());
     }
 
     #[test]

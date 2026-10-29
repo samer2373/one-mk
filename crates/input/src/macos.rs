@@ -59,7 +59,7 @@ const NX_SYSDEFINED: u32 = 14;
 
 /// Stamped on every event we post (`kCGEventSourceUserData`) so our own
 /// tap lets them through untouched.
-const OUR_EVENTS: i64 = 0x6f6e_655f_6d6b; // "one_mk"
+pub(crate) const OUR_EVENTS: i64 = 0x6f6e_655f_6d6b; // "one_mk"
 
 /// macOS's default double-click interval and a few points of slop.
 const DOUBLE_CLICK_SECS: f64 = 0.5;
