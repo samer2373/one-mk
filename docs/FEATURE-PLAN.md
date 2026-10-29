@@ -6,37 +6,36 @@ status column when something changes. Started 2026-10-29.
 Goals every feature is judged against: lowest latency, zero idle CPU, tiny
 footprint, setup as easy as possible, no stuck keys.
 
-## Where things stand (updated 2026-10-29)
+## Where things stand (updated 2026-10-29, end of the second batch)
 
-Merged into `worktree-features-wave1` and validated (full `cargo test`, clippy
-clean on Linux, Windows and macOS targets for the crates that cross-build):
-waves 1 and 2, packaging and Send-to (3D, 3G), X11 and wlroots backends (3E,
-3F), pairing by link with its security fixes (3H), key mapper and input tuning
-core (4A) and its window editor (4B), window and tray UI and its design review,
-and every fix round so far (D, E, F1, F2, G, the Codex rounds for the
-cross-review findings, and the run:-action permission fix).
+Everything below is merged into `main` and was validated together (full
+`cargo test`, 274 tests in the `one-mk` crate and none failing; clippy clean on
+Linux, and on the Windows and macOS targets for the crates that cross-build).
+Every piece was reviewed by a model other than the one that wrote it, and the
+findings were fixed with tests that fail without the fix:
 
-4C has partial, inactive groundwork on `t3/local-key-mapping`: local scope,
-CLI/check/status, and a pure mapper adapter with invariant tests. Native
-Windows/macOS interception, timer/health wiring and acknowledged injection
-handoff remain unimplemented; local typing is unchanged on every platform.
-The last Codex rounds were reviewed by Claude and their
-findings fixed (guarded-edge click replay is a whole click again; permission
-checks, pairing admission, hook ordering, the Windows startup entry). The final
-full validation passed: 256 tests in the `one-mk` crate and none failing,
-clippy clean on Linux, Windows and macOS targets. The fixes made after that
-last review were small and each has tests, but they have not had a third review.
-Nothing has been merged into `main`: the work is on `worktree-features-wave1`.
+- Waves 1 and 2, packaging and Send-to (3D, 3G), X11 and wlroots backends (3E,
+  3F), pairing by link (3H), key mapper and input tuning (4A) with its window
+  editor (4B), the window and tray UI and its design review.
+- The second batch: per-app rules (4D), the pointer drawn on a computer with no
+  mouse (3A), edge drop zones for files (3B) and the pure Windows service logic
+  (2C, contracts only).
+- 4C (local-only remap) is partial and INACTIVE everywhere: local scope, CLI,
+  checks and a pure mapper adapter exist; native Windows and macOS interception
+  is not wired because the injection handoff needs an acknowledged design.
+- The last review rounds are all fixed. The final small fix rounds had no third
+  review.
 
-3A (pointer with no mouse), 3B (edge drop zones) and 4D (per-app rules) are merged. 4C (local-only
-remap) is partial: the pure adapter, config and CLI exist but are inactive on every platform.
-3B: X11 scripted XDND on Xvfb and a two-daemon loopback verified; Windows/macOS compile-checked only;
-Wayland unavailable.
-Needs a decision from the user: 3C auto-update (where releases are published,
-how they are signed) and 2C Windows login/UAC service (pure contracts only;
-privileged implementation remains manual, see the 2C row).
-Open defaults to confirm with the user: clipboard fetching is OFF by default;
-a computer with lock-sync off ignores automatic locks but obeys `lock-all`.
+Not tested on real hardware (compile and unit-test only): everything for Windows
+and macOS, the wlroots backend, the real tray, a screen reader, the AppImage,
+Flatpak, Windows installer and macOS `.dmg`, and the first run of the new CI
+release jobs.
+
+Waiting on the user: 3C auto-update (where releases are published and how they
+are signed); the privileged part of 2C (the system service: to be written and
+reviewed by hand, see `docs/WINDOWS-SERVICE.md`); the open defaults (clipboard
+fetching is OFF by default; a computer with lock-sync off ignores automatic
+locks but obeys `lock-all`).
 
 ## How we work
 
