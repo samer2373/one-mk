@@ -3,6 +3,7 @@
 //! Nothing in this crate does I/O, so all of it is unit-tested and shared by
 //! every platform backend.
 
+pub mod appmatch;
 mod codec;
 mod edge;
 mod geometry;
