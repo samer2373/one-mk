@@ -1667,6 +1667,8 @@ impl App {
     /// after ours is ours starting 300 px before its.
     fn send_layout(&self, fp: Fingerprint) {
         if let (Some(p), Some(d)) = (self.peers.get(&fp), self.trust.get(&fp)) {
+            #[cfg(test)]
+            tests::layouts_sent_by(&self.dir).fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let align = Some(d.align().mirror());
             p.ctl.send(Control::Layout { side_of_you: d.side().opposite(), version: d.layout_version, align });
         }
@@ -4233,6 +4235,17 @@ mod tests {
     /// Offsets, walls, multi-monitor crossings and layout sync between
     /// daemons (in `app/tests/layout.rs`).
     mod layout;
+
+    /// How many `Layout` messages the daemon in `dir` has sent.
+    pub(super) fn layouts_sent_by(dir: &std::path::Path) -> Arc<std::sync::atomic::AtomicUsize> {
+        static SENT: std::sync::Mutex<Vec<(PathBuf, Arc<std::sync::atomic::AtomicUsize>)>> = std::sync::Mutex::new(Vec::new());
+        let mut all = SENT.lock().unwrap();
+        if let Some((_, n)) = all.iter().find(|(d, _)| d == dir) {
+            return n.clone();
+        }
+        all.push((dir.to_owned(), Arc::default()));
+        all.last().unwrap().1.clone()
+    }
 
     /// Key mapper, button, scroll and pointer tuning between daemons (in
     /// `app/tests/tuning.rs`).

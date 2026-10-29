@@ -75,6 +75,12 @@ pub async fn takeback(dir: &Path) -> Result<()> {
 /// seen, so it wins when the two computers compare layouts. A new side
 /// without an alignment is stretched; the same side keeps its alignment.
 pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>) -> Result<Device> {
+    set_layout_at(dir, device, side, align, swap, now_ms())
+}
+
+/// [`set_layout`] with the clock (milliseconds since 1970) given, so a test
+/// can make two computers choose under the same version.
+pub fn set_layout_at(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>, now: u64) -> Result<Device> {
     if let Some(align) = align {
         parse_align(&align.to_string()).map_err(anyhow::Error::msg)?;
     }
@@ -87,7 +93,7 @@ pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Al
         // so a new side without one starts stretched.
         let new_side = side.unwrap_or_else(|| dev.side());
         let keep = if new_side == dev.side() { dev.align() } else { Align::Stretch };
-        place(dev, new_side, align.unwrap_or(keep));
+        place_at(dev, new_side, align.unwrap_or(keep), now);
     }
     if let Some(swap) = swap {
         dev.swap_ctrl_cmd = swap;
@@ -97,9 +103,20 @@ pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Al
     Ok(dev)
 }
 
-/// Puts `dev` on `side`, lined up as `align`, under a new layout version.
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Puts `dev` on `side`, lined up as `align`, under a new layout version:
+/// `now`, but always above the one it has. A layout received from the peer
+/// is stored under its version, so a change made after receiving it is
+/// above that too.
 pub fn place(dev: &mut Device, side: Side, align: Align) {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    place_at(dev, side, align, now_ms());
+}
+
+/// [`place`] with the clock given.
+pub fn place_at(dev: &mut Device, side: Side, align: Align, now: u64) {
     dev.side = side.to_string();
     dev.set_align(align);
     dev.layout_version = now.max(dev.layout_version.saturating_add(1));
