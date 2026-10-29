@@ -16,6 +16,7 @@ mod motion;
 mod pairing;
 mod scene;
 mod style;
+mod tune;
 mod view;
 mod widgets;
 
