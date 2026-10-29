@@ -1,0 +1,62 @@
+# Flatpak manifest for one-mk. UNTESTED: written without flatpak-builder on
+# hand. `sh scripts/package-flatpak.sh` fills in @VERSION@ and @SHA256@ and
+# writes the result to dist/flatpak/ (@ROOT@ becomes the checkout). See docs/PACKAGING.md for what cannot
+# work inside a sandbox.
+app-id: io.github.onemk.OneMk
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: one-mk-app
+
+finish-args:
+  # The window: Wayland, falling back to X11 (egui uses OpenGL).
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # Pairing and the link are UDP (QUIC); mDNS needs the host network
+  # namespace, which --share=network is. one-mk speaks mDNS itself (no
+  # Avahi needed; add --talk-name=org.freedesktop.Avahi only if that ever
+  # changes).
+  - --share=network
+  # Input capture and injection, global shortcuts and the clipboard go
+  # through the desktop portals on Wayland.
+  - --talk-name=org.freedesktop.portal.*
+  # "Files received" notifications and their "Show in folder" button.
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.FileManager1
+  # The tray icon (StatusNotifierItem).
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --own-name=org.kde.*
+  # Received files land in Downloads/one-mk.
+  - --filesystem=xdg-download
+
+modules:
+  - name: one-mk
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 one-mk one-mk-tray one-mk-app -t ${FLATPAK_DEST}/bin
+      # The app id doubles as desktop-file and icon name inside Flatpak.
+      - install -Dm644 one-mk.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - desktop-file-edit --set-icon=${FLATPAK_ID} ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
+      - sed -i 's|one-mk.desktop|${FLATPAK_ID}.desktop|' io.github.onemk.OneMk.metainfo.xml
+      - install -Dm644 io.github.onemk.OneMk.metainfo.xml -t ${FLATPAK_DEST}/share/metainfo
+      - install -Dm644 icon.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm644 icon-256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
+    sources:
+      # The release build (built on the oldest supported distribution, so
+      # it runs on the runtime's newer glibc).
+      - type: archive
+        url: @URL@
+        sha256: @SHA256@
+        strip-components: 1
+      - type: file
+        path: @ROOT@/packaging/linux/one-mk.desktop
+      - type: file
+        path: @ROOT@/packaging/linux/io.github.onemk.OneMk.metainfo.xml
+      - type: file
+        path: @ROOT@/docs/brand/app-icon/windows-linux/hicolor/scalable/apps/one-mk.svg
+        dest-filename: icon.svg
+      - type: file
+        path: @ROOT@/docs/brand/app-icon/windows-linux/hicolor/256x256/apps/one-mk.png
+        dest-filename: icon-256.png
