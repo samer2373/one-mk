@@ -24,8 +24,10 @@ clippy clean on Linux, Windows and macOS targets. The fixes made after that
 last review were small and each has tests, but they have not had a third review.
 Nothing has been merged into `main`: the work is on `worktree-features-wave1`.
 
-Not started: 3A pointer drawn on a computer with no mouse, 3B drag files across
-the edge, 4C local-only remap on Windows/macOS, 4D per-app rules.
+3B now has local edge drop zones: X11 scripted-XDND/Xvfb and resumable-transfer
+loopback verified; Windows/macOS compile-checked only; Wayland unavailable.
+Not started: 3A pointer drawn on a computer with no mouse,
+4C local-only remap on Windows/macOS, 4D per-app rules.
 Needs a decision from the user: 3C auto-update (where releases are published,
 how they are signed) and 2C Windows login/UAC service (paused: the child run was
 stopped by a safety check, see the 2C row).
@@ -186,7 +188,7 @@ Known gaps:
 | ID | Task | Depends on | Notes | Status |
 |---|---|---|---|---|
 | 3A | Pointer drawn on a computer with no mouse attached | none | Known gap in Lan Mouse and Mouse Without Borders. | todo |
-| 3B | Drag files across the screen edge | transfer code (1B) | Hardest of the list. Deskflow and Synergy both removed theirs as broken. Linux GNOME and Windows first. | todo |
+| 3B | Drop files on a peer-facing edge zone | transfer code (1B) | Copy to receiver Downloads via existing resumable transfer; no remote file-manager drop injection. X11 scripted XDND verified on private Xvfb; Windows OLE/macOS AppKit adapters compile-checked only (native runtime validation pending). GNOME/KDE/wlroots Wayland unavailable without compositor cooperation. See [DRAG-FILES.md](DRAG-FILES.md). | implemented; native runtime validation pending |
 | 3C | Auto-update with signed releases | none | | todo |
 | 3D | Packaging: `.deb`, AppImage or Flatpak, MSI, `.dmg` or Homebrew | none | Probably matters most for adoption. See `docs/PACKAGING.md`. **Verified here (Linux):** reproducible `.deb` built with `scripts/package-deb.sh`; contents, control, unpacked `one-mk --version`, `desktop-file-validate`, `appstreamcli validate`, `systemd-analyze --user verify` of the unit (`scripts/check-packaging.sh`); AppDir layout runs `AppRun --version`. **Written, untested:** AppImage file (needs appimagetool; pinned in CI), Flatpak manifest, Inno Setup installer, macOS `.app`/`.dmg` and Homebrew cask/formula; lintian not run (not installed); release CI jobs not run. Versions now come from `[workspace.package]` only. | done (Linux verified) |
 | 3E | wlroots (Sway/Hyprland) backend | none | Branch `t3/60bf24e6`. `input/wlroots.rs`: layer-shell edge strips (capture on outward relative motion), full-screen keyboard-exclusive capture surface + pointer lock, virtual pointer/keyboard with the seat's keymap, xdg-output monitors; one thread, no timers. `--backend wlroots`; `native` picks it on Wayland without portals. See 3E/3F notes. | done (compiled only) |

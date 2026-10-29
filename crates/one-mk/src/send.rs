@@ -32,7 +32,7 @@ const CLOSE_WAIT: Duration = Duration::from_millis(500);
 /// `notify_errors`: also say so in a desktop notification if sending fails
 /// (for the file manager's "Send to" entries, which have no terminal).
 pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>, notify_errors: bool) -> Result<()> {
-    let result = send(dir, paths, to, connect).await;
+    let result = send(dir, paths, to, connect).await.map(|_| ());
     if let Err(e) = &result
         && notify_errors
     {
@@ -41,7 +41,13 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
     result
 }
 
-async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<()> {
+pub async fn dropped(dir: &Path, paths: Vec<PathBuf>, peer: String) -> Result<()> {
+    let (count, name) = send(dir, paths, Some(peer), vec![]).await?;
+    crate::notify::sent(count, &name).await;
+    Ok(())
+}
+
+async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<(usize, String)> {
     for p in &paths {
         if std::fs::symlink_metadata(p).is_err() {
             bail!("{}: no such file or folder", p.display());
@@ -107,7 +113,7 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
     if failed > 0 {
         bail!("{failed} file(s) were not sent ({first_reason})");
     }
-    Ok(())
+    Ok((saved, device.name.clone()))
 }
 
 /// What one try at sending needs.

@@ -12,6 +12,8 @@ clipboard and files follow. Setup takes about a minute.
 > machines**: expect rough edges there. The X11 and wlroots (Sway,
 > Hyprland) backends are new: see [Supported desktops](#supported-desktops).
 
+**File edge drops:** hold a file drag over the thin peer-facing edge zone and release to copy into the other computer's Downloads inbox; X11 is verified with scripted XDND on private Xvfb, Windows/macOS adapters are compile-checked only, and Wayland edge drops are **not available on this desktop** (use `one-mk send`); configure with `one-mk drag --on|--off` / `one-mk drag --zone 12` or `[drag] enabled = true, zone_px = 12` in settings (defaults on only for supported desktops). See [feasibility and limits](docs/DRAG-FILES.md).
+
 ## Quick start
 
 Get it first. Every release has a package for each system (the

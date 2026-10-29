@@ -18,6 +18,7 @@ use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
 use one_mk_ctl::client::SwitchTo;
 use one_mk_input::{Armed, Backend, CaptureCmd, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, PowerEvent, ScreenLocker};
+use one_mk_input::dropzone::{DropTarget, Zone};
 use one_mk_net::{
     ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, Swap, TrustStore, read_stream_kind,
 };
@@ -386,6 +387,7 @@ impl Owner {
 }
 
 struct App {
+    dropzones: Option<one_mk_input::dropzone::Handle>,
     dir: PathBuf,
     backend_name: &'static str,
     node: Node,
@@ -520,9 +522,18 @@ pub async fn serve(
     };
 
     let settings = Settings::load_or_default(&dir);
+    let (dropzones, mut drops) = match one_mk_input::dropzone::start(name) {
+        Ok((handle, events)) => (Some(handle), events),
+        Err(error) => {
+            tracing::warn!("file edge drops unavailable: {error:#}");
+            (None, mpsc::channel(1).1)
+        }
+    };
+    let mut drop_jobs = tokio::task::JoinSet::new();
     let computers = crate::hotkeys::numbered_from(&identity, &trust).len();
     let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys, computers);
     let mut app = App {
+        dropzones,
         dir,
         backend_name: name,
         node: node.clone(),
@@ -608,6 +619,22 @@ pub async fn serve(
             Some(ev) = rx.recv() => app.on_app(ev, &screens_rx),
             Some((req, reply)) = ipc.recv() => app.on_request(req, reply),
             Some(ev) = shortcut_events.recv() => app.on_shortcut_event(ev),
+            Some(drop) = drops.recv() => {
+                let allowed = app.settings.drag.enabled && !app.locked && !app.lock_sync.is_locked()
+                    && app.owner.is_none() && app.remote.is_none()
+                    && app.peers.keys().any(|peer| peer.to_string() == drop.peer);
+                if allowed && drop_jobs.len() < 4 {
+                    let dir = app.dir.clone();
+                    drop_jobs.spawn(async move {
+                        if let Err(error) = crate::drag::send(&dir, drop.paths, drop.peer).await {
+                            crate::notify::failure("one-mk could not send the drop", &format!("{error:#}")).await;
+                        }
+                    });
+                } else {
+                    tracing::warn!("file drop not sent: peer unavailable, input locked, drag disabled, or four sends already active");
+                }
+            }
+            _ = drop_jobs.join_next(), if !drop_jobs.is_empty() => {},
             _ = tokio::time::sleep_until(app.dial_at.unwrap_or_else(Instant::now)), if app.dial_at.is_some() => {
                 app.dial_missing(&screens_rx);
             }
@@ -2163,6 +2190,7 @@ impl App {
                 let _ = self.inject.send(Inject::Key { code, down: false });
             }
             self.unlock_release = Mods::default();
+            self.sync_dropzones();
             return;
         }
         tracing::debug!("screen locked");
@@ -2176,6 +2204,7 @@ impl App {
             }
         }
         self.let_go_for_lock();
+        self.sync_dropzones();
     }
 
     /// Peer `fp` asks us to lock: its `lock-all` (`all`), obeyed always,
@@ -2245,6 +2274,7 @@ impl App {
     }
 
     fn update_sides(&mut self) {
+        self.sync_dropzones();
         let mut sides = Vec::new();
         let mut conflicts = Vec::new();
         let switching = self.switching.and_then(|(fp, _)| self.peers.get(&fp).map(|p| p.side));
@@ -2301,6 +2331,39 @@ impl App {
             self.sides = sides.clone();
             let _ = self.capture.send(CaptureCmd::SetSides(sides));
         }
+    }
+
+    fn sync_dropzones(&self) {
+        let Some(target) = &self.dropzones else { return };
+        let mut zones = Vec::new();
+        if self.settings.drag.enabled && !self.locked && !self.lock_sync.is_locked()
+            && self.owner.is_none() && self.remote.is_none()
+            && let Some(local) = &self.local
+        {
+            let bounds = local.bounds();
+            let width = i32::from(self.settings.drag.zone_px.clamp(1, 128)).min(bounds.w).min(bounds.h);
+            let mut peers: Vec<_> = self.peers.iter().filter(|(_, peer)| peer.desktop.is_some()).collect();
+            peers.sort_by_key(|(fingerprint, _)| **fingerprint);
+            for (fingerprint, peer) in peers {
+                let spans = self.armed_spans(peer.side, std::iter::once(*fingerprint));
+                for (start, end) in local.edge_spans(peer.side) {
+                    let allowed = spans.clone().unwrap_or_else(|| vec![(f64::from(start), f64::from(end))]);
+                    for (from, to) in allowed {
+                        let from = (from.ceil() as i32).max(start);
+                        let to = (to.floor() as i32).min(end);
+                        if from >= to { continue; }
+                        let rect = match peer.side {
+                            Side::Left => Rect::new(bounds.x, from, width, to - from),
+                            Side::Right => Rect::new(bounds.right() - width, from, width, to - from),
+                            Side::Top => Rect::new(from, bounds.y, to - from, width),
+                            Side::Bottom => Rect::new(from, bounds.bottom() - width, to - from, width),
+                        };
+                        zones.push(Zone { rect, peer: fingerprint.to_string() });
+                    }
+                }
+            }
+        }
+        target.set_zones(zones);
     }
 
     /// Paired devices that are not connected.

@@ -69,5 +69,85 @@ are used rather than a second network protocol. Completion must say
 - Windows: https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-registerdragdrop
 - AppKit: https://developer.apple.com/documentation/appkit/nsdraggingdestination
 
-Implementation and verification status is recorded below as work completes;
-feasibility is not evidence that a native adapter has been implemented.
+## Implementation and verification (2026-10-29)
+
+The shared, unit-tested state machine debounces repeated samples, hides on
+leave/button-up, latches Escape until release, and accepts each drop once.
+Connected peer-facing spans are derived from the existing screen layout;
+locked, remotely controlled, disconnected, and disabled states clear zones.
+Settings are saved through the existing locked `Settings::update` path:
+
+```toml
+[drag]
+enabled = true
+zone_px = 12
+```
+
+`one-mk drag --on`, `--off`, and `--zone 1..128` update these settings and ask
+the daemon to reload. Defaults enable only supported desktops. `doctor`
+explains Wayland unavailability; explicitly enabling the setting cannot make
+an unsupported backend work. No window/tray editor has been added.
+
+- **X11 implemented and tested:** a private Xvfb with XTest input and a
+  scripted XDND source verified raw-button/motion arming, actual target-window
+  mapping, URI offer negotiation, selection conversion after drop, two file
+  URLs, copy acknowledgement, and unmapping. This is not evidence of manual
+  Nautilus/Dolphin/Thunar interoperability. INCR selection streaming is not
+  implemented; oversized, incremental, non-file, and non-copy offers fail
+  closed. Drop onto the zone before crossing the pointer-handoff boundary;
+  this does not turn an ordinary remote pointer visit into a file drag.
+- **Windows implemented, compile-checked only:** a separate OLE STA owns a
+  topmost no-activate edge window, `IDropTarget`, and chained input hooks.
+  Native Explorer drop, DPI/multi-monitor behavior, permissions, and interplay
+  with pointer handoff require real Windows verification. Windows reparse
+  points (including junctions) are rejected. Existing Windows notifications
+  currently print to the daemon log, not a newly implemented toast service.
+- **macOS implemented, compile-checked only:** an AppKit main-thread run loop
+  owns an accessory window/view, global/local event monitors and file-URL
+  `NSDraggingDestination`. Finder interoperability, permissions, display
+  scaling/multiple screens, and pointer handoff require real macOS verification.
+  Missing permission/monitor initialization fails gracefully. Neither adapter
+  reads the clipboard or promises delivery before the transfer acknowledgements.
+- **Wayland:** deliberately no edge adapter, no XWayland fallback, no
+  compositor-specific hacks. A normal app window can receive a deliberate
+  drop; globally arming this hidden edge zone still needs compositor support.
+
+Safe intake rejects missing/relative/traversal/remote/symlink/special paths,
+validates nested trees and readable regular files, collapses duplicate roots,
+and bounds depth (64), tree entries (20,000), files (10,000), bytes (1 TiB),
+URI payload (1 MiB) and the existing receiver path rules. Empty directories
+are not represented by the existing transfer format. The queue and concurrent
+sends are bounded (four). Progress uses the existing transfer reporter; only
+a fully successful batch prints/notifies `Sent N files to <computer>`.
+OS drop acknowledgement means accepted for local processing, not guaranteed
+remote delivery; safety/connection/transfer failures are reported separately.
+
+The ignored test `drag::tests::two_null_daemons_receive_a_simulated_edge_drop`
+starts **two real binaries** in throwaway homes with `run --backend null
+--no-discovery --no-notify --no-clipboard --port <free> --downloads <private>`.
+The harness arms the shared state machine, simulates a drop, and invokes the
+same safe-intake/send handler used by the daemon; native intake is separately
+covered by Xvfb, not simulated inside the null backend. It verifies received
+bytes and kills/waits both children on every exit. Run after building:
+
+```sh
+cargo build -j 2 -p one-mk --bin one-mk
+ONE_MK_TEST_BINARY="$PWD/target/debug/one-mk" cargo test -j 2 -p one-mk \
+  drag::tests::two_null_daemons_receive_a_simulated_edge_drop -- --ignored --nocapture
+```
+
+Observed output (terminal progress control codes omitted):
+
+```text
+Sending 1 file (55 B) to computer-1 (127.0.0.1:49095)
+Sent 1 file (55 B) to computer-1 in 0.1 s (603 B/s)
+Sent 1 files to computer-1
+PASS: two real --backend null daemons; armed edge -> simulated drop -> safe intake -> QUIC -> receiver Downloads; 55 bytes verified
+test drag::tests::two_null_daemons_receive_a_simulated_edge_drop ... ok
+```
+
+Validation: workspace tests and clippy; Windows/macOS cross-target clippy for
+`one-mk-input`, `one-mk-proto`, `one-mk-ctl` with `--all-targets`. Native runtime
+verification is **not** implied by a cross-target check. No live input backend,
+real clipboard, or real user configuration was used. There are no idle polling
+timers in the adapters; idle CPU and footprint have not been benchmarked.
