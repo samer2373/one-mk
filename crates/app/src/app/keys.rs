@@ -49,6 +49,8 @@ pub(super) struct KeysUi {
     /// The key being changed, and the layer of the rule being changed.
     pub selected: Option<u16>,
     pub layer: Option<String>,
+    /// The app the rule being changed is only for ("Only in app…").
+    pub app: Option<String>,
     /// The key the keyboard's focus is on (arrows move it).
     pub focus_key: u16,
     /// Waiting for a key press.
@@ -292,7 +294,7 @@ impl App {
         let want = KeyRule { scope: self.keys.scope.clone(), layer: self.keys.layer.clone(), ..KeyRule::to(&name, "none") };
         let i = self.prefs.input.keys.iter().position(|r| {
             r.scope == want.scope
-                && r.app.is_none()
+                && tune::same_app(&r.app, &self.keys.app)
                 && r.layer.as_ref().map(|l| l.to_ascii_lowercase()) == want.layer.as_ref().map(|l| l.to_ascii_lowercase())
                 && r.from.parse::<keynames::Trigger>().is_ok_and(|t| t == keynames::Trigger::key(code))
         })?;
@@ -317,7 +319,7 @@ impl App {
         let Some(code) = self.keys.selected else { return };
         let from = keynames::key_name(u32::from(code));
         let own = self.own_rule(code).map(|(_, r)| r);
-        let base = KeyRule { scope: self.keys.scope.clone(), layer: self.keys.layer.clone(), ..Default::default() };
+        let base = KeyRule { scope: self.keys.scope.clone(), layer: self.keys.layer.clone(), app: self.keys.app.clone(), ..Default::default() };
         let tap_of = |r: &KeyRule| r.tap.clone().or_else(|| match &r.to {
             Some(tune::To::One(s)) => Some(s.clone()),
             _ => None,
@@ -346,6 +348,7 @@ impl App {
         self.keys.selected = Some(code);
         self.keys.focus_key = code;
         self.keys.layer = layer;
+        self.keys.app = None;
         self.keys.capture = None;
         self.keys.picker = None;
         self.keys.more = self.own_rule(code).is_some_and(|(_, r)| r.hold.is_some());
@@ -806,7 +809,6 @@ impl App {
                 Scope::All => String::new(),
                 s => s.label(),
             };
-            let tag = if r.app.is_some() { "One app: not used yet".to_owned() } else { tag };
             let bx = row.right() - 26.0;
             let edit = Rect::from_center_size(pos2(bx - 32.0, row.center().y), vec2(28.0, 28.0));
             let del = Rect::from_center_size(pos2(bx + 13.0, row.center().y), vec2(28.0, 28.0));
@@ -849,6 +851,8 @@ impl App {
                 if let Ok(t) = r.from.parse::<keynames::Trigger>() {
                     self.keys.scope = r.scope.clone();
                     self.select_key(t.key, r.layer.clone());
+                    self.keys.app = r.app.clone();
+                    self.keys.more = r.hold.is_some();
                 }
             }
             Some((i, false)) => {
@@ -905,8 +909,13 @@ impl App {
             Scope::Os(o) => format!("Changes here are only for {}.", tune::os_plural(*o)),
             Scope::Peer(p) => format!("Changes here are only for {p}."),
         };
+        let scope_note = match &self.keys.app {
+            Some(a) => format!("{}, {}.", scope_note.trim_end_matches('.'), tune::app_text(a)),
+            None => scope_note,
+        };
         y += para(ui, pos2(c.left(), y), c.width(), &scope_note, regular(T_META), INK2) + 10.0;
         let busy = self.tuning_busy();
+        y = self.app_field(ui, pos2(c.left(), y), c.width(), &name);
         match (self.keys.capture, self.keys.picker.clone()) {
             (Some((want, _)), _) => y = self.capture_box(ui, c.left(), y, c.width(), &name, want),
             (_, Some((want, query))) => y = self.picker(ui, c.left(), y, c.width(), want, query, 7),
@@ -998,6 +1007,40 @@ impl App {
             y += error_line(ui, c.left(), y, c.width(), &e);
         }
         card.end(ui, y)
+    }
+
+    /// "Only in app…": the rule being changed applies only while this app
+    /// has the focus on the computer typed on. Changing it moves the rule
+    /// there; with no rule yet, the next change is made for that app.
+    fn app_field(&mut self, ui: &mut Ui, at: Pos2, w: f32, name: &str) -> f32 {
+        let (left, y) = (at.x, at.y);
+        let own = self.keys.selected.and_then(|code| self.own_rule(code)).map(|(_, r)| r);
+        let own = own.as_ref();
+        let busy = self.tuning_busy();
+        let label = "Only in app";
+        let row = Rect::from_min_size(pos2(left, y), vec2(w, ROW));
+        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
+        let x = left + text_width(ui, label, regular(T_BODY)) + 12.0;
+        let fr = Rect::from_min_size(pos2(x, row.center().y - 13.0), vec2((row.right() - x).min(240.0), 26.0));
+        let cur = self.keys.app.clone().unwrap_or_default();
+        let help = "Only in app: the program's name on the other computer, like chrome.exe on Windows, com.apple.Terminal on a Mac or firefox on Linux. Empty for every app.";
+        if let Some(text) = self.edit_field(ui, fr, "key-app", &cur, "Any app", help, !busy, true) {
+            let new = (!text.is_empty()).then_some(text);
+            if let Some(Err(e)) = new.as_ref().map(|a| a.parse::<one_mk_proto::appmatch::AppPattern>()) {
+                self.keys.error = Some(("keyboard", format!("Only in app: {}", e.trim_start_matches("app: "))));
+                return y + ROW;
+            }
+            if let Some(r) = own.filter(|r| !tune::same_app(&r.app, &new)) {
+                let moved = KeyRule { app: new.clone(), ..r.clone() };
+                if let Err(e) = tune::check_add(&self.prefs.input, &moved) {
+                    self.keys.error = Some(("keyboard", e));
+                    return y + ROW;
+                }
+                self.tune_cmds(name, "keyboard", vec![tune::remove_args(r), tune::add_args(&moved)], None);
+            }
+            self.keys.app = new;
+        }
+        y + ROW + 4.0
     }
 
     /// "Press the key you want…", while the window waits for it.
