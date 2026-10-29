@@ -1,11 +1,11 @@
 [package]
 name = "one-mk-input"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-one-mk-proto = { version = "0.1.4", path = "../proto" }
+one-mk-proto = { version = "0.1.5", path = "../proto" }
 tokio = { version = "1.54.1", features = ["rt", "sync", "macros", "time"] }
 tracing = "0.1.44"
 

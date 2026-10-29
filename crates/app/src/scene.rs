@@ -214,8 +214,8 @@ fn panels<'a>(screens: &'a [Monitor], pl: &Plane) -> impl Iterator<Item = [f32; 
     let k = (pw / bw).min(ph / bh);
     let (ku, kw) = (k / pw, k / ph);
     let (u, w) = ((1.0 - bw * ku) / 2.0, (1.0 - bh * kw) / 2.0);
-    // A thin seam of glass between monitors that touch, in desk units.
-    let (gu, gw) = (0.25 / pw, 0.25 / ph);
+    // A visible bezel between monitors that touch, in desk units.
+    let (gu, gw) = (0.9 / pw, 0.9 / ph);
     screens.iter().map(move |r| {
         let (u0, w0) = (u + (r.x - x0) as f32 * ku, w + (r.y - y0) as f32 * kw);
         [u0 + gu, w0 + gw, u0 + r.w as f32 * ku - gu, w0 + r.h as f32 * kw - gw]
@@ -1183,7 +1183,7 @@ impl Scene {
         if lit > 0.01 {
             let [c0, c1] = d.wall.map(|c| fade(rgba(hex(c), 1.0, 1.0), lit));
             let mid = mix(c0, c1, 0.5);
-            let edge = Some(fade(rgba(hex(0x30353E), 0.9, 1.0), lit));
+            let edge = Some(fade(rgba(hex(if d.screens.len() > 1 { 0x5A616C } else { 0x30353E }), 0.9, 1.0), lit));
             if d.screens.len() > 1 {
                 for [u0, w0, u1, w1] in panels(&d.screens, pl) {
                     quad_colors(painter, rect(u0, w0, u1, w1), [c0, mid, c1, mid], edge);
@@ -1403,7 +1403,7 @@ mod tests {
             let (w, h) = size(p[2]);
             assert!(h > w, "the portrait monitor stands upright: {w} x {h}");
             let (w, h) = size(p[0]);
-            assert!(((w + 0.5) / (h + 0.5) - 16.0 / 9.0).abs() < 0.01, "the main one keeps 16:9, seam aside: {w} x {h}");
+            assert!(((w + 1.8) / (h + 1.8) - 16.0 / 9.0).abs() < 0.01, "the main one keeps 16:9, seam aside: {w} x {h}");
             assert!(p[1][0] < p[2][0] && p[2][0] < p[0][0] && p[0][0] < p[3][0], "left to right as on the desk");
             assert!(p[2][1] < p[0][1], "the portrait one reaches higher");
         }

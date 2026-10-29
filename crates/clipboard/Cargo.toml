@@ -1,6 +1,6 @@
 [package]
 name = "one-mk-clipboard"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 
 [dependencies]
