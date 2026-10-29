@@ -6,27 +6,19 @@ status column when something changes. Started 2026-10-29.
 Goals every feature is judged against: lowest latency, zero idle CPU, tiny
 footprint, setup as easy as possible, no stuck keys.
 
-## Where things stand (updated 2026-10-29, Claude rate limit until 8am Asia/Amman)
+## Where things stand (updated 2026-10-29)
 
 Merged into `worktree-features-wave1` and validated (full `cargo test`, clippy
 clean on Linux, Windows and macOS targets for the crates that cross-build):
 waves 1 and 2, packaging and Send-to (3D, 3G), X11 and wlroots backends (3E,
 3F), pairing by link with its security fixes (3H), key mapper and input tuning
-core (4A), window and tray UI and its design review, and the fix rounds D, E,
-F1, F2, G (layout tie-break).
+core (4A) and its window editor (4B), window and tray UI and its design review,
+and every fix round so far (D, E, F1, F2, G, the Codex rounds for the
+cross-review findings, and the run:-action permission fix).
 
-In flight: Codex fixing six findings from its review of the Claude fix rounds
-(pulse duplicate presses, X11/wlroots partial-edge spans, drag broken by
-click replay, Windows uninstall ownership, netwatch reconnect, backend status).
-
-Waiting for the Claude limit to reset (resume these first):
-1. **W4-B** (keyboard and mouse editor tab in the window) failed on the rate
-   limit before doing anything: start it again with the same brief.
-2. **Claude review of Codex's two fix rounds** (hooks/settings/clipboard and
-   the pairing security fixes): the review agent stopped on the limit; resume
-   it with SendMessage (agent `af9a75326963870d4`) or start it again.
-3. **Claude review of the Codex fixes above** once they land (cross-review
-   rule).
+In flight: a Claude review of the last two Codex rounds
+(`t3/fix-input-edge-regressions`, `t3/harden-hooks-pairing`), the last step of
+the cross-review rule for this batch.
 
 Not started: 3A pointer drawn on a computer with no mouse, 3B drag files across
 the edge, 4C local-only remap on Windows/macOS, 4D per-app rules.
