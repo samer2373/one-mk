@@ -177,9 +177,12 @@ impl Link {
         });
     }
 
-    pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side) {
+    /// Moves a peer to `side`: with an offset, to that exact place; without,
+    /// anywhere along it.
+    pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side, offset: Option<(i32, i32)>) {
         let (id, word) = (peer.to_owned(), side.to_string());
-        self.job(Job::Layout { id: peer.into(), name: name.into(), side }, move |l| l.one_mk(&["layout", &id, &word]).map(drop));
+        let at = offset.map_or_else(|| "--offset=none".to_owned(), |(x, y)| format!("--offset={x},{y}"));
+        self.job(Job::Layout { id: peer.into(), name: name.into(), side }, move |l| l.one_mk(&["layout", &id, &word, &at]).map(drop));
     }
 
     pub fn set_swap(&self, peer: &str, name: &str, swap: &str) {

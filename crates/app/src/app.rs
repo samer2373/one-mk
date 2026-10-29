@@ -12,7 +12,7 @@ use crate::widgets::{self, Look, Pills, a11y_text, button, button_width, mix, pa
 use egui::accesskit::{Live, Role};
 use egui::{Align2, Color32, CornerRadius, Id, Key, Modifiers, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 use one_mk_ctl::status::{PeerStatus, Status, on_your, os_name};
-use one_mk_proto::{Side, os};
+use one_mk_proto::{Desktop, Edge, Side, os};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -37,8 +37,27 @@ const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"),
 const SWAPS: [(&str, &str); 3] = [("auto", "Auto"), ("on", "Always swap"), ("off", "Never swap")];
 
 enum Drag {
-    Device { i: usize, start: Pos2, x0: f32 },
+    /// `place` is set when both computers' monitors are known: then the
+    /// drag puts it at an exact place beside this computer's monitors.
+    Device { i: usize, start: Pos2, x0: f32, place: Option<Box<Placing>> },
     Orbit,
+}
+
+/// Where a computer's (0,0) sits in our pixels, if it was placed there.
+type Offset = Option<(i32, i32)>;
+
+/// A computer being dragged to a place beside this one's monitors.
+struct Placing {
+    fit: scene::Fit,
+    mine: Desktop,
+    /// Our monitors' free edges, every side.
+    edges: Vec<Edge>,
+    /// Its monitors' span, in its pixels.
+    peer: one_mk_proto::Rect,
+    /// That span's top left from the pointer, in our pixels.
+    grab: (f64, f64),
+    /// Where it goes if let go now: side and offset.
+    now: (Side, (i32, i32)),
 }
 
 struct PairUi {
@@ -139,8 +158,11 @@ pub struct App {
     latency: HashMap<String, Measured>,
     failed_measure: HashSet<String>,
     measuring: Option<String>,
-    /// Sides chosen here and not yet reported back by the daemon, and when.
-    pending_side: HashMap<String, (Side, f64)>,
+    /// Sides (and offsets) chosen here and not yet reported back by the
+    /// daemon, and when.
+    pending_side: HashMap<String, (Side, Offset, f64)>,
+    /// Computers placed where no screen of theirs touches ours.
+    apart: HashSet<String>,
     pending_swap: HashMap<String, String>,
     /// A computer that should hop (not slide) to its new place.
     hop: Option<String>,
@@ -208,10 +230,11 @@ fn edge_word(side: Side) -> &'static str {
 const GAP: f32 = 26.0;
 
 /// Where each computer stands, from the sides set in the layout. Each
-/// entry is (id, side, half width); this computer is at the origin.
-fn slots(me_half: f32, peers: &[(String, Side, f32)]) -> HashMap<String, (scene::V3, f32)> {
+/// entry is (id, side, half width); this computer is at the origin, and
+/// with what stands at an offset it spans `span` across the desk.
+fn slots(span: (f32, f32), peers: &[(String, Side, f32)]) -> HashMap<String, (scene::V3, f32)> {
     let mut out = HashMap::new();
-    let (mut left, mut right) = (-me_half, me_half);
+    let (mut left, mut right) = span;
     let mut count: HashMap<Side, usize> = HashMap::new();
     for (id, side, half) in peers {
         let n = count.entry(*side).or_default();
@@ -233,7 +256,7 @@ fn slots(me_half: f32, peers: &[(String, Side, f32)]) -> HashMap<String, (scene:
             Side::Top => (v((k - 1.0) * SPACING, 34.0 + (k - 1.0) * 6.0, -26.0), 0.92),
             // In front of this computer, but beside it, so it hides
             // neither screen.
-            Side::Bottom => (v(me_half + (k - 0.5) * SPACING, 0.0, 40.0), 0.8),
+            Side::Bottom => (v(span.1 + (k - 0.5) * SPACING, 0.0, 40.0), 0.8),
         };
         out.insert(id.clone(), place);
     }
@@ -326,6 +349,7 @@ impl App {
             failed_measure: HashSet::new(),
             measuring: None,
             pending_side: HashMap::new(),
+            apart: HashSet::new(),
             pending_swap: HashMap::new(),
             hop: None,
             just_paired: None,
@@ -398,7 +422,7 @@ impl App {
         self.pairing_steps(now);
         // A side the daemon never confirmed: show what it really has.
         let before = self.pending_side.len();
-        self.pending_side.retain(|_, (_, t)| now - *t < 5.0);
+        self.pending_side.retain(|_, (_, _, t)| now - *t < 5.0);
         if self.pending_side.len() != before {
             self.sync_scene();
         }
@@ -515,9 +539,20 @@ impl App {
     }
 
     fn side_shown(&self, id: &str, reported: Side) -> Side {
+        self.place_shown(id, (reported, None)).0
+    }
+
+    /// Side and offset to show: where a drag would put it, or what was
+    /// chosen here but not yet confirmed, or what the daemon reports.
+    fn place_shown(&self, id: &str, reported: (Side, Option<(i32, i32)>)) -> (Side, Option<(i32, i32)>) {
+        if let Some(Drag::Device { i, place: Some(pl), .. }) = &self.drag
+            && self.scene.devices.get(*i).is_some_and(|d| d.id == id)
+        {
+            return (pl.now.0, Some(pl.now.1));
+        }
         match &self.drag_side {
-            Some((d, side)) if d == id => *side,
-            _ => self.pending_side.get(id).map_or(reported, |(s, _)| *s),
+            Some((d, side)) if d == id => (*side, None),
+            _ => self.pending_side.get(id).map_or(reported, |(s, o, _)| (*s, *o)),
         }
     }
 
@@ -528,8 +563,9 @@ impl App {
         let status = self.running().cloned();
         let off = self.off();
         let peers: Vec<_> = status.as_ref().map(|s| s.peers.clone()).unwrap_or_default();
-        // The daemon has caught up with a side or a swap chosen here.
-        self.pending_side.retain(|id, (side, _)| peers.iter().any(|p| &p.id == id && p.side != *side));
+        let offset_of = |id: &str| status.as_ref().and_then(|s| s.offset_of(id));
+        // The daemon has caught up with a place or a swap chosen here.
+        self.pending_side.retain(|id, (side, offset, _)| peers.iter().any(|p| &p.id == id && (p.side, offset_of(id)) != (*side, *offset)));
         self.pending_swap.retain(|id, swap| peers.iter().any(|p| &p.id == id && &p.swap != swap));
         let listed = self.just_paired.as_ref().is_some_and(|(j, _)| peers.iter().any(|p| &p.id == j));
         if listed || self.just_paired.as_ref().is_some_and(|(_, t)| now - t > 6.0) {
@@ -537,8 +573,31 @@ impl App {
         }
         // A computer with several monitors stands as a wall of them, laptop or not.
         let kind_of = |o: u8, screens: &[one_mk_proto::Rect]| if o == os::MACOS && screens.len() < 2 { Kind::Laptop } else { Kind::Monitor };
-        let mut layout: Vec<(String, Side, f32)> =
-            peers.iter().map(|p| (p.id.clone(), self.side_shown(&p.id, p.side), scene::half_width(kind_of(p.os, &p.screens), &p.screens))).collect();
+        let me = &mut self.scene.devices[0];
+        me.screens = status.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
+        me.kind = if me.screens.len() > 1 { Kind::Monitor } else { me_kind() };
+        let me_half = scene::half_width(me.kind, &me.screens);
+        // A computer with an offset stands there, at our scale; the rest
+        // stand in a row on each side, clear of it.
+        let mine = (!me.screens.is_empty()).then(|| Desktop::new(me.screens.clone()));
+        let (mut placed, mut span) = (HashMap::new(), (-me_half, me_half));
+        self.apart.clear();
+        let mut layout: Vec<(String, Side, f32)> = Vec::new();
+        for p in &peers {
+            let kind = kind_of(p.os, &p.screens);
+            let (side, offset) = self.place_shown(&p.id, (p.side, offset_of(&p.id)));
+            match offset.zip(self.scene.fit(kind, &p.screens)) {
+                Some((o, fit)) => {
+                    let (pos, half) = (fit.pos(o), scene::half_width(kind, &p.screens) * fit.scale);
+                    span = (span.0.min(pos.x - half), span.1.max(pos.x + half));
+                    placed.insert(p.id.clone(), (pos, fit.scale));
+                    if mine.as_ref().is_some_and(|m| one_mk_proto::touching(m, &Desktop::new(p.screens.clone()), side, o).is_empty()) {
+                        self.apart.insert(p.id.clone());
+                    }
+                }
+                None => layout.push((p.id.clone(), side, scene::half_width(kind, &p.screens))),
+            }
+        }
         if let Some((id, _)) = &self.just_paired
             && let Some(i) = self.scene.index(id)
         {
@@ -551,10 +610,10 @@ impl App {
             let left = layout.iter().filter(|(_, s, _)| *s == Side::Left).count();
             layout.push((GHOST.into(), if right <= left { Side::Right } else { Side::Left }, scene::half_width(Kind::Monitor, &[]) * 0.86));
         }
+        let mounted: HashSet<String> = placed.keys().cloned().collect();
+        let mut places = slots(span, &layout);
+        places.extend(placed);
         let me = &mut self.scene.devices[0];
-        me.screens = status.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
-        me.kind = if me.screens.len() > 1 { Kind::Monitor } else { me_kind() };
-        let places = slots(scene::half_width(me.kind, &me.screens), &layout);
         if let Some(s) = &status {
             me.name = s.name.clone();
         }
@@ -591,6 +650,7 @@ impl App {
             if !keep {
                 d.leave(now);
             }
+            d.mounted = mounted.contains(&d.id);
             if let Some((pos, scale)) = places.get(&d.id) {
                 if hop.as_deref() == Some(d.id.as_str()) {
                     d.hop_to(*pos, now);
@@ -743,19 +803,33 @@ impl App {
     }
 
     fn side_of(&self, id: &str) -> Option<Side> {
-        self.pending_side.get(id).map(|(s, _)| *s).or_else(|| self.running()?.peers.iter().find(|p| p.id == id).map(|p| p.side))
+        self.place_of(id).map(|(side, _)| side)
+    }
+
+    /// Its side and offset, as chosen here or reported.
+    fn place_of(&self, id: &str) -> Option<(Side, Option<(i32, i32)>)> {
+        if let Some((side, offset, _)) = self.pending_side.get(id) {
+            return Some((*side, *offset));
+        }
+        let s = self.running()?;
+        s.peers.iter().find(|p| p.id == id).map(|p| (p.side, s.offset_of(id)))
     }
 
     fn name_of(&self, id: &str) -> String {
         self.running().and_then(|s| s.peers.iter().find(|p| p.id == id)).map_or_else(|| id.to_owned(), |p| p.name.clone())
     }
 
+    /// Anywhere along `side`: drops an offset, even on the same side.
     fn choose_side(&mut self, id: &str, side: Side, hop: bool) {
-        if self.side_of(id) != Some(side) {
+        self.choose_place(id, side, None, hop);
+    }
+
+    fn choose_place(&mut self, id: &str, side: Side, offset: Option<(i32, i32)>, hop: bool) {
+        if self.place_of(id) != Some((side, offset)) {
             let name = self.name_of(id);
-            self.pending_side.insert(id.to_owned(), (side, self.now));
+            self.pending_side.insert(id.to_owned(), (side, offset, self.now));
             self.busy.push(Job::Layout { id: id.into(), name: name.clone(), side });
-            self.link.set_side(id, &name, side);
+            self.link.set_side(id, &name, side, offset);
             if hop {
                 self.hop = Some(id.to_owned());
             }
@@ -763,8 +837,27 @@ impl App {
         self.sync_scene();
     }
 
+    /// Starts placing computer `i` by dragging it from `start`, when its
+    /// monitors and ours are known.
+    fn placing(&self, rect: Rect, i: usize, start: Pos2) -> Option<Box<Placing>> {
+        let d = &self.scene.devices[i];
+        let fit = self.scene.fit(d.kind, &d.screens)?;
+        let mine = Desktop::new(self.scene.devices[0].screens.clone());
+        let edges: Vec<Edge> = Side::ALL.into_iter().flat_map(|s| mine.exposed_edges(s)).collect();
+        let peer = Desktop::new(d.screens.clone()).bounds();
+        let (px, py) = self.scene.wall_px(rect, &fit.map, start)?;
+        // Held where it was picked up: from the middle of its screen.
+        let (cx, cy) = self.scene.wall_px(rect, &fit.map, self.scene.screen_centre(rect, i))?;
+        let grab = (cx - f64::from(peer.w) / 2.0 - px, cy - f64::from(peer.h) / 2.0 - py);
+        let now = scene::drop_place(&mine.screens, &edges, peer, (px + grab.0, py + grab.1), fit.reach());
+        Some(Box::new(Placing { fit, mine, edges, peer, grab, now }))
+    }
+
     /// The side a dragged computer is on right now.
     fn side_at(&self, i: usize) -> Side {
+        if let Some(Drag::Device { place: Some(pl), .. }) = &self.drag {
+            return pl.now.0;
+        }
         let d = &self.scene.devices[i];
         let dx = d.pos.x - self.scene.devices[0].pos.x;
         let moved = (d.pos.x - d.target.x).abs();
@@ -889,20 +982,29 @@ impl App {
             let start = resp.interact_pointer_pos().unwrap_or_default();
             self.drag = match self.scene.hit(start) {
                 Some(i) if self.draggable(i) => {
+                    let place = self.placing(rect, i, start);
                     let d = &mut self.scene.devices[i];
                     // Picked up: it lifts a little and its shadow softens.
                     d.lift.go(motion::space(2.5), now, 0.12, motion::out_cubic);
                     d.pop.go(if motion::reduced() { 1.0 } else { 1.02 }, now, 0.12, motion::out_cubic);
-                    Some(Drag::Device { i, start, x0: d.pos.x })
+                    Some(Drag::Device { i, start, x0: d.pos.x, place })
                 }
                 _ => Some(Drag::Orbit),
             };
         }
         if resp.dragged() {
-            match &self.drag {
-                Some(Drag::Device { i, start, x0 }) => {
+            match &mut self.drag {
+                Some(Drag::Device { i, start, x0, place }) => {
                     let (i, start, x0) = (*i, *start, *x0);
-                    if let Some(p) = resp.interact_pointer_pos() {
+                    if let Some(pl) = place {
+                        // In our monitors' plane, snapping beside the nearest.
+                        if let Some((x, y)) = resp.interact_pointer_pos().and_then(|p| self.scene.wall_px(rect, &pl.fit.map, p)) {
+                            pl.now = scene::drop_place(&pl.mine.screens, &pl.edges, pl.peer, (x + pl.grab.0, y + pl.grab.1), pl.fit.reach());
+                            let d = &mut self.scene.devices[i];
+                            d.pos = pl.fit.pos(pl.now.1);
+                            d.scale = pl.fit.scale;
+                        }
+                    } else if let Some(p) = resp.interact_pointer_pos() {
                         let ax = self.scene.x_axis(rect, i);
                         let d = p - start;
                         let dx = (d.x * ax.x + d.y * ax.y) / ax.length_sq().max(1e-3);
@@ -920,16 +1022,20 @@ impl App {
             }
         }
         if resp.drag_stopped() {
-            if let Some(Drag::Device { i, .. }) = self.drag
-                && i < self.scene.devices.len()
+            if let Some(Drag::Device { i, place, .. }) = &self.drag
+                && *i < self.scene.devices.len()
             {
+                let (i, offset) = (*i, place.as_ref().map(|pl| pl.now.1));
                 let side = self.side_at(i);
                 let d = &mut self.scene.devices[i];
                 d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
                 d.pop.go(1.0, now, 0.16, motion::out_cubic);
                 let id = d.id.clone();
                 self.drag_side = None;
-                self.choose_side(&id, side, false);
+                match offset {
+                    Some(o) => self.choose_place(&id, side, Some(o), false),
+                    None => self.choose_side(&id, side, false),
+                }
             }
             self.drag = None;
         }
@@ -1164,6 +1270,10 @@ impl App {
             [] => (
                 "Waiting for your computers".into(),
                 "Paired computers appear here when one·mk is running on them and they're on the same network.".into(),
+            ),
+            [p] if self.apart.contains(&p.id) => (
+                format!("{} is apart from this computer", p.name),
+                format!("No screen of theirs touches one here, so the pointer doesn't cross. Drag it next to a monitor to cross there.{away}"),
             ),
             [p] => {
                 let side = self.side_shown(&p.id, p.side);
@@ -1943,7 +2053,7 @@ mod debug {
                 let d = &mut app.scene.devices[i];
                 d.lift.go(2.5, now, 0.12, motion::out_cubic);
                 d.pop.go(1.02, now, 0.12, motion::out_cubic);
-                app.drag = Some(Drag::Device { i, start: Pos2::ZERO, x0: d.pos.x });
+                app.drag = Some(Drag::Device { i, start: Pos2::ZERO, x0: d.pos.x, place: None });
             }
             if let Some(Drag::Device { x0, .. }) = app.drag {
                 let t = ((now - 1.5) / 1.5).min(1.0) as f32;
@@ -1978,7 +2088,7 @@ mod tests {
 
     #[test]
     fn sides_become_places() {
-        let s = slots(29.0, &[("a".into(), Side::Left, 15.5), ("b".into(), Side::Right, 29.0), ("c".into(), Side::Left, 29.0), ("d".into(), Side::Top, 29.0)]);
+        let s = slots((-29.0, 29.0), &[("a".into(), Side::Left, 15.5), ("b".into(), Side::Right, 29.0), ("c".into(), Side::Left, 29.0), ("d".into(), Side::Top, 29.0)]);
         assert_eq!(s["a"].0.x, -(29.0 + GAP + 15.5));
         assert_eq!(s["c"].0.x, -(29.0 + GAP + 31.0 + GAP + 29.0));
         assert_eq!(s["b"].0.x, 29.0 + GAP + 29.0);
@@ -1987,7 +2097,7 @@ mod tests {
 
     #[test]
     fn below_stands_beside_this_computer_not_in_front_of_it() {
-        let s = slots(29.0, &[("b".into(), Side::Bottom, 29.0)]);
+        let s = slots((-29.0, 29.0), &[("b".into(), Side::Bottom, 29.0)]);
         assert!(s["b"].0.z > 0.0, "in front");
         assert!(s["b"].0.x.abs() > 20.0, "but to one side");
     }
