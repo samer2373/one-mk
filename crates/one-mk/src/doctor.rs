@@ -759,6 +759,8 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     let paired = config.paired.clone().unwrap_or_default();
     let port = port_of(&daemon);
 
+    let non_portal = daemon.status().filter(|status| !status.backend.as_str().is_empty() && status.backend.as_str() != "portal");
+
     // Whose announcements we wait for: this computer's own, and every
     // paired computer that is not connected.
     let mut wanted: Vec<String> = Vec::new();
@@ -776,7 +778,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         blocking(move || probe_port(port), PortFacts { port, bind: Bind::Error("probe failed".into()), holder: None },),
         probe_mdns(wanted),
         probe_firewall(os),
-        probe_portals(os, dir.to_owned()),
+        async { if non_portal.is_some() { None } else { probe_portals(os, dir.to_owned()).await } },
         blocking(probe_addrs, Vec::new()),
         probe_shortcuts(os),
     );
@@ -786,7 +788,16 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.push(port_check(&daemon, &port_facts));
     checks.push(mdns_check(&daemon, &mdns));
     checks.push(firewall_check(os, &firewall, port));
-    checks.push(portal_check(os, portals.as_ref(), daemon.status().map_or(&[], |s| &s.input)));
+    checks.push(match non_portal {
+        Some(status) => check("portals", "Permissions", Outcome::skip(format!("this daemon uses the {} backend", status.backend.as_str()))),
+        None => portal_check(os, portals.as_ref(), daemon.status().map_or(&[], |s| &s.input)),
+    });
+    if let Ok(settings) = crate::settings::Settings::load(dir) {
+        if let Some(reason) = &settings.hooks.blocked {
+            checks.push(check("hooks", "Hooks", Outcome::fail(format!("Hooks REFUSED: {reason}"), "Fix settings.toml ownership and permissions and remove group/world write access from its folder; alternatively explicitly use `one-mk hooks --trust-permissions`.")));
+        }
+        checks.push(check("clipboard", "Clipboard", Outcome::pass(settings.clipboard.summary())));
+    }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
     checks.push(network_check(&addrs));
     let seen = mdns.seen.as_deref().unwrap_or_default();

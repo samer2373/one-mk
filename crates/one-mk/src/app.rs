@@ -367,6 +367,7 @@ impl Owner {
 
 struct App {
     dir: PathBuf,
+    backend_kind: one_mk_input::Kind,
     node: Node,
     trust: TrustStore,
     trust_reloaded: Option<Instant>,
@@ -489,6 +490,7 @@ pub async fn serve(
     let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys);
     let mut app = App {
         dir,
+        backend_kind: opts.backend,
         node: node.clone(),
         trust,
         trust_reloaded: None,
@@ -1759,6 +1761,11 @@ impl App {
             name: sanitize_name(&id.name),
             id: id.fingerprint.short(),
             port: self.node.local_addr().map_or(0, |a| a.port()),
+            backend: match self.backend_kind {
+                one_mk_input::Kind::Null => "null",
+                one_mk_input::Kind::Native if cfg!(target_os = "linux") => "portal",
+                one_mk_input::Kind::Native => "native",
+            }.into(),
             controlling: self.remote.as_ref().map(|r| name_of(&r.peer)),
             controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
             peers: peers.collect(),
