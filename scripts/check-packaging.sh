@@ -4,7 +4,8 @@
 #   - the .deb: contents, control, runs `one-mk --version` from an unpacked copy,
 #     builds twice, and under two other time zones, and compares checksums, validates the desktop files, the
 #     AppStream file and the systemd user unit;
-#   - the AppDir: `AppRun --version`.
+#   - the AppDir: `AppRun --version`;
+#   - the Flatpak source bundle: unpacked elsewhere, every path in the manifest resolves.
 # Optional tools (lintian, desktop-file-validate, appstreamcli, systemd-analyze)
 # are used when present and reported as skipped when not.
 #   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app
@@ -72,5 +73,27 @@ else skip "lintian not installed"; fi
 OUT_DIR=$scratch/c APPIMAGETOOL= sh "$ROOT/scripts/package-appimage.sh" >/dev/null 2>&1
 got=$("$scratch/c/one-mk.AppDir/AppRun" --version) && [ "$got" = "one-mk $VERSION" ] && ok "AppDir: AppRun --version: $got" || bad "AppDir AppRun --version"
 [ -f "$scratch/c/one-mk.AppDir/one-mk.desktop" ] && [ -f "$scratch/c/one-mk.AppDir/one-mk.png" ] && [ -L "$scratch/c/one-mk.AppDir/.DirIcon" ] && ok "AppDir has desktop file and icons at the top" || bad "AppDir top level"
+
+# The Flatpak source bundle: built here, unpacked somewhere else, and every
+# path in the manifest must resolve there and match its checksum.
+OUT_DIR=$scratch/t sh "$ROOT/scripts/package-tarball.sh" >/dev/null
+OUT_DIR=$scratch/f sh "$ROOT/scripts/package-flatpak.sh" "$(ls "$scratch"/t/*.tar.gz)" >/dev/null 2>&1
+bundle=$(ls "$scratch"/f/*-flatpak-sources.tar.gz 2>/dev/null) || bundle=
+if [ -n "$bundle" ]; then
+    mkdir -p "$scratch/elsewhere"
+    tar -xzf "$bundle" -C "$scratch/elsewhere"
+    rm -rf "$scratch/f"   # what the manifest points at must be in the bundle, not left behind
+    manifest=$(ls "$scratch"/elsewhere/*/io.github.onemk.OneMk.yml)
+    mdir=$(dirname "$manifest")
+    refs=$(sed -n 's/^ *path: //p' "$manifest")
+    [ -n "$refs" ] && ok "flatpak manifest names $(echo "$refs" | wc -l | tr -d ' ') local sources" || bad "flatpak manifest names no sources"
+    for ref in $refs; do
+        want=$(awk -v r="$ref" '$1=="path:" && $2==r {f=1; next} f && $1=="sha256:" {print $2; exit}' "$manifest")
+        case "$ref" in /*|*..*) bad "flatpak source $ref is not a plain relative path"; continue ;; esac
+        if [ -f "$mdir/$ref" ] && [ "$(sha256sum < "$mdir/$ref" | cut -d' ' -f1)" = "$want" ]; then ok "flatpak source $ref resolves and matches its sha256"
+        else bad "flatpak source $ref is missing from the bundle or its sha256 is wrong"; fi
+    done
+    grep -q "$ROOT\|$scratch\|@[A-Z0-9_]*@" "$manifest" && bad "flatpak manifest holds a checkout path or a placeholder" || ok "flatpak manifest holds no checkout path or placeholder"
+else bad "no flatpak source bundle was written"; fi
 
 [ "$fail" = 0 ] && echo "all checks passed" || { echo "some checks failed"; exit 1; }
