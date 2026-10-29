@@ -284,7 +284,8 @@ impl Settings {
             Ok(s) => {
                 let mut settings: Settings = toml::from_str(&s).with_context(|| format!("reading {}", path.display()))?;
                 settings.hooks.trust_permissions = crate::hooks::permissions_trusted(dir);
-                if settings.hooks.any() && !settings.hooks.trust_permissions {
+                // Hooks and key actions (`run: ...`) both start programs.
+                if (settings.hooks.any() || settings.input.runs_commands()) && !settings.hooks.trust_permissions {
                     settings.hooks.blocked = crate::hooks::unsafe_permissions(&path);
                 }
                 Ok(settings)
@@ -691,6 +692,36 @@ mod tests {
         assert!(s.clipboard.text && s.notify_files, "what the file doesn't say keeps its default");
         std::fs::write(dir.join(FILE), "clipboard = [").unwrap();
         assert!(Settings::load(&dir).is_err(), "a broken file is reported, not silently reset");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A key action that runs a command is held to the same permission
+    /// rules as `[hooks]`: a settings file others can write must not be able
+    /// to start programs, even when no hook is set.
+    #[cfg(unix)]
+    #[test]
+    fn run_key_actions_are_refused_when_the_file_is_writable_by_others() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("run-actions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let file = dir.join(FILE);
+        let write = |text: &str, mode: u32| {
+            std::fs::write(&file, text).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let run_rule = "[[input.keymap.rule]]\nfrom = \"f13\"\nto = \"run: touch /tmp/x\"\n";
+        let plain_rule = "[[input.keymap.rule]]\nfrom = \"f13\"\nto = \"esc\"\n";
+        let button_run = "[[input.button]]\nfrom = 8\nto = [\"run: touch /tmp/x\"]\n";
+
+        write(run_rule, 0o660);
+        assert!(Settings::load(&dir).unwrap().hooks.blocked.is_some(), "run: in a group-writable file");
+        write(button_run, 0o660);
+        assert!(Settings::load(&dir).unwrap().hooks.blocked.is_some(), "run: on a button");
+        write(run_rule, 0o600);
+        assert!(Settings::load(&dir).unwrap().hooks.blocked.is_none(), "a private file is fine");
+        write(plain_rule, 0o660);
+        assert!(Settings::load(&dir).unwrap().hooks.blocked.is_none(), "no command, nothing to refuse");
         let _ = std::fs::remove_dir_all(dir);
     }
 

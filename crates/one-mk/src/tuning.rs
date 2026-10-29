@@ -202,6 +202,22 @@ pub struct KeymapSettings {
     pub rule: Vec<KeyRule>,
 }
 
+impl TuningSettings {
+    /// Whether any key or button rule runs a command (`run: ...`). Such a
+    /// file can start programs, so it is held to the same permission rules
+    /// as `[hooks]` (see `Settings::load`).
+    pub fn runs_commands(&self) -> bool {
+        let run = |s: &str| s.trim_start().to_ascii_lowercase().starts_with("run:");
+        let to = |t: &To| match t {
+            To::One(s) => run(s),
+            To::Many(v) => v.iter().any(|s| run(s)),
+        };
+        self.keymap.rule.iter().any(|r| {
+            r.to.as_ref().is_some_and(to) || r.tap.as_deref().is_some_and(run) || r.hold.as_deref().is_some_and(run)
+        }) || self.button.iter().any(|b| to(&b.to))
+    }
+}
+
 impl KeymapSettings {
     fn is_empty(&self) -> bool {
         self.tap_ms.is_none() && self.rule.is_empty()
