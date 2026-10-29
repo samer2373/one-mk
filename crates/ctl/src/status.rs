@@ -102,6 +102,9 @@ pub struct Status {
     /// What the input backend needs the user to know or do, one line each
     /// (e.g. approve the desktop's permission dialog); empty when it works.
     pub input: Vec<String>,
+    /// Problems with the layout, one line each (two computers claiming the
+    /// same stretch of edge, one whose edge doesn't face ours anywhere).
+    pub warnings: Vec<String>,
     /// Where the computers are, in detail (boxed: most readers never look,
     /// and it would double the size of every `Status`).
     pub layout: Box<LayoutStatus>,
@@ -290,6 +293,9 @@ impl Status {
         for line in &self.input {
             out += &format!("input\t{}\n", line.replace(['\t', '\n', '\r'], " "));
         }
+        for line in &self.warnings {
+            out += &format!("warning\t{}\n", line.replace(['\t', '\n', '\r'], " "));
+        }
         for t in &self.transfers {
             out += &format!(
                 "transfer\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -338,6 +344,7 @@ impl Status {
                     screens: decode_rects(screens).unwrap_or_default(),
                 }),
                 ["input", v] => s.input.push(v.into()),
+                ["warning", v] => s.warnings.push(v.into()),
                 // Cosmetic: a line that doesn't parse is skipped, not fatal.
                 ["transfer", id, dir, files, done, total, rate, peer] => s.transfers.extend(|| -> Option<_> {
                     Some(TransferStatus {
@@ -371,7 +378,7 @@ impl Status {
             (_, Some(p)) => format!("{p} is controlling this computer right now. {}\n", takeback_hint()),
             _ => "The mouse and keyboard are on this computer.\n".to_owned(),
         };
-        for line in &self.input {
+        for line in self.input.iter().chain(&self.warnings) {
             out += &format!("{line}\n");
         }
         if self.pointer_locked {
@@ -451,6 +458,9 @@ mod tests {
         // A line can't break the format.
         let odd = Status { input: vec!["a\tb\nc".into()], ..Status::default() };
         assert_eq!(Status::decode(&odd.encode()).unwrap().input, ["a b c"]);
+        let warned = Status { warnings: vec!["layout of B does not overlap yours".into()], ..Status::default() };
+        assert_eq!(Status::decode(&warned.encode()).unwrap(), warned);
+        assert!(warned.render().contains("does not overlap"));
     }
 
     /// The layout a layout editor reads: our monitors, each peer's

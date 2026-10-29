@@ -237,3 +237,44 @@ async fn profile_switches_with_the_network() {
     assert_eq!(record(&da, &fb).align(), Align::Offset(300));
     duo.stop().await;
 }
+
+/// An offset past the end of the edge (`one-mk layout B right --offset
+/// 5000`): nothing crosses and status says why, but `one-mk switch` still
+/// reaches B, and from there any part of B's edge facing A leads home
+/// (there is no overlap to aim for).
+#[tokio::test]
+async fn no_overlap_warns_and_a_switch_still_comes_home() {
+    let setup = |a_sees_b: &mut Device, b_sees_a: &mut Device| {
+        a_sees_b.set_align(Align::Offset(5000));
+        b_sees_a.set_align(Align::Offset(-5000));
+    };
+    let mut duo = Duo::start_on("no-overlap", None, setup, screen(1920, 1080), screen(1280, 800)).await;
+    let da = duo.da.clone();
+    let warned = || async {
+        let st = control::request(&da, Request::Status).await.ok().flatten().and_then(|t| Status::decode(&t));
+        st.is_some_and(|s| s.warnings.iter().any(|w| w.contains("does not overlap")))
+    };
+    eventually_async("the warning", warned).await;
+    while duo.ha.capture.try_recv().is_ok() {}
+
+    let fb = duo.fb.clone();
+    assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+    loop {
+        match next_capture(&mut duo.ha).await {
+            CaptureCmd::Activate { side } => break assert_eq!(side, Side::Right),
+            CaptureCmd::SetSides(_) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
+    assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(640.0, 400.0)));
+    duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0 }).unwrap();
+    loop {
+        match next_capture(&mut duo.ha).await {
+            CaptureCmd::Release { id: 3, pos: Some(p) } => break assert_eq!(p.x, 1917.0, "just inside A's right edge: {p:?}"),
+            CaptureCmd::SetSides(_) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    duo.stop().await;
+}

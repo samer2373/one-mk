@@ -194,13 +194,27 @@ impl Seam {
     /// The pointer leaves the neighbour's desktop through its facing edge
     /// at `p`: where it arrives here, `inset` pixels inside our edge.
     /// `None` if that part of its edge doesn't face us: it stays there.
+    ///
+    /// If the two edges don't face each other anywhere (an offset past the
+    /// end of the edge: a layout mistake), all of its edge leads home, to
+    /// the nearest point of ours. The pointer can only have got there
+    /// without crossing (`one-mk switch`, a shortcut), and must always
+    /// have a way back.
     pub fn exit(&self, p: Pos, inset: f64) -> Option<Pos> {
         let v = Desktop::along(self.home(), p);
+        if !self.overlaps() {
+            return Some(self.home_near(p, inset));
+        }
         if !within(&self.remote_spans, v) {
             return None;
         }
         let u = self.to_local(v);
         within(&self.local_spans, u).then(|| self.local.edge_point(self.side, u, inset))
+    }
+
+    /// Whether the two edges face each other anywhere (see [`Seam::shared`]).
+    pub fn overlaps(&self) -> bool {
+        !self.shared().is_empty()
     }
 
     /// Where the pointer comes home when it is brought back without
@@ -364,6 +378,22 @@ mod tests {
         assert_eq!(s.exit(Pos::new(100.0, -1.0), 0.0), Some(Pos::new(1600.0, 1079.0)));
         assert_eq!(s.exit(Pos::new(500.0, -1.0), 0.0), None, "under nothing of ours");
         assert_eq!(s.home_near(Pos::new(900.0, 400.0), 2.0), Pos::new(1920.0 - IN, 1077.0));
+    }
+
+    /// An offset past the end of our edge: nothing faces anything, no
+    /// crossing leads there, but a pointer that got there anyway (by a
+    /// switch) comes home through any part of the facing edge, to the
+    /// nearest point of ours.
+    #[test]
+    fn no_overlap_still_leads_home() {
+        let s = Seam::new(one(1920, 1080), one(1280, 800), Side::Right, Align::Offset(5000));
+        assert!(!s.overlaps() && s.shared().is_empty());
+        assert_eq!(s.enter(Pos::new(1919.0, 540.0)), None);
+        assert_eq!(s.exit(Pos::new(-1.0, 400.0), 2.0), Some(Pos::new(1917.0, 1080.0 - IN)));
+        assert_eq!(s.exit(Pos::new(-1.0, 0.0), 2.0), Some(Pos::new(1917.0, 1080.0 - IN)));
+        let below = Seam::new(one(1920, 1080), one(1280, 800), Side::Bottom, Align::Offset(-3000));
+        assert_eq!(below.exit(Pos::new(640.0, -1.0), 0.0), Some(Pos::new(0.0, 1079.0)));
+        assert!(Seam::new(one(1920, 1080), one(1280, 800), Side::Right, Align::Offset(300)).overlaps());
     }
 
     #[test]

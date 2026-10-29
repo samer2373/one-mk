@@ -1828,6 +1828,7 @@ impl App {
                 profile: profiles.active,
             }),
             input: self.input_problems.values().cloned().collect(),
+            warnings: self.conflicts.clone(),
         }
     }
 
@@ -1892,6 +1893,11 @@ impl App {
 
     fn switch_to(&mut self, fp: Fingerprint) -> String {
         let (name, side) = (self.peers[&fp].name.clone(), self.peers[&fp].side);
+        if self.seam(fp).is_some_and(|s| !s.overlaps()) {
+            // Allowed (it's the only way there), and any part of the edge
+            // facing us leads back (see `Seam::exit`).
+            tracing::warn!("{}", no_overlap(&name, side));
+        }
         if self.remote.as_ref().is_some_and(|r| r.peer == fp) {
             return format!("already\n{name}\n");
         }
@@ -2046,6 +2052,10 @@ impl App {
             let shared = |fp: &Fingerprint| self.seam(*fp).map(|s| s.shared());
             for (i, (fp, other)) in here.iter().enumerate() {
                 let theirs = shared(fp);
+                if theirs.as_ref().is_some_and(|t| t.is_empty()) {
+                    conflicts.push(no_overlap(&other.name, side));
+                    continue;
+                }
                 let Some((_, used)) = here[..i].iter().find(|(f, _)| match (&theirs, shared(f)) {
                     (Some(a), Some(b)) => overlaps(a, &b),
                     _ => true,
@@ -2135,6 +2145,16 @@ impl App {
             });
         }
     }
+}
+
+/// The warning for a peer on our `side` whose facing edge doesn't line up
+/// with ours anywhere (an offset past the end of the edge).
+fn no_overlap(name: &str, side: Side) -> String {
+    format!(
+        "layout of {name} does not overlap yours: no part of its edge faces this computer's, so the pointer can't \
+         cross to it (`one-mk switch` still goes there, and any part of that edge comes back); fix it with \
+         `one-mk layout \"{name}\" {side} --offset 0`"
+    )
 }
 
 /// Whether to send relative motion (gaming mode) to a peer that supports
