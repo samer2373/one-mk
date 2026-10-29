@@ -24,7 +24,12 @@ channel. Type `y` on both computers only if the code and host identity are
 right. Anything else refuses. Prompts have a maximum two-minute answer
 window; A's is additionally bounded by invitation expiry. A valid proof
 consumes the link **before** either prompt or trust save. Refusal or an
-interrupted exchange requires a fresh invitation.
+interrupted exchange requires a fresh invitation. Ctrl+C before the host saves
+trust cancels approval. Once the host has saved trust, Ctrl+C no longer cancels
+its bounded daemon-reload and commit-acknowledgment steps: it either finishes
+normally or reports that trust was saved locally but peer commit is uncertain.
+It never reports an ordinary cancellation after saving trust. Process crashes,
+forced termination and lost acknowledgments can still leave asymmetric trust.
 
 The six-digit short authentication string (SAS) is neither the secret nor
 a reusable password. It depends on the secret and full session transcript,
@@ -64,9 +69,10 @@ B tries direct addresses **before** mDNS. The fallback uses `mdns-sd`'s
 local service browser, never system/unicast DNS for `.local`. Only matching
 fingerprint hints in pairing mode are considered, with address filtering
 and eight distinct candidates per pass. An eight-second connection budget
-is shared with one optional busy retry; each dial is at most two seconds.
+is shared with up to three optional busy retries; each dial is at most two seconds.
 mDNS gets at most two seconds of the remaining budget. A busy refusal is
-retried once after 150–405 ms random delay. None of this promises availability.
+retried up to three times after independently jittered 300–900 ms waits, only
+while the original connection budget permits. None of this promises availability.
 
 TLS 1.3/QUIC uses the existing Node stack. B pins A's exact fingerprint
 **inside rustls's server certificate verifier**, retaining handshake
@@ -111,11 +117,22 @@ This revision closes that route, not all denial of service.
 
 Separate source admission allows 32 attempts per canonical source IP per
 one-second bucket, with at most 256 recent buckets and eviction of expired
-entries. IPv6 addresses share a /64 bucket; at capacity the oldest bucket is
-evicted rather than refusing every new source. Node retains 16 concurrent
+entries. Ordinary IPv6 neighbors have independent /128 buckets. After more
+than eight distinct /128s appear in a /64 within one second, that prefix uses
+a shared /64 rate budget, including attempts counted before the switch. Prefix
+tracking is also bounded to 256 entries and nine retained addresses per prefix.
+At capacity the oldest bucket is evicted rather than refusing every new source.
+Node retains 16 concurrent
 TLS handshakes / 4 per IP and a three-second handshake timeout. Invitation
 headers have a 1.5-second deadline for opening the stream and sending magic plus
-ID, with at most 128 short-lived header tasks. Only a matching secret-derived ID
+ID, with at most 128 short-lived header tasks and four concurrent pre-ID
+attempts per source (aggregated across a /64 when its rotation limit activates).
+Eight of the global slots are reserved for a source with no pre-ID attempt
+open and a freshly accepted TLS connection (at most one second old at admission).
+The reservation timestamp is observed when Node delivers the authenticated peer;
+Node does not expose the underlying transport's handshake-completion timestamp.
+Source permits are released immediately on header rejection, cancellation or a
+matching ID, rather than waiting for the entire proof exchange. Only a matching secret-derived ID
 can reserve one of 16 long proof slots / 4 per certificate. The complete exchange
 has a ten-second transport timeout. Silent TLS clients do not reserve long slots.
 Unknown-ID refusals disclose no name, nonce or proof
@@ -139,6 +156,63 @@ invitation expiry. This closes the buffered-approval/expiry race without changin
 wire bytes. Both approval orders are tested, including a joiner responding after
 expiry to an already-approved host. Independent human/transport
 timeouts still apply; an initially skewed B clock can reject a valid link.
+
+## Related local hardening
+
+On Unix, hook and `run:` action settings require a current-user-owned file.
+The config path and every resolved target-parent ancestor through the filesystem
+root are checked, even when a symlink points to the config folder's ancestor,
+a sibling tree, or a child folder. Directories may belong to the current user
+or root; group/world-writable directories require the sticky bit. File write
+permissions are not exempted by a sticky bit. Existing explicit permission
+trust overrides remain available. These checks do not replace OS ACL checks
+or eliminate concurrent filesystem replacement races.
+
+New peer state changes cancel the same peer's queued opposite hook, including
+transitions without a configured hook. Still-pending events for that peer
+cannot be overtaken by an earlier due time. Hooks and key actions have separate
+eight-process budgets, so neither consumes the other's capacity.
+
+When the Linux network watcher has never connected to the system bus, five
+consecutive identical connection failures stop automatic retries entirely.
+Manual `profile use` remains available; restart the daemon after fixing an
+initially absent bus to rearm automatic watching. A previously working bus
+continues reconnecting with the bounded 1–60 second backoff.
+
+Windows startup removal reads the Run value through the wide-character
+registry API rather than decoding `reg query` output. Non-ASCII paths remain
+intact. An entry belonging to another copy is explicitly left in place; read
+or delete failures are errors rather than a misleading "nothing to remove."
+This path has only been cross-compiled/clippy-checked, not exercised on Windows.
+
+## Regression verification
+
+`cargo test -j 2 --workspace` includes paused-time peer-hook ordering and
+action-budget tests, symlink permission cases, fake-signal cancellation before
+and after save, adaptive IPv6 admission, reserved-slot admission, and continuous
+three-source slow-loris refill while a real join completes. The refill test uses
+local sockets and ephemeral identities; it does not start an input backend.
+Repeat `cargo test -j 2 -p one-mk continuously_refilled_three_source_slowloris_allows_real_join -- --nocapture`
+ten times when changing admission policy.
+
+The private-bus restart test requires `dbus-daemon` on PATH. Like an
+environment-dependent ignored integration test, its explicit skip condition is
+an executable-not-found error; it prints `skipped: dbus-daemon missing` to stderr
+(visible with `--nocapture`) and returns. Other spawn failures fail the test.
+The paused-time absent-bus regression always runs, independent of that tool.
+
+For CLI stress, run isolated host/join processes under separate throwaway
+`--home` directories, leave host confirmation enabled, compare the displayed
+SAS values, then approve. Production links deliberately reject loopback
+addresses: use a local unicast address in the link while the three flooding
+sources connect to the same listener through `127.0.0.1`. The ignored
+`flood_cli_invitation_listener` helper runs six seconds of continuous refill
+from `127.0.0.2`, `.3`, and `.4`; opt in with `ONE_MK_TEST_INVITE_ADDR=127.0.0.1:<pairing-port>`
+and `cargo test -j 2 -p one-mk flood_cli_invitation_listener -- --ignored --nocapture`.
+To exercise post-save cancellation, pause the joiner after it sends approval,
+approve on the host, wait for the host's `devices.toml`, send SIGINT to the host,
+and resume the joiner. Both should acknowledge and exit successfully. Always
+resume/terminate all test processes and remove their throwaway homes afterward.
 
 ## Residual risks and recovery
 

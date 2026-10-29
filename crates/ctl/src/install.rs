@@ -109,7 +109,7 @@ pub fn uninstall() -> Result<String> {
     } else if cfg!(target_os = "macos") {
         uninstall_macos()?
     } else {
-        uninstall_windows()
+        return uninstall_windows();
     };
     Ok(if did {
         "one-mk will no longer start when you log in.\n  to turn it back on:  one-mk install".to_owned()
@@ -403,15 +403,44 @@ fn install_windows(l: &Launch) -> Result<String> {
     ))
 }
 
-fn uninstall_windows() -> bool {
-    let Ok(exe) = std::env::current_exe() else { return false };
-    let Some(folder) = exe.parent() else { return false };
-    let Ok(query) = Command::new("reg").args(["query", RUN_KEY, "/v", "one-mk"]).output() else { return false };
-    if !query.status.success() { return false; }
-    let text = String::from_utf8_lossy(&query.stdout);
-    let value = text.lines().find_map(|line| line.trim().strip_prefix("one-mk")?.trim_start().strip_prefix("REG_SZ").map(str::trim_start));
-    value.is_some_and(|value| windows_run_owned(value, &folder.to_string_lossy()))
-        && ok("reg", &["delete", RUN_KEY, "/v", "one-mk", "/f"])
+fn uninstall_windows() -> Result<String> {
+    let Some(value) = windows_startup_value()? else {
+        return Ok("one-mk was not set to start at login; nothing to remove.".into());
+    };
+    let exe = std::env::current_exe()?;
+    let folder = exe.parent().context("the current executable has no parent folder")?;
+    if !windows_run_owned(&value, &folder.to_string_lossy()) {
+        return Ok("the startup entry belongs to another copy of one-mk; left in place".into());
+    }
+    if !ok("reg", &["delete", RUN_KEY, "/v", "one-mk", "/f"]) {
+        bail!("could not remove the one-mk startup entry (`reg delete` failed)");
+    }
+    Ok("one-mk will no longer start when you log in.\n  to turn it back on:  one-mk install".into())
+}
+
+#[cfg(not(windows))]
+fn windows_startup_value() -> Result<Option<String>> { Ok(None) }
+
+#[cfg(windows)]
+fn windows_startup_value() -> Result<Option<String>> {
+    use std::ffi::c_void;
+    const RRF_RT_REG_SZ: u32 = 2;
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn RegGetValueW(key: *mut c_void, subkey: *const u16, value: *const u16, flags: u32, kind: *mut u32, data: *mut c_void, size: *mut u32) -> i32;
+    }
+    let key = (0x80000001u32 as i32 as isize) as *mut c_void;
+    let subkey: Vec<u16> = r"Software\Microsoft\Windows\CurrentVersion\Run".encode_utf16().chain(Some(0)).collect();
+    let name: Vec<u16> = "one-mk".encode_utf16().chain(Some(0)).collect();
+    let mut value = vec![0u16; 32768];
+    let mut size = (value.len() * 2) as u32;
+    let status = unsafe { RegGetValueW(key, subkey.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), value.as_mut_ptr().cast(), &mut size) };
+    if status == ERROR_FILE_NOT_FOUND { return Ok(None); }
+    if status != 0 { bail!("could not read the one-mk startup entry (Windows registry error {status}); left in place"); }
+    value.truncate(size as usize / 2);
+    if value.last() == Some(&0) { value.pop(); }
+    Ok(Some(String::from_utf16(&value).context("startup entry is not valid UTF-16; left in place")?))
 }
 
 fn windows_run_owned(value: &str, folder: &str) -> bool {
@@ -438,6 +467,7 @@ mod tests {
 
     #[test]
     fn windows_startup_ownership_is_folder_scoped() {
+        assert!(windows_run_owned(r#""C:\Users\Jürgen\one-mk\one-mk.exe" run"#, r"C:\Users\Jürgen\one-mk"));
         let folder = r"C:\Program Files\one-mk\";
         for value in [r#""c:\PROGRAM FILES\ONE-MK\one-mk.exe" run"#, r#""C:\Program Files\one-mk\one-mk-tray.exe" --start-daemon"#] {
             assert!(windows_run_owned(value, folder), "{value}");

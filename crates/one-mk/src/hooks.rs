@@ -377,21 +377,19 @@ fn opened_permissions(path: &Path, resolved: &Path, file: &std::fs::File) -> Opt
         let config = path.parent()?.to_owned();
         let canonical_config = match std::fs::canonicalize(&config) { Ok(dir) => dir, Err(error) => return Some(error.to_string()) };
         let target_parent = resolved.parent()?;
-        let boundary = canonical_config.ancestors().find(|ancestor| target_parent.starts_with(ancestor))?;
         let mut checks = vec![(resolved.to_owned(), md)];
-        for start in [config.as_path(), target_parent] {
+        for start in [config.as_path(), canonical_config.as_path(), target_parent] {
             for target in start.ancestors() {
-                if target == boundary && target != config && target != canonical_config { break; }
                 let metadata = match std::fs::metadata(target) { Ok(md) => md, Err(error) => return Some(error.to_string()) };
                 checks.push((target.to_owned(), metadata));
-                if target == config || target == canonical_config { break; }
             }
         }
         for (target, metadata) in checks {
-            if metadata.uid() != uid {
+            if metadata.uid() != uid && !(metadata.is_dir() && metadata.uid() == 0) {
                 return Some(format!("{} is owned by uid {}, not current uid {uid}", target.display(), metadata.uid()));
             }
-            if let Some(msg) = writable_by_others(metadata.mode()) {
+            if !(metadata.is_dir() && metadata.mode() & 0o1000 != 0)
+                && let Some(msg) = writable_by_others(metadata.mode()) {
                 return Some(format!("{} is {msg}", target.display()));
             }
         }
@@ -495,27 +493,33 @@ struct Queue {
 }
 
 impl Queue {
-    fn cancel_opposite(&mut self, event: Event) {
+    fn cancel_opposite(&mut self, event: Event, peer: &str) {
         let opposite = match event {
             Event::Enter => Some(Event::Leave),
             Event::Leave => Some(Event::Enter),
-            _ => None,
+            Event::PeerConnect => Some(Event::PeerDisconnect),
+            Event::PeerDisconnect => Some(Event::PeerConnect),
         };
         if let Some(opposite) = opposite {
-            self.pending.retain(|(event, _), _| *event != opposite);
+            self.pending.retain(|(event, id), _| *event != opposite || (!id.is_empty() && id != peer));
         }
     }
 
     fn insert(&mut self, mut pending: Pending, now: Instant) {
         pending.generation = self.generation;
         let event = pending.event;
-        self.cancel_opposite(event);
+        self.cancel_opposite(event, &pending.env[2].1);
         self.sequence = self.sequence.wrapping_add(1);
         pending.sequence = self.sequence;
         let key = (event, if matches!(event, Event::PeerConnect | Event::PeerDisconnect) { pending.env[2].1.clone() } else { String::new() });
         self.peer_last.retain(|_, last| now.saturating_duration_since(*last) < MIN_INTERVAL);
         let last = if key.1.is_empty() { self.limit.last[event.index()] } else { self.peer_last.get(&key).copied() };
         pending.due = last.map_or(now, |last| (last + MIN_INTERVAL).max(now));
+        if !key.1.is_empty() {
+            for queued in self.pending.values().filter(|queued| queued.env[2].1 == key.1) {
+                pending.due = pending.due.max(queued.due);
+            }
+        }
         if self.pending.len() < 256 || self.pending.contains_key(&key) { self.pending.insert(key, pending); }
     }
 
@@ -573,6 +577,7 @@ pub struct Engine {
     peer_wake: Arc<tokio::sync::Notify>,
     workers: Vec<tokio::task::JoinHandle<()>>,
     running: Arc<AtomicUsize>,
+    actions_running: Arc<AtomicUsize>,
     /// When each key action's command last ran (see [`Engine::run_action`]).
     actions: HashMap<String, Instant>,
 }
@@ -598,9 +603,9 @@ impl Engine {
         if !cfg.any() {
             if self.primed {
                 // What runs (and key actions' limits) outlive the hooks.
-                let (running, actions) = (self.running.clone(), std::mem::take(&mut self.actions));
+                let (running, actions_running, actions) = (self.running.clone(), self.actions_running.clone(), std::mem::take(&mut self.actions));
                 let mut fresh = Engine::default();
-                (fresh.running, fresh.actions) = (running, actions);
+                (fresh.running, fresh.actions_running, fresh.actions) = (running, actions_running, actions);
                 *self = fresh;
             }
             return;
@@ -676,7 +681,7 @@ impl Engine {
 
     fn fire(&mut self, cfg: &Hooks, ev: Event, peer: &PeerInfo) {
         let (lane, wake) = if matches!(ev, Event::Enter | Event::Leave) { (&self.queue, &self.wake) } else { (&self.peer_queue, &self.peer_wake) };
-        lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel_opposite(ev);
+        lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel_opposite(ev, &peer.id);
         wake.notify_one();
         let Some(cmd) = cfg.get(ev) else { return };
         let argv = match cmd.argv(cfg.shell) {
@@ -737,7 +742,7 @@ impl Engine {
     /// hooks run: split into words without a shell (whatever `shell` says:
     /// a key repeats too easily for that), killed after `timeout_secs`, at
     /// most once per [`MIN_INTERVAL`] per command and [`MAX_RUNNING`] at a
-    /// time with the hooks, and refused like hooks are when `settings.toml`
+    /// time independently of hooks, and refused like hooks are when `settings.toml`
     /// is writable by others. `peer` is the computer the keys go to (name,
     /// short id), for `ONE_MK_PEER` and `ONE_MK_PEER_ID`.
     pub fn run_action(&mut self, cfg: &Hooks, cmd: &str, peer: Option<(String, String)>) {
@@ -766,12 +771,12 @@ impl Engine {
     /// Starts `argv` on its own task right away (key actions are not queued
     /// with the enter/leave hooks), unless [`MAX_RUNNING`] already run.
     fn spawn_now(&self, label: &'static str, argv: Vec<String>, env: Vec<(&'static str, String)>, timeout: Duration) {
-        if self.running.fetch_add(1, Ordering::SeqCst) >= MAX_RUNNING {
-            self.running.fetch_sub(1, Ordering::SeqCst);
+        if self.actions_running.fetch_add(1, Ordering::SeqCst) >= MAX_RUNNING {
+            self.actions_running.fetch_sub(1, Ordering::SeqCst);
             tracing::warn!(event = label, "hook dropped: {MAX_RUNNING} are still running");
             return;
         }
-        let running = Running(self.running.clone());
+        let running = Running(self.actions_running.clone());
         tokio::spawn(async move {
             let _running = running;
             run(label, &argv, &env, timeout, false).await;
@@ -995,6 +1000,66 @@ pub async fn run_command(dir: &Path, args: HooksArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn symlink_target_directory_permissions() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let base = std::env::temp_dir().join(format!("one-mk-target-permissions-{}", std::process::id()));
+        for (case, relative, writable) in [
+            ("ancestor", "..", true), ("sibling", "../dotfiles", true),
+            ("child", "dotfiles", true), ("safe", "../dotfiles", false),
+        ] {
+            let root = base.join(case);
+            let config = root.join("one-mk");
+            let parent = config.join(relative);
+            std::fs::create_dir_all(&parent).unwrap();
+            std::fs::create_dir_all(&config).unwrap();
+            for directory in [&base, &root, &config, &parent] {
+                std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let target = parent.join("target.toml");
+            std::fs::write(&target, "").unwrap();
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let path = config.join("settings.toml");
+            let _ = std::fs::remove_file(&path);
+            symlink(&target, &path).unwrap();
+            std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(if writable { 0o2775 } else { 0o755 })).unwrap();
+            assert_eq!(unsafe_permissions(&path).is_some(), writable, "{case}");
+        }
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn newest_peer_transition_cancels_the_opposite() {
+        let mut queue = Queue::default();
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
+        let pending = |event| Pending { command: None, generation: 0, event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
+        queue.insert(pending(Event::PeerConnect), Instant::now());
+        assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::PeerConnect);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        queue.insert(pending(Event::PeerDisconnect), Instant::now());
+        tokio::time::advance(Duration::from_millis(100)).await;
+        queue.insert(pending(Event::PeerConnect), Instant::now());
+        tokio::time::advance(Duration::from_millis(100)).await;
+        queue.insert(pending(Event::PeerDisconnect), Instant::now());
+        tokio::time::advance(MIN_INTERVAL).await;
+        assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::PeerDisconnect);
+        assert!(queue.next().is_none(), "stale connect must not run after the final disconnect");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(start_paused = true)]
+    async fn saturated_actions_do_not_drop_hooks() {
+        let mut engine = Engine::default();
+        let cfg = Hooks { on_enter: Some(Command::Argv(vec!["/bin/sleep".into(), "30".into()])), ..Hooks::default() };
+        for index in 0..MAX_RUNNING {
+            engine.run_action(&cfg, &format!("/bin/sh -c 'sleep 30' unused{index}"), None);
+        }
+        engine.fire(&cfg, Event::Enter, &PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left });
+        for _ in 0..32 { tokio::task::yield_now().await; }
+        assert_eq!(engine.running.load(Ordering::SeqCst), 1, "hook budget is independent of actions");
+    }
+
     #[cfg(unix)]
     #[tokio::test(start_paused = true)]
     async fn pointer_and_peer_hooks_have_independent_serial_lanes() {
