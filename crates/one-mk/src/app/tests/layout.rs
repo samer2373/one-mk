@@ -194,3 +194,46 @@ async fn two_neighbours_share_one_edge() {
     drop(c);
     duo.stop().await;
 }
+
+/// A profile that switches by itself goes into effect when the network
+/// matches (once per change of network), syncs to the peer like any
+/// layout change, and leaves later tweaks alone until the network changes.
+#[tokio::test]
+async fn profile_switches_with_the_network() {
+    use crate::profiles::{NetworkId, ProfileCmd, Profiles};
+    let mut duo = Duo::start("auto-profile", None).await;
+    let (da, fb, fa) = (duo.da.clone(), duo.fb.clone(), duo.fa.clone());
+    // At the desk B is below, 300 px to the right; at home on the right.
+    crate::manage::set_layout(&da, &fb[..8], Some(Side::Bottom), Some(Align::Offset(300)), None).unwrap();
+    crate::profiles::run(&da, ProfileCmd::Save { name: "desk".into() }).await.unwrap();
+    crate::manage::set_layout(&da, &fb[..8], Some(Side::Right), Some(Align::Stretch), None).unwrap();
+    crate::profiles::run(&da, ProfileCmd::Save { name: "home".into() }).await.unwrap();
+    let auto = ProfileCmd::Auto { name: "desk".into(), ssid: vec!["Desk WiFi".into()], network: vec![], off: false };
+    let watching = crate::netwatch::fake::watchers();
+    crate::profiles::run(&da, auto).await.unwrap(); // reloads A, which starts watching
+    eventually("A to watch the network", || crate::netwatch::fake::watchers() > watching).await;
+    let s = status(&da).await;
+    assert_eq!((s.layout.profile.as_deref(), s.layout.profiles.len()), (Some("home"), 2));
+
+    let desk = NetworkId { ssids: vec!["Desk WiFi".into()], ..NetworkId::default() };
+    crate::netwatch::fake::announce(&desk);
+    assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Bottom]));
+    assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Top]));
+    let b_sees_a = record(&duo.db, &fa);
+    assert_eq!((b_sees_a.side(), b_sees_a.align()), (Side::Top, Align::Offset(-300)));
+    assert_eq!(Profiles::load(&da).unwrap().active.as_deref(), Some("desk"));
+
+    // A tweak, then the same network again (a reconnect): the tweak stands.
+    crate::manage::set_layout(&da, &fb[..8], None, Some(Align::Offset(100)), None).unwrap();
+    assert!(control::request(&da, Request::Reload).await.unwrap().is_some());
+    crate::netwatch::fake::announce(&desk);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(record(&da, &fb).align(), Align::Offset(100));
+    // Elsewhere, then back at the desk: the profile again.
+    crate::netwatch::fake::announce(&NetworkId { ssids: vec!["Café".into()], ..NetworkId::default() });
+    crate::netwatch::fake::announce(&desk);
+    let (db, fa2) = (duo.db.clone(), fa.clone());
+    eventually("B to get the desk layout back", move || record(&db, &fa2).align() == Align::Offset(-300)).await;
+    assert_eq!(record(&da, &fb).align(), Align::Offset(300));
+    duo.stop().await;
+}

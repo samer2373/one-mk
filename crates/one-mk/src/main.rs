@@ -9,8 +9,10 @@ mod doctor;
 mod install;
 mod link;
 mod manage;
+mod netwatch;
 mod notify;
 mod pair;
+mod profiles;
 mod send;
 mod settings;
 mod steer;
@@ -216,6 +218,12 @@ enum Cmd {
         #[arg(long, value_name = "on|off|auto")]
         swap_ctrl_cmd: Option<Swap>,
     },
+    /// Named layouts: save where every computer is, switch between them,
+    /// and switch by Wi-Fi network automatically.
+    Profile {
+        #[command(subcommand)]
+        cmd: profiles::ProfileCmd,
+    },
     /// Unpair a computer.
     Forget {
         /// Name or id of the paired computer (see `one-mk devices`).
@@ -386,6 +394,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Layout { device, side, offset, swap_ctrl_cmd } => {
                 manage::layout(&dir, &device, side, offset, swap_ctrl_cmd).await
             }
+            Cmd::Profile { cmd } => profiles::run(&dir, cmd).await,
             Cmd::Forget { device } => forget(&dir, &device),
             Cmd::Switch { to } => steer::switch(&dir, &to).await,
             Cmd::LockPointer { state } => {

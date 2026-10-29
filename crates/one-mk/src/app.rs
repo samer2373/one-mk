@@ -11,6 +11,7 @@
 use crate::clip::ClipSync;
 use crate::control::{self, Request};
 use crate::link::{self, Link, LinkEvent, Rank};
+use crate::profiles::{NetworkId, Profiles};
 use crate::manage::{LayoutStatus, PeerStatus, Place, Status, on_your, placement, takeback_hint};
 use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
@@ -156,6 +157,9 @@ enum AppEvent {
     Connected(Link),
     Found(Found),
     DialDone(SocketAddr),
+    /// The networks this computer is on changed (only watched while some
+    /// layout profile switches by itself).
+    Network(NetworkId),
 }
 
 struct Connected {
@@ -392,6 +396,12 @@ struct App {
     lock_sync: LockSync,
     /// Modifier keys to release once more when the screen unlocks.
     unlock_release: Mods,
+    /// Network changes are watched (for automatic layout profiles).
+    watching_network: bool,
+    /// The automatic profile the current network matched, if any.
+    auto_profile: Option<String>,
+    /// A network change has been seen since starting.
+    network_seen: bool,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -484,11 +494,15 @@ pub async fn serve(
         switching: None,
         lock_sync: LockSync::default(),
         unlock_release: Mods::default(),
+        watching_network: false,
+        auto_profile: None,
+        network_seen: false,
     };
     if app.locked {
         println!("The pointer is locked to this computer (`one-mk lock-pointer off` frees it).");
     }
     app.dial_missing(&screens_rx);
+    app.watch_network_if_wanted();
 
     let mut dial_tick = tokio::time::interval(DIAL_INTERVAL);
     dial_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1235,6 +1249,7 @@ impl App {
             AppEvent::DialDone(addr) => {
                 self.dialing.remove(&addr);
             }
+            AppEvent::Network(net) => self.on_network(&net),
         }
     }
 
@@ -1464,6 +1479,53 @@ impl App {
         self.update_sides();
     }
 
+    /// Starts watching for network changes if a layout profile switches by
+    /// itself (once; it then runs for good, idle until the network changes).
+    fn watch_network_if_wanted(&mut self) {
+        if self.watching_network || !Profiles::load(&self.dir).is_ok_and(|p| p.any_auto()) {
+            return;
+        }
+        self.watching_network = true;
+        let tx = self.tx.clone();
+        crate::netwatch::system().start(Box::new(move |net| {
+            let _ = tx.send(AppEvent::Network(net));
+        }));
+    }
+
+    /// The network changed: put the first automatic profile that matches
+    /// in place, unless it already was for this network, so `one-mk layout`
+    /// tweaks stand until the network really changes. The first report
+    /// after starting is the network we start on: if its profile is the
+    /// one in use, tweaks made before the restart stand too.
+    fn on_network(&mut self, net: &NetworkId) {
+        let first = !std::mem::replace(&mut self.network_seen, true);
+        let all = match Profiles::load(&self.dir) {
+            Ok(all) => all,
+            Err(e) => return tracing::warn!("{e:#}"),
+        };
+        let Some(p) = all.matching(net) else {
+            self.auto_profile = None;
+            return;
+        };
+        if self.auto_profile.replace(p.name.clone()).as_deref() == Some(p.name.as_str())
+            || (first && all.active.as_deref() == Some(p.name.as_str()))
+        {
+            return;
+        }
+        match crate::profiles::use_profile(&self.dir, &p.name) {
+            Ok((name, moved)) => {
+                println!("This network matches layout profile {name:?}; using it.");
+                if !moved.is_empty() {
+                    self.reload_trust();
+                    self.sync_sides();
+                    let fps: Vec<_> = self.peers.keys().copied().collect();
+                    fps.into_iter().for_each(|fp| self.send_layout(fp));
+                }
+            }
+            Err(e) => tracing::warn!("could not switch layout profiles: {e:#}"),
+        }
+    }
+
     /// Reads `settings.toml` and applies all of it: clipboard and
     /// notifications, edge rules, gaming mode and lock sync. A file that
     /// can't be read changes nothing.
@@ -1488,6 +1550,7 @@ impl App {
                 }
                 let fps: Vec<_> = self.peers.keys().copied().collect();
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
+                self.watch_network_if_wanted();
                 "ok\n".to_owned()
             }
             Request::Settings => match self.reload_settings() {
@@ -1540,6 +1603,7 @@ impl App {
 
     fn status(&self) -> Status {
         let id = self.node.identity();
+        let profiles = Profiles::load(&self.dir).unwrap_or_default();
         let name_of = |fp: &Fingerprint| self.peers.get(fp).map_or_else(String::new, |p| p.name.clone());
         let peers = self.trust.devices().iter().filter_map(|d| {
             let live = self.peers.get(&d.fingerprint()?);
@@ -1577,8 +1641,8 @@ impl App {
             layout: Box::new(LayoutStatus {
                 screens: self.local.as_ref().map_or_else(Vec::new, |d| d.screens.clone()),
                 places: places.collect(),
-                profile: None,
-                profiles: Vec::new(),
+                profiles: profiles.names(),
+                profile: profiles.active,
             }),
         }
     }
