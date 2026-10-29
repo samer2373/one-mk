@@ -390,6 +390,8 @@ struct App {
     lock_sync: LockSync,
     /// Modifier keys to release once more when the screen unlocks.
     unlock_release: Mods,
+    /// Runs `[hooks]` when the pointer arrives or leaves, peers come or go.
+    hooks: crate::hooks::Engine,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -482,7 +484,9 @@ pub async fn serve(
         switching: None,
         lock_sync: LockSync::default(),
         unlock_release: Mods::default(),
+        hooks: Default::default(),
     };
+    crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
     if app.locked {
         println!("The pointer is locked to this computer (`one-mk lock-pointer off` frees it).");
     }
@@ -519,6 +523,7 @@ pub async fn serve(
             _ = dial_tick.tick() => app.dial_missing(&screens_rx),
             _ = &mut shutdown => break,
         }
+        app.sync_hooks();
     }
 
     if let Some(r) = app.remote.as_ref() {
@@ -1441,11 +1446,22 @@ impl App {
         self.update_sides();
     }
 
+    /// Lets `[hooks]` see what changed: the pointer left or came back, a
+    /// peer took control or let go, a peer connected or disconnected.
+    fn sync_hooks(&mut self) {
+        let hooks = &self.settings.hooks;
+        let away = self.remote.as_ref().filter(|r| r.acked).map(|r| r.peer);
+        let owner = self.owner.as_ref().map(|o| o.peer);
+        let peers = self.peers.iter().map(|(fp, p)| (*fp, p.name.as_str(), p.side));
+        self.hooks.sync(hooks, away, owner, peers);
+    }
+
     /// Reads `settings.toml` and applies all of it: clipboard and
     /// notifications, edge rules, gaming mode and lock sync. A file that
     /// can't be read changes nothing.
     fn reload_settings(&mut self) -> Result<()> {
         self.settings = Settings::load(&self.dir)?;
+        crate::hooks::warn_if_unsafe(&self.dir, &self.settings.hooks);
         crate::clipctl::apply(&self.settings, &self.services);
         self.apply_pointer_mode();
         self.sync_sides();
@@ -2694,6 +2710,47 @@ mod tests {
 
     fn switch_to(fp: &str) -> Request {
         Request::Switch(SwitchTo::Device(fp[..8].to_owned()))
+    }
+
+    /// `[hooks]`: the command runs on the computer the pointer arrives on
+    /// (`enter`) and the one it leaves (`leave`), with the environment
+    /// filled in, and not at all for what was already true when it was set.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn hooks_run_on_enter_and_leave() {
+        use crate::hooks::Command;
+        let mut duo = Duo::start("hooks", None).await;
+        let (la, lb) = (duo.da.join("hook.log"), duo.db.join("hook.log"));
+        let hook = |log: &std::path::Path| {
+            let script = format!("echo \"$ONE_MK_EVENT $ONE_MK_PEER $ONE_MK_SIDE\" >> {}", log.display());
+            Command::Argv(vec!["/bin/sh".into(), "-c".into(), script])
+        };
+        for (dir, log) in [(&duo.da, &la), (&duo.db, &lb)] {
+            set(dir, |s| {
+                s.hooks.on_enter = Some(hook(log));
+                s.hooks.on_leave = Some(hook(log));
+            })
+            .await;
+        }
+        let lines = |log: &std::path::Path| -> Vec<String> {
+            std::fs::read_to_string(log).unwrap_or_default().lines().map(|l| l.split(' ').next().unwrap().to_owned()).collect()
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(lines(&la).is_empty() && lines(&lb).is_empty(), "setting a hook is not an event");
+
+        // The pointer goes A -> B: it leaves A and enters B.
+        duo.enter_b().await;
+        eventually("the hooks of the first crossing", || lines(&la) == ["leave"] && lines(&lb) == ["enter"]).await;
+        let (a, b) = (std::fs::read_to_string(&la).unwrap(), std::fs::read_to_string(&lb).unwrap());
+        // B is on A's right, A on B's left; each names the other.
+        assert!(a.trim_end().ends_with(" right") && b.trim_end().ends_with(" left"), "{a:?} {b:?}");
+        assert!(a.contains(&format!(" {} ", Duo::peer_status(&duo.da).await.name)), "{a:?}");
+
+        // And back: it enters A and leaves B. (After the rate limit.)
+        tokio::time::sleep(crate::hooks::MIN_INTERVAL).await;
+        duo.leave_b().await;
+        eventually("the hooks of the way back", || lines(&la) == ["leave", "enter"] && lines(&lb) == ["enter", "leave"]).await;
+        duo.stop().await;
     }
 
     const CENTER: Pos = Pos::new(960.0, 540.0);

@@ -6,6 +6,7 @@ mod clip;
 mod clipctl;
 mod control;
 mod doctor;
+mod hooks;
 mod install;
 mod link;
 mod manage;
@@ -240,6 +241,9 @@ enum Cmd {
         #[arg(value_name = "on|off", value_parser = settings::parse_on_off, action = clap::ArgAction::Set)]
         state: bool,
     },
+    /// Show or set commands to run when the pointer arrives on or leaves
+    /// this computer, or a computer connects or disconnects.
+    Hooks(hooks::HooksArgs),
     /// Show this computer's name and id.
     Id,
     /// Find out why computers are not connecting, and how to fix it.
@@ -384,6 +388,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Gaming { mode } => settings::gaming(&dir, mode).await,
             Cmd::LockAll => steer::lock_all(&dir).await,
             Cmd::LockSync { state } => settings::lock_sync(&dir, state).await,
+            Cmd::Hooks(args) => hooks::run_command(&dir, args).await,
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;
                 println!("{} ({})", id.name, id.fingerprint.short());

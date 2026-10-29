@@ -32,6 +32,8 @@ pub struct Settings {
     pub gaming: Gaming,
     /// Locking any computer locks the others.
     pub lock_sync: bool,
+    /// Commands to run when the pointer arrives or leaves (see `hooks.rs`).
+    pub hooks: crate::hooks::Hooks,
 }
 
 impl Default for Settings {
@@ -42,6 +44,7 @@ impl Default for Settings {
             edge: EdgeSettings::default(),
             gaming: Gaming::default(),
             lock_sync: false,
+            hooks: crate::hooks::Hooks::default(),
         }
     }
 }
