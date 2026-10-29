@@ -552,6 +552,8 @@ one-mk scroll --natural auto                        # natural on Macs, tradition
 one-mk scroll --modifier shift=horizontal --modifier alt=x5
 one-mk scroll --device wheel --mode discrete --speed 2 --peer desk
 one-mk pointer --speed 1.5 --peer laptop
+one-mk keymap add ctrl+space f13 --os mac --app com.microsoft.VSCode   # only in VS Code on the Mac
+one-mk pointer --speed 0.6 --app 'steam*'           # per app: also scroll and buttons
 one-mk keymap check                                 # typos, conflicts, rules that never apply
 ```
 
@@ -576,6 +578,15 @@ Good to know:
 - Only input sent to other computers is changed: on Linux one-mk sees your
   keyboard only while it forwards it (local remapping is planned for
   Windows and macOS).
+- `--app NAME` rules follow the app that has the focus on the computer you
+  are typing on: a program file on Windows (`chrome.exe`), a bundle id on a
+  Mac (`com.apple.Terminal`), the window class on Linux (`firefox`); `*`
+  matches anything, `!code` means every app but that one. That computer
+  says which app it is (only to the computer controlling it, and only while
+  rules need it), after a click or Alt+Tab. When it can't tell, the rule
+  doesn't apply and `one-mk status` says so: Wayland windows on GNOME and
+  KDE can't be named (X11 windows can), and older one-mk versions don't
+  say.
 - Pointer acceleration: one-mk sends positions computed on this computer,
   so this computer's acceleration applies once. Turning it off or a custom
   curve needs raw mouse motion, which no backend reads yet; turn
