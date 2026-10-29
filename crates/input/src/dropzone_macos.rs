@@ -6,7 +6,7 @@ use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2_app_kit::*;
-use objc2_foundation::{MainThreadMarker, NSArray, NSObjectProtocol, NSPoint, NSRect, NSSize};
+use objc2_foundation::{MainThreadMarker, NSArray, NSObjectProtocol, NSPoint, NSRect, NSSize, NSURL};
 use one_mk_proto::{Pos, drag::{Drag, Change}};
 use std::{cell::RefCell, ptr::NonNull, sync::atomic::{AtomicBool, Ordering}, time::Duration};
 use tokio::sync::{mpsc, watch};
@@ -75,7 +75,10 @@ fn dropped_paths(sender: &ProtocolObject<dyn NSDraggingInfo>) -> Result<Vec<std:
     for item in items.iter() {
         let value = item.stringForType(unsafe { NSPasteboardTypeFileURL }).ok_or_else(|| anyhow::anyhow!("drop contains a non-file item"))?;
         if value.len() > MAX_URI_BYTES || text.len() + value.len() * 4 > MAX_URI_BYTES { bail!("drop URLs are too large"); }
-        text.push_str(&value.to_string());
+        let url = NSURL::URLWithString(&value).and_then(|url| url.filePathURL())
+            .and_then(|url| url.absoluteString()).ok_or_else(|| anyhow::anyhow!("cannot resolve file URL"))?;
+        if text.len() + url.len() * 4 > MAX_URI_BYTES { bail!("drop URLs are too large"); }
+        text.push_str(&url.to_string());
         text.push('\n');
     }
     uri_list(text.as_bytes())
@@ -122,6 +125,7 @@ impl Ui {
     }
 
     fn cancel(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.state.cancel();
         self.view.ivars().zone.replace(None);
         self.window.orderOut(None);
@@ -134,14 +138,16 @@ impl Ui {
         }
         if event.r#type() == NSEventType::LeftMouseDown {
             self.generation = self.generation.wrapping_add(1);
-            self.state.pointer(false, None);
+            if self.state.pointer(false, None) == Change::Hide { self.cancel(); }
             self.held = true;
         } else if event.r#type() == NSEventType::LeftMouseUp {
             self.held = false;
-            let generation = self.generation;
-            let _ = DispatchQueue::main().after(DispatchTime::try_from(Duration::from_millis(300)).expect("bounded delay"), move || {
-                with_ui(|ui| { if !ui.held && ui.generation == generation { ui.cancel(); ui.state.pointer(false, None); } });
-            });
+            if self.view.ivars().zone.borrow().is_some() {
+                let generation = self.generation;
+                let _ = DispatchQueue::main().after(DispatchTime::try_from(Duration::from_millis(300)).expect("bounded delay"), move || {
+                    with_ui(|ui| { if !ui.held && ui.generation == generation { ui.cancel(); ui.state.pointer(false, None); } });
+                });
+            }
             return;
         }
         if !self.held { return; }
@@ -153,6 +159,11 @@ impl Ui {
         let zone = self.zones.iter().position(|zone| zone.rect.contains(point));
         match self.state.pointer(true, zone) {
             Change::Show(index) => {
+                self.generation = self.generation.wrapping_add(1);
+                let generation = self.generation;
+                let _ = DispatchQueue::main().after(DispatchTime::try_from(Duration::from_secs(30)).expect("bounded delay"), move || {
+                    with_ui(|ui| { if ui.generation == generation { ui.cancel(); } });
+                });
                 let zone = self.zones[index].clone();
                 let rect = zone.rect;
                 self.view.ivars().zone.replace(Some(zone));
@@ -160,7 +171,7 @@ impl Ui {
                     NSSize::new(rect.w.into(), rect.h.into())), true);
                 self.window.orderFrontRegardless();
             }
-            Change::Hide => { self.view.ivars().zone.replace(None); self.window.orderOut(None); }
+            Change::Hide => self.cancel(),
             Change::None => {}
         }
     }

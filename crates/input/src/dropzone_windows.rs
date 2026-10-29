@@ -35,6 +35,7 @@ impl State {
                 let rect = self.zones[index].rect;
                 unsafe { let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), rect.x, rect.y, rect.w, rect.h, SWP_NOACTIVATE | SWP_SHOWWINDOW); }
                 self.shown = Some(index);
+                if unsafe { SetTimer(Some(self.hwnd), 1, 30_000, None) } == 0 { self.cancel(); }
             }
             Change::Hide => self.hide(),
             Change::None => {}
@@ -55,7 +56,11 @@ unsafe extern "system" fn mouse(code: i32, message: WPARAM, data: LPARAM) -> LRE
         let event = unsafe { &*(data.0 as *const MSLLHOOKSTRUCT) };
         if event.flags & LLMHF_INJECTED == 0 {
             with_state(|state| match message.0 as u32 {
-                WM_LBUTTONDOWN => { state.drag.pointer(false, None); state.held = true; state.pointer(event.pt); }
+                WM_LBUTTONDOWN => {
+                    if state.drag.pointer(false, None) == Change::Hide { state.hide(); }
+                    state.held = true;
+                    state.pointer(event.pt);
+                }
                 WM_MOUSEMOVE if state.held => state.pointer(event.pt),
                 WM_LBUTTONUP => {
                     state.held = false;
