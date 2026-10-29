@@ -214,3 +214,7 @@ shot 48-keys-mouse-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE
 shot 49-keys-problems-long-name 3 "$W/kx" ONE_MK_APP_STATUS="$F" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY_SCOPE="$LONG"
 shot 50-keys-focus 2 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_FOCUS=1
 shot 51-keys-nothing-set 3 "$W/e" ONE_MK_APP_TAB=keys
+# Saving from the window (as a click would): the rule must land in settings.toml.
+mkdir -m 700 -p "$W/ks"
+env ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=f5 ONE_MK_APP_KEY_CHOOSE=ctrl+shift+esc ONE_MK_APP_SHOT="$W/ks.ppm" ONE_MK_APP_SHOT_AFTER=3 timeout 20 "$APP" --home "$W/ks" || true
+grep -q '^to = "ctrl+shift+esc"' "$W/ks/settings.toml" || { echo "saving a key rule from the window failed" >&2; exit 1; }
