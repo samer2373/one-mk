@@ -519,6 +519,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// `one-mk layout <pc> <side>` alone keeps the offset on the same side
+    /// and drops it on another, where it would mean something else.
+    #[test]
+    fn a_new_side_starts_stretched() {
+        let dir = temp_dir("new-side");
+        let laptop = pair(&dir, "laptop", Side::Bottom);
+        manage::set_layout(&dir, &laptop[..8], None, Some(Align::Offset(300)), None).unwrap();
+        manage::set_layout(&dir, &laptop[..8], Some(Side::Bottom), None, None).unwrap();
+        assert_eq!(place_of(&dir, &laptop).1, Align::Offset(300));
+        manage::set_layout(&dir, &laptop[..8], Some(Side::Right), None, None).unwrap();
+        assert_eq!(place_of(&dir, &laptop).1, Align::Stretch);
+        manage::set_layout(&dir, &laptop[..8], Some(Side::Left), Some(Align::Center), None).unwrap();
+        assert_eq!(place_of(&dir, &laptop).1, Align::Center);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Many processes' worth of writers at once: every change lands.
     #[test]
     fn concurrent_writes_all_land() {

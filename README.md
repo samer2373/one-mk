@@ -159,6 +159,9 @@ one-mk layout laptop right --offset center  # the two edges centred on each othe
 one-mk layout laptop --offset stretch       # back to stretching (the side stays)
 ```
 
+Moving a computer to another side without `--offset` starts it stretched
+again (an offset means something else on another side).
+
 The offset is in logical pixels (what your display settings call the
 resolution after scaling), measured from the start of your edge to the start
 of the other: the top for left and right, the left end for top and bottom;

@@ -51,14 +51,19 @@ pub async fn takeback(dir: &Path) -> Result<()> {
 
 /// Changes a paired device's side, alignment and/or Ctrl/Cmd setting in
 /// `devices.toml`. A new side or alignment gets a version newer than any
-/// seen, so it wins when the two computers compare layouts.
+/// seen, so it wins when the two computers compare layouts. A new side
+/// without an alignment is stretched; the same side keeps its alignment.
 pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>) -> Result<Device> {
     let mut trust = TrustStore::load(dir)?;
     let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
     let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
     let dev = trust.get_mut(&fp).expect("found above");
     if side.is_some() || align.is_some() {
-        place(dev, side.unwrap_or_else(|| dev.side()), align.unwrap_or_else(|| dev.align()));
+        // An offset chosen for one side means something else on another,
+        // so a new side without one starts stretched.
+        let new_side = side.unwrap_or_else(|| dev.side());
+        let keep = if new_side == dev.side() { dev.align() } else { Align::Stretch };
+        place(dev, new_side, align.unwrap_or(keep));
     }
     if let Some(swap) = swap {
         dev.swap_ctrl_cmd = swap;
