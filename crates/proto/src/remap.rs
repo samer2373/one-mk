@@ -774,7 +774,8 @@ impl Mapper {
     // ------------------------------------------------- the derived wire
 
     /// Each tap has one fresh down. The last tap of an already-held key
-    /// leaves that down for its holder to release.
+    /// leaves that down for its holder to release, if it should be down
+    /// at all (a combo may hide it): the state `sync` would produce.
     fn pulse(&mut self, c: Chord, last: bool, out: &mut impl FnMut(Emit)) {
         self.force = c.mods;
         for (i, &m) in MOD_CODES.iter().enumerate() {
@@ -789,7 +790,7 @@ impl Mapper {
         }
         out(Emit::Key { code: key, down: true });
         self.wire.update(key, true);
-        if !last || self.holders[key as usize] == 0 {
+        if !last || !self.wanted(key) {
             out(Emit::Key { code: key, down: false });
             self.wire.update(key, false);
         }
@@ -855,12 +856,18 @@ impl Mapper {
         }
     }
 
+    /// Whether `code` should be down on the wire: something holds it and
+    /// no combo hides it (unless the chord being typed needs it).
+    fn wanted(&self, code: u32) -> bool {
+        let bit = mod_bit(code);
+        let hidden = bit != 0 && self.hide[bit.trailing_zeros() as usize] > 0 && self.force & bit == 0;
+        self.holders[code as usize] > 0 && !hidden
+    }
+
     /// Emits a transition if what should be down on the wire for `code`
     /// differs from what is.
     fn sync(&mut self, code: u32, out: &mut impl FnMut(Emit)) {
-        let bit = mod_bit(code);
-        let hidden = bit != 0 && self.hide[bit.trailing_zeros() as usize] > 0 && self.force & bit == 0;
-        let want = self.holders[code as usize] > 0 && !hidden;
+        let want = self.wanted(code);
         if want != self.wire.is_held(code) {
             self.wire.update(code, want);
             out(Emit::Key { code, down: want });
@@ -1307,12 +1314,34 @@ mod tests {
         assert_eq!(t.key(LCTRL, true), [d(LCTRL)]);
         assert_eq!(t.tap(60), [u(LCTRL), d(LCTRL), d(C), u(C)]);
         assert_eq!(t.key(LCTRL, false), [u(LCTRL)]);
-        // A chord needs its modifier even while a combo hides it.
+        // A chord needs its modifier even while a combo hides it; the
+        // Ctrl step is a tap of its own, and Ctrl stays hidden after it.
         t.key(LCTRL, true);
         assert_eq!(t.key(H, true), [u(LCTRL), d(BACKSPACE)]);
-        assert_eq!(t.tap(60), [d(LCTRL), d(C), u(C), u(LCTRL)]);
+        assert_eq!(t.tap(60), [d(LCTRL), u(LCTRL), d(LCTRL), d(C), u(C), u(LCTRL)]);
         assert_eq!(t.key(H, false), [u(BACKSPACE), d(LCTRL)]);
         assert_eq!(t.key(LCTRL, false), [u(LCTRL)]);
+        assert!(t.m.is_idle());
+    }
+
+    /// The last tap of a key held but hidden by a combo leaves it up, as
+    /// the combo wants: Shift+Space (Backspace) held, then Shift typed
+    /// twice must not leave Shift down under the Backspace repeat.
+    #[test]
+    fn taps_of_a_hidden_key_leave_it_hidden() {
+        const SPACE: u32 = 57;
+        const F12: u32 = 88;
+        let seq = |from: &str, steps: &[&str]| RuleSpec { from: from.parse().unwrap(), layer: None, what: What::To(Output::sequence(steps).unwrap()) };
+        let mut t = T::new(&[rule("shift+space", "backspace"), seq("f12", &["lshift", "lshift"])]);
+        assert_eq!(t.key(LSHIFT, true), [d(LSHIFT)]);
+        assert_eq!(t.key(SPACE, true), [u(LSHIFT), d(BACKSPACE)]);
+        let taps = t.tap(F12);
+        assert_eq!(taps.iter().filter(|event| **event == d(LSHIFT)).count(), 2, "one fresh press per tap");
+        assert_eq!(taps, [d(LSHIFT), u(LSHIFT), d(LSHIFT), u(LSHIFT)]);
+        assert_eq!(t.key(SPACE, true), [d(BACKSPACE)], "a repeat of Backspace, not Shift+Backspace");
+        assert!(!t.m.wire.is_held(LSHIFT));
+        assert_eq!(t.key(SPACE, false), [u(BACKSPACE), d(LSHIFT)]);
+        assert_eq!(t.key(LSHIFT, false), [u(LSHIFT)]);
         assert!(t.m.is_idle());
     }
 
@@ -1471,6 +1500,9 @@ mod tests {
                 dual("q", "a", "lshift"),
                 dual("c", "lctrl", "c"),
                 rule("f13", "lock-all"),
+                // Typing a modifier a combo hides while it is held.
+                rule("shift+space", "backspace"),
+                RuleSpec { from: "f12".parse().unwrap(), layer: None, what: What::To(Output::sequence(&["lshift", "lshift"]).unwrap()) },
             ],
             vec![],
         ]
@@ -1482,7 +1514,7 @@ mod tests {
     /// every physical key is up nothing is left down.
     #[test]
     fn no_stuck_keys_under_random_streams() {
-        let keys = [CAPS, LALT, LMETA, LCTRL, RCTRL, LSHIFT, H, J, Q, A, C, RALT, 57, 59, 60, 183, 0x112, 0x110];
+        let keys = [CAPS, LALT, LMETA, LCTRL, RCTRL, LSHIFT, H, J, Q, A, C, RALT, 57, 59, 60, 88, 183, 0x112, 0x110];
         let maps: Vec<Keymap> = configs().iter().map(|c| map(c)).collect();
         let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
         for stream in 0..10_000 {
@@ -1520,6 +1552,10 @@ mod tests {
                     wire.apply(e, repeat);
                 }
                 assert_eq!(wire.down.iter().copied().collect::<Vec<_>>(), m.wire.iter().collect::<Vec<_>>());
+                // Down on the wire exactly when held and not hidden.
+                for code in 0..CODE_LIMIT {
+                    assert_eq!(m.wire.is_held(code), m.wanted(code), "stream {stream}: code {code}");
+                }
             }
             // Everything comes up physically (and a pending key's time runs out).
             for k in std::mem::take(&mut phys) {
