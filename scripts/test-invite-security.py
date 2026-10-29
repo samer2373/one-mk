@@ -16,6 +16,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target/debug/one-mk"
 PROBE = ROOT / "target/debug/examples/invite_probe"
 CHILDREN = []
+PROCESSES = []
 
 
 class Terminal:
@@ -119,6 +120,56 @@ def main():
     assert not address.startswith("127.")
     print(f"Same-host unicast endpoint: {address} (loopback link literals intentionally rejected)", flush=True)
     with tempfile.TemporaryDirectory(prefix="one-mk-invite-security-") as directory:
+        root = pathlib.Path(directory)
+        host, link = invitation(root / "slow-A", address)
+        slow = subprocess.Popen([str(PROBE), *metadata(link), "slow"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        PROCESSES.append(slow)
+        assert select.select([slow.stdout], [], [], 10)[0], "slow-loris probe did not initialize"
+        print(slow.stdout.readline().strip(), flush=True)
+        joiner, code = join_terminal(root / "slow-B", link)
+        host.expect(r"Does the other computer show " + code)
+        host.send("y\n")
+        joiner.send("y\n")
+        host.expect("Trusted ")
+        joiner.expect("Trusted ")
+        host.finish()
+        joiner.finish()
+        devices(root / "slow-A")
+        devices(root / "slow-B")
+        print(f"Slow-loris pairing: both PTYs show {code}; real join succeeded and both production stores saved.", flush=True)
+        slow.terminate()
+        slow.wait(timeout=3)
+        for host_first in [True, False]:
+            label = "host-first" if host_first else "joiner-first"
+            home_a, home_b = root / (label + "-A"), root / (label + "-B")
+            host, link = invitation(home_a, address, ["--expires", "3s"])
+            expiry = int(metadata(link)[2])
+            joiner, code = join_terminal(home_b, link)
+            host.expect(r"Does the other computer show " + code)
+            if host_first:
+                host.send("y\n")
+                time.sleep(max(0, expiry - time.time() + .2))
+                joiner.send("y\n")
+            else:
+                joiner.send("y\n")
+                host.send("y\n")
+            host.expect("Trusted ")
+            joiner.expect("Trusted ")
+            host.finish()
+            joiner.finish()
+            devices(home_a)
+            devices(home_b)
+            print(f"Approval {label}: matching SAS {code}; both saved" + (" after expiry crossed following host approval." if host_first else "."), flush=True)
+        host, link = invitation(root / "cancel-A", address)
+        joiner, code = join_terminal(root / "cancel-B", link)
+        host.expect(r"Does the other computer show " + code)
+        host.process.send_signal(signal.SIGINT)
+        host.finish(success=False)
+        joiner.send("y\n")
+        joiner.finish(success=False)
+        assert not (root / "cancel-A/devices.toml").exists()
+        assert not (root / "cancel-B/devices.toml").exists()
+        print("Ctrl+C during approval: host exits nonzero; neither saved.", flush=True)
         homes = [pathlib.Path(directory) / name for name in ["A", "B", "C", "script-A", "script-B", "refuse-A", "refuse-B", "expire-A", "expire-B"]]
         host, link = invitation(homes[0], address)
         assert link in control(homes[0])
@@ -182,5 +233,9 @@ if __name__ == "__main__":
     try:
         main()
     finally:
+        for process in reversed(PROCESSES):
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=3)
         for child in reversed(CHILDREN):
             child.stop()

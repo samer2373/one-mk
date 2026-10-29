@@ -5,7 +5,7 @@ use one_mk_ctl::client::Request;
 use one_mk_net::{Device, Discovery, Identity, Node, Peer, TrustStore};
 use one_mk_net::invite::{Invitation, InvitationState, InviteSession, MAX_LINK, STEP_TIMEOUT};
 use one_mk_proto::{DEFAULT_PORT, Side, sanitize_name};
-use std::io::{BufRead, IsTerminal, Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -140,7 +140,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
         }
         tokio::select! {
             _ = clock.tick() => {}
-            _ = tokio::signal::ctrl_c() => { break Ok(()); }
+            _ = tokio::signal::ctrl_c() => { break Err(anyhow::anyhow!("invitation cancelled")); }
             _ = tokio::time::sleep_until(end) => { break Err(anyhow::anyhow!("invitation expired; create a new one")); }
             Some((req, reply)) = control.recv() => {
                 let text = match req {
@@ -160,19 +160,22 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                     peer.conn.close(4u32.into(), b"invitation busy");
                     continue;
                 }
-                let Some(permit) = pending.admit(peer.fingerprint) else {
+                if attempts.len() >= 128 {
                     peer.conn.close(4u32.into(), b"busy");
                     continue;
-                };
+                }
                 let (identity, state) = (identity.clone(), state.clone());
+                let pending = pending.clone();
                 let service_port = args.service_port;
                 attempts.spawn(async move {
-                    let exchange = tokio::time::timeout(STEP_TIMEOUT, InviteSession::accept(&peer, identity.fingerprint, &identity.name, service_port, &state)).await;
-                    (peer, exchange, permit)
+                    let exchange = tokio::time::timeout(STEP_TIMEOUT, InviteSession::accept_with_admission(&peer, identity.fingerprint, &identity.name, service_port, &state, || {
+                        pending.admit(peer.fingerprint).context("invitation busy")
+                    })).await;
+                    (peer, exchange)
                 });
             }
             Some(done) = attempts.join_next(), if !attempts.is_empty() => {
-                let (peer, exchange, _permit) = done?;
+                let (peer, exchange) = done?;
                 match exchange {
                     Ok(Ok(session)) => {
                         link.zeroize();
@@ -185,7 +188,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                         loop {
                             tokio::select! {
                                 res = &mut decision => break res,
-                                _ = tokio::signal::ctrl_c() => break Ok(()),
+                                _ = tokio::signal::ctrl_c() => break Err(anyhow::anyhow!("invitation cancelled during approval")),
                                 Some((_, reply)) = control.recv() => { let _ = reply.send("none\n".into()); }
                                 Some(accepted) = node.accept() => { accepted?.conn.close(3u32.into(), b"invitation already used or expired"); }
                             }
@@ -221,7 +224,7 @@ async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, c
         read_approval(end, Some(wall_expiry)).await
     } else { println!("WARNING: --no-confirm skips comparing code {} and approves automatically.", session.code); true };
     let accept = accept && tokio::time::Instant::now() < end && one_mk_net::invite::unix_now() < wall_expiry;
-    let ok = tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")??;
+    let ok = tokio::time::timeout(STEP_TIMEOUT, session.confirm(accept)).await.context("invitation approval transport timed out")??;
     if !ok { bail!("device refused; invitation consumed; nothing saved here"); }
     save(dir, peer, &name, port, Side::Left).await?;
     acknowledge(session).await?;
@@ -341,8 +344,13 @@ impl SourceLimit {
     fn admit(&mut self, source: std::net::IpAddr) -> bool {
         let now = std::time::Instant::now();
         self.0.retain(|_, (start, _)| now.duration_since(*start) < Duration::from_secs(1));
-        if self.0.len() >= 256 { return false; }
-        let (_, count) = self.0.entry(source.to_canonical()).or_insert((now, 0));
+        let source = match source.to_canonical() {
+            std::net::IpAddr::V6(address) => std::net::IpAddr::V6((u128::from(address) & (u128::MAX << 64)).into()),
+            address => address,
+        };
+        if self.0.len() >= 256 && !self.0.contains_key(&source)
+            && let Some(oldest) = self.0.iter().min_by_key(|(_, (start, _))| *start).map(|(address, _)| *address) { self.0.remove(&oldest); }
+        let (_, count) = self.0.entry(source).or_insert((now, 0));
         *count = count.saturating_add(1);
         *count <= 32
     }
@@ -364,11 +372,22 @@ async fn read_stdin(limit: usize) -> Result<Zeroizing<String>> {
     // would keep runtime shutdown blocked when an invitation expires.
     let (tx, rx) = oneshot::channel();
     std::thread::spawn(move || {
-        let mut text = Zeroizing::new(String::new());
-        let result = std::io::stdin().lock().take(limit as u64).read_line(&mut text).map(|_| text);
+        let result = (|| -> Result<Zeroizing<String>> {
+            let mut bytes = Zeroizing::new(Vec::with_capacity(limit));
+            #[cfg(unix)]
+            let mut input = std::fs::File::open("/dev/stdin")?;
+            #[cfg(not(unix))]
+            let mut input = std::io::stdin().lock();
+            let mut byte = Zeroizing::new([0]);
+            while bytes.len() < limit && input.read(&mut *byte)? != 0 {
+                bytes.push(byte[0]);
+                if byte[0] == b'\n' { break; }
+            }
+            Ok(Zeroizing::new(std::str::from_utf8(&bytes)?.to_owned()))
+        })();
         let _ = tx.send(result);
     });
-    Ok(rx.await??)
+    rx.await?
 }
 
 fn print_qr(link: &str) -> Result<()> {
@@ -390,6 +409,57 @@ fn print_qr(link: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn invitation_pairs_across_expiry_and_persists_via_production_save() {
+        for host_first in [true, false] {
+            let host = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+            let joiner = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+            let invitation = Invitation::new(host.identity().fingerprint, vec!["192.0.2.1:1234".parse().unwrap()], 24900, Duration::from_secs(60)).unwrap();
+            let state = InvitationState::new(&invitation);
+            let (outgoing, incoming) = tokio::join!(joiner.connect(host.local_addr().unwrap()), host.accept());
+            let (outgoing, incoming) = (outgoing.unwrap(), incoming.unwrap().unwrap());
+            let (host_session, join_session) = tokio::join!(
+                InviteSession::accept(&incoming, host.identity().fingerprint, "Host", 24900, &state),
+                InviteSession::join(&outgoing, joiner.identity().fingerprint, "Joiner", 24901, &invitation)
+            );
+            let (host_session, mut join_session) = (host_session.unwrap(), join_session.unwrap());
+            assert_eq!(host_session.code, join_session.code);
+            let dir = std::env::temp_dir().join(format!("one-mk-production-invite-{}-{}", std::process::id(), host.identity().fingerprint));
+            let host_dir = dir.join("host");
+            let join_dir = dir.join("joiner");
+            let (host_result, join_result) = tokio::join!(async {
+                if !host_first { tokio::time::sleep(Duration::from_millis(100)).await; }
+                approve_and_save(&host_dir, &incoming, host_session, false, tokio::time::Instant::now() + Duration::from_millis(50), invitation.expires).await
+            }, async {
+                if host_first { tokio::time::sleep(Duration::from_millis(150)).await; }
+                ensure!(join_session.confirm(true).await?, "host declined");
+                save(&join_dir, &outgoing, "Host", 24900, Side::Right).await?;
+                acknowledge(join_session).await
+            });
+            host_result.unwrap(); join_result.unwrap();
+            for (home, fingerprint, name, port, side) in [(&host_dir, joiner.identity().fingerprint, "Joiner", 24901, Side::Left), (&join_dir, host.identity().fingerprint, "Host", 24900, Side::Right)] {
+                let trust = TrustStore::load(home).unwrap();
+                let device = trust.get(&fingerprint).unwrap();
+                assert_eq!((&*device.name, device.side()), (name, side));
+                assert_eq!(device.addrs, [format!("127.0.0.1:{port}")]);
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+            host.close(); joiner.close();
+        }
+    }
+    #[test]
+    fn source_rotation_does_not_lock_out_new_sources() {
+        let mut limit = SourceLimit::default();
+        for address in 0..256 { assert!(limit.admit(std::net::Ipv4Addr::from(0xc6336400 + address).into())); }
+        assert!(limit.admit("192.0.2.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn ipv6_rotation_shares_a_subnet_budget() {
+        let mut limit = SourceLimit::default();
+        for address in 1..=32 { assert!(limit.admit(format!("2001:db8::{address:x}").parse().unwrap())); }
+        assert!(!limit.admit("2001:db8::100".parse().unwrap()));
+    }
     use super::*;
     #[test]
     fn source_limits_are_bounded_and_do_not_change_invitations() {

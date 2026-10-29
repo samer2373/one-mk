@@ -111,12 +111,20 @@ This revision closes that route, not all denial of service.
 
 Separate source admission allows 32 attempts per canonical source IP per
 one-second bucket, with at most 256 recent buckets and eviction of expired
-entries. At capacity, unknown sources are refused. Node retains 16 concurrent
+entries. IPv6 addresses share a /64 bucket; at capacity the oldest bucket is
+evicted rather than refusing every new source. Node retains 16 concurrent
 TLS handshakes / 4 per IP and a three-second handshake timeout. Invitation
-proofs retain 16 pending attempts / 4 per certificate and a ten-second
-exchange timeout. Unknown-ID refusals disclose no name, nonce or proof
+headers have a 1.5-second deadline for opening the stream and sending magic plus
+ID, with at most 128 short-lived header tasks. Only a matching secret-derived ID
+can reserve one of 16 long proof slots / 4 per certificate. The complete exchange
+has a ten-second transport timeout. Silent TLS clients do not reserve long slots.
+Unknown-ID refusals disclose no name, nonce or proof
 validity. Late joins get explicit protocol/QUIC application-close refusals,
 including during approval, rather than a ten-second stream timeout.
+The early application close code 3 reveals whether an invitation is still active
+before checking an ID. This availability side channel is accepted; it reveals
+neither the bearer secret nor proof validity. ID comparisons use constant-time
+fixed-length comparison, just as MAC verification does.
 
 Both monotonic and wall clocks bound availability. A 250 ms check detects
 forward wall jumps while idle; A's approval reader also checks wall expiry.
@@ -125,8 +133,11 @@ mDNS advertising, with a bounded wait for the daemon's goodbye cleanup.
 A valid proof likewise clears the link and withdraws discovery before the
 host prompt. B initially checks expiry, but **only A decides invitation
 expiry for the final decision**, just before its approval byte. Neither
-side rechecks invitation expiry after mutual approval, avoiding one-sided
-trust caused solely by crossing expiry then. Independent human/transport
+side rechecks invitation expiry after the host sends its approval: from that
+point the host waits up to ten seconds for the peer's decision, independent of
+invitation expiry. This closes the buffered-approval/expiry race without changing
+wire bytes. Both approval orders are tested, including a joiner responding after
+expiry to an already-approved host. Independent human/transport
 timeouts still apply; an initially skewed B clock can reject a valid link.
 
 ## Residual risks and recovery
@@ -155,7 +166,14 @@ timeouts still apply; an initially skewed B clock can reject a valid link.
   its retained link at burn/expiry; no link is saved to configuration.
   Terminal/QR renderer copies, argv, UI clients, journals, swap, allocator/
   compiler copies and crash dumps cannot be comprehensively recalled or
-  erased. This is not a complete process-memory-erasure guarantee.
+  erased. Secret parsing copies directly into a zeroizing destination; encoded
+  links are assembled at final capacity. Stdin reads bounded bytes directly into
+  a preallocated zeroizing buffer, without `read_line` growth; Unix uses an
+  unbuffered `/dev/stdin` handle. Windows' standard-input runtime/OS may retain
+  copies. HMAC keys are dropped immediately after their last use, but ring does
+  not provide a safe zeroize API for its inner/outer pad states. Those states,
+  compiler-created stack/clone temporaries and transport buffers are not
+  guaranteed wiped. This is not a complete process-memory-erasure guarantee.
 - The private control hook returns `invitation\t<expiry>\t<link>\n` only
   while active, otherwise `none\n`. A sharing daemon forwards it to the
   invitation endpoint under `<home>/invitation`. Only endpoint/lock metadata,
@@ -170,8 +188,9 @@ original implementation first and failed. Tests now call production
 transcript construction and independently change ID, both fingerprints,
 names, ports and nonces; role separation and replay over a second TLS
 exporter are checked. SAS agreement, secret/certificate dependence, and a
-copied-link/same-hostname impostor are covered. The impostor test uses fresh
-state to calculate the intended B's hypothetical code; an already-used
+copied-link/same-hostname impostor are covered. The impostor regression fixes
+both nonces, names, ports, ID, secret and TLS exporter, varying only the peer's
+certificate fingerprint. It checks both proof and SAS changes; an already-used
 invitation never admits a second real join.
 
 A wire-level loopback test sends 1,000 wrong-ID streams plus 1,000 wrong-proof
@@ -185,10 +204,10 @@ commit acknowledgment loss, stdin refusal without `--yes` and argv warnings.
 Reproducible Linux PTY/process smoke:
 
 ```sh
-cargo test -j 3 --workspace
-cargo clippy -j 3 --workspace --all-targets -- -D warnings
-cargo build -j 3 -p one-mk
-cargo build -j 3 -p one-mk-net --example invite_probe
+cargo test -j 2 --workspace
+cargo clippy -j 2 --workspace --all-targets -- -D warnings
+cargo build -j 2 -p one-mk
+cargo build -j 2 -p one-mk-net --example invite_probe
 python3 scripts/test-invite-security.py
 ```
 
@@ -204,13 +223,13 @@ behavior remain unverified. Compile checks are not runtime validation.
 
 ### Recorded validation (2026-10-29)
 
-`cargo test -j 3 --workspace`: **414 passed, 3 existing ignored, 0 failed**.
+`cargo test -j 2 --workspace`: **596 passed, 5 existing ignored, 0 failed**.
 Workspace clippy and the following target checks pass with `-- -D warnings`:
 
 ```sh
-cargo clippy -j 3 --workspace --all-targets -- -D warnings
-cargo clippy -j 3 --target x86_64-pc-windows-msvc -p one-mk-net -p one-mk-input -p one-mk-proto -p one-mk-ctl --all-targets -- -D warnings
-cargo clippy -j 3 --target aarch64-apple-darwin -p one-mk-net -p one-mk-input -p one-mk-proto -p one-mk-ctl --all-targets -- -D warnings
+cargo clippy -j 2 --workspace --all-targets -- -D warnings
+cargo clippy -j 2 --target x86_64-pc-windows-msvc -p one-mk-input -p one-mk-proto -p one-mk-ctl --all-targets -- -D warnings
+cargo clippy -j 2 --target aarch64-apple-darwin -p one-mk-input -p one-mk-proto -p one-mk-ctl --all-targets -- -D warnings
 ```
 
 On this Linux host, ring's cross-target C compilation used temporary Clang
@@ -221,24 +240,43 @@ The Windows C flags additionally used `-fgnuc-version=4.2.1` so MinGW headers
 select GNU-style declaration attributes accepted by Clang's MSVC target.
 The Rust targets remained exactly those shown above. No target cfg override,
 Rust warning suppression, dependency patch or fabricated header was used.
-The net crate's existing Windows-only unnecessary mutable binding was fixed
-without changing directory permissions or behavior.
+The full Windows binary and its tests also pass `cargo check -j 2 --target
+x86_64-pc-windows-msvc -p one-mk --all-targets`, including the new batch-hook
+environment handling. That additional check reports existing dead-code warnings
+in doctor, netwatch and notify; full-binary Windows strict clippy is not green
+because of those unrelated warnings. The required three-crate target checks
+above are warning-free. Windows behavior has only been compile-checked.
+
+Failing-first regressions reproduced unsafe POSIX shell conversion, stale hook
+queues, cross-peer coalescing, unsafe symlink target folders, legacy clipboard
+fetch retention, unbounded alignment, slow invitation headers, source-bucket
+lockout and IPv6 rotation. The expiry/persistence regression also failed when
+the old expiry-bound approval timeout was temporarily restored, then passed
+with the fix. Lane independence, descendant cancellation and corrected
+production-path/transcript tests provide additional coverage; they are not
+claimed as independent failing-first demonstrations. The shell round-trip test
+executes 441 hostile word combinations through `/bin/sh`.
 
 Captured real-process output (invitation bearer links deliberately omitted):
 
 ```text
 Same-host unicast endpoint: 192.168.1.18 (loopback link literals intentionally rejected)
-Public-only attacker: 1000 wrong-ID + 1000 wrong-proof/wrong-ID attempts; 256 explicitly refused, 1744 source-rate-limited; no secret supplied.
+Slow-loris: holding 20 silent TLS connections across 5 certificates; no magic, ID or secret supplied.
+Slow-loris pairing: both PTYs show 001382; real join succeeded and both production stores saved.
+Approval host-first: matching SAS 276393; both saved after expiry crossed following host approval.
+Approval joiner-first: matching SAS 225465; both saved.
+Ctrl+C during approval: host exits nonzero; neither saved.
+Public-only attacker: 1000 wrong-ID + 1000 wrong-proof/wrong-ID attempts; 192 explicitly refused, 1808 source-rate-limited; no secret supplied.
 Late join: explicit 'invitation already used or expired'; active UI link cleared.
-B: Your code: 057186 (the other computer will ask you to compare it)
-A: Does the other computer show 057186? Trust it with your keyboard, mouse and shared clipboard? [y/N] -> y
-B: Trust samer-Victus (11b2 5e58 834b e49e b62d ebc0 76d2 2f96 e38f 369b 2113 2def 6baf 18bf 87e9 d864)? [y/N] -> y
+B: Your code: 996050 (the other computer will ask you to compare it)
+A: Does the other computer show 996050? Trust it with your keyboard, mouse and shared clipboard? [y/N] -> y
+B: Trust samer-Victus (631b 96d2 929b d7ca 6499 d211 df80 dc7b 2352 4002 0f31 644a 5e95 6239 ba6e 48ae)? [y/N] -> y
 A devices:
 NAME                     ID         SIDE    ADDRESS
-samer-Victus             0ff7-4311  left    192.168.1.18:24900
+samer-Victus             9b1f-67f0  left    192.168.1.18:24900
 B devices:
 NAME                     ID         SIDE    ADDRESS
-samer-Victus             11b2-5e58  right   192.168.1.18:24900
+samer-Victus             631b-96d2  right   192.168.1.18:24900
 Scripted --yes / --no-confirm: both warnings printed; both devices saved.
 Joiner refusal: neither trust store created.
 Expiry during approval: both commands fail; neither trust store created.
