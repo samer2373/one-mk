@@ -679,7 +679,7 @@ impl Mapper {
     fn once(&mut self, o: Out, out: &mut impl FnMut(Emit)) {
         match o {
             Out::None | Out::Layer(_) => {}
-            Out::Chord(c) => self.pulse(c, out),
+            Out::Chord(c) => self.pulse(c, true, out),
             Out::Seq { start, len } => self.sequence(start, len, 0, out),
             Out::Action(a) => out(Emit::Action(self.map.actions[usize::from(a)].clone())),
         }
@@ -690,7 +690,9 @@ impl Mapper {
             let c = self.map.chords[i];
             let hidden = used & !c.mods;
             self.hide_mods(hidden, out);
-            self.pulse(c, out);
+            let end = usize::from(start) + usize::from(len);
+            let last = !self.map.chords[i + 1..end].iter().any(|next| next.key == c.key);
+            self.pulse(c, last, out);
             self.unhide_mods(hidden, out);
         }
     }
@@ -771,11 +773,9 @@ impl Mapper {
 
     // ------------------------------------------------- the derived wire
 
-    /// A chord typed once (a tap, a sequence step). Its key goes down and
-    /// up even if something already holds it: let go of first, pressed
-    /// again after for its holder. Its modifiers are down for it even if a
-    /// combo hides them, and back as they were after.
-    fn pulse(&mut self, c: Chord, out: &mut impl FnMut(Emit)) {
+    /// Each tap has one fresh down. The last tap of an already-held key
+    /// leaves that down for its holder to release.
+    fn pulse(&mut self, c: Chord, last: bool, out: &mut impl FnMut(Emit)) {
         self.force = c.mods;
         for (i, &m) in MOD_CODES.iter().enumerate() {
             if c.mods & (1 << i) != 0 {
@@ -788,8 +788,11 @@ impl Mapper {
             out(Emit::Key { code: key, down: false });
         }
         out(Emit::Key { code: key, down: true });
-        out(Emit::Key { code: key, down: false });
-        self.sync(key, out);
+        self.wire.update(key, true);
+        if !last || self.holders[key as usize] == 0 {
+            out(Emit::Key { code: key, down: false });
+            self.wire.update(key, false);
+        }
         self.force = 0;
         for (i, &m) in MOD_CODES.iter().enumerate() {
             if c.mods & (1 << i) != 0 {
@@ -1291,19 +1294,23 @@ mod tests {
         let seq = |from: &str, steps: &[&str]| RuleSpec { from: from.parse().unwrap(), layer: None, what: What::To(Output::sequence(steps).unwrap()) };
         let mut t = T::new(&[seq("f1", &["a", "a"]), dual("capslock", "a", "lctrl"), seq("f2", &["lctrl", "ctrl+c"]), rule("ctrl+h", "backspace")]);
         assert_eq!(t.key(A, true), [d(A)]);
-        assert_eq!(t.tap(59), [u(A), d(A), u(A), d(A), u(A), d(A), u(A), d(A)]);
-        assert_eq!(t.tap(CAPS), [u(A), d(A), u(A), d(A)]);
+        let sequence = t.tap(59);
+        assert_eq!(sequence.iter().filter(|event| **event == d(A)).count(), 2);
+        assert_eq!(sequence, [u(A), d(A), u(A), d(A)]);
+        let tap = t.tap(CAPS);
+        assert_eq!(tap.iter().filter(|event| **event == d(A)).count(), 1);
+        assert_eq!(tap, [u(A), d(A)]);
         assert_eq!(t.key(A, false), [u(A)]);
         assert!(t.m.is_idle());
         // A held modifier typed as a step comes back afterwards, and a
         // chord needing it still has it.
         assert_eq!(t.key(LCTRL, true), [d(LCTRL)]);
-        assert_eq!(t.tap(60), [u(LCTRL), d(LCTRL), u(LCTRL), d(LCTRL), d(C), u(C)]);
+        assert_eq!(t.tap(60), [u(LCTRL), d(LCTRL), d(C), u(C)]);
         assert_eq!(t.key(LCTRL, false), [u(LCTRL)]);
         // A chord needs its modifier even while a combo hides it.
         t.key(LCTRL, true);
         assert_eq!(t.key(H, true), [u(LCTRL), d(BACKSPACE)]);
-        assert_eq!(t.tap(60), [d(LCTRL), u(LCTRL), d(LCTRL), d(C), u(C), u(LCTRL)]);
+        assert_eq!(t.tap(60), [d(LCTRL), d(C), u(C), u(LCTRL)]);
         assert_eq!(t.key(H, false), [u(BACKSPACE), d(LCTRL)]);
         assert_eq!(t.key(LCTRL, false), [u(LCTRL)]);
         assert!(t.m.is_idle());
