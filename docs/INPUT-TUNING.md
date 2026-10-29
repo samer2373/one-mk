@@ -122,7 +122,10 @@ changes, and keeps the wire state in a bitset. So:
 * **auto-repeat**: a repeated down of a key whose record holds an output
   repeats that output's key (if it is down on the wire); a pending,
   swallowed or layer key ignores repeats; sequences and actions never
-  repeat.
+  repeat;
+* **actions** are emitted as the action itself (shared with the keymap,
+  no copy), not an index into the keymap, so one emitted just before a
+  reload still runs as the old keymap had it.
 
 **Dual-role** (`tap`/`hold`): pressing the key makes it pending and arms a
 deadline. It resolves to *hold* when the deadline passes, when another key

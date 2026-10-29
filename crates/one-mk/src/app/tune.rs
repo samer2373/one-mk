@@ -153,8 +153,8 @@ impl App {
                     Control::Button { button: code, down, seq: r.cursor.seq(), pos: r.cursor.pos() }
                 }
                 Emit::Key { code, down } => Control::Key { code: if r.swap { swap_ctrl_meta(code) } else { code }, down },
-                Emit::Action(i) => {
-                    actions.extend(r.tune.mapper.keymap().action(i).cloned());
+                Emit::Action(a) => {
+                    actions.push(a);
                     continue;
                 }
             };
@@ -164,15 +164,15 @@ impl App {
             r.tune.out = out; // keeps the capacity
         }
         for a in actions {
-            self.run_action(a);
+            self.run_action(&a);
         }
     }
 
     /// A key mapped to an action: the same requests `one-mk switch`,
     /// `lock-pointer` and `lock-all` send, scrolling, or a command run
     /// like a hook.
-    fn run_action(&mut self, action: Action) {
-        let req = match &action {
+    fn run_action(&mut self, action: &Action) {
+        let req = match action {
             Action::Switch(to) => match SwitchTo::parse(to) {
                 Some(to) => Request::Switch(to),
                 None => return tracing::warn!("key action {action}: say which computer"),

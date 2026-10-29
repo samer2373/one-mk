@@ -18,6 +18,7 @@ use crate::keynames::{self, CODE_LIMIT, Chord, MOD_CODES, NameError, Trigger, mo
 use crate::{HeldKeys, os};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Named layers a keymap may have.
@@ -289,7 +290,7 @@ pub struct Keymap {
     slots: Vec<(u16, u16)>,
     layer_names: Vec<String>,
     chords: Vec<Chord>,
-    actions: Vec<Action>,
+    actions: Vec<Arc<Action>>,
 }
 
 /// A compiled keymap and what is odd about the rules (they still work).
@@ -348,7 +349,7 @@ impl Keymap {
                         Out::Seq { start, len: s.len() as u16 }
                     }
                     Output::Action(a) => {
-                        map.actions.push(a.clone());
+                        map.actions.push(Arc::new(a.clone()));
                         Out::Action(map.actions.len() as u16 - 1)
                     }
                     Output::Layer(name) => {
@@ -409,11 +410,6 @@ impl Keymap {
         self.rules.is_empty()
     }
 
-    /// The action an emitted [`Emit::Action`] stands for.
-    pub fn action(&self, i: u16) -> Option<&Action> {
-        self.actions.get(usize::from(i))
-    }
-
     /// The rule for `code` in `layer` with the modifiers `held`.
     fn find(&self, layer: u8, code: u32, held: u8) -> Option<usize> {
         let (start, len) = *self.slots.get(usize::from(layer) * KEYS + code as usize)?;
@@ -424,13 +420,14 @@ impl Keymap {
 // --------------------------------------------------------------- mapper
 
 /// What the mapper says to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Emit {
     /// Send this key (or button) transition. A down for a key already
     /// down is an auto-repeat.
     Key { code: u32, down: bool },
-    /// Run [`Keymap::action`]`(i)`.
-    Action(u16),
+    /// Run this action. Shared with the keymap it came from, not an index
+    /// into it: a keymap replaced before it runs can't change it.
+    Action(Arc<Action>),
 }
 
 /// What a physical key's press produced: its release undoes exactly this.
@@ -661,7 +658,7 @@ impl Mapper {
                 Rec::Swallow
             }
             Out::Action(a) => {
-                out(Emit::Action(a));
+                out(Emit::Action(self.map.actions[usize::from(a)].clone()));
                 Rec::Swallow
             }
             Out::Layer(l) => {
@@ -681,7 +678,7 @@ impl Mapper {
                 self.release_chord(c, out);
             }
             Out::Seq { start, len } => self.sequence(start, len, 0, out),
-            Out::Action(a) => out(Emit::Action(a)),
+            Out::Action(a) => out(Emit::Action(self.map.actions[usize::from(a)].clone())),
         }
     }
 
@@ -898,7 +895,7 @@ mod tests {
         fn key(&mut self, code: u32, down: bool) -> Vec<Emit> {
             let mut out = Vec::new();
             self.m.key(code, down, self.now, &mut |e| out.push(e));
-            self.out.extend(&out);
+            self.out.extend(out.iter().cloned());
             out
         }
         fn tap(&mut self, code: u32) -> Vec<Emit> {
@@ -910,7 +907,7 @@ mod tests {
             self.now += Duration::from_millis(ms);
             let mut out = Vec::new();
             self.m.timer(self.now, &mut |e| out.push(e));
-            self.out.extend(&out);
+            self.out.extend(out.iter().cloned());
             out
         }
     }
@@ -1136,12 +1133,10 @@ mod tests {
     #[test]
     fn actions_fire_once_on_press() {
         let mut t = T::new(&[rule("f13", "switch next"), rule("f14", "lock-all")]);
-        assert_eq!(t.key(183, true), [Emit::Action(0)]);
+        assert_eq!(t.key(183, true), [Emit::Action(Arc::new(Action::Switch("next".into())))]);
         assert_eq!(t.key(183, true), [], "no repeats");
         assert_eq!(t.key(183, false), []);
-        assert_eq!(t.m.keymap().action(0), Some(&Action::Switch("next".into())));
-        assert_eq!(t.tap(184), [Emit::Action(1)]);
-        assert_eq!(t.m.keymap().action(1), Some(&Action::LockAll));
+        assert_eq!(t.tap(184), [Emit::Action(Arc::new(Action::LockAll))]);
     }
 
     #[test]
@@ -1217,6 +1212,27 @@ mod tests {
         assert_eq!(out, [d(LCTRL)]);
         assert_eq!(t.m.deadline(), None);
         assert_eq!(t.key(CAPS, false), [u(LCTRL)]);
+    }
+
+    /// A reload while a tap/hold key's hold is an action: the action run is
+    /// the one the old keymap had, whatever the new one has at that index.
+    #[test]
+    fn a_reload_runs_the_old_keymaps_action() {
+        for hold in ["switch here", "lock-all", "run: echo old"] {
+            let mut t = T::new(&[dual("capslock", "esc", hold)]);
+            t.key(CAPS, true);
+            let mut out = Vec::new();
+            let new = map(&[rule("f1", "run: echo new"), rule("f2", "lock-all"), rule("f3", "switch next")]);
+            t.m.set_keymap(new, &mut |e| out.push(e));
+            // Run after the swap, as the daemon does.
+            let ran: Vec<Action> = out.iter().filter_map(|e| match e {
+                Emit::Action(a) => Some(Action::clone(a)),
+                Emit::Key { .. } => None,
+            }).collect();
+            let Output::Action(want) = hold.parse().unwrap() else { unreachable!() };
+            assert_eq!(ran, [want], "{hold}");
+            assert_eq!(t.key(CAPS, false), []);
+        }
     }
 
     #[test]
