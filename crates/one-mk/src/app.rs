@@ -1576,6 +1576,9 @@ impl App {
     /// suspending), or woke.
     fn on_power(&mut self, ev: PowerEvent) {
         match ev {
+            PowerEvent::DisplayAsleep(true) if self.visiting() => {
+                tracing::debug!("display asleep during a visit; not asking the others to sleep (sleep sync)");
+            }
             PowerEvent::DisplayAsleep(true) => {
                 let fresh = link::random_u64();
                 let sync = self.settings.power.sleep_sync;
@@ -1589,8 +1592,12 @@ impl App {
     }
 
     /// Peer `fp` asks us to sleep (its sleep sync): followed only with sleep
-    /// sync on here.
+    /// sync on here, and not during a visit (see `visiting`).
     fn on_peer_sleep(&mut self, fp: Fingerprint, id: u64) {
+        if self.visiting() {
+            tracing::debug!("a peer's display went to sleep during a visit; staying awake (sleep sync)");
+            return;
+        }
         match self.sleep_sync.on_remote(id, self.settings.power.sleep_sync, std::time::Instant::now()) {
             OnRemoteSleep::Ignore => {}
             OnRemoteSleep::Sleep { sleep_here } => {
@@ -1604,6 +1611,14 @@ impl App {
                 }
             }
         }
+    }
+
+    /// The pointer is on a peer, or a peer controls this computer: someone
+    /// is using these computers, whatever their idle timers say (a
+    /// controlled display blanks because injected input doesn't count, the
+    /// controller's because its input goes elsewhere). Sleep sync waits.
+    fn visiting(&self) -> bool {
+        self.remote.is_some() || self.owner.is_some()
     }
 
     /// `Sleep { id }` to every peer that understands it, except `except`.
@@ -3115,6 +3130,33 @@ mod tests {
         duo.powb.events.send(PowerEvent::DisplayAsleep(true)).unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(sleeps(&duo.powa), 0);
+        duo.stop().await;
+    }
+
+    /// Sleep sync stays out of a visit: B, controlled from A, may blank its
+    /// display (injected input doesn't count as activity), but the person
+    /// is using A's keyboard on it, so A must not sleep; nor B when A's
+    /// display, idle while its input goes to B, blanks.
+    #[tokio::test]
+    async fn sleep_sync_waits_while_a_visit_is_on() {
+        use one_mk_input::PowerEvent;
+        let mut duo = Duo::start("sleep-visit", None).await;
+        set(&duo.da, |s| s.power.sleep_sync = true).await;
+        set(&duo.db, |s| s.power.sleep_sync = true).await;
+        tokio::time::sleep(Duration::from_millis(100)).await; // caps arrive
+        duo.enter_b().await;
+        duo.powb.events.send(PowerEvent::DisplayAsleep(true)).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(sleeps(&duo.powa), 0, "the controller stays awake");
+        duo.powb.events.send(PowerEvent::DisplayAsleep(false)).unwrap();
+        duo.powa.events.send(PowerEvent::DisplayAsleep(true)).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(sleeps(&duo.powb), 0, "the controlled one stays awake");
+        duo.powa.events.send(PowerEvent::DisplayAsleep(false)).unwrap();
+
+        duo.leave_b().await;
+        duo.powa.events.send(PowerEvent::DisplayAsleep(true)).unwrap();
+        eventually("B to sleep once the visit is over", || sleeps(&duo.powb) == 1).await;
         duo.stop().await;
     }
 
