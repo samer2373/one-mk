@@ -45,6 +45,10 @@ pub struct Status {
     pub peers: Vec<PeerStatus>,
     /// This computer's monitors, in its logical pixels.
     pub screens: Vec<Rect>,
+    /// (peer id, offset): where a peer's (0,0) sits in this computer's
+    /// pixels, for the peers that have one. Kept here rather than on
+    /// [`PeerStatus`] so its literals elsewhere stay valid.
+    pub offsets: Vec<(String, (i32, i32))>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,7 +88,15 @@ impl Status {
                 out += &screen(&p.id, r);
             }
         }
+        for (id, (x, y)) in &self.offsets {
+            out += &format!("offset\t{id}\t{x}\t{y}\n");
+        }
         out
+    }
+
+    /// Where `peer`'s (0,0) sits in this computer's pixels, if it was placed.
+    pub fn offset_of(&self, peer: &str) -> Option<(i32, i32)> {
+        self.offsets.iter().find(|(id, _)| id == peer).map(|(_, o)| *o)
     }
 
     pub fn decode(text: &str) -> Option<Self> {
@@ -116,6 +128,11 @@ impl Status {
                     let screens = if who == "me" { Some(&mut s.screens) } else { s.peers.iter_mut().find(|p| p.id == who).map(|p| &mut p.screens) };
                     if let Some(screens) = screens {
                         screens.push(Rect::new(x, y, w, h));
+                    }
+                }
+                ["offset", id, x, y] => {
+                    if let (Ok(x), Ok(y)) = (x.parse(), y.parse()) {
+                        s.offsets.push((id.into(), (x, y)));
                     }
                 }
                 _ => {}
@@ -159,8 +176,14 @@ mod tests {
                 PeerStatus { id: "9999-0000".into(), name: "old pc".into(), side: Side::Top, os: 0, online: false, swap: "off".into(), screens: vec![] },
             ],
             screens: vec![Rect::new(0, 0, 1920, 1080), Rect::new(-2592, 98, 1512, 982), Rect::new(-1080, -840, 1080, 1920), Rect::new(1920, 0, 1920, 1080)],
+            offsets: vec![("1234-5678".into(), (3840, -98))],
         };
-        assert_eq!(Status::decode(&s.encode()), Some(s));
+        assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
+        assert_eq!(s.offset_of("1234-5678"), Some((3840, -98)));
+        assert_eq!(s.offset_of("9999-0000"), None);
+        // A line this reader can't make sense of only costs that offset.
+        let text = s.encode() + "offset\t9999-0000\tleft\t0\n";
+        assert_eq!(Status::decode(&text).unwrap().offsets, s.offsets);
         assert_eq!(Status::decode("error unknown request\n"), None);
     }
 
@@ -171,6 +194,7 @@ mod tests {
         assert!(s.screens.is_empty());
         assert_eq!(s.peers.len(), 1);
         assert!(s.peers[0].screens.is_empty());
+        assert!(s.offsets.is_empty());
         assert_eq!(s.peers[0].name, "MacBook Air");
     }
 
@@ -184,6 +208,7 @@ mod tests {
             controlled_by: None,
             peers: vec![PeerStatus { id: "1".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into(), screens: vec![] }],
             screens: vec![],
+            offsets: vec![],
         };
         let text = s.render();
         assert!(text.starts_with("one-mk is running on desk (id abcd-ef01).\n"), "{text}");

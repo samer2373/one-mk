@@ -1062,7 +1062,7 @@ impl App {
         match msg {
             Control::Hello { .. } => {}
             Control::Screens(screens) => self.on_peer_screens(fp, screens),
-            Control::Layout { side_of_you, version } => self.on_peer_layout(fp, side_of_you, version),
+            Control::Layout { side_of_you, version, offset } => self.on_peer_layout(fp, side_of_you, version, offset),
             Control::Enter { epoch, pos } => self.on_enter(fp, id, epoch, pos),
             Control::Leave => {
                 if self.is_owner(fp, id) {
@@ -1121,19 +1121,24 @@ impl App {
         }
     }
 
-    /// Tells a peer where we think it is, from its point of view. It adopts
-    /// that only if our version is newer than its own.
+    /// Tells a peer where we think it is, from its point of view (and
+    /// where we put its (0,0) in ours). It adopts that only if our version
+    /// is newer than its own.
     fn send_layout(&self, fp: Fingerprint) {
         if let (Some(p), Some(d)) = (self.peers.get(&fp), self.trust.get(&fp)) {
-            p.ctl.send(Control::Layout { side_of_you: d.side().opposite(), version: d.layout_version });
+            p.ctl.send(Control::Layout { side_of_you: d.side().opposite(), version: d.layout_version, offset: d.offset });
         }
     }
 
-    /// The peer says it sits on `side_of_you` of us.
-    fn on_peer_layout(&mut self, fp: Fingerprint, side_of_you: Side, version: u64) {
+    /// The peer says it sits on `side_of_you` of us, and maybe where it put
+    /// our (0,0): then its (0,0) is the opposite in ours. Without one (an
+    /// older peer, or none set) an offset only goes with a change of side.
+    fn on_peer_layout(&mut self, fp: Fingerprint, side_of_you: Side, version: u64, offset: Option<(i32, i32)>) {
         self.reload_trust();
         let Some(dev) = self.trust.get_mut(&fp).filter(|d| version > d.layout_version) else { return };
-        if dev.side() != side_of_you {
+        if let Some((x, y)) = offset {
+            dev.offset = Some((-x, -y));
+        } else if dev.side() != side_of_you {
             dev.offset = None; // it was for the old side
         }
         dev.side = side_of_you.to_string();
@@ -1214,6 +1219,15 @@ impl App {
             controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
             peers: peers.collect(),
             screens: self.local.as_ref().map_or_else(Vec::new, |d| d.screens.clone()),
+            offsets: self
+                .trust
+                .devices()
+                .iter()
+                .filter_map(|d| {
+                    let live = d.fingerprint().and_then(|fp| self.peers.get(&fp));
+                    Some((d.short_id(), live.map_or(d.offset, |p| p.offset)?))
+                })
+                .collect(),
         }
     }
 
@@ -1913,7 +1927,7 @@ mod tests {
         // far slower than they arrive: its event queue never runs dry.
         let mut flood = Vec::new();
         for _ in 0..30_000 {
-            Control::Layout { side_of_you: Side::Bottom, version: 0 }.encode_frame(&mut flood);
+            Control::Layout { side_of_you: Side::Bottom, version: 0, offset: None }.encode_frame(&mut flood);
         }
         let (tx_done, mut rx_done) = mpsc::unbounded_channel();
         let send = async {
@@ -2153,6 +2167,27 @@ mod tests {
         let t = TrustStore::load(&duo.db).unwrap();
         let d = t.get(&duo.fa.parse().unwrap()).unwrap();
         assert_eq!((d.side(), d.layout_version), (Side::Right, 5));
+        duo.stop().await;
+    }
+
+    /// A newer layout carries its offset across, mirrored: where A put B's
+    /// (0,0), negated, is where B puts A's.
+    #[tokio::test]
+    async fn offset_syncs_mirrored() {
+        let mut duo = Duo::start_with("offset-sync", None, |a_sees_b, _| {
+            a_sees_b.offset = Some((1920, 500));
+            a_sees_b.layout_version = 5;
+        })
+        .await;
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetEdges(vec![Edge { side: Side::Right, at: 1920, lo: 500, hi: 1080 }]));
+        assert_eq!(next_capture(&mut duo.hb).await, armed(Side::Left));
+        // B's view of the same contact: A's right edge, 500 px higher.
+        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetEdges(vec![Edge { side: Side::Left, at: 0, lo: 0, hi: 580 }]));
+        let t = TrustStore::load(&duo.db).unwrap();
+        let d = t.get(&duo.fa.parse().unwrap()).unwrap();
+        assert_eq!((d.side(), d.offset, d.layout_version), (Side::Left, Some((-1920, -500)), 5));
+        let text = control::request(&duo.db, Request::Status).await.unwrap().unwrap();
+        assert_eq!(Status::decode(&text).unwrap().offsets, vec![(d.short_id(), (-1920, -500))]);
         duo.stop().await;
     }
 

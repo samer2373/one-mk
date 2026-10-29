@@ -51,9 +51,10 @@ pub fn parse_offset(s: &str) -> Result<Option<(i32, i32)>> {
 }
 
 /// Changes a paired device's side, offset and/or Ctrl/Cmd setting in
-/// `devices.toml`. A new side gets a version newer than any seen, so it
-/// wins when the two computers compare layouts; it also drops an offset
-/// that was meant for the old side, unless a new one is given.
+/// `devices.toml`. A new side or offset gets a version newer than any
+/// seen, so it wins when the two computers compare layouts; a new side
+/// also drops an offset that was meant for the old side, unless a new
+/// one is given.
 pub fn set_layout(
     dir: &Path,
     device: &str,
@@ -65,13 +66,15 @@ pub fn set_layout(
     let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
     let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
     let dev = trust.get_mut(&fp).expect("found above");
-    if let Some(side) = side {
+    if side.is_some() || offset.is_some() {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        dev.layout_version = now.max(dev.layout_version + 1);
+    }
+    if let Some(side) = side {
         if dev.side() != side {
             dev.offset = None;
         }
         dev.side = side.to_string();
-        dev.layout_version = now.max(dev.layout_version + 1);
     }
     if let Some(offset) = offset {
         dev.offset = offset;
@@ -106,7 +109,7 @@ pub async fn layout(dir: &Path, device: &str, side: Option<Side>, offset: Option
         None => {}
     }
     if control::request(dir, Request::Reload).await?.is_some() {
-        println!("Applied right away.{}", if side.is_some() { " Its computer picks up the change too." } else { "" });
+        println!("Applied right away.{}", if side.is_some() || offset.is_some() { " Its computer picks up the change too." } else { "" });
     } else {
         println!("one-mk is not running; this takes effect the next time it starts.");
     }

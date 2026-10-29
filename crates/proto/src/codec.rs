@@ -141,7 +141,10 @@ pub enum Control {
     Revoked { epoch: u16 },
     /// Layout sync: the sender sits on `side_of_you` of the receiver. The
     /// receiver adopts it if `version` is newer than the one it has stored.
-    Layout { side_of_you: Side, version: u64 },
+    /// `offset` is where the sender put the receiver's (0,0) in its own
+    /// pixels; it travels as optional trailing bytes, which older peers
+    /// neither send nor read.
+    Layout { side_of_you: Side, version: u64, offset: Option<(i32, i32)> },
 }
 
 impl Control {
@@ -208,10 +211,14 @@ impl Control {
                 w.u8(12);
                 w.u16(*epoch);
             }
-            Control::Layout { side_of_you, version } => {
+            Control::Layout { side_of_you, version, offset } => {
                 w.u8(13);
                 w.u8(Side::ALL.iter().position(|s| s == side_of_you).unwrap_or(0) as u8);
                 w.u64(*version);
+                if let Some((x, y)) = offset {
+                    w.i32(*x);
+                    w.i32(*y);
+                }
             }
         }
     }
@@ -252,6 +259,17 @@ impl Control {
             13 => Control::Layout {
                 side_of_you: *Side::ALL.get(usize::from(r.u8()?)).ok_or(DecodeError::Invalid("side"))?,
                 version: r.u64()?,
+                offset: match r.0.len() {
+                    0..8 => None,
+                    _ => {
+                        let o = (r.i32()?, r.i32()?);
+                        // Far beyond any desktop: it would only overflow the geometry.
+                        if o.0.unsigned_abs().max(o.1.unsigned_abs()) > MAX_OFFSET {
+                            return Err(DecodeError::Invalid("offset"));
+                        }
+                        Some(o)
+                    }
+                },
             },
             t => return Err(DecodeError::UnknownTag(t)),
         };
@@ -428,6 +446,9 @@ impl Reader<'_> {
 /// Most monitors a desktop may have on the wire.
 pub const MAX_SCREENS: usize = 64;
 
+/// Largest offset (either axis) a `Layout` may carry, in pixels.
+const MAX_OFFSET: u32 = 1 << 24;
+
 fn to_fixed(v: f64) -> i32 {
     (v * 256.0).round() as i32
 }
@@ -474,7 +495,8 @@ mod tests {
             Control::EnterAck { epoch: 1 },
             Control::Busy { epoch: 2 },
             Control::Revoked { epoch: u16::MAX },
-            Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123 },
+            Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123, offset: None },
+            Control::Layout { side_of_you: Side::Left, version: 7, offset: Some((-3432, 98)) },
         ];
         let mut buf = Vec::new();
         for m in &msgs {
@@ -549,6 +571,26 @@ mod tests {
         b.extend_from_slice(&i32::MAX.to_le_bytes());
         let Ok(Control::Enter { pos, .. }) = Control::decode(&b) else { panic!() };
         assert!(pos.x.is_finite() && pos.y.is_finite());
+    }
+
+    #[test]
+    fn layout_offset_is_optional_trailing_bytes() {
+        // What an older peer sends: no offset after the version.
+        let mut old = vec![13, 1];
+        old.extend_from_slice(&42u64.to_le_bytes());
+        assert_eq!(Control::decode(&old), Ok(Control::Layout { side_of_you: Side::Right, version: 42, offset: None }));
+        // And a newer one; an older reader stops before the trailing bytes.
+        let mut new = old.clone();
+        new.extend_from_slice(&(-1920i32).to_le_bytes());
+        new.extend_from_slice(&98i32.to_le_bytes());
+        assert_eq!(Control::decode(&new), Ok(Control::Layout { side_of_you: Side::Right, version: 42, offset: Some((-1920, 98)) }));
+        let mut buf = Vec::new();
+        Control::Layout { side_of_you: Side::Right, version: 42, offset: Some((-1920, 98)) }.encode_frame(&mut buf);
+        assert_eq!(&buf[2..], &new[..]);
+        let mut bad = old;
+        bad.extend_from_slice(&i32::MIN.to_le_bytes());
+        bad.extend_from_slice(&0i32.to_le_bytes());
+        assert_eq!(Control::decode(&bad), Err(DecodeError::Invalid("offset")));
     }
 
     #[test]
