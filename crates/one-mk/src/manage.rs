@@ -21,6 +21,17 @@ pub fn unknown_device(device: &str) -> anyhow::Error {
     anyhow::anyhow!("no paired computer called {device:?}; see `one-mk devices` for names and ids")
 }
 
+pub fn parse_align(value: &str) -> Result<Align, String> {
+    if value.trim().is_empty() {
+        return Err("--offset cannot be empty; use center, stretch or a number from -100000 to 100000 logical pixels".into());
+    }
+    let align: Align = value.parse()?;
+    if matches!(align, Align::Offset(offset) if !(-100_000..=100_000).contains(&offset)) {
+        return Err("--offset must be between -100000 and 100000 logical pixels".into());
+    }
+    Ok(align)
+}
+
 pub async fn status(dir: &Path) -> Result<()> {
     let reply = control::request(dir, Request::Status).await?;
     match reply.as_deref().and_then(Status::decode) {
@@ -31,6 +42,11 @@ pub async fn status(dir: &Path) -> Result<()> {
             println!("Start it with `one-mk run`, or make it start when you log in with `one-mk install`.");
         }
     }
+    let settings = crate::settings::Settings::load(dir)?;
+    if settings.hooks.blocked.is_some() {
+        println!("{}", settings.hooks.describe());
+    }
+    println!("Clipboard: {}.", settings.clipboard.summary());
     Ok(())
 }
 
@@ -54,6 +70,9 @@ pub async fn takeback(dir: &Path) -> Result<()> {
 /// seen, so it wins when the two computers compare layouts. A new side
 /// without an alignment is stretched; the same side keeps its alignment.
 pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>) -> Result<Device> {
+    if let Some(align) = align {
+        parse_align(&align.to_string()).map_err(anyhow::Error::msg)?;
+    }
     let mut trust = TrustStore::load(dir)?;
     let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
     let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
@@ -78,7 +97,7 @@ pub fn place(dev: &mut Device, side: Side, align: Align) {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
     dev.side = side.to_string();
     dev.set_align(align);
-    dev.layout_version = now.max(dev.layout_version + 1);
+    dev.layout_version = now.max(dev.layout_version.saturating_add(1));
 }
 
 pub async fn layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>) -> Result<()> {

@@ -169,11 +169,12 @@ fn path(dir: &Path) -> PathBuf {
 
 /// A profile name that is safe to show and to put on one status line.
 pub fn check_name(name: &str) -> Result<String> {
-    let clean = sanitize_name(name);
-    if name.trim().is_empty() || clean != name.trim() || name.contains('\t') {
-        bail!("a profile name is up to 64 letters, digits, spaces and punctuation; {name:?} is not");
+    let clean = name.trim();
+    if clean.is_empty() || name.chars().count() > 64 || name.contains("..")
+        || !name.chars().all(|ch| ch.is_alphabetic() || ch.is_ascii_digit() || matches!(ch, ' ' | '.' | '_' | '-')) {
+        bail!("a profile name must be 1-64 letters, digits, spaces or ._-; paths, '..', control characters and TOML syntax are not allowed: {name:?}");
     }
-    Ok(clean)
+    Ok(clean.to_owned())
 }
 
 impl Profiles {
@@ -266,7 +267,7 @@ pub fn apply(dir: &Path, profile: &Profile) -> Result<Vec<String>> {
         let Some(fp) = p.fingerprint.parse().ok() else { continue };
         let Some(dev) = trust.get_mut(&fp) else { continue };
         let side: Side = p.side.parse().unwrap_or_else(|_| dev.side());
-        let align: Align = p.align.parse().unwrap_or_default();
+        let align = if p.align.is_empty() { Align::Stretch } else { manage::parse_align(&p.align).map_err(anyhow::Error::msg)? };
         if (dev.side(), dev.align()) != (side, align) {
             manage::place(dev, side, align);
             moved.push(sanitize_name(&dev.name));
@@ -313,6 +314,9 @@ pub enum ProfileCmd {
         /// (192.168.1.0/24) (repeatable).
         #[arg(long, value_name = "GATEWAY-MAC|SUBNET")]
         network: Vec<String>,
+        /// Clear earlier automatic rules before adding these rules.
+        #[arg(long)]
+        clear: bool,
         /// Stop switching to it by itself.
         #[arg(long, conflicts_with_all = ["ssid", "network"])]
         off: bool,
@@ -384,8 +388,8 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
             println!("Deleted layout profile {gone:?}.");
             Ok(())
         }
-        ProfileCmd::Auto { name, ssid, network, off } => {
-            if !off && ssid.is_empty() && network.is_empty() {
+        ProfileCmd::Auto { name, ssid, network, off, clear } => {
+            if !off && !clear && ssid.is_empty() && network.is_empty() {
                 bail!("say when to switch to {name:?}: --ssid <wifi-name> and/or --network <gateway-mac|subnet>, or --off");
             }
             let mut rules = Vec::new();
@@ -399,8 +403,16 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
             let ssid: Vec<String> = ssid.into_iter().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect();
             let p = Profiles::update(dir, |all| {
                 let Some(p) = all.get_mut(&name) else { bail!("no layout profile called {name:?}; save one first") };
-                p.ssid = ssid;
-                p.network = rules;
+                if off || clear {
+                    p.ssid.clear();
+                    p.network.clear();
+                }
+                for value in ssid {
+                    if !p.ssid.contains(&value) { p.ssid.push(value); }
+                }
+                for value in rules {
+                    if !p.network.contains(&value) { p.network.push(value); }
+                }
                 Ok(p.clone())
             })?;
             match p.is_auto() {
@@ -450,6 +462,15 @@ fn render(all: &Profiles) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_names_reject_paths_and_toml_syntax() {
+        for name in ["../home", "a/b", "..", "a..b", "a[b]", "a=b", "a\"b", "a\nb"] {
+            assert!(check_name(name).is_err(), "accepted {name:?}");
+        }
+        assert!(check_name(&"x".repeat(65)).is_err());
+        assert_eq!(check_name("Home مكتب._- 2").unwrap(), "Home مكتب._- 2");
+    }
     use one_mk_net::{Device, Identity};
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -610,6 +631,7 @@ mod tests {
             ssid: ssid.iter().map(|s| s.to_string()).collect(),
             network: network.iter().map(|s| s.to_string()).collect(),
             off,
+            clear: false,
         };
         assert!(run(&dir, auto("home", &[], &["192.168.1.1"], false)).await.is_err());
         assert!(run(&dir, auto("nope", &["x"], &[], false)).await.is_err());
@@ -617,6 +639,14 @@ mod tests {
         run(&dir, auto("home", &["Home"], &["AA-BB-CC-00-11-22", "192.168.1.7/24"], false)).await.unwrap();
         let p = Profiles::load(&dir).unwrap().get("home").cloned().unwrap();
         assert_eq!((p.ssid, p.network), (vec!["Home".to_owned()], vec!["aa:bb:cc:00:11:22".to_owned(), "192.168.1.7/24".to_owned()]));
+        run(&dir, auto("home", &["Office"], &["10.0.0.0/8"], false)).await.unwrap();
+        let p = Profiles::load(&dir).unwrap().get("home").cloned().unwrap();
+        assert_eq!(p.ssid, ["Home", "Office"]);
+        assert_eq!(p.network.len(), 3);
+        run(&dir, ProfileCmd::Auto { name: "home".into(), ssid: vec![], network: vec!["172.16.0.0/12".into()], off: false, clear: true }).await.unwrap();
+        let p = Profiles::load(&dir).unwrap().get("home").cloned().unwrap();
+        assert!(p.ssid.is_empty());
+        assert_eq!(p.network, ["172.16.0.0/12"]);
         run(&dir, auto("home", &[], &[], true)).await.unwrap();
         assert!(!Profiles::load(&dir).unwrap().any_auto());
         let _ = std::fs::remove_dir_all(dir);

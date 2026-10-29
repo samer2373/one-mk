@@ -1,5 +1,20 @@
 //! one-mk: share one mouse and keyboard across your computers.
 
+macro_rules! print {
+    ($($args:tt)*) => {{
+        use std::io::Write as _;
+        if let Err(error) = write!(std::io::stdout().lock(), $($args)*)
+            && error.kind() != std::io::ErrorKind::BrokenPipe {
+            panic!("failed printing to stdout: {error}");
+        }
+    }};
+}
+
+macro_rules! println {
+    () => { print!("\n") };
+    ($($args:tt)*) => { print!("{}\n", format_args!($($args)*)) };
+}
+
 mod app;
 mod bench;
 mod clip;
@@ -157,7 +172,7 @@ enum Cmd {
         /// detectable on every system yet, see the README).
         #[arg(long, value_name = "on|off")]
         skip_sensitive: Option<OnOff>,
-        /// Let other computers fetch this clipboard with `one-mk clip-get` (default on).
+        /// Let other computers fetch this clipboard with `one-mk clip-get` (default off).
         #[arg(long, value_name = "on|off")]
         allow_fetch: Option<OnOff>,
     },
@@ -213,8 +228,9 @@ enum Cmd {
         /// bottom) edge starts after this one's, negative for before;
         /// `center` to centre the two; `stretch` (the default) to map the
         /// whole edges onto each other. With a number or `center` the
-        /// pointer only crosses where the edges overlap.
-        #[arg(long, value_name = "PX|center|stretch", allow_hyphen_values = true)]
+        /// pointer only crosses where the edges overlap. Numbers must be
+        /// between -100000 and 100000 logical pixels.
+        #[arg(long, value_name = "PX|center|stretch", allow_hyphen_values = true, value_parser = manage::parse_align)]
         offset: Option<Align>,
         /// Swap Ctrl and Cmd for keys sent to it, so copy and paste feel the same
         /// between a Mac and a PC (default: auto, which swaps only between a Mac and another computer).
@@ -513,6 +529,16 @@ fn forget(dir: &Path, device: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_offset_bounds_and_empty_values() {
+        for offset in ["", "99999999", "-99999999", "2147483647", "-2147483648"] {
+            assert!(Cli::try_parse_from(["one-mk", "layout", "peer", "--offset", offset]).is_err(), "accepted {offset:?}");
+        }
+        for offset in ["-100000", "100000", "center", "stretch", "0"] {
+            assert!(Cli::try_parse_from(["one-mk", "layout", "peer", "--offset", offset]).is_ok(), "rejected {offset:?}");
+        }
+    }
 
     fn run_args(args: &[&str]) -> RunArgs {
         let cli = Cli::try_parse_from(std::iter::once("one-mk").chain(args.iter().copied())).unwrap();

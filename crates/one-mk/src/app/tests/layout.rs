@@ -208,7 +208,7 @@ async fn profile_switches_with_the_network() {
     crate::profiles::run(&da, ProfileCmd::Save { name: "desk".into() }).await.unwrap();
     crate::manage::set_layout(&da, &fb[..8], Some(Side::Right), Some(Align::Stretch), None).unwrap();
     crate::profiles::run(&da, ProfileCmd::Save { name: "home".into() }).await.unwrap();
-    let auto = ProfileCmd::Auto { name: "desk".into(), ssid: vec!["Desk WiFi".into()], network: vec![], off: false };
+    let auto = ProfileCmd::Auto { name: "desk".into(), ssid: vec!["Desk WiFi".into()], network: vec![], off: false, clear: false };
     let watching = crate::netwatch::fake::watchers();
     crate::profiles::run(&da, auto).await.unwrap(); // reloads A, which starts watching
     eventually("A to watch the network", || crate::netwatch::fake::watchers() > watching).await;

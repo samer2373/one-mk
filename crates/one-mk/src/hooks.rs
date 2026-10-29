@@ -21,11 +21,11 @@
 //! double quotes and backslashes, nothing is expanded). It is started and
 //! reaped by its own task, so the daemon never waits for it, killed after
 //! `timeout_secs` (5 by default), run at most once per 500 ms per event
-//! (more are dropped) and at most [`MAX_RUNNING`] at a time. Anything that
+//! (the latest pending transition is retained), with commands serialized. Anything that
 //! can write `settings.toml` can run programs as you, so a file others can
 //! write is reported (see [`unsafe_permissions`]).
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use one_mk_net::Fingerprint;
 use one_mk_proto::Side;
 use serde::{Deserialize, Serialize};
@@ -33,15 +33,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
-/// One hook runs at most this often; a faster trigger is dropped.
+/// One hook runs at most this often; faster triggers are coalesced.
 pub const MIN_INTERVAL: Duration = Duration::from_millis(500);
 /// Default and largest time a hook may run before it is killed.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 5;
 pub const MAX_TIMEOUT_SECS: u64 = 60;
-/// Most hooks running at once; more are dropped.
-pub const MAX_RUNNING: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Event {
@@ -81,6 +80,13 @@ impl Command {
     /// The program and its arguments. A string is split into words (or, with
     /// `shell`, handed to the system shell as one script).
     pub fn argv(&self, shell: bool) -> Result<Vec<String>> {
+        let bytes = match self {
+            Command::Line(line) => line.len(),
+            Command::Argv(words) => words.iter().fold(0usize, |size, word| size.saturating_add(word.len()).saturating_add(1)),
+        };
+        if bytes > 4096 {
+            bail!("a hook command must be at most 4096 bytes");
+        }
         let argv = match self {
             Command::Argv(v) => v.clone(),
             Command::Line(s) if shell => shell_argv(s),
@@ -93,6 +99,7 @@ impl Command {
     }
 
     /// How to show it.
+    #[cfg(test)]
     pub fn describe(&self) -> String {
         match self {
             Command::Argv(v) => v.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" "),
@@ -118,6 +125,19 @@ fn quote(word: &str) -> String {
         return word.to_owned();
     }
     format!("'{}'", word.replace('\'', r"'\''"))
+}
+
+fn legacy_shell_word(word: &str) -> String {
+    #[cfg(windows)]
+    {
+        if word.is_empty() || word.contains(|ch: char| ch.is_whitespace() || ch == '"') {
+            format!("\"{}\"", word.replace('"', "\"\""))
+        } else {
+            word.to_owned()
+        }
+    }
+    #[cfg(not(windows))]
+    quote(word)
 }
 
 /// Splits a command line into words like a POSIX shell would, without
@@ -206,6 +226,10 @@ pub struct Hooks {
     /// default: nothing is then expanded or interpreted.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub shell: bool,
+    #[serde(skip)]
+    pub trust_permissions: bool,
+    #[serde(skip)]
+    pub blocked: Option<String>,
 }
 
 impl Hooks {
@@ -228,7 +252,7 @@ impl Hooks {
     }
 
     pub fn any(&self) -> bool {
-        Event::ALL.iter().any(|&e| self.get(e).is_some())
+        self.blocked.is_none() && Event::ALL.iter().any(|&e| self.get(e).is_some())
     }
 
     pub fn timeout(&self) -> Duration {
@@ -247,10 +271,14 @@ impl Hooks {
     }
 
     pub fn describe(&self) -> String {
+        if let Some(reason) = &self.blocked {
+            return format!("Hooks REFUSED: {reason}. Fix permissions or explicitly use `one-mk hooks --trust-permissions`.");
+        }
         let mut out = String::new();
         for e in Event::ALL {
             if let Some(c) = self.get(e) {
-                out += &format!("  on_{}: {}\n", e.as_str(), c.describe());
+                let actual = c.argv(self.shell).map(|words| words.iter().map(|word| quote(word)).collect::<Vec<_>>().join(" "));
+                out += &format!("  on_{}: {}\n", e.as_str(), actual.unwrap_or_else(|error| format!("INVALID: {error}")));
             }
         }
         if out.is_empty() {
@@ -269,6 +297,10 @@ pub fn env(ev: Event, peer: &PeerInfo) -> [(&'static str, String); 4] {
         ("ONE_MK_PEER_ID", peer.id.clone()),
         ("ONE_MK_SIDE", peer.side.to_string()),
     ]
+}
+
+fn shell_value(value: &str) -> String {
+    value.chars().map(|ch| if ch.is_alphabetic() || ch.is_ascii_digit() || matches!(ch, ' ' | '.' | '_' | '-') { ch } else { '_' }).collect()
 }
 
 /// Whom a hook is about.
@@ -307,8 +339,16 @@ pub fn unsafe_permissions(path: &Path) -> Option<String> {
     {
         use std::os::unix::fs::MetadataExt;
         let md = std::fs::metadata(path).ok()?;
-        let msg = writable_by_others(md.mode())?;
-        Some(format!("{} is {msg}", path.display()))
+        let uid = unsafe { libc::geteuid() };
+        for (target, metadata) in [(path.to_owned(), md), (path.parent()?.to_owned(), std::fs::metadata(path.parent()?).ok()?)] {
+            if metadata.uid() != uid {
+                return Some(format!("{} is owned by uid {}, not current uid {uid}", target.display(), metadata.uid()));
+            }
+            if let Some(msg) = writable_by_others(metadata.mode()) {
+                return Some(format!("{} is {msg}", target.display()));
+            }
+        }
+        None
     }
     #[cfg(not(unix))]
     {
@@ -317,15 +357,42 @@ pub fn unsafe_permissions(path: &Path) -> Option<String> {
     }
 }
 
-/// Takes group and world access away from `path` (Unix; elsewhere a no-op).
-fn make_private(path: &Path) -> Result<()> {
+const TRUST_FILE: &str = "hooks-trust-permissions";
+
+pub fn permissions_trusted(dir: &Path) -> bool {
+    use std::io::Read;
+    let path = dir.join(TRUST_FILE);
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    #[cfg(not(unix))]
-    let _ = path;
+    let Ok(file) = options.open(path) else { return false };
+    let Ok(metadata) = file.metadata() else { return false };
+    if !metadata.is_file() { return false; }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 { return false; }
+    }
+    let mut text = String::new();
+    file.take(64).read_to_string(&mut text).is_ok() && text == "explicitly trust hook permissions\n"
+}
+
+fn trust_permissions(dir: &Path) -> Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir)?;
+    if permissions_trusted(dir) { return Ok(()); }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(dir.join(TRUST_FILE))?.write_all(b"explicitly trust hook permissions\n")?;
     Ok(())
 }
 
@@ -338,18 +405,76 @@ pub fn writable_by_others(mode: u32) -> Option<&'static str> {
     }
 }
 
-/// Says (once per call) if hooks are set and `settings.toml` could be changed by others.
+/// Reports each distinct hook configuration or permission problem once.
 pub fn warn_if_unsafe(dir: &Path, hooks: &Hooks) {
-    if !hooks.any() {
+    if !Event::ALL.iter().any(|&event| hooks.get(event).is_some()) {
         return;
     }
-    for p in hooks.problems() {
-        tracing::warn!("{p}");
-        eprintln!("Warning: {p}");
-    }
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    let mut problems = hooks.problems();
     if let Some(msg) = unsafe_permissions(&dir.join("settings.toml")) {
-        tracing::warn!("{msg}: anyone who can write it can run commands as you; run `chmod go-w` on it");
-        eprintln!("Warning: {msg}. Anyone who can write it can run commands as you through hooks; run `chmod go-w` on it.");
+        problems.push(format!("{msg}: hooks {}", if hooks.trust_permissions { "explicitly trusted despite unsafe permissions" } else { "REFUSED; fix permissions or use `one-mk hooks --trust-permissions`" }));
+    }
+    let mut warned = WARNED.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    for problem in problems {
+        if warned.insert(problem.clone()) {
+            tracing::warn!("{problem}");
+        }
+    }
+}
+
+struct Pending {
+    event: Event,
+    argv: Vec<String>,
+    env: [(&'static str, String); 4],
+    shell: bool,
+    timeout: Duration,
+    due: Instant,
+    sequence: u64,
+}
+
+#[derive(Default)]
+struct Queue {
+    limit: RateLimit,
+    pending: [Option<Pending>; 4],
+    sequence: u64,
+    active: bool,
+}
+
+impl Queue {
+    fn cancel_opposite(&mut self, event: Event) {
+        let opposite = match event {
+            Event::Enter => Some(Event::Leave),
+            Event::Leave => Some(Event::Enter),
+            _ => None,
+        };
+        if let Some(opposite) = opposite {
+            self.pending[opposite.index()] = None;
+        }
+    }
+
+    fn insert(&mut self, mut pending: Pending, now: Instant) {
+        let event = pending.event;
+        self.cancel_opposite(event);
+        self.sequence = self.sequence.wrapping_add(1);
+        pending.sequence = self.sequence;
+        pending.due = self.limit.last[event.index()].map_or(now, |last| (last + MIN_INTERVAL).max(now));
+        self.pending[event.index()] = Some(pending);
+    }
+
+    fn next(&self) -> Option<usize> {
+        self.pending.iter().enumerate().filter_map(|(index, pending)| pending.as_ref().map(|pending| (index, pending)))
+            .min_by_key(|(_, pending)| (pending.due, pending.sequence)).map(|(index, _)| index)
+    }
+
+    fn take_ready(&mut self, now: Instant) -> Option<Pending> {
+        let index = self.next()?;
+        if self.pending[index].as_ref()?.due > now {
+            return None;
+        }
+        let pending = self.pending[index].take()?;
+        self.limit.allow(pending.event, now);
+        Some(pending)
     }
 }
 
@@ -372,8 +497,18 @@ pub struct Engine {
     away: Option<Fingerprint>,
     owner: Option<Fingerprint>,
     known: HashMap<Fingerprint, Known>,
-    limit: RateLimit,
+    queue: Arc<std::sync::Mutex<Queue>>,
+    wake: Arc<tokio::sync::Notify>,
+    worker: Option<tokio::task::JoinHandle<()>>,
     running: Arc<AtomicUsize>,
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Some(worker) = &self.worker {
+            worker.abort();
+        }
+    }
 }
 
 impl Engine {
@@ -459,11 +594,9 @@ impl Engine {
     }
 
     fn fire(&mut self, cfg: &Hooks, ev: Event, peer: &PeerInfo) {
+        self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel_opposite(ev);
+        self.wake.notify_one();
         let Some(cmd) = cfg.get(ev) else { return };
-        if !self.limit.allow(ev, Instant::now()) {
-            tracing::debug!(event = ev.as_str(), "hook dropped: it ran less than {MIN_INTERVAL:?} ago");
-            return;
-        }
         let argv = match cmd.argv(cfg.shell) {
             Ok(a) => a,
             Err(e) => {
@@ -471,18 +604,46 @@ impl Engine {
                 return;
             }
         };
-        if self.running.fetch_add(1, Ordering::SeqCst) >= MAX_RUNNING {
-            self.running.fetch_sub(1, Ordering::SeqCst);
-            tracing::warn!(event = ev.as_str(), "hook dropped: {MAX_RUNNING} are still running");
+        let mut environment = env(ev, peer);
+        if cfg.shell && matches!(cmd, Command::Line(_)) {
+            for (_, value) in &mut environment[1..] {
+                *value = shell_value(value);
+            }
+        }
+        let now = Instant::now();
+        let mut queue = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        queue.insert(Pending { event: ev, argv, env: environment, shell: cfg.shell && matches!(cmd, Command::Line(_)), timeout: cfg.timeout(), due: now, sequence: 0 }, now);
+        self.wake.notify_one();
+        if queue.active {
             return;
         }
-        let running = Running(self.running.clone());
-        let env = env(ev, peer);
-        let timeout = cfg.timeout();
-        tokio::spawn(async move {
-            let _running = running;
-            run(ev, &argv, &env, timeout).await;
-        });
+        queue.active = true;
+        drop(queue);
+        let (queue, wake, running) = (self.queue.clone(), self.wake.clone(), self.running.clone());
+        self.worker = Some(tokio::spawn(async move {
+            loop {
+                let (ready, due) = {
+                    let mut queue = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let ready = queue.take_ready(Instant::now());
+                    let due = queue.next().and_then(|index| queue.pending[index].as_ref().map(|pending| pending.due));
+                    if ready.is_none() && due.is_none() {
+                        queue.active = false;
+                        return;
+                    }
+                    (ready, due)
+                };
+                if let Some(pending) = ready {
+                    running.fetch_add(1, Ordering::SeqCst);
+                    let _running = Running(running.clone());
+                    run(pending.event, &pending.argv, &pending.env, pending.timeout, pending.shell).await;
+                } else if let Some(due) = due {
+                    tokio::select! {
+                        _ = tokio::time::sleep_until(due) => {},
+                        _ = wake.notified() => {},
+                    }
+                }
+            }
+        }));
     }
 }
 
@@ -496,10 +657,21 @@ impl Drop for Running {
 }
 
 /// Runs one hook to its end or the timeout, and reaps it.
-async fn run(ev: Event, argv: &[String], env: &[(&'static str, String)], timeout: Duration) {
+async fn run(ev: Event, argv: &[String], env: &[(&'static str, String)], timeout: Duration, shell: bool) {
     let mut cmd = tokio::process::Command::new(&argv[0]);
-    cmd.args(&argv[1..])
-        .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
+    #[cfg(windows)]
+    if shell {
+        use std::os::windows::process::CommandExt;
+        cmd.arg("/C").as_std_mut().raw_arg(&argv[2]);
+    } else {
+        cmd.args(&argv[1..]);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = shell;
+        cmd.args(&argv[1..]);
+    }
+    cmd.envs(env.iter().map(|(k, v)| (*k, v.as_str())))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -557,6 +729,9 @@ pub struct HooksArgs {
     /// interprets them, or without (`off`, the default).
     #[arg(long, value_name = "on|off", value_parser = crate::settings::parse_on_off, action = clap::ArgAction::Set)]
     pub shell: Option<bool>,
+    /// Explicitly allow hooks despite unsafe Unix ownership or permissions.
+    #[arg(long, conflicts_with = "off")]
+    pub trust_permissions: bool,
     /// Remove every hook.
     #[arg(long)]
     pub off: bool,
@@ -565,14 +740,13 @@ pub struct HooksArgs {
 impl HooksArgs {
     fn changes_anything(&self) -> bool {
         self.off
+            || self.trust_permissions
             || self.timeout.is_some()
             || self.shell.is_some()
             || [&self.on_enter, &self.on_leave, &self.on_peer_connect, &self.on_peer_disconnect].iter().any(|c| c.is_some())
     }
 
-    /// Applies the options to `h`. Commands are stored as an array of words
-    /// (so what runs is exactly what was checked here), or as a string when
-    /// the shell is on.
+    /// Applies the options to `h`, retaining command text for runtime mode changes.
     pub fn apply(&self, h: &mut Hooks) -> Result<()> {
         if self.off {
             *h = Hooks::default();
@@ -585,7 +759,17 @@ impl HooksArgs {
         }
         if let Some(on) = self.shell {
             h.shell = on;
+            if on {
+                for event in Event::ALL {
+                    if let Some(Command::Argv(words)) = h.get(event) {
+                        let line = words.iter().map(|word| legacy_shell_word(word)).collect::<Vec<_>>().join(" ");
+                        *h.slot(event) = Some(Command::Line(line));
+                    }
+                }
+            }
         }
+        h.trust_permissions |= self.trust_permissions;
+        h.blocked = None;
         let given = [
             (Event::Enter, &self.on_enter),
             (Event::Leave, &self.on_leave),
@@ -596,14 +780,8 @@ impl HooksArgs {
             let Some(text) = text else { continue };
             *h.slot(ev) = if text.trim().is_empty() {
                 None
-            } else if h.shell {
-                Some(Command::Line(text.clone()))
             } else {
-                let words = split(text).with_context(|| format!("--on-{}", ev.as_str().replace('_', "-")))?;
-                if words.is_empty() {
-                    bail!("--on-{} is empty", ev.as_str().replace('_', "-"));
-                }
-                Some(Command::Argv(words))
+                Some(Command::Line(text.clone()))
             };
         }
         let problems = h.problems();
@@ -618,6 +796,16 @@ pub const SECURITY_NOTE: &str = "Hooks run with your rights, from settings.toml:
 
 pub async fn run_command(dir: &Path, args: HooksArgs) -> Result<()> {
     use crate::settings::Settings;
+    if args.trust_permissions {
+        trust_permissions(dir)?;
+    }
+    if args.off {
+        match std::fs::remove_file(dir.join(TRUST_FILE)) {
+            Ok(()) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        }
+    }
     let hooks = if args.changes_anything() {
         Settings::update(dir, |s| {
             args.apply(&mut s.hooks)?;
@@ -626,17 +814,12 @@ pub async fn run_command(dir: &Path, args: HooksArgs) -> Result<()> {
     } else {
         Settings::load(dir)?.hooks
     };
+    let hooks = Settings::load(dir).map(|settings| settings.hooks).unwrap_or(hooks);
     println!("{}", hooks.describe());
     if hooks.any() {
         println!("{SECURITY_NOTE}");
-        let file = dir.join("settings.toml");
-        if let Some(msg) = unsafe_permissions(&file) {
-            // A group-writable file is the default under some umasks; it is
-            // ours, so close it rather than only complaining.
-            match make_private(&file) {
-                Ok(()) if args.changes_anything() => println!("{msg}: made it private (mode 600)."),
-                _ => println!("Warning: {msg}. Run `chmod go-w` on it."),
-            }
+        if let Some(msg) = unsafe_permissions(&dir.join("settings.toml")) {
+            println!("Warning: {msg}; running hooks because you explicitly trusted these permissions.");
         }
     }
     if args.changes_anything() {
@@ -652,6 +835,72 @@ pub async fn run_command(dir: &Path, args: HooksArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_flips_reinterpret_existing_commands() {
+        let mut hooks = Hooks::default();
+        HooksArgs { on_enter: Some("echo hello | cat".into()), ..Default::default() }.apply(&mut hooks).unwrap();
+        HooksArgs { shell: Some(true), ..Default::default() }.apply(&mut hooks).unwrap();
+        assert_eq!(hooks.on_enter.as_ref().unwrap().argv(true).unwrap(), shell_argv("echo hello | cat"));
+        HooksArgs { shell: Some(false), ..Default::default() }.apply(&mut hooks).unwrap();
+        assert_eq!(hooks.on_enter.unwrap().argv(false).unwrap(), ["echo", "hello", "|", "cat"]);
+        let mut legacy = Hooks { on_enter: Some(Command::Argv(vec!["notify".into(), "hi there".into()])), ..Hooks::default() };
+        HooksArgs { shell: Some(true), ..Default::default() }.apply(&mut legacy).unwrap();
+        let script = if cfg!(windows) { "notify \"hi there\"" } else { "notify 'hi there'" };
+        assert_eq!(legacy.on_enter.unwrap().argv(true).unwrap(), shell_argv(script));
+    }
+
+    #[test]
+    fn oversized_hook_commands_are_rejected() {
+        assert!(Command::Line("x".repeat(4097)).argv(false).is_err());
+    }
+
+    #[test]
+    fn shell_environment_has_no_interpreter_metacharacters() {
+        for (name, expected) in [("& calc", "_ calc"), ("%PATH%", "_PATH_"), ("$(id)", "__id_"), ("`id`", "_id_"), ("a\nb", "a_b"), ("\"; rm", "__ rm")] {
+            assert_eq!(shell_value(name), expected);
+        }
+        assert_eq!(shell_value("مكتب 日本-é._- 12"), "مكتب 日本-é._- 12");
+        let long = "&a".repeat(10_000);
+        assert_eq!(shell_value(&long), "_a".repeat(10_000));
+        let peer = PeerInfo { name: "& calc".into(), id: "%PATH%".into(), side: Side::Left };
+        assert_eq!(env(Event::Enter, &peer)[1].1, "& calc", "argv hooks keep the exact peer name");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn coalescing_preserves_the_newest_transition() {
+        let mut queue = Queue::default();
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
+        let pending = |event| Pending { event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
+        queue.insert(pending(Event::Leave), Instant::now());
+        assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::Leave);
+        tokio::time::advance(Duration::from_millis(200)).await;
+        queue.insert(pending(Event::Enter), Instant::now());
+        assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::Enter);
+        tokio::time::advance(Duration::from_millis(200)).await;
+        queue.insert(pending(Event::Leave), Instant::now());
+        assert!(queue.take_ready(Instant::now()).is_none());
+        tokio::time::advance(Duration::from_millis(100)).await;
+        assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::Leave);
+        assert!(queue.next().is_none());
+        queue.insert(pending(Event::Leave), Instant::now());
+        queue.insert(pending(Event::Enter), Instant::now());
+        tokio::time::advance(MIN_INTERVAL).await;
+        assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::Enter);
+        assert!(queue.next().is_none(), "an older pending leave cannot fire after the final enter");
+    }
+
+    #[test]
+    fn a_transition_without_a_hook_cancels_stale_opposite_work() {
+        let mut engine = Engine::default();
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
+        engine.queue.lock().unwrap().insert(Pending {
+            event: Event::Leave, argv: vec!["echo".into()], env: env(Event::Leave, &peer),
+            shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0,
+        }, Instant::now());
+        engine.fire(&Hooks::default(), Event::Enter, &peer);
+        assert!(engine.queue.lock().unwrap().next().is_none());
+    }
 
     fn words(s: &str) -> Vec<String> {
         split(s).unwrap()
@@ -781,6 +1030,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_directory_blocks_hooks_and_only_explicit_trust_overrides_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("one-mk-hooks-directory-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let mut settings = crate::settings::Settings::default();
+        settings.hooks.on_enter = Some(Command::Line("echo test".into()));
+        settings.save(&dir).unwrap();
+        let loaded = crate::settings::Settings::load(&dir).unwrap();
+        assert!(!loaded.hooks.any());
+        assert!(loaded.hooks.describe().contains("REFUSED"));
+        let path = dir.join("settings.toml");
+        std::fs::write(&path, std::fs::read_to_string(&path).unwrap().replace("[hooks]\n", "[hooks]\ntrust_permissions = true\n")).unwrap();
+        assert!(!crate::settings::Settings::load(&dir).unwrap().hooks.any(), "untrusted TOML cannot authorize itself");
+        trust_permissions(&dir).unwrap();
+        assert!(crate::settings::Settings::load(&dir).unwrap().hooks.any());
+        std::fs::set_permissions(dir.join(TRUST_FILE), std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(!crate::settings::Settings::load(&dir).unwrap().hooks.any());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn command_line_changes() {
         let mut h = Hooks::default();
@@ -791,7 +1063,7 @@ mod tests {
             ..HooksArgs::default()
         };
         args.apply(&mut h).unwrap();
-        assert_eq!(h.on_enter, Some(Command::Argv(vec!["notify-send".into(), "one mk".into(), "here".into()])));
+        assert_eq!(h.on_enter, Some(Command::Line("notify-send 'one mk' here".into())));
         assert_eq!(h.timeout_secs, Some(8));
         // An empty command removes one hook, leaves the rest.
         HooksArgs { on_leave: Some(String::new()), ..HooksArgs::default() }.apply(&mut h).unwrap();
@@ -869,18 +1141,18 @@ mod tests {
         let script = format!("echo \"$ONE_MK_EVENT $ONE_MK_PEER $ONE_MK_SIDE\" >> {}", out.display());
         let argv = vec!["/bin/sh".to_owned(), "-c".to_owned(), script];
         let p = PeerInfo { name: "other pc".into(), id: "x".into(), side: Side::Right };
-        run(Event::Enter, &argv, &env(Event::Enter, &p), Duration::from_secs(5)).await;
+        run(Event::Enter, &argv, &env(Event::Enter, &p), Duration::from_secs(5), false).await;
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "enter other pc right\n");
 
         // A hook that outlives its timeout is killed, with what it started.
         let marker = dir.join("late");
         let slow = vec!["/bin/sh".to_owned(), "-c".to_owned(), format!("sleep 30 & sleep 30; touch {}", marker.display())];
         let t = Instant::now();
-        run(Event::Leave, &slow, &env(Event::Leave, &p), Duration::from_millis(200)).await;
+        run(Event::Leave, &slow, &env(Event::Leave, &p), Duration::from_millis(200), false).await;
         assert!(t.elapsed() < Duration::from_secs(5));
         assert!(!marker.exists());
         // A program that doesn't exist is just reported.
-        run(Event::Leave, &["/nonexistent/program".to_owned()], &[], Duration::from_secs(1)).await;
+        run(Event::Leave, &["/nonexistent/program".to_owned()], &[], Duration::from_secs(1), false).await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -107,6 +107,7 @@ fn clip_request(
                 // name, what and size.
                 _ => format!("ok\n{name}\n{}\n{}\n", m.what, size(&m)),
             },
+            Err(e) if !send && e.to_string() == crate::clip::FETCH_DISABLED_MESSAGE => format!("error {name} does not allow fetching its clipboard; on {name} run `one-mk clipboard --allow-fetch on`\n"),
             Err(e) => format!("error {e:#}\n"),
         };
         let _ = reply.send(text);

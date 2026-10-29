@@ -113,7 +113,10 @@ one-mk clip-get --from other-pc   # fetch its clipboard now
 
 `clip-send` tells you if the other computer ignored it (a kind switched off
 there, or over its limit). Others can only fetch yours if
-`one-mk clipboard --allow-fetch on` (the default). Content a password manager
+`one-mk clipboard --allow-fetch on` **on the computer being read**. Fetching is
+**off by default**; existing settings with `allow_pull = true` keep their opt-in.
+`clip-send` still works without enabling fetching: the owner chooses to push.
+Content a password manager
 marks as sensitive is skipped (`--skip-sensitive on`, the default), and never
 handed out by `clip-get`; `clip-send` is you asking for it, so it sends.
 **Limitation:** the clipboard library one-mk uses cannot read those markers
@@ -132,6 +135,9 @@ the receiving computer shows one desktop notification naming the files, with
 **Show in folder** (Linux, over D-Bus; macOS shows the notification without
 the button; Windows does not notify yet). Turn it off with `one-mk notify off`,
 or for one run with `one-mk run --no-notify`. Nothing runs while idle.
+Each send is limited to 10000 files and 1 TiB in total (also the per-file
+limit); inconsistent or oversized incoming batches are rejected before progress
+accounting.
 
 **Mac and PC keyboards.** When keys go between a Mac and a Windows or Linux
 computer, Ctrl and Cmd trade places by default, so Ctrl+C on the PC keyboard
@@ -168,7 +174,9 @@ again (an offset means something else on another side).
 The offset is in logical pixels (what your display settings call the
 resolution after scaling), measured from the start of your edge to the start
 of the other: the top for left and right, the left end for top and bottom;
-negative means before yours. The other computer gets the mirror image
+negative means before yours. Offsets must be between **-100000 and 100000**
+logical pixels; an empty value is rejected (use `stretch` explicitly).
+The other computer gets the mirror image
 (`--offset 300` here is `-300` there), and as with sides the newer change
 wins. Both computers need this version of one-mk for the offset to work
 both ways: an older one keeps stretching the edges for the pointer it sends.
@@ -203,6 +211,8 @@ A profile holds each computer's side and offset, nothing else: edge rules,
 gaming mode and the other settings stay the same everywhere, because they are
 about how you like to work, not where the computers stand. Using a profile
 counts as a new change, so the other computers pick it up.
+Names use 1-64 letters, digits, spaces or `._-`; paths, `..`, control characters
+and TOML syntax are rejected.
 
 To switch by itself when this computer joins a network:
 
@@ -212,6 +222,10 @@ one-mk profile auto home --network 192.168.1.0/24          # a subnet this compu
 one-mk profile auto home --network aa:bb:cc:dd:ee:ff       # the router's MAC address
 one-mk profile auto home --off
 ```
+
+Repeated `profile auto` calls accumulate distinct Wi-Fi/network rules. Use
+`--clear` to remove earlier rules before adding replacements, or `--off` to
+remove every automatic rule for that profile.
 
 The first profile that matches is used, once each time the network changes,
 so a `one-mk layout` change afterwards stays until you move on. Set this up
@@ -347,12 +361,29 @@ screen the other computer is on). In the file a command is an array
 split into words with shell-style quotes, **without a shell**: nothing is
 expanded (`$HOME`, `~`, `*`, pipes and redirections are ordinary characters).
 `one-mk hooks --shell on` runs strings through `sh -c` (`cmd /C` on Windows)
-instead. A command is killed after 5 seconds (`--timeout SECS`, at most 60),
-runs on its own task so one-mk never waits for it, runs at most once per event
-per 500 ms (more are dropped) and at most 8 at a time. **Hooks run with your
+instead. Commands entered with the CLI retain their original text, so changing
+`--shell on|off` also reinterprets existing commands and prints the resulting
+invocation. Older CLI-created argv arrays are reconstructed when enabling the
+shell; review the printed invocation. Explicit argv arrays otherwise run directly.
+Shell-mode hooks see **sanitized** `ONE_MK_PEER`, `ONE_MK_PEER_ID` and
+`ONE_MK_SIDE`: only letters (including non-ASCII letters), ASCII digits,
+spaces and `._-` survive; every other character becomes `_`. Direct argv hooks
+keep the exact peer name. Commands are limited to 4096 bytes.
+A command is killed after 5 seconds (`--timeout SECS`, at most 60),
+runs on its own task so one-mk never waits for it, and runs at most once per event
+per 500 ms. Faster triggers coalesce to the newest pending run. Enter/leave
+supersede older pending opposite transitions, and hooks run serially so the final
+completed command matches the final state. No timer runs when nothing is pending.
+**Hooks run with your
 rights, from `settings.toml`:** anyone who can write that file can run programs
-as you. one-mk warns when it is writable by its group or everyone (and
-`one-mk hooks` makes it private); keep it that way.
+as you. On Unix all settings saves use a private mode-0600 temporary file.
+The daemon refuses hooks if the settings file or its containing folder is
+group/world-writable or owned by a different uid. It logs each distinct problem
+once and shows refusals in `status` and `doctor`. Fix permissions, or deliberately
+override this protection with `one-mk hooks --trust-permissions`; the explicit
+opt-in is stored in a separate private owner-owned marker, not in the untrusted
+settings file. `hooks --off` also removes that permission override.
+Windows ACL checking is **not implemented**: keep the settings folder's ACL private.
 
 **Screensaver and sleep.** `one-mk power --block-screensaver on`: while this
 computer controls another one, that one's screensaver, display blanking and idle

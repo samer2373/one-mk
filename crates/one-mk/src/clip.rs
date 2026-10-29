@@ -32,6 +32,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
+const FETCH_DISABLED: u32 = 0x434c4950;
+pub const FETCH_DISABLED_MESSAGE: &str = "does not allow fetching its clipboard";
+
 /// The longest a peer may take to deliver one clipboard snapshot.
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(30);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -96,7 +99,7 @@ struct State {
 
 impl ClipSync {
     pub fn new(cb: Clipboard, node: Node) -> Arc<Self> {
-        Arc::new(Self { cb, node, state: Mutex::default(), allow_pull: AtomicBool::new(true) })
+        Arc::new(Self { cb, node, state: Mutex::default(), allow_pull: AtomicBool::new(false) })
     }
 
     #[cfg(test)]
@@ -185,9 +188,15 @@ impl ClipSync {
         let skip: Vec<Digest> = self.state().known.get(&fp).copied().into_iter().chain(also_skip).collect();
         match self.cb.read(skip).await {
             Ok(Read::Changed { digest, data }) => {
-                self.state().known.insert(fp, digest);
-                match self.send(fp, addr, &data, false).await {
-                    Ok(_) => tracing::debug!(peer = %name, bytes = data.len(), "sent clipboard"),
+                match self.send(fp, addr, &data, true).await {
+                    Ok(None | Some(ClipAck::Stored)) => {
+                        self.state().known.insert(fp, digest);
+                        tracing::debug!(peer = %name, bytes = data.len(), "sent clipboard");
+                    }
+                    Ok(Some(ack)) => {
+                        self.state().known.remove(&fp);
+                        tracing::debug!(peer = %name, ?ack, "clipboard rejected; will retry on the next crossing");
+                    }
                     Err(e) => {
                         tracing::debug!(peer = %name, "sending clipboard: {e:#}");
                         self.state().known.remove(&fp);
@@ -236,7 +245,7 @@ impl ClipSync {
         let mut ack = [0u8; 1];
         // A closed stream with nothing on it is an older receiver, which never answers.
         match tokio::time::timeout(ACK_TIMEOUT, recv.read_exact(&mut ack)).await {
-            Ok(Ok(())) => Ok(ClipAck::from_u8(ack[0])),
+            Ok(Ok(())) => ClipAck::from_u8(ack[0]).map(Some).ok_or_else(|| anyhow::anyhow!("unknown clipboard acknowledgement {}", ack[0])),
             Ok(Err(_)) | Err(_) => wrote.map(|()| None),
         }
     }
@@ -274,8 +283,12 @@ impl ClipSync {
         send.write_all(&buf).await?;
         send.finish()?;
         let got = tokio::time::timeout(RECEIVE_TIMEOUT, async {
-            let header = read_clip_header(&mut recv).await.map_err(|_| {
-                anyhow::anyhow!("it did not answer: it may be running an older one-mk, or not sharing its clipboard")
+            let header = read_clip_header(&mut recv).await.map_err(|error| {
+                if error.chain().any(|cause| cause.downcast_ref::<quinn::ReadExactError>().is_some_and(|error| matches!(error, quinn::ReadExactError::ReadError(quinn::ReadError::Reset(code)) if *code == quinn::VarInt::from_u32(FETCH_DISABLED)))) {
+                    anyhow::anyhow!(FETCH_DISABLED_MESSAGE)
+                } else {
+                    anyhow::anyhow!("it did not answer: it may be running an older one-mk, or not sharing its clipboard ({error:#})")
+                }
             })?;
             self.read_snapshot(fp, &header, &mut recv).await
         })
@@ -347,6 +360,10 @@ impl ClipSync {
     /// Sensitive content is never handed out this way: only we can decide to
     /// send that.
     async fn answer_pull(&self, name: &str, send: &mut quinn::SendStream) -> anyhow::Result<()> {
+        if !self.allow_pull.load(Ordering::Relaxed) {
+            send.reset(FETCH_DISABLED.into())?;
+            return Ok(());
+        }
         let data = if self.allow_pull.load(Ordering::Relaxed) {
             match self.cb.read(Vec::new()).await? {
                 Read::Changed { data, .. } => Some(data),
@@ -466,6 +483,28 @@ async fn read_exact(recv: &mut quinn::RecvStream, len: usize) -> anyhow::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rejected_automatic_push_retries_the_same_clipboard() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        text(&a.mem, "unchanged clipboard");
+        b.settings(ClipSettings { text: false, ..Default::default() });
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert!(!a.clip.state().known.contains_key(&b.fp()));
+        b.settings(ClipSettings::default());
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        eventually("retry accepted", || b.mem.text().as_deref() == Some("unchanged clipboard")).await;
+    }
+
+    #[tokio::test]
+    async fn unknown_acknowledgement_is_not_cached_as_delivered() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve_ack(Some(255));
+        text(&a.mem, "unchanged clipboard");
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert!(!a.clip.state().known.contains_key(&b.fp()));
+    }
     use crate::app::Services;
     use crate::settings::ClipSettings;
     use crate::transfer::Inbox;
@@ -519,13 +558,21 @@ mod tests {
         /// Serves like a version from before acks and pulls: reads a snapshot,
         /// answers nothing.
         fn serve_old(&self) {
+            self.serve_ack(None);
+        }
+
+        fn serve_ack(&self, acknowledgement: Option<u8>) {
             let node = self.node.clone();
             tokio::spawn(async move {
                 while let Some(Ok(peer)) = node.accept().await {
                     tokio::spawn(async move {
-                        while let Ok((_, send, mut recv)) = peer.accept_stream().await {
+                        while let Ok((_, mut send, mut recv)) = peer.accept_stream().await {
                             if let Ok(h) = read_clip_header(&mut recv).await {
                                 let _ = read_exact(&mut recv, h.total() as usize).await;
+                                if let Some(acknowledgement) = acknowledgement {
+                                    let _ = send.write_all(&[acknowledgement]).await;
+                                    let _ = send.finish();
+                                }
                             }
                             drop(send); // never answers
                         }
@@ -630,6 +677,7 @@ mod tests {
     #[tokio::test]
     async fn clip_get_fetches_that_computers_clipboard() {
         let (a, b) = (Pc::new(), Pc::new());
+        b.settings(ClipSettings { allow_pull: true, ..Default::default() });
         b.serve();
         text(&b.mem, "from b");
         let m = a.clip.pull(b.fp(), b.addr()).await.unwrap();
@@ -652,20 +700,20 @@ mod tests {
 
         // The owner doesn't let it be fetched.
         b.settings(ClipSettings { allow_pull: false, ..Default::default() });
-        assert!(err(a.clip.pull(b.fp(), b.addr()).await.unwrap_err()).contains("empty, or it does not share"));
+        assert!(err(a.clip.pull(b.fp(), b.addr()).await.unwrap_err()).contains(FETCH_DISABLED_MESSAGE));
         assert_eq!(a.mem.writes(), 0);
 
         // A password manager's copy is never handed out on request.
-        b.settings(ClipSettings::default());
+        b.settings(ClipSettings { allow_pull: true, ..Default::default() });
         b.mem.set_concealed(true);
         assert!(err(a.clip.pull(b.fp(), b.addr()).await.unwrap_err()).contains("empty, or it does not share"));
         b.mem.set_concealed(false);
 
         // Over the owner's size limit: nothing comes.
         text(&b.mem, &"y".repeat(2 << 20));
-        b.settings(ClipSettings { max_mb: 1, ..Default::default() });
+        b.settings(ClipSettings { max_mb: 1, allow_pull: true, ..Default::default() });
         assert!(a.clip.pull(b.fp(), b.addr()).await.is_err());
-        b.settings(ClipSettings::default());
+        b.settings(ClipSettings { allow_pull: true, ..Default::default() });
 
         // The asker has text switched off: what comes is refused here.
         a.settings(ClipSettings { text: false, ..Default::default() });

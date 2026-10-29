@@ -147,6 +147,9 @@ impl HotkeyArgs {
     /// Setting a chord turns the shortcuts on.
     pub fn apply(&self, s: &mut HotkeySettings) -> Result<(), String> {
         fn canonical<T: FromStr<Err = String> + ToString>(v: &str) -> Result<String, String> {
+            if v.trim().is_empty() {
+                return Err("a shortcut cannot be empty; use `none` to turn it off".into());
+            }
             Ok(chord_or_none::<T>(v)?.map(|c| c.to_string()).unwrap_or_default())
         }
         if let Some(v) = &self.jump {
@@ -268,6 +271,8 @@ mod tests {
 
     #[test]
     fn defaults_are_valid_and_distinct() {
+        assert!(HotkeyArgs { jump: Some(String::new()), ..Default::default() }.apply(&mut HotkeySettings::default()).is_err());
+        assert!(HotkeyArgs { cycle: Some(" ".into()), ..Default::default() }.apply(&mut HotkeySettings::default()).is_err());
         let b = HotkeySettings::default().bindings().unwrap();
         assert_eq!(b.iter().count(), 12);
         assert_eq!(b.action("ctrl+alt+5".parse().unwrap()), Some(Action::Jump(5)));
