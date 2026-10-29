@@ -105,8 +105,10 @@ jobs:
           --title "$GITHUB_REF_NAME" --generate-notes
       # Package-manager files that need the published release: the Homebrew
       # cask and formula (checksums of the .dmg files and source tarball) and
-      # the Flatpak manifest (the Linux tarball's URL and checksum). They are
-      # attached to the release; putting them in a tap or on Flathub is by hand.
+      # the Flatpak source bundle (the manifest with the Linux tarball's URL and
+      # checksum, and every other file it names, relative to it, so it builds
+      # anywhere). They are attached to the release; putting them in a tap or
+      # on Flathub is by hand.
       - name: Homebrew and Flatpak files
         env:
           GH_TOKEN: ${{ github.token }}
@@ -115,5 +117,5 @@ jobs:
           src=$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" | sha256sum | cut -d' ' -f1)
           SOURCE_SHA256=$src sh scripts/package-homebrew.sh
           sh scripts/package-flatpak.sh "$base/one-mk-x86_64-unknown-linux-gnu.tar.gz"
-          cp dist/flatpak/io.github.onemk.OneMk.yml dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb "$RUNNER_TEMP/"
-          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/io.github.onemk.OneMk.yml" "$RUNNER_TEMP/one-mk.rb" "$RUNNER_TEMP/one-mk-source.rb" --repo "$GITHUB_REPOSITORY"
+          cp dist/one-mk-*-flatpak-sources.tar.gz dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb "$RUNNER_TEMP/"
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/one-mk-*-flatpak-sources.tar.gz "$RUNNER_TEMP/one-mk.rb" "$RUNNER_TEMP/one-mk-source.rb" --repo "$GITHUB_REPOSITORY"

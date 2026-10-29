@@ -2,7 +2,7 @@
 //! manager. The files themselves are made in `one_mk_ctl::integrate`; this
 //! reads the paired computers.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use one_mk_ctl::integrate::{self as ctl, Computer, Setup};
 use one_mk_net::TrustStore;
 use std::path::Path;
@@ -21,7 +21,12 @@ pub fn run(dir: &Path, custom_home: bool, remove: bool) -> Result<()> {
     if remove {
         println!("{}", removed(ctl::remove()?));
     } else {
-        println!("{}", ctl::install(&setup(dir, custom_home)?)?);
+        let done = ctl::install(&setup(dir, custom_home)?)?;
+        println!("{}", done.message);
+        if done.skipped > 0 {
+            // Some of the menu is missing: say so in the exit code, too.
+            bail!("{} \"Send to\" entr{} skipped: something of yours is in the way", done.skipped, if done.skipped == 1 { "y was" } else { "ies were" });
+        }
     }
     Ok(())
 }

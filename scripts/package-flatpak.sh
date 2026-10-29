@@ -1,29 +1,75 @@
 #!/bin/sh
-# Writes dist/flatpak/io.github.onemk.OneMk.yml for a release tarball, and
-# builds the Flatpak if flatpak-builder is installed. UNTESTED end to end.
-#   sh scripts/package-flatpak.sh [URL_OF_TARBALL]
-# Without an argument it points at dist/one-mk-x86_64-unknown-linux-gnu.tar.gz
-# (what the release workflow builds) by file path.
+# Writes the Flatpak manifest and everything it names, packs them as one
+# self-contained source bundle, and builds the Flatpak if flatpak-builder is
+# installed. UNTESTED end to end (no flatpak-builder here).
+#   sh scripts/package-flatpak.sh [URL_OR_FILE_OF_THE_TARBALL]
+# Without an argument it uses dist/one-mk-x86_64-unknown-linux-gnu.tar.gz
+# (what the release workflow builds). With a URL, the manifest downloads the
+# tarball from there (and its checksum is taken from a download made here);
+# with a file, the tarball is copied into the bundle.
+#
+# Writes dist/flatpak/ (manifest.yml and sources/) and
+# dist/one-mk-<version>-flatpak-sources.tar.gz: that folder, packed with
+# relative paths only and a sha256 for every source, so it builds anywhere.
+# The release publishes the bundle, never the bare manifest.
 . "$(dirname "$0")/package-common.sh"
 
-tarball=$OUT_DIR/one-mk-x86_64-unknown-linux-gnu.tar.gz
-if [ $# -ge 1 ]; then
-    url=$1
-    # The checksum of what is behind the URL: download it once to hash it.
-    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-    curl -fsSL "$url" -o "$tmp/t.tar.gz"
-    sha=$(sha256sum "$tmp/t.tar.gz" | cut -d' ' -f1)
-else
-    [ -f "$tarball" ] || die "$tarball not found; build the release tarball first (see docs/PACKAGING.md)"
-    url=file://$tarball
-    sha=$(sha256sum "$tarball" | cut -d' ' -f1)
-fi
-
+arg=${1:-$OUT_DIR/one-mk-x86_64-unknown-linux-gnu.tar.gz}
 dir=$OUT_DIR/flatpak
-mkdir -p "$dir"
-sed -e "s|@URL@|$url|" -e "s|@SHA256@|$sha|" -e "s|@VERSION@|$VERSION|" -e "s|@ROOT@|$ROOT|" \
+rm -rf "$dir"
+mkdir -p "$dir/sources"
+
+case "$arg" in
+    http://*|https://*)
+        # The checksum of what is behind the URL: download it once to hash it.
+        tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+        curl -fsSL "$arg" -o "$tmp/t.tar.gz"
+        key=url ref=$arg
+        sha=$(sha256sum "$tmp/t.tar.gz" | cut -d' ' -f1) ;;
+    *)
+        [ -f "$arg" ] || die "$arg not found; build the release tarball first (see docs/PACKAGING.md)"
+        cp "$arg" "$dir/sources/$(basename "$arg")"
+        key=path ref=sources/$(basename "$arg")
+        sha=$(sha256sum "$arg" | cut -d' ' -f1) ;;
+esac
+
+hash_of() { sha256sum "$1" | cut -d' ' -f1; }
+icons=$ROOT/docs/brand/app-icon/windows-linux/hicolor
+cp "$ROOT/packaging/linux/one-mk.desktop" "$dir/sources/one-mk.desktop"
+cp "$ROOT/packaging/linux/io.github.onemk.OneMk.metainfo.xml" "$dir/sources/io.github.onemk.OneMk.metainfo.xml"
+cp "$icons/scalable/apps/one-mk.svg" "$dir/sources/icon.svg"
+cp "$icons/256x256/apps/one-mk.png" "$dir/sources/icon-256.png"
+
+sed -e "s|@ARCHIVE_KEY@|$key|" -e "s|@ARCHIVE_REF@|$ref|" -e "s|@SHA256@|$sha|" \
+    -e "s|@SHA256_DESKTOP@|$(hash_of "$dir/sources/one-mk.desktop")|" \
+    -e "s|@SHA256_METAINFO@|$(hash_of "$dir/sources/io.github.onemk.OneMk.metainfo.xml")|" \
+    -e "s|@SHA256_ICON_SVG@|$(hash_of "$dir/sources/icon.svg")|" \
+    -e "s|@SHA256_ICON_PNG@|$(hash_of "$dir/sources/icon-256.png")|" \
     "$ROOT/packaging/flatpak/io.github.onemk.OneMk.yml.in" > "$dir/io.github.onemk.OneMk.yml"
 echo "$dir/io.github.onemk.OneMk.yml"
+if grep -q '@[A-Z0-9_]*@' "$dir/io.github.onemk.OneMk.yml"; then die "a placeholder is left in the manifest"; fi
+
+cat > "$dir/README.txt" <<README
+one-mk $VERSION, Flatpak source bundle: the manifest and every file it names.
+Build with:
+  flatpak-builder --force-clean --user --install-deps-from=flathub --repo=repo build io.github.onemk.OneMk.yml
+Every source in the manifest has a sha256; paths are relative to the manifest.
+README
+
+# The bundle: a folder named for the version, files in sorted order, the same bytes every time.
+bundle=$OUT_DIR/one-mk-$VERSION-flatpak-sources.tar.gz
+work=$(mktemp -d)
+trap 'rm -rf "$work" "${tmp:-}"' EXIT
+mkdir "$work/one-mk-flatpak-$VERSION"
+cp -R "$dir/." "$work/one-mk-flatpak-$VERSION/"
+clamp_times "$work/one-mk-flatpak-$VERSION"
+if tar --version 2>/dev/null | grep -q GNU; then
+    set -- --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$SOURCE_DATE_EPOCH"
+else
+    set --
+fi
+(cd "$work" && tar "$@" -cf - "one-mk-flatpak-$VERSION" | gzip -9n > "$bundle")
+echo "$bundle"
 
 if command -v flatpak-builder >/dev/null; then
     (cd "$dir" && flatpak-builder --force-clean --user --install-deps-from=flathub \
@@ -31,5 +77,5 @@ if command -v flatpak-builder >/dev/null; then
     flatpak build-bundle "$dir/repo" "$OUT_DIR/one-mk-$VERSION.flatpak" io.github.onemk.OneMk
     echo "$OUT_DIR/one-mk-$VERSION.flatpak"
 else
-    echo "flatpak-builder not found: wrote the manifest only." >&2
+    echo "flatpak-builder not found: wrote the manifest and the source bundle only." >&2
 fi

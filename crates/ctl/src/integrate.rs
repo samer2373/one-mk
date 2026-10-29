@@ -14,10 +14,12 @@
 //!
 //! Everything this module writes carries a marker, and only files with the
 //! marker are replaced or removed, so a user's own scripts are never
-//! touched. [`install`] and [`refresh`] (called when a computer is paired
+//! touched: a file (or symlink) that is already where an entry would go and
+//! does not carry the marker is left alone, and the entry is reported as
+//! skipped. [`install`] and [`refresh`] (called when a computer is paired
 //! or forgotten) rewrite the whole set; [`remove`] deletes it.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
 /// First text in every generated file; what decides that a file is ours.
@@ -46,6 +48,19 @@ pub struct Setup {
     /// `--home`, if the user chose a settings folder.
     pub home: Option<PathBuf>,
     pub computers: Vec<Computer>,
+}
+
+impl Setup {
+    /// Refuses what must not be copied into a generated file: line breaks
+    /// and NUL in a path would start new lines (directives) in the Dolphin
+    /// menu, and no path of ours has any.
+    fn check(&self) -> Result<()> {
+        crate::install::check_plain("the program's path", &self.exe)?;
+        match &self.home {
+            Some(h) => crate::install::check_plain("the settings folder's path", h),
+            None => Ok(()),
+        }
+    }
 }
 
 /// One menu entry.
@@ -138,8 +153,10 @@ fn exec_word(w: &str) -> String {
     out + "\""
 }
 
+/// A desktop-entry text value: the escapes the specification gives for a
+/// backslash and the three control characters it allows.
 fn desktop_value(s: &str) -> String {
-    s.replace('\\', r"\\")
+    s.replace('\\', r"\\").replace('\n', r"\n").replace('\r', r"\r").replace('\t', r"\t")
 }
 
 /// Dolphin's menu: one file, one action per entry (under a submenu when
@@ -304,11 +321,25 @@ enum Kind {
 
 const KDE_FILE: &str = "one-mk-send.desktop";
 
+/// A regular file (never a symlink, whatever it points at) that starts with
+/// our marker.
 fn is_ours(path: &Path) -> bool {
     use std::io::Read;
     let mut head = Vec::new();
-    std::fs::File::open(path).and_then(|f| f.take(512).read_to_end(&mut head)).is_ok()
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
+        && std::fs::File::open(path).and_then(|f| f.take(512).read_to_end(&mut head)).is_ok()
         && String::from_utf8_lossy(&head).contains(MARKER)
+}
+
+/// A real folder (not a symlink to one) that is a Quick Action of ours.
+fn is_our_bundle(path: &Path) -> bool {
+    use std::io::Read;
+    let plist = path.join("Contents/Info.plist");
+    let mut head = String::new();
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
+        && std::fs::symlink_metadata(&plist).is_ok_and(|m| m.file_type().is_file())
+        && std::fs::File::open(&plist).and_then(|f| f.take(1 << 16).read_to_string(&mut head)).is_ok()
+        && head.contains("OneMkGenerated")
 }
 
 /// What generated entries are in `t`: files for the first three kinds,
@@ -320,12 +351,10 @@ fn generated(t: &Target) -> Vec<PathBuf> {
         .filter(|p| match t.kind {
             Kind::KdeMenu => p.file_name().is_some_and(|n| n == KDE_FILE) && is_ours(p),
             Kind::Scripts | Kind::SendTo => {
-                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("Send ")) && p.is_file() && is_ours(p)
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("Send ")) && is_ours(p)
             }
             Kind::Services => {
-                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("Send ") && n.ends_with(".workflow"))
-                    && p.join("Contents/Info.plist").is_file()
-                    && std::fs::read_to_string(p.join("Contents/Info.plist")).is_ok_and(|s| s.contains("OneMkGenerated"))
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("Send ") && n.ends_with(".workflow")) && is_our_bundle(p)
             }
         })
         .collect()
@@ -334,59 +363,92 @@ fn generated(t: &Target) -> Vec<PathBuf> {
 fn clear(t: &Target) -> Result<usize> {
     let old = generated(t);
     for p in &old {
-        let r = if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
+        // `generated` only lists real files and real folders, never symlinks.
+        let r = if t.kind == Kind::Services { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
         r.with_context(|| format!("removing {}", p.display()))?;
     }
     Ok(old.len())
 }
 
-fn put(path: &Path, text: &str, executable: bool) -> Result<()> {
+/// What one `write_target` did.
+#[derive(Debug, Default)]
+struct Written {
+    /// The entries now in place.
+    files: Vec<PathBuf>,
+    /// Entries not written because something that is not ours is in the way.
+    skipped: Vec<PathBuf>,
+}
+
+/// Creates `path` with `text`, only if nothing is there: `false` if
+/// something is (a file of the user's, or a symlink, even a dangling one).
+/// The exclusive creation does not follow a symlink and cannot overwrite.
+fn put(path: &Path, text: &str, executable: bool) -> Result<bool> {
+    use std::io::Write;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-    std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))?;
+    let mut f = match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(e) => return Err(e).with_context(|| format!("writing {}", path.display())),
+    };
+    f.write_all(text.as_bytes()).with_context(|| format!("writing {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = if executable { 0o755 } else { 0o644 };
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+        f.set_permissions(std::fs::Permissions::from_mode(mode))?;
     }
     let _ = executable;
-    Ok(())
+    Ok(true)
 }
 
-/// Replaces what is in `t` with the entries for `setup`; the files written.
-fn write_target(t: &Target, setup: &Setup) -> Result<Vec<PathBuf>> {
+/// A Quick Action folder, like [`put`]: not if anything is there.
+fn put_bundle(bundle: &Path, plist: &str, workflow: &str) -> Result<bool> {
+    if let Some(dir) = bundle.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    match std::fs::create_dir(bundle) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(e) => return Err(e).with_context(|| format!("creating {}", bundle.display())),
+    }
+    let ok = put(&bundle.join("Contents/Info.plist"), plist, false)? && put(&bundle.join("Contents/document.wflow"), workflow, false)?;
+    debug_assert!(ok, "a folder made just now was not empty");
+    Ok(true)
+}
+
+/// Replaces what is ours in `t` with the entries for `setup`. Nothing that
+/// is not ours is touched: after our own entries are cleared, whatever is
+/// still at an entry's path is someone else's, and that entry is skipped.
+fn write_target(t: &Target, setup: &Setup) -> Result<Written> {
+    setup.check()?;
     clear(t)?;
     let entries = items(&setup.computers);
-    let mut out = Vec::new();
+    let mut out = Written::default();
+    let mut add = |path: PathBuf, written: bool| if written { out.files.push(path) } else { out.skipped.push(path) };
     match t.kind {
         Kind::Scripts => {
             for i in &entries {
                 let p = t.dir.join(&i.label);
-                put(&p, &shell_script(setup, i), true)?;
-                out.push(p);
+                add(p.clone(), put(&p, &shell_script(setup, i), true)?);
             }
         }
         Kind::KdeMenu => {
             let p = t.dir.join(KDE_FILE);
             // Dolphin only runs menu files it can tell are trusted: executable.
-            put(&p, &kde_service_menu(setup, &entries), true)?;
-            out.push(p);
+            add(p.clone(), put(&p, &kde_service_menu(setup, &entries), true)?);
         }
         Kind::SendTo => {
             for i in &entries {
                 let p = t.dir.join(format!("{}.cmd", i.label));
-                put(&p, &windows_cmd(setup, i), false)?;
-                out.push(p);
+                add(p.clone(), put(&p, &windows_cmd(setup, i), false)?);
             }
         }
         Kind::Services => {
             for i in &entries {
                 let bundle = t.dir.join(format!("{}.workflow", i.label));
-                put(&bundle.join("Contents/Info.plist"), &mac_info_plist(i), false)?;
-                put(&bundle.join("Contents/document.wflow"), &mac_workflow(setup, i), false)?;
-                out.push(bundle);
+                add(bundle.clone(), put_bundle(&bundle, &mac_info_plist(i), &mac_workflow(setup, i))?);
             }
         }
     }
@@ -430,37 +492,71 @@ pub fn is_enabled() -> bool {
     targets(true).iter().any(|t| !generated(t).is_empty())
 }
 
-fn describe(done: &[(Target, Vec<PathBuf>)]) -> String {
+fn describe(done: &[(Target, Written)]) -> String {
     done.iter()
-        .flat_map(|(_, files)| files)
+        .flat_map(|(_, w)| &w.files)
         .filter_map(|p| p.file_name().map(|n| format!("  {}\n", n.to_string_lossy())))
         .collect()
 }
 
+/// "Left alone" lines for the entries that were in the way, or "".
+fn skipped_text<'a>(skipped: impl Iterator<Item = &'a PathBuf>) -> String {
+    let list: String = skipped.map(|p| format!("  {}\n", p.display())).collect();
+    if list.is_empty() {
+        return list;
+    }
+    format!("Skipped, because a file or folder that is not one-mk's is already there (it was left exactly as it is):\n{list}  Rename or move it, then run `one-mk integrate` again.\n")
+}
+
+/// What [`install`] did.
+pub struct Outcome {
+    /// What to tell the user.
+    pub message: String,
+    /// Entries that were not written because something else is in the way;
+    /// `integrate` fails if there are any, `install` only warns.
+    pub skipped: usize,
+}
+
 /// Adds the entries to every file manager found, and says what was done.
-pub fn install(setup: &Setup) -> Result<String> {
+pub fn install(setup: &Setup) -> Result<Outcome> {
+    setup.check()?;
     let found = targets(false);
     if found.is_empty() {
-        return Ok("No supported file manager found (Nautilus, Nemo, Dolphin), so no \"Send to\" menu entries were added.".into());
+        return Ok(Outcome {
+            message: "No supported file manager found (Nautilus, Nemo, Dolphin), so no \"Send to\" menu entries were added.".into(),
+            skipped: 0,
+        });
     }
     let mut done = Vec::new();
     for t in found {
-        let files = write_target(&t, setup)?;
-        done.push((t, files));
+        let w = write_target(&t, setup)?;
+        done.push((t, w));
     }
     let dirs: Vec<String> = done.iter().map(|(t, _)| t.dir.display().to_string()).collect();
-    Ok(format!(
-        "File manager entries added in {}:\n{}  they follow the computers you pair or forget; to remove them:  one-mk uninstall",
-        dirs.join(", "),
-        describe(&done)
-    ))
+    let skipped = done.iter().map(|(_, w)| w.skipped.len()).sum();
+    Ok(Outcome {
+        message: format!(
+            "File manager entries added in {}:\n{}  they follow the computers you pair or forget; to remove them:  one-mk uninstall\n{}",
+            dirs.join(", "),
+            describe(&done),
+            skipped_text(done.iter().flat_map(|(_, w)| &w.skipped))
+        )
+        .trim_end()
+        .to_owned(),
+        skipped,
+    })
 }
 
 /// Rewrites the entries for the current computers, if they are installed.
-/// Does nothing for someone who never ran `integrate`.
+/// Does nothing for someone who never ran `integrate`. An error (after
+/// writing everything it could) if something that is not ours is in the way.
 pub fn refresh(setup: &Setup) -> Result<()> {
+    let mut skipped = Vec::new();
     for t in targets(true) {
-        write_target(&t, setup)?;
+        skipped.extend(write_target(&t, setup)?.skipped);
+    }
+    if !skipped.is_empty() {
+        bail!("{}", skipped_text(skipped.iter()).trim_end());
     }
     Ok(())
 }
@@ -477,7 +573,6 @@ pub fn remove() -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     const A: &str = "aaaa1111aaaa1111";
     const B: &str = "bbbb2222bbbb2222";
@@ -618,11 +713,11 @@ mod tests {
             std::fs::write(t.dir.join("Send mine.workflow/Contents/Info.plist"), "<plist/>").unwrap();
 
             let two = write_target(&t, &setup(&[(A, "Laptop"), (B, "Desk")])).unwrap();
-            assert_eq!(two.len(), if kind == Kind::KdeMenu { 1 } else { 3 }, "{kind:?}");
-            assert!(two.iter().all(|p| p.exists()));
+            assert_eq!(two.files.len(), if kind == Kind::KdeMenu { 1 } else { 3 }, "{kind:?}");
+            assert!(two.files.iter().all(|p| p.exists()) && two.skipped.is_empty());
             // B forgotten: Desk goes, the generic one now is the only entry.
             let one = write_target(&t, &setup(&[(A, "Laptop")])).unwrap();
-            assert_eq!(one.len(), 1);
+            assert_eq!(one.files.len(), 1);
             let left = generated(&t);
             assert_eq!(left.len(), 1, "{kind:?}: {left:?}");
             #[cfg(unix)]
@@ -638,12 +733,118 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A user's own file where an entry of ours would go is never replaced,
+    /// removed, or written through (for every kind of target); the rest of
+    /// the entries are still written and the collision is reported.
+    #[test]
+    fn a_users_own_file_at_our_path_is_never_overwritten() {
+        let root = tmp("collide");
+        for kind in [Kind::Scripts, Kind::KdeMenu, Kind::SendTo, Kind::Services] {
+            let t = Target { dir: root.join(format!("{kind:?}")), kind };
+            std::fs::create_dir_all(&t.dir).unwrap();
+            let s = setup(&[(A, "laptop"), (B, "desk")]);
+            // Make the user's files at the exact paths we would write.
+            let want = write_target(&t, &s).unwrap();
+            assert!(want.skipped.is_empty());
+            let paths = want.files.clone();
+            clear(&t).unwrap();
+            for p in &paths {
+                if p.extension().is_some_and(|e| e == "workflow") {
+                    std::fs::create_dir_all(p.join("Contents")).unwrap();
+                    std::fs::write(p.join("Contents/Info.plist"), "<plist>mine</plist>").unwrap();
+                } else {
+                    std::fs::write(p, "mine").unwrap();
+                }
+            }
+            let done = write_target(&t, &s).unwrap();
+            assert!(done.files.is_empty(), "{kind:?}: wrote over a user's file: {:?}", done.files);
+            assert_eq!(done.skipped.len(), paths.len(), "{kind:?}");
+            for p in &paths {
+                let own = if p.extension().is_some_and(|e| e == "workflow") { p.join("Contents/Info.plist") } else { p.clone() };
+                assert!(std::fs::read_to_string(&own).unwrap().contains("mine"), "{kind:?}: {own:?} was changed");
+            }
+            // `integrate --remove` leaves them too.
+            assert_eq!(clear(&t).unwrap(), 0, "{kind:?}");
+            for p in &paths {
+                assert!(p.exists(), "{kind:?}: {p:?} was removed");
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// One collision does not stop the others, and ours still get replaced.
+    #[test]
+    fn a_collision_skips_only_that_entry() {
+        let root = tmp("partial");
+        let t = Target { dir: root.join("scripts"), kind: Kind::Scripts };
+        std::fs::create_dir_all(&t.dir).unwrap();
+        std::fs::write(t.dir.join("Send to laptop"), "#!/bin/sh
+echo mine
+").unwrap();
+        let done = write_target(&t, &setup(&[(A, "laptop"), (B, "desk")])).unwrap();
+        assert_eq!(done.skipped, [t.dir.join("Send to laptop")]);
+        assert_eq!(done.files.len(), 2);
+        assert_eq!(std::fs::read_to_string(t.dir.join("Send to laptop")).unwrap(), "#!/bin/sh
+echo mine
+");
+        // A second run replaces ours (desk) and still skips theirs.
+        let again = write_target(&t, &setup(&[(A, "laptop"), (B, "desk")])).unwrap();
+        assert_eq!((again.files.len(), again.skipped.len()), (2, 1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A symlink is never ours, whatever it points at, and is never written through.
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_left_alone_and_not_written_through() {
+        let root = tmp("symlink");
+        let t = Target { dir: root.join("scripts"), kind: Kind::Scripts };
+        std::fs::create_dir_all(&t.dir).unwrap();
+        let victim = root.join("victim");
+        std::fs::write(&victim, "precious").unwrap();
+        std::os::unix::fs::symlink(&victim, t.dir.join("Send to laptop")).unwrap();
+        // Dangling, pointing at a place that must not be created.
+        std::os::unix::fs::symlink(root.join("nowhere"), t.dir.join("Send with one-mk")).unwrap();
+        let done = write_target(&t, &setup(&[(A, "laptop"), (B, "desk")])).unwrap();
+        assert_eq!(done.skipped.len(), 2, "{done:?}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
+        assert!(!root.join("nowhere").exists());
+        assert_eq!(clear(&t).unwrap(), 1, "only the Desk script is ours");
+        assert!(std::fs::symlink_metadata(t.dir.join("Send to laptop")).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn newlines_and_nul_in_paths_are_refused() {
+        for bad in ["/opt/a\nExec=touch /tmp/injected\n/one-mk", "/opt/a\rb", "/opt/a\0b"] {
+            let s = Setup { exe: bad.into(), ..setup(&[(A, "x")]) };
+            let e = s.check().unwrap_err().to_string();
+            assert!(e.contains("line break") || e.contains("NUL"), "{e}");
+            let s = Setup { home: Some(bad.into()), ..setup(&[(A, "x")]) };
+            assert!(s.check().is_err());
+            let t = Target { dir: tmp("hostile").join("m"), kind: Kind::KdeMenu };
+            assert!(write_target(&t, &s).is_err());
+            assert!(!t.dir.exists() || generated(&t).is_empty());
+        }
+        assert!(setup(&[(A, "x")]).check().is_ok());
+    }
+
+    #[test]
+    fn desktop_text_values_escape_control_characters() {
+        assert_eq!(desktop_value("a\nb\rc\td\\e"), "a\\nb\\rc\\td\\\\e");
+        // Whatever the label holds, the menu has exactly the lines we wrote.
+        let item = Item { label: "x\nExec=touch /tmp/injected".into(), to: Some(A.into()) };
+        let m = kde_service_menu(&setup(&[(A, "x")]), &[item]);
+        assert_eq!(m.lines().filter(|l| l.starts_with("Exec=")).count(), 1, "{m}");
+    }
+
     /// The generated script, run by a real shell against a stub `one-mk`,
     /// hands over every odd file name unchanged.
     #[cfg(unix)]
     #[test]
     fn the_script_delivers_odd_file_names_intact() {
         use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
         let root = tmp("shell");
         let bin = root.join("it's a \"dir\" $HOME");
         std::fs::create_dir_all(&bin).unwrap();
@@ -654,7 +855,7 @@ mod tests {
 
         let s = Setup { exe: stub.clone(), home: None, computers: vec![Computer::new(A, "x'; echo pwned; '").unwrap()] };
         let target = Target { dir: root.join("scripts"), kind: Kind::Scripts };
-        let files = write_target(&target, &s).unwrap();
+        let files = write_target(&target, &s).unwrap().files;
         assert_eq!(files.len(), 1);
         assert!(files[0].file_name().unwrap().to_str().unwrap().starts_with("Send to x'; echo pwned"));
 

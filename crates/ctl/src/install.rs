@@ -28,7 +28,33 @@ pub struct Launch {
     pub start_now: bool,
 }
 
+/// Refuses a path with a line break or NUL in it: it would end up in a
+/// service file or login entry, where the rest of the path would be read as
+/// a new setting (`Exec=`, `ExecStart=`).
+pub fn check_plain(what: &str, path: &Path) -> Result<()> {
+    let text = path.to_string_lossy();
+    if text.contains(['\r', '\n']) {
+        bail!("{what} has a line break in it ({text:?}); one-mk cannot write it into a startup or menu entry safely. Move it somewhere with a plain path.");
+    }
+    if text.contains('\0') {
+        bail!("{what} has a NUL character in it ({text:?}); one-mk cannot write it into a startup or menu entry.");
+    }
+    Ok(())
+}
+
 impl Launch {
+    /// Every path that is going into a generated file must be plain.
+    fn check(&self) -> Result<()> {
+        check_plain("the program's path", &self.exe)?;
+        if let Some(t) = &self.tray {
+            check_plain("the tray program's path", t)?;
+        }
+        if let Some(h) = &self.home {
+            check_plain("the settings folder's path", h)?;
+        }
+        Ok(())
+    }
+
     /// `one-mk run`, with `--home` after `run`: before it, clap refuses it.
     fn args(&self) -> Vec<String> {
         let mut a = vec!["run".to_owned()];
@@ -66,6 +92,7 @@ pub fn sibling(exe: &Path, name: &str) -> Option<PathBuf> {
 
 /// Makes `launch` start at login and says what was done.
 pub fn install(launch: &Launch) -> Result<String> {
+    launch.check()?;
     if cfg!(target_os = "linux") {
         install_linux(launch)
     } else if cfg!(target_os = "macos") {
@@ -408,6 +435,23 @@ mod tests {
         assert!(tray.contains("Exec=\"/usr/bin/one-mk-tray\"\n"), "{tray}");
         let hidden = &files.iter().find(|(p, _)| p.ends_with("io.github.onemk.OneMk.desktop")).unwrap().1;
         assert!(hidden.contains("NoDisplay=true") && !hidden.contains("Autostart"), "{hidden}");
+    }
+
+    #[test]
+    fn hostile_paths_never_become_directives() {
+        let evil = "/opt/x\nExecStop=touch /tmp/injected\n/one-mk";
+        for l in [
+            Launch { exe: evil.into(), ..launch(None) },
+            Launch { tray: Some(evil.into()), ..launch(None) },
+            Launch { home: Some(evil.into()), ..launch(None) },
+            Launch { exe: "/opt/a\rb".into(), ..launch(None) },
+            Launch { exe: "/opt/a\0b".into(), ..launch(None) },
+        ] {
+            assert!(l.check().is_err());
+            // `install` refuses before anything is written anywhere.
+            assert!(install(&l).is_err());
+        }
+        assert!(launch(Some("/tmp/a b")).check().is_ok());
     }
 
     #[test]
