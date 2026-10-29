@@ -13,15 +13,19 @@ clipboard and files follow. Setup takes about a minute.
 
 ## Quick start
 
-Get it first. On macOS and Linux:
+Get it first. Every release has a package for each system (the
+[latest release](https://github.com/samer2373/one-mk/releases/latest)):
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh
-```
+| System | Get it | Notes |
+|---|---|---|
+| Debian, Ubuntu | `sudo apt install ./one-mk_*_amd64.deb` | Installs nothing into your login; run `one-mk install` as yourself |
+| Any Linux | `one-mk-*-x86_64.AppImage` | `chmod +x` it and run it; with no arguments it opens the window, otherwise it is `one-mk` |
+| macOS | `one-mk-*-arm64.dmg` or `-x64.dmg` | Drag `one-mk.app` to Applications; or `brew install --cask samer2373/tap/one-mk` |
+| Windows | `one-mk-*-x64-setup.exe` | Installs to Program Files, opens the firewall for private networks, optionally starts at sign-in |
+| macOS, Linux, Windows | the plain `.tar.gz` / `.zip` | `curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh \| sh` installs it into `~/.local/bin` |
 
-On Windows, download the `.zip` from the
-[latest release](https://github.com/samer2373/one-mk/releases/latest) and
-unzip it. Or build it yourself (see Building).
+Or build it yourself (see Building). How each package is made, and which are
+untested, is in [docs/PACKAGING.md](docs/PACKAGING.md).
 
 Install once, pair once, done. On **each** computer:
 
@@ -69,7 +73,8 @@ one-mk layout "laptop" bottom --offset center
 | `one-mk lock-sync on\|off` | Locking any computer locks the others (those with lock sync on) |
 | `one-mk hooks [--on-enter CMD] [--on-leave CMD] [--on-peer-connect CMD] [--on-peer-disconnect CMD] [--off]` | Run a command when the pointer arrives or leaves, or a computer connects or disconnects (see below) |
 | `one-mk power [--block-screensaver on\|off] [--sleep-sync on\|off]` | Keep other computers awake while you control them; sleep displays together (see below) |
-| `one-mk install` / `uninstall` | Start automatically at login / stop doing that |
+| `one-mk install` / `uninstall` | Start automatically at login (and add the file manager's "Send to" entries) / stop doing that |
+| `one-mk integrate [--remove]` | Add or remove "Send to <computer>" in the file manager only (see below) |
 | `one-mk pair` | Pair with another computer (run on both) |
 | `one-mk layout <pc> <left\|right\|top\|bottom> [--offset PX\|center\|stretch]` | Say where a paired computer sits, and how its edge lines up with yours |
 | `one-mk profile save\|use\|list\|delete <name>` | Named layouts, e.g. "home" and "office" |
@@ -132,6 +137,19 @@ the receiving computer shows one desktop notification naming the files, with
 **Show in folder** (Linux, over D-Bus; macOS shows the notification without
 the button; Windows does not notify yet). Turn it off with `one-mk notify off`,
 or for one run with `one-mk run --no-notify`. Nothing runs while idle.
+
+**Send from the file manager.** `one-mk install` (or `one-mk integrate`) adds
+**Send to <computer>** to the right-click menu: Nautilus and Nemo (a script in
+`Scripts`), Dolphin (a service menu), Explorer (the *Send to* menu) and Finder
+(a Quick Action, under *Services*). With several paired computers there is one
+entry each, plus **Send with one-mk**, which takes the first. The entries are
+rewritten whenever you pair or forget a computer, and `one-mk uninstall` (or
+`one-mk integrate --remove`) removes them; files that are not one-mk's are
+never touched. If sending fails, a desktop notification says why (Windows keeps
+the console window open instead). On Linux the entry only appears for file
+managers that are installed. Only Nautilus/Nemo/Dolphin scripts and menus on
+Linux are tested on a real system; the Windows and macOS entries are written
+and unit-tested but have not been seen in Explorer or Finder.
 
 **Mac and PC keyboards.** When keys go between a Mac and a Windows or Linux
 computer, Ctrl and Cmd trade places by default, so Ctrl+C on the PC keyboard

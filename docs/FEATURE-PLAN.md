@@ -151,10 +151,10 @@ Known gaps:
 | 3A | Pointer drawn on a computer with no mouse attached | none | Known gap in Lan Mouse and Mouse Without Borders. | todo |
 | 3B | Drag files across the screen edge | transfer code (1B) | Hardest of the list. Deskflow and Synergy both removed theirs as broken. Linux GNOME and Windows first. | todo |
 | 3C | Auto-update with signed releases | none | | todo |
-| 3D | Packaging: `.deb`, AppImage or Flatpak, MSI, `.dmg` or Homebrew | none | Probably matters most for adoption. | todo |
+| 3D | Packaging: `.deb`, AppImage or Flatpak, MSI, `.dmg` or Homebrew | none | Probably matters most for adoption. See `docs/PACKAGING.md`. **Verified here (Linux):** reproducible `.deb` built with `scripts/package-deb.sh`; contents, control, unpacked `one-mk --version`, `desktop-file-validate`, `appstreamcli validate`, `systemd-analyze --user verify` of the unit (`scripts/check-packaging.sh`); AppDir layout runs `AppRun --version`. **Written, untested:** AppImage file (needs appimagetool; pinned in CI), Flatpak manifest, Inno Setup installer, macOS `.app`/`.dmg` and Homebrew cask/formula; lintian not run (not installed); release CI jobs not run. Versions now come from `[workspace.package]` only. | done (Linux verified) |
 | 3E | wlroots (Sway/Hyprland) backend | none | | todo |
 | 3F | X11 capture backend | none | | todo |
-| 3G | "Send to <computer>" file-manager entries | 1B | Nautilus, Dolphin, Explorer, Finder. | todo |
+| 3G | "Send to <computer>" file-manager entries | 1B | Nautilus, Dolphin, Explorer, Finder. `one-mk install`/`integrate` write them, pair/forget refresh them, `uninstall` removes them; `send --notify-errors` reports failures. **Verified here:** unit tests of every generated file and of quoting with hostile file and computer names, a real `sh` run of the generated script against a stub `one-mk` with odd file names, a real `integrate`/`forget`/`--remove` cycle in a scratch `$HOME`, failure notification through a stub `notify-send`. **Compiled only:** Windows `.cmd`, macOS Quick Action (plist parses; not seen in Finder). | done (Linux verified) |
 | 3H | Pairing without sitting at both screens (QR or link) | none | | todo |
 
 ## UI and design (after waves 1 and 2)
