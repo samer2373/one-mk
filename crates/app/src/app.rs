@@ -435,6 +435,7 @@ impl App {
                 self.toast_error(format!("Couldn't turn {word} start at login."), e, now);
             }
             Job::Start => self.toast_error("one·mk didn't start.", e, now),
+            Job::Stop => self.toast_error("Couldn't stop one·mk. Try again, or quit it from Activity Monitor or Task Manager.", e, now),
             Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
         }
     }
@@ -1377,6 +1378,17 @@ impl App {
         if button(ui, b, Id::unique("open-dl"), label, Look::Quiet, !busy, Some("Open received files folder")).clicked() {
             self.busy.push(Job::Open);
             self.link.open_downloads();
+        }
+        ui.painter().hline(c.x_range(), top + 2.0 * row_h, Stroke::new(1.0, LINE));
+        let r2 = Rect::from_min_size(pos2(c.left(), top + 2.0 * row_h), vec2(c.width(), row_h));
+        ui.painter().text(r2.left_center(), Align2::LEFT_CENTER, "Sharing", regular(T_BODY), INK);
+        let label = "Stop";
+        let bw = button_width(ui, label) - 4.0;
+        let b = Rect::from_min_size(pos2(r2.right() - bw, r2.center().y - 14.0), vec2(bw, 28.0));
+        let busy = self.busy.contains(&Job::Stop);
+        if button(ui, b, Id::unique("stop"), label, Look::Quiet, self.running().is_some() && !busy, Some("Stop one·mk on this computer")).clicked() {
+            self.busy.push(Job::Stop);
+            self.link.stop();
         }
     }
 

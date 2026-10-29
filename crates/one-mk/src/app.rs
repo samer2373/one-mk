@@ -422,7 +422,7 @@ pub async fn serve(
             Some((fp, id, ev)) = link_rx.recv() => app.on_link(fp, id, ev),
             _ = tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => app.on_timer(),
             Some(ev) = rx.recv() => app.on_app(ev, &screens_rx),
-            Some((req, reply)) = ipc.recv() => app.on_request(req, reply),
+            Some((req, reply)) = ipc.recv() => if app.on_request(req, reply) { break },
             _ = dial_tick.tick() => app.dial_missing(&screens_rx),
             _ = &mut shutdown => break,
         }
@@ -1099,7 +1099,8 @@ impl App {
         self.update_sides();
     }
 
-    fn on_request(&mut self, req: Request, reply: tokio::sync::oneshot::Sender<String>) {
+    /// Answers a control request; true when it asked the daemon to stop.
+    fn on_request(&mut self, req: Request, reply: tokio::sync::oneshot::Sender<String>) -> bool {
         self.reload_trust();
         let text = match req {
             Request::Status => self.status().encode(),
@@ -1118,8 +1119,10 @@ impl App {
                 }
                 None => "none\n".to_owned(),
             },
+            Request::Stop => "ok\n".to_owned(),
         };
         let _ = reply.send(text);
+        req == Request::Stop
     }
 
     fn status(&self) -> Status {

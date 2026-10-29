@@ -20,6 +20,8 @@ pub enum Request {
     /// End the control of whichever peer controls this machine, as if
     /// this machine's own mouse or keyboard had been used.
     TakeBack,
+    /// Shut the daemon down, as if it had been sent Ctrl-C.
+    Stop,
 }
 
 impl Request {
@@ -28,11 +30,12 @@ impl Request {
             Request::Status => "status",
             Request::Reload => "reload",
             Request::TakeBack => "takeback",
+            Request::Stop => "stop",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        [Request::Status, Request::Reload, Request::TakeBack].into_iter().find(|r| r.name() == s)
+        [Request::Status, Request::Reload, Request::TakeBack, Request::Stop].into_iter().find(|r| r.name() == s)
     }
 }
 
@@ -132,7 +135,7 @@ mod tests {
 
     #[test]
     fn requests_have_names() {
-        for r in [Request::Status, Request::Reload, Request::TakeBack] {
+        for r in [Request::Status, Request::Reload, Request::TakeBack, Request::Stop] {
             assert_eq!(Request::parse(r.name()), Some(r));
         }
         assert_eq!(Request::parse("format c:"), None);

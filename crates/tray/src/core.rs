@@ -73,6 +73,7 @@ impl Ctx {
         let result: anyhow::Result<()> = match action {
             Action::OpenApp => self.open_app().map_err(Into::into),
             Action::StartDaemon => self.start_daemon().map_err(Into::into),
+            Action::Stop => client::request(&self.dir, Request::Stop, Duration::from_secs(5)).map(drop),
             Action::TakeBack => client::request(&self.dir, Request::TakeBack, Duration::from_secs(5)).map(drop),
             Action::SetSide { peer, side } => self.set_side(peer, &side.to_string()),
             Action::ToggleAutostart => self.toggle_autostart(),

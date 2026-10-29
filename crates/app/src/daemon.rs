@@ -32,6 +32,7 @@ pub enum Job {
     Layout { id: String, name: String, side: one_mk_proto::Side },
     Swap { id: String, name: String, swap: String },
     TakeBack,
+    Stop,
     /// Turning start at login on (true) or off.
     Autostart(bool),
     Send { to: String, count: usize },
@@ -177,6 +178,10 @@ impl Link {
         let (id, value) = (peer.to_owned(), swap.to_owned());
         let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into() };
         self.job(what, move |l| l.one_mk(&["layout", &id, "--swap-ctrl-cmd", &value]).map(drop));
+    }
+
+    pub fn stop(&self) {
+        self.job(Job::Stop, |l| client::request(&l.dir, Request::Stop, Duration::from_secs(5)).map(drop));
     }
 
     pub fn take_back(&self) {

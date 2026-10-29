@@ -17,6 +17,7 @@ pub enum Action {
     OpenApp,
     StartDaemon,
     TakeBack,
+    Stop,
     SetSide { peer: String, side: Side },
     ToggleAutostart,
     Quit,
@@ -103,6 +104,7 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
             }
             m.push(Entry::Separator);
             m.push(Entry::Item { label: "Take back control".into(), action: Action::TakeBack, checked: None });
+            m.push(Entry::Item { label: "Stop one-mk".into(), action: Action::Stop, checked: None });
         }
         None => m.push(Entry::Item { label: "Start one-mk".into(), action: Action::StartDaemon, checked: None }),
     }

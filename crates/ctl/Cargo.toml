@@ -1,9 +1,9 @@
 [package]
 name = "one-mk-ctl"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
 directories = "6.0.0"
-one-mk-proto = { version = "0.1.7", path = "../proto" }
+one-mk-proto = { version = "0.1.8", path = "../proto" }
