@@ -1,6 +1,6 @@
 [package]
 name = "one-mk"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 
 [dependencies]
@@ -10,11 +10,11 @@ bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 directories = "6.0.0"
 fs4 = "1.1.0"
-one-mk-ctl = { version = "0.1.6", path = "../ctl" }
-one-mk-clipboard = { version = "0.1.6", path = "../clipboard" }
-one-mk-input = { version = "0.1.6", path = "../input" }
-one-mk-net = { version = "0.1.6", path = "../net" }
-one-mk-proto = { version = "0.1.6", path = "../proto" }
+one-mk-ctl = { version = "0.1.7", path = "../ctl" }
+one-mk-clipboard = { version = "0.1.7", path = "../clipboard" }
+one-mk-input = { version = "0.1.7", path = "../input" }
+one-mk-net = { version = "0.1.7", path = "../net" }
+one-mk-proto = { version = "0.1.7", path = "../proto" }
 quinn = { version = "0.11.12", default-features = false }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-std", "io-util", "net"] }
 tracing = "0.1.44"
