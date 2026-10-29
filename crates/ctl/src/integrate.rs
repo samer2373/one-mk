@@ -573,7 +573,6 @@ pub fn remove() -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     const A: &str = "aaaa1111aaaa1111";
     const B: &str = "bbbb2222bbbb2222";
@@ -845,6 +844,7 @@ echo mine
     #[test]
     fn the_script_delivers_odd_file_names_intact() {
         use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
         let root = tmp("shell");
         let bin = root.join("it's a \"dir\" $HOME");
         std::fs::create_dir_all(&bin).unwrap();
