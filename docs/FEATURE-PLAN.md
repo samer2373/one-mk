@@ -78,7 +78,7 @@ Known gaps:
 | ID | Task | Depends on | Notes | Status |
 |---|---|---|---|---|
 | 2A | Global hotkeys: jump to computer N, cycle, toggle lock-to-here | 1C `switch` | Linux needs the GlobalShortcuts portal; check it on GNOME. Windows `RegisterHotKey`; macOS event tap. | todo |
-| 2B | Wayland hardening: persist the portal and RemoteDesktop token, release capture on every failure path | none | Top competitor pain point. Touches `crates/input/src/portal.rs`; coordinate with 1C's gaming-mode edits. | todo |
+| 2B | Wayland hardening: persist the portal and RemoteDesktop token, release capture on every failure path | none | Branch `t3/wayland-portal-recovery`. Tokens 0600 + atomic, refused token replaced; InputCapture v2 restore token (GNOME 50 is v1: still asks each start). Per-session D-Bus connection, call timeouts, owner-change watch, panic guard, held-key release, sleep/lock pause, backoff 1-2-4-8-16-30 s. `Event::Status` → `one-mk status`, doctor, one printed line. Fake-portal + fake-EIS tests for each path; real GNOME: only the first-run dialog line (smoke). | done |
 | 2C | Windows service for the login screen and UAC | none | Service in SYSTEM plus a helper in the user session. Untestable here. | todo |
 | 2D | Layout editor: several monitors per computer, unaligned edges, push-toward-it learning | 1C edge work | Extends `crates/proto/src/geometry.rs` and the window. | todo |
 | 2E | Location profiles: layout switches by Wi-Fi network | 2D | | todo |
