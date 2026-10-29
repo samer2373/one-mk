@@ -21,7 +21,7 @@
 //! double quotes and backslashes, nothing is expanded). It is started and
 //! reaped by its own task, so the daemon never waits for it, killed after
 //! `timeout_secs` (5 by default), run at most once per 500 ms per event
-//! (the latest pending transition is retained), with commands serialized. Anything that
+//! (per peer for connection events), with independent serial pointer/peer lanes. Anything that
 //! can write `settings.toml` can run programs as you, so a file others can
 //! write is reported (see [`unsafe_permissions`]).
 
@@ -139,7 +139,13 @@ fn legacy_shell_word(word: &str) -> String {
         }
     }
     #[cfg(not(windows))]
-    quote(word)
+    {
+        if !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&byte)) {
+            word.to_owned()
+        } else {
+            format!("'{}'", word.replace('\'', r"'\''"))
+        }
+    }
 }
 
 /// Splits a command line into words like a POSIX shell would, without
@@ -337,12 +343,51 @@ impl RateLimit {
 /// programs as this user. `None` when it is fine, missing, or the OS has no
 /// such bits.
 pub fn unsafe_permissions(path: &Path) -> Option<String> {
+    let resolved = std::fs::canonicalize(path).ok()?;
+    let file = std::fs::File::open(&resolved).ok()?;
+    opened_permissions(path, &resolved, &file)
+}
+
+pub fn read_settings(path: &Path) -> std::io::Result<(String, Option<String>)> {
+    use std::io::Read;
+    let resolved = std::fs::canonicalize(path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options.open(&resolved)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("settings must be a regular file"));
+    }
+    let reason = opened_permissions(path, &resolved, &file);
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok((text, reason))
+}
+
+fn opened_permissions(path: &Path, resolved: &Path, file: &std::fs::File) -> Option<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let md = std::fs::metadata(path).ok()?;
+        let md = match file.metadata() { Ok(md) => md, Err(error) => return Some(error.to_string()) };
         let uid = unsafe { libc::geteuid() };
-        for (target, metadata) in [(path.to_owned(), md), (path.parent()?.to_owned(), std::fs::metadata(path.parent()?).ok()?)] {
+        let config = path.parent()?.to_owned();
+        let canonical_config = match std::fs::canonicalize(&config) { Ok(dir) => dir, Err(error) => return Some(error.to_string()) };
+        let target_parent = resolved.parent()?;
+        let boundary = canonical_config.ancestors().find(|ancestor| target_parent.starts_with(ancestor))?;
+        let mut checks = vec![(resolved.to_owned(), md)];
+        for start in [config.as_path(), target_parent] {
+            for target in start.ancestors() {
+                if target == boundary && target != config && target != canonical_config { break; }
+                let metadata = match std::fs::metadata(target) { Ok(md) => md, Err(error) => return Some(error.to_string()) };
+                checks.push((target.to_owned(), metadata));
+                if target == config || target == canonical_config { break; }
+            }
+        }
+        for (target, metadata) in checks {
             if metadata.uid() != uid {
                 return Some(format!("{} is owned by uid {}, not current uid {uid}", target.display(), metadata.uid()));
             }
@@ -354,7 +399,7 @@ pub fn unsafe_permissions(path: &Path) -> Option<String> {
     }
     #[cfg(not(unix))]
     {
-        let _ = path;
+        let _ = (path, resolved, file);
         None
     }
 }
@@ -399,6 +444,7 @@ fn trust_permissions(dir: &Path) -> Result<()> {
 }
 
 /// What is wrong with a file of mode `mode`, if it is group or world writable.
+#[cfg(any(unix, test))]
 pub fn writable_by_others(mode: u32) -> Option<&'static str> {
     match mode & 0o022 {
         0 => None,
@@ -426,6 +472,8 @@ pub fn warn_if_unsafe(dir: &Path, hooks: &Hooks) {
 }
 
 struct Pending {
+    command: Option<Command>,
+    generation: u64,
     event: Event,
     argv: Vec<String>,
     env: [(&'static str, String); 4],
@@ -437,8 +485,11 @@ struct Pending {
 
 #[derive(Default)]
 struct Queue {
+    configuration: Option<Hooks>,
+    generation: u64,
     limit: RateLimit,
-    pending: [Option<Pending>; 4],
+    pending: HashMap<(Event, String), Pending>,
+    peer_last: HashMap<(Event, String), Instant>,
     sequence: u64,
     active: bool,
 }
@@ -451,31 +502,48 @@ impl Queue {
             _ => None,
         };
         if let Some(opposite) = opposite {
-            self.pending[opposite.index()] = None;
+            self.pending.retain(|(event, _), _| *event != opposite);
         }
     }
 
     fn insert(&mut self, mut pending: Pending, now: Instant) {
+        pending.generation = self.generation;
         let event = pending.event;
         self.cancel_opposite(event);
         self.sequence = self.sequence.wrapping_add(1);
         pending.sequence = self.sequence;
-        pending.due = self.limit.last[event.index()].map_or(now, |last| (last + MIN_INTERVAL).max(now));
-        self.pending[event.index()] = Some(pending);
+        let key = (event, if matches!(event, Event::PeerConnect | Event::PeerDisconnect) { pending.env[2].1.clone() } else { String::new() });
+        self.peer_last.retain(|_, last| now.saturating_duration_since(*last) < MIN_INTERVAL);
+        let last = if key.1.is_empty() { self.limit.last[event.index()] } else { self.peer_last.get(&key).copied() };
+        pending.due = last.map_or(now, |last| (last + MIN_INTERVAL).max(now));
+        if self.pending.len() < 256 || self.pending.contains_key(&key) { self.pending.insert(key, pending); }
     }
 
-    fn next(&self) -> Option<usize> {
-        self.pending.iter().enumerate().filter_map(|(index, pending)| pending.as_ref().map(|pending| (index, pending)))
-            .min_by_key(|(_, pending)| (pending.due, pending.sequence)).map(|(index, _)| index)
+    fn next(&self) -> Option<(Event, String)> {
+        self.pending.iter().min_by_key(|(_, pending)| (pending.due, pending.sequence)).map(|(key, _)| key.clone())
+    }
+
+    fn configure(&mut self, cfg: &Hooks) {
+        if self.configuration.as_ref() == Some(cfg) { return; }
+        self.generation = self.generation.wrapping_add(1);
+        self.configuration = Some(cfg.clone());
+        self.pending.retain(|_, pending| {
+            pending.generation = self.generation;
+            if pending.command.as_ref() != cfg.get(pending.event) { return false; }
+            cfg.get(pending.event).is_some_and(|command| command.argv(cfg.shell).is_ok_and(|argv| argv == pending.argv)
+                && (cfg.shell && matches!(command, Command::Line(_))) == pending.shell && cfg.timeout() == pending.timeout)
+        });
     }
 
     fn take_ready(&mut self, now: Instant) -> Option<Pending> {
+        self.pending.retain(|_, pending| pending.generation == self.generation);
         let index = self.next()?;
-        if self.pending[index].as_ref()?.due > now {
+        if self.pending.get(&index)?.due > now {
             return None;
         }
-        let pending = self.pending[index].take()?;
-        self.limit.allow(pending.event, now);
+        let pending = self.pending.remove(&index)?;
+        if index.1.is_empty() { self.limit.allow(pending.event, now); }
+        else { self.peer_last.insert(index, now); }
         Some(pending)
     }
 }
@@ -500,8 +568,10 @@ pub struct Engine {
     owner: Option<Fingerprint>,
     known: HashMap<Fingerprint, Known>,
     queue: Arc<std::sync::Mutex<Queue>>,
+    peer_queue: Arc<std::sync::Mutex<Queue>>,
     wake: Arc<tokio::sync::Notify>,
-    worker: Option<tokio::task::JoinHandle<()>>,
+    peer_wake: Arc<tokio::sync::Notify>,
+    workers: Vec<tokio::task::JoinHandle<()>>,
     running: Arc<AtomicUsize>,
     /// When each key action's command last ran (see [`Engine::run_action`]).
     actions: HashMap<String, Instant>,
@@ -509,7 +579,7 @@ pub struct Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        if let Some(worker) = &self.worker {
+        for worker in &self.workers {
             worker.abort();
         }
     }
@@ -534,6 +604,9 @@ impl Engine {
                 *self = fresh;
             }
             return;
+        }
+        for queue in [&self.queue, &self.peer_queue] {
+            queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).configure(cfg);
         }
         for (ev, info) in self.diff(away, owner, peers) {
             self.fire(cfg, ev, &info);
@@ -602,8 +675,9 @@ impl Engine {
     }
 
     fn fire(&mut self, cfg: &Hooks, ev: Event, peer: &PeerInfo) {
-        self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel_opposite(ev);
-        self.wake.notify_one();
+        let (lane, wake) = if matches!(ev, Event::Enter | Event::Leave) { (&self.queue, &self.wake) } else { (&self.peer_queue, &self.peer_wake) };
+        lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel_opposite(ev);
+        wake.notify_one();
         let Some(cmd) = cfg.get(ev) else { return };
         let argv = match cmd.argv(cfg.shell) {
             Ok(a) => a,
@@ -619,21 +693,22 @@ impl Engine {
             }
         }
         let now = Instant::now();
-        let mut queue = self.queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        queue.insert(Pending { event: ev, argv, env: environment, shell: cfg.shell && matches!(cmd, Command::Line(_)), timeout: cfg.timeout(), due: now, sequence: 0 }, now);
-        self.wake.notify_one();
+        let mut queue = lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        queue.insert(Pending { command: Some(cmd.clone()), generation: 0, event: ev, argv, env: environment, shell: cfg.shell && matches!(cmd, Command::Line(_)), timeout: cfg.timeout(), due: now, sequence: 0 }, now);
+        wake.notify_one();
         if queue.active {
             return;
         }
         queue.active = true;
         drop(queue);
-        let (queue, wake, running) = (self.queue.clone(), self.wake.clone(), self.running.clone());
-        self.worker = Some(tokio::spawn(async move {
+        let (queue, wake, running) = (lane.clone(), wake.clone(), self.running.clone());
+        self.workers.retain(|worker| !worker.is_finished());
+        self.workers.push(tokio::spawn(async move {
             loop {
                 let (ready, due) = {
                     let mut queue = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     let ready = queue.take_ready(Instant::now());
-                    let due = queue.next().and_then(|index| queue.pending[index].as_ref().map(|pending| pending.due));
+                    let due = queue.next().and_then(|index| queue.pending.get(&index).map(|pending| pending.due));
                     if ready.is_none() && due.is_none() {
                         queue.active = false;
                         return;
@@ -641,7 +716,11 @@ impl Engine {
                     (ready, due)
                 };
                 if let Some(pending) = ready {
-                    running.fetch_add(1, Ordering::SeqCst);
+                    if running.fetch_add(1, Ordering::SeqCst) >= MAX_RUNNING {
+                        running.fetch_sub(1, Ordering::SeqCst);
+                        tracing::warn!("hook dropped: global running cap reached");
+                        continue;
+                    }
                     let _running = Running(running.clone());
                     run(pending.event.as_str(), &pending.argv, &pending.env, pending.timeout, pending.shell).await;
                 } else if let Some(due) = due {
@@ -709,8 +788,26 @@ impl Drop for Running {
     }
 }
 
+struct ProcessGroup(Option<u32>);
+
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.0.and_then(|pid| i32::try_from(pid).ok()) {
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
+        }
+    }
+}
+
 /// Runs one hook to its end or the timeout, and reaps it.
 async fn run(label: &'static str, argv: &[String], env: &[(&'static str, String)], timeout: Duration, shell: bool) {
+    #[cfg(windows)]
+    let sanitized;
+    #[cfg(windows)]
+    let env = if Path::new(&argv[0]).extension().and_then(|extension| extension.to_str()).is_some_and(|extension| ["bat", "cmd", "com"].iter().any(|candidate| extension.eq_ignore_ascii_case(candidate))) {
+        sanitized = env.iter().map(|(key, value)| (*key, if *key == "ONE_MK_EVENT" { value.clone() } else { shell_value(value) })).collect::<Vec<_>>();
+        sanitized.as_slice()
+    } else { env };
     let mut cmd = tokio::process::Command::new(&argv[0]);
     #[cfg(windows)]
     if shell {
@@ -739,6 +836,7 @@ async fn run(label: &'static str, argv: &[String], env: &[(&'static str, String)
         }
     };
     let pid = child.id();
+    let mut group = ProcessGroup(pid);
     match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) if status.success() => tracing::debug!(event = label, "hook finished"),
         Ok(Ok(status)) => tracing::warn!(event = label, "hook {:?} failed: {status}", argv[0]),
@@ -755,6 +853,7 @@ async fn run(label: &'static str, argv: &[String], env: &[(&'static str, String)
             let _ = child.kill().await; // and reaps it
         }
     }
+    group.0 = None;
 }
 
 // ------------------------------------------------------------ command line
@@ -811,6 +910,15 @@ impl HooksArgs {
             h.timeout_secs = (t != DEFAULT_TIMEOUT_SECS).then_some(t);
         }
         if let Some(on) = self.shell {
+            #[cfg(windows)]
+            if on {
+                for event in Event::ALL {
+                    if let Some(Command::Argv(words)) = h.get(event)
+                        && words.iter().any(|word| word.contains(['^', '&', '|', '<', '>', '%', '!', '"', '\r', '\n', '(', ')']) || word.ends_with('\\')) {
+                        bail!("cannot safely convert Windows argv to cmd script: {words:?}; keep --shell off or explicitly provide the exact shell script");
+                    }
+                }
+            }
             h.shell = on;
             if on {
                 for event in Event::ALL {
@@ -887,6 +995,81 @@ pub async fn run_command(dir: &Path, args: HooksArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[tokio::test(start_paused = true)]
+    async fn pointer_and_peer_hooks_have_independent_serial_lanes() {
+        let mut engine = Engine::default();
+        let slow = Some(Command::Argv(vec!["/bin/sleep".into(), "30".into()]));
+        let cfg = Hooks { on_enter: slow.clone(), on_peer_connect: slow, ..Hooks::default() };
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
+        engine.fire(&cfg, Event::PeerConnect, &peer);
+        engine.fire(&cfg, Event::Enter, &peer);
+        for _ in 0..32 { tokio::task::yield_now().await; }
+        assert_eq!(engine.running.load(Ordering::SeqCst), 2);
+        drop(engine);
+        tokio::task::yield_now().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reset_kills_hook_descendants() {
+        let dir = std::env::temp_dir().join(format!("one-mk-hook-reset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let started = dir.join("started");
+        let late = dir.join("late");
+        let argv = vec!["/bin/sh".into(), "-c".into(), format!("(sleep .3; touch {}) & touch {}; wait", late.display(), started.display())];
+        let cfg = Hooks { on_enter: Some(Command::Argv(argv)), timeout_secs: Some(30), ..Hooks::default() };
+        let mut engine = Engine::default();
+        engine.sync(&cfg, None, None, std::iter::empty());
+        engine.fire(&cfg, Event::Enter, &PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left });
+        for _ in 0..100 {
+            if started.exists() { break; }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(started.exists());
+        engine.sync(&Hooks::default(), None, None, std::iter::empty());
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(!late.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[tokio::test(start_paused = true)]
+    async fn config_changes_discard_pending_work() {
+        let mut engine = Engine::default();
+        let mut cfg = Hooks { on_enter: Some(Command::Argv(vec!["echo".into(), "old".into()])), ..Hooks::default() };
+        engine.sync(&cfg, None, None, std::iter::empty());
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
+        engine.fire(&cfg, Event::Enter, &peer);
+        cfg.on_enter = Some(Command::Argv(vec!["echo".into(), "new".into()]));
+        engine.sync(&cfg, None, None, std::iter::empty());
+        assert!(engine.queue.lock().unwrap().next().is_none());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn shell_conversion_preserves_hostile_argv() {
+        let alphabet = ["", "a", "&", ";", "|", "$HOME", ">", "<", "*", "?", "(", ")", "`id`", "#", "~", "'", "\"", "\\", " ", "\n", "é"];
+        for first in alphabet {
+            for second in alphabet {
+                let word = format!("{first}{second}");
+                let mut hooks = Hooks { on_enter: Some(Command::Argv(vec!["printf".into(), "%s\\000".into(), word.clone()])), ..Hooks::default() };
+                HooksArgs { shell: Some(true), ..Default::default() }.apply(&mut hooks).unwrap();
+                let Some(Command::Line(script)) = hooks.on_enter else { panic!("shell conversion must store a script") };
+                let output = std::process::Command::new("/bin/sh").args(["-c", &script]).output().unwrap();
+                assert!(output.status.success(), "{word:?}");
+                assert_eq!(output.stdout, [word.as_bytes(), &[0]].concat(), "{word:?}");
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn different_peers_are_not_coalesced() {
+        let mut queue = Queue::default();
+        for id in ["first", "second"] {
+            let peer = PeerInfo { name: id.into(), id: id.into(), side: Side::Left };
+            queue.insert(Pending { command: None, generation: 0, event: Event::PeerConnect, argv: vec!["echo".into()], env: env(Event::PeerConnect, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 }, Instant::now());
+        }
+        assert!(queue.take_ready(Instant::now()).is_some());
+        assert!(queue.take_ready(Instant::now()).is_some());
+    }
     use super::*;
 
     #[test]
@@ -924,7 +1107,7 @@ mod tests {
     async fn coalescing_preserves_the_newest_transition() {
         let mut queue = Queue::default();
         let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
-        let pending = |event| Pending { event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
+        let pending = |event| Pending { command: None, generation: 0, event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
         queue.insert(pending(Event::Leave), Instant::now());
         assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::Leave);
         tokio::time::advance(Duration::from_millis(200)).await;
@@ -948,6 +1131,7 @@ mod tests {
         let mut engine = Engine::default();
         let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
         engine.queue.lock().unwrap().insert(Pending {
+            command: None, generation: 0,
             event: Event::Leave, argv: vec!["echo".into()], env: env(Event::Leave, &peer),
             shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0,
         }, Instant::now());
