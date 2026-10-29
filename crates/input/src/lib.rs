@@ -26,7 +26,7 @@ pub use system::{DisplaySleeper, FocusProbe, Inhibitor, Power, PowerEvent, Power
 pub use portal::{PortalProbe, probe_portals};
 
 use anyhow::Result;
-use one_mk_proto::{Desktop, Mods, Pos, Side};
+use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
@@ -83,11 +83,69 @@ pub enum Event {
     Status { part: &'static str, problem: Option<String> },
 }
 
+/// An edge that leads to a connected peer, and which parts of it do.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Armed {
+    pub side: Side,
+    /// The stretches of the edge that lead somewhere, as `[start, end)`
+    /// along it (y for left and right, x for top and bottom), in logical
+    /// pixels; `None` for all of it. With an offset alignment only the
+    /// part facing the peer does: touching the rest must not capture (the
+    /// daemon would hand the pointer straight back, and the input in
+    /// between would be lost), so it is a wall, as beside a real monitor.
+    pub spans: Option<Vec<(f64, f64)>>,
+}
+
+impl Armed {
+    /// All of `side`.
+    pub fn whole(side: Side) -> Self {
+        Armed { side, spans: None }
+    }
+
+    /// Whether `pos` (on or near this edge) is on a part that leads
+    /// somewhere.
+    pub fn covers(&self, pos: Pos) -> bool {
+        let v = Desktop::along(self.side, pos);
+        self.spans.as_ref().is_none_or(|s| s.iter().any(|&(a, b)| v >= a && v < b))
+    }
+
+    /// The pixels of `desktop`'s outer edge on this side that lead
+    /// somewhere, as `(rect, first, last)`: for each monitor on that edge,
+    /// the first and last pixel along it (inclusive). What the pointer
+    /// barriers of the Linux portal cover.
+    pub fn segments<'a>(&'a self, desktop: &'a Desktop) -> impl Iterator<Item = (Rect, i32, i32)> + 'a {
+        desktop.outer_edges(self.side).flat_map(move |r| {
+            let (lo, hi) = if self.side.along_x() { (r.x, r.right()) } else { (r.y, r.bottom()) };
+            let whole = [(f64::from(lo), f64::from(hi))];
+            let spans: Vec<(f64, f64)> = self.spans.clone().unwrap_or_else(|| whole.to_vec());
+            spans.into_iter().filter_map(move |(a, b)| {
+                // Pixels p with a <= p < b, within the monitor.
+                let first = (a.ceil() as i32).max(lo);
+                let end = (b.ceil() as i32).min(hi);
+                (first < end).then_some((*r, first, end - 1))
+            })
+        })
+    }
+}
+
+/// The sides in `armed` that lead somewhere at `pos` (no allocation: this
+/// runs on every mouse move).
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+pub(crate) fn open_sides(armed: &[Armed], pos: Pos) -> ([Side; 4], usize) {
+    let mut out = [Side::Left; 4];
+    let mut n = 0;
+    for a in armed.iter().filter(|a| a.covers(pos)).take(4) {
+        out[n] = a.side;
+        n += 1;
+    }
+    (out, n)
+}
+
 /// From the daemon to the capture side.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CaptureCmd {
     /// Edges that lead to a connected peer.
-    SetSides(Vec<Side>),
+    SetSides(Vec<Armed>),
     /// End activation `id` and give the pointer back to this machine,
     /// placing it at `pos`. Ignored if `id` is not the current activation.
     Release { id: u32, pos: Option<Pos> },
@@ -203,4 +261,51 @@ pub fn power(kind: Kind) -> Power {
 /// and observe injected input.
 pub fn null(desktop: Desktop) -> (Backend, NullHandles) {
     null::open(desktop)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn desk() -> Desktop {
+        // A 1920x1080 monitor and a 1280x1024 one to its right, tops aligned.
+        Desktop::new(vec![Rect::new(0, 0, 1920, 1080), Rect::new(1920, 0, 1280, 1024)])
+    }
+
+    #[test]
+    fn whole_edges_cover_everything() {
+        let a = Armed::whole(Side::Right);
+        assert!(a.covers(Pos::new(3199.0, 0.0)) && a.covers(Pos::new(3199.0, 5000.0)));
+        assert_eq!(a.segments(&desk()).collect::<Vec<_>>(), vec![(Rect::new(1920, 0, 1280, 1024), 0, 1023)]);
+        let top: Vec<_> = Armed::whole(Side::Top).segments(&desk()).map(|(_, a, b)| (a, b)).collect();
+        assert_eq!(top, vec![(0, 1919), (1920, 3199)]);
+        // Only the outer boundary: the smaller monitor's bottom is set back.
+        let bottom: Vec<_> = Armed::whole(Side::Bottom).segments(&desk()).map(|(_, a, b)| (a, b)).collect();
+        assert_eq!(bottom, vec![(0, 1919)]);
+    }
+
+    /// Only the part facing the peer captures; the rest is a wall.
+    #[test]
+    fn spans_limit_the_edge() {
+        let a = Armed { side: Side::Right, spans: Some(vec![(300.0, 800.5)]) };
+        assert!(!a.covers(Pos::new(3199.0, 299.0)));
+        assert!(a.covers(Pos::new(3199.0, 300.0)) && a.covers(Pos::new(3199.0, 800.0)));
+        assert!(!a.covers(Pos::new(3199.0, 801.0)));
+        assert_eq!(a.segments(&desk()).map(|(_, a, b)| (a, b)).collect::<Vec<_>>(), vec![(300, 800)]);
+        // Across two monitors along the top edge; past the end: nothing.
+        let b = Armed { side: Side::Top, spans: Some(vec![(1500.0, 2500.0), (9000.0, 9100.0)]) };
+        assert_eq!(b.segments(&desk()).map(|(_, a, b)| (a, b)).collect::<Vec<_>>(), vec![(1500, 1919), (1920, 2499)]);
+        let none = Armed { side: Side::Left, spans: Some(vec![]) };
+        assert_eq!(none.segments(&desk()).count(), 0);
+        assert!(!none.covers(Pos::new(0.0, 10.0)));
+    }
+
+    #[test]
+    fn open_sides_at_a_point() {
+        let armed = [Armed { side: Side::Right, spans: Some(vec![(300.0, 800.0)]) }, Armed::whole(Side::Bottom)];
+        let (s, n) = open_sides(&armed, Pos::new(3199.0, 1023.0));
+        assert_eq!(&s[..n], &[Side::Bottom]);
+        let (s, n) = open_sides(&armed, Pos::new(3199.0, 500.0));
+        assert_eq!(&s[..n], &[Side::Right, Side::Bottom]);
+    }
 }

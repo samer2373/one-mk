@@ -26,7 +26,7 @@
 
 use crate::common_logic::{Controlled, KeyRepeat, LocalInputGate, drain_coalesced, is_repeatable, now_ms};
 use crate::macos_logic::{self as logic, MacScroll};
-use crate::{Backend, CaptureCmd, Event, Inject};
+use crate::{Armed, Backend, CaptureCmd, Event, Inject};
 use anyhow::Result;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_core_foundation::{
@@ -242,7 +242,7 @@ struct Ctx {
 
 struct State {
     desktop: Option<Desktop>,
-    sides: Vec<Side>,
+    sides: Vec<Armed>,
     /// Input goes to a peer: events are swallowed and the cursor is frozen.
     active: bool,
     /// The current (or last) activation id.
@@ -664,7 +664,9 @@ impl Ctx {
                 let loc = CGEvent::location(e);
                 let p = Pos::new(loc.x, loc.y);
                 let (dx, dy) = mouse_delta(ev);
-                match logic::edge_hit(desktop, &st.sides, p, dx, dy) {
+                // Only the parts of an edge that face a peer.
+                let (open, n) = crate::open_sides(&st.sides, p);
+                match logic::edge_hit(desktop, &open[..n], p, dx, dy) {
                     Some(_) if st.armed && secure_input() => {
                         // Keys wouldn't reach the peer; don't cross.
                         st.armed = false;

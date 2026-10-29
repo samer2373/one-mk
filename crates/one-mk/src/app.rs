@@ -17,7 +17,7 @@ use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
 use one_mk_ctl::client::SwitchTo;
-use one_mk_input::{Backend, CaptureCmd, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, PowerEvent, ScreenLocker};
+use one_mk_input::{Armed, Backend, CaptureCmd, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, PowerEvent, ScreenLocker};
 use one_mk_net::{
     ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, Swap, TrustStore, read_stream_kind,
 };
@@ -384,7 +384,7 @@ struct App {
     inject: mpsc::UnboundedSender<Inject>,
     tx: mpsc::UnboundedSender<AppEvent>,
     link_tx: link::LinkTx,
-    sides: Vec<Side>,
+    sides: Vec<Armed>,
     /// Layout conflicts last warned about.
     conflicts: Vec<String>,
     discovered: HashMap<Fingerprint, Vec<SocketAddr>>,
@@ -404,6 +404,10 @@ struct App {
     mods: Mods,
     /// The pointer is held at an edge (capture `.0`), waiting to cross.
     approach: Option<(u32, Approach)>,
+    /// Capture `.0` was handed straight back (a wall, a corner, the
+    /// fullscreen guard): input it caught before the release took effect
+    /// was meant for this computer, and is typed here.
+    handed_back: Option<u32>,
     /// `one-mk switch` asked the backend to capture: the pointer goes to
     /// this peer, unless capture hasn't started by then.
     switching: Option<(Fingerprint, Instant)>,
@@ -523,6 +527,7 @@ pub async fn serve(
         locked: opts.start_locked,
         mods: Mods::default(),
         approach: None,
+        handed_back: None,
         switching: None,
         lock_sync: LockSync::default(),
         unlock_release: Mods::default(),
@@ -872,6 +877,15 @@ impl App {
                 }
             }
             Event::ScreenLocked(locked) => self.on_screen_locked(locked),
+            ev @ (Event::Button { .. }
+            | Event::Key { .. }
+            | Event::Scroll { .. }
+            | Event::ScrollDiscrete { .. }
+            | Event::ScrollStop)
+                if self.handed_back.is_some() && self.remote.is_none() =>
+            {
+                self.replay_here(ev);
+            }
             Event::Button { button, down } => {
                 let Some(r) = self.remote.as_mut() else { return };
                 if r.held.update(button, down) {
@@ -902,6 +916,9 @@ impl App {
                 }
             }
             Event::Deactivated { id } => {
+                if self.handed_back == Some(id) {
+                    self.handed_back = None;
+                }
                 if self.approach.as_ref().is_some_and(|(a, _)| *a == id) {
                     self.approach = None;
                     self.mods = Mods::default();
@@ -946,6 +963,7 @@ impl App {
     fn on_activated(&mut self, id: u32, side: Side, pos: Pos) {
         self.end_visit(); // a new activation supersedes any visit in progress
         self.approach = None;
+        self.handed_back = None;
         if let Some((fp, _)) = self.switching.take() {
             self.enter_peer_at_center(id, fp);
             return;
@@ -958,13 +976,13 @@ impl App {
             // Like the wall beside a real monitor: the neighbours on this
             // side are lined up elsewhere along it.
             tracing::debug!(%side, ?pos, "not crossing: no computer faces this part of the edge");
-            self.release_capture(id, None);
+            self.hand_back(id);
             return;
         }
         if self.locked {
             // Normally unreachable: no barriers are armed while locked.
             tracing::debug!(%side, "not crossing: {}", Refusal::Locked.as_str());
-            self.release_capture(id, None);
+            self.hand_back(id);
             return;
         }
         let guard = self.settings.edge.guard(side);
@@ -975,7 +993,7 @@ impl App {
             Start::Cross(p) => self.enter_peer(id, side, p),
             Start::Refuse(why) => {
                 tracing::debug!(%side, "not crossing: {}", why.as_str());
-                self.release_capture(id, None);
+                self.hand_back(id);
             }
             Start::Wait(a) => {
                 tracing::debug!(%side, ?guard, "holding the pointer at the edge");
@@ -1024,6 +1042,33 @@ impl App {
         let Some((_, a)) = self.approach.as_mut() else { return };
         let next = a.other_input();
         self.on_approach(next, Some(input));
+    }
+
+    /// Refuses capture `id` at once, leaving the pointer where it is.
+    fn hand_back(&mut self, id: u32) {
+        self.release_capture(id, None);
+        self.handed_back = Some(id);
+    }
+
+    /// Input caught by a capture handed straight back (`handed_back`):
+    /// typed here, keys and clicks whole (their real releases may already
+    /// have been caught too, or go past the injector).
+    fn replay_here(&mut self, ev: Event) {
+        let replay: &[Inject] = match ev {
+            Event::Key { code, down: true } => &[Inject::Key { code, down: true }, Inject::Key { code, down: false }],
+            Event::Key { code, down: false } => &[Inject::Key { code, down: false }],
+            Event::Button { button, down: true } => {
+                &[Inject::Button { button, down: true }, Inject::Button { button, down: false }]
+            }
+            Event::Button { button, down: false } => &[Inject::Button { button, down: false }],
+            Event::Scroll { dx, dy } => &[Inject::Scroll { dx, dy }],
+            Event::ScrollDiscrete { dx, dy } => &[Inject::ScrollDiscrete { dx, dy }],
+            Event::ScrollStop => &[Inject::ScrollStop],
+            _ => &[],
+        };
+        for &i in replay {
+            let _ = self.inject.send(i);
+        }
     }
 
     /// Ends capture `id`, putting the pointer at `pos` (or where it was).
@@ -1826,9 +1871,9 @@ impl App {
                 places: places.collect(),
                 profiles: profiles.names(),
                 profile: profiles.active,
+                warnings: self.conflicts.clone(),
             }),
             input: self.input_problems.values().cloned().collect(),
-            warnings: self.conflicts.clone(),
         }
     }
 
@@ -2039,6 +2084,7 @@ impl App {
     fn update_sides(&mut self) {
         let mut sides = Vec::new();
         let mut conflicts = Vec::new();
+        let switching = self.switching.and_then(|(fp, _)| self.peers.get(&fp).map(|p| p.side));
         for side in Side::ALL {
             let mut here: Vec<_> =
                 self.peers.iter().filter(|(_, p)| p.side == side && p.desktop.is_some()).collect();
@@ -2046,7 +2092,12 @@ impl App {
             if here.is_empty() {
                 continue;
             }
-            sides.push(side);
+            // A switch about to start needs its edge: the Linux backend
+            // pushes the pointer into it to start capturing.
+            let spans = if switching == Some(side) { None } else { self.armed_spans(side, here.iter().map(|(fp, _)| **fp)) };
+            if spans.as_ref().is_none_or(|s| !s.is_empty()) {
+                sides.push(Armed { side, spans });
+            }
             // Each one's stretch of our edge; without our monitors yet, all
             // of it.
             let shared = |fp: &Fingerprint| self.seam(*fp).map(|s| s.shared());
@@ -2079,9 +2130,9 @@ impl App {
             // Only the edge of a visit in progress (or of a switch about to
             // start) stays armed, so the pointer can come back that way.
             let keep: Vec<Side> = (self.remote.as_ref().map(|r| r.side).into_iter())
-                .chain(self.switching.and_then(|(fp, _)| self.peers.get(&fp).map(|p| p.side)))
+                .chain(switching)
                 .collect();
-            sides.retain(|s| keep.contains(s));
+            sides.retain(|a| keep.contains(&a.side));
         }
         if sides != self.sides {
             self.sides = sides.clone();
@@ -2108,6 +2159,21 @@ impl App {
     fn redial_soon(&mut self) {
         self.dial_backoff = DIAL_INTERVAL;
         self.dial_at = Some(Instant::now());
+    }
+
+    /// The parts of our `side` edge that lead to one of `peers` (there):
+    /// with 1:1 alignments only where their edges face ours, so the rest
+    /// is a wall the pointer never gets captured at. `None` for all of it:
+    /// a stretched peer, monitors not known yet, or simply the whole edge.
+    fn armed_spans(&self, side: Side, peers: impl Iterator<Item = Fingerprint>) -> Option<Vec<(f64, f64)>> {
+        let mut spans = Vec::new();
+        for fp in peers {
+            let seam = self.seam(fp).filter(|s| s.align().is_exact())?;
+            spans.extend(seam.shared());
+        }
+        let whole = self.local.as_ref()?.edge_spans(side).into_iter().map(|(a, b)| (f64::from(a), f64::from(b)));
+        let merged = merge_spans(spans);
+        if merged == merge_spans(whole.collect()) { None } else { Some(merged) }
     }
 
     /// Dials paired devices that are not connected, at every address we
@@ -2145,6 +2211,19 @@ impl App {
             });
         }
     }
+}
+
+/// `[start, end)` ranges, sorted, with those that overlap or touch joined.
+fn merge_spans(mut spans: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in spans {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    merged
 }
 
 /// The warning for a peer on our `side` whose facing edge doesn't line up
@@ -2281,8 +2360,8 @@ mod tests {
         let b = tokio::spawn(serve(db.clone(), opts(pb, vec![SocketAddr::from(([127, 0, 0, 1], pa))]), bb, stop(stop_rx)));
 
         // A arms its right edge once B is connected.
-        assert_eq!(next_capture(&mut ha).await, CaptureCmd::SetSides(vec![Side::Right]));
-        assert_eq!(next_capture(&mut hb).await, CaptureCmd::SetSides(vec![Side::Left]));
+        assert_eq!(next_capture(&mut ha).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Right)]));
+        assert_eq!(next_capture(&mut hb).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Left)]));
 
         // Pointer hits A's right edge halfway down: it appears on B's left edge.
         ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
@@ -2361,7 +2440,7 @@ mod tests {
         tokio::time::sleep(DIAL_TIMEOUT + Duration::from_millis(500)).await;
         let b = tokio::spawn(serve(db.clone(), opts(pb, &db), bb, wait(stop_rx)));
         let armed = tokio::time::timeout(Duration::from_secs(10), ha.capture.recv()).await.expect("A dialed B again");
-        assert_eq!(armed, Some(CaptureCmd::SetSides(vec![Side::Right])));
+        assert_eq!(armed, Some(CaptureCmd::SetSides(vec![Armed::whole(Side::Right)])));
         stop.send(true).unwrap();
         a.await.unwrap().unwrap();
         b.await.unwrap().unwrap();
@@ -2447,8 +2526,13 @@ mod tests {
 
         /// Waits until each side has armed the edge facing the other.
         async fn settle(&mut self) {
-            assert_eq!(next_capture(&mut self.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
-            assert_eq!(next_capture(&mut self.hb).await, CaptureCmd::SetSides(vec![Side::Left]));
+            self.settle_as(Armed::whole(Side::Right), Armed::whole(Side::Left)).await;
+        }
+
+        /// Waits until A has armed `a` and B `b`.
+        async fn settle_as(&mut self, a: Armed, b: Armed) {
+            assert_eq!(next_capture(&mut self.ha).await, CaptureCmd::SetSides(vec![a]));
+            assert_eq!(next_capture(&mut self.hb).await, CaptureCmd::SetSides(vec![b]));
         }
 
         /// What `daemon_dir`'s daemon says about its single paired peer.
@@ -3014,8 +3098,8 @@ mod tests {
 
         // On A: B is now on the left.
         Duo::layout(&duo.da, &fb, Some(Side::Left), None).await;
-        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Left]));
-        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Right]));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Left)]));
+        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Right)]));
         let (sa, sb) = (Duo::peer_status(&duo.da).await, Duo::peer_status(&duo.db).await);
         assert_eq!((sa.side, sa.online), (Side::Left, true));
         assert_eq!((sb.side, sb.online), (Side::Right, true));
@@ -3031,8 +3115,8 @@ mod tests {
 
         // Then on B: A is above. The newer change wins over the old one.
         Duo::layout(&duo.db, &fa, Some(Side::Top), None).await;
-        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Top]));
-        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Bottom]));
+        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Top)]));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Bottom)]));
         assert_eq!(Duo::peer_status(&duo.da).await.side, Side::Bottom);
         assert!(version(&duo.da, &fb).1 > v);
         duo.stop().await;
@@ -3049,9 +3133,9 @@ mod tests {
             a_sees_b.layout_version = 5;
         })
         .await;
-        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Left]));
-        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Left]));
-        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Right]));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Left)]));
+        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Left)]));
+        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Right)]));
         let t = TrustStore::load(&duo.db).unwrap();
         let d = t.get(&duo.fa.parse().unwrap()).unwrap();
         assert_eq!((d.side(), d.layout_version), (Side::Right, 5));
@@ -3345,7 +3429,7 @@ mod tests {
 
         let fb = duo.fb.clone();
         assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
-        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Right)]));
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
         duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
@@ -3354,7 +3438,7 @@ mod tests {
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![]), "locked again once home");
 
         assert_eq!(ask(&duo.da, Request::LockPointer(Toggle::Toggle)).await, "ok\noff\n");
-        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Right)]));
         assert!(!status(&duo.da).await.pointer_locked);
         duo.stop().await;
     }
@@ -3412,7 +3496,7 @@ mod tests {
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![]));
         assert!(status(&duo.da).await.pointer_locked);
         duo.ha.events.send(Event::Hotkey(Action::LockPointer)).unwrap();
-        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Right)]));
 
         // Turned off in settings.toml: the chord is just keys again.
         set(&duo.da, |s| s.hotkeys.enabled = false).await;

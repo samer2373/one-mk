@@ -38,7 +38,7 @@
 //! the daemon lets a controller that sent no real input for a minute go.
 
 use crate::common_logic::{Backoff, drain_coalesced};
-use crate::{Backend, CaptureCmd, Event, Inject};
+use crate::{Armed, Backend, CaptureCmd, Event, Inject};
 use anyhow::{Context, Result, anyhow, bail};
 use ashpd::desktop::input_capture::{
     self, Barrier, Capabilities, InputCapture, ReleaseOptions, SetPointerBarriersOptions,
@@ -511,7 +511,7 @@ impl Sleep {
 /// Capture state that outlives a portal session.
 struct CaptureState {
     tx: mpsc::UnboundedSender<Event>,
-    sides: Vec<Side>,
+    sides: Vec<Armed>,
     /// The desktop last reported to the daemon.
     reported: Option<Desktop>,
     next_id: u32,
@@ -562,20 +562,24 @@ impl Capture<'_> {
         Ok(())
     }
 
-    async fn apply_barriers(&mut self, sides: &[Side]) -> Result<()> {
+    /// Barriers are line segments: only the parts of each edge that lead
+    /// to a peer get one (`Armed::spans`), so touching the rest never
+    /// activates capture.
+    async fn apply_barriers(&mut self, sides: &[Armed]) -> Result<()> {
         let mut barriers = Vec::new();
         self.barriers.clear();
-        for &side in sides {
-            for r in self.desktop.outer_edges(side) {
+        for armed in sides {
+            let side = armed.side;
+            for (r, first, last) in armed.segments(&self.desktop) {
                 let id = side as u32 * 64 + barriers.len() as u32 + 1;
                 let (x, y, right, bottom) = (r.x, r.y, r.right(), r.bottom());
                 // Barriers lie on the zone edge; right/bottom edges are one
                 // past the last pixel, as the portal spec requires.
                 let pos = match side {
-                    Side::Left => (x, y, x, bottom - 1),
-                    Side::Right => (right, y, right, bottom - 1),
-                    Side::Top => (x, y, right - 1, y),
-                    Side::Bottom => (x, bottom, right - 1, bottom),
+                    Side::Left => (x, first, x, last),
+                    Side::Right => (right, first, right, last),
+                    Side::Top => (first, y, last, y),
+                    Side::Bottom => (first, bottom, last, bottom),
                 };
                 barriers.push(Barrier::new(NonZeroU32::new(id).expect("nonzero"), pos));
                 self.barriers.insert(id, side);
@@ -602,7 +606,7 @@ impl Capture<'_> {
     /// Re-reads the zones and re-applies the barriers. Failures are logged
     /// and otherwise ignored: the old layout stays in use, and a session
     /// that is really gone shows up as a closed libei connection.
-    async fn refresh(&mut self, sides: &[Side]) {
+    async fn refresh(&mut self, sides: &[Armed]) {
         if let Err(e) = self.refresh_zones().await {
             tracing::warn!("reading the screen layout: {e:#}");
         }
@@ -614,7 +618,7 @@ impl Capture<'_> {
     /// Hands the pointer back. If the portal refuses, disabling capture
     /// also ends it; only if that fails too is the session given up (which
     /// closes it, and closing always releases).
-    async fn release(&mut self, portal_id: Option<u32>, pos: Option<Pos>, sides: &[Side]) -> Result<()> {
+    async fn release(&mut self, portal_id: Option<u32>, pos: Option<Pos>, sides: &[Armed]) -> Result<()> {
         let opts = ReleaseOptions::default()
             .set_activation_id(portal_id)
             .set_cursor_position(pos.map(|p| (p.x, p.y)));
@@ -876,11 +880,14 @@ const NO_CAPTURE: &str = "Can't move the pointer to another computer right now: 
 /// with our own injector; the compositor then activates capture as if the
 /// mouse had done it. Needs a barrier on `side` (the daemon arms it).
 fn push_into_barrier(desktop: &Desktop, st: &CaptureState, side: Side) {
-    let Some(r) = desktop.outer_edges(side).next().filter(|_| st.sides.contains(&side)) else {
+    // The middle of the first part of the edge with a barrier.
+    let segment = st.sides.iter().filter(|a| a.side == side).flat_map(|a| a.segments(desktop)).next();
+    let Some((r, first, last)) = segment else {
         let _ = st.tx.send(Event::Error(NO_CAPTURE.into()));
         return;
     };
-    let c = r.center();
+    let mid = f64::from(first + last) / 2.0;
+    let c = if side.along_x() { Pos::new(mid, r.center().y) } else { Pos::new(r.center().x, mid) };
     let (x, y, right, bottom) = (f64::from(r.x), f64::from(r.y), f64::from(r.right()), f64::from(r.bottom()));
     let (at, dx, dy) = match side {
         Side::Left => (Pos::new(x + 1.0, c.y), -64, 0),
