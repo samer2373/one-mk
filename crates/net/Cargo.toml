@@ -1,6 +1,6 @@
 [package]
 name = "one-mk-net"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2024"
 
 [dependencies]
@@ -8,7 +8,7 @@ anyhow = "1.0.104"
 directories = "6.0.0"
 hostname = "0.4.2"
 mdns-sd = "0.21.6"
-one-mk-proto = { version = "0.1.9", path = "../proto" }
+one-mk-proto = { version = "0.1.10", path = "../proto" }
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
 rand = "0.10.3"
 rcgen = "0.14.10"
