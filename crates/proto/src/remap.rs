@@ -464,6 +464,8 @@ pub struct Mapper {
     hide: [u16; 8],
     /// Modifiers hidden until released (modifier-scroll).
     lifted: u8,
+    /// Modifiers shown whatever hides them, for the chord being typed.
+    force: u8,
     /// What is down on the wire.
     wire: HeldKeys,
     /// Physical keys down.
@@ -484,6 +486,7 @@ impl Mapper {
             holders: vec![0; KEYS].into_boxed_slice(),
             hide: [0; 8],
             lifted: 0,
+            force: 0,
             wire: HeldKeys::new(),
             phys: HeldKeys::new(),
             layer_on: [0; MAX_LAYERS + 1],
@@ -676,10 +679,7 @@ impl Mapper {
     fn once(&mut self, o: Out, out: &mut impl FnMut(Emit)) {
         match o {
             Out::None | Out::Layer(_) => {}
-            Out::Chord(c) => {
-                self.hold_chord(c, out);
-                self.release_chord(c, out);
-            }
+            Out::Chord(c) => self.pulse(c, out),
             Out::Seq { start, len } => self.sequence(start, len, 0, out),
             Out::Action(a) => out(Emit::Action(self.map.actions[usize::from(a)].clone())),
         }
@@ -690,8 +690,7 @@ impl Mapper {
             let c = self.map.chords[i];
             let hidden = used & !c.mods;
             self.hide_mods(hidden, out);
-            self.hold_chord(c, out);
-            self.release_chord(c, out);
+            self.pulse(c, out);
             self.unhide_mods(hidden, out);
         }
     }
@@ -772,6 +771,33 @@ impl Mapper {
 
     // ------------------------------------------------- the derived wire
 
+    /// A chord typed once (a tap, a sequence step). Its key goes down and
+    /// up even if something already holds it: let go of first, pressed
+    /// again after for its holder. Its modifiers are down for it even if a
+    /// combo hides them, and back as they were after.
+    fn pulse(&mut self, c: Chord, out: &mut impl FnMut(Emit)) {
+        self.force = c.mods;
+        for (i, &m) in MOD_CODES.iter().enumerate() {
+            if c.mods & (1 << i) != 0 {
+                self.hold(u32::from(m), out);
+            }
+        }
+        let key = u32::from(c.key);
+        if self.wire.is_held(key) {
+            self.wire.update(key, false);
+            out(Emit::Key { code: key, down: false });
+        }
+        out(Emit::Key { code: key, down: true });
+        out(Emit::Key { code: key, down: false });
+        self.sync(key, out);
+        self.force = 0;
+        for (i, &m) in MOD_CODES.iter().enumerate() {
+            if c.mods & (1 << i) != 0 {
+                self.unhold(u32::from(m), out);
+            }
+        }
+    }
+
     fn hold_chord(&mut self, c: Chord, out: &mut impl FnMut(Emit)) {
         for (i, &m) in MOD_CODES.iter().enumerate() {
             if c.mods & (1 << i) != 0 {
@@ -830,7 +856,7 @@ impl Mapper {
     /// differs from what is.
     fn sync(&mut self, code: u32, out: &mut impl FnMut(Emit)) {
         let bit = mod_bit(code);
-        let hidden = bit != 0 && self.hide[bit.trailing_zeros() as usize] > 0;
+        let hidden = bit != 0 && self.hide[bit.trailing_zeros() as usize] > 0 && self.force & bit == 0;
         let want = self.holders[code as usize] > 0 && !hidden;
         if want != self.wire.is_held(code) {
             self.wire.update(code, want);
@@ -1258,6 +1284,31 @@ mod tests {
         assert_eq!(t.key(CAPS, false), [u(LCTRL)]);
     }
 
+    /// Typing a key that is already held (physically or by a mapping):
+    /// it is let go of, typed, and pressed again for its holder.
+    #[test]
+    fn taps_of_a_held_key_are_typed() {
+        let seq = |from: &str, steps: &[&str]| RuleSpec { from: from.parse().unwrap(), layer: None, what: What::To(Output::sequence(steps).unwrap()) };
+        let mut t = T::new(&[seq("f1", &["a", "a"]), dual("capslock", "a", "lctrl"), seq("f2", &["lctrl", "ctrl+c"]), rule("ctrl+h", "backspace")]);
+        assert_eq!(t.key(A, true), [d(A)]);
+        assert_eq!(t.tap(59), [u(A), d(A), u(A), d(A), u(A), d(A), u(A), d(A)]);
+        assert_eq!(t.tap(CAPS), [u(A), d(A), u(A), d(A)]);
+        assert_eq!(t.key(A, false), [u(A)]);
+        assert!(t.m.is_idle());
+        // A held modifier typed as a step comes back afterwards, and a
+        // chord needing it still has it.
+        assert_eq!(t.key(LCTRL, true), [d(LCTRL)]);
+        assert_eq!(t.tap(60), [u(LCTRL), d(LCTRL), u(LCTRL), d(LCTRL), d(C), u(C)]);
+        assert_eq!(t.key(LCTRL, false), [u(LCTRL)]);
+        // A chord needs its modifier even while a combo hides it.
+        t.key(LCTRL, true);
+        assert_eq!(t.key(H, true), [u(LCTRL), d(BACKSPACE)]);
+        assert_eq!(t.tap(60), [d(LCTRL), u(LCTRL), d(LCTRL), d(C), u(C), u(LCTRL)]);
+        assert_eq!(t.key(H, false), [u(BACKSPACE), d(LCTRL)]);
+        assert_eq!(t.key(LCTRL, false), [u(LCTRL)]);
+        assert!(t.m.is_idle());
+    }
+
     #[test]
     fn lifted_modifiers_come_back_only_after_release() {
         let mut t = T::new(&[]);
@@ -1402,21 +1453,32 @@ mod tests {
                     what: What::TapHold { tap: "space".parse().unwrap(), hold: "layer:nav".parse().unwrap(), timeout: None },
                 },
             ],
-            vec![rule("capslock", "lctrl"), rule("h", "lshift"), dual("j", "j", "ralt"), rule("ctrl+a", "rctrl+q")],
+            vec![
+                rule("capslock", "lctrl"),
+                rule("h", "lshift"),
+                dual("j", "j", "ralt"),
+                rule("ctrl+a", "rctrl+q"),
+                // Typing keys that may be held already: A, Ctrl, Shift, J.
+                RuleSpec { from: "f1".parse().unwrap(), layer: None, what: What::To(Output::sequence(&["a", "a", "lctrl", "ctrl+a", "lshift+j"]).unwrap()) },
+                RuleSpec { from: "ctrl+f2".parse().unwrap(), layer: None, what: What::To(Output::sequence(&["ctrl+c", "a"]).unwrap()) },
+                dual("q", "a", "lshift"),
+                dual("c", "lctrl", "c"),
+                rule("f13", "lock-all"),
+            ],
             vec![],
         ]
     }
 
     /// Random presses, releases, repeats, timeouts (in time and late),
-    /// clicks, modifier-lifts, keymap reloads and visit ends: every emitted
-    /// down gets exactly one up, and once every physical key is up nothing
-    /// is left down.
+    /// clicks, modifier-lifts, keymap reloads and visit ends, about a
+    /// million in all: every emitted down gets exactly one up, and once
+    /// every physical key is up nothing is left down.
     #[test]
     fn no_stuck_keys_under_random_streams() {
         let keys = [CAPS, LALT, LMETA, LCTRL, RCTRL, LSHIFT, H, J, Q, A, C, RALT, 57, 59, 60, 183, 0x112, 0x110];
         let maps: Vec<Keymap> = configs().iter().map(|c| map(c)).collect();
         let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
-        for stream in 0..400 {
+        for stream in 0..10_000 {
             let mut m = Mapper::new(maps[stream % maps.len()].clone());
             let mut wire = Wire::default();
             let mut phys = std::collections::BTreeSet::new();
