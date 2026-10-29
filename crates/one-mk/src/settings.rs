@@ -37,6 +37,9 @@ pub struct Settings {
     /// Screensaver and sleep sync (see `power.rs`).
     pub power: crate::power::PowerSettings,
     pub hotkeys: crate::hotkeys::HotkeySettings,
+    /// Key mapper, pointer, scroll and button tuning (see `tuning.rs`).
+    #[serde(skip_serializing_if = "crate::tuning::TuningSettings::is_empty")]
+    pub input: crate::tuning::TuningSettings,
 }
 
 impl Default for Settings {
@@ -50,6 +53,7 @@ impl Default for Settings {
             hooks: crate::hooks::Hooks::default(),
             power: crate::power::PowerSettings::default(),
             hotkeys: Default::default(),
+            input: Default::default(),
         }
     }
 }

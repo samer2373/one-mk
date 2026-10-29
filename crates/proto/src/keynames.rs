@@ -344,6 +344,11 @@ fn words(s: &str) -> Result<Vec<&str>, NameError> {
     Ok(parts)
 }
 
+/// A word's error, saying which chord it is in if there are several words.
+fn within(s: &str, parts: &[&str], e: NameError) -> NameError {
+    if parts.len() > 1 { NameError(format!("in {:?}: {e}", s.trim())) } else { e }
+}
+
 impl FromStr for Chord {
     type Err = NameError;
 
@@ -352,14 +357,14 @@ impl FromStr for Chord {
         let (last, mods) = parts.split_last().expect("words() is never empty");
         let mut bits = 0u8;
         for m in mods {
-            let code = parse_key(m).map_err(|e| NameError(format!("in {:?}: {e}", s.trim())))?;
+            let code = parse_key(m).map_err(|e| within(s, &parts, e))?;
             let bit = mod_bit(code);
             if bit == 0 {
                 return err(format!("in {:?}: {m:?} is not a modifier (only the last key of a chord may be another key)", s.trim()));
             }
             bits |= bit;
         }
-        let key = parse_key(last).map_err(|e| NameError(format!("in {:?}: {e}", s.trim())))?;
+        let key = parse_key(last).map_err(|e| within(s, &parts, e))?;
         if mods.len() > 4 {
             return err(format!("{:?}: at most 4 modifiers", s.trim()));
         }
@@ -429,7 +434,7 @@ impl FromStr for Trigger {
                 t.groups |= 1 << g;
                 continue;
             }
-            let code = parse_key(m).map_err(|e| NameError(format!("in {:?}: {e}", s.trim())))?;
+            let code = parse_key(m).map_err(|e| within(s, &parts, e))?;
             let bit = mod_bit(code);
             if bit == 0 {
                 return err(format!("in {:?}: {m:?} is not a modifier (only the last key may be another key)", s.trim()));
@@ -445,7 +450,7 @@ impl FromStr for Trigger {
         if mods.len() > 4 {
             return err(format!("{:?}: at most 4 modifiers", s.trim()));
         }
-        t.key = parse_key(last).map_err(|e| NameError(format!("in {:?}: {e}", s.trim())))? as u16;
+        t.key = parse_key(last).map_err(|e| within(s, &parts, e))? as u16;
         Ok(t)
     }
 }

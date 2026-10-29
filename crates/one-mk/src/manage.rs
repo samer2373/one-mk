@@ -24,7 +24,12 @@ pub fn unknown_device(device: &str) -> anyhow::Error {
 pub async fn status(dir: &Path) -> Result<()> {
     let reply = control::request(dir, Request::Status).await?;
     match reply.as_deref().and_then(Status::decode) {
-        Some(s) => print!("{}", s.render()),
+        Some(s) => {
+            print!("{}", s.render());
+            if let Some(line) = crate::settings::Settings::load(dir).ok().and_then(|s| s.input.summary()) {
+                println!("{line}");
+            }
+        }
         None if reply.is_some() => bail!("unexpected answer from one-mk: {reply:?}"),
         None => {
             println!("one-mk is not running.");
