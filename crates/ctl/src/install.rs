@@ -404,7 +404,28 @@ fn install_windows(l: &Launch) -> Result<String> {
 }
 
 fn uninstall_windows() -> bool {
-    ok("reg", &["delete", RUN_KEY, "/v", "one-mk", "/f"])
+    let Ok(exe) = std::env::current_exe() else { return false };
+    let Some(folder) = exe.parent() else { return false };
+    let Ok(query) = Command::new("reg").args(["query", RUN_KEY, "/v", "one-mk"]).output() else { return false };
+    if !query.status.success() { return false; }
+    let text = String::from_utf8_lossy(&query.stdout);
+    let value = text.lines().find_map(|line| line.trim().strip_prefix("one-mk")?.trim_start().strip_prefix("REG_SZ").map(str::trim_start));
+    value.is_some_and(|value| windows_run_owned(value, &folder.to_string_lossy()))
+        && ok("reg", &["delete", RUN_KEY, "/v", "one-mk", "/f"])
+}
+
+fn windows_run_owned(value: &str, folder: &str) -> bool {
+    let value = value.trim();
+    let program = if let Some(quoted) = value.strip_prefix('"') {
+        let Some(end) = quoted.find('"') else { return false };
+        &quoted[..end]
+    } else {
+        value.split_whitespace().next().unwrap_or("")
+    };
+    let normalize = |path: &str| path.strip_prefix(r"\\?\").unwrap_or(path).replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    let program = normalize(program);
+    let Some((parent, _)) = program.rsplit_once('\\') else { return false };
+    parent == normalize(folder)
 }
 
 #[cfg(test)]
@@ -413,6 +434,20 @@ mod tests {
 
     fn launch(home: Option<&str>) -> Launch {
         Launch { exe: "/opt/my apps/one-mk".into(), tray: None, home: home.map(PathBuf::from), start_now: true }
+    }
+
+    #[test]
+    fn windows_startup_ownership_is_folder_scoped() {
+        let folder = r"C:\Program Files\one-mk\";
+        for value in [r#""c:\PROGRAM FILES\ONE-MK\one-mk.exe" run"#, r#""C:\Program Files\one-mk\one-mk-tray.exe" --start-daemon"#] {
+            assert!(windows_run_owned(value, folder), "{value}");
+        }
+        assert!(windows_run_owned(r#""C:/Program Files/one-mk/one-mk.exe" run"#, folder));
+        assert!(windows_run_owned(r#""\\?\C:\Program Files\one-mk\one-mk.exe" run"#, folder));
+        assert!(windows_run_owned(r"C:\one-mk\one-mk.exe run", r"c:\ONE-MK\\"));
+        for value in [r#""C:\Portable\one-mk.exe" run"#, r#""C:\Program Files\one-mk-other\one-mk.exe" run"#, r#""C:\Program Files\one-mk\sub\one-mk.exe" run"#, r#""C:\Program Files\one-mk\one-mk.exe run"#, ""] {
+            assert!(!windows_run_owned(value, folder), "{value}");
+        }
     }
 
     #[test]
