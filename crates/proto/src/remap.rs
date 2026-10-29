@@ -21,6 +21,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 /// Named layers a keymap may have.
 pub const MAX_LAYERS: usize = 8;
 /// Steps in a sequence.
@@ -1433,38 +1436,7 @@ mod tests {
 
     // ------------------------------------------------- the invariant
 
-    /// xorshift: deterministic, no dependency.
-    struct Rng(u64);
-    impl Rng {
-        fn next(&mut self) -> u64 {
-            self.0 ^= self.0 << 13;
-            self.0 ^= self.0 >> 7;
-            self.0 ^= self.0 << 17;
-            self.0
-        }
-        fn below(&mut self, n: usize) -> usize {
-            (self.next() % n as u64) as usize
-        }
-    }
-
-    /// Checks the emitted stream as the target would see it: every up is
-    /// for a key down, a down for a key already down is only a repeat.
-    #[derive(Default)]
-    struct Wire {
-        down: std::collections::BTreeSet<u32>,
-    }
-    impl Wire {
-        fn apply(&mut self, e: Emit, physical_repeat: bool) {
-            if let Emit::Key { code, down } = e {
-                if down {
-                    let new = self.down.insert(code);
-                    assert!(new || physical_repeat, "{code} pressed twice, not by a repeat");
-                } else {
-                    assert!(self.down.remove(&code), "{code} released but not down");
-                }
-            }
-        }
-    }
+    use super::test_support::{Rng, Wire};
 
     fn configs() -> [Vec<RuleSpec>; 3] {
         [
@@ -1544,7 +1516,7 @@ mod tests {
                         m.timer(now, &mut |e| emitted.push(e));
                     }
                     15 => m.interrupt(&mut |e| emitted.push(e)),
-                    16 => m.lift(rng.next() as u8, &mut |e| emitted.push(e)),
+                    16 => m.lift(rng.next_u64() as u8, &mut |e| emitted.push(e)),
                     17 | 18 => m.set_keymap(maps[rng.below(maps.len())].clone(), &mut |e| emitted.push(e)),
                     _ => m.release_all(&mut |e| emitted.push(e)),
                 }

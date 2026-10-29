@@ -3,4 +3,7 @@ name = "one-mk-proto"
 version.workspace = true
 edition = "2024"
 
+[features]
+test-support = []
+
 [dependencies]
