@@ -157,6 +157,22 @@ Known gaps:
 | 3G | "Send to <computer>" file-manager entries | 1B | Nautilus, Dolphin, Explorer, Finder. | todo |
 | 3H | Pairing without sitting at both screens (QR or link) | none | | todo |
 
+## Wave 4: input tuning and key mapper (added 2026-10-29, from LinearMouse)
+
+LinearMouse (macOS) offers per-device/app/display profiles, pointer speed and
+acceleration (including off), scroll direction per device and per axis,
+modifier keys that change scrolling, and mouse-button remapping to
+shortcuts, media keys, shell commands or gestures. We add the same, scoped
+per target computer (a KVM's real need: natural scrolling on the Mac, not on
+the PC, with one mouse), plus a keyboard mapper for any key.
+
+| ID | Task | Depends on | Notes | Status |
+|---|---|---|---|---|
+| 4A | Core: pure rule engines in `crates/proto` (key mapper with tap/hold, layers and combos; pointer speed/acceleration; scroll direction, speed, discrete mode and modifier-scroll; button remap), wired into the send path, `settings.toml` tables, CLI `one-mk keymap\|pointer\|scroll\|buttons` | wave 2 merged | Scope: global and per target computer. Hot path must stay allocation-free. | todo |
+| 4B | Window panels: keyboard mapper editor (click a key, press the key it becomes), pointer and scroll tuning, button map | 4A, UI task | | todo |
+| 4C | Local-only remapping where the OS allows it (Windows low-level hook, macOS event tap) | 4A | Not possible on Wayland without root: documented limit. | todo |
+| 4D | Per-app rules via the focus probe (receiving or sending side) | 4A | Best effort: Windows, X11 windows; macOS probe is a stub. | todo |
+
 ## UI and design (after waves 1 and 2)
 
 | ID | Task | Status |
