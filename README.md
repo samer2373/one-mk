@@ -69,6 +69,9 @@ one-mk layout "laptop" bottom --offset center
 | `one-mk lock-sync on\|off` | Locking any computer locks the others (those with lock sync on) |
 | `one-mk hooks [--on-enter CMD] [--on-leave CMD] [--on-peer-connect CMD] [--on-peer-disconnect CMD] [--off]` | Run a command when the pointer arrives or leaves, or a computer connects or disconnects (see below) |
 | `one-mk power [--block-screensaver on\|off] [--sleep-sync on\|off]` | Keep other computers awake while you control them; sleep displays together (see below) |
+| `one-mk keymap [list\|add\|remove\|clear\|check]` | Change what keys do on the other computers: remaps, combos, tap/hold, layers, actions (see below) |
+| `one-mk buttons [list\|map N TO\|preset side-back-forward\|clear]` | Remap mouse buttons on the other computers |
+| `one-mk pointer [--speed X]` / `one-mk scroll [options]` | Pointer speed; scroll direction, natural scrolling, speed, notches, Shift-scroll |
 | `one-mk install` / `uninstall` | Start automatically at login / stop doing that |
 | `one-mk pair` | Pair with another computer (run on both) |
 | `one-mk layout <pc> <left\|right\|top\|bottom> [--offset PX\|center\|stretch]` | Say where a paired computer sits, and how its edge lines up with yours |
@@ -389,6 +392,57 @@ you can take it back:
   scroll or pointer movement) for a minute is let go by itself; its pointer
   goes home and its next movement comes back in. So a forgotten session
   never locks you out for long.
+
+### Remapping keys and tuning the mouse
+
+Rules change the input this computer sends to the others, for every
+computer, for those running one OS (`--os mac`), or for one (`--peer
+laptop`); the most specific wins. The other computers need nothing new.
+
+```sh
+one-mk keymap add capslock --tap esc --hold lctrl   # tap: Esc, hold: Ctrl
+one-mk keymap add lalt lmeta --os mac               # Alt is Cmd on Macs
+one-mk keymap add ctrl+h backspace                  # a combo
+one-mk keymap add ralt layer:nav                    # hold AltGr for a layer...
+one-mk keymap add h left --layer nav                # ...where h is Left
+one-mk keymap add f13 'switch next'                 # an action (also lock-pointer, lock-all, run: CMD, scroll down)
+one-mk keymap add f2 ctrl+a ctrl+c                  # a sequence
+one-mk buttons preset side-back-forward             # side buttons: back/forward (Cmd+[ / Cmd+] on a Mac)
+one-mk buttons map 3 button1                        # middle click is a left click
+one-mk scroll --natural auto                        # natural on Macs, traditional elsewhere
+one-mk scroll --modifier shift=horizontal --modifier alt=x5
+one-mk scroll --device wheel --mode discrete --speed 2 --peer desk
+one-mk pointer --speed 1.5 --peer laptop
+one-mk keymap check                                 # typos, conflicts, rules that never apply
+```
+
+Key names are case-insensitive with the usual aliases (`esc`, `ctrl`
+= `lctrl`, `altgr`, `cmd` = `win` = `super` = `meta`, `f1`..`f24`, `kp0`,
+media keys like `volume up`, `button4`), or `code:58` /
+`evdev:KEY_CAPSLOCK`. The rules live under `[input]` in `settings.toml`
+and apply at once, also in the middle of a visit; keys held while they
+change are released as what they were pressed as.
+
+Good to know:
+
+- Keyboard shortcuts (`Ctrl+Alt+H`...) and `Ctrl+Alt+Shift+Esc` see the keys
+  as you press them, before any remapping, so a keymap can't lock you out.
+  Ctrl/Cmd swapping applies after the keymap.
+- Nothing stays held: every key the keymap presses is released, also when
+  the pointer comes back mid-press, a layer ends or the rules change.
+- A Shift (or Alt) that changes scrolling is released on the other
+  computer once you scroll with it, so it never sees Shift+scroll.
+- `natural auto` assumes this computer scrolls its OS's default way
+  (natural on a Mac); otherwise use `--reverse-vertical on`.
+- Only input sent to other computers is changed: on Linux one-mk sees your
+  keyboard only while it forwards it (local remapping is planned for
+  Windows and macOS).
+- Pointer acceleration: one-mk sends positions computed on this computer,
+  so this computer's acceleration applies once. Turning it off or a custom
+  curve needs raw mouse motion, which no backend reads yet; turn
+  acceleration off in this computer's settings instead.
+
+Details and the design: [docs/INPUT-TUNING.md](docs/INPUT-TUNING.md).
 
 ## Why it feels good
 

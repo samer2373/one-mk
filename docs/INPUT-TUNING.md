@@ -152,7 +152,7 @@ released (see scrolling).
 ### Limits (checked when the rules are compiled)
 
 At most 8 layers, 16 steps in a sequence, 4 modifiers plus a key per
-chord, 1024 rules per scope. Codes are evdev codes below 0x300 (keys and
+chord, 4096 rules. Codes are evdev codes below 0x300 (keys and
 mouse buttons share the space). A dual-role key can't have modifiers in
 `from` and `tap` can't be a layer.
 
@@ -193,7 +193,9 @@ mouse buttons share the space). A dual-role key can't have modifiers in
 
 Per scope and optionally per device kind (`device = "wheel"` for notched
 wheels, which arrive as `ScrollDiscrete`, `"touchpad"` for smooth scrolling;
-leave it out for both):
+leave it out for both). Each event goes through: direction (of the wheel
+or fingers, so a reversed wheel stays reversed when Shift turns it
+sideways), modifier behaviour, speed, then mode.
 
 * `reverse_vertical`, `reverse_horizontal`: flip that axis.
 * `natural = on|off|auto`: what the target sees. One-mk assumes scroll
