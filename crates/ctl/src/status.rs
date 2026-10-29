@@ -103,6 +103,9 @@ pub struct Status {
     /// What the input backend needs the user to know or do, one line each
     /// (e.g. approve the desktop's permission dialog); empty when it works.
     pub input: Vec<String>,
+    /// one-mk draws the pointer here right now: a peer controls this
+    /// computer and it shows none of its own (no mouse attached).
+    pub pointer_overlay: bool,
     /// Where the computers are, in detail (boxed: most readers never look,
     /// and it would double the size of every `Status`).
     pub layout: Box<LayoutStatus>,
@@ -316,6 +319,7 @@ impl Status {
             ("screen_locked", self.screen_locked),
             ("relative", self.relative),
             ("lock_sync", self.lock_sync),
+            ("pointer_overlay", self.pointer_overlay),
         ] {
             if on {
                 out += &format!("{key}\t1\n");
@@ -373,6 +377,7 @@ impl Status {
                 ["screen_locked", v] => s.screen_locked = v == "1",
                 ["relative", v] => s.relative = v == "1",
                 ["lock_sync", v] => s.lock_sync = v == "1",
+                ["pointer_overlay", v] => s.pointer_overlay = v == "1",
                 ["gaming", v] => s.gaming = v.into(),
                 ["edges", v] => s.edges = v.into(),
                 ["hotkeys", state, detail] => (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into()),
@@ -423,6 +428,9 @@ impl Status {
         };
         for line in self.input.iter().chain(&self.layout.warnings) {
             out += &format!("{line}\n");
+        }
+        if self.pointer_overlay {
+            out += "one-mk draws the pointer here: this computer shows none of its own (`one-mk pointer-overlay` to change).\n";
         }
         if self.pointer_locked {
             out += "The pointer is locked to this computer: edges lead nowhere (`one-mk lock-pointer off`).\n";
@@ -501,11 +509,13 @@ mod tests {
             edges: "dead corners 20 px, dwell 300 ms".into(),
             input: vec!["Waiting for your approval: allow one-mk in the desktop's dialog.".into()],
             backend: InputBackend::Null,
+            pointer_overlay: true,
             ..s
         };
         assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
         let text = s.render();
-        for want in ["Input backend: null", "locked to this computer", "screen is locked", "Edges: dead corners 20 px", "Gaming mode: auto (relative", "Lock sync is on", "Waiting for your approval"] {
+        assert!(!Status::default().render().contains("draws the pointer"));
+        for want in ["Input backend: null", "one-mk draws the pointer here", "locked to this computer", "screen is locked", "Edges: dead corners 20 px", "Gaming mode: auto (relative", "Lock sync is on", "Waiting for your approval"] {
             assert!(text.contains(want), "{want}: {text}");
         }
         assert_eq!(Status::decode("error unknown request\n"), None);

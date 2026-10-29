@@ -1,8 +1,9 @@
 //! Settings that are not about one paired computer: what the clipboard
 //! shares, whether received files raise a notification, the edge rules,
-//! gaming mode, lock sync and keyboard shortcuts. They live in
-//! `settings.toml` next to `devices.toml`; the command line (`one-mk
-//! clipboard`, `notify`, `edge`, `gaming`, `lock-sync`, `hotkeys`) edits the
+//! gaming mode, lock sync, keyboard shortcuts and the drawn pointer. They
+//! live in `settings.toml` next to `devices.toml`; the command line (`one-mk
+//! clipboard`, `notify`, `edge`, `gaming`, `lock-sync`, `hotkeys`,
+//! `pointer-overlay`) edits the
 //! file and a running daemon applies it at once (like `one-mk layout`).
 
 use crate::control::{self, Request};
@@ -42,6 +43,9 @@ pub struct Settings {
     /// Key mapper, pointer, scroll and button tuning (see `tuning.rs`).
     #[serde(skip_serializing_if = "crate::tuning::TuningSettings::is_empty")]
     pub input: crate::tuning::TuningSettings,
+    /// Drawing the pointer on a computer with no mouse (see
+    /// `pointeroverlay.rs`).
+    pub pointer: crate::pointeroverlay::PointerSettings,
 }
 
 impl Default for Settings {
@@ -57,6 +61,7 @@ impl Default for Settings {
             power: crate::power::PowerSettings::default(),
             hotkeys: Default::default(),
             input: Default::default(),
+            pointer: Default::default(),
         }
     }
 }

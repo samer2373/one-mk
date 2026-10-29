@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use crate::manage::Status as DaemonStatus;
 use crate::settings::Settings;
+use one_mk_input::cursoroverlay::{DrawMode, Support};
 
 /// How the daemon is asked, and how long mDNS gets to answer.
 const DAEMON_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -624,6 +625,20 @@ pub fn tuning_check(t: Option<&Tuning>) -> Check {
     check("input-tuning", "Input tuning", out)
 }
 
+/// The pointer one-mk draws where a computer has no mouse (plan 3A):
+/// available, not needed or not available here.
+pub fn pointer_overlay_check(support: Support, mode: DrawMode) -> Check {
+    let detail = crate::pointeroverlay::describe(support, mode);
+    let out = match (support, mode) {
+        (Support::NotAvailable, DrawMode::Always) => {
+            Outcome::warn(detail, "`one-mk pointer-overlay always` has no effect here; `one-mk pointer-overlay auto` is the default.")
+        }
+        (Support::Available | Support::NotNeeded, _) => Outcome::pass(detail),
+        _ => Outcome::skip(detail),
+    };
+    check("pointer-overlay", "Pointer without a mouse", out)
+}
+
 fn probe_tuning(dir: &Path) -> Option<Tuning> {
     let input = Settings::load(dir).ok()?.input;
     let paired = TrustStore::load(dir)
@@ -865,6 +880,10 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
     checks.push(tuning_check(probe_tuning(dir).as_ref()));
+    checks.push(pointer_overlay_check(
+        crate::pointeroverlay::support_here(daemon.status().map(|s| s.backend.as_str())),
+        crate::settings::Settings::load(dir).map(|s| s.pointer.draw_when_no_mouse).unwrap_or_default(),
+    ));
     checks.push(network_check(&addrs));
     let seen = mdns.seen.as_deref().unwrap_or_default();
     checks.extend(peer_checks(&daemon, &paired, seen));

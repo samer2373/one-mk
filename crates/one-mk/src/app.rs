@@ -17,7 +17,7 @@ use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
 use one_mk_ctl::client::SwitchTo;
-use one_mk_input::{Armed, Backend, CaptureCmd, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, PowerEvent, ScreenLocker};
+use one_mk_input::{Armed, Backend, CaptureCmd, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, InjectTx, PowerEvent, ScreenLocker};
 use one_mk_net::{
     ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, Swap, TrustStore, read_stream_kind,
 };
@@ -296,7 +296,7 @@ impl Owner {
     }
 
     /// A relative-motion datagram from the owner.
-    fn motion_by(&mut self, epoch: u16, seq: u32, sum: (i32, i32), inject: &mpsc::UnboundedSender<Inject>) {
+    fn motion_by(&mut self, epoch: u16, seq: u32, sum: (i32, i32), inject: &InjectTx) {
         match self.motion.accept_relative(epoch, seq, sum) {
             RelReceived::MoveBy { dx, dy } => {
                 let now = Instant::now();
@@ -312,7 +312,7 @@ impl Owner {
     }
 
     /// A motion datagram from the owner.
-    fn motion(&mut self, epoch: u16, seq: u32, pos: Pos, inject: &mpsc::UnboundedSender<Inject>) {
+    fn motion(&mut self, epoch: u16, seq: u32, pos: Pos, inject: &InjectTx) {
         match self.motion.accept(epoch, seq, pos) {
             Received::Move(p) => {
                 let now = Instant::now();
@@ -326,7 +326,7 @@ impl Owner {
         }
     }
 
-    fn input(&mut self, msg: Control, inject: &mpsc::UnboundedSender<Inject>) {
+    fn input(&mut self, msg: Control, inject: &InjectTx) {
         let now = Instant::now();
         self.last_rx = now;
         self.last_input = now;
@@ -373,7 +373,7 @@ impl Owner {
         }
     }
 
-    fn release_all(&mut self, inject: &mpsc::UnboundedSender<Inject>) {
+    fn release_all(&mut self, inject: &InjectTx) {
         for code in self.held.take_all() {
             let release = if link::is_button(code) {
                 Inject::Button { button: code, down: false }
@@ -398,7 +398,8 @@ struct App {
     local_screens: watch::Sender<Vec<Rect>>,
     epoch: u16,
     capture: mpsc::UnboundedSender<CaptureCmd>,
-    inject: mpsc::UnboundedSender<Inject>,
+    /// To the backend; draws the pointer where the OS doesn't (3A).
+    inject: InjectTx,
     tx: mpsc::UnboundedSender<AppEvent>,
     link_tx: link::LinkTx,
     sides: Vec<Armed>,
@@ -535,7 +536,7 @@ pub async fn serve(
         local_screens,
         epoch: 0,
         capture,
-        inject,
+        inject: crate::pointeroverlay::inject_tx(inject, name, &settings),
         tx,
         link_tx,
         sides: Vec::new(),
@@ -1905,6 +1906,7 @@ impl App {
         self.settings = Settings::load(&self.dir)?;
         crate::hooks::warn_if_unsafe(&self.dir, &self.settings.hooks);
         crate::clipctl::apply(&self.settings, &self.services);
+        self.inject.set_overlay_mode(self.settings.pointer.draw_when_no_mouse);
         self.apply_pointer_mode();
         self.sync_sides();
         self.shortcuts.reload(&self.settings.hotkeys);
@@ -2035,6 +2037,7 @@ impl App {
                 warnings: self.conflicts.clone(),
             }),
             input: self.input_problems.values().cloned().collect(),
+            pointer_overlay: self.inject.overlay_active(),
         }
     }
 
@@ -3034,10 +3037,10 @@ mod tests {
         duo.stop().await;
     }
 
-    fn owner_for_test() -> (Owner, mpsc::UnboundedReceiver<Inject>, mpsc::UnboundedSender<Inject>) {
+    fn owner_for_test() -> (Owner, mpsc::UnboundedReceiver<Inject>, InjectTx) {
         let fp = Identity::ephemeral().unwrap().fingerprint;
         let (tx, rx) = mpsc::unbounded_channel();
-        (Owner::new(fp, 1, 7, Pos::new(0.0, 540.0)), rx, tx)
+        (Owner::new(fp, 1, 7, Pos::new(0.0, 540.0)), rx, InjectTx::plain(tx))
     }
 
     fn drain(rx: &mut mpsc::UnboundedReceiver<Inject>) -> Vec<Inject> {
