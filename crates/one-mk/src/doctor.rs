@@ -875,6 +875,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     }
 
     let mut checks = vec![daemon_check(&daemon)];
+    checks.push(check("drag", "File edge drops", Outcome::skip(one_mk_input::dropzone::availability())));
     checks.extend(config_checks(&config, dir));
     checks.push(port_check(&daemon, &port_facts));
     checks.push(mdns_check(&daemon, &mdns));

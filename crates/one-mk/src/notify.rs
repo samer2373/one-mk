@@ -144,6 +144,12 @@ pub async fn failure(title: &str, body: &str) {
     sys::failure(title, body).await;
 }
 
+pub async fn sent(count: usize, peer: &str) {
+    let body = format!("Sent {count} files to {}", display(peer));
+    println!("{body}");
+    if !disabled() { sys::failure("one-mk files sent", &body).await; }
+}
+
 /// The real notifier for this platform.
 pub struct Desktop;
 
@@ -186,11 +192,12 @@ mod sys {
                 "org.freedesktop.Notifications",
             )
             .await?;
-            let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from("transfer.error"))]);
+            let success = title == "one-mk files sent";
+            let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from(if success { "transfer.complete" } else { "transfer.error" }))]);
             proxy
                 .call::<_, _, u32>(
                     "Notify",
-                    &("one-mk", 0u32, "dialog-error", title, escape_markup(body), Vec::<&str>::new(), hints, -1i32),
+                    &("one-mk", 0u32, if success { "document-send" } else { "dialog-error" }, title, escape_markup(body), Vec::<&str>::new(), hints, -1i32),
                 )
                 .await?;
             anyhow::Ok(())

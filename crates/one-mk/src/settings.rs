@@ -26,6 +26,7 @@ pub const MAX_DWELL_MS: u32 = 5000;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub drag: crate::drag::Settings,
     #[serde(default)]
     pub settings_version: u32,
     pub clipboard: ClipSettings,
@@ -51,6 +52,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            drag: Default::default(),
             settings_version: 2,
             clipboard: ClipSettings::default(),
             notify_files: true,

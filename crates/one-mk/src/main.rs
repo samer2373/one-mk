@@ -35,6 +35,7 @@ mod pointeroverlay;
 mod power;
 mod profiles;
 mod send;
+mod drag;
 mod settings;
 mod steer;
 mod track;
@@ -144,6 +145,15 @@ impl Action {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Show or configure file edge-drop zones (X11).
+    Drag {
+        #[arg(long, conflicts_with = "off")]
+        on: bool,
+        #[arg(long)]
+        off: bool,
+        #[arg(long, value_name = "PX")]
+        zone: Option<u16>,
+    },
     /// Run the sharing service (the default).
     Run(RunArgs),
     /// Send files or folders to a paired computer running `one-mk run`.
@@ -405,7 +415,20 @@ fn main() -> ExitCode {
         log.init();
     }
 
-    match run(cli) {
+    #[cfg(target_os = "macos")]
+    let native_daemon = match cli.cmd.as_ref() {
+        None => cli.run.backend != Some(Backend::Null),
+        Some(Cmd::Run(args)) => args.backend.or(cli.run.backend) != Some(Backend::Null),
+        _ => false,
+    };
+    #[cfg(target_os = "macos")]
+    let result = if native_daemon
+    {
+        one_mk_input::dropzone::with_main_loop(move || run(cli))
+    } else { run(cli) };
+    #[cfg(not(target_os = "macos"))]
+    let result = run(cli);
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             if verbose > 0 {
@@ -459,6 +482,7 @@ fn run(cli: Cli) -> Result<()> {
             Action::Other(cmd) => cmd,
         };
         match cmd {
+            Cmd::Drag { on, off, zone } => drag::configure(&dir, on, off, zone).await,
             Cmd::Run(_) => unreachable!("handled above"),
             Cmd::Clipboard { text, html, image, max_mb, skip_sensitive, allow_fetch } => {
                 clipctl::clipboard(&dir, clipctl::ClipChange { text, html, image, max_mb, skip_sensitive, allow_fetch }).await

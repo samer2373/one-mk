@@ -31,13 +31,17 @@ zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [target."cfg(windows)".dependencies]
 ring = "0.17.14"
+windows-core = "0.62.2"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_LibraryLoader", "Win32_System_RemoteDesktop", "Win32_System_Threading", "Win32_System_Shutdown", "Win32_Security", "Win32_Media", "Win32_System_Power", "Win32_System_SystemServices", "Win32_UI_Accessibility"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSString", "NSGeometry", "NSObject"] }
 objc2 = "0.6.5"
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFMachPort", "CFDate", "CFDictionary", "CFString", "CFNumber", "CFCGTypes", "CFPreferences", "CFNotificationCenter"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "libc", "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGSession"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSEvent", "NSGraphicsContext", "objc2-core-graphics", "objc2-core-foundation", "NSApplication", "NSResponder", "NSWindow", "NSView", "NSControl", "NSImageView", "NSImage", "NSCursor", "NSColor", "NSRunningApplication", "NSGraphics"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSEvent", "NSGraphicsContext", "objc2-core-graphics", "objc2-core-foundation", "block2", "NSApplication", "NSResponder", "NSWindow", "NSView", "NSControl", "NSImageView", "NSImage", "NSCursor", "NSColor", "NSRunningApplication", "NSGraphics", "NSDragging", "NSPasteboard", "NSPasteboardItem", "NSScreen"] }
 # The pointer window helper (cursoroverlay_macos.rs).
-dispatch2 = "0.3.1"
 libc = "0.2.191"
