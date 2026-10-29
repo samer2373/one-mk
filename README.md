@@ -54,6 +54,7 @@ soon as they connect.
 | `one-mk takeback` | Take this computer back from the one controlling it |
 | `one-mk switch <pc\|here\|next>` | Move the mouse and keyboard to another computer without crossing an edge (`here`: back to this one) |
 | `one-mk lock-pointer on\|off\|toggle` | Keep the pointer on this computer: edges lead nowhere |
+| `one-mk hotkeys [options]` | Show or change the keyboard shortcuts (see below) |
 | `one-mk edge [options]` | Rules for crossing edges (see below) |
 | `one-mk gaming on\|off\|auto` | Raw mouse movement for games on another computer |
 | `one-mk lock-all` | Lock this computer's screen and every connected one's |
@@ -137,8 +138,52 @@ middle of desk's main screen; `one-mk switch next` goes round every online
 computer and back to this one; `one-mk switch here` brings the mouse and
 keyboard back (and, if another computer is controlling this one, takes it
 back, like `takeback`). Held keys are released on the computer left behind,
-as with any crossing. Bind it to a keyboard shortcut in your desktop's
-settings for a quick switch.
+as with any crossing. The keyboard shortcuts below do the same.
+
+**Keyboard shortcuts.** They work wherever the pointer is:
+
+| Shortcut | What it does |
+|---|---|
+| `Ctrl+Alt+1` ... `Ctrl+Alt+9` | Jump to computer 1 to 9 |
+| `Ctrl+Alt+PageDown` | The next computer (`one-mk switch next`) |
+| `Ctrl+Alt+P` | Lock the pointer to this computer, or unlock it |
+| `Ctrl+Alt+H` | Back to this computer (`one-mk switch here`) |
+
+Computers are numbered by name, this one included, so when every computer is
+paired with every other, `Ctrl+Alt+2` means the same computer on every
+keyboard; `one-mk hotkeys` shows the numbers. Change the keys with, for
+example, `one-mk hotkeys --jump 'ctrl+shift+{n}' --cycle 'super+f12'
+--lock-pointer none --home-key 'ctrl+alt+end'` (modifiers `ctrl`, `alt`,
+`shift`, `super`, then one key: a letter, digit, `f1`-`f24`, an arrow,
+`pageup`, `space` and so on; `none` turns one off), or turn them all off with
+`--off`. They are kept in the `[hotkeys]` table of `settings.toml`.
+
+While the pointer is on this computer the system delivers them: the
+GlobalShortcuts portal on Linux (GNOME 48+, KDE Plasma 6), `RegisterHotKey`
+on Windows, a keyboard event tap on macOS (the Accessibility permission
+one-mk already has). While it is on another computer, one-mk recognizes them
+in the keys it captures: a shortcut fires only when its key goes down with
+exactly its modifiers and no other key held, and that key is never sent to
+the other computer. Ctrl and Alt are already there by then (one-mk can't know
+a shortcut is coming, and holding every Ctrl back would slow it down), so the
+switch releases them: the computer left behind lets go of everything, and
+the next one never saw them go down. The right Alt key doesn't count as Alt
+there, because it is AltGr on many keyboards.
+
+- **Linux:** the portal accepts only installed programs, so run
+  `one-mk install` once (it also writes a hidden desktop entry,
+  `io.github.onemk.OneMk`), then restart one-mk. GNOME then asks you to
+  confirm the shortcuts in a dialog and lets you change their keys under
+  Settings > Keyboard (this dialog step is not yet tested). Where the desktop has no GlobalShortcuts portal, `one-mk status`
+  and `one-mk doctor` say so: the shortcuts then work only while the pointer
+  is on another computer, so bind `one-mk switch next` (and
+  `one-mk switch here`) to a key in your desktop settings instead.
+- **Windows:** on keyboards where AltGr types characters on the digit row or
+  on P and H (German, Polish and others), Windows reports AltGr as Ctrl+Alt
+  and the shortcuts take those characters; pick other keys, for example
+  `one-mk hotkeys --jump 'ctrl+shift+alt+{n}'`. A shortcut another program
+  already uses is skipped and `one-mk status` names it.
+- Windows and macOS shortcuts are not tested on real hardware yet.
 
 **Lock to this computer.** `one-mk lock-pointer on` (like Scroll Lock in
 Barrier) stops the edges from leading anywhere, for example while playing a
@@ -247,9 +292,10 @@ you can take it back:
 - On Windows and macOS, just use your computer's own mouse or keyboard.
 - On Linux this doesn't work: the Wayland portals one-mk uses can't tell
   your own mouse and keyboard apart from the input one-mk injects, so one-mk
-  can't notice you. Run `one-mk takeback` (or `one-mk switch here`) instead. It's worth binding it to
-  a keyboard shortcut in your desktop's settings (GNOME: Settings >
-  Keyboard > Custom Shortcuts; KDE: System Settings > Shortcuts).
+  can't notice you. Run `one-mk takeback` (or `one-mk switch here`, or press
+  `Ctrl+Alt+H`) instead. Without the shortcut portal, bind it to a keyboard
+  shortcut in your desktop's settings (GNOME: Settings > Keyboard > Custom
+  Shortcuts; KDE: System Settings > Shortcuts).
 - On every system, a computer that sends no input at all (no key, click,
   scroll or pointer movement) for a minute is let go by itself; its pointer
   goes home and its next movement comes back in. So a forgotten session
@@ -367,10 +413,10 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
 ## Troubleshooting
 
 Start with `one-mk doctor`. It checks that one-mk is running and paired,
-the port, discovery, the firewall, the desktop permission (Linux) and the
-network, and prints a plain fix for each problem. It only reads: it never
-changes your firewall or settings, needs no root, and exits with status 1 if
-something failed.
+the port, discovery, the firewall, the desktop permission (Linux), the
+keyboard shortcuts and the network, and prints a plain fix for each problem.
+It only reads: it never changes your firewall or settings, needs no root,
+and exits with status 1 if something failed.
 
 - **Computers don't find each other.** Both must be on the same network
   (not a guest or "client isolation" Wi-Fi). Allow one-mk through the
@@ -430,6 +476,5 @@ background apps, so there it goes through XWayland.
 5. Done: a small tray icon (status, sides, take back, start at login).
    **Next:** a drag-and-drop layout editor and "push toward it" layout learning
 6. Done: gaming mode (relative motion), switching without an edge, edge
-   rules, lock sync, connection doctor (`one-mk doctor`). **Next:** global
-   keyboard shortcuts (on Linux through the GlobalShortcuts portal),
-   auto-update
+   rules, lock sync, connection doctor (`one-mk doctor`), keyboard shortcuts
+   (on Linux through the GlobalShortcuts portal). **Next:** auto-update

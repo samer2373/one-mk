@@ -71,13 +71,13 @@ Known gaps:
 - Everything for Windows and macOS (SendInput relative motion, lock detection,
   fullscreen detection, notifications) is compiled and unit-tested only.
 - Not yet exercised on the real GNOME session: `switch` capture start,
-  GlobalShortcuts, the real `Session.Lock`.
+  GlobalShortcuts binding (see 2A notes), the real `Session.Lock`.
 
 ## Wave 2 (wave 1 is validated; ready to start)
 
 | ID | Task | Depends on | Notes | Status |
 |---|---|---|---|---|
-| 2A | Global hotkeys: jump to computer N, cycle, toggle lock-to-here | 1C `switch` | Linux needs the GlobalShortcuts portal; check it on GNOME. Windows `RegisterHotKey`; macOS event tap. | todo |
+| 2A | Global hotkeys: jump to computer N, cycle, toggle lock-to-here | 1C `switch` | Branch `t3/global-keyboard-hotkeys`. `one-mk hotkeys`, `[hotkeys]` in settings.toml, status and doctor lines. Linux: GlobalShortcuts portal (needs `one-mk install` for an app id); Windows `RegisterHotKey`; macOS session event tap; captured keys matched in the daemon while away. See 2A notes. | done |
 | 2B | Wayland hardening: persist the portal and RemoteDesktop token, release capture on every failure path | none | Top competitor pain point. Touches `crates/input/src/portal.rs`; coordinate with 1C's gaming-mode edits. | todo |
 | 2C | Windows service for the login screen and UAC | none | Service in SYSTEM plus a helper in the user session. Untestable here. | todo |
 | 2D | Layout editor: several monitors per computer, unaligned edges, push-toward-it learning | 1C edge work | Extends `crates/proto/src/geometry.rs` and the window. | todo |
@@ -85,6 +85,34 @@ Known gaps:
 | 2F | Screensaver and sleep sync; block screensaver on peers | 1C lock sync | `[power]`, `one-mk power`; `Control::Inhibit`/`Sleep` + `caps::POWER`; `proto/sleep.rs`, `one-mk/power.rs`, `input/system` (`Inhibitor`, `DisplaySleeper`). Linux verified against the real session bus (read-only); Windows/macOS compile-only. macOS can't notice its own display sleep. | done (Linux verified) |
 | 2G | Multimedia keys across computers | none | `crates/proto/src/mediakeys.rs` is the table (evdev / Windows VK / macOS NX_KEYTYPE); Windows types by VK, macOS captures and posts `NX_SYSDEFINED`; only volume/brightness repeat. Windows/macOS compile-only, not tested on real hardware. | done (Linux/null verified) |
 | 2H | Run a command on screen enter and exit | 1C | `[hooks]`, `one-mk hooks`, `crates/one-mk/src/hooks.rs`: no shell by default, timeout, rate limit, env vars, permission warning. Two-daemon test proves enter and leave. | done |
+
+### 2A notes (2026-10-29)
+
+- Verified on this GNOME 50 box: the GlobalShortcuts portal exists
+  (version 1, xdg-desktop-portal-gnome implements it). Without an app id
+  GNOME refuses `CreateSession` ("An app id is required"); the host
+  Registry refuses an id with no desktop entry ("App info not found"). With
+  a hidden `io.github.onemk.OneMk.desktop` (temporarily placed, then
+  removed) registration and `CreateSession` work. `BindShortcuts` was not
+  run: GNOME shows a dialog (through GNOME Settings) and remembers the
+  answer, so the dialog and real key presses at home are unverified.
+- Verified by tests: chord parsing (incl. malformed input), numbering,
+  shortcut-to-Request mapping, the captured-key matcher (exact modifiers,
+  never mid-chord, the chord's key swallowed), and a two-daemon test where
+  simulated shortcuts switch, come home with no key left held on the peer,
+  toggle lock-pointer, and are turned off by settings.toml.
+- Decisions: computers are numbered by name including this one (same
+  number on every keyboard); the chord's modifiers reach the peer and are
+  released by the switch (holding them back would delay every Ctrl);
+  right Alt is AltGr, not Alt, in captured keys; defaults avoid GNOME's
+  Ctrl+Alt+arrows and Polish AltGr+N.
+- **Open decision:** the app id `io.github.onemk.OneMk` was made up here;
+  pick the real one before release (the window still uses `one-mk`).
+- Known gaps: Windows `RegisterHotKey` can't tell AltGr from Ctrl+Alt, so
+  the default Ctrl+Alt+digits take AltGr characters on German and Polish
+  layouts (documented). Windows and macOS listeners are compiled and
+  clippy-clean only, not tested on real hardware. After `one-mk install`
+  the running daemon must be restarted to register.
 
 ## Wave 3
 

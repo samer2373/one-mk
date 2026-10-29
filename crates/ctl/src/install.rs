@@ -128,6 +128,12 @@ fn tray_desktop_path(home: &Path) -> PathBuf {
     home.join(".config/autostart/one-mk-tray.desktop")
 }
 
+/// The (hidden) application entry that gives one-mk an app id, for the
+/// GlobalShortcuts portal.
+fn app_entry_path(home: &Path) -> PathBuf {
+    home.join(".local/share/applications").join(format!("{}.desktop", one_mk_proto::LINUX_APP_ID))
+}
+
 fn systemd_available() -> bool {
     ok("systemctl", &["--user", "show-environment"])
 }
@@ -180,6 +186,9 @@ fn desktop_entry(name: &str, exe: &Path, args: &[String]) -> String {
 fn install_linux(l: &Launch) -> Result<String> {
     let home = home_dir()?;
     let mut msg = String::new();
+    // Before the service starts: the daemon registers its app id at startup.
+    let app = app_entry_path(&home);
+    write(&app, &(desktop_entry("one-mk", &l.exe, &l.args()).replace("X-GNOME-Autostart-enabled=true\n", "") + "NoDisplay=true\n"))?;
     if systemd_available() {
         let unit = unit_path(&home);
         write(&unit, &systemd_unit(l))?;
@@ -203,6 +212,7 @@ fn install_linux(l: &Launch) -> Result<String> {
         write(&entry, &desktop_entry("one-mk tray", tray, &l.tray_args(false)))?;
         msg += &format!("  the tray icon will start at login too: {}\n", entry.display());
     }
+    msg += &format!("  desktop entry (for keyboard shortcuts): {}\n", app.display());
     msg += "  to undo:              one-mk uninstall";
     Ok(msg)
 }
@@ -222,6 +232,7 @@ fn uninstall_linux() -> Result<bool> {
     }
     did |= remove(&desktop_path(&home))?;
     did |= remove(&tray_desktop_path(&home))?;
+    did |= remove(&app_entry_path(&home))?;
     Ok(did)
 }
 
@@ -407,6 +418,7 @@ mod tests {
         assert_eq!(unit_path(h), Path::new("/home/u/.config/systemd/user/one-mk.service"));
         assert_eq!(desktop_path(h), Path::new("/home/u/.config/autostart/one-mk.desktop"));
         assert_eq!(tray_desktop_path(h), Path::new("/home/u/.config/autostart/one-mk-tray.desktop"));
+        assert_eq!(app_entry_path(h), Path::new("/home/u/.local/share/applications/io.github.onemk.OneMk.desktop"));
         assert_eq!(plist_path(h, LABEL), Path::new("/home/u/Library/LaunchAgents/com.one-mk.daemon.plist"));
     }
 }

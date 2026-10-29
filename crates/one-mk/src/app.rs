@@ -33,6 +33,8 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
+mod shortcuts;
+
 /// While the pointer is on a peer, resend its position at least this often
 /// so Wi-Fi radios never doze off between mouse movements, and the peer
 /// knows we are still there.
@@ -405,6 +407,7 @@ struct App {
     /// Keeps this screen awake while a peer that asked controls it.
     awake: crate::power::Awake,
     sleep_sync: SleepSync,
+    shortcuts: shortcuts::Shortcuts,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -468,7 +471,8 @@ pub async fn serve(
         None
     };
 
-    let dir_for_settings = dir.clone();
+    let settings = Settings::load_or_default(&dir);
+    let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys);
     let mut app = App {
         dir,
         node: node.clone(),
@@ -493,7 +497,7 @@ pub async fn serve(
         announced: HashSet::new(),
         focus,
         locker,
-        settings: Settings::load_or_default(&dir_for_settings),
+        settings,
         locked: opts.start_locked,
         mods: Mods::default(),
         approach: None,
@@ -505,6 +509,7 @@ pub async fn serve(
         sleeper: power.sleeper,
         awake: Default::default(),
         sleep_sync: SleepSync::default(),
+        shortcuts,
     };
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
     if app.locked {
@@ -544,6 +549,7 @@ pub async fn serve(
             },
             Some(ev) = rx.recv() => app.on_app(ev, &screens_rx),
             Some((req, reply)) = ipc.recv() => app.on_request(req, reply),
+            Some(ev) = shortcut_events.recv() => app.on_shortcut_event(ev),
             _ = dial_tick.tick() => app.dial_missing(&screens_rx),
             _ = &mut shutdown => break,
         }
@@ -784,6 +790,8 @@ impl App {
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
         match ev {
+            Event::Key { code, down } if self.captured_shortcut(code, down) => {}
+            ev @ (Event::Hotkey(_) | Event::Hotkeys(_)) => self.on_shortcut_event(ev),
             Event::Desktop(d) => {
                 tracing::debug!(screens = ?d.screens, "local screens");
                 for p in self.peers.values() {
@@ -1558,6 +1566,7 @@ impl App {
         crate::clipctl::apply(&self.settings, &self.services);
         self.apply_pointer_mode();
         self.sync_sides();
+        self.shortcuts.reload(&self.settings.hotkeys);
         Ok(())
     }
 
@@ -1638,6 +1647,7 @@ impl App {
                 swap: d.swap_ctrl_cmd.to_string(),
             })
         });
+        let (hotkeys, hotkeys_detail) = self.shortcuts.status();
         Status {
             name: sanitize_name(&id.name),
             id: id.fingerprint.short(),
@@ -1652,6 +1662,8 @@ impl App {
             lock_sync: self.settings.lock_sync,
             edges: self.settings.edge.describe(),
             transfers: self.services.inbox.transfers().snapshot(),
+            hotkeys,
+            hotkeys_detail,
         }
     }
 
@@ -3025,6 +3037,70 @@ mod tests {
         assert_eq!(ask(&duo.da, Request::LockPointer(Toggle::Toggle)).await, "ok\noff\n");
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
         assert!(!status(&duo.da).await.pointer_locked);
+        duo.stop().await;
+    }
+
+    /// Keyboard shortcuts: the system's (simulated here) at home, the
+    /// matcher on captured keys away. The chord's key never reaches the
+    /// peer and its modifiers don't stay held there.
+    #[tokio::test]
+    async fn keyboard_shortcuts_switch_without_leaving_keys_held() {
+        use one_mk_input::hotkeys::Action;
+        const CTRL: u32 = 29;
+        const ALT: u32 = 56;
+        const KEY_H: u32 = 35;
+        const KEY_X: u32 = 45;
+        let mut duo = Duo::start("shortcuts", None).await;
+        assert_eq!(status(&duo.da).await.hotkeys, "unavailable", "nothing listens with the null backend");
+        let (ia, ib) = (Identity::load_or_create(&duo.da).unwrap(), Identity::load_or_create(&duo.db).unwrap());
+        let order = crate::hotkeys::numbered((&ia.name, &duo.fa), [(ib.name.clone(), duo.fb.clone())]);
+        let n = |fp: &str| 1 + order.iter().position(|c| c.id == fp).unwrap() as u8;
+
+        // At home: Ctrl+Alt+<B's number> from the system moves to B.
+        duo.ha.events.send(Event::Hotkey(Action::Jump(n(&duo.fb)))).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.ha.events.send(Event::Activated { id: 5, side: Side::Right, pos: Pos::new(1919.0, 3.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
+
+        // On B: a key held while the chord's key goes down is typing, not a shortcut.
+        for (code, down) in [(KEY_X, true), (CTRL, true), (ALT, true), (KEY_H, true), (KEY_H, false), (KEY_X, false)] {
+            duo.ha.events.send(Event::Key { code, down }).unwrap();
+            assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code, down });
+        }
+        // Ctrl+Alt+H alone (Ctrl and Alt still held) brings it home; B
+        // releases Ctrl and Alt and never sees the H.
+        duo.ha.events.send(Event::Key { code: KEY_H, down: true }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 5, pos: Some(CENTER) });
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: CTRL, down: false });
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: ALT, down: false });
+        for code in [KEY_H, CTRL, ALT] {
+            duo.ha.events.send(Event::Key { code, down: false }).unwrap();
+        }
+
+        // Back on B (the system's "next"), Ctrl+Alt+<this computer's
+        // number> comes home too, Ctrl and Alt held since before the capture.
+        duo.ha.events.send(Event::Hotkey(Action::Cycle)).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.ha.events.send(Event::Activated { id: 6, side: Side::Right, pos: Pos::new(1919.0, 3.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
+        duo.ha.events.send(Event::Modifiers(Mods::from_keys([CTRL, ALT]))).unwrap();
+        duo.ha.events.send(Event::Key { code: 1 + u32::from(n(&duo.fa)), down: true }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 6, pos: Some(CENTER) });
+        assert!(injected(&mut duo.hb).iter().all(|i| !matches!(i, Inject::Key { .. })), "no key reached B");
+
+        // Lock pointer, from the system, toggles like `one-mk lock-pointer toggle`.
+        duo.ha.events.send(Event::Hotkey(Action::LockPointer)).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![]));
+        assert!(status(&duo.da).await.pointer_locked);
+        duo.ha.events.send(Event::Hotkey(Action::LockPointer)).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
+
+        // Turned off in settings.toml: the chord is just keys again.
+        set(&duo.da, |s| s.hotkeys.enabled = false).await;
+        assert_eq!(status(&duo.da).await.hotkeys, "off");
+        duo.enter_b().await;
+        duo.ha.events.send(Event::Key { code: KEY_H, down: true }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: KEY_H, down: true });
         duo.stop().await;
     }
 

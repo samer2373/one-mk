@@ -57,6 +57,10 @@ pub struct Status {
     pub edges: String,
     /// File transfers in flight, to and from this computer.
     pub transfers: Vec<TransferStatus>,
+    /// Keyboard shortcuts: `on`, `off`, `starting` or `unavailable` (empty
+    /// from older daemons), and the details in words.
+    pub hotkeys: String,
+    pub hotkeys_detail: String,
 }
 
 /// One file transfer in flight (a whole `one-mk send`, not a single file).
@@ -137,7 +141,24 @@ pub struct PeerStatus {
     pub swap: String,
 }
 
+/// What to do where the desktop has no global shortcuts.
+pub const HOTKEYS_FALLBACK: &str = "bind `one-mk switch next` (and `one-mk switch here`) to a key in your desktop settings";
+
 impl Status {
+    /// The keyboard shortcuts, in one line; `None` if there is nothing to say.
+    pub fn hotkeys_line(&self) -> Option<String> {
+        let d = &self.hotkeys_detail;
+        Some(match self.hotkeys.as_str() {
+            "on" => format!("Keyboard shortcuts work {d} (`one-mk hotkeys` lists them)."),
+            "starting" => format!("Keyboard shortcuts are being set up: {d}."),
+            "unavailable" => format!(
+                "Keyboard shortcuts work only while the pointer is on another computer ({d}); here, {HOTKEYS_FALLBACK}."
+            ),
+            _ if !d.is_empty() => format!("Keyboard shortcuts are off: {d}."),
+            _ => return None,
+        })
+    }
+
     /// One `key<TAB>value` line per fact (names never contain tabs or
     /// newlines: they are sanitized).
     pub fn encode(&self) -> String {
@@ -164,6 +185,9 @@ impl Status {
             if !v.is_empty() {
                 out += &format!("{key}\t{v}\n");
             }
+        }
+        if !self.hotkeys.is_empty() {
+            out += &format!("hotkeys\t{}\t{}\n", self.hotkeys, self.hotkeys_detail);
         }
         for t in &self.transfers {
             out += &format!(
@@ -200,6 +224,7 @@ impl Status {
                 ["lock_sync", v] => s.lock_sync = v == "1",
                 ["gaming", v] => s.gaming = v.into(),
                 ["edges", v] => s.edges = v.into(),
+                ["hotkeys", state, detail] => (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into()),
                 // Cosmetic: a line that doesn't parse is skipped, not fatal.
                 ["transfer", id, dir, files, done, total, rate, peer] => s.transfers.extend(|| -> Option<_> {
                     Some(TransferStatus {
@@ -249,6 +274,9 @@ impl Status {
         if self.lock_sync {
             out += "Lock sync is on: locking any computer locks the others.\n";
         }
+        if let Some(line) = self.hotkeys_line() {
+            out += &format!("{line}\n");
+        }
         if self.peers.is_empty() {
             out += "No computers are paired yet. Run `one-mk pair` on this and the other computer.\n";
         }
@@ -297,6 +325,22 @@ mod tests {
             assert!(text.contains(want), "{want}: {text}");
         }
         assert_eq!(Status::decode("error unknown request\n"), None);
+    }
+
+    #[test]
+    fn shortcut_state_survives_the_wire_and_reads_plainly() {
+        let s = Status { hotkeys: "unavailable".into(), hotkeys_detail: "this desktop has no GlobalShortcuts portal".into(), ..Status::default() };
+        assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
+        let line = s.hotkeys_line().unwrap();
+        assert!(line.contains("only while the pointer is on another computer") && line.contains("`one-mk switch next`"), "{line}");
+        assert!(s.render().contains(&line));
+        let on = Status { hotkeys: "on".into(), hotkeys_detail: "through Windows".into(), ..Status::default() };
+        assert_eq!(on.hotkeys_line().unwrap(), "Keyboard shortcuts work through Windows (`one-mk hotkeys` lists them).");
+        assert_eq!(Status::decode(&on.encode()), Some(on));
+        // Older daemons say nothing; off without a reason says nothing either.
+        assert_eq!(Status::default().hotkeys_line(), None);
+        assert_eq!(Status { hotkeys: "off".into(), ..Status::default() }.hotkeys_line(), None);
+        assert!(!Status::default().encode().contains("hotkeys"));
     }
 
     #[test]

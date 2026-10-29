@@ -32,6 +32,11 @@ pub const ALPN: &[u8] = b"one-mk/1";
 /// Default UDP port.
 pub const DEFAULT_PORT: u16 = 24900;
 
+/// The app id one-mk goes by on Linux desktops. `one-mk install` writes a
+/// desktop entry by this name, without which the portals won't accept it
+/// (the GlobalShortcuts portal needs an app id).
+pub const LINUX_APP_ID: &str = "io.github.onemk.OneMk";
+
 /// Makes a peer-supplied device name safe to display: removes control,
 /// bidi-override and zero-width characters (which could redraw a terminal or
 /// disguise a name), collapses whitespace and limits the length.
