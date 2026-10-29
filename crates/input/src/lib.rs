@@ -7,6 +7,10 @@
 
 mod common_logic;
 pub mod hotkeys;
+#[cfg(any(target_os = "linux", test))]
+mod linux_logic;
+#[cfg(target_os = "linux")]
+mod linux_rt;
 mod null;
 pub mod system;
 #[cfg(target_os = "macos")]
@@ -17,6 +21,10 @@ mod macos_logic;
 mod portal;
 #[cfg(windows)]
 mod windows;
+#[cfg(target_os = "linux")]
+mod wlroots;
+#[cfg(target_os = "linux")]
+mod x11;
 #[cfg(any(windows, test))]
 mod win_logic;
 
@@ -24,6 +32,8 @@ pub use null::NullHandles;
 pub use system::{DisplaySleeper, FocusProbe, Inhibitor, Power, PowerEvent, PowerHandles, ScreenLocker, fake_power};
 #[cfg(target_os = "linux")]
 pub use portal::{PortalProbe, probe_portals};
+#[cfg(target_os = "linux")]
+pub use linux_logic::{LinuxBackend, SessionFacts, choose as choose_linux_backend};
 
 use anyhow::Result;
 use one_mk_proto::{Desktop, Mods, Pos, Side};
@@ -123,8 +133,13 @@ pub struct Backend {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// The native backend for this OS.
+    /// The native backend for this OS. On Linux the best one the session
+    /// has (see [`choose_linux_backend`]).
     Native,
+    /// X11 (Linux).
+    X11,
+    /// The wlroots Wayland protocols (Linux: Sway, Hyprland, labwc ...).
+    Wlroots,
     /// Captures nothing and only logs injected input.
     Null,
 }
@@ -161,12 +176,53 @@ pub async fn open(kind: Kind, state_dir: PathBuf) -> Result<Backend> {
             Ok(backend)
         }
         Kind::Native => native(state_dir).await,
+        Kind::X11 | Kind::Wlroots => linux(kind, state_dir).await,
     }
 }
 
 #[cfg(target_os = "linux")]
 async fn native(state_dir: PathBuf) -> Result<Backend> {
-    portal::open(state_dir).await
+    // Outside Wayland the portals don't matter (see `choose`).
+    let portals = if std::env::var_os("WAYLAND_DISPLAY").is_some_and(|d| !d.is_empty()) {
+        let probe = tokio::time::timeout(std::time::Duration::from_secs(3), probe_portals()).await;
+        probe.ok().map(|p| p.remote_desktop.is_ok() && p.input_capture.is_ok())
+    } else {
+        None
+    };
+    let facts = session_facts(portals).await;
+    let (backend, why) = linux_logic::choose(&facts);
+    tracing::info!("input backend: {} ({why})", backend.name());
+    match backend {
+        LinuxBackend::Portal => portal::open(state_dir).await,
+        LinuxBackend::Wlroots => wlroots::open(state_dir).await,
+        LinuxBackend::X11 => x11::open(state_dir).await,
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn linux(kind: Kind, state_dir: PathBuf) -> Result<Backend> {
+    if kind == Kind::X11 { x11::open(state_dir).await } else { wlroots::open(state_dir).await }
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn linux(_kind: Kind, _state_dir: PathBuf) -> Result<Backend> {
+    anyhow::bail!("the x11 and wlroots input backends are for Linux")
+}
+
+/// What this session offers for picking a Linux backend; `portals` is
+/// what [`probe_portals`] found, if asked. Asks the Wayland compositor
+/// (if any) for its globals; never takes more than about two seconds.
+#[cfg(target_os = "linux")]
+pub async fn session_facts(portals: Option<bool>) -> SessionFacts {
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|d| !d.is_empty());
+    let wayland_globals = if wayland {
+        let probe = tokio::task::spawn_blocking(wlroots::globals);
+        tokio::time::timeout(std::time::Duration::from_secs(2), probe).await.ok().and_then(Result::ok).flatten()
+    } else {
+        None
+    };
+    let x11 = std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty());
+    SessionFacts { portals, wayland, wayland_globals, x11 }
 }
 
 #[cfg(windows)]
@@ -188,7 +244,7 @@ async fn native(_state_dir: PathBuf) -> Result<Backend> {
 /// only count (and whose events never come).
 pub fn power(kind: Kind) -> Power {
     match kind {
-        Kind::Native => system::native_power(),
+        Kind::Native | Kind::X11 | Kind::Wlroots => system::native_power(),
         Kind::Null => fake_power().0,
     }
 }

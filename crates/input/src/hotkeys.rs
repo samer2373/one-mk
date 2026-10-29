@@ -621,7 +621,7 @@ pub fn listen(kind: Kind, bindings: Bindings) -> (Listener, mpsc::UnboundedRecei
             let _ = tx.send(Event::Hotkeys(Availability::Unavailable("not with the null input backend".into())));
             None
         }
-        Kind::Native => native(bindings, tx),
+        Kind::Native | Kind::X11 | Kind::Wlroots => native(bindings, tx),
     };
     (Listener(platform), rx)
 }
