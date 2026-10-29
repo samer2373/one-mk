@@ -14,14 +14,18 @@ use ashpd::zbus;
 use futures::StreamExt;
 use one_mk_proto::Focus;
 use tokio::sync::mpsc;
+use std::io::Write as _;
+use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as mpsc_std;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::properties::WmClass;
-use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt, GetPropertyReply, Window};
+use x11rb::protocol::Event as XEvent;
+use x11rb::protocol::xproto::{Atom, AtomEnum, ChangeWindowAttributesAux, ConnectionExt, EventMask, GetPropertyReply, Window};
 use x11rb::rust_connection::RustConnection;
 
 const LOGIN1: &str = "org.freedesktop.login1";
@@ -235,100 +239,273 @@ const ANSWER_WITHIN: Duration = Duration::from_millis(5);
 const CONNECT_WITHIN: Duration = Duration::from_millis(15);
 /// The X connection, and the thread holding it, close after this long
 /// without a probe (probes come only from the fullscreen guard at an
-/// edge, and from gaming mode `auto` on clicks).
+/// edge, and from gaming mode `auto` and per-app rules on input that may
+/// move the focus), unless it is watching for the focus to move.
 const IDLE: Duration = Duration::from_secs(60);
+/// A change of the active window is said this long after the first one
+/// of a burst (a window manager may set it more than once per switch).
+const SETTLE: Duration = Duration::from_millis(50);
 
 /// The focused X11 window. X11 calls block, so they run on a thread of
 /// their own (started on demand, ended when idle) and the daemon waits
 /// for the answer only briefly; a slow or hung X server makes the answer
 /// "unknown" and never stalls the daemon.
 ///
+/// While watched ([`FocusProbe::watch`]: a controller wants to hear what
+/// has the focus here), the same thread and connection also listen for
+/// the window manager changing `_NET_ACTIVE_WINDOW` on the root window
+/// (`PropertyNotify`): no polling, the thread sleeps until X says
+/// something. It stops listening when the watch ends or the connection
+/// goes.
+///
 /// On a Wayland session it connects only to an XWayland that is already
 /// running: GNOME starts XWayland when a client connects, and keeps it
 /// running while one is connected. So it also lets go as soon as no X11
-/// window has the focus there.
+/// window has the focus there, which ends the listening too: a
+/// Wayland-native window's focus is unknowable anyway (the daemon looks
+/// again after input that may move the focus).
 #[derive(Default)]
 pub(super) struct X11Focus {
     worker: Option<Worker>,
+    /// What to call when the active window changes, while watched.
+    notify: Option<Notify>,
+    /// The X display; `None` is `DISPLAY` (tests name a private one).
+    display: Option<String>,
 }
 
 type Reply = mpsc_std::SyncSender<Option<Focus>>;
+type Notify = Arc<dyn Fn() + Send + Sync>;
+
+enum Msg {
+    Probe(Reply),
+    Watch(Option<Notify>),
+}
 
 struct Worker {
-    requests: mpsc_std::Sender<Reply>,
+    requests: mpsc_std::Sender<Msg>,
+    /// Written after each message, to wake the thread from `poll`; closed
+    /// with the worker, which ends the thread.
+    wake: UnixStream,
     /// A probe is running: don't queue behind it.
     busy: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
 }
 
 impl Worker {
-    fn spawn() -> Option<Worker> {
+    fn spawn(display: Option<String>) -> Option<Worker> {
         let (requests, rx) = mpsc_std::channel();
+        let (wake, woken) = UnixStream::pair().map_err(|e| tracing::debug!("no focus probe wake socket: {e}")).ok()?;
+        wake.set_nonblocking(true).ok()?;
+        woken.set_nonblocking(true).ok()?;
         let busy = Arc::new(AtomicBool::new(false));
         let connected = Arc::new(AtomicBool::new(false));
         let (b, c) = (busy.clone(), connected.clone());
-        let spawned = std::thread::Builder::new().name("one-mk-x11-focus".into()).spawn(move || serve(&rx, &b, &c));
+        let spawned =
+            std::thread::Builder::new().name("one-mk-x11-focus".into()).spawn(move || serve(&rx, &woken, &b, &c, display.as_deref()));
         if let Err(e) = spawned {
             tracing::debug!("no focus probe thread: {e}");
             return None;
         }
-        Some(Worker { requests, busy, connected })
+        Some(Worker { requests, wake, busy, connected })
+    }
+
+    /// Fails (giving the message back) if the thread ended, idle.
+    fn send(&self, msg: Msg) -> Result<(), Msg> {
+        self.requests.send(msg).map_err(|e| e.0)?;
+        // A full socket already has the thread woken.
+        let _ = (&self.wake).write(&[1]);
+        Ok(())
+    }
+}
+
+impl X11Focus {
+    #[cfg(test)]
+    fn on(display: &str) -> X11Focus {
+        X11Focus { display: Some(display.to_owned()), ..Default::default() }
+    }
+
+    fn has_display(&self) -> bool {
+        self.display.is_some() || std::env::var_os("DISPLAY").is_some()
+    }
+
+    /// Sends `msg` to the probe thread, starting one (told about the
+    /// watch first) if it ended.
+    fn send(&mut self, msg: Msg) -> Option<()> {
+        let msg = match &self.worker {
+            Some(w) => match w.send(msg) {
+                Ok(()) => return Some(()),
+                Err(msg) => msg,
+            },
+            None => msg,
+        };
+        self.worker = None;
+        let w = Worker::spawn(self.display.clone())?;
+        if self.notify.is_some() && !matches!(msg, Msg::Watch(_)) {
+            w.send(Msg::Watch(self.notify.clone())).ok()?;
+        }
+        w.send(msg).ok()?;
+        self.worker = Some(w);
+        Some(())
     }
 }
 
 impl FocusProbe for X11Focus {
     fn focus(&mut self) -> Option<Focus> {
-        std::env::var_os("DISPLAY")?;
-        if self.worker.as_ref().is_some_and(|w| w.busy.load(Ordering::Acquire)) {
+        if !self.has_display() || self.worker.as_ref().is_some_and(|w| w.busy.load(Ordering::Acquire)) {
             return None;
         }
         let (tx, rx) = mpsc_std::sync_channel(1);
-        let mut request = Some(tx);
-        if let Some(w) = &self.worker {
-            // Fails if the thread ended, idle.
-            request = w.requests.send(request.take()?).err().map(|e| e.0);
-        }
-        if let Some(tx) = request {
-            let w = Worker::spawn()?;
-            w.requests.send(tx).ok()?;
-            self.worker = Some(w);
-        }
+        self.send(Msg::Probe(tx))?;
         let w = self.worker.as_ref()?;
         let within = if w.connected.load(Ordering::Acquire) { ANSWER_WITHIN } else { CONNECT_WITHIN };
         rx.recv_timeout(within).ok().flatten()
     }
+
+    fn watch(&mut self, notify: Option<Box<dyn Fn() + Send>>) {
+        self.notify = notify.map(|f| {
+            let f = std::sync::Mutex::new(f);
+            Arc::new(move || (f.lock().unwrap_or_else(|e| e.into_inner()))()) as Notify
+        });
+        if !self.has_display() {
+            return;
+        }
+        if self.notify.is_none() && self.worker.is_none() {
+            return;
+        }
+        let _ = self.send(Msg::Watch(self.notify.clone()));
+    }
 }
 
-/// The probe thread: answers requests until idle for [`IDLE`], then ends,
-/// closing the X connection.
-fn serve(requests: &mpsc_std::Receiver<Reply>, busy: &AtomicBool, connected: &AtomicBool) {
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+/// The probe thread: answers probes and, while watched, says when the
+/// active window changed; ends when idle for [`IDLE`] and not watching
+/// (or when the probe is dropped), closing the X connection.
+fn serve(requests: &mpsc_std::Receiver<Msg>, woken: &UnixStream, busy: &AtomicBool, connected: &AtomicBool, display: Option<&str>) {
+    let wayland = display.is_none() && std::env::var_os("WAYLAND_DISPLAY").is_some();
     let mut conn: Option<X11> = None;
-    while let Ok(reply) = requests.recv_timeout(IDLE) {
-        busy.store(true, Ordering::Release);
-        // SAFETY: geteuid has no preconditions.
-        let uid = || unsafe { libc::geteuid() };
-        if conn.is_none() && may_connect(wayland, || xwayland_running(Path::new("/proc"), uid())) {
-            conn = X11::connect().map_err(|e| tracing::debug!("focus probe: no X11 connection: {e}")).ok();
-        }
-        let focus = match conn.as_ref().map(X11::probe) {
-            Some(Ok(f)) => f,
-            Some(Err(e)) => {
-                tracing::debug!("focus probe: {e}; reconnecting next time");
-                conn = None;
-                None
+    let mut notify: Option<Notify> = None;
+    // When to say the active window changed.
+    let mut due: Option<Instant> = None;
+    let mut used = Instant::now();
+    loop {
+        loop {
+            let msg = match requests.try_recv() {
+                Ok(msg) => msg,
+                Err(mpsc_std::TryRecvError::Empty) => break,
+                Err(mpsc_std::TryRecvError::Disconnected) => return,
+            };
+            used = Instant::now();
+            match msg {
+                Msg::Probe(reply) => {
+                    busy.store(true, Ordering::Release);
+                    let focus = probe(&mut conn, wayland, display);
+                    connected.store(conn.is_some(), Ordering::Release);
+                    busy.store(false, Ordering::Release);
+                    let _ = reply.send(focus);
+                }
+                Msg::Watch(n) => {
+                    notify = n;
+                    // On X11 there is always a server to listen to; on
+                    // Wayland only while connected anyway (see `probe`).
+                    if notify.is_some() && conn.is_none() && !wayland {
+                        conn = connect(display);
+                        connected.store(conn.is_some(), Ordering::Release);
+                    }
+                }
             }
-            None => None,
-        };
-        // On Wayland, with no X11 window focused, let go of XWayland so that
-        // if GNOME started it on demand (for a game now gone), it can exit.
-        if focus.is_none() && wayland {
-            conn = None;
         }
-        connected.store(conn.is_some(), Ordering::Release);
-        busy.store(false, Ordering::Release);
-        let _ = reply.send(focus);
+        // Listen while watched (a new connection starts deaf).
+        let want = notify.is_some();
+        if let Some(c) = conn.as_ref().filter(|c| c.listening.get() != want)
+            && let Err(e) = c.listen(want)
+        {
+            tracing::debug!("focus probe: not listening for focus changes: {e}");
+            conn = None;
+            connected.store(false, Ordering::Release);
+        }
+        let listening = conn.as_ref().is_some_and(|c| c.listening.get());
+        if !listening {
+            due = None;
+        }
+        if let Some(c) = conn.as_ref().filter(|_| listening) {
+            match c.active_changed() {
+                Ok(true) => due = due.or(Some(Instant::now() + SETTLE)),
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::debug!("focus probe: {e}; reconnecting next time");
+                    (conn, due) = (None, None);
+                    connected.store(false, Ordering::Release);
+                    continue;
+                }
+            }
+        }
+        if due.is_some_and(|t| Instant::now() >= t) {
+            due = None;
+            if let Some(n) = &notify {
+                n();
+            }
+        }
+        // Sleep until a message, an X event, the debounce, or the idle
+        // end (only while not listening; then nothing is due either).
+        let idle_end = (!listening).then_some(used + IDLE);
+        if idle_end.is_some_and(|t| Instant::now() >= t) {
+            return; // a message sent meanwhile starts another thread
+        }
+        let deadline = due.or(idle_end);
+        let x_fd = conn.as_ref().filter(|_| listening).map(|c| c.conn.stream().as_raw_fd());
+        if !wait(woken.as_raw_fd(), x_fd, deadline) {
+            return;
+        }
     }
+}
+
+/// Waits for the wake socket (drained here) or the X connection to be
+/// readable, or `deadline`. False once the probe is gone (the wake socket
+/// closed).
+fn wait(woken: RawFd, x: Option<RawFd>, deadline: Option<Instant>) -> bool {
+    let mut fds = [libc::pollfd { fd: woken, events: libc::POLLIN, revents: 0 }, libc::pollfd { fd: x.unwrap_or(-1), events: libc::POLLIN, revents: 0 }];
+    let timeout = deadline.map_or(-1, |t| i32::try_from(t.saturating_duration_since(Instant::now()).as_millis() + 1).unwrap_or(i32::MAX));
+    // SAFETY: `fds` is a valid array of two pollfds (a negative fd is ignored).
+    let n = unsafe { libc::poll(fds.as_mut_ptr(), 2, timeout) };
+    if n <= 0 || fds[0].revents == 0 {
+        return true;
+    }
+    let mut buf = [0u8; 64];
+    loop {
+        // SAFETY: reads into a valid buffer from our own nonblocking socket.
+        match unsafe { libc::read(woken, buf.as_mut_ptr().cast(), buf.len()) } {
+            0 => return false,
+            n if n > 0 => {}
+            _ => return true,
+        }
+    }
+}
+
+fn connect(display: Option<&str>) -> Option<X11> {
+    X11::connect(display).map_err(|e| tracing::debug!("focus probe: no X11 connection: {e}")).ok()
+}
+
+/// Looks at the focused window, connecting first if need be.
+fn probe(conn: &mut Option<X11>, wayland: bool, display: Option<&str>) -> Option<Focus> {
+    // SAFETY: geteuid has no preconditions.
+    let uid = || unsafe { libc::geteuid() };
+    if conn.is_none() && may_connect(wayland, || xwayland_running(Path::new("/proc"), uid())) {
+        *conn = connect(display);
+    }
+    let focus = match conn.as_ref().map(X11::probe) {
+        Some(Ok(f)) => f,
+        Some(Err(e)) => {
+            tracing::debug!("focus probe: {e}; reconnecting next time");
+            *conn = None;
+            None
+        }
+        None => None,
+    };
+    // On Wayland, with no X11 window focused, let go of XWayland so that
+    // if GNOME started it on demand (for a game now gone), it can exit.
+    if focus.is_none() && wayland {
+        *conn = None;
+    }
+    focus
 }
 
 /// Whether to connect to the X server: always on an X11 session; on
@@ -357,13 +534,15 @@ struct X11 {
     clients: Atom,
     state: Atom,
     fullscreen: Atom,
+    /// The root window's property changes are selected (see `listen`).
+    listening: std::cell::Cell<bool>,
 }
 
 type XResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 impl X11 {
-    fn connect() -> XResult<X11> {
-        let (conn, screen) = x11rb::connect(None)?;
+    fn connect(display: Option<&str>) -> XResult<X11> {
+        let (conn, screen) = x11rb::connect(display)?;
         let root = conn.setup().roots.get(screen).ok_or("no such screen")?.root;
         // All four requests go out before waiting for the first answer.
         let names: [&[u8]; 4] = [b"_NET_ACTIVE_WINDOW", b"_NET_CLIENT_LIST", b"_NET_WM_STATE", b"_NET_WM_STATE_FULLSCREEN"];
@@ -373,7 +552,29 @@ impl X11 {
             *a = c?.reply()?.atom;
         }
         let [active, clients, state, fullscreen] = atoms;
-        Ok(X11 { conn, root, active, clients, state, fullscreen })
+        Ok(X11 { conn, root, active, clients, state, fullscreen, listening: false.into() })
+    }
+
+    /// Starts (or stops) hearing about the root window's property changes.
+    fn listen(&self, on: bool) -> XResult<()> {
+        let mask = if on { EventMask::PROPERTY_CHANGE } else { EventMask::NO_EVENT };
+        self.conn.change_window_attributes(self.root, &ChangeWindowAttributesAux::new().event_mask(mask))?.check()?;
+        self.listening.set(on);
+        // What came before is no news.
+        while self.conn.poll_for_event()?.is_some() {}
+        Ok(())
+    }
+
+    /// Whether the active window changed, by the events received so far
+    /// (taken without waiting).
+    fn active_changed(&self) -> XResult<bool> {
+        let mut changed = false;
+        while let Some(event) = self.conn.poll_for_event()? {
+            if let XEvent::PropertyNotify(e) = event {
+                changed |= e.window == self.root && e.atom == self.active;
+            }
+        }
+        Ok(changed)
     }
 
     /// The focused window: two round trips.
@@ -458,6 +659,164 @@ mod tests {
         }
         let _ = p.focus();
         assert!(std::env::var_os("DISPLAY").is_none() || p.worker.is_some());
+    }
+
+    /// A private X server on a free display, killed when dropped; `None`
+    /// (the test is skipped) where Xvfb isn't installed.
+    struct Xvfb(std::process::Child, String);
+
+    impl Xvfb {
+        fn start() -> Option<Xvfb> {
+            use std::io::BufRead;
+            let child = std::process::Command::new("Xvfb")
+                .args(["-displayfd", "1", "-screen", "0", "640x480x24", "-nolisten", "tcp", "-noreset"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            let Ok(mut child) = child else {
+                eprintln!("Xvfb not installed: skipped");
+                return None;
+            };
+            let mut line = String::new();
+            std::io::BufReader::new(child.stdout.take().expect("piped")).read_line(&mut line).unwrap();
+            assert!(line.trim().parse::<u32>().is_ok(), "Xvfb did not start: {line:?}");
+            Some(Xvfb(child, format!(":{}", line.trim())))
+        }
+    }
+
+    impl Drop for Xvfb {
+        fn drop(&mut self) {
+            // SAFETY: plain kill(2) on our own child.
+            unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) };
+            let _ = self.0.wait();
+        }
+    }
+
+    /// Plays the window manager on `display`: client windows of the given
+    /// classes, and which of them is active.
+    struct Wm {
+        conn: RustConnection,
+        root: Window,
+        windows: Vec<Window>,
+        active: Atom,
+        workarea: Atom,
+    }
+
+    impl Wm {
+        fn start(display: &str, classes: &[&str]) -> Wm {
+            use x11rb::protocol::xproto::{CreateWindowAux, PropMode, WindowClass};
+            use x11rb::wrapper::ConnectionExt as _;
+            let (conn, screen) = x11rb::connect(Some(display)).unwrap();
+            let root = conn.setup().roots[screen].root;
+            let atom = |n: &[u8]| conn.intern_atom(false, n).unwrap().reply().unwrap().atom;
+            let (active, clients, workarea) = (atom(b"_NET_ACTIVE_WINDOW"), atom(b"_NET_CLIENT_LIST"), atom(b"_NET_WORKAREA"));
+            let mut windows = Vec::new();
+            for class in classes {
+                let w = conn.generate_id().unwrap();
+                conn.create_window(0, w, root, 0, 0, 10, 10, 0, WindowClass::INPUT_OUTPUT, 0, &CreateWindowAux::new()).unwrap();
+                let wm_class = format!("{class}\0{class}\0");
+                conn.change_property8(PropMode::REPLACE, w, AtomEnum::WM_CLASS, AtomEnum::STRING, wm_class.as_bytes()).unwrap();
+                windows.push(w);
+            }
+            conn.change_property32(PropMode::REPLACE, root, clients, AtomEnum::WINDOW, &windows).unwrap();
+            conn.sync().unwrap();
+            Wm { conn, root, windows, active, workarea }
+        }
+
+        fn activate(&self, i: usize) {
+            use x11rb::protocol::xproto::PropMode;
+            use x11rb::wrapper::ConnectionExt as _;
+            self.conn.change_property32(PropMode::REPLACE, self.root, self.active, AtomEnum::WINDOW, &[self.windows[i]]).unwrap();
+            self.conn.sync().unwrap();
+        }
+
+        /// Another root property: not a focus change.
+        fn touch_workarea(&self) {
+            use x11rb::protocol::xproto::PropMode;
+            use x11rb::wrapper::ConnectionExt as _;
+            self.conn.change_property32(PropMode::REPLACE, self.root, self.workarea, AtomEnum::CARDINAL, &[0, 0, 640, 480]).unwrap();
+            self.conn.sync().unwrap();
+        }
+    }
+
+    fn app(f: Option<Focus>) -> Option<String> {
+        f.and_then(|f| f.apps.into_iter().next())
+    }
+
+    /// Waits up to `ms` for `n` to reach `want`; returns what it is then.
+    fn settle(n: &std::sync::atomic::AtomicUsize, want: usize, ms: u64) -> usize {
+        let until = Instant::now() + Duration::from_millis(ms);
+        while n.load(Ordering::SeqCst) < want && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        n.load(Ordering::SeqCst)
+    }
+
+    /// Against a private Xvfb: while watched, the probe says when the
+    /// window manager changes the active window (a burst once, other root
+    /// properties never), with no input and no polling; it stops when the
+    /// watch ends, and comes back with a new probe thread after idle.
+    #[test]
+    fn watch_says_when_the_active_window_changes() {
+        let Some(x) = Xvfb::start() else { return };
+        let wm = Wm::start(&x.1, &["code", "firefox"]);
+        wm.activate(0);
+        let mut p = X11Focus::on(&x.1);
+        assert_eq!(app(p.focus()), Some("code".into()));
+        let told = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let t = told.clone();
+        p.watch(Some(Box::new(move || {
+            t.fetch_add(1, Ordering::SeqCst);
+        })));
+        std::thread::sleep(Duration::from_millis(50));
+        wm.touch_workarea();
+        assert_eq!(settle(&told, 1, 200), 0, "another root property is not a focus change");
+        wm.activate(1);
+        assert_eq!(settle(&told, 1, 2000), 1, "told of the change");
+        assert_eq!(app(p.focus()), Some("firefox".into()));
+        // A burst (a window manager setting it twice) is said once.
+        wm.activate(0);
+        wm.activate(1);
+        wm.activate(0);
+        assert_eq!(settle(&told, 2, 2000), 2);
+        assert_eq!(settle(&told, 3, SETTLE.as_millis() as u64 * 4), 2, "once per burst");
+        // The watch ends: nothing more.
+        p.watch(None);
+        std::thread::sleep(Duration::from_millis(50));
+        wm.activate(1);
+        assert_eq!(settle(&told, 3, 300), 2, "not watched");
+        // Watched again on a fresh thread (the old one ended idle).
+        let t = told.clone();
+        if let Some(w) = &mut p.worker {
+            let (tx, _) = mpsc_std::channel();
+            w.requests = tx;
+        }
+        p.watch(Some(Box::new(move || {
+            t.fetch_add(1, Ordering::SeqCst);
+        })));
+        std::thread::sleep(Duration::from_millis(50));
+        wm.activate(0);
+        assert_eq!(settle(&told, 3, 2000), 3, "watching again");
+        drop(p);
+    }
+
+    /// The probe thread ends when the probe is dropped, even while it
+    /// listens (it sleeps in `poll`, not on a timer).
+    #[test]
+    fn dropping_a_watched_probe_ends_its_thread() {
+        let Some(x) = Xvfb::start() else { return };
+        let _wm = Wm::start(&x.1, &["code"]);
+        let mut p = X11Focus::on(&x.1);
+        p.watch(Some(Box::new(|| {})));
+        let _ = p.focus();
+        let requests = p.worker.as_ref().unwrap().requests.clone();
+        drop(p);
+        let until = Instant::now() + Duration::from_secs(2);
+        // The thread holds the receiver: sending fails once it ended.
+        while requests.send(Msg::Watch(None)).is_ok() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(requests.send(Msg::Watch(None)).is_err(), "the probe thread still runs");
     }
 
     /// Reads the session manager's idea of whether idle is inhibited: true

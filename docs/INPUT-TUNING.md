@@ -69,10 +69,11 @@ with `scope = { os = "mac" }` and `app = "com.microsoft.VSCode"`.
 ```
 controller (rules)                              controlled computer (focus probe)
 visit starts, rules name apps ──WatchFocus{app}──► looks at the focus now,
-                                                   then FOCUS_SETTLE after a click or a
-                                                   window-switching chord from the controller,
-                                                   and when Windows says another window came
-                                                   to the front (no timer)
+                                                   then FOCUS_SETTLE after a click, a
+                                                   window-switching chord, Enter, Tab, Esc or
+                                                   the logo key let go from the controller,
+                                                   and when the OS says another window came
+                                                   to the front (Windows, X11, macOS; no timer)
 re-resolve the rules, ◄──Focus{apps}────────────── only when the names change
 Mapper::set_keymap (as a reload)
 ```
@@ -83,8 +84,8 @@ Mapper::set_keymap (as a reload)
   | target | names reported | how | status |
   |---|---|---|---|
   | Windows | program file (`chrome.exe`) and window class | `GetForegroundWindow`, `QueryFullProcessImageNameW`, `GetClassNameW`; `EVENT_SYSTEM_FOREGROUND` hook says when it changes | compile-checked; unit-tested logic |
-  | macOS | bundle id (`com.apple.Terminal`) and app name (`Terminal`) | Accessibility `AXFocusedApplication` → pid → `NSRunningApplication` (`NSWorkspace.frontmostApplication` goes stale in a process without an AppKit run loop) | compile-checked only |
-  | Linux, X11 and XWayland windows | both parts of `WM_CLASS` (`code`, `Code`) | `_NET_ACTIVE_WINDOW` on a worker thread | runs on X11 |
+  | macOS | bundle id (`com.apple.Terminal`) and app name (`Terminal`) | Accessibility `AXFocusedApplication` → pid → `NSRunningApplication` (`NSWorkspace.frontmostApplication` goes stale in a process without an AppKit run loop); an `AXObserver` for `AXApplicationDeactivated` on the focused app, on a run-loop thread of its own, says when it changes (each probe moves it to the app found) | compile-checked only |
+  | Linux, X11 and XWayland windows | both parts of `WM_CLASS` (`code`, `Code`) | `_NET_ACTIVE_WINDOW` on a worker thread; the same thread and connection select `PropertyNotify` on the root window while watched and say when `_NET_ACTIVE_WINDOW` changes (50 ms debounce) | runs on X11; tested against a private Xvfb |
   | Linux, Wayland-native windows | nothing | GNOME and KDE don't tell a background program which Wayland window has the focus (no protocol for it) | unknown: the rules for apps don't apply |
 
 * **Matching**: case-insensitive; `.exe`/`.app` may be left off (`chrome`
@@ -123,9 +124,21 @@ Mapper::set_keymap (as a reload)
   computer name an app; the names go only to the computer controlling this
   one, only while it asks, and are logged at debug level at most. Watching
   for apps alone sends no fullscreen repeats, and nothing polls: the focus
-  is looked at only after input that may move it (and on Windows when the
-  foreground changes). So keys typed in the first ~100 ms after a click
-  that changed the app still use the previous app's rules.
+  is looked at after input that may move it and when the OS says it
+  moved. Input that may move it: a click; a chord with Ctrl, Alt or the
+  logo key; Alt or the logo key let go; F11, Esc; and, only while rules
+  for apps watch that computer, Enter and Tab (launchers, docks and
+  switchers change apps with them; not Space or letters, so typing costs
+  nothing). The OS says it moved on Windows (`EVENT_SYSTEM_FOREGROUND`),
+  for X11 and XWayland windows (`PropertyNotify` on the root window for
+  `_NET_ACTIVE_WINDOW`, selected only while watched, on the probe's own
+  thread and connection: it never connects to, or starts, XWayland for
+  this, and lets go once no X11 window has the focus), and on macOS (an
+  Accessibility observer, only while watched). A focus change between two
+  Wayland-native windows with no such input stays unseen until the next
+  one. Keys typed in the first ~100 ms after a change still use the
+  previous app's rules (`app::tests::tuning::per_app_rules_follow_a_switch_made_with_enter`,
+  `..._with_no_input`, `system::linux::tests::watch_says_when_the_active_window_changes`).
 
 ### Local keyboard scope: groundwork only (4C incomplete)
 

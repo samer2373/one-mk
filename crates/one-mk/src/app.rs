@@ -79,8 +79,9 @@ const MAX_PENDING_PER_PEER: usize = 4;
 const MAX_COALESCE: usize = 256;
 
 /// After input from the controller that may move the focus (a click, a
-/// window-switching chord), the focus is looked at again this much later,
-/// once the system has acted on it (gaming mode `auto`).
+/// window-switching chord), or the OS saying it moved, the focus is looked
+/// at again this much later, once the system has acted on it (gaming mode
+/// `auto`, per-app rules).
 const FOCUS_SETTLE: Duration = Duration::from_millis(100);
 
 /// evdev codes for the emergency "bring my pointer home" shortcut:
@@ -177,7 +178,8 @@ enum AppEvent {
     /// layout profile switches by itself).
     Network(NetworkId),
     /// Another window came to the front (only watched while a controller
-    /// asks what has the focus, and where the OS says so: Windows).
+    /// asks what has the focus, and where the OS says so: Windows, X11
+    /// windows, macOS).
     FocusMoved,
 }
 
@@ -1457,8 +1459,10 @@ impl App {
     /// Tells the owner whether a fullscreen window has the focus here (for
     /// its gaming mode `auto`), if it asked. Looked at when it starts
     /// watching, and `FOCUS_SETTLE` after input from it that may move the
-    /// focus (a click, a window-switching chord: see `may_move_focus`),
-    /// once the system has acted on it; said when it changed. While
+    /// focus (a click, a window-switching chord, and for per-app rules
+    /// Enter and Tab: see `may_move_focus`), once the system has acted on
+    /// it, or after the OS said another window came to the front (see
+    /// `sync_focus_watch`); said when it changed. While
     /// fullscreen, it is looked at and said again every `FOCUS_REPEAT`:
     /// the focus can also move with no input (a game minimizing itself),
     /// and the owner leaves relative mode if it hears nothing. When this
@@ -1759,7 +1763,7 @@ impl App {
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id) {
                     let moves = match input {
                         Control::Button { down, .. } => down,
-                        Control::Key { code, down } => may_move_focus(code, down, &o.held),
+                        Control::Key { code, down } => may_move_focus(code, down, &o.held, o.watch_app),
                         _ => false,
                     };
                     o.input(input, &self.inject);
@@ -2525,8 +2529,16 @@ fn no_overlap(name: &str, side: Side) -> String {
 /// Win+Up), Alt or the logo key let go (Alt+Tab switches then; the logo
 /// key opens the start menu), F11 or Esc. `held` is what the controller
 /// held before this key. Not plain typing, so a game's WASD costs nothing.
-fn may_move_focus(code: u32, down: bool, held: &HeldKeys) -> bool {
+///
+/// With `app` (the controller has rules for apps here), also Enter and
+/// Tab, which launch or switch apps without a chord (a launcher, a dock,
+/// a switcher): where the OS doesn't say when the focus moves (a
+/// Wayland-native window), this is the only way the rules notice. Not
+/// Space, which is typing.
+fn may_move_focus(code: u32, down: bool, held: &HeldKeys, app: bool) -> bool {
     const ESC: u32 = 1;
+    const TAB: u32 = 15;
+    const ENTER: [u32; 2] = [28, 96];
     const F11: u32 = 87;
     const ALTS: [u32; 2] = [56, 100];
     const LOGO: [u32; 2] = [125, 126];
@@ -2534,7 +2546,7 @@ fn may_move_focus(code: u32, down: bool, held: &HeldKeys) -> bool {
         return ALTS.contains(&code) || LOGO.contains(&code);
     }
     let chord = [CTRL, ALT, [LOGO[0], LOGO[1]]].iter().flatten().any(|&m| held.is_held(m));
-    (chord && !Mods::is_modifier(code)) || code == F11 || code == ESC
+    (chord && !Mods::is_modifier(code)) || code == F11 || code == ESC || (app && (code == TAB || ENTER.contains(&code)))
 }
 
 /// Whether to send relative motion (gaming mode) to a peer that supports
@@ -4455,19 +4467,30 @@ mod tests {
     #[test]
     fn keys_that_may_move_the_focus() {
         let mut held = HeldKeys::new();
-        assert!(!may_move_focus(17, true, &held), "plain typing (W)");
-        assert!(may_move_focus(87, true, &held), "F11");
-        assert!(may_move_focus(1, true, &held), "Esc");
+        assert!(!may_move_focus(17, true, &held, false), "plain typing (W)");
+        assert!(may_move_focus(87, true, &held, false), "F11");
+        assert!(may_move_focus(1, true, &held, false), "Esc");
         held.update(56, true);
-        assert!(may_move_focus(15, true, &held), "Alt+Tab");
-        assert!(may_move_focus(28, true, &held), "Alt+Enter");
-        assert!(!may_move_focus(42, true, &held), "Alt then Shift: not yet");
-        assert!(may_move_focus(56, false, &held), "Alt let go: the switch happens");
+        assert!(may_move_focus(15, true, &held, false), "Alt+Tab");
+        assert!(may_move_focus(28, true, &held, false), "Alt+Enter");
+        assert!(!may_move_focus(42, true, &held, false), "Alt then Shift: not yet");
+        assert!(may_move_focus(56, false, &held, false), "Alt let go: the switch happens");
         let mut logo = HeldKeys::new();
         logo.update(125, true);
-        assert!(may_move_focus(103, true, &logo), "Win+Up");
-        assert!(may_move_focus(125, false, &logo), "the start menu");
-        assert!(!may_move_focus(42, false, &HeldKeys::new()), "Shift let go");
+        assert!(may_move_focus(103, true, &logo, false), "Win+Up");
+        assert!(may_move_focus(125, false, &logo, false), "the start menu");
+        assert!(!may_move_focus(42, false, &HeldKeys::new(), false), "Shift let go");
+        // Watching for apps: Enter and Tab too (launchers, switchers), not
+        // Space or letters; without it, a game's Enter costs nothing.
+        let none = HeldKeys::new();
+        for (code, what) in [(28, "Enter"), (96, "keypad Enter"), (15, "Tab")] {
+            assert!(may_move_focus(code, true, &none, true), "{what}");
+            assert!(!may_move_focus(code, true, &none, false), "{what} without app rules");
+            assert!(!may_move_focus(code, false, &none, true), "{what} let go");
+        }
+        assert!(!may_move_focus(57, true, &none, true), "Space");
+        assert!(!may_move_focus(30, true, &none, true), "A");
+        assert!(may_move_focus(125, false, &none, true), "the logo key let go");
     }
 
     #[test]

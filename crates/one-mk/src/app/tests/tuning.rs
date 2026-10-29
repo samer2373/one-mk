@@ -357,3 +357,59 @@ async fn the_focused_app_goes_only_to_a_controller_that_asks() {
     assert!(tokio::time::timeout(FOCUS_SETTLE * 5, next_focus(&mut c)).await.is_err(), "B said nothing more");
     duo.stop().await;
 }
+
+/// An app launched or switched to with a plain key (Enter on a launcher,
+/// Tab in a switcher) has B look at its focus again, with no click and no
+/// chord: the editor's rules don't stay on in the browser. Plain typing
+/// costs nothing.
+#[tokio::test]
+async fn per_app_rules_follow_a_switch_made_with_enter() {
+    let mut duo = Duo::start("tune-app-enter", None).await;
+    set(&duo.da, |s| s.input.pointer = vec![PointerRule { speed: Some(2.0), app: Some("code".into()), ..Default::default() }]).await;
+    focus_b(&duo, Some(&["code"]));
+    duo.enter_b().await;
+    duo.ha.events.send(Event::Motion { dx: 100.0, dy: 0.0 }).unwrap(); // away from the edge
+    next_pos(&mut duo).await;
+    until_speed(&mut duo, 2.0).await;
+    let counter = duo.hb.focus_probes.clone();
+    let probes = || counter.load(std::sync::atomic::Ordering::SeqCst);
+    let before = probes();
+    press(&duo, &[(H, true), (H, false), (C, true), (C, false)]);
+    assert_eq!(next_n(&mut duo, 4).await.len(), 4);
+    tokio::time::sleep(FOCUS_SETTLE * 3).await;
+    assert_eq!(probes(), before, "typing costs nothing");
+    // Enter launches the browser.
+    focus_b(&duo, Some(&["firefox"]));
+    press(&duo, &[(28, true), (28, false)]);
+    assert_eq!(next_n(&mut duo, 2).await, [key(28, true), key(28, false)]);
+    until_speed(&mut duo, 1.0).await;
+    // Tab in a switcher (no modifier) goes back to the editor.
+    focus_b(&duo, Some(&["code"]));
+    press(&duo, &[(15, true), (15, false)]);
+    assert_eq!(next_n(&mut duo, 2).await, [key(15, true), key(15, false)]);
+    until_speed(&mut duo, 2.0).await;
+    duo.stop().await;
+}
+
+/// The focus moves on B with no input at all (an app opens a window by
+/// itself): B's probe says so (on X11 and macOS, as on Windows) and A's
+/// rules follow.
+#[tokio::test]
+async fn per_app_rules_follow_a_switch_with_no_input() {
+    let mut duo = Duo::start("tune-app-notify", None).await;
+    set(&duo.da, |s| s.input.pointer = vec![PointerRule { speed: Some(2.0), app: Some("code".into()), ..Default::default() }]).await;
+    focus_b(&duo, Some(&["code"]));
+    duo.enter_b().await;
+    duo.ha.events.send(Event::Motion { dx: 100.0, dy: 0.0 }).unwrap();
+    next_pos(&mut duo).await;
+    until_speed(&mut duo, 2.0).await;
+    eventually("B listens for focus changes", || duo.hb.focus_notify.lock().unwrap().is_some()).await;
+    focus_b(&duo, Some(&["firefox"]));
+    (duo.hb.focus_notify.lock().unwrap().as_ref().unwrap())();
+    until_speed(&mut duo, 1.0).await;
+    // Leaving B: B stops listening.
+    duo.ha.events.send(Event::Motion { dx: -500.0, dy: 0.0 }).unwrap();
+    assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { pos: Some(_), .. }), "home");
+    eventually("B stopped listening", || duo.hb.focus_notify.lock().unwrap().is_none()).await;
+    duo.stop().await;
+}

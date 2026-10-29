@@ -7,12 +7,14 @@
 //! Noticing that the screen locked is the input backends' job (they already
 //! watch the session) and arrives as `Event::ScreenLocked`.
 //!
-//! Gaming mode `auto` looks at the focus again shortly after input that may
-//! move it, and every few seconds while a fullscreen window has it. Windows
-//! also says when another window comes to the front ([`FocusProbe::watch`]).
-//! Linux has no such signal for X11 focus short of an X event loop; macOS
-//! would need an AppKit run loop for `NSWorkspace` activation
-//! notifications, so both are looked at again after input only.
+//! Gaming mode `auto` and per-app rules look at the focus again shortly
+//! after input that may move it, and every few seconds while a fullscreen
+//! window has it. While a controller watches, the probe also says when
+//! another window comes to the front ([`FocusProbe::watch`]): Windows
+//! (`EVENT_SYSTEM_FOREGROUND`), X11 and XWayland (`_NET_ACTIVE_WINDOW`
+//! changing on the root window) and macOS (an Accessibility observer on
+//! the focused app). A Wayland-native window's focus is unknowable, so
+//! there input is all there is.
 //!
 //! | | focused window | its app's names ([`Focus::apps`]) | lock | lock noticed |
 //! |---|---|---|---|---|
@@ -50,9 +52,11 @@ pub trait FocusProbe: Send {
 
     /// Calls `notify` (from another thread) whenever another window comes
     /// to the front, until called with `None`. Only where the OS says so
-    /// without polling: Windows (`EVENT_SYSTEM_FOREGROUND`); elsewhere
-    /// nothing, and the caller looks again after input and every few
-    /// seconds.
+    /// without polling: Windows (`EVENT_SYSTEM_FOREGROUND`), X11 windows
+    /// (`PropertyNotify` for `_NET_ACTIVE_WINDOW`; on Wayland only while
+    /// XWayland runs and one of its windows has the focus), macOS (an
+    /// `AXApplicationDeactivated` observer); elsewhere nothing, and the
+    /// caller looks again after input.
     fn watch(&mut self, _notify: Option<Box<dyn Fn() + Send>>) {}
 }
 
@@ -133,7 +137,7 @@ pub(crate) fn native(events: &mpsc::UnboundedSender<Event>) -> (Box<dyn FocusPro
     #[cfg(target_os = "macos")]
     {
         let _ = events;
-        (Box::new(macos::Frontmost), Box::new(macos::Suspend))
+        (Box::new(macos::Frontmost::default()), Box::new(macos::Suspend))
     }
     #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
