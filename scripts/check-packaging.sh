@@ -74,6 +74,9 @@ OUT_DIR=$scratch/c APPIMAGETOOL= sh "$ROOT/scripts/package-appimage.sh" >/dev/nu
 got=$("$scratch/c/one-mk.AppDir/AppRun" --version) && [ "$got" = "one-mk $VERSION" ] && ok "AppDir: AppRun --version: $got" || bad "AppDir AppRun --version"
 [ -f "$scratch/c/one-mk.AppDir/one-mk.desktop" ] && [ -f "$scratch/c/one-mk.AppDir/one-mk.png" ] && [ -L "$scratch/c/one-mk.AppDir/.DirIcon" ] && ok "AppDir has desktop file and icons at the top" || bad "AppDir top level"
 
+# The Windows installer's PATH and startup logic (the installer itself cannot run here).
+check "Windows installer PATH and startup logic" sh "$ROOT/scripts/check-windows-path.sh"
+
 # The Flatpak source bundle: built here, unpacked somewhere else, and every
 # path in the manifest must resolve there and match its checksum.
 OUT_DIR=$scratch/t sh "$ROOT/scripts/package-tarball.sh" >/dev/null
