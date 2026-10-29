@@ -1039,7 +1039,9 @@ pub fn evdev_of(key: egui::Key) -> Option<u16> {
     Some(match key {
         K::Escape => 1,
         K::Minus => 12,
-        K::Equals | K::Plus => 13,
+        K::Equals => 13,
+        // Only the keypad's + key is reported as Plus.
+        K::Plus => 78,
         K::Backspace => 14,
         K::Tab => 15,
         K::OpenBracket | K::OpenCurlyBracket => 26,
@@ -1359,8 +1361,7 @@ pub fn button_default(n: u32) -> &'static str {
         1 => "Left click",
         2 => "Right click",
         3 => "Middle click",
-        4 => "Its own button (often Back)",
-        _ => "Its own button (often Forward)",
+        _ => "Its own button",
     }
 }
 
@@ -1393,6 +1394,8 @@ pub fn button_text(o: &Output) -> String {
     }
     match o {
         Output::Action(a) => title(&action_text(a)),
+        Output::Nav(Nav::Back) => "Go back".into(),
+        Output::Nav(Nav::Forward) => "Go forward".into(),
         Output::None => "Nothing".into(),
         Output::Chord(_) | Output::Sequence(_) => title(&out_text(o)),
         _ => out_text(o),
@@ -1858,7 +1861,7 @@ os = "mac"
         assert_eq!(scroll_shown(&i, &linux, Some(Device::Wheel)).mode, "discrete");
         assert_eq!(scroll_shown(&i, &linux, Some(Device::Touchpad)).mode, "auto", "wheels only");
         let b = buttons_shown(&i, &all);
-        assert_eq!(b[3], (4, "Back (browser)".to_owned(), true));
+        assert_eq!(b[3], (4, "Go back".to_owned(), true));
         assert_eq!(b[2], (3, "Middle click".to_owned(), false));
         assert_eq!(buttons_shown(&i, &Facts::of(&Scope::Os(os::MACOS), &[]))[2].1, "Locks every screen");
         assert_eq!(button_text(&"button2".parse().unwrap()), "Right click");
@@ -1889,7 +1892,7 @@ os = "mac"
     #[test]
     fn egui_keys_become_evdev_codes() {
         use egui::Key as K;
-        for (k, code) in [(K::A, 30), (K::Q, 16), (K::M, 50), (K::Num1, 2), (K::Num0, 11), (K::F1, 59), (K::F12, 88), (K::F13, 183), (K::F24, 194), (K::Escape, 1), (K::CapsLock, 58), (K::ControlLeft, 29), (K::ControlRight, 97), (K::AltRight, 100), (K::SuperLeft, 125), (K::ShiftRight, 54), (K::IntlBackslash, 86), (K::Menu, 127), (K::ArrowUp, 103), (K::MediaPlayPause, 164), (K::Backtick, 41), (K::Quote, 40)] {
+        for (k, code) in [(K::A, 30), (K::Q, 16), (K::M, 50), (K::Num1, 2), (K::Num0, 11), (K::F1, 59), (K::F12, 88), (K::F13, 183), (K::F24, 194), (K::Escape, 1), (K::CapsLock, 58), (K::ControlLeft, 29), (K::ControlRight, 97), (K::AltRight, 100), (K::SuperLeft, 125), (K::ShiftRight, 54), (K::IntlBackslash, 86), (K::Menu, 127), (K::ArrowUp, 103), (K::MediaPlayPause, 164), (K::Backtick, 41), (K::Quote, 40), (K::Plus, 78), (K::Equals, 13)] {
             assert_eq!(evdev_of(k), Some(code), "{k:?}");
         }
         // Every key egui has a name for and that has a code here, round trip.

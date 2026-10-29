@@ -2123,7 +2123,7 @@ mod debug {
         if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
             app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("one-mk didn't answer within 3 seconds".into()), now);
         }
-        if ready && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
+        if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
             ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
             if let Some(id) = app.selected_id() {
                 let target = match app.tab {

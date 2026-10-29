@@ -652,7 +652,7 @@ impl App {
         let lh = if self.keys.selected.is_some() { self.key_editor(ui, left, col_w, &input, &facts) } else { self.rules_card(ui, left, col_w, &input) };
         if std::mem::take(&mut self.keys.reveal) {
             // Its title and first choices, at least, in view.
-            ui.scroll_to_rect(Rect::from_min_size(left, vec2(col_w, lh.min(190.0))), None);
+            ui.scroll_to_rect(Rect::from_min_size(left, vec2(col_w, lh.min(130.0))), None);
         }
         let test_at = if two { pos2(all.left() + col_w + GAP, ly) } else { pos2(all.left(), ly + lh + GAP) };
         let th = self.test_card(ui, test_at, col_w, now);
@@ -1136,7 +1136,7 @@ impl App {
             para(ui, pos2(r.left() + 12.0, r.top() + 10.0), r.width() - 24.0, &format!("These rules can't be tried: {e}"), regular(T_META), INK);
         } else if empty {
             let hint = if focused { "Type now: try the keys you changed. Tab leaves." } else { "Click here, then type" };
-            p.text(r.center(), Align2::CENTER_CENTER, hint, regular(T_BODY), if focused { INK2 } else { OFF });
+            p.text(r.center(), Align2::CENTER_CENTER, hint, regular(T_BODY), INK2);
         } else if let Some((t, ..)) = &self.keys.tester {
             for (k, (label, log)) in [("You press", &t.pressed), ("They get", &t.sent)].into_iter().enumerate() {
                 let ly = r.top() + 22.0 + 34.0 * k as f32;
@@ -1398,7 +1398,7 @@ impl App {
         ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
         let lw = text_width(ui, label, regular(T_BODY)) + 16.0;
         let track = Rect::from_min_max(pos2(row.left() + lw, row.center().y - 14.0), pos2(row.right(), row.center().y + 14.0));
-        let labels = ["As this computer", "Off", "Curve"];
+        let labels = ["Like here", "Off", "Curve"];
         let values = ["system", "off", "curve"];
         let can = tune::RAW_MOTION;
         let pills = Pills {
@@ -1443,13 +1443,14 @@ impl App {
             let n = labels.len();
             Pills { id: Id::unique(id), track, cells: Pills::even(track, n, 2.0), labels, names, chosen, enabled: vec![true; n], role: Role::RadioButton, font: T_META, radius: 6 }.show(ui, app.arrowed)
         };
-        let devs = ["Both", "Mouse wheel", "Touchpad"];
+        let devs = ["Both", "Wheel", "Touchpad"];
         let chosen = Some(match dev {
             None => 0,
             Some(Device::Wheel) => 1,
             Some(Device::Touchpad) => 2,
         });
-        if let Some(k) = seg(ui, self, row(y), "scroll-device", "Settings for", &devs, devs.iter().map(|d| format!("Scroll settings for: {d}")).collect(), chosen) {
+        let names = vec!["Scroll settings for: mouse wheels and touchpads".into(), "Scroll settings for: mouse wheels".into(), "Scroll settings for: touchpads".into()];
+        if let Some(k) = seg(ui, self, row(y), "scroll-device", "Settings for", &devs, names, chosen) {
             self.keys.device = [None, Some(Device::Wheel), Some(Device::Touchpad)][k];
         }
         y += ROW + 4.0;
