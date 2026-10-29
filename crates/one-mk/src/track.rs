@@ -150,10 +150,38 @@ impl Transfers {
     }
 
     /// A file of `size` bytes is being offered by `peer`.
+    #[cfg(test)]
     pub fn begin(self: &Arc<Self>, fp: Fingerprint, peer: &str, batch: Batch, size: u64) -> FileTicket {
+        self.begin_inner(fp, peer, batch, size, false).unwrap()
+    }
+
+    pub fn try_begin(self: &Arc<Self>, fp: Fingerprint, peer: &str, batch: Batch, size: u64) -> Result<FileTicket, &'static str> {
+        self.begin_inner(fp, peer, batch, size, true)
+    }
+
+    fn begin_inner(self: &Arc<Self>, fp: Fingerprint, peer: &str, batch: Batch, size: u64, validate: bool) -> Result<FileTicket, &'static str> {
         let key = (fp, batch.id);
         let now = Instant::now();
         let mut s = self.state();
+        if validate {
+            const MAX_FILES: u32 = 10_000;
+            const MAX_BYTES: u64 = 1 << 40;
+            if size > MAX_BYTES || batch.bytes > MAX_BYTES || batch.files > MAX_FILES {
+                return Err("file batch exceeds the limit of 10000 files or 1 TiB");
+            }
+            if let Some(rx) = s.rx.get(&key) {
+                if batch.files != rx.expect_files || batch.bytes != rx.expect_bytes {
+                    return Err("file batch metadata changed during transfer");
+                }
+                if rx.offered_files >= MAX_FILES || rx.offered_bytes.saturating_add(size) > MAX_BYTES
+                    || (batch.files > 0 && rx.offered_files >= batch.files)
+                    || (batch.bytes > 0 && rx.offered_bytes.saturating_add(size) > batch.bytes) {
+                    return Err("file offers exceed the batch count or size");
+                }
+            } else if batch.bytes > 0 && size > batch.bytes {
+                return Err("file size exceeds the declared batch size");
+            }
+        }
         let rx = s.rx.entry(key).or_insert_with(|| Rx {
             peer: peer.to_owned(),
             expect_files: batch.files,
@@ -169,12 +197,12 @@ impl Transfers {
             rate: Rate::new(now),
             generation: 0,
         });
-        rx.offered_files += 1;
-        rx.offered_bytes += size;
-        rx.active += 1;
-        rx.generation += 1;
+        rx.offered_files = rx.offered_files.saturating_add(1);
+        rx.offered_bytes = rx.offered_bytes.saturating_add(size);
+        rx.active = rx.active.saturating_add(1);
+        rx.generation = rx.generation.wrapping_add(1);
         drop(s);
-        FileTicket { owner: self.clone(), key, size, credited: 0, settled: false }
+        Ok(FileTicket { owner: self.clone(), key, size, credited: 0, settled: false })
     }
 
     /// Called when a file has ended: saved as `name`, or not (`None`).
@@ -182,13 +210,13 @@ impl Transfers {
         let mut s = self.state();
         let Some(rx) = s.rx.get_mut(&key) else { return };
         rx.active = rx.active.saturating_sub(1);
-        rx.settled += 1;
-        rx.generation += 1;
+        rx.settled = rx.settled.saturating_add(1);
+        rx.generation = rx.generation.wrapping_add(1);
         if let Some(name) = saved {
             // A file that arrived whole is all done, however its bytes were counted.
-            rx.done += size.saturating_sub(credited);
+            rx.done = rx.done.saturating_add(size.saturating_sub(credited));
             rx.saved.push(name);
-            rx.saved_bytes += size;
+            rx.saved_bytes = rx.saved_bytes.saturating_add(size);
         }
         if rx.complete() {
             let rx = s.rx.remove(&key).expect("just found");
@@ -282,9 +310,9 @@ impl FileTicket {
         self.credited += n;
         let now = Instant::now();
         if let Some(rx) = self.owner.state().rx.get_mut(&self.key) {
-            rx.done += n;
+            rx.done = rx.done.saturating_add(n);
             if over_network {
-                rx.moved += n;
+                rx.moved = rx.moved.saturating_add(n);
                 let moved = rx.moved;
                 rx.rate.update(now, moved);
             }
@@ -309,6 +337,49 @@ impl Drop for FileTicket {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn hostile_offer_totals_never_overflow() {
+        let (transfers, _) = setup();
+        let batch = batch(900, u32::MAX, u64::MAX);
+        let first = transfers.begin(FP, "peer", batch, u64::MAX);
+        let second = transfers.begin(FP, "peer", batch, 1);
+        assert_eq!(transfers.state().rx[&(FP, batch.id)].offered_bytes, u64::MAX);
+        drop((first, second));
+    }
+
+    #[tokio::test]
+    async fn hostile_batches_are_refused_before_progress_accounting() {
+        let (transfers, _) = setup();
+        for files in [0, 1, 10_000, 10_001, u32::MAX] {
+            for bytes in [0, 1, 1 << 40, (1 << 40) + 1, u64::MAX] {
+                for size in [0, 1, 1 << 40, u64::MAX] {
+                    let rejected = files > 10_000 || bytes > 1 << 40 || size > 1 << 40 || (bytes > 0 && size > bytes);
+                    let result = transfers.try_begin(FP, "peer", batch(901, files, bytes), size);
+                    assert_eq!(result.is_err(), rejected, "{files} {bytes} {size}");
+                    if rejected { assert!(transfers.snapshot().is_empty()); }
+                    transfers.state().rx.clear();
+                    drop(result);
+                }
+            }
+        }
+        let first = transfers.try_begin(FP, "peer", batch(902, 2, 10), 8).unwrap();
+        assert!(transfers.try_begin(FP, "peer", batch(902, 2, 10), 3).is_err());
+        assert!(transfers.try_begin(FP, "peer", batch(902, 3, 10), 1).is_err());
+        drop(first);
+    }
+
+    #[tokio::test]
+    async fn undeclared_batches_cannot_accumulate_unlimited_offers() {
+        let (transfers, _) = setup();
+        let mut tickets = Vec::new();
+        for _ in 0..10_000 {
+            tickets.push(transfers.try_begin(FP, "peer", Batch::default(), 0).unwrap());
+        }
+        assert!(transfers.try_begin(FP, "peer", Batch::default(), 0).is_err());
+        assert_eq!(transfers.state().rx[&(FP, 0)].offered_files, 10_000);
+        drop(tickets);
+    }
 
     /// Records what would have been shown.
     #[derive(Default)]
