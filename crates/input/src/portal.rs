@@ -83,7 +83,7 @@ pub(crate) async fn open(state_dir: PathBuf) -> Result<Backend> {
     tokio::spawn(watch_power(sys_rx, ev_tx.clone(), power_tx));
     let env = Env { bus: None, unit: Duration::from_secs(1), power };
     let (capture, inject) = start(env, ev_tx, state_dir)?;
-    Ok(Backend { events: ev_rx, capture, inject, focus, locker })
+    Ok(Backend { name: "portal", events: ev_rx, capture, inject, focus, locker })
 }
 
 type Channels = (mpsc::UnboundedSender<CaptureCmd>, mpsc::UnboundedSender<Inject>);

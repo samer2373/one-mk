@@ -35,11 +35,11 @@
 
 use crate::common_logic::{Backoff, drain_coalesced};
 use crate::linux_logic::{
-    AxisFrame, EdgePush, Held, Notches, OutputGeometry, Pressed, absolute_motion, pushes_out, wlr_missing,
+    AxisFrame, EdgePush, Held, Notches, OutputGeometry, Pressed, absolute_motion, layer_strips, pushes_out, wlr_missing,
 };
 use crate::linux_rt::{Socket, forward_lock, lock_changed, spawn_thread};
 use crate::xkb::{KeyboardMods, Modifiers};
-use crate::{Backend, CaptureCmd, Event, Inject};
+use crate::{Armed, Backend, CaptureCmd, Event, Inject};
 use anyhow::{Context, Result, anyhow, bail};
 use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
@@ -87,7 +87,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let (cap_tx, cap_rx) = mpsc::unbounded_channel();
     let (inj_tx, inj_rx) = mpsc::unbounded_channel();
     spawn_thread("one-mk-wlroots", move || run(first, ev_tx, cap_rx, inj_rx, locked))?;
-    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { name: "wlroots", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 /// The compositor's global interface names, for choosing a backend.
@@ -163,7 +163,7 @@ async fn run(
             tokio::select! {
                 _ = &mut sleep => break,
                 cmd = cmds.recv() => match cmd {
-                    Some(CaptureCmd::SetSides(s)) => keep.sides = s.iter().map(|a| a.side).collect(),
+                    Some(CaptureCmd::SetSides(s)) => keep.sides = s,
                     Some(CaptureCmd::Activate { .. }) => { let _ = tx.send(Event::Error(NO_CAPTURE.into())); }
                     Some(CaptureCmd::Release { .. }) => {}
                     None => return,
@@ -177,7 +177,7 @@ async fn run(
 
 /// What outlives one connection.
 struct Keep {
-    sides: Vec<Side>,
+    sides: Vec<Armed>,
     next_id: u32,
     locked: bool,
     reported: Option<Desktop>,
@@ -246,6 +246,7 @@ struct Layer {
     role: Role,
     /// The output's registry name.
     output: u32,
+    edge_rect: Option<Rect>,
     surface: wl_surface::WlSurface,
     layer: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
     viewport: Option<wp_viewport::WpViewport>,
@@ -394,7 +395,7 @@ impl State {
                     drop(guard);
                     match cmd {
                         Some(CaptureCmd::SetSides(sides)) => {
-                            self.keep.sides = sides.iter().map(|a| a.side).collect();
+                            self.keep.sides = sides;
                             self.set_edges();
                         }
                         Some(CaptureCmd::Release { id, pos }) => {
@@ -492,18 +493,21 @@ impl State {
         old.into_iter().for_each(Layer::destroy);
         self.edge.leave();
         let Some(desktop) = self.desktop.clone() else { return };
-        for side in self.keep.sides.clone() {
-            for r in desktop.outer_edges(side) {
-                let Some(o) = self.outputs.iter().find(|o| o.geometry.rect() == Some(*r)) else { continue };
-                let (anchor, size) = match side {
-                    Side::Left => (Anchor::Left | Anchor::Top | Anchor::Bottom, (1, 0)),
-                    Side::Right => (Anchor::Right | Anchor::Top | Anchor::Bottom, (1, 0)),
-                    Side::Top => (Anchor::Top | Anchor::Left | Anchor::Right, (0, 1)),
-                    Side::Bottom => (Anchor::Bottom | Anchor::Left | Anchor::Right, (0, 1)),
-                };
-                let (name, wl) = (o.name, o.wl.clone());
-                self.add_layer(Role::Edge(side), name, &wl, anchor, size, KeyboardInteractivity::None);
-            }
+        for (side, output, strip) in layer_strips(&self.keep.sides, &desktop) {
+            let Some(o) = self.outputs.iter().find(|o| o.geometry.rect() == Some(output)) else { continue };
+            let (anchor, size) = match side {
+                Side::Left => (Anchor::Left | Anchor::Top, (1, strip.h as u32)),
+                Side::Right => (Anchor::Right | Anchor::Top, (1, strip.h as u32)),
+                Side::Top => (Anchor::Top | Anchor::Left, (strip.w as u32, 1)),
+                Side::Bottom => (Anchor::Bottom | Anchor::Left, (strip.w as u32, 1)),
+            };
+            let (name, wl) = (o.name, o.wl.clone());
+            self.add_layer(Role::Edge(side), name, &wl, anchor, size, KeyboardInteractivity::None);
+            let layer = self.layers.last_mut().expect("added edge");
+            layer.edge_rect = Some(strip);
+            let (top, left) = if side.along_x() { (0, strip.x - output.x) } else { (strip.y - output.y, 0) };
+            layer.layer.set_margin(top, 0, 0, left);
+            layer.surface.commit();
         }
     }
 
@@ -534,7 +538,7 @@ impl State {
         layer.set_keyboard_interactivity(keyboard);
         surface.commit();
         let viewport = self.s.viewporter.as_ref().map(|v| v.get_viewport(&surface, &qh, ()));
-        self.layers.push(Layer { id, role, output, surface, layer, viewport, buffer: None });
+        self.layers.push(Layer { id, role, output, edge_rect: None, surface, layer, viewport, buffer: None });
     }
 
     fn configure(&mut self, id: u32, serial: u32, w: u32, h: u32) {
@@ -567,14 +571,10 @@ impl State {
     }
 
     /// Where surface-local `(sx, sy)` on an edge surface is on the desktop.
-    fn edge_pos(&self, l: &Layer, side: Side, sx: f64, sy: f64) -> Option<Pos> {
-        let r = self.output_rect(l.output)?;
-        let (x, y) = match side {
-            Side::Left | Side::Top => (f64::from(r.x), f64::from(r.y)),
-            Side::Right => (f64::from(r.right() - 1), f64::from(r.y)),
-            Side::Bottom => (f64::from(r.x), f64::from(r.bottom() - 1)),
-        };
-        Some(Pos::new(x + sx, y + sy))
+    fn edge_pos(&self, l: &Layer, _side: Side, sx: f64, sy: f64) -> Option<Pos> {
+        let strip = l.edge_rect?;
+        let pos = Pos::new(f64::from(strip.x) + sx, f64::from(strip.y) + sy);
+        self.output_rect(l.output)?.contains(pos).then_some(pos)
     }
 
     fn activate_cmd(&mut self, side: Side) {
@@ -878,7 +878,9 @@ impl State {
         }
         if let Some((side, at)) = self.edge.push(dx, dy) {
             debug_assert!(pushes_out(side, dx, dy));
-            self.activate(side, at);
+            if self.keep.sides.iter().any(|edge| edge.side == side && edge.covers(at)) {
+                self.activate(side, at);
+            }
         }
     }
 

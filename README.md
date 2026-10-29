@@ -74,9 +74,14 @@ one-mk layout "laptop" bottom --offset center
 
 On Linux one-mk picks the backend by itself: on Wayland the desktop
 portals where the desktop has them, else the wlroots protocols; in an X11
-session, X11. `one-mk doctor` says which one it picks and why;
+session, X11. Running status reports the backend actually opened (including
+`wlroots`); `one-mk doctor` uses that resolved backend for its permission checks;
 `one-mk run --backend wlroots` or `--backend x11` forces one of those
 (the default, `native`, picks). Notes:
+
+X11 barriers (or fallback edge windows) and wlroots edge surfaces cover only
+the spans facing a peer, clipped to each outer monitor boundary. A wall beside
+a partially overlapping peer stays local, including after re-arming.
 
 - **X11** asks for no permission. X11 has no display scaling, so the
   desktop is measured in real pixels (a HiDPI setup with `Xft.dpi` or
@@ -382,7 +387,12 @@ one-mk edge                      # show the rules; --reset turns them off
 ```
 
 While the pointer waits at an edge (dwell or modifier), moving away hands it
-back at once, and typing or clicking there goes to this computer. The
+back at once, and typing or clicking there goes to this computer. Press-and-hold
+can begin a local drag: the replayed button stays down until physical release,
+with a three-second safety deadline. A new peer visit, capture loss, screen lock,
+or shutdown also releases it. X11, Windows and macOS report local button releases;
+Wayland portal/wlroots cannot observe those after handing control back, so an
+unobserved release uses the safety deadline. The
 fullscreen guard keeps the pointer here while the focused window fills its
 screen, except for programs in the allow list (`--fullscreen-block` never
 leaves a program, fullscreen or not). Windows can always tell; on Linux only

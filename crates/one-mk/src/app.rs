@@ -58,6 +58,7 @@ const IDLE: Duration = Duration::from_secs(60);
 const ENTER_TIMEOUT: Duration = Duration::from_millis(750);
 /// `one-mk switch` gives up if the backend doesn't start capturing in this.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
+const LOCAL_DRAG_TIMEOUT: Duration = Duration::from_secs(3);
 /// Paired computers that are not connected are dialed again after this,
 /// doubling up to [`DIAL_MAX`] while they stay away. Only while one has an
 /// address to try: with every one connected no timer runs.
@@ -387,7 +388,7 @@ impl Owner {
 
 struct App {
     dir: PathBuf,
-    backend_kind: one_mk_input::Kind,
+    backend_name: &'static str,
     node: Node,
     trust: TrustStore,
     trust_reloaded: Option<Instant>,
@@ -425,6 +426,7 @@ struct App {
     /// fullscreen guard): input it caught before the release took effect
     /// was meant for this computer, and is typed here.
     handed_back: Option<u32>,
+    local_buttons: HashMap<u32, Instant>,
     /// `one-mk switch` asked the backend to capture: the pointer goes to
     /// this peer, unless capture hasn't started by then.
     switching: Option<(Fingerprint, Instant)>,
@@ -478,7 +480,7 @@ pub async fn serve(
     }
     tracing::debug!(id = %identity.fingerprint.short(), port, "listening");
 
-    let Backend { mut events, capture, inject, focus, locker } = backend;
+    let Backend { name, mut events, capture, inject, focus, locker } = backend;
     let services = Services {
         clip: opts.clipboard.map(|cb| ClipSync::new(cb, node.clone())),
         inbox: Inbox::new(opts.downloads.clone()),
@@ -520,7 +522,7 @@ pub async fn serve(
     let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys, computers);
     let mut app = App {
         dir,
-        backend_kind: opts.backend,
+        backend_name: name,
         node: node.clone(),
         trust,
         trust_reloaded: None,
@@ -548,6 +550,7 @@ pub async fn serve(
         mods: Mods::default(),
         approach: None,
         handed_back: None,
+        local_buttons: HashMap::new(),
         switching: None,
         lock_sync: LockSync::default(),
         unlock_release: Mods::default(),
@@ -591,6 +594,7 @@ pub async fn serve(
                 Some(ev) => app.on_input(ev, &mut events),
                 None => {
                     tracing::error!("input backend stopped");
+                    app.release_local_buttons();
                     input_open = false;
                 }
             },
@@ -614,6 +618,7 @@ pub async fn serve(
         app.sync_focus_watch();
     }
 
+    app.release_local_buttons();
     app.go_home();
     if let Some((id, a)) = app.approach.take() {
         app.release_capture(id, Some(a.pos()));
@@ -849,6 +854,7 @@ impl App {
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
         match ev {
+            Event::Button { button, down: false } if self.local_buttons.contains_key(&button) => self.release_local_button(button),
             Event::Key { code, down } if self.captured_shortcut(code, down) => {}
             ev @ (Event::Hotkey(_) | Event::Hotkeys(_)) => self.on_shortcut_event(ev),
             Event::Desktop(d) => {
@@ -894,6 +900,7 @@ impl App {
                 }
             }
             Event::LocalKeyUp { code } => {
+                self.release_local_button(code);
                 // Stays here, but shortcuts and modifier-to-cross must no
                 // longer count it.
                 if self.mods.update(code, false)
@@ -942,6 +949,7 @@ impl App {
                 }
             }
             Event::Deactivated { id } => {
+                self.release_local_buttons();
                 if self.handed_back == Some(id) {
                     self.handed_back = None;
                 }
@@ -1042,23 +1050,17 @@ impl App {
             Next::Release { pos, around, keys } => {
                 let Some((id, _)) = self.approach.take() else { return };
                 self.release_capture(id, Some(pos));
+                self.handed_back = Some(id);
                 // Captured while held, but meant for this computer. Every
                 // key pressed here is released here too: the user's own
                 // key-ups bypass the injector, which would hold (and on
-                // Windows and macOS repeat) anything left down. A click
-                // likewise: its real button-up either reaches the system
-                // past the injector (whose own press would then stay down
-                // on Wayland and macOS) or was captured too and goes
-                // nowhere, so it is replayed as a whole click.
+                // Windows and macOS repeat) anything left down. Buttons
+                // remain down for dragging, with a bounded release lease.
                 let press = around.iter().map(|&code| Inject::Key { code, down: true });
                 let typed = keys.into_iter().map(|(code, down)| Inject::Key { code, down });
-                let up = match input {
-                    Some(Inject::Button { button, down: true }) => Some(Inject::Button { button, down: false }),
-                    _ => None,
-                };
                 let release = around.iter().rev().map(|&code| Inject::Key { code, down: false });
-                for i in press.chain(typed).chain(input).chain(up).chain(release) {
-                    let _ = self.inject.send(i);
+                for i in press.chain(typed).chain(input).chain(release) {
+                    self.inject_here(i);
                 }
             }
         }
@@ -1078,14 +1080,13 @@ impl App {
     }
 
     /// Input caught by a capture handed straight back (`handed_back`):
-    /// typed here, keys and clicks whole (their real releases may already
-    /// have been caught too, or go past the injector).
+    /// typed here. Keys are whole taps; buttons await release or timeout.
     fn replay_here(&mut self, ev: Event) {
         let replay: &[Inject] = match ev {
             Event::Key { code, down: true } => &[Inject::Key { code, down: true }, Inject::Key { code, down: false }],
-            Event::Key { code, down: false } => &[Inject::Key { code, down: false }],
+            Event::Key { down: false, .. } => &[],
             Event::Button { button, down: true } => {
-                &[Inject::Button { button, down: true }, Inject::Button { button, down: false }]
+                &[Inject::Button { button, down: true }]
             }
             Event::Button { button, down: false } => &[Inject::Button { button, down: false }],
             Event::Scroll { dx, dy } => &[Inject::Scroll { dx, dy }],
@@ -1094,7 +1095,34 @@ impl App {
             _ => &[],
         };
         for &i in replay {
-            let _ = self.inject.send(i);
+            self.inject_here(i);
+        }
+    }
+
+    fn inject_here(&mut self, input: Inject) {
+        match input {
+            Inject::Button { button, down: true } => {
+                if self.local_buttons.contains_key(&button) { return; }
+                self.local_buttons.insert(button, Instant::now() + LOCAL_DRAG_TIMEOUT);
+            }
+            Inject::Button { button, down: false } => {
+                self.release_local_button(button);
+                return;
+            }
+            _ => {}
+        }
+        let _ = self.inject.send(input);
+    }
+
+    fn release_local_button(&mut self, button: u32) {
+        if self.local_buttons.remove(&button).is_some() {
+            let _ = self.inject.send(Inject::Button { button, down: false });
+        }
+    }
+
+    fn release_local_buttons(&mut self) {
+        for (button, _) in self.local_buttons.drain() {
+            let _ = self.inject.send(Inject::Button { button, down: false });
         }
     }
 
@@ -1203,6 +1231,7 @@ impl App {
     /// Ends the visit to a peer (which releases anything still held there),
     /// without touching capture.
     fn end_visit(&mut self) -> Option<Remote> {
+        self.release_local_buttons();
         self.release_tuned();
         let r = self.remote.take()?;
         if let Some(p) = self.peers.get(&r.peer) {
@@ -1270,11 +1299,13 @@ impl App {
                 r.entered_at + ENTER_TIMEOUT
             }
         });
-        lease.into_iter().chain(visit).min()
+        lease.into_iter().chain(visit).chain(self.local_buttons.values().copied()).min()
     }
 
     fn on_timer(&mut self) {
         let now = Instant::now();
+        let expired: Vec<u32> = self.local_buttons.iter().filter_map(|(&button, &deadline)| (now >= deadline).then_some(button)).collect();
+        for button in expired { self.release_local_button(button); }
         if let Some((fp, until)) = self.switching
             && now >= until
         {
@@ -1341,6 +1372,7 @@ impl App {
 
     /// Peer `fp` (link `id`) moves its pointer onto this machine.
     fn on_enter(&mut self, fp: Fingerprint, id: usize, epoch: u16, pos: Pos) {
+        self.release_local_buttons();
         let peer = &self.peers[&fp];
         if self.owner.is_some() && !self.is_owner(fp, id) {
             tracing::info!(peer = %peer.name, "refused control: another computer controls this one");
@@ -1977,13 +2009,7 @@ impl App {
             name: sanitize_name(&id.name),
             id: id.fingerprint.short(),
             port: self.node.local_addr().map_or(0, |a| a.port()),
-            backend: match self.backend_kind {
-                one_mk_input::Kind::Null => "null",
-                one_mk_input::Kind::Native if cfg!(target_os = "linux") => "portal",
-                one_mk_input::Kind::Native => "native",
-                one_mk_input::Kind::X11 => "x11",
-                one_mk_input::Kind::Wlroots => "wlroots",
-            }.into(),
+            backend: self.backend_name.into(),
             controlling: self.remote.as_ref().map(|r| name_of(&r.peer)),
             controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
             peers: peers.collect(),
@@ -2122,6 +2148,7 @@ impl App {
 
     /// The OS says this screen locked or unlocked.
     fn on_screen_locked(&mut self, locked: bool) {
+        if locked { self.release_local_buttons(); }
         if !locked {
             tracing::debug!("screen unlocked");
             self.lock_sync.on_local_unlocked();
@@ -2477,6 +2504,27 @@ mod tests {
 
     async fn next_capture(h: &mut NullHandles) -> CaptureCmd {
         tokio::time::timeout(Duration::from_secs(5), h.capture.recv()).await.expect("timed out").unwrap()
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_open_backend_not_the_requested_kind() {
+        for name in ["null", "x11", "wlroots", "portal", "native"] {
+            let dir = temp_dir(&format!("backend-{name}"));
+            let (mut backend, _handles) = one_mk_input::null(Desktop::new(vec![Rect::new(0, 0, 800, 600)]));
+            backend.name = name;
+            let (stop, mut stopped) = watch::channel(false);
+            let (power, _power_handles) = one_mk_input::fake_power();
+            let opts = Options {
+                backend: one_mk_input::Kind::Null, port: free_port(), connect: vec![], discovery: false,
+                clipboard: None, downloads: dir.join("downloads"), start_locked: false, power: Some(power),
+            };
+            let task = tokio::spawn(serve(dir.clone(), opts, backend, async move { let _ = stopped.wait_for(|value| *value).await; }));
+            eventually_async("status socket", || async { control::request(&dir, Request::Status).await.ok().flatten().is_some() }).await;
+            assert_eq!(status(&dir).await.backend.as_str(), name);
+            stop.send(true).unwrap();
+            task.await.unwrap().unwrap();
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     /// Two daemons on loopback with fake input: cross the edge, move, type,
@@ -3804,7 +3852,7 @@ mod tests {
         duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(1919.0, 540.0)) });
         let mut got = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..3 {
             got.push(next_inject(&mut duo.ha).await);
         }
         assert_eq!(
@@ -3812,21 +3860,18 @@ mod tests {
             vec![
                 Inject::Key { code: 42, down: true },
                 Inject::Button { button: 0x110, down: true },
-                Inject::Button { button: 0x110, down: false },
                 Inject::Key { code: 42, down: false },
             ]
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(injected(&mut duo.ha), vec![]);
         assert_eq!(injected(&mut duo.hb), vec![], "never crossed");
+        duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
+        assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: false });
         duo.stop().await;
     }
 
-    /// A click while held at the edge is replayed here as a whole click:
-    /// its real button-up may have been captured too (and is then dropped,
-    /// nothing being captured any more), or reach the system past the
-    /// injector, which on Wayland and macOS would keep the replayed press
-    /// down. Either way no button stays held.
+    /// Both halves of a captured click are replayed once, in order.
     #[tokio::test]
     async fn click_at_the_edge_leaves_no_button_held() {
         let mut duo = Duo::start("handback-click", None).await;
@@ -3842,6 +3887,55 @@ mod tests {
         assert_eq!(injected(&mut duo.ha), vec![], "the captured button-up adds nothing");
         assert_eq!(injected(&mut duo.hb), vec![], "never crossed");
         duo.stop().await;
+    }
+
+    #[tokio::test]
+    async fn guarded_edge_drag_waits_for_physical_release() {
+        let mut duo = Duo::start("handback-drag", None).await;
+        set(&duo.da, |settings| settings.edge.all.dwell_ms = Some(5000)).await;
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, .. }));
+        assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: true });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(injected(&mut duo.ha).is_empty(), "a held button must not become a click");
+        duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
+        assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: false });
+        duo.stop().await;
+    }
+
+    #[tokio::test]
+    async fn guarded_edge_drag_cleanup_is_bounded() {
+        for cleanup in ["deadline", "visit", "incoming", "deactivated", "local-up", "shutdown"] {
+            let mut duo = Duo::start(&format!("drag-{cleanup}"), None).await;
+            set(&duo.da, |settings| settings.edge.all.dwell_ms = Some(5000)).await;
+            duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+            duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+            assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, .. }));
+            assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: true });
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert!(injected(&mut duo.ha).is_empty(), "{cleanup}: prematurely released");
+            match cleanup {
+                "deadline" => tokio::time::sleep(LOCAL_DRAG_TIMEOUT).await,
+                "visit" => {
+                    set(&duo.da, |settings| settings.edge.all.dwell_ms = Some(0)).await;
+                    duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+                }
+                "incoming" => { duo.hb.events.send(Event::Activated { id: 2, side: Side::Left, pos: Pos::new(0.0, 540.0) }).unwrap(); }
+                "deactivated" => { duo.ha.events.send(Event::Deactivated { id: 1 }).unwrap(); }
+                "local-up" => { duo.ha.events.send(Event::LocalKeyUp { code: 0x110 }).unwrap(); }
+                "shutdown" => { duo.stop.send(true).unwrap(); }
+                _ => unreachable!(),
+            }
+            assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: false }, "{cleanup}");
+            if cleanup == "shutdown" {
+                for task in duo.tasks { task.await.unwrap().unwrap(); }
+                let _ = std::fs::remove_dir_all(&duo.da);
+                let _ = std::fs::remove_dir_all(&duo.db);
+            } else {
+                duo.stop().await;
+            }
+        }
     }
 
     /// Dead corners and the fullscreen guard refuse at once; the allow list

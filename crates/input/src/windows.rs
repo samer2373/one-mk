@@ -134,7 +134,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, shared, controlled))?;
-    Ok(Backend { events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 fn set_thread_dpi_awareness() {
@@ -645,6 +645,7 @@ impl State {
         let Some(cap) = self.captured else {
             if let Some(b) = button {
                 self.local.set(b, down);
+                if !down && !injected { let _ = self.tx.send(Event::LocalKeyUp { code: b }); }
             }
             if !injected {
                 self.local_input();
