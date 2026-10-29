@@ -16,6 +16,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::manage::Status as DaemonStatus;
+use crate::settings::Settings;
 
 /// How the daemon is asked, and how long mDNS gets to answer.
 const DAEMON_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -138,6 +139,8 @@ pub struct Config {
     pub has_identity: bool,
     /// The paired computers, or why `devices.toml` could not be read.
     pub paired: Result<Vec<Paired>, String>,
+    /// Whether `settings.toml` (if there is one) can be read.
+    pub settings: Result<(), String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,7 +241,16 @@ pub fn daemon_check(d: &Daemon) -> Check {
 }
 
 pub fn config_checks(c: &Config, dir: &Path) -> Vec<Check> {
-    let folder = if c.dir_exists {
+    let folder = if let (true, Err(e)) = (c.dir_exists, &c.settings) {
+        Outcome::warn(
+            format!(
+                "Found at {}, but settings.toml cannot be read ({e}). one-mk ignores it: a running one-mk keeps the \
+                 settings it has, and a new start uses the defaults.",
+                dir.display()
+            ),
+            "Fix the line it points to, or delete `settings.toml` in the settings folder (everything goes back to the defaults).",
+        )
+    } else if c.dir_exists {
         Outcome::pass(format!("Found at {}.", dir.display()))
     } else {
         Outcome::warn(
@@ -299,19 +311,28 @@ pub fn port_check(d: &Daemon, p: &PortFacts) -> Check {
     check("port", "Port", out)
 }
 
+/// The port one-mk listens on here (the other computers are assumed to use the same).
+fn port_of(d: &Daemon) -> u16 {
+    d.status().map_or(DEFAULT_PORT, |s| s.port)
+}
+
 pub fn mdns_check(d: &Daemon, m: &MdnsFacts) -> Check {
     let title = "Discovery";
-    const BLOCKED: &str = "Check that no firewall or VPN blocks UDP 5353 (mDNS) and that you are not on a guest Wi-Fi. \
-                           Without discovery, connect directly: `one-mk run --connect <ip>:24900`.";
+    let port = port_of(d);
+    let blocked = format!(
+        "Check that no firewall or VPN blocks UDP 5353 (mDNS) and that you are not on a guest Wi-Fi. \
+         Without discovery, connect directly: `one-mk run --connect <ip>:{port}`."
+    );
+    let blocked = blocked.as_str();
     if let Err(e) = &m.join {
         let out =
-            Outcome::fail(format!("This computer cannot join the mDNS group {MDNS_GROUP}:{MDNS_PORT} ({e})."), BLOCKED);
+            Outcome::fail(format!("This computer cannot join the mDNS group {MDNS_GROUP}:{MDNS_PORT} ({e})."), blocked);
         return check("mdns", title, out);
     }
     let seen = match &m.seen {
         Ok(s) => s,
         Err(e) => {
-            let out = Outcome::fail(format!("Looking for computers failed ({e})."), BLOCKED);
+            let out = Outcome::fail(format!("Looking for computers failed ({e})."), blocked);
             return check("mdns", title, out);
         }
     };
@@ -321,8 +342,10 @@ pub fn mdns_check(d: &Daemon, m: &MdnsFacts) -> Check {
         }
         Daemon::Running(_) => Outcome::warn(
             "one-mk is running but its announcement was not seen on the network.",
-            "Was it started with `--no-discovery`? Otherwise something drops mDNS (UDP 5353): a firewall, VPN or guest Wi-Fi. \
-             Connecting with `--connect <ip>:24900` still works.",
+            &format!(
+                "Was it started with `--no-discovery`? Otherwise something drops mDNS (UDP 5353): a firewall, VPN or guest Wi-Fi. \
+                 Connecting with `--connect <ip>:{port}` still works."
+            ),
         ),
         _ => Outcome::pass(format!(
             "This computer can use mDNS; {} one-mk computer{} announced {}.",
@@ -511,6 +534,7 @@ fn linux_portals(p: &Portals) -> Outcome {
 }
 
 pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
+    let port = port_of(d);
     paired
         .iter()
         .map(|p| {
@@ -526,7 +550,7 @@ pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
                     &format!(
                         "On \"{name}\" run `one-mk doctor` (its firewall may block one-mk's UDP port); \
                          or wait a few seconds: connecting is automatic. You can also try `one-mk run --connect {}`.",
-                        f.addrs.first().map_or("<ip>:24900".to_owned(), |a| a.clone()),
+                        f.addrs.first().map_or(format!("<ip>:{port}"), |a| a.clone()),
                     ),
                 ),
                 (false, Some(f), false) => Outcome::warn(
@@ -543,7 +567,7 @@ pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
                         "Is \"{name}\" switched on, running one-mk and on the same network (not a guest Wi-Fi)? {}",
                         match p.addrs.first() {
                             Some(a) => format!("It was last at {a}: try `one-mk run --connect {a}`."),
-                            None => "Connect directly with `one-mk run --connect <ip>:24900`.".to_owned(),
+                            None => format!("Connect directly with `one-mk run --connect <ip>:{port}`."),
                         }
                     ),
                 ),
@@ -692,11 +716,11 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
                 let dir = dir.to_owned();
                 move || probe_config(&dir)
             },
-            Config { dir_exists: false, has_identity: false, paired: Err("probe failed".into()) },
+            Config { dir_exists: false, has_identity: false, paired: Err("probe failed".into()), settings: Ok(()) },
         )
     );
     let paired = config.paired.clone().unwrap_or_default();
-    let port = daemon.status().map_or(DEFAULT_PORT, |s| s.port);
+    let port = port_of(&daemon);
 
     // Whose announcements we wait for: this computer's own, and every
     // paired computer that is not connected.
@@ -753,7 +777,16 @@ fn probe_config(dir: &Path) -> Config {
         dir_exists: dir.is_dir(),
         has_identity: dir.join("identity.key.der").is_file() && dir.join("identity.cert.der").is_file(),
         paired,
+        settings: Settings::load(dir).map(|_| ()).map_err(|e| one_line(&format!("{e:#}"))),
     }
+}
+
+/// A parse error (several lines, quoting the offending text) as one line:
+/// where it is and what is wrong.
+fn one_line(error: &str) -> String {
+    // `toml` draws `1 | text` and `  | ^^^` around the message.
+    let quoted = |l: &str| l.split_once('|').is_some_and(|(n, _)| n.trim().is_empty() || n.trim().parse::<u32>().is_ok());
+    error.lines().map(str::trim).filter(|l| !l.is_empty() && !quoted(l)).collect::<Vec<_>>().join("; ")
 }
 
 fn probe_port(port: u16) -> PortFacts {
@@ -998,7 +1031,7 @@ mod tests {
     }
 
     fn cfg(dir: bool, id: bool, paired: Result<Vec<Paired>, String>) -> Vec<Check> {
-        config_checks(&Config { dir_exists: dir, has_identity: id, paired }, Path::new("/x/one-mk"))
+        config_checks(&Config { dir_exists: dir, has_identity: id, paired, settings: Ok(()) }, Path::new("/x/one-mk"))
     }
 
     fn paired(id: &str) -> Paired {
@@ -1018,6 +1051,36 @@ mod tests {
         assert_eq!(c.iter().map(st).collect::<Vec<_>>(), [Status::Pass, Status::Pass, Status::Fail]);
         let c = cfg(true, false, Ok(vec![]));
         assert_eq!(st(&c[1]), Status::Warn);
+    }
+
+    #[test]
+    fn a_settings_file_that_does_not_parse_is_reported() {
+        let c = |settings| {
+            let cfg = Config { dir_exists: true, has_identity: true, paired: Ok(vec![]), settings };
+            config_checks(&cfg, Path::new("/x/one-mk")).remove(0)
+        };
+        assert_eq!(st(&c(Ok(()))), Status::Pass);
+        let bad = c(Err("reading /x/one-mk/settings.toml: TOML parse error at line 1, column 13; unclosed array".into()));
+        assert_eq!(st(&bad), Status::Warn);
+        assert!(bad.outcome.detail.contains("TOML parse error at line 1"), "{}", bad.outcome.detail);
+        let fix = bad.outcome.fix.unwrap();
+        assert!(fix.contains("delete") && fix.contains("settings.toml"), "{fix}");
+    }
+
+    /// The real probe: a corrupt file in a real folder.
+    #[test]
+    fn probing_a_corrupt_settings_file() {
+        let dir = std::env::temp_dir().join(format!("one-mk-doctor-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(probe_config(&dir).settings, Ok(()), "no file is fine");
+        std::fs::write(dir.join("settings.toml"), "[clipboard]\nmax_mb = 5\n").unwrap();
+        assert_eq!(probe_config(&dir).settings, Ok(()));
+        std::fs::write(dir.join("settings.toml"), "gaming = 7\n[[[").unwrap();
+        let e = probe_config(&dir).settings.unwrap_err();
+        assert!(e.contains("settings.toml") && e.contains("line 2") && !e.contains('\n'), "{e}");
+        assert_eq!(st(&config_checks(&probe_config(&dir), &dir)[0]), Status::Warn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1228,6 +1291,26 @@ mod tests {
         let c = peer_checks(&down, &with_addr, &[]);
         assert!(c[0].outcome.fix.as_ref().unwrap().contains("--connect 10.0.0.7:24900"));
         assert!(peer_checks(&down, &[], &[]).is_empty());
+    }
+
+    /// Advice to connect directly names the port one-mk really uses.
+    #[test]
+    fn connect_advice_uses_the_real_port() {
+        let on = |port| Daemon::Running(status("aaaa-aaaa", port, &[("bbbb-bbbb", false)]));
+        let fixes = |d: &Daemon| {
+            let mut all = vec![mdns_check(d, &mdns(Ok(()), Ok(vec![seen("bbbb-bbbb")]))), mdns_check(d, &mdns(Err("no"), Ok(vec![])))];
+            all.extend(peer_checks(d, &[paired("bbbb-bbbb")], &[]));
+            let fixes: Vec<_> = all.into_iter().filter_map(|c| c.outcome.fix).collect();
+            assert!(fixes.len() >= 2);
+            fixes
+        };
+        for fix in fixes(&on(24955)) {
+            assert!(!fix.contains("24900"), "{fix}");
+            assert!(fix.contains("<ip>:24955"), "{fix}");
+        }
+        for fix in fixes(&Daemon::NotRunning) {
+            assert!(fix.contains("<ip>:24900"), "{fix}");
+        }
     }
 
     fn addr(iface: &str, ip: [u8; 4]) -> Addr {
