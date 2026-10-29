@@ -25,6 +25,8 @@ pub const MAX_DWELL_MS: u32 = 5000;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(default)]
+    pub settings_version: u32,
     pub clipboard: ClipSettings,
     /// Show a desktop notification when files arrive.
     pub notify_files: bool,
@@ -45,6 +47,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            settings_version: 2,
             clipboard: ClipSettings::default(),
             notify_files: true,
             edge: EdgeSettings::default(),
@@ -72,8 +75,15 @@ pub struct ClipSettings {
     /// Don't share what a password manager marked as sensitive.
     pub skip_sensitive: bool,
     /// Let a paired computer fetch this clipboard (`one-mk clip-get` there).
+    #[serde(skip_serializing_if = "is_false")]
     pub allow_pull: bool,
+    #[serde(skip)]
+    pub fetch_migrated: bool,
+    #[serde(skip)]
+    pub fetch_notice: Option<PathBuf>,
 }
+
+fn is_false(value: &bool) -> bool { !*value }
 
 impl Default for ClipSettings {
     fn default() -> Self {
@@ -84,6 +94,8 @@ impl Default for ClipSettings {
             max_mb: (DEFAULT_MAX_BYTES >> 20) as u32,
             skip_sensitive: true,
             allow_pull: false,
+            fetch_migrated: false,
+            fetch_notice: None,
         }
     }
 }
@@ -104,7 +116,7 @@ impl ClipSettings {
 
     pub fn summary(&self) -> String {
         let on = |b: bool| if b { "on" } else { "off" };
-        format!(
+        let summary = format!(
             "text {}, html {}, images {}, size limit {} MB, skip password managers {}, others may fetch it {}",
             on(self.text),
             on(self.html),
@@ -112,7 +124,23 @@ impl ClipSettings {
             self.max_mb.clamp(1, Self::MAX_MB_LIMIT),
             on(self.skip_sensitive),
             on(self.allow_pull)
-        )
+        );
+        let show_notice = self.fetch_migrated && !self.allow_pull && self.fetch_notice.as_ref().is_none_or(|path| {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(path) {
+                Ok(_) => true,
+                Err(error) => error.kind() != std::io::ErrorKind::AlreadyExists,
+            }
+        });
+        if show_notice {
+            format!("{summary}; clipboard fetching was switched off by this update; turn it on with one-mk clipboard --allow-fetch on")
+        } else { summary }
     }
 }
 
@@ -280,13 +308,19 @@ impl Settings {
     /// hand edit it didn't understand.
     pub fn load(dir: &Path) -> Result<Settings> {
         let path = path(dir);
-        match std::fs::read_to_string(&path) {
-            Ok(s) => {
+        match crate::hooks::read_settings(&path) {
+            Ok((s, unsafe_reason)) => {
                 let mut settings: Settings = toml::from_str(&s).with_context(|| format!("reading {}", path.display()))?;
+                if settings.settings_version < 2 && settings.clipboard.allow_pull {
+                    settings.clipboard.allow_pull = false;
+                    settings.clipboard.fetch_migrated = true;
+                    settings.clipboard.fetch_notice = Some(dir.join(".clipboard-fetch-update-noticed"));
+                }
+                settings.settings_version = 2;
                 settings.hooks.trust_permissions = crate::hooks::permissions_trusted(dir);
                 // Hooks and key actions (`run: ...`) both start programs.
                 if (settings.hooks.any() || settings.input.runs_commands()) && !settings.hooks.trust_permissions {
-                    settings.hooks.blocked = crate::hooks::unsafe_permissions(&path);
+                    settings.hooks.blocked = unsafe_reason;
                 }
                 Ok(settings)
             }
@@ -543,6 +577,59 @@ pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn legacy_clipboard_fetch_is_migrated_but_explicit_v2_is_kept() {
+        let dir = temp_dir("clipboard-version");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[clipboard]\nallow_pull = true\n").unwrap();
+        let settings = Settings::load(&dir).unwrap();
+        assert!(!settings.clipboard.allow_pull);
+        assert!(settings.clipboard.summary().contains("clipboard fetching was switched off by this update; turn it on with one-mk clipboard --allow-fetch on"));
+        assert!(!Settings::load(&dir).unwrap().clipboard.summary().contains("switched off"));
+        std::fs::write(dir.join(FILE), "settings_version = 2\n[clipboard]\nallow_pull = true\n").unwrap();
+        assert!(Settings::load(&dir).unwrap().clipboard.allow_pull);
+        assert!(!toml::to_string(&ClipSettings::default()).unwrap().contains("allow_pull"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_target_directory_must_be_private() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = temp_dir("symlink-settings");
+        let target = dir.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let file = target.join(FILE);
+        std::fs::write(&file, "[hooks]\non_enter = ['echo']\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&file, dir.join(FILE)).unwrap();
+        assert!(Settings::load(&dir).unwrap().hooks.blocked.is_some());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn external_symlink_target_ancestors_must_be_private() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = temp_dir("external-symlink-settings");
+        let home = dir.join("home");
+        let shared = dir.join("shared");
+        let target = shared.join("private");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        for folder in [&dir, &home, &target] { std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700)).unwrap(); }
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let file = target.join(FILE);
+        std::fs::write(&file, "[hooks]\non_enter = ['echo']\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&file, home.join(FILE)).unwrap();
+        assert!(Settings::load(&home).unwrap().hooks.blocked.is_some());
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(Settings::load(&home).unwrap().hooks.blocked.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[cfg(unix)]
     #[test]
     fn settings_replacement_keeps_private_permissions() {

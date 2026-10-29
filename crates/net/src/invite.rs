@@ -16,6 +16,7 @@ const DOMAIN: &[u8] = b"one-mk invitation v1";
 pub const MAX_LINK: usize = 1600;
 pub const MAX_LIFETIME: Duration = Duration::from_secs(3600);
 pub const STEP_TIMEOUT: Duration = Duration::from_secs(10);
+pub const HEADER_TIMEOUT: Duration = Duration::from_millis(1500);
 const MAX_GUESSES: u8 = 5;
 
 pub fn unix_now() -> u64 {
@@ -70,7 +71,10 @@ impl Invitation {
         let mut bytes = Zeroizing::new(self.public_bytes());
         bytes.extend_from_slice(self.secret.as_ref());
         let encoded = Zeroizing::new(URL_SAFE_NO_PAD.encode(&*bytes));
-        Zeroizing::new(format!("{PREFIX}{}", encoded.as_str()))
+        let mut link = Zeroizing::new(String::with_capacity(PREFIX.len() + encoded.len()));
+        link.push_str(PREFIX);
+        link.push_str(&encoded);
+        link
     }
 
     pub fn parse(link: &str) -> Result<Self> {
@@ -87,7 +91,8 @@ impl Invitation {
         ensure!((1..=8).contains(&count), "invalid address count");
         let mut addrs = Vec::with_capacity(count);
         for _ in 0..count { addrs.push(r.text(64)?.parse().context("invalid invitation address")?); }
-        let secret = Zeroizing::new(r.array()?);
+        let mut secret = Zeroizing::new([0; 32]);
+        secret.copy_from_slice(r.take(32)?);
         ensure!(r.0.is_empty(), "trailing invitation data");
         let out = Self { fingerprint, addrs, mdns, service_port, expires, secret };
         out.validate()?;
@@ -141,7 +146,7 @@ impl InvitationState {
     pub fn new(invitation: &Invitation) -> Self {
         let remaining = Duration::from_secs(invitation.expires.saturating_sub(unix_now())).min(MAX_LIFETIME);
         Self {
-            inner: Mutex::new(State { secret: Some(Zeroizing::new(*invitation.secret)), guesses: 0 }),
+            inner: Mutex::new(State { secret: Some(invitation.secret.clone()), guesses: 0 }),
             deadline: Instant::now() + remaining,
             expires: invitation.expires,
             id: invitation.id(),
@@ -156,20 +161,19 @@ impl InvitationState {
         s.secret.is_some()
     }
     fn consume(&self, id: &[u8; 32], transcript: &[u8], proof: &[u8; 32]) -> Result<([u8; 32], String)> {
-        ensure!(id == &self.id, "unknown invitation");
+        ensure!(constant_time_eq::constant_time_eq_32(id, &self.id), "unknown invitation");
         let mut s = self.inner.lock().expect("invitation mutex");
         if self.expired() { s.secret = None; }
         let secret = s.secret.as_ref().context("invitation unavailable")?;
-        let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_ref());
-        // ring::hmac::verify uses constant-time tag comparison. Never compare
-        // the secret or an expected tag with ==, nor send either secret.
-        if hmac::verify(&key, &role(b"join", transcript), proof).is_err() {
-            s.guesses += 1;
-            if s.guesses >= MAX_GUESSES { s.secret = None; }
-            anyhow::bail!("invitation proof rejected");
-        }
-        let answer = tag(&key, b"accept", transcript);
-        let code = sas(&key, transcript);
+        let (answer, code) = {
+            let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_ref());
+            if hmac::verify(&key, &role(b"join", transcript), proof).is_err() {
+                s.guesses += 1;
+                if s.guesses >= MAX_GUESSES { s.secret = None; }
+                anyhow::bail!("invitation proof rejected");
+            }
+            (tag(&key, b"accept", transcript), sas(&key, transcript))
+        };
         s.secret = None; // burn BEFORE replying, prompting, or writing trust
         Ok((answer, code))
     }
@@ -183,27 +187,35 @@ pub struct InviteSession {
     pub code: String,
 }
 impl InviteSession {
-    /// Called only by A on its existing pairing Node. The caller holds an
-    /// admission permit and bounds the entire exchange by STEP_TIMEOUT.
+    /// Called only by A on its existing pairing Node. The caller bounds the
+    /// entire exchange by STEP_TIMEOUT; the host uses accept_with_admission.
     pub async fn accept(peer: &Peer, me: Fingerprint, name: &str, service_port: u16, state: &InvitationState) -> Result<Self> {
+        Self::accept_with_admission(peer, me, name, service_port, state, || Ok(())).await
+    }
+
+    pub async fn accept_with_admission<Permit>(peer: &Peer, me: Fingerprint, name: &str, service_port: u16, state: &InvitationState, admit: impl FnOnce() -> Result<Permit>) -> Result<Self> {
         ensure!(!peer.initiator, "expected incoming connection");
-        let (kind, mut send, mut recv) = peer.accept_stream().await?;
-        ensure!(kind == StreamKind::Pairing, "expected pairing stream");
-        let mut magic = [0; 7];
-        recv.read_exact(&mut magic).await?;
-        ensure!(&magic == MAGIC, "unsupported invitation protocol");
-        let mut id = [0; 32];
-        recv.read_exact(&mut id).await?;
+        let (mut send, mut recv, id) = tokio::time::timeout(HEADER_TIMEOUT, async {
+            let (kind, send, mut recv) = peer.accept_stream().await?;
+            ensure!(kind == StreamKind::Pairing, "expected pairing stream");
+            let mut magic = [0; 7];
+            recv.read_exact(&mut magic).await?;
+            ensure!(&magic == MAGIC, "unsupported invitation protocol");
+            let mut id = [0; 32];
+            recv.read_exact(&mut id).await?;
+            Ok::<_, anyhow::Error>((send, recv, id))
+        }).await.context("invitation header timed out")??;
         if !state.active() {
             send.write_all(&[0]).await?;
             send.finish()?;
             anyhow::bail!("invitation already used or expired");
         }
-        if id != state.id {
+        if !constant_time_eq::constant_time_eq_32(&id, &state.id) {
             send.write_all(&[0]).await?;
             send.finish()?;
             anyhow::bail!("unknown invitation");
         }
+        let _permit = admit()?;
         send.write_all(&[1]).await?;
         let (peer_raw, peer_port, nb) = read_hello(&mut recv).await?;
         let my_name = sanitize_name(name);
@@ -235,12 +247,14 @@ impl InviteSession {
         let (peer_raw, peer_port, na) = read_hello(&mut recv).await?;
         ensure!(peer_port == invitation.service_port, "invitation service port mismatch");
         let t = transcript(peer, &id, peer.fingerprint, me, &peer_raw, my_name.as_bytes(), peer_port, service_port, &na, &nb)?;
-        let key = hmac::Key::new(hmac::HMAC_SHA256, invitation.secret.as_ref());
-        send.write_all(&tag(&key, b"join", &t)).await?;
-        let mut answer = [0; 32];
-        recv.read_exact(&mut answer).await?;
-        hmac::verify(&key, &role(b"accept", &t), &answer).map_err(|_| anyhow::anyhow!("invitation response rejected"))?;
-        let code = sas(&key, &t);
+        let code = {
+            let key = hmac::Key::new(hmac::HMAC_SHA256, invitation.secret.as_ref());
+            send.write_all(&tag(&key, b"join", &t)).await?;
+            let mut answer = [0; 32];
+            recv.read_exact(&mut answer).await?;
+            hmac::verify(&key, &role(b"accept", &t), &answer).map_err(|_| anyhow::anyhow!("invitation response rejected"))?;
+            sas(&key, &t)
+        };
         Ok(Self { send, recv, peer_name: sanitize_name(&String::from_utf8(peer_raw)?), service_port: peer_port, code })
     }
 
@@ -316,6 +330,21 @@ fn sas(key: &hmac::Key, transcript: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn silent_clients_have_a_short_header_deadline() {
+        use crate::{Identity, Node};
+        use std::sync::Arc;
+        let host = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let client = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let (outgoing, incoming) = tokio::join!(client.connect(host.local_addr().unwrap()), host.accept());
+        let _outgoing = outgoing.unwrap();
+        let incoming = incoming.unwrap().unwrap();
+        let state = InvitationState::new(&invitation());
+        let result = tokio::time::timeout(Duration::from_secs(2), InviteSession::accept(&incoming, host.identity().fingerprint, "host", 24900, &state)).await;
+        assert!(result.is_ok_and(|result| result.is_err()), "silent client outlived header budget");
+        assert!(state.active());
+        host.close(); client.close();
+    }
     use super::*;
     use sha2::{Digest, Sha256};
     #[test]
@@ -325,6 +354,26 @@ mod tests {
         copied_public.secret = Zeroizing::new([42; 32]);
         assert_ne!(first.id(), copied_public.id());
         assert_ne!(first.id(), <[u8; 32]>::from(Sha256::digest(first.public_bytes())));
+    }
+
+    #[tokio::test]
+    async fn copied_link_impostor_with_same_name_has_a_different_code() {
+        use crate::{Identity, Node};
+        use std::sync::Arc;
+        let host = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let real = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let impostor = Identity::ephemeral().unwrap();
+        let (outgoing, incoming) = tokio::join!(real.connect(host.local_addr().unwrap()), host.accept());
+        let _outgoing = outgoing.unwrap();
+        let incoming = incoming.unwrap().unwrap();
+        let invitation = invitation();
+        let key = hmac::Key::new(hmac::HMAC_SHA256, invitation.secret.as_ref());
+        let build = |fingerprint| transcript(&incoming, &invitation.id(), host.identity().fingerprint, fingerprint, b"Host", b"B", 24900, 24901, &[1; 32], &[2; 32]).unwrap();
+        let real_transcript = build(real.identity().fingerprint);
+        let impostor_transcript = build(impostor.fingerprint);
+        assert_ne!(tag(&key, b"join", &real_transcript), tag(&key, b"join", &impostor_transcript));
+        assert_ne!(sas(&key, &real_transcript), sas(&key, &impostor_transcript));
+        host.close(); real.close();
     }
 
     #[test]

@@ -454,26 +454,49 @@ expanded (`$HOME`, `~`, `*`, pipes and redirections are ordinary characters).
 instead. Commands entered with the CLI retain their original text, so changing
 `--shell on|off` also reinterprets existing commands and prints the resulting
 invocation. Older CLI-created argv arrays are reconstructed when enabling the
-shell; review the printed invocation. Explicit argv arrays otherwise run directly.
+shell, with POSIX-safe literal quoting of every unsafe word; review the printed
+invocation. Windows refuses conversion when cmd metacharacters, quotes, line
+breaks, grouping parentheses or a trailing backslash cannot be represented safely.
+Explicit argv arrays otherwise run directly.
 Shell-mode hooks see **sanitized** `ONE_MK_PEER`, `ONE_MK_PEER_ID` and
 `ONE_MK_SIDE`: only letters (including non-ASCII letters), ASCII digits,
 spaces and `._-` survive; every other character becomes `_`. Direct argv hooks
-keep the exact peer name. Commands are limited to 4096 bytes.
+keep the exact peer name, except Windows `.bat`, `.cmd` and `.com` programs also
+receive sanitized values (including `run:` actions). Rust may additionally refuse
+batch-file arguments it cannot safely escape; one-mk does not bypass that refusal.
+Commands are limited to 4096 bytes.
 A command is killed after 5 seconds (`--timeout SECS`, at most 60),
 runs on its own task so one-mk never waits for it, and runs at most once per event
-per 500 ms. Faster triggers coalesce to the newest pending run. Enter/leave
-supersede older pending opposite transitions, and hooks run serially so the final
-completed command matches the final state. No timer runs when nothing is pending.
+per 500 ms (connect/disconnect limits and coalescing are per peer). Faster triggers
+coalesce to the newest pending run. Enter/leave supersede older pending opposite
+transitions and run serially in a pointer lane; peer events have their own serial
+lane, so a slow connect hook cannot delay pointer work. Configuration generations
+discard pending commands whose text, shell mode or timeout changed. Already-running
+commands finish; disabling hooks cancels both lanes and kills their Unix process
+groups. All commands share the eight-running-process cap. No timer runs when
+nothing is pending.
 **Hooks run with your
 rights, from `settings.toml`:** anyone who can write that file can run programs
 as you. On Unix all settings saves use a private mode-0600 temporary file.
-The daemon refuses hooks if the settings file or its containing folder is
+The daemon reads and checks the same open settings file, refusing hooks and `run:`
+actions if the settings file or its containing folder is
 group/world-writable or owned by a different uid. It logs each distinct problem
-once and shows refusals in `status` and `doctor`. Fix permissions, or deliberately
+once. Symlinked settings check both the link's folder and the resolved file and
+target folders back to the config directory, opening the resolved file with
+`O_NOFOLLOW` and checking its handle rather than reopening it for the permission
+gate. Refusals appear in `status` and `doctor`. Fix permissions, or deliberately
 override this protection with `one-mk hooks --trust-permissions`; the explicit
 opt-in is stored in a separate private owner-owned marker, not in the untrusted
 settings file. `hooks --off` also removes that permission override.
 Windows ACL checking is **not implemented**: keep the settings folder's ACL private.
+
+Settings now save `settings_version = 2`. A legacy, unversioned
+`clipboard.allow_pull = true` is treated as the old default, not explicit opt-in:
+fetching is off. Status/doctor show the migration notice once per home, recording
+only a private empty `.clipboard-fetch-update-noticed` marker (not changing the
+settings). If the marker cannot be written, the notice can repeat. The next normal
+settings save persists version 2; `one-mk clipboard --allow-fetch on` explicitly
+enables fetching and remains enabled in version-2 settings.
 
 **Screensaver and sleep.** `one-mk power --block-screensaver on`: while this
 computer controls another one, that one's screensaver, display blanking and idle

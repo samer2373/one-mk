@@ -4,15 +4,31 @@ use one_mk_proto::StreamKind;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::io::Write;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let arguments: Vec<String> = std::env::args().collect();
-    anyhow::ensure!(arguments.len() == 4, "usage: invite_probe <numeric address:port> <public host fingerprint> <public expiry>");
+    anyhow::ensure!((4..=5).contains(&arguments.len()), "usage: invite_probe <numeric address:port> <public host fingerprint> <public expiry> [slow]");
     let address: SocketAddr = arguments[1].parse()?;
     let fingerprint: Fingerprint = arguments[2].parse()?;
     let expiry: u64 = arguments[3].parse()?;
+    if arguments.get(4).is_some_and(|mode| mode == "slow") {
+        let mut nodes = Vec::new();
+        let mut peers = Vec::new();
+        for _ in 0..5 {
+            let node = Node::bind_any(Arc::new(Identity::ephemeral()?), 0)?;
+            for _ in 0..4 { peers.push(node.connect_pinned(address, fingerprint).await?); }
+            nodes.push(node);
+        }
+        println!("Slow-loris: holding 20 silent TLS connections across 5 certificates; no magic, ID or secret supplied.");
+        std::io::stdout().flush()?;
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        for peer in peers { peer.conn.close(0u32.into(), b"probe complete"); }
+        for node in nodes { node.shutdown(Duration::from_millis(50)).await; }
+        return Ok(());
+    }
     let mut public = vec![1];
     public.extend_from_slice(&fingerprint.0);
     public.extend_from_slice(&expiry.to_be_bytes());

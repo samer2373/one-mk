@@ -342,10 +342,9 @@ pub(crate) mod tests {
     async fn hostile_offer_totals_never_overflow() {
         let (transfers, _) = setup();
         let batch = batch(900, u32::MAX, u64::MAX);
-        let first = transfers.begin(FP, "peer", batch, u64::MAX);
-        let second = transfers.begin(FP, "peer", batch, 1);
-        assert_eq!(transfers.state().rx[&(FP, batch.id)].offered_bytes, u64::MAX);
-        drop((first, second));
+        assert!(transfers.try_begin(FP, "peer", batch, u64::MAX).is_err());
+        assert!(transfers.try_begin(FP, "peer", batch, 1).is_err());
+        assert!(!transfers.state().rx.contains_key(&(FP, batch.id)));
     }
 
     #[tokio::test]

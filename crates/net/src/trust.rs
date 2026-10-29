@@ -80,9 +80,10 @@ impl Device {
     }
     /// A value that doesn't parse (a bad hand edit) is the default.
     pub fn align(&self) -> Align {
-        self.align.parse().unwrap_or_default()
+        bounded_align(self.align.parse().unwrap_or_default())
     }
     pub fn set_align(&mut self, align: Align) {
+        let align = bounded_align(align);
         self.align = if align == Align::Stretch { String::new() } else { align.to_string() };
     }
     pub fn fingerprint(&self) -> Option<Fingerprint> {
@@ -90,6 +91,13 @@ impl Device {
     }
     pub fn short_id(&self) -> String {
         self.fingerprint().map(|f| f.short()).unwrap_or_default()
+    }
+}
+
+fn bounded_align(align: Align) -> Align {
+    match align {
+        Align::Offset(offset) => Align::Offset(offset.clamp(-100000, 100000)),
+        other => other,
     }
 }
 
@@ -108,11 +116,14 @@ pub struct TrustStore {
 impl TrustStore {
     pub fn load(dir: &Path) -> Result<Self> {
         let path = dir.join("devices.toml");
-        let file = match std::fs::read_to_string(&path) {
+        let mut file: File = match std::fs::read_to_string(&path) {
             Ok(s) => toml::from_str(&s).with_context(|| format!("reading {}", path.display()))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => File::default(),
             Err(e) => return Err(e.into()),
         };
+        for device in &mut file.devices {
+            if let Ok(Align::Offset(offset)) = device.align.parse() { device.set_align(Align::Offset(offset)); }
+        }
         Ok(Self { path, file })
     }
 
@@ -175,6 +186,24 @@ impl TrustStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hand_edited_offsets_are_normalized_on_load() {
+        let dir = std::env::temp_dir().join(format!("one-mk-trust-offset-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("devices.toml"), format!("[[device]]\nname = 'peer'\nfingerprint = '{}'\nside = 'left'\nalign = '{}'\n", "ab".repeat(32), i32::MIN)).unwrap();
+        let trust = TrustStore::load(&dir).unwrap();
+        assert_eq!(trust.devices()[0].align, "-100000");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn hostile_alignment_is_bounded() {
+        for (raw, expected) in [(i32::MAX, 100000), (i32::MIN, -100000)] {
+            let mut device = Device { align: raw.to_string(), ..Device::default() };
+            assert_eq!(device.align(), Align::Offset(expected));
+            device.set_align(Align::Offset(raw));
+            assert_eq!(device.align, expected.to_string());
+        }
+    }
     use super::*;
 
     /// A `devices.toml` from before layout versions and Ctrl/Cmd settings
