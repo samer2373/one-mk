@@ -818,10 +818,10 @@ echo mine
     #[test]
     fn newlines_and_nul_in_paths_are_refused() {
         for bad in ["/opt/a\nExec=touch /tmp/injected\n/one-mk", "/opt/a\rb", "/opt/a\0b"] {
-            let s = Setup { exe: bad.clone().into(), ..setup(&[(A, "x")]) };
+            let s = Setup { exe: bad.into(), ..setup(&[(A, "x")]) };
             let e = s.check().unwrap_err().to_string();
             assert!(e.contains("line break") || e.contains("NUL"), "{e}");
-            let s = Setup { home: Some(bad.clone().into()), ..setup(&[(A, "x")]) };
+            let s = Setup { home: Some(bad.into()), ..setup(&[(A, "x")]) };
             assert!(s.check().is_err());
             let t = Target { dir: tmp("hostile").join("m"), kind: Kind::KdeMenu };
             assert!(write_target(&t, &s).is_err());
