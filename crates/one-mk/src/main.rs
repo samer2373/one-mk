@@ -9,6 +9,7 @@ mod doctor;
 mod hooks;
 mod hotkeys;
 mod install;
+mod integrate;
 mod link;
 mod manage;
 mod netwatch;
@@ -138,6 +139,9 @@ enum Cmd {
         /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
         #[arg(long, value_name = "IP:PORT")]
         connect: Vec<SocketAddr>,
+        /// Also show a desktop notification if sending fails (the file manager's "Send to" entries use this).
+        #[arg(long)]
+        notify_errors: bool,
     },
     /// Show or change what the clipboard shares: which formats, and how much (applies at once).
     Clipboard {
@@ -200,6 +204,13 @@ enum Cmd {
     Install,
     /// Stop starting one-mk automatically.
     Uninstall,
+    /// Add "Send to <computer>" to the file manager's menu (Nautilus, Nemo,
+    /// Dolphin, Explorer, Finder); it follows the computers you pair or forget.
+    Integrate {
+        /// Remove the entries instead.
+        #[arg(long)]
+        remove: bool,
+    },
     /// Say which side of this computer a paired computer is on and how its
     /// edge lines up with this one's (applies at once if one-mk is
     /// running), and how Ctrl/Cmd are treated.
@@ -397,18 +408,27 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::ClipSend { to } => clipctl::move_clipboard(&dir, to, true).await,
             Cmd::ClipGet { from } => clipctl::move_clipboard(&dir, from, false).await,
             Cmd::Notify { state } => clipctl::notify(&dir, state).await,
-            Cmd::Send { paths, to, connect } => send::run(&dir, paths, to, connect).await,
-            Cmd::Pair { connect, machine } => pair::run(&dir, connect, pair::Out::new(machine)).await,
+            Cmd::Send { paths, to, connect, notify_errors } => send::run(&dir, paths, to, connect, notify_errors).await,
+            Cmd::Pair { connect, machine } => {
+                let paired = pair::run(&dir, connect, pair::Out::new(machine)).await;
+                integrate::refresh(&dir, custom_home);
+                paired
+            }
             Cmd::Devices => devices(&dir, verbose > 0),
             Cmd::Status => manage::status(&dir).await,
             Cmd::Takeback => manage::takeback(&dir).await,
             Cmd::Install => install::install(&dir, custom_home).await,
             Cmd::Uninstall => install::uninstall(),
+            Cmd::Integrate { remove } => integrate::run(&dir, custom_home, remove),
             Cmd::Layout { device, side, offset, swap_ctrl_cmd } => {
                 manage::layout(&dir, &device, side, offset, swap_ctrl_cmd).await
             }
             Cmd::Profile { cmd } => profiles::run(&dir, cmd).await,
-            Cmd::Forget { device } => forget(&dir, &device),
+            Cmd::Forget { device } => {
+                forget(&dir, &device)?;
+                integrate::refresh(&dir, custom_home);
+                Ok(())
+            }
             Cmd::Switch { to } => steer::switch(&dir, &to).await,
             Cmd::LockPointer { state } => {
                 steer::lock_pointer(&dir, steer::Toggle::parse(&state).context("on, off or toggle")?).await
@@ -558,6 +578,21 @@ mod tests {
         assert_eq!(r.connect.len(), 2);
         let r = run_args(&["--backend", "null", "run", "--backend", "native"]);
         assert_eq!(r.backend, Some(Backend::Native));
+    }
+
+    /// What the file manager entries run: file names after `--` are files, whatever they look like.
+    #[test]
+    fn send_to_entries_parse_odd_file_names() {
+        let cli = Cli::try_parse_from(["one-mk", "--home", "/h", "send", "--notify-errors", "--to", "abcd", "--", "-rf", "--to=x", "a b"]).unwrap();
+        match cli.cmd {
+            Some(Cmd::Send { paths, to, notify_errors, .. }) => {
+                assert_eq!(paths, [PathBuf::from("-rf"), PathBuf::from("--to=x"), PathBuf::from("a b")]);
+                assert_eq!(to.as_deref(), Some("abcd"));
+                assert!(notify_errors);
+            }
+            _ => panic!("not send"),
+        }
+        assert!(matches!(Cli::try_parse_from(["one-mk", "integrate", "--remove"]).unwrap().cmd, Some(Cmd::Integrate { remove: true })));
     }
 
     #[test]

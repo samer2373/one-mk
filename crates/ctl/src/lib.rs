@@ -5,6 +5,7 @@
 
 pub mod client;
 pub mod install;
+pub mod integrate;
 pub mod proc;
 pub mod status;
 

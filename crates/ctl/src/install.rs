@@ -47,6 +47,17 @@ impl Launch {
     }
 }
 
+/// The path to start this program by later (from the login service, the
+/// file manager menu). Inside an AppImage the running copy lives in a
+/// temporary mount that is gone afterwards, so it is the AppImage file
+/// itself, which hands its arguments to `one-mk`.
+pub fn program_path() -> Result<PathBuf> {
+    match std::env::var_os("APPIMAGE").map(PathBuf::from) {
+        Some(p) if p.is_file() => Ok(p),
+        _ => std::env::current_exe().context("finding this program"),
+    }
+}
+
 /// The program called `name` that sits next to `exe`, if there is one.
 pub fn sibling(exe: &Path, name: &str) -> Option<PathBuf> {
     let p = exe.with_file_name(format!("{name}{}", std::env::consts::EXE_SUFFIX));
@@ -181,6 +192,22 @@ fn desktop_entry(name: &str, exe: &Path, args: &[String]) -> String {
          Terminal=false\nX-GNOME-Autostart-enabled=true\n",
         command_line(exe, args)
     )
+}
+
+/// The files a Linux package ships, as (path relative to the package root,
+/// text), for the program installed at `bindir` (`/usr/bin`). Built from
+/// the same text `one-mk install` writes into the home folder, so the two
+/// cannot drift apart. Used by `scripts/package-*.sh` through the
+/// `packaging-files` example.
+pub fn packaged_files(bindir: &Path) -> Vec<(String, String)> {
+    let launch = Launch { exe: bindir.join("one-mk"), tray: Some(bindir.join("one-mk-tray")), home: None, start_now: false };
+    let daemon_entry = desktop_entry("one-mk", &launch.exe, &launch.args()).replace("X-GNOME-Autostart-enabled=true\n", "") + "NoDisplay=true\n";
+    vec![
+        ("usr/lib/systemd/user/one-mk.service".to_owned(), systemd_unit(&launch)),
+        (format!("usr/share/applications/{}.desktop", one_mk_proto::LINUX_APP_ID), daemon_entry),
+        // Not started by default: the tray only shows the state of a service the user turned on.
+        ("etc/xdg/autostart/one-mk-tray.desktop".to_owned(), desktop_entry("one-mk tray", launch.tray.as_ref().unwrap(), &launch.tray_args(false))),
+    ]
 }
 
 fn install_linux(l: &Launch) -> Result<String> {
@@ -369,6 +396,18 @@ mod tests {
         assert!(unit.contains("Restart=on-failure"));
         let with_home = systemd_unit(&launch(Some("/tmp/a b")));
         assert!(with_home.contains("ExecStart=\"/opt/my apps/one-mk\" \"run\" \"--home\" \"/tmp/a b\"\n"), "{with_home}");
+    }
+
+    #[test]
+    fn packaged_files_match_what_install_writes() {
+        let files = packaged_files(Path::new("/usr/bin"));
+        let unit = &files.iter().find(|(p, _)| p.ends_with("one-mk.service")).unwrap().1;
+        assert_eq!(*unit, systemd_unit(&Launch { exe: "/usr/bin/one-mk".into(), tray: None, home: None, start_now: false }));
+        assert!(unit.contains("ExecStart=\"/usr/bin/one-mk\" \"run\"\n"));
+        let tray = &files.iter().find(|(p, _)| p.starts_with("etc/xdg/autostart/")).unwrap().1;
+        assert!(tray.contains("Exec=\"/usr/bin/one-mk-tray\"\n"), "{tray}");
+        let hidden = &files.iter().find(|(p, _)| p.ends_with("io.github.onemk.OneMk.desktop")).unwrap().1;
+        assert!(hidden.contains("NoDisplay=true") && !hidden.contains("Autostart"), "{hidden}");
     }
 
     #[test]
