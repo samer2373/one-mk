@@ -76,6 +76,7 @@ pub struct Status {
     pub name: String,
     pub id: String,
     pub port: u16,
+    pub backend: InputBackend,
     /// The paired computer this one is controlling right now.
     pub controlling: Option<String>,
     /// The paired computer controlling this one right now.
@@ -105,6 +106,40 @@ pub struct Status {
     /// Where the computers are, in detail (boxed: most readers never look,
     /// and it would double the size of every `Status`).
     pub layout: Box<LayoutStatus>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum InputBackend {
+    #[default]
+    Unknown,
+    Null,
+    Portal,
+    Native,
+    X11,
+}
+
+impl InputBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "",
+            Self::Null => "null",
+            Self::Portal => "portal",
+            Self::Native => "native",
+            Self::X11 => "x11",
+        }
+    }
+}
+
+impl From<&str> for InputBackend {
+    fn from(value: &str) -> Self {
+        match value {
+            "null" => Self::Null,
+            "portal" => Self::Portal,
+            "native" => Self::Native,
+            "x11" => Self::X11,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// Everything a layout editor needs to draw where the computers are,
@@ -283,7 +318,7 @@ impl Status {
                 out += &format!("{key}\t1\n");
             }
         }
-        for (key, v) in [("gaming", &self.gaming), ("edges", &self.edges)] {
+        for (key, v) in [("gaming", self.gaming.as_str()), ("edges", self.edges.as_str()), ("backend", self.backend.as_str())] {
             if !v.is_empty() {
                 out += &format!("{key}\t{v}\n");
             }
@@ -328,6 +363,7 @@ impl Status {
                 ["name", v] => s.name = v.into(),
                 ["id", v] => s.id = v.into(),
                 ["port", v] => s.port = v.parse().ok()?,
+                ["backend", value] => s.backend = value.into(),
                 ["controlling", v] => s.controlling = Some(v.into()),
                 ["controlled_by", v] => s.controlled_by = Some(v.into()),
                 ["pointer_locked", v] => s.pointer_locked = v == "1",
@@ -374,6 +410,9 @@ impl Status {
 
     pub fn render(&self) -> String {
         let mut out = format!("one-mk is running on {} (id {}).\n", self.name, self.id);
+        if !self.backend.as_str().is_empty() {
+            out += &format!("Input backend: {}.\n", self.backend.as_str());
+        }
         out += &match (&self.controlling, &self.controlled_by) {
             (Some(p), _) => format!("The mouse and keyboard are controlling {p} right now.\n"),
             (_, Some(p)) => format!("{p} is controlling this computer right now. {}\n", takeback_hint()),
@@ -448,11 +487,12 @@ mod tests {
             lock_sync: true,
             edges: "dead corners 20 px, dwell 300 ms".into(),
             input: vec!["Waiting for your approval: allow one-mk in the desktop's dialog.".into()],
+            backend: InputBackend::Null,
             ..s
         };
         assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
         let text = s.render();
-        for want in ["locked to this computer", "screen is locked", "Edges: dead corners 20 px", "Gaming mode: auto (relative", "Lock sync is on", "Waiting for your approval"] {
+        for want in ["Input backend: null", "locked to this computer", "screen is locked", "Edges: dead corners 20 px", "Gaming mode: auto (relative", "Lock sync is on", "Waiting for your approval"] {
             assert!(text.contains(want), "{want}: {text}");
         }
         assert_eq!(Status::decode("error unknown request\n"), None);

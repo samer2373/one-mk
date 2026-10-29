@@ -83,7 +83,7 @@ impl Default for ClipSettings {
             image: true,
             max_mb: (DEFAULT_MAX_BYTES >> 20) as u32,
             skip_sensitive: true,
-            allow_pull: true,
+            allow_pull: false,
         }
     }
 }
@@ -281,7 +281,14 @@ impl Settings {
     pub fn load(dir: &Path) -> Result<Settings> {
         let path = path(dir);
         match std::fs::read_to_string(&path) {
-            Ok(s) => toml::from_str(&s).with_context(|| format!("reading {}", path.display())),
+            Ok(s) => {
+                let mut settings: Settings = toml::from_str(&s).with_context(|| format!("reading {}", path.display()))?;
+                settings.hooks.trust_permissions = crate::hooks::permissions_trusted(dir);
+                if settings.hooks.any() && !settings.hooks.trust_permissions {
+                    settings.hooks.blocked = crate::hooks::unsafe_permissions(&path);
+                }
+                Ok(settings)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
             Err(e) => Err(e.into()),
         }
@@ -306,7 +313,17 @@ impl Settings {
         std::fs::create_dir_all(dir)?;
         let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let write = || -> Result<()> {
-            std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
+            use std::io::Write;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&tmp)?;
+            file.write_all(toml::to_string_pretty(self)?.as_bytes())?;
+            drop(file);
             std::fs::rename(&tmp, path(dir))?;
             Ok(())
         };
@@ -525,6 +542,16 @@ pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn settings_replacement_keeps_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("private-save");
+        Settings::default().save(&dir).unwrap();
+        std::fs::set_permissions(path(&dir), std::fs::Permissions::from_mode(0o600)).unwrap();
+        Settings::default().save(&dir).unwrap();
+        assert_eq!(std::fs::metadata(path(&dir)).unwrap().permissions().mode() & 0o777, 0o600);
+    }
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -627,9 +654,16 @@ mod tests {
     #[test]
     fn clipboard_defaults_share_everything_up_to_25_mb() {
         let s = Settings::default();
+        assert!(!s.clipboard.allow_pull, "fetching must be opt-in");
         assert!(s.clipboard.text && s.clipboard.html && s.clipboard.image && s.notify_files);
         assert_eq!(s.clipboard.filter(), Filter::default());
         assert_eq!(s.clipboard.max_mb, 25);
+    }
+
+    #[test]
+    fn explicit_clipboard_fetch_opt_in_survives_the_new_default() {
+        let settings: Settings = toml::from_str("[clipboard]\nallow_pull = true\n").unwrap();
+        assert!(settings.clipboard.allow_pull);
     }
 
     #[test]

@@ -354,7 +354,10 @@ impl Inbox {
         (size, mtime, batch): (u64, u64, Batch),
     ) -> Result<()> {
         // Counts toward the transfer's progress and end, also when refused.
-        let ticket = self.transfers.begin(fp, peer, batch, size);
+        let ticket = match self.transfers.try_begin(fp, peer, batch, size) {
+            Ok(ticket) => ticket,
+            Err(reason) => return write_file_msg(send, &FileMsg::Reject { reason: reason.into() }).await,
+        };
         let parts = match sanitize(path) {
             Ok(p) => p,
             Err(reason) => {
@@ -606,7 +609,7 @@ fn peer_partial_bytes(staging: &Path, prefix: &str, except: &str) -> u64 {
         .filter_map(|e| e.metadata().ok())
         .filter(|m| m.is_file())
         .map(|m| m.len())
-        .sum()
+        .fold(0u64, u64::saturating_add)
 }
 
 fn human(n: u64) -> String {
@@ -910,6 +913,13 @@ pub struct Progress {
     pub skipped: AtomicU64,
 }
 
+fn add_progress(counter: &AtomicU64, amount: u64) {
+    let mut current = counter.load(Ordering::Relaxed);
+    while let Err(actual) = counter.compare_exchange_weak(current, current.saturating_add(amount), Ordering::Relaxed, Ordering::Relaxed) {
+        current = actual;
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     Saved { name: String, resumed_from: u64 },
@@ -939,7 +949,10 @@ pub async fn send_files_as(
     progress: Arc<Progress>,
     id: u64,
 ) -> Vec<(Outgoing, Outcome)> {
-    let bytes = files.iter().map(|f| f.size).sum();
+    let bytes = files.iter().map(|file| file.size).fold(0u64, u64::saturating_add);
+    if files.len() > 10_000 || bytes > 1 << 40 {
+        return files.into_iter().map(|file| (file, Outcome::Rejected("file batch exceeds the limit of 10000 files or 1 TiB".into()))).collect();
+    }
     progress.total.store(bytes, Ordering::Relaxed);
     let batch = Batch { id, files: u32::try_from(files.len()).unwrap_or(u32::MAX), bytes };
     let n = files.len();
@@ -992,16 +1005,16 @@ async fn send_one(
     let offset = match read_file_msg(recv).await? {
         Some(FileMsg::Accept { offset }) => offset,
         Some(FileMsg::Reject { reason }) => {
-            progress.done.fetch_add(file.size, Ordering::Relaxed);
-            progress.skipped.fetch_add(file.size, Ordering::Relaxed);
+            add_progress(&progress.done, file.size);
+            add_progress(&progress.skipped, file.size);
             return Ok(Outcome::Rejected(reason));
         }
         Some(FileMsg::Failed { reason }) => bail!("receiver: {reason}"),
         other => bail!("unexpected reply {other:?}"),
     };
     ensure!(offset <= file.size, "receiver asked for an offset past the end");
-    progress.done.fetch_add(offset, Ordering::Relaxed);
-    progress.skipped.fetch_add(offset, Ordering::Relaxed);
+    add_progress(&progress.done, offset);
+    add_progress(&progress.skipped, offset);
 
     // Disk reader (which also hashes) → bounded channel → network.
     let (tx, mut rx) = mpsc::channel::<bytes::Bytes>(DEPTH);
@@ -1019,7 +1032,7 @@ async fn send_one(
             }
             return Err(e.into());
         }
-        progress.done.fetch_add(n, Ordering::Relaxed);
+        add_progress(&progress.done, n);
     }
     let hash = reader.await??;
     write_file_msg(send, &FileMsg::End { hash }).await?;

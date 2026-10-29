@@ -51,6 +51,10 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
     if files.is_empty() {
         bail!("nothing to send (the folders are empty)");
     }
+    let total = files.iter().fold(0u64, |total, file| total.saturating_add(file.size));
+    if files.len() > 10_000 || total > 1 << 40 {
+        bail!("file batch exceeds the limit of 10000 files or 1 TiB");
+    }
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let trust = TrustStore::load(dir)?;
     let device = pick(&trust, to.as_deref())?.clone();
@@ -67,19 +71,19 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
         tokio::time::sleep(BUSY_RETRY).await;
         let (again, more) = tried.send(busy.into_iter().map(|(f, _)| f).collect(), true).await?;
         results.extend(again);
-        sent += more;
+        sent = sent.saturating_add(more);
     }
 
     let elapsed = start.elapsed().as_secs_f64();
     eprint!("\r\x1b[2K");
     let mut failed = 0;
     let mut first_reason = String::new();
-    let (mut saved, mut saved_bytes) = (0, 0);
+    let (mut saved, mut saved_bytes) = (0, 0u64);
     for (file, outcome) in &results {
         match outcome {
             Outcome::Saved { resumed_from, .. } => {
                 saved += 1;
-                saved_bytes += file.size;
+                saved_bytes = saved_bytes.saturating_add(file.size);
                 if *resumed_from > 0 {
                     eprintln!("  resumed {} from {}", file.rel, bytes(*resumed_from));
                 }
@@ -123,7 +127,7 @@ impl Attempt<'_> {
         let peer = find(&node, self.identity, self.device, self.fp, self.connect.to_vec()).await?;
         let conn = peer.conn;
 
-        let total: u64 = files.iter().map(|f| f.size).sum();
+        let total = files.iter().fold(0u64, |total, file| total.saturating_add(file.size));
         let addr = conn.remote_address();
         let addr = SocketAddr::new(addr.ip().to_canonical(), addr.port());
         let name = &self.device.name;
