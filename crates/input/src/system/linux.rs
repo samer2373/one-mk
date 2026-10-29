@@ -113,28 +113,37 @@ impl Inhibitor for KeepAwake {
     }
 }
 
+/// How long a D-Bus service may take to answer before it counts as not
+/// there: a hung screensaver or logind must not hold the inhibitor task
+/// (and with it the release) forever.
+const DBUS_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn within<T>(what: &str, f: impl std::future::Future<Output = zbus::Result<T>>) -> zbus::Result<T> {
+    tokio::time::timeout(DBUS_TIMEOUT, f).await.unwrap_or_else(|_| Err(zbus::Error::Failure(format!("{what}: no answer"))))
+}
+
 /// Holds the inhibitors until `released` completes (its sender dropped).
 async fn hold(reason: &str, released: tokio::sync::oneshot::Receiver<()>) -> zbus::Result<()> {
-    let saver = async {
+    let saver = within("screensaver", async {
         let conn = zbus::Connection::session().await?;
         let proxy = zbus::Proxy::new(&conn, SCREENSAVER, "/org/freedesktop/ScreenSaver", SCREENSAVER).await?;
         let cookie: u32 = proxy.call("Inhibit", &("one-mk", reason)).await?;
         zbus::Result::Ok((proxy, cookie))
-    }
+    })
     .await;
-    let idle = async {
+    let idle = within("logind", async {
         let conn = zbus::Connection::system().await?;
         let manager = zbus::Proxy::new(&conn, LOGIN1, "/org/freedesktop/login1", "org.freedesktop.login1.Manager").await?;
         let fd: zbus::zvariant::OwnedFd = manager.call("Inhibit", &("idle", "one-mk", reason, "block")).await?;
         zbus::Result::Ok(fd)
-    }
+    })
     .await;
     if let (Err(a), Err(b)) = (&saver, &idle) {
         tracing::warn!("no screensaver inhibitor ({a}) and no logind one ({b})");
     }
     let _ = released.await;
     if let Ok((proxy, cookie)) = saver {
-        let _ = proxy.call::<_, _, ()>("UnInhibit", &(cookie,)).await;
+        let _ = within("screensaver", proxy.call::<_, _, ()>("UnInhibit", &(cookie,))).await;
     }
     drop(idle); // closing the file descriptor releases logind's inhibitor
     Ok(())

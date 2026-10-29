@@ -7,7 +7,7 @@ use super::{DisplaySleeper, FocusProbe, Inhibitor, PowerEvent, ScreenLocker};
 use tokio::sync::mpsc;
 use crate::win_logic::{Ltrb, is_fullscreen};
 use one_mk_proto::Focus;
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, RECT};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, RECT};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -27,9 +27,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, HWND_BROADCAST, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND,
     PBT_POWERSETTINGCHANGE, PostMessageW, RegisterClassW, SC_MONITORPOWER, TranslateMessage, WM_POWERBROADCAST,
     WM_SYSCOMMAND, WNDCLASSW, EVENT_SYSTEM_FOREGROUND, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_QUIT, WM_USER,
+    WINEVENT_SKIPOWNPROCESS, WM_QUIT, WM_USER, PostQuitMessage,
 };
-use std::sync::OnceLock;
 
 #[derive(Default)]
 pub(super) struct Foreground {
@@ -230,22 +229,28 @@ fn is_display_state(g: &windows_sys::core::GUID) -> bool {
     (g.data1, g.data2, g.data3, g.data4) == (want.data1, want.data2, want.data3, want.data4)
 }
 
-static POWER_EVENTS: OnceLock<mpsc::UnboundedSender<PowerEvent>> = OnceLock::new();
+std::thread_local! {
+    /// Where this thread's power window reports to: each watcher (each
+    /// daemon run, in tests several in one process) has a thread and a
+    /// window of its own, and a window's procedure runs on its thread.
+    static POWER_EVENTS: std::cell::RefCell<Option<mpsc::UnboundedSender<PowerEvent>>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 /// Reports the display turning off or on (`GUID_CONSOLE_DISPLAY_STATE`) and
 /// the computer suspending or resuming, from a hidden window on a thread
 /// of its own that sleeps in `GetMessageW` until Windows says something.
+/// The thread ends with the first event after `events` is closed.
 pub(super) fn watch_display(events: mpsc::UnboundedSender<PowerEvent>) {
-    if POWER_EVENTS.set(events).is_err() {
-        return; // already watching
-    }
-    let _ = std::thread::Builder::new().name("one-mk-power".into()).spawn(|| {
+    let _ = std::thread::Builder::new().name("one-mk-power".into()).spawn(move || {
+        POWER_EVENTS.with(|p| *p.borrow_mut() = Some(events));
         let class: Vec<u16> = "one-mk-power\0".encode_utf16().collect();
         // SAFETY: standard window creation; all pointers outlive the calls.
         unsafe {
             let hinst = GetModuleHandleW(std::ptr::null());
             let wc = WNDCLASSW { lpfnWndProc: Some(power_proc), hInstance: hinst, lpszClassName: class.as_ptr(), ..std::mem::zeroed() };
-            if RegisterClassW(&wc) == 0 {
+            // A second watcher finds the class registered already.
+            if RegisterClassW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS {
                 return;
             }
             // Never shown, but top level: suspend and resume are broadcast
@@ -296,8 +301,12 @@ unsafe extern "system" fn power_proc(
             }
             _ => None,
         };
-        if let (Some(asleep), Some(tx)) = (asleep, POWER_EVENTS.get()) {
-            let _ = tx.send(PowerEvent::DisplayAsleep(asleep));
+        if let Some(asleep) = asleep {
+            let gone = POWER_EVENTS.with(|p| p.borrow().as_ref().is_none_or(|tx| tx.send(PowerEvent::DisplayAsleep(asleep)).is_err()));
+            if gone {
+                // SAFETY: ends this thread's message loop.
+                unsafe { PostQuitMessage(0) };
+            }
         }
         return 1; // TRUE: handled
     }

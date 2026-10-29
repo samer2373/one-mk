@@ -787,12 +787,16 @@ impl Ctx {
 }
 
 /// The media key event in an `NX_SYSDEFINED` event, if it is one.
+/// AppKit objects made here are autoreleased, and this runs on the tap's
+/// thread, which has no pool of its own: without this one they would leak.
 fn read_media(ev: &CGEvent) -> Option<logic::MediaEvent> {
-    let ns = NSEvent::eventWithCGEvent(ev)?;
-    if ns.r#type() != NSEventType::SystemDefined {
-        return None;
-    }
-    logic::parse_media(ns.subtype().0, ns.data1() as i64)
+    objc2::rc::autoreleasepool(|_| {
+        let ns = NSEvent::eventWithCGEvent(ev)?;
+        if ns.r#type() != NSEventType::SystemDefined {
+            return None;
+        }
+        logic::parse_media(ns.subtype().0, ns.data1() as i64)
+    })
 }
 
 fn keycode(ev: &CGEvent) -> u16 {
@@ -1213,8 +1217,13 @@ impl Injector {
         self.post(&ev, logic::key_extra_flags(kc));
     }
 
-    /// Posts a media key press or release (`NX_SYSDEFINED`, subtype 8).
+    /// Posts a media key press or release (`NX_SYSDEFINED`, subtype 8). In
+    /// an autorelease pool: this thread has none, and AppKit autoreleases.
     fn media_key(&self, nx: u8, down: bool, repeat: bool) {
+        objc2::rc::autoreleasepool(|_| self.post_media_key(nx, down, repeat));
+    }
+
+    fn post_media_key(&self, nx: u8, down: bool, repeat: bool) {
         let state = if down { 0xA00 } else { 0xB00 };
         let Some(ns) = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
             NSEventType::SystemDefined,
