@@ -54,6 +54,7 @@ pub fn no_raw_motion_reason() -> &'static str {
 pub enum Scope {
     #[default]
     Global,
+    Local,
     /// Computers running this OS (one of `os`).
     Os(u8),
     /// One paired computer, by name or id.
@@ -80,6 +81,7 @@ impl Scope {
     /// a computer beats an OS beats everything.
     fn rank(&self, peer: &PeerFacts) -> Option<u8> {
         match self {
+            Scope::Local => None,
             Scope::Global => Some(0),
             Scope::Os(o) => (*o == peer.os).then_some(1),
             Scope::Peer(p) => peer_matches(p, peer.name, peer.id).then_some(2),
@@ -114,6 +116,7 @@ fn os_name(o: u8) -> &'static str {
 impl fmt::Display for Scope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Scope::Local => f.write_str("this computer (local)"),
             Scope::Global => f.write_str("every computer"),
             Scope::Os(o) => write!(f, "{} computers", os_name(*o)),
             Scope::Peer(p) => write!(f, "{p}"),
@@ -125,6 +128,11 @@ impl Serialize for Scope {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         match self {
+            Scope::Local => {
+                let mut m = s.serialize_map(Some(1))?;
+                m.serialize_entry("local", &true)?;
+                m.end()
+            }
             Scope::Global => s.serialize_str("global"),
             Scope::Os(o) => {
                 let mut m = s.serialize_map(Some(1))?;
@@ -146,7 +154,7 @@ impl<'de> Deserialize<'de> for Scope {
         impl<'de> Visitor<'de> for V {
             type Value = Scope;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str(r#""global", { os = "mac|windows|linux" } or { peer = "computer" }"#)
+                f.write_str(r#""global", { os = "mac|windows|linux" }, { peer = "computer" } or { local = true }"#)
             }
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Scope, E> {
                 if v.trim().eq_ignore_ascii_case("global") {
@@ -159,17 +167,24 @@ impl<'de> Deserialize<'de> for Scope {
                 let mut out = None;
                 while let Some(key) = map.next_key::<String>()? {
                     if out.is_some() {
-                        return Err(de::Error::custom("a scope has one entry: os or peer"));
+                        return Err(de::Error::custom("a scope has one entry: os, peer or local"));
+                    }
+                    if key == "local" {
+                        if !map.next_value::<bool>()? {
+                            return Err(de::Error::custom("local scope must be true"));
+                        }
+                        out = Some(Scope::Local);
+                        continue;
                     }
                     let value: String = map.next_value()?;
                     out = Some(match key.as_str() {
                         "os" => Scope::Os(parse_os(&value).map_err(de::Error::custom)?),
                         "peer" if value.trim().is_empty() => return Err(de::Error::custom("scope peer is empty")),
                         "peer" => Scope::Peer(value.trim().to_owned()),
-                        other => return Err(de::Error::custom(format!("scope {other:?}: say os or peer"))),
+                        other => return Err(de::Error::custom(format!("scope {other:?}: say os or peer, or local = true"))),
                     });
                 }
-                out.ok_or_else(|| de::Error::custom("an empty scope: say os or peer"))
+                out.ok_or_else(|| de::Error::custom("an empty scope: say os or peer, or local = true"))
             }
         }
         d.deserialize_any(V)
@@ -550,18 +565,45 @@ impl TuningSettings {
     /// Key and button rules that apply to `peer`, most specific scope
     /// first, one per key, layer and modifiers; and what was skipped.
     fn specs(&self, peer: &PeerFacts) -> (Vec<RuleSpec>, Vec<String>) {
+        self.specs_in(peer, false)
+    }
+
+    pub fn local_keymap(&self) -> Result<Keymap> {
+        Ok(self.local_compiled()?.map)
+    }
+
+    fn local_compiled(&self) -> Result<remap::Compiled> {
+        let peer = PeerFacts { name: "", id: "", os: os::local(), apps: &[] };
+        let (specs, warnings) = self.specs_in(&peer, true);
+        if !warnings.is_empty() {
+            bail!("{}", warnings.join("; "));
+        }
+        Ok(Keymap::compile(&specs, remap::Target { os: peer.os, swap: false }, self.keymap.tap())?)
+    }
+
+    fn specs_in(&self, peer: &PeerFacts, local: bool) -> (Vec<RuleSpec>, Vec<String>) {
         let mut warnings = Vec::new();
         let mut found: Vec<(u8, usize, RuleSpec, String)> = Vec::new();
         let keys = self.keymap.rule.iter().enumerate().map(|(i, r)| (place("input.keymap.rule", i), &r.scope, &r.app, r.spec()));
         let buttons = self.button.iter().enumerate().map(|(i, r)| (place("input.button", i), &r.scope, &r.app, r.spec()));
-        for (n, (at, scope, app, spec)) in keys.chain(buttons).enumerate() {
-            let Some(rank) = scope.rank(peer) else { continue };
-            let rank = match app_rank(app, peer) {
-                Ok(Some(r)) => rank + r,
-                Ok(None) => continue,
-                Err(e) => {
-                    warnings.push(format!("{at} skipped: {e}"));
+        for (n, (at, scope, app, spec)) in keys.chain(buttons.filter(|_| !local)).enumerate() {
+            let rank = if local {
+                if *scope != Scope::Local {
                     continue;
+                }
+                if app.is_some() {
+                    continue; // a local rule can't follow the focused app of another computer
+                }
+                0
+            } else {
+                let Some(rank) = scope.rank(peer) else { continue };
+                match app_rank(app, peer) {
+                    Ok(Some(r)) => rank + r,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        warnings.push(format!("{at} skipped: {e}"));
+                        continue;
+                    }
                 }
             };
             match spec {
@@ -747,7 +789,7 @@ impl TuningSettings {
                 }
             };
             let target = match scope {
-                Scope::Global => None,
+                Scope::Global | Scope::Local => None,
                 Scope::Os(o) => Some(*o),
                 Scope::Peer(name) => paired.iter().find(|(n, id, _)| peer_matches(name, n, id)).map(|(.., o)| *o),
             };
@@ -778,8 +820,21 @@ impl TuningSettings {
         }
         let focused: Vec<Vec<String>> = std::iter::once(Vec::new()).chain(plain_apps.into_iter().map(|a| vec![a])).collect();
         for s in &scopes {
+            if **s == Scope::Local {
+                if !cfg!(any(windows, target_os = "macos")) {
+                    out.push("local rules need Windows or macOS and are ignored on this platform".into());
+                } else {
+                    out.push("local key rules are inactive: native hook integration is not implemented yet (plan 4C)".into());
+                }
+                match self.local_compiled() {
+                    Ok(compiled) => out.extend(compiled.warnings),
+                    Err(error) => out.push(format!("local rules: {error}")),
+                }
+                continue;
+            }
             for apps in &focused {
                 let facts = match s {
+                    Scope::Local => unreachable!(),
                     Scope::Global => PeerFacts { name: "", id: "", os: os::UNKNOWN, apps },
                     Scope::Os(o) => PeerFacts { name: "", id: "", os: *o, apps },
                     Scope::Peer(p) => PeerFacts { name: p, id: "", os: os::UNKNOWN, apps },
@@ -797,6 +852,12 @@ impl TuningSettings {
                 }
                 out.extend(self.scroll_for(&facts).1);
             }
+        }
+        if self.button.iter().any(|rule| rule.scope == Scope::Local)
+            || self.pointer.iter().any(|rule| rule.scope == Scope::Local)
+            || self.scroll.iter().any(|rule| rule.scope == Scope::Local)
+        {
+            out.push("local scope is reserved for input.keymap.rule; local button, pointer and scroll rules are ignored".into());
         }
         for (i, r) in self.pointer.iter().enumerate() {
             if r.acceleration.is_some_and(|a| a != AccelMode::System) && !RAW_MOTION {
@@ -825,7 +886,7 @@ impl TuningSettings {
         out
     }
 
-    /// One line for `one-mk status`, if anything is set.
+    /// Summary for `one-mk status`, with a separate local availability line.
     pub fn summary(&self) -> Option<String> {
         if self.is_empty() {
             return None;
@@ -844,7 +905,14 @@ impl TuningSettings {
         if !self.scroll.is_empty() {
             parts.push(n(self.scroll.len(), "scroll setting", "scroll settings"));
         }
-        Some(format!("Input tuning: {} (one-mk keymap, buttons, pointer, scroll).", parts.join(", ")))
+        let local = if cfg!(target_os = "linux") && self.keymap.rule.iter().any(|rule| rule.scope == Scope::Local) {
+            "\nlocal key rules are not available on Linux"
+        } else if self.keymap.rule.iter().any(|rule| rule.scope == Scope::Local) {
+            "\nlocal key rules are inactive: native hook integration is not implemented yet (plan 4C)"
+        } else {
+            ""
+        };
+        Some(format!("Input tuning: {} (one-mk keymap, buttons, pointer, scroll).{local}", parts.join(", ")))
     }
 }
 
@@ -902,8 +970,12 @@ pub struct ScopeArgs {
 }
 
 impl ScopeArgs {
+    fn selected(&self) -> Result<Scope> {
+        Scope::from_args(self.peer.as_deref(), self.os.as_deref())
+    }
+
     fn scope(&self, dir: &Path) -> Result<Scope> {
-        let s = Scope::from_args(self.peer.as_deref(), self.os.as_deref())?;
+        let s = self.selected()?;
         check_scope(dir, &s)?;
         Ok(s)
     }
@@ -918,6 +990,43 @@ impl ScopeArgs {
             bail!("{why}");
         }
         Ok(Some(p.to_string()))
+    }
+}
+
+#[derive(clap::Args, Debug, Default, Clone)]
+pub struct KeyScopeArgs {
+    /// Reserve a local keyboard rule (inactive: native hooks are not wired yet).
+    #[arg(long, conflicts_with_all = ["peer", "os"])]
+    pub local: bool,
+    #[command(flatten)]
+    pub remote: ScopeArgs,
+}
+
+impl KeyScopeArgs {
+    fn selected(&self) -> Result<Scope> {
+        if self.local {
+            if self.remote.peer.is_some() || self.remote.os.is_some() {
+                bail!("say --local, --peer or --os, not more than one");
+            }
+            Ok(Scope::Local)
+        } else {
+            self.remote.selected()
+        }
+    }
+
+    fn scope(&self, dir: &Path) -> Result<Scope> {
+        let s = self.selected()?;
+        check_scope(dir, &s)?;
+        Ok(s)
+    }
+
+    /// `--app`, checked. A local rule (this computer's own keyboard) can't
+    /// follow the app focused on another computer, so `--local --app` is refused.
+    fn app(&self) -> Result<Option<String>> {
+        if self.local && self.remote.app.is_some() {
+            bail!("--app is for rules about another computer; a --local rule applies to this computer's own keyboard");
+        }
+        self.remote.app()
     }
 }
 
@@ -948,7 +1057,7 @@ pub enum KeymapCmd {
         #[arg(long, value_name = "MS")]
         timeout_ms: Option<u32>,
         #[command(flatten)]
-        scope: ScopeArgs,
+        scope: KeyScopeArgs,
     },
     /// Remove the rule for FROM (in that scope and layer).
     Remove {
@@ -956,7 +1065,7 @@ pub enum KeymapCmd {
         #[arg(long, value_name = "NAME")]
         layer: Option<String>,
         #[command(flatten)]
-        scope: ScopeArgs,
+        scope: KeyScopeArgs,
     },
     /// Remove every key rule.
     Clear,
@@ -979,9 +1088,12 @@ fn list_keymap(s: &TuningSettings) {
         println!("No key rules: keys are sent as they are. Add one with `one-mk keymap add capslock esc`.");
         return;
     }
-    println!("Key rules (applied to keys sent to other computers):");
+    println!("Key rules (remote unless marked local; local integration is not active yet):");
     for r in &s.keymap.rule {
         println!("  {}{}", r.describe(), where_suffix(&r.scope, &r.app));
+    }
+    if s.keymap.rule.iter().any(|rule| rule.scope == Scope::Local) {
+        println!("Local key rules are inactive: native hook integration is not implemented yet (plan 4C).");
     }
     if let Some(ms) = s.keymap.tap_ms {
         println!("Tap/hold keys decide after {ms} ms.");
@@ -1027,6 +1139,9 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
                 }
                 // The whole keymap must still compile (layers, sizes), also
                 // with the rule's app focused.
+                if scope == Scope::Local {
+                    s.input.local_keymap()?;
+                }
                 let focused: Vec<String> = app.iter().filter(|a| !a.starts_with('!') && !a.contains('*')).cloned().collect();
                 let facts = PeerFacts { name: "", id: "", os: os::UNKNOWN, apps: &focused };
                 let (specs, _) = s.input.specs(&facts);
@@ -1038,8 +1153,8 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             settings::apply(dir).await?;
         }
         KeymapCmd::Remove { from, layer, scope } => {
-            let app = scope.app.clone();
-            let scope = Scope::from_args(scope.peer.as_deref(), scope.os.as_deref())?;
+            let app = scope.app()?;
+            let scope = scope.selected()?;
             let t: Trigger = from.parse().map_err(|e: keynames::NameError| anyhow::anyhow!("{e}"))?;
             let removed = Settings::update(dir, |s| {
                 Ok(find_key_rule(&s.input.keymap.rule, &t, &layer, &scope, &app).map(|i| s.input.keymap.rule.remove(i)))
@@ -1374,8 +1489,8 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             println!("{line}.");
         }
         ButtonsCmd::Unmap { button, scope } => {
-            let app = scope.app.clone();
-            let scope = Scope::from_args(scope.peer.as_deref(), scope.os.as_deref())?;
+            let app = scope.app()?;
+            let scope = scope.selected()?;
             let (_, t) = button_from(&button)?;
             let removed = Settings::update(dir, |s| {
                 let at = s.input.button.iter().position(|r| {
@@ -1775,6 +1890,75 @@ scope = { peer = "Laptop" }
         }
         assert_eq!(Scope::from_args(None, Some("Mac")).unwrap(), Scope::Os(os::MACOS));
         assert!(Scope::from_args(Some("x"), Some("mac")).is_err());
+    }
+
+    #[test]
+    fn local_scope_is_explicit_and_never_reaches_a_peer() {
+        let tuning = load("[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"esc\"\nscope = { local = true }\n");
+        assert_eq!(tuning.keymap.rule[0].scope, Scope::Local);
+        for target in [os::LINUX, os::WINDOWS, os::MACOS] {
+            assert!(tuning.resolve(&facts(target), false).keymap.is_empty());
+        }
+        assert!(!tuning.local_keymap().unwrap().is_empty());
+        let encoded = toml::to_string(&Settings { input: tuning.clone(), ..Default::default() }).unwrap();
+        assert_eq!(load(&encoded), tuning);
+        assert!(toml::from_str::<Settings>("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nscope = { local = false }\n").is_err());
+        if os::local() == os::LINUX {
+            assert!(tuning.check(&[]).iter().any(|line| line.contains("local rules need Windows or macOS")));
+        }
+    }
+
+    #[test]
+    fn local_cli_scope_is_only_for_keys_and_cannot_select_a_peer() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Keys {
+            #[command(subcommand)]
+            command: KeymapCmd,
+        }
+        #[derive(Parser)]
+        struct Remote {
+            #[command(flatten)]
+            scope: ScopeArgs,
+        }
+
+        let parsed = Keys::try_parse_from(["keymap", "add", "a", "b", "--local"]).unwrap();
+        let KeymapCmd::Add { scope, .. } = parsed.command else { panic!("not an add") };
+        assert_eq!(scope.selected().unwrap(), Scope::Local);
+        let parsed = Keys::try_parse_from(["keymap", "remove", "a", "--local"]).unwrap();
+        let KeymapCmd::Remove { scope, .. } = parsed.command else { panic!("not a removal") };
+        assert_eq!(scope.selected().unwrap(), Scope::Local);
+        for selector in ["--peer", "--os"] {
+            assert!(Keys::try_parse_from(["keymap", "add", "a", "b", "--local", selector, "mac"]).is_err());
+        }
+        assert!(Remote::try_parse_from(["pointer", "--local"]).is_err());
+        assert_eq!(Remote::try_parse_from(["pointer", "--os", "mac"]).unwrap().scope.selected().unwrap(), Scope::Os(os::MACOS));
+    }
+
+    #[test]
+    fn local_validation_keeps_compile_warnings_and_rejects_invalid_rules() {
+        let tuning = load("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nlayer = \"nav\"\nscope = { local = true }\n");
+        assert!(tuning.check(&[]).iter().any(|line| line.contains("layer \"nav\" is never switched on")));
+        let invalid = load("[[input.keymap.rule]]\nfrom = \"not-a-key\"\nto = \"b\"\nscope = { local = true }\n");
+        assert!(invalid.local_keymap().is_err());
+        let duplicate = load("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nscope = { local = true }\n[[input.keymap.rule]]\nfrom = \"a\"\nto = \"c\"\nscope = { local = true }\n");
+        assert!(duplicate.local_keymap().is_err());
+        assert!(duplicate.resolve(&facts(os::WINDOWS), false).keymap.is_empty());
+        let mixed = "[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nscope = { local = true, os = \"windows\" }\n";
+        assert!(toml::from_str::<Settings>(mixed).is_err());
+    }
+
+    #[test]
+    fn local_status_has_one_explicit_availability_line() {
+        let tuning = load("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nscope = { local = true }\n[[input.keymap.rule]]\nfrom = \"c\"\nto = \"d\"\nscope = { local = true }\n");
+        let summary = tuning.summary().unwrap();
+        assert_eq!(summary.lines().count(), 2);
+        if cfg!(target_os = "linux") {
+            assert_eq!(summary.lines().nth(1), Some("local key rules are not available on Linux"));
+        } else {
+            assert!(summary.contains("native hook integration is not implemented yet"));
+        }
     }
 
     #[test]

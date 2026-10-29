@@ -16,7 +16,11 @@ core (4A) and its window editor (4B), window and tray UI and its design review,
 and every fix round so far (D, E, F1, F2, G, the Codex rounds for the
 cross-review findings, and the run:-action permission fix).
 
-Nothing is in flight. The last Codex rounds were reviewed by Claude and their
+4C has partial, inactive groundwork on `t3/local-key-mapping`: local scope,
+CLI/check/status, and a pure mapper adapter with invariant tests. Native
+Windows/macOS interception, timer/health wiring and acknowledged injection
+handoff remain unimplemented; local typing is unchanged on every platform.
+The last Codex rounds were reviewed by Claude and their
 findings fixed (guarded-edge click replay is a whole click again; permission
 checks, pairing admission, hook ordering, the Windows startup entry). The final
 full validation passed: 256 tests in the `one-mk` crate and none failing,
@@ -24,10 +28,9 @@ clippy clean on Linux, Windows and macOS targets. The fixes made after that
 last review were small and each has tests, but they have not had a third review.
 Nothing has been merged into `main`: the work is on `worktree-features-wave1`.
 
-Done on branch `t3/dfdd7778` (not merged yet): 3A pointer drawn on a
-computer with no mouse (Windows/macOS compiled only).
-Not started: 3B drag files across the edge, 4C local-only remap on
-Windows/macOS, 4D per-app rules.
+3A (pointer with no mouse) and 4D (per-app rules) are merged. 4C (local-only remap) is partial: the
+pure adapter, config and CLI exist but are inactive on every platform. Not started: 3B drag files
+across the edge (in progress).
 Needs a decision from the user: 3C auto-update (where releases are published,
 how they are signed) and 2C Windows login/UAC service (pure contracts only;
 privileged implementation remains manual, see the 2C row).
@@ -209,7 +212,7 @@ the PC, with one mouse), plus a keyboard mapper for any key.
 |---|---|---|---|---|
 | 4A | Core: pure rule engines in `crates/proto` (key mapper with tap/hold, layers and combos; pointer speed/acceleration; scroll direction, speed, discrete mode and modifier-scroll; button remap), wired into the send path, `settings.toml` tables, CLI `one-mk keymap\|pointer\|scroll\|buttons` | wave 2 merged | Scope: global, per target OS, per target computer. Design: `docs/INPUT-TUNING.md`. Mapper: no allocation per event (benchmark test: ~55 M events/s release). Acceleration `off`/`curve` implemented in `proto/pointer.rs` but refused: no backend reports raw motion yet (Windows Raw Input / macOS IOHID are follow-ups; Linux libei can't). Middle-click autoscroll not done. | done |
 | 4B | Window panels: keyboard mapper editor (click a key, press the key it becomes), pointer and scroll tuning, button map | 4A, UI task | Tab "Keys & mouse" (`crates/app/src/app/keys.rs`, view-model `crates/app/src/tune.rs`): drawn keyboard (press a key, searchable list, does nothing, tap/hold under More), rules as sentences, quick setups, For: scope, Test it box running the proto mapper in-process, drawn mouse and button actions, pointer speed, acceleration shown disabled with the reason, scrolling. Reads `[input]` from `settings.toml`; writes only through `one-mk keymap\|pointer\|scroll\|buttons` (one at a time, worker thread), so no `--json` was needed. Not verified: real key events on Windows/macOS, a screen reader. | done |
-| 4C | Local-only remapping where the OS allows it (Windows low-level hook, macOS event tap) | 4A | Not possible on Wayland without root: documented limit. | todo |
+| 4C | Local-only remapping where the OS allows it (Windows low-level hook, macOS event tap) | 4A | Partial groundwork only: explicit local config/CLI, separate pure Mapper adapter, physical shortcuts, health/disable/reset/snapshot tests and shared random-stream invariant oracle. No native hook edits or tune wiring: local rules are inactive on ALL platforms. Must implement acknowledged local injection before capture handoff, daemon health, native timers/tags, AltGr/extended scancodes/session lock and tap-disable cleanup; native runtime validation still required. Wayland local typing is unavailable without a separate privileged remapper. See `docs/INPUT-TUNING.md`. | partial, inactive |
 | 4D | Per-app rules via the focus probe (receiving or sending side) | 4A | `app` on key, button, pointer and scroll rules: the app focused on the computer the input goes to. Matcher `proto/appmatch.rs` (case-insensitive, `*`, `!`, hostile names cleaned/refused); controlled side reports names with `Focus` when `WatchFocus` asks (cap `FOCUS_APP`, trailing fields, old peers unaffected), event-driven (after clicks/chords, Windows foreground hook), only to its controller; controller re-resolves and swaps the keymap like a reload (held keys keep their codes); unknown app = rule off, `one-mk status` says why. CLI `--app` on keymap/buttons/pointer/scroll, `keymap check` flags apps impossible on the OS, doctor notes Wayland. Window: sentences show the app, "Only in app" field. Linux X11 and null backend verified (two-daemon test); Windows exe/class compile-only; macOS Accessibility + `NSRunningApplication` compile-only; Wayland-native windows can't be named. See INPUT-TUNING.md. | done |
 
 ### 3E/3F notes (branch `t3/60bf24e6`)

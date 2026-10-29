@@ -589,9 +589,13 @@ Good to know:
   computer once you scroll with it, so it never sees Shift+scroll.
 - `natural auto` assumes this computer scrolls its OS's default way
   (natural on a Mac); otherwise use `--reverse-vertical on`.
-- Only input sent to other computers is changed: on Linux one-mk sees your
-  keyboard only while it forwards it (local remapping is planned for
-  Windows and macOS).
+- Only input sent to other computers is changed. Local keyboard rules
+  (`scope = { local = true }`, or `one-mk keymap add capslock esc --local`)
+  can be stored and checked, but are **inactive on every platform**: the
+  Windows/macOS hook integration is not implemented yet (plan 4C).
+  Linux status says `local key rules are not available on Linux`; its
+  Wayland portal only supplies keys while forwarding. Local rules never
+  change keys sent to a peer. See `docs/INPUT-TUNING.md` for the safety gates.
 - `--app NAME` rules follow the app that has the focus on the computer you
   are typing on: a program file on Windows (`chrome.exe`), a bundle id on a
   Mac (`com.apple.Terminal`), the window class on Linux (`firefox`); `*`

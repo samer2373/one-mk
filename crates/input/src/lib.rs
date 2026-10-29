@@ -13,6 +13,7 @@ mod cursoroverlay_macos;
 mod cursoroverlay_windows;
 #[cfg(target_os = "linux")]
 mod cursoroverlay_x11;
+pub mod localmap;
 pub mod hotkeys;
 #[cfg(any(target_os = "linux", test))]
 mod linux_logic;
