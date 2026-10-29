@@ -60,6 +60,12 @@ pub enum Event {
     /// see every key); Linux whenever libei reports modifiers, which it
     /// does only while input is captured.
     Modifiers(Mods),
+    /// While captured: a modifier key held since before the capture went
+    /// up. Its release goes to this machine (it went down here), so it is
+    /// not input for a peer, but the modifiers held have changed: a
+    /// shortcut or a modifier-to-cross must no longer count it. Windows
+    /// and macOS (libei reports such changes as `Modifiers`).
+    LocalKeyUp { code: u32 },
     /// This machine's screen was locked (`true`) or unlocked, where the OS
     /// tells us: logind's `LockedHint` on Linux, session notifications on
     /// Windows, the screen lock notifications on macOS.

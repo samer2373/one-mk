@@ -757,6 +757,11 @@ impl Ctx {
                     send(Event::Key { code: KEY_CAPSLOCK, down: false });
                 } else if let Some(down) = logic::modifier_down(kc, CGEvent::flags(e).0) {
                     if !down && st.take_local_key(kc) {
+                        // Held since before the capture: released here, but
+                        // the daemon counted it as held (`Event::Modifiers`).
+                        if let Some(code) = logic::mac_to_evdev(kc) {
+                            send(Event::LocalKeyUp { code });
+                        }
                         return true;
                     }
                     if let Some(code) = logic::mac_to_evdev(kc) {

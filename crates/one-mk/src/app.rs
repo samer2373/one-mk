@@ -850,6 +850,16 @@ impl App {
                     self.on_approach(next, None);
                 }
             }
+            Event::LocalKeyUp { code } => {
+                // Stays here, but shortcuts and modifier-to-cross must no
+                // longer count it.
+                if self.mods.update(code, false)
+                    && let (Some((_, a)), Some(local)) = (self.approach.as_mut(), self.local.as_ref())
+                {
+                    let next = a.modifiers(local, self.mods, std::time::Instant::now());
+                    self.on_approach(next, None);
+                }
+            }
             Event::ScreenLocked(locked) => self.on_screen_locked(locked),
             Event::Button { button, down } => {
                 let Some(r) = self.remote.as_mut() else { return };
@@ -3268,6 +3278,52 @@ mod tests {
         duo.enter_b().await;
         duo.ha.events.send(Event::Key { code: KEY_H, down: true }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: KEY_H, down: true });
+        duo.stop().await;
+    }
+
+    /// Ctrl and Alt held through the shortcut that moved the pointer away
+    /// (reported at activation), then released, which Windows and macOS
+    /// leave to this computer and report as `LocalKeyUp`: what is typed
+    /// next is just keys, not Ctrl+Alt shortcuts.
+    #[tokio::test]
+    async fn modifiers_released_after_a_switch_are_forgotten() {
+        use one_mk_input::hotkeys::Action;
+        const CTRL: u32 = 29;
+        const ALT: u32 = 56;
+        const KEY_H: u32 = 35;
+        let mut duo = Duo::start("stale-mods", None).await;
+        duo.ha.events.send(Event::Hotkey(Action::Cycle)).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.ha.events.send(Event::Modifiers(Mods::from_keys([CTRL, ALT]))).unwrap();
+        duo.ha.events.send(Event::Activated { id: 5, side: Side::Right, pos: Pos::new(1919.0, 3.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
+        for code in [CTRL, ALT] {
+            duo.ha.events.send(Event::LocalKeyUp { code }).unwrap();
+        }
+        duo.ha.events.send(Event::Key { code: KEY_H, down: true }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: KEY_H, down: true }, "H, not Ctrl+Alt+H");
+        assert!(duo.ha.capture.try_recv().is_err(), "the pointer stayed on B");
+        duo.stop().await;
+    }
+
+    /// Modifier-to-cross with a dwell: Shift was held when the pointer hit
+    /// the edge, then let go (its release stays here): the dwell ending
+    /// doesn't cross.
+    #[tokio::test]
+    async fn a_modifier_released_here_no_longer_crosses() {
+        let mut duo = Duo::start("stale-mod-edge", None).await;
+        set(&duo.da, |s| {
+            s.edge.all.dwell_ms = Some(100);
+            s.edge.all.modifier = Some("shift".into());
+        })
+        .await;
+        duo.ha.events.send(Event::Modifiers(Mods::from_keys([42]))).unwrap();
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        duo.ha.events.send(Event::LocalKeyUp { code: 42 }).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(injected(&mut duo.hb), vec![], "did not cross");
+        duo.ha.events.send(Event::Motion { dx: -30.0, dy: 0.0 }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(1889.0, 540.0)) });
         duo.stop().await;
     }
 

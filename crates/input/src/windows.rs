@@ -725,11 +725,16 @@ impl State {
         };
         if self.local.has(code) {
             // Held since before the pointer left: auto-repeat stays
-            // swallowed, the release goes to this machine.
+            // swallowed, the release goes to this machine. The daemon
+            // counted a modifier as held (`Event::Modifiers` at activation),
+            // so it hears that it no longer is.
             if down {
                 return (true, Effect::None);
             }
             self.local.set(code, false);
+            if Mods::is_modifier(code) {
+                let _ = self.tx.send(Event::LocalKeyUp { code });
+            }
             return (false, Effect::None);
         }
         // Auto-repeat (Caps Lock's too) is dropped; the peer repeats.
