@@ -71,7 +71,7 @@ pub fn handle(dir: &Path, services: &Services, online: Vec<Online>, trust: &Trus
         }
         Request::ClipSend(to) => clip_request(services, &online, trust, to, true, reply),
         Request::ClipGet(from) => clip_request(services, &online, trust, from, false, reply),
-        Request::Status | Request::Reload | Request::TakeBack | Request::Switch(_) | Request::LockPointer(_) | Request::LockAll => {
+        Request::Invitation | Request::Status | Request::Reload | Request::TakeBack | Request::Switch(_) | Request::LockPointer(_) | Request::LockAll => {
             let _ = reply.send("error unexpected request\n".to_owned());
         }
     }

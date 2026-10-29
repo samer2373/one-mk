@@ -9,6 +9,7 @@ mod doctor;
 mod hooks;
 mod hotkeys;
 mod install;
+mod invite;
 mod link;
 mod manage;
 mod netwatch;
@@ -178,6 +179,10 @@ enum Cmd {
         /// on or off; leave out to see the current setting.
         state: Option<OnOff>,
     },
+    /// Create a one-time invitation link and QR code.
+    Invite(invite::InviteArgs),
+    /// Join using an invitation link (or read it from stdin).
+    Join(invite::JoinArgs),
     /// Pair with another computer (run it on both).
     Pair {
         /// Pair with the computer at this address instead of searching the
@@ -399,6 +404,8 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Notify { state } => clipctl::notify(&dir, state).await,
             Cmd::Send { paths, to, connect } => send::run(&dir, paths, to, connect).await,
             Cmd::Pair { connect, machine } => pair::run(&dir, connect, pair::Out::new(machine)).await,
+            Cmd::Invite(args) => invite::run(&dir, args).await,
+            Cmd::Join(args) => invite::join(&dir, args).await,
             Cmd::Devices => devices(&dir, verbose > 0),
             Cmd::Status => manage::status(&dir).await,
             Cmd::Takeback => manage::takeback(&dir).await,

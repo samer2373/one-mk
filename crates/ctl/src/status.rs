@@ -565,3 +565,33 @@ mod tests {
         assert_eq!((damaged.name.as_str(), damaged.transfers.len()), ("desk", 0));
     }
 }
+
+/// Returned only by Request::Invitation, never by ordinary status/logs.
+/// This is a bearer credential; deliberately has no Debug implementation.
+pub struct InvitationStatus {
+    pub link: String,
+    pub expires: u64,
+}
+impl InvitationStatus {
+    pub fn encode(&self) -> String { format!("invitation\t{}\t{}\n", self.expires, self.link) }
+    pub fn decode(text: &str) -> Option<Self> {
+        let mut fields = text.trim_end_matches('\n').split('\t');
+        if fields.next()? != "invitation" { return None; }
+        let expires = fields.next()?.parse().ok()?;
+        let link = fields.next()?;
+        if fields.next().is_some() || link.len() > 1600 || !link.starts_with("onemk://pair?") || link.chars().any(char::is_whitespace) { return None; }
+        Some(Self { link: link.to_owned(), expires })
+    }
+}
+#[cfg(test)]
+mod invitation_tests {
+    use super::*;
+    #[test]
+    fn invitation_status_roundtrip() {
+        let s = InvitationStatus { link: "onemk://pair?v=1&d=test".into(), expires: 123 };
+        let got = InvitationStatus::decode(&s.encode()).unwrap();
+        assert_eq!(got.link, s.link);
+        assert_eq!(got.expires, s.expires);
+        for bad in ["none\n", "invitation\tx\tonemk://pair?x", "invitation\t1\thttps://bad", "invitation\t1\tonemk://pair?x\textra"] { assert!(InvitationStatus::decode(bad).is_none()); }
+    }
+}
