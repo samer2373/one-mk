@@ -132,7 +132,8 @@ deadline. It resolves to *hold* when the deadline passes, when another key
 is pressed while it is down ("permissive hold": the other key then sees the
 hold, so Caps-as-Ctrl + C is Ctrl+C), or when a mouse button is pressed or
 the wheel turned; to *tap* when it is released first (tap down and up are
-sent at once). The deadline is the mapper's only timer: the daemon's event
+sent at once). Every event first checks the deadline, so a release that
+arrives after it, before the timer ran (a busy loop), is a hold, not a tap. The deadline is the mapper's only timer: the daemon's event
 loop includes it only while a key is pending, and it fires or is cancelled
 exactly once, so an idle keyboard costs nothing.
 

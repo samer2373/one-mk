@@ -503,6 +503,9 @@ impl Mapper {
         if code >= CODE_LIMIT {
             return;
         }
+        // A tap/hold key past its time was held, even if this event comes
+        // before the timer does (a busy loop): its release is not a tap.
+        self.timer(now, out);
         if down {
             if self.phys.is_held(code) {
                 return self.repeat(code, out);
@@ -1235,6 +1238,26 @@ mod tests {
         }
     }
 
+    /// A tap/hold key released after its time, before the timer ran (a
+    /// busy loop): it was held, not tapped.
+    #[test]
+    fn a_late_release_is_a_hold() {
+        let mut t = T::new(&[dual("capslock", "esc", "lctrl")]);
+        t.key(CAPS, true);
+        t.now += Duration::from_millis(500);
+        assert_eq!(t.key(CAPS, false), [d(LCTRL), u(LCTRL)]);
+        assert!(t.m.is_idle());
+        // Released exactly at the deadline: held too (as the timer has it).
+        t.key(CAPS, true);
+        t.now += DEFAULT_TAP;
+        assert_eq!(t.key(CAPS, false), [d(LCTRL), u(LCTRL)]);
+        // Any other event late resolves it first as well.
+        t.key(CAPS, true);
+        t.now += Duration::from_millis(300);
+        assert_eq!(t.key(CAPS, true), [d(LCTRL), d(LCTRL)], "held, then the repeat");
+        assert_eq!(t.key(CAPS, false), [u(LCTRL)]);
+    }
+
     #[test]
     fn lifted_modifiers_come_back_only_after_release() {
         let mut t = T::new(&[]);
@@ -1384,9 +1407,10 @@ mod tests {
         ]
     }
 
-    /// Random presses, releases, repeats, timeouts, clicks, modifier-lifts,
-    /// keymap reloads and visit ends: every emitted down gets exactly one
-    /// up, and once every physical key is up nothing is left down.
+    /// Random presses, releases, repeats, timeouts (in time and late),
+    /// clicks, modifier-lifts, keymap reloads and visit ends: every emitted
+    /// down gets exactly one up, and once every physical key is up nothing
+    /// is left down.
     #[test]
     fn no_stuck_keys_under_random_streams() {
         let keys = [CAPS, LALT, LMETA, LCTRL, RCTRL, LSHIFT, H, J, Q, A, C, RALT, 57, 59, 60, 183, 0x112, 0x110];
@@ -1412,7 +1436,9 @@ mod tests {
                         }
                         m.key(k, down, now, &mut |e| emitted.push(e));
                     }
-                    12..=14 => {
+                    // Time passes, and the timer may run late.
+                    12 => now += Duration::from_millis(rng.below(400) as u64),
+                    13 | 14 => {
                         now += Duration::from_millis(rng.below(400) as u64);
                         m.timer(now, &mut |e| emitted.push(e));
                     }
