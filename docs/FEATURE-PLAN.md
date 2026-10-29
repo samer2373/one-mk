@@ -206,7 +206,10 @@ the PC, with one mouse), plus a keyboard mapper for any key.
   constraints it covers every output. Capture ends on keyboard leave,
   `unlocked`, layer `closed`, output changes, lock, daemon exit. The
   virtual keyboard gets the seat's keymap (re-sent when it changes) and
-  modifiers computed here (wlroots takes them from the client).
+  modifiers computed here (wlroots takes them from the client), with a
+  libxkbcommon state built from that same keymap (`input/xkb.rs`, loaded
+  with `dlopen` on first use, so `ctrl:nocaps` makes Caps Lock a Control
+  key); without libxkbcommon, what the keys mean in a standard keymap.
 - **Verified here (Xvfb, `x11_tests.rs`):** injection observed from a
   second client (absolute/relative motion, clamping, keys, buttons, wheel
   clicks), Shift released when the daemon goes away; capture by pushing

@@ -25,6 +25,8 @@ mod windows;
 mod wlroots;
 #[cfg(target_os = "linux")]
 mod x11;
+#[cfg(target_os = "linux")]
+mod xkb;
 #[cfg(any(windows, test))]
 mod win_logic;
 
