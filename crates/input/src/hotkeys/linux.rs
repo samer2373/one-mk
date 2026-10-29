@@ -1,7 +1,9 @@
 //! Linux: the GlobalShortcuts desktop portal (GNOME 48+, KDE Plasma 6).
 //!
 //! One session at a time on a D-Bus connection of its own (so nothing here
-//! can disturb the input portals' connection). The chords are only
+//! can disturb the input portals' connection). GNOME refuses sessions to
+//! programs without an app id, so the connection first registers one with
+//! the host Registry portal (xdg-desktop-portal 1.19+). The chords are only
 //! suggestions: the desktop asks the user to confirm them (GNOME in a
 //! dialog) and lets them change the keys in its settings. The task waits on
 //! the portal's signals and on new bindings, nothing else.
@@ -14,6 +16,9 @@ use futures::StreamExt;
 use tokio::sync::{mpsc, watch};
 
 const NO_PORTAL: &str = "this desktop has no GlobalShortcuts portal";
+/// Who we are to the portals, on the shortcut connection only (the desktop
+/// lists the shortcuts under it).
+use one_mk_proto::LINUX_APP_ID as APP_ID;
 
 pub(super) struct Portal(watch::Sender<Bindings>);
 
@@ -42,6 +47,32 @@ fn one_line(e: &ashpd::Error) -> String {
     }
 }
 
+/// The portal on a new connection, registered as [`APP_ID`] (before any
+/// other call on it, as the Registry wants), and why it could not be
+/// registered. Without the Registry, or without one-mk's desktop entry, it
+/// is tried anyway: KDE accepts programs without an app id.
+async fn connect() -> Result<(GlobalShortcuts, Option<String>), ashpd::Error> {
+    let conn = ashpd::zbus::Connection::session().await?;
+    let id = APP_ID.parse().expect("a valid app id");
+    let unregistered = ashpd::register_host_app_with_connection(conn.clone(), id).await.err().map(|e| {
+        tracing::debug!("registering as {APP_ID}: {e}");
+        e.to_string()
+    });
+    Ok((GlobalShortcuts::with_connection(conn).await?, unregistered))
+}
+
+/// Why a session was refused, in words.
+fn refused(e: &ashpd::Error, unregistered: Option<&str>) -> String {
+    match unregistered {
+        // GNOME: "An app id is required"; the Registry: "App info not found".
+        Some(why) if why.contains("App info not found") => {
+            "the desktop gives shortcuts only to installed programs: run `one-mk install`, then restart one-mk".into()
+        }
+        Some(why) => format!("{} (and no app id: {why})", one_line(e)),
+        None => one_line(e),
+    }
+}
+
 /// How a session ended.
 enum End {
     /// New bindings: start over with them.
@@ -54,11 +85,7 @@ async fn run(mut rx: watch::Receiver<Bindings>, events: mpsc::UnboundedSender<Ev
     let status = |a: Availability| {
         let _ = events.send(Event::Hotkeys(a));
     };
-    let portal = async {
-        let conn = ashpd::zbus::Connection::session().await?;
-        GlobalShortcuts::with_connection(conn).await
-    };
-    let portal = match portal.await {
+    let (portal, unregistered) = match connect().await {
         Ok(p) => p,
         Err(e) => return status(Availability::Unavailable(one_line(&e))),
     };
@@ -70,7 +97,7 @@ async fn run(mut rx: watch::Receiver<Bindings>, events: mpsc::UnboundedSender<Ev
                 Err(_) => End::Quit,
             }
         } else {
-            match session(&portal, &bindings, &mut rx, &events).await {
+            match session(&portal, &bindings, &mut rx, &events, unregistered.as_deref()).await {
                 Ok(end) => end,
                 Err(why) => {
                     tracing::debug!("global shortcuts: {why}");
@@ -94,9 +121,10 @@ async fn session(
     bindings: &Bindings,
     rx: &mut watch::Receiver<Bindings>,
     events: &mpsc::UnboundedSender<Event>,
+    unregistered: Option<&str>,
 ) -> Result<End, String> {
     let mut activated = portal.receive_activated().await.map_err(|e| one_line(&e))?;
-    let session = portal.create_session(Default::default()).await.map_err(|e| one_line(&e))?;
+    let session = portal.create_session(Default::default()).await.map_err(|e| refused(&e, unregistered))?;
     let _ = events.send(Event::Hotkeys(Availability::Starting(
         "asking the desktop; confirm the shortcuts if it shows a dialog".into(),
     )));
@@ -173,12 +201,30 @@ mod tests {
     use crate::hotkeys::Chord;
     use std::time::Duration;
 
-    /// Binds one throwaway shortcut through the real portal and reports what
-    /// happens. Not run by default: the desktop may show a dialog. Run with
-    /// `cargo test -p one-mk-input real_portal -- --ignored --nocapture`.
+    /// Opens and closes a session on the real portal without binding
+    /// anything (no dialog). Run with `cargo test -p one-mk-input
+    /// real_portal_session -- --ignored --nocapture`.
     #[tokio::test]
     #[ignore]
-    async fn real_portal() {
+    async fn real_portal_session() {
+        let (portal, unregistered) = connect().await.unwrap();
+        println!("version {}; registered as {APP_ID}: {:?}", portal.version(), unregistered.as_deref().unwrap_or("yes"));
+        let session = match portal.create_session(Default::default()).await {
+            Ok(s) => s,
+            Err(e) => return println!("no session: {}", refused(&e, unregistered.as_deref())),
+        };
+        let listed = portal.list_shortcuts(&session, Default::default()).await.and_then(|r| r.response());
+        println!("shortcuts of a new session: {:?}", listed.map(|l| l.shortcuts().len()));
+        session.close().await.unwrap();
+    }
+
+    /// Binds one throwaway shortcut through the real portal and reports what
+    /// happens. Not run by default: GNOME asks in a dialog and remembers the
+    /// answer. Run with `cargo test -p one-mk-input real_portal_bind --
+    /// --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn real_portal_bind() {
         println!("probe: {:?}", probe().await);
         let chord: Chord = "ctrl+alt+shift+f12".parse().unwrap();
         let bindings = Bindings::new(vec![(Action::Jump(9), chord)]).unwrap();
