@@ -3208,6 +3208,7 @@ dependencies = [
  "objc2-core-graphics",
  "one-mk-proto",
  "reis",
+ "ring",
  "tokio",
  "tracing",
  "wayland-client",

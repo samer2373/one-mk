@@ -29,6 +29,8 @@ mod x11;
 mod xkb;
 #[cfg(any(windows, test))]
 mod win_logic;
+#[cfg(any(windows, test))]
+pub mod windows_service_logic;
 
 pub use null::NullHandles;
 pub use system::{DisplaySleeper, FocusProbe, Inhibitor, Power, PowerEvent, PowerHandles, ScreenLocker, fake_power};
