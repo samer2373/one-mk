@@ -15,6 +15,11 @@ footprint, setup as easy as possible, no stuck keys.
   to keep merges small.
 - **Model tier:** Opus for daemon core and risky OS work, Sonnet for routine
   implementation, tests and docs, Haiku for lookups.
+- **Cross-review (added 2026-10-29):** work is also delegated to Codex
+  (`delegate_task` with `providerInstanceId: codex`), and each side reviews
+  the other's output: Codex reviews what Claude children build, Claude
+  reviews what Codex builds. Every wave gets at least one review by a
+  different model than the one that wrote it, before it counts as validated.
 - **Builds:** `cargo ... -j 4` or lower. Fat-LTO builds got OOM-killed on the
   dev box (30 GB).
 - **Definition of done for every task:**
