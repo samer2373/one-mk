@@ -54,6 +54,20 @@ one-mk layout "laptop" bottom --offset 300   # its left edge 300 px right of you
 one-mk layout "laptop" bottom --offset center
 ```
 
+## Pair without sitting at both computers
+
+On computer A, run `one-mk invite --expires 10m`. Privately transfer its
+one-time link or QR code to B. On B, run `one-mk join` and paste the link
+(or use `one-mk join '<link>'`). No numeric code comparison is needed.
+
+A shows B's name and full fingerprint and asks for `y` before trusting it
+(`--confirm`, the default). For unattended A, explicitly use
+`one-mk invite --no-confirm`: **anyone holding the link can join if they
+use it first**. Treat the link like a password, including in chat history.
+It expires, works once, and dies when the invitation process closes.
+Start sharing with `one-mk run` on both; use `one-mk forget <id>` to revoke.
+See [invitation security and protocol](docs/PAIRING-INVITE.md).
+
 ## Everyday use
 
 | Command | What it does |

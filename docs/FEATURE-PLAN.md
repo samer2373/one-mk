@@ -160,7 +160,7 @@ Known gaps:
 | 3E | wlroots (Sway/Hyprland) backend | none | | todo |
 | 3F | X11 capture backend | none | | todo |
 | 3G | "Send to <computer>" file-manager entries | 1B | Nautilus, Dolphin, Explorer, Finder. | todo |
-| 3H | Pairing without sitting at both screens (QR or link) | none | | todo |
+| 3H | Pairing without sitting at both screens (QR or link) | none | `t3/implement-pair-invite-flow`: `invite`/`join`, single-use expiring link + ANSI QR, certificate pinning and transcript/TLS-bound HMAC, default A-side approval, private control hook. See [PAIRING-INVITE.md](PAIRING-INVITE.md). Linux loopback/null validated; Windows/macOS compile-only. | done |
 
 ## Wave 4: input tuning and key mapper (added 2026-10-29, from LinearMouse)
 
