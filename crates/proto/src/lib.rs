@@ -14,7 +14,7 @@ mod motion;
 mod sleep;
 mod transfer;
 
-pub use codec::{Control, Datagram, DecodeError, MAX_SCREENS, StreamKind, caps, os};
+pub use codec::{Control, Datagram, DecodeError, FOCUS_REPEAT, FOCUS_SILENCE, MAX_SCREENS, StreamKind, caps, os};
 pub use edge::{
     AWAY, Approach, EdgeGuard, Focus, Modifier, Mods, Next, Refusal, Start, app_matches, cycle_next, fullscreen_blocks,
     in_dead_corner,

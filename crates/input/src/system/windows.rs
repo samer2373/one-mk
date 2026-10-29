@@ -17,19 +17,31 @@ use windows_sys::Win32::System::Power::{
 };
 use windows_sys::Win32::System::Shutdown::LockWorkStation;
 use windows_sys::Win32::System::SystemServices::GUID_CONSOLE_DISPLAY_STATE;
-use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
+use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DispatchMessageW, GWL_STYLE, GetClassNameW,
     GetDesktopWindow, GetForegroundWindow, GetMessageW, GetShellWindow, GetWindowLongW, GetWindowRect,
     GetWindowThreadProcessId, HWND_BROADCAST, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND,
     PBT_POWERSETTINGCHANGE, PostMessageW, RegisterClassW, SC_MONITORPOWER, TranslateMessage, WM_POWERBROADCAST,
-    WM_SYSCOMMAND, WNDCLASSW,
+    WM_SYSCOMMAND, WNDCLASSW, EVENT_SYSTEM_FOREGROUND, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_QUIT, WM_USER,
 };
 use std::sync::OnceLock;
 
-pub(super) struct Foreground;
+#[derive(Default)]
+pub(super) struct Foreground {
+    watching: Option<ForegroundWatch>,
+}
 
 impl FocusProbe for Foreground {
+    fn watch(&mut self, notify: Option<Box<dyn Fn() + Send>>) {
+        self.watching = None; // stops the old one
+        self.watching = notify.and_then(ForegroundWatch::start);
+    }
+
     fn focus(&mut self) -> Option<Focus> {
         // SAFETY: plain Win32 calls; every out-pointer is valid and sized.
         unsafe {
@@ -55,6 +67,79 @@ impl FocusProbe for Foreground {
             apps.push(class);
             Some(Focus { fullscreen, apps })
         }
+    }
+}
+
+/// A thread with a `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`: Windows
+/// calls it (out of context, through the thread's message loop) whenever
+/// another window comes to the front, and it sleeps otherwise. Ended when
+/// dropped.
+struct ForegroundWatch {
+    thread: u32,
+}
+
+std::thread_local! {
+    static ON_FOREGROUND: std::cell::RefCell<Option<Box<dyn Fn() + Send>>> = const { std::cell::RefCell::new(None) };
+}
+
+unsafe extern "system" fn foreground_changed(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    _hwnd: HWND,
+    _object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    ON_FOREGROUND.with(|n| {
+        if let Some(notify) = n.borrow().as_ref() {
+            notify();
+        }
+    });
+}
+
+impl ForegroundWatch {
+    fn start(notify: Box<dyn Fn() + Send>) -> Option<Self> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new().name("one-mk-foreground".into()).spawn(move || {
+            ON_FOREGROUND.with(|n| *n.borrow_mut() = Some(notify));
+            // SAFETY: plain Win32 calls with valid pointers; peeking creates
+            // this thread's message queue before its id is handed out.
+            unsafe {
+                let mut msg: MSG = std::mem::zeroed();
+                PeekMessageW(&mut msg, std::ptr::null_mut(), WM_USER, WM_USER, PM_NOREMOVE);
+                let hook = SetWinEventHook(
+                    EVENT_SYSTEM_FOREGROUND,
+                    EVENT_SYSTEM_FOREGROUND,
+                    std::ptr::null_mut(),
+                    Some(foreground_changed),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+                );
+                let _ = tx.send((!hook.is_null()).then(|| GetCurrentThreadId()));
+                if hook.is_null() {
+                    return;
+                }
+                while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+                UnhookWinEvent(hook);
+            }
+        });
+        if let Err(e) = spawned {
+            tracing::debug!("not watching the foreground window: {e}");
+            return None;
+        }
+        Some(ForegroundWatch { thread: rx.recv().ok().flatten()? })
+    }
+}
+
+impl Drop for ForegroundWatch {
+    fn drop(&mut self) {
+        // SAFETY: posting to a thread id; fails harmlessly if it is gone.
+        unsafe { PostThreadMessageW(self.thread, WM_QUIT, 0, 0) };
     }
 }
 

@@ -6,6 +6,13 @@
 //! Noticing that the screen locked is the input backends' job (they already
 //! watch the session) and arrives as `Event::ScreenLocked`.
 //!
+//! Gaming mode `auto` looks at the focus again shortly after input that may
+//! move it, and every few seconds while a fullscreen window has it. Windows
+//! also says when another window comes to the front ([`FocusProbe::watch`]).
+//! Linux has no such signal for X11 focus short of an X event loop; macOS
+//! doesn't probe the focus at all yet, so there is nothing to watch (an
+//! `NSWorkspace` activation observer would come with that probe).
+//!
 //! | | focused window | lock | lock noticed |
 //! |---|---|---|---|
 //! | Linux | X11/XWayland windows only; Wayland-native ones are unknown | logind `Session.Lock` | logind `LockedHint` |
@@ -39,6 +46,13 @@ pub trait FocusProbe: Send {
     /// The focused window, or `None` if this system can't tell (then the
     /// fullscreen guard never blocks).
     fn focus(&mut self) -> Option<Focus>;
+
+    /// Calls `notify` (from another thread) whenever another window comes
+    /// to the front, until called with `None`. Only where the OS says so
+    /// without polling: Windows (`EVENT_SYSTEM_FOREGROUND`); elsewhere
+    /// nothing, and the caller looks again after input and every few
+    /// seconds.
+    fn watch(&mut self, _notify: Option<Box<dyn Fn() + Send>>) {}
 }
 
 pub trait ScreenLocker: Send {
@@ -113,7 +127,7 @@ pub(crate) fn native(events: &mpsc::UnboundedSender<Event>) -> (Box<dyn FocusPro
     #[cfg(windows)]
     {
         let _ = events;
-        (Box::new(windows::Foreground), Box::new(windows::Workstation))
+        (Box::new(windows::Foreground::default()), Box::new(windows::Workstation))
     }
     #[cfg(target_os = "macos")]
     {
@@ -157,17 +171,25 @@ impl ScreenLocker for Unsupported {
     }
 }
 
+/// What [`FocusProbe::watch`] was given, for a test to call.
+pub type FocusNotify = Arc<Mutex<Option<Box<dyn Fn() + Send>>>>;
+
 /// For tests and `--backend null`: reports whatever focus it is given,
 /// and counts how often it was asked.
 pub struct FakeFocus {
     pub focus: Arc<Mutex<Option<Focus>>>,
     pub probes: Arc<AtomicUsize>,
+    pub notify: FocusNotify,
 }
 
 impl FocusProbe for FakeFocus {
     fn focus(&mut self) -> Option<Focus> {
         self.probes.fetch_add(1, Ordering::SeqCst);
         self.focus.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn watch(&mut self, notify: Option<Box<dyn Fn() + Send>>) {
+        *self.notify.lock().unwrap_or_else(|e| e.into_inner()) = notify;
     }
 }
 

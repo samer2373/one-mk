@@ -24,7 +24,7 @@ use one_mk_net::{
 use one_mk_proto::{
     Align, Approach, Control, Datagram, Desktop, HeldKeys, LockSync, Mods, MotionReceiver, Next, OnRemote,
     OnRemoteSleep, Pos, Received, Rect, Refusal, RelReceived, RemoteCursor, Seam, Side, SleepSync, Start, Step,
-    StreamKind, caps, cycle_next, fullscreen_blocks, os, overlaps, sanitize_name, swap_ctrl_meta,
+    StreamKind, FOCUS_REPEAT, FOCUS_SILENCE, caps, cycle_next, fullscreen_blocks, os, overlaps, sanitize_name, swap_ctrl_meta,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -75,6 +75,11 @@ const MAX_PENDING_PER_PEER: usize = 4;
 /// At most this many queued motion events are merged into one send, so a
 /// burst can't hold off the safety deadlines for long.
 const MAX_COALESCE: usize = 256;
+
+/// After input from the controller that may move the focus (a click, a
+/// window-switching chord), the focus is looked at again this much later,
+/// once the system has acted on it (gaming mode `auto`).
+const FOCUS_SETTLE: Duration = Duration::from_millis(100);
 
 /// evdev codes for the emergency "bring my pointer home" shortcut:
 /// Ctrl+Alt+Shift+Esc.
@@ -169,6 +174,9 @@ enum AppEvent {
     /// The networks this computer is on changed (only watched while some
     /// layout profile switches by itself).
     Network(NetworkId),
+    /// Another window came to the front (only watched while a controller
+    /// asks what has the focus, and where the OS says so: Windows).
+    FocusMoved,
 }
 
 struct Connected {
@@ -211,6 +219,8 @@ struct Remote {
     resends: usize,
     /// The peer says a fullscreen window has its focus (gaming mode `auto`).
     peer_fullscreen: bool,
+    /// When the peer last said what has its focus.
+    focus_heard: Instant,
     /// We asked the peer to report that (`WatchFocus`).
     watching_focus: bool,
     /// We asked the peer to keep its screen awake (`Inhibit`).
@@ -250,6 +260,8 @@ struct Owner {
     watch_focus: bool,
     /// Whether a fullscreen window has the focus, as last told to the owner.
     focus_sent: Option<bool>,
+    /// When to look at the focus again (see `App::report_focus`).
+    focus_check: Option<Instant>,
     /// The owner asked to keep this screen awake while it controls it.
     inhibit: bool,
     /// Modifier keys pressed during this visit; released once more after
@@ -274,6 +286,7 @@ impl Owner {
             relative: false,
             watch_focus: false,
             focus_sent: None,
+            focus_check: None,
             inhibit: false,
             mods_pressed: Mods::default(),
         }
@@ -430,6 +443,8 @@ struct App {
     network_seen: bool,
     /// What the input backend says needs the user, by part (`Event::Status`).
     input_problems: std::collections::BTreeMap<&'static str, String>,
+    /// The focus probe is asked to say when the front window changes.
+    focus_watched: bool,
     /// When to dial missing peers again, and the wait after that.
     dial_at: Option<Instant>,
     dial_backoff: Duration,
@@ -541,6 +556,7 @@ pub async fn serve(
         auto_profile: None,
         network_seen: false,
         input_problems: Default::default(),
+        focus_watched: false,
         dial_at: None,
         dial_backoff: DIAL_INTERVAL,
     };
@@ -590,6 +606,7 @@ pub async fn serve(
         app.sync_hooks();
         app.sync_power();
         app.shortcuts.set_controlled(app.owner.is_some());
+        app.sync_focus_watch();
     }
 
     app.go_home();
@@ -1140,6 +1157,7 @@ impl App {
             resend_at: None,
             resends: 0,
             peer_fullscreen: false,
+            focus_heard: now,
             watching_focus: false,
             inhibit_sent: false,
         });
@@ -1223,7 +1241,10 @@ impl App {
         // switch only until capture starts: otherwise nothing ticks.
         let waits = self.approach.as_ref().and_then(|(_, a)| a.deadline()).map(Instant::from_std);
         let waits = waits.into_iter().chain(self.switching.map(|(_, until)| until)).min();
-        let lease = self.owner.as_ref().map(|o| (o.last_rx + LEASE).min(o.last_input + IDLE));
+        let lease = self.owner.as_ref().map(|o| {
+            let lease = (o.last_rx + LEASE).min(o.last_input + IDLE);
+            o.focus_check.map_or(lease, |c| c.min(lease))
+        });
         let lease = lease.into_iter().chain(waits).min();
         let visit = self.remote.as_ref().map(|r| {
             if r.acked {
@@ -1258,6 +1279,21 @@ impl App {
         } else if self.owner.as_ref().is_some_and(|o| now >= o.last_input + IDLE) {
             tracing::info!("no input from the controlling computer for {} s; it lets go", IDLE.as_secs());
             self.end_owner(true);
+        }
+        if self.owner.as_ref().and_then(|o| o.focus_check).is_some_and(|t| now >= t) {
+            self.report_focus();
+        }
+        if let Some(r) = self.remote.as_mut()
+            && r.peer_fullscreen
+            && self.peers.get(&r.peer).is_some_and(|p| p.caps & caps::FOCUS_BEAT != 0)
+            && now >= r.focus_heard + FOCUS_SILENCE
+        {
+            // It repeats "fullscreen" while that lasts: silence means it
+            // can't tell any more, or is stuck. Relative motion has no
+            // edge leading home, so it ends.
+            tracing::warn!("the other computer stopped saying a fullscreen window has its focus; absolute motion again");
+            r.peer_fullscreen = false;
+            self.apply_pointer_mode();
         }
         let Some(r) = self.remote.as_mut() else { return };
         if !r.acked {
@@ -1310,23 +1346,58 @@ impl App {
     }
 
     /// Tells the owner whether a fullscreen window has the focus here (for
-    /// its gaming mode `auto`), if it asked and that changed. Asked when it
-    /// starts watching and on every click, which is when focus moves. When
-    /// this OS can't tell (a Wayland-native window), "fullscreen" is taken
-    /// back if it was said, or the owner would stay in relative mode, where
-    /// no edge leads home; otherwise nothing is said.
+    /// its gaming mode `auto`), if it asked. Looked at when it starts
+    /// watching, and `FOCUS_SETTLE` after input from it that may move the
+    /// focus (a click, a window-switching chord: see `may_move_focus`),
+    /// once the system has acted on it; said when it changed. While
+    /// fullscreen, it is looked at and said again every `FOCUS_REPEAT`:
+    /// the focus can also move with no input (a game minimizing itself),
+    /// and the owner leaves relative mode if it hears nothing. When this
+    /// OS can't tell (a Wayland-native window), "fullscreen" is taken back
+    /// if it was said, or the owner would stay in relative mode, where no
+    /// edge leads home; otherwise nothing is said.
     fn report_focus(&mut self) {
-        let Some(o) = self.owner.as_mut().filter(|o| o.watch_focus) else { return };
+        let Some(o) = self.owner.as_mut() else { return };
+        o.focus_check = None;
+        if !o.watch_focus {
+            return;
+        }
         let fullscreen = match self.focus.focus() {
             Some(f) => f.fullscreen,
             None if o.focus_sent == Some(true) => false,
             None => return,
         };
-        if o.focus_sent.replace(fullscreen) == Some(fullscreen) {
+        let changed = o.focus_sent.replace(fullscreen) != Some(fullscreen);
+        if fullscreen {
+            o.focus_check = Some(Instant::now() + FOCUS_REPEAT);
+        }
+        if !changed && !fullscreen {
             return;
         }
         if let Some(p) = self.peers.get(&o.peer).filter(|p| p.id == o.link) {
             p.ctl.send(Control::Focus { epoch: o.epoch, fullscreen });
+        }
+    }
+
+    /// Has the focus probe say when another window comes to the front while
+    /// a controller watches the focus here, and stop when it doesn't.
+    fn sync_focus_watch(&mut self) {
+        let want = self.owner.as_ref().is_some_and(|o| o.watch_focus);
+        if want == std::mem::replace(&mut self.focus_watched, want) {
+            return;
+        }
+        let tx = self.tx.clone();
+        let notify: Box<dyn Fn() + Send> = Box::new(move || {
+            let _ = tx.send(AppEvent::FocusMoved);
+        });
+        self.focus.watch(want.then_some(notify));
+    }
+
+    /// Looks at the focus `FOCUS_SETTLE` from now (unless sooner anyway).
+    fn check_focus_soon(&mut self) {
+        if let Some(o) = self.owner.as_mut().filter(|o| o.watch_focus) {
+            let at = Instant::now() + FOCUS_SETTLE;
+            o.focus_check = Some(o.focus_check.map_or(at, |c| c.min(at)));
         }
     }
 
@@ -1374,6 +1445,7 @@ impl App {
                 self.dialing.remove(&addr);
             }
             AppEvent::Network(net) => self.on_network(&net),
+            AppEvent::FocusMoved => self.check_focus_soon(),
         }
     }
 
@@ -1530,6 +1602,7 @@ impl App {
             Control::Focus { epoch, fullscreen } => {
                 if let Some(r) = self.remote.as_mut().filter(|r| r.peer == fp && r.cursor.epoch() == epoch) {
                     r.peer_fullscreen = fullscreen;
+                    r.focus_heard = Instant::now();
                     self.apply_pointer_mode();
                 }
             }
@@ -1548,11 +1621,15 @@ impl App {
                 }
             }
             input => {
-                let click = matches!(input, Control::Button { down: true, .. });
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id) {
+                    let moves = match input {
+                        Control::Button { down, .. } => down,
+                        Control::Key { code, down } => may_move_focus(code, down, &o.held),
+                        _ => false,
+                    };
                     o.input(input, &self.inject);
-                    if click {
-                        self.report_focus();
+                    if moves {
+                        self.check_focus_soon();
                     }
                 }
             }
@@ -2234,6 +2311,24 @@ fn no_overlap(name: &str, side: Side) -> String {
          cross to it (`one-mk switch` still goes there, and any part of that edge comes back); fix it with \
          `one-mk layout \"{name}\" {side} --offset 0`"
     )
+}
+
+/// Whether a key from the controller may move the focus, or take a window
+/// in or out of fullscreen, so gaming mode `auto` must look again: a key
+/// pressed with Alt, Ctrl or the logo key held (Alt+Tab, Alt+Enter,
+/// Win+Up), Alt or the logo key let go (Alt+Tab switches then; the logo
+/// key opens the start menu), F11 or Esc. `held` is what the controller
+/// held before this key. Not plain typing, so a game's WASD costs nothing.
+fn may_move_focus(code: u32, down: bool, held: &HeldKeys) -> bool {
+    const ESC: u32 = 1;
+    const F11: u32 = 87;
+    const ALTS: [u32; 2] = [56, 100];
+    const LOGO: [u32; 2] = [125, 126];
+    if !down {
+        return ALTS.contains(&code) || LOGO.contains(&code);
+    }
+    let chord = [CTRL, ALT, [LOGO[0], LOGO[1]]].iter().flatten().any(|&m| held.is_held(m));
+    (chord && !Mods::is_modifier(code)) || code == F11 || code == ESC
 }
 
 /// Whether to send relative motion (gaming mode) to a peer that supports
@@ -3764,6 +3859,123 @@ mod tests {
         duo.stop().await;
     }
 
+    /// Gaming mode `auto`, out of the game without a click: Alt+Tab on B
+    /// (typed on A) makes B look at its focus again once B has switched,
+    /// and A goes back to absolute motion, where B's edge leads home.
+    #[tokio::test]
+    async fn gaming_auto_notices_alt_tab() {
+        let mut duo = Duo::start("gaming-alt-tab", None).await;
+        set(&duo.da, |s| s.gaming = Gaming::Auto).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec![] });
+        duo.enter_b().await;
+        eventually_async("relative motion", || async { status(&duo.da).await.relative }).await;
+        // Plain typing (a game's W) doesn't make B look.
+        let probes = duo.hb.focus_probes.load(std::sync::atomic::Ordering::SeqCst);
+        for (code, down) in [(17, true), (17, false)] {
+            duo.ha.events.send(Event::Key { code, down }).unwrap();
+        }
+        tokio::time::sleep(FOCUS_SETTLE * 3).await;
+        assert_eq!(duo.hb.focus_probes.load(std::sync::atomic::Ordering::SeqCst), probes, "WASD costs nothing");
+        // Alt+Tab: the game loses the focus.
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: false, apps: vec![] });
+        for (code, down) in [(56, true), (15, true), (15, false), (56, false)] {
+            duo.ha.events.send(Event::Key { code, down }).unwrap();
+        }
+        eventually_async("absolute motion", || async { !status(&duo.da).await.relative }).await;
+        duo.stop().await;
+    }
+
+    /// Where the OS says when another window comes to the front (Windows),
+    /// B listens only while A watches its focus, and looks again at once.
+    #[tokio::test]
+    async fn gaming_auto_hears_the_front_window_change() {
+        let mut duo = Duo::start("gaming-front", None).await;
+        let listening = |h: &NullHandles| h.focus_notify.lock().unwrap().is_some();
+        set(&duo.da, |s| s.gaming = Gaming::Auto).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec![] });
+        assert!(!listening(&duo.hb), "nobody watches yet");
+        duo.enter_b().await;
+        eventually_async("relative motion", || async { status(&duo.da).await.relative }).await;
+        assert!(listening(&duo.hb));
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: false, apps: vec![] });
+        (duo.hb.focus_notify.lock().unwrap().as_ref().unwrap())();
+        tokio::time::timeout(FOCUS_REPEAT - Duration::from_millis(500), async {
+            while status(&duo.da).await.relative {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("absolute motion before B would have looked again by itself");
+        duo.leave_b().await;
+        eventually("B to stop listening", || !listening(&duo.hb)).await;
+        duo.stop().await;
+    }
+
+    /// While a fullscreen window has B's focus, B looks again and says so
+    /// every `FOCUS_REPEAT` with no input at all (the focus can move by
+    /// itself), so A keeps relative motion; once it isn't, A hears it.
+    #[tokio::test]
+    async fn gaming_auto_rechecks_without_input() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut duo = Duo::start("gaming-beat", None).await;
+        set(&duo.da, |s| s.gaming = Gaming::Auto).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec![] });
+        duo.enter_b().await;
+        eventually_async("relative motion", || async { status(&duo.da).await.relative }).await;
+        let probes = duo.hb.focus_probes.load(SeqCst);
+        // Keep the visit alive (B lets go after a minute without input,
+        // not before), but send nothing that moves the focus.
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: false, apps: vec![] });
+        tokio::time::sleep(FOCUS_REPEAT + Duration::from_millis(500)).await;
+        assert!(duo.hb.focus_probes.load(SeqCst) > probes, "B looked again by itself");
+        eventually_async("absolute motion", || async { !status(&duo.da).await.relative }).await;
+        duo.stop().await;
+    }
+
+    /// A peer that said "fullscreen" (and promised to repeat it) and then
+    /// goes quiet: A stops relative motion after `FOCUS_SILENCE`, so the
+    /// edge leads home again.
+    #[tokio::test]
+    async fn gaming_auto_ends_when_the_peer_goes_quiet() {
+        let duo = Duo::start("gaming-quiet", None).await;
+        set(&duo.db, |s| s.gaming = Gaming::Auto).await;
+        // C, above B, says it supports relative motion, focus and the beat.
+        let mut c = RawPeer::connect("gaming-quiet-c", &duo.db, duo.pb).await;
+        c.send(Control::Screens(vec![Rect::new(0, 0, 1920, 1080)])).await;
+        c.send(Control::Caps(caps::RELATIVE | caps::FOCUS | caps::FOCUS_BEAT)).await;
+        let db = duo.db.clone();
+        eventually_async("C's screens", || async { status(&db).await.layout.places.iter().any(|p| !p.screens.is_empty()) }).await;
+        duo.hb.events.send(Event::Activated { id: 1, side: Side::Top, pos: Pos::new(960.0, 0.0) }).unwrap();
+        let epoch = loop {
+            if let Control::Enter { epoch, .. } = c.next().await {
+                break epoch;
+            }
+        };
+        c.send(Control::EnterAck { epoch }).await;
+        loop {
+            if let Control::WatchFocus { on: true, .. } = c.next().await {
+                break;
+            }
+        }
+        c.send(Control::Focus { epoch, fullscreen: true }).await;
+        eventually_async("relative motion", || async { status(&db).await.relative }).await;
+        let since = Instant::now();
+        // Then nothing more from C.
+        for _ in 0..((FOCUS_SILENCE.as_millis() + 2000) / 50) {
+            if !status(&db).await.relative {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!status(&db).await.relative, "still relative after {:?}", since.elapsed());
+        assert!(since.elapsed() >= FOCUS_SILENCE - Duration::from_millis(500), "not before the silence: {:?}", since.elapsed());
+        assert!(status(&db).await.controlling.is_some(), "still on C, now able to come home");
+        duo.stop().await;
+    }
+
     /// Nobody looks at B's windows unless A's gaming mode is `auto` (on
     /// GNOME, just connecting to X11 can start XWayland).
     #[tokio::test]
@@ -3938,6 +4150,24 @@ mod tests {
         }
         assert!(seen.is_empty(), "{seen:?}");
         duo.stop().await;
+    }
+
+    #[test]
+    fn keys_that_may_move_the_focus() {
+        let mut held = HeldKeys::new();
+        assert!(!may_move_focus(17, true, &held), "plain typing (W)");
+        assert!(may_move_focus(87, true, &held), "F11");
+        assert!(may_move_focus(1, true, &held), "Esc");
+        held.update(56, true);
+        assert!(may_move_focus(15, true, &held), "Alt+Tab");
+        assert!(may_move_focus(28, true, &held), "Alt+Enter");
+        assert!(!may_move_focus(42, true, &held), "Alt then Shift: not yet");
+        assert!(may_move_focus(56, false, &held), "Alt let go: the switch happens");
+        let mut logo = HeldKeys::new();
+        logo.update(125, true);
+        assert!(may_move_focus(103, true, &logo), "Win+Up");
+        assert!(may_move_focus(125, false, &logo), "the start menu");
+        assert!(!may_move_focus(42, false, &HeldKeys::new()), "Shift let go");
     }
 
     #[test]
