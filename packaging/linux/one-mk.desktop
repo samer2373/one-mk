@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=one·mk
+GenericName=Keyboard and mouse sharing
+Comment=Share one mouse and keyboard between your computers
+Exec=one-mk-app
+Icon=one-mk
+Terminal=false
+Categories=Utility;RemoteAccess;
+Keywords=kvm;keyboard;mouse;share;clipboard;
+StartupWMClass=one-mk

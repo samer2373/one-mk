@@ -1,0 +1,12 @@
+#!/bin/sh
+# AppImage entry point. With no arguments it opens the window; otherwise the
+# arguments go to `one-mk` (so `one-mk-x86_64.AppImage pair` works), except
+# that `app` and `tray` start the window and the tray icon explicitly.
+HERE=$(dirname "$(readlink -f "$0")")
+export PATH="$HERE/usr/bin:$PATH"
+case "${1:-}" in
+    "")   exec "$HERE/usr/bin/one-mk-app" ;;
+    app)  shift; exec "$HERE/usr/bin/one-mk-app" "$@" ;;
+    tray) shift; exec "$HERE/usr/bin/one-mk-tray" "$@" ;;
+    *)    exec "$HERE/usr/bin/one-mk" "$@" ;;
+esac

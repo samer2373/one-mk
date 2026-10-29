@@ -1,0 +1,23 @@
+# Homebrew formula that builds one-mk from the release's source tarball
+# (UNTESTED: written without a Mac). The cask is the normal way to install;
+# this is for people who prefer to build. `sh scripts/package-homebrew.sh`
+# fills it in.
+class OneMk < Formula
+  desc "Share one mouse and keyboard between computers"
+  homepage "https://github.com/samer2373/one-mk"
+  url "https://github.com/samer2373/one-mk/archive/refs/tags/v@VERSION@.tar.gz"
+  sha256 "@SHA256_SOURCE@"
+  license any_of: ["MIT", "Apache-2.0"]
+  head "https://github.com/samer2373/one-mk.git", branch: "main"
+
+  depends_on "rust" => :build
+
+  def install
+    system "cargo", "install", *std_cargo_args(path: "crates/one-mk")
+    system "cargo", "install", *std_cargo_args(path: "crates/tray")
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/one-mk --version")
+  end
+end

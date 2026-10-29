@@ -134,6 +134,16 @@ fn escape_markup(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+/// Says that something went wrong, for commands started from a file
+/// manager menu where nobody sees stderr. Waits until the notification
+/// is shown, so call it before the process exits; never fails.
+pub async fn failure(title: &str, body: &str) {
+    if disabled() {
+        return;
+    }
+    sys::failure(title, body).await;
+}
+
 /// The real notifier for this platform.
 pub struct Desktop;
 
@@ -161,6 +171,41 @@ mod sys {
                 if let Err(e) = via_notify_send(&n).await {
                     tracing::debug!("notify-send failed too: {e:#}; no notification");
                 }
+            }
+        }
+    }
+
+    /// A plain error notification: D-Bus, else `notify-send`, else stderr.
+    pub async fn failure(title: &str, body: &str) {
+        let shown = async {
+            let conn = zbus::Connection::session().await?;
+            let proxy = zbus::Proxy::new(
+                &conn,
+                "org.freedesktop.Notifications",
+                "/org/freedesktop/Notifications",
+                "org.freedesktop.Notifications",
+            )
+            .await?;
+            let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from("transfer.error"))]);
+            proxy
+                .call::<_, _, u32>(
+                    "Notify",
+                    &("one-mk", 0u32, "dialog-error", title, escape_markup(body), Vec::<&str>::new(), hints, -1i32),
+                )
+                .await?;
+            anyhow::Ok(())
+        };
+        if let Err(e) = shown.await {
+            tracing::debug!("notification over D-Bus failed ({e:#}); trying notify-send");
+            let status = Command::new("notify-send")
+                .args(["--app-name=one-mk", "--icon=dialog-error", "--"])
+                .arg(title)
+                .arg(escape_markup(body))
+                .stdin(Stdio::null())
+                .status()
+                .await;
+            if !status.is_ok_and(|s| s.success()) {
+                eprintln!("one-mk: {title}: {body}");
             }
         }
     }
@@ -305,8 +350,16 @@ mod sys {
     use super::*;
     use std::process::Stdio;
 
+    pub async fn failure(title: &str, body: &str) {
+        notify(body, title).await;
+    }
+
     /// Title and body go in as arguments, never into the script text.
     pub async fn show(n: FilesReceived) {
+        notify(&n.body(), &n.title()).await;
+    }
+
+    async fn notify(body: &str, title: &str) {
         let res = tokio::process::Command::new("osascript")
             .args([
                 "-e",
@@ -316,8 +369,8 @@ mod sys {
                 "-e",
                 "end run",
             ])
-            .arg(n.body())
-            .arg(n.title())
+            .arg(body)
+            .arg(title)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -339,12 +392,20 @@ mod sys {
     pub async fn show(n: FilesReceived) {
         tracing::info!("not notifying about {} (notifications are not implemented on Windows yet)", n.title());
     }
+
+    /// The SendTo script keeps its window open on failure instead.
+    pub async fn failure(title: &str, body: &str) {
+        eprintln!("one-mk: {title}: {body}");
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
 mod sys {
     use super::*;
     pub async fn show(_: FilesReceived) {}
+    pub async fn failure(title: &str, body: &str) {
+        eprintln!("one-mk: {title}: {body}");
+    }
 }
 
 #[cfg(test)]

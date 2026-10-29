@@ -29,7 +29,19 @@ const BUSY_RETRY: Duration = Duration::from_millis(1500);
 /// How long to wait for the close notice to leave when finishing.
 const CLOSE_WAIT: Duration = Duration::from_millis(500);
 
-pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<()> {
+/// `notify_errors`: also say so in a desktop notification if sending fails
+/// (for the file manager's "Send to" entries, which have no terminal).
+pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>, notify_errors: bool) -> Result<()> {
+    let result = send(dir, paths, to, connect).await;
+    if let Err(e) = &result
+        && notify_errors
+    {
+        crate::notify::failure("one-mk could not send the files", &format!("{e:#}")).await;
+    }
+    result
+}
+
+async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<()> {
     for p in &paths {
         if std::fs::symlink_metadata(p).is_err() {
             bail!("{}: no such file or folder", p.display());
@@ -61,6 +73,7 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
     let elapsed = start.elapsed().as_secs_f64();
     eprint!("\r\x1b[2K");
     let mut failed = 0;
+    let mut first_reason = String::new();
     let (mut saved, mut saved_bytes) = (0, 0);
     for (file, outcome) in &results {
         match outcome {
@@ -73,6 +86,9 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
             }
             Outcome::Rejected(why) | Outcome::Failed(why) => {
                 failed += 1;
+                if first_reason.is_empty() {
+                    first_reason = format!("{}: {why}", file.rel);
+                }
                 eprintln!("  not sent: {}: {why}", file.rel);
             }
         }
@@ -85,7 +101,7 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
         bytes((sent as f64 / elapsed.max(1e-6)) as u64)
     );
     if failed > 0 {
-        bail!("{failed} file(s) were not sent");
+        bail!("{failed} file(s) were not sent ({first_reason})");
     }
     Ok(())
 }
@@ -370,7 +386,7 @@ mod tests {
             let (home, file) = (home.clone(), file.clone());
             let sent = tokio::task::spawn_blocking(move || {
                 let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-                rt.block_on(run(&home, vec![file], None, vec![]))
+                rt.block_on(send(&home, vec![file], None, vec![]))
             })
             .await
             .unwrap();
@@ -394,14 +410,14 @@ mod tests {
             held.pop();
             held
         });
-        let sent = run(&home, vec![file.clone()], None, vec![]).await;
+        let sent = send(&home, vec![file.clone()], None, vec![]).await;
         assert!(sent.is_ok(), "{sent:?}");
         assert!(rx.root.join("g.txt").exists());
         let mut held = free.await.unwrap();
 
         // Still full for good: tried twice, then it says so.
         held.push(rx.inbox.admit(me).unwrap());
-        let sent = run(&home, vec![file], None, vec![]).await;
+        let sent = send(&home, vec![file], None, vec![]).await;
         let why = format!("{:#}", sent.unwrap_err());
         assert!(why.contains("1 file(s) were not sent"), "{why}");
     }

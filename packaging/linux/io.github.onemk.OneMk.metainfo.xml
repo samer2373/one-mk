@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.onemk.OneMk</id>
+  <name>one·mk</name>
+  <summary>Share one mouse and keyboard between your computers</summary>
+  <developer id="io.github.onemk">
+    <name>Samer Abu-Sleem</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <description>
+    <p>
+      one·mk moves your mouse and keyboard from one computer to the next when the pointer crosses the edge of the
+      screen, and shares the clipboard and files between them. It is a small, encrypted, peer-to-peer program for
+      Linux, macOS and Windows.
+    </p>
+    <p>Pair two computers once, and they find each other on the local network from then on.</p>
+  </description>
+  <launchable type="desktop-id">one-mk.desktop</launchable>
+  <url type="homepage">https://github.com/samer2373/one-mk</url>
+  <url type="bugtracker">https://github.com/samer2373/one-mk/issues</url>
+  <provides>
+    <binary>one-mk</binary>
+    <binary>one-mk-tray</binary>
+    <binary>one-mk-app</binary>
+  </provides>
+  <categories>
+    <category>Utility</category>
+    <category>Network</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

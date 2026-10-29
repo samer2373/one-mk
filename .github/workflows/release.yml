@@ -13,13 +13,17 @@ jobs:
       matrix:
         include:
           - { os: macos-14,        target: aarch64-apple-darwin }
-          - { os: macos-13,        target: x86_64-apple-darwin }
+          - { os: macos-15-intel,  target: x86_64-apple-darwin }
           - { os: ubuntu-22.04,    target: x86_64-unknown-linux-gnu }
           - { os: windows-latest,  target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
+      # The tag has to be the version in Cargo.toml: the one place versions come from.
+      - name: Check the tag matches Cargo.toml
+        shell: bash
+        run: sh scripts/version.sh --check "$GITHUB_REF_NAME"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: stable, targets: "${{ matrix.target }}" }
       - run: cargo build --release --locked --target ${{ matrix.target }} -p one-mk -p one-mk-tray -p one-mk-app
@@ -41,17 +45,75 @@ jobs:
           name: ${{ matrix.target }}
           path: one-mk-*.*
 
+      # Installers, built from the programs just compiled (docs/PACKAGING.md).
+      # Linux: .deb and AppImage. appimagetool is pinned by version and checksum.
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          APPIMAGETOOL_SHA256: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1
+        run: |
+          sh scripts/package-deb.sh
+          mkdir -p "$RUNNER_TEMP/appimagetool"
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool/appimagetool" \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
+          echo "$APPIMAGETOOL_SHA256  $RUNNER_TEMP/appimagetool/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool/appimagetool"
+          APPIMAGETOOL="$RUNNER_TEMP/appimagetool/appimagetool" sh scripts/package-appimage.sh
+          rm -rf dist/one-mk.AppDir
+      # macOS: one-mk.app in a .dmg (ad-hoc signed unless MACOS_SIGN_IDENTITY is set up).
+      - name: macOS package
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: sh scripts/package-macos.sh
+      # Windows: Inno Setup installer.
+      - name: Windows package
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          choco install innosetup --version 6.4.3 --no-progress -y
+          sh scripts/package-windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.target }}
+          path: |
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.dmg
+            dist/*-setup.exe
+
   publish:
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
-      - run: cd dist && sha256sum one-mk-* > SHA256SUMS
+      - run: cd dist && sha256sum one-mk* > SHA256SUMS
       - env:
           GH_TOKEN: ${{ github.token }}
         run: >
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY"
           --title "$GITHUB_REF_NAME" --generate-notes
+      # Package-manager files that need the published release: the Homebrew
+      # cask and formula (checksums of the .dmg files and source tarball) and
+      # the Flatpak manifest (the Linux tarball's URL and checksum). They are
+      # attached to the release; putting them in a tap or on Flathub is by hand.
+      - name: Homebrew and Flatpak files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          src=$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" | sha256sum | cut -d' ' -f1)
+          SOURCE_SHA256=$src sh scripts/package-homebrew.sh
+          sh scripts/package-flatpak.sh "$base/one-mk-x86_64-unknown-linux-gnu.tar.gz"
+          cp dist/flatpak/io.github.onemk.OneMk.yml dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb "$RUNNER_TEMP/"
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/io.github.onemk.OneMk.yml" "$RUNNER_TEMP/one-mk.rb" "$RUNNER_TEMP/one-mk-source.rb" --repo "$GITHUB_REPOSITORY"
