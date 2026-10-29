@@ -55,7 +55,7 @@ impl Snapshot {
 
     /// The first line of the menu, and the icon's tooltip.
     pub fn headline(&self) -> String {
-        let Some(s) = &self.status else { return "one-mk is not running".into() };
+        let Some(s) = &self.status else { return "one·mk isn't running".into() };
         if let Some(p) = &s.controlled_by {
             return format!("{p} is controlling this computer");
         }
@@ -66,7 +66,7 @@ impl Snapshot {
         match online[..] {
             [p] => format!("Connected to {} ({})", p.name, on_your(p.side)),
             [] if s.peers.is_empty() => "No computers paired yet".into(),
-            [] => "Not connected to any computer".into(),
+            [] => "Waiting for your computers".into(),
             _ => format!("Connected to {} computers", online.len()),
         }
     }
@@ -76,8 +76,8 @@ pub fn side_label(side: Side) -> &'static str {
     match side {
         Side::Left => "Left",
         Side::Right => "Right",
-        Side::Top => "Top",
-        Side::Bottom => "Bottom",
+        Side::Top => "Above",
+        Side::Bottom => "Below",
     }
 }
 
@@ -151,15 +151,15 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
                 });
             }
             if s.peers.is_empty() {
-                m.push(Entry::Label("Run `one-mk pair` on both computers".into()));
+                m.push(Entry::Item { label: "Pair a computer…".into(), action: Action::OpenApp, checked: None });
             }
             m.push(Entry::Separator);
             let locked = s.pointer_locked;
-            m.push(Entry::Item { label: "Lock pointer here".into(), action: Action::LockPointer(!locked), checked: Some(locked) });
-            m.push(Entry::Item { label: "Lock all computers".into(), action: Action::LockAll, checked: None });
+            m.push(Entry::Item { label: "Keep the pointer here".into(), action: Action::LockPointer(!locked), checked: Some(locked) });
+            m.push(Entry::Item { label: "Lock every screen".into(), action: Action::LockAll, checked: None });
             m.push(Entry::Item { label: "Take back control".into(), action: Action::TakeBack, checked: None });
         }
-        None => m.push(Entry::Item { label: "Start one-mk".into(), action: Action::StartDaemon, checked: None }),
+        None => m.push(Entry::Item { label: "Start one·mk".into(), action: Action::StartDaemon, checked: None }),
     }
     m.push(Entry::Separator);
     m.push(Entry::Item { label: "Start at login".into(), action: Action::ToggleAutostart, checked: Some(snap.autostart) });
@@ -182,9 +182,9 @@ mod tests {
 
     #[test]
     fn headlines() {
-        assert_eq!(Snapshot::default().headline(), "one-mk is not running");
+        assert_eq!(Snapshot::default().headline(), "one·mk isn't running");
         assert_eq!(snap(vec![]).headline(), "No computers paired yet");
-        assert_eq!(snap(vec![peer("a", Side::Left, false)]).headline(), "Not connected to any computer");
+        assert_eq!(snap(vec![peer("a", Side::Left, false)]).headline(), "Waiting for your computers");
         assert_eq!(snap(vec![peer("desk", Side::Right, true)]).headline(), "Connected to desk (on your right)");
         assert_eq!(snap(vec![peer("a", Side::Right, true), peer("b", Side::Top, true)]).headline(), "Connected to 2 computers");
         let mut s = snap(vec![peer("a", Side::Right, true)]);
@@ -244,9 +244,9 @@ mod tests {
     #[test]
     fn pointer_lock_is_a_checkmark_that_flips() {
         let mut s = snap(vec![peer("desk", Side::Right, true)]);
-        assert!(menu(&s).contains(&Entry::Item { label: "Lock pointer here".into(), action: Action::LockPointer(true), checked: Some(false) }));
+        assert!(menu(&s).contains(&Entry::Item { label: "Keep the pointer here".into(), action: Action::LockPointer(true), checked: Some(false) }));
         s.status.as_mut().unwrap().pointer_locked = true;
-        assert!(menu(&s).contains(&Entry::Item { label: "Lock pointer here".into(), action: Action::LockPointer(false), checked: Some(true) }));
+        assert!(menu(&s).contains(&Entry::Item { label: "Keep the pointer here".into(), action: Action::LockPointer(false), checked: Some(true) }));
     }
 
     #[test]
