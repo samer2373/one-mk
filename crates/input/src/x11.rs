@@ -171,7 +171,7 @@ async fn run(
             tokio::select! {
                 _ = &mut sleep => break,
                 cmd = cmds.recv() => match cmd {
-                    Some(CaptureCmd::SetSides(s)) => st.sides = s,
+                    Some(CaptureCmd::SetSides(s)) => st.sides = s.iter().map(|a| a.side).collect(),
                     Some(CaptureCmd::Activate { .. }) => st.send(Event::Error(NO_CAPTURE.into())),
                     Some(CaptureCmd::Release { .. }) => {}
                     None => return,
@@ -511,7 +511,7 @@ impl X {
                 r = socket.readable() => r?,
                 cmd = cmds.recv() => match cmd {
                     Some(CaptureCmd::SetSides(sides)) => {
-                        st.sides = sides;
+                        st.sides = sides.iter().map(|a| a.side).collect();
                         self.set_edges(&st.sides.clone())?;
                     }
                     Some(CaptureCmd::Release { id, pos }) => self.release(st, id, pos)?,

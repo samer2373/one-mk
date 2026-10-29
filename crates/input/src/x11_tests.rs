@@ -219,7 +219,7 @@ async fn pushing_against_an_edge_captures_until_released() {
     let o = x.observer();
     let (mut b, locked) = open_on(&x.display).unwrap();
     assert!(matches!(next(&mut b.events).await, Event::Desktop(_)));
-    b.capture.send(CaptureCmd::SetSides(vec![Side::Right])).unwrap();
+    b.capture.send(CaptureCmd::SetSides(vec![crate::Armed::whole(Side::Right)])).unwrap();
 
     // Along the edge without pushing out: nothing.
     o.move_to(W - 1, 400);
@@ -319,7 +319,7 @@ async fn without_barriers_an_edge_window_captures() {
     let (mut b, _locked) = open_target(Target { display: Some(x.display.clone()), barriers: false }).unwrap();
     assert!(matches!(next(&mut b.events).await, Event::Desktop(_)));
     o.move_to(W - 1, 400);
-    b.capture.send(CaptureCmd::SetSides(vec![Side::Right])).unwrap();
+    b.capture.send(CaptureCmd::SetSides(vec![crate::Armed::whole(Side::Right)])).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(b.events.try_recv().is_err(), "the pointer was there before: no capture");
     o.move_to(600, 400);

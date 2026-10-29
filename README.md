@@ -282,14 +282,15 @@ as with any crossing. The keyboard shortcuts below do the same.
 
 | Shortcut | What it does |
 |---|---|
-| `Ctrl+Alt+1` ... `Ctrl+Alt+9` | Jump to computer 1 to 9 |
+| `Ctrl+Alt+1` ... `Ctrl+Alt+9` (Windows: `Ctrl+Alt+Shift+1` ... `9`) | Jump to computer 1 to 9 |
 | `Ctrl+Alt+PageDown` | The next computer (`one-mk switch next`) |
 | `Ctrl+Alt+P` | Lock the pointer to this computer, or unlock it |
 | `Ctrl+Alt+H` | Back to this computer (`one-mk switch here`) |
 
 Computers are numbered by name, this one included, so when every computer is
 paired with every other, `Ctrl+Alt+2` means the same computer on every
-keyboard; `one-mk hotkeys` shows the numbers. Change the keys with, for
+keyboard; `one-mk hotkeys` shows the numbers. Only computers that exist get a
+shortcut: with two, `Ctrl+Alt+3` and up stay free for programs. Change the keys with, for
 example, `one-mk hotkeys --jump 'ctrl+shift+{n}' --cycle 'super+f12'
 --lock-pointer none --home-key 'ctrl+alt+end'` (modifiers `ctrl`, `alt`,
 `shift`, `super`, then one key: a letter, digit, `f1`-`f24`, an arrow,
@@ -306,7 +307,10 @@ the other computer. Ctrl and Alt are already there by then (one-mk can't know
 a shortcut is coming, and holding every Ctrl back would slow it down), so the
 switch releases them: the computer left behind lets go of everything, and
 the next one never saw them go down. The right Alt key doesn't count as Alt
-there, because it is AltGr on many keyboards.
+there, because it is AltGr on many keyboards. While another computer controls
+this one, this computer's own shortcuts are off (on Windows unregistered, on
+macOS let through), so a chord typed over there reaches the program here; on
+Linux the desktop still takes the chord, and one-mk ignores it.
 
 - **Linux:** the portal accepts only installed programs, so run
   `one-mk install` once (it also writes a hidden desktop entry,
@@ -316,11 +320,13 @@ there, because it is AltGr on many keyboards.
   and `one-mk doctor` say so: the shortcuts then work only while the pointer
   is on another computer, so bind `one-mk switch next` (and
   `one-mk switch here`) to a key in your desktop settings instead.
-- **Windows:** on keyboards where AltGr types characters on the digit row or
-  on P and H (German, Polish and others), Windows reports AltGr as Ctrl+Alt
-  and the shortcuts take those characters; pick other keys, for example
-  `one-mk hotkeys --jump 'ctrl+shift+alt+{n}'`. A shortcut another program
-  already uses is skipped and `one-mk status` names it.
+- **Windows:** Windows reports AltGr as Ctrl+Alt, and AltGr+digit types
+  `{ [ ] }` on German keyboards and most of the digit row on French ones, so
+  the jump shortcuts add Shift there by default. If AltGr+P or AltGr+H types
+  a character on your keyboard (Polish and others), pick other keys for
+  those, for example `one-mk hotkeys --lock-pointer 'ctrl+alt+shift+p'`. A
+  shortcut another program already uses is skipped and `one-mk status` names
+  it.
 - Windows and macOS shortcuts are not tested on real hardware yet.
 
 **Lock to this computer.** `one-mk lock-pointer on` (like Scroll Lock in
@@ -364,8 +370,10 @@ in any way locks the others that have lock sync on too (each lock is passed
 on once, so it never comes back); a computer with lock sync off follows only
 `lock-all`. Anything held down is let go before a screen locks, and modifier keys
 are released once more after it unlocks, so no key stays stuck. Locking uses
-logind on Linux, `LockWorkStation` on Windows and the login window (or
-display sleep) on macOS; noticing a lock uses logind's lock hint on Linux
+logind on Linux, `LockWorkStation` on Windows and the login window on macOS
+(where neither the old `CGSession` tool nor the login framework's lock call
+exists, `lock-all` says this Mac couldn't be locked instead of pretending);
+noticing a lock uses logind's lock hint on Linux
 and the system's lock notifications on Windows and macOS.
 
 **Media keys.** Play/pause, stop, next and previous track, volume and mute,

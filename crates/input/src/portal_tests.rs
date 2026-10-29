@@ -160,6 +160,8 @@ struct World {
     sessions: Vec<(&'static str, String)>,
     /// Barrier ids of the last SetPointerBarriers.
     barriers: Vec<u32>,
+    /// And their positions (x1, y1, x2, y2).
+    positions: Vec<(i32, i32, i32, i32)>,
     /// ('k', key) and ('b', button) held down through libei.
     pressed: BTreeSet<(char, u32)>,
     /// Devices the injector started emulating on.
@@ -181,6 +183,7 @@ impl Default for World {
             restoring: HashMap::new(),
             sessions: Vec::new(),
             barriers: Vec::new(),
+            positions: Vec::new(),
             pressed: BTreeSet::new(),
             emulating: 0,
         }
@@ -444,6 +447,10 @@ impl FakeInputCapture {
     ) -> zbus::fdo::Result<OwnedObjectPath> {
         let mut w = lock(&self.0);
         w.barriers = barriers.iter().filter_map(|b| opt_u32(b, "barrier_id")).collect();
+        w.positions = barriers
+            .iter()
+            .filter_map(|b| <(i32, i32, i32, i32)>::try_from(b.get("position")?.try_clone().ok()?).ok())
+            .collect();
         let line = format!("ic.SetPointerBarriers {:?}", w.barriers);
         w.log.push(line);
         let handle = handle_path(&hdr, "request", opt_str(&options, "handle_token"));
@@ -717,7 +724,7 @@ impl Harness {
     /// Both sides set up, with a barrier on the right and the injector's
     /// devices ready.
     async fn ready(&mut self) {
-        self.capture().send(CaptureCmd::SetSides(vec![Side::Right])).unwrap();
+        self.capture().send(CaptureCmd::SetSides(vec![Armed::whole(Side::Right)])).unwrap();
         self.until("injection", |w| w.emulating >= 2).await;
         self.until("barriers", |w| !w.barriers.is_empty() && w.count("ic.Enable") > 0).await;
     }
@@ -817,7 +824,7 @@ async fn first_start_waits_for_the_dialog_then_the_token_is_reused() {
     let (ev_tx, events) = mpsc::unbounded_channel();
     let (capture, inject) = start(env, ev_tx, h.dir.clone()).unwrap();
     (h.events, h.capture, h.inject, h.power) = (events, Some(capture), Some(inject), power);
-    h.capture().send(CaptureCmd::SetSides(vec![Side::Right])).unwrap();
+    h.capture().send(CaptureCmd::SetSides(vec![Armed::whole(Side::Right)])).unwrap();
     h.until("started again", |w| w.count("rd.ConnectToEIS") == 2 && w.count("ic.Enable") == 2).await;
     assert_eq!(h.count("rd.Start dialog=false"), 1, "{:#?}", h.log());
     assert_eq!(h.token().as_deref(), Some("tok-2"));
@@ -1005,4 +1012,22 @@ async fn input_capture_version_2_restores_its_permission_too() {
     assert_eq!(h.count("ic.Start token=Some(\"ic-saved\") dialog=false"), 1, "{:#?}", h.log());
     let saved = TokenFile(h.dir.join(INPUT_CAPTURE_TOKEN)).load().unwrap();
     assert!(saved.starts_with("tok-"), "{saved}");
+}
+
+/// Barriers are line segments: with only part of an edge leading to a
+/// peer (an offset layout), only that part gets one, so the rest is a wall
+/// that never activates capture. `Activate` (`one-mk switch`) pushes the
+/// pointer into the middle of that part.
+#[tokio::test]
+async fn barriers_cover_only_the_armed_part_of_an_edge() {
+    let Some(mut h) = Harness::start(&[], |_| {}).await else { return };
+    h.ready().await;
+    assert_eq!(h.world().positions, [(1920, 0, 1920, 1079)], "all of the right edge");
+    let part = Armed { side: Side::Right, spans: Some(vec![(300.0, 1080.0)]) };
+    let bottom = Armed { side: Side::Bottom, spans: Some(vec![(100.5, 200.0), (5000.0, 6000.0)]) };
+    h.capture().send(CaptureCmd::SetSides(vec![part, bottom])).unwrap();
+    h.until("partial barriers", |w| w.positions.len() == 2).await;
+    assert_eq!(h.world().positions, [(1920, 300, 1920, 1079), (101, 1080, 199, 1080)]);
+    h.capture().send(CaptureCmd::SetSides(vec![Armed { side: Side::Left, spans: Some(vec![]) }])).unwrap();
+    h.until("no barriers", |w| w.positions.is_empty()).await;
 }

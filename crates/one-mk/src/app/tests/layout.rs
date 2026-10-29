@@ -12,6 +12,11 @@ async fn status(dir: &std::path::Path) -> Status {
     Status::decode(&control::request(dir, Request::Status).await.unwrap().expect("daemon running")).unwrap()
 }
 
+/// `side`, armed only along `s`.
+fn spans(side: Side, s: &[(f64, f64)]) -> Armed {
+    Armed { side, spans: Some(s.to_vec()) }
+}
+
 /// `dir`'s record of the device with fingerprint `fp`.
 fn record(dir: &std::path::Path, fp: &str) -> Device {
     TrustStore::load(dir).unwrap().find(&fp[..8]).unwrap().clone()
@@ -28,9 +33,12 @@ async fn offset_crossing_maps_and_walls() {
         b_sees_a.set_align(Align::Offset(-300));
     };
     let mut duo = Duo::start_on("offset", None, setup, screen(1920, 1080), screen(1280, 800)).await;
-    duo.settle().await;
+    // Only the parts facing each other are armed: A's edge from 300 down,
+    // the laptop's down to A's bottom (780 on its edge).
+    duo.settle_as(spans(Side::Right, &[(300.0, 1080.0)]), spans(Side::Left, &[(0.0, 780.0)])).await;
 
-    // Above the laptop: nothing there, the pointer stays on A.
+    // Above the laptop: nothing there, the pointer stays on A (a backend
+    // armed as asked never reports this; the daemon refuses it anyway).
     duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 100.0) }).unwrap();
     assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: None });
     assert_eq!(status(&duo.da).await.controlling, None);
@@ -68,7 +76,7 @@ async fn crossing_between_multi_monitor_desktops() {
         b_sees_a.set_align(Align::Offset(600));
     };
     let mut duo = Duo::start_on("multimon", None, setup, a, b).await;
-    duo.settle().await;
+    duo.settle_as(spans(Side::Right, &[(-240.0, 1320.0)]), spans(Side::Left, &[(-480.0, 1080.0)])).await;
     duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(2999.0, -200.0) }).unwrap();
     // -200 on A is 40 below the top of A's desktop, 640 below the top of
     // B's: -440 on B, on its upper monitor.
@@ -87,8 +95,8 @@ async fn offset_change_converges_as_a_mirror_image() {
     let (fa, fb) = (duo.fa.clone(), duo.fb.clone());
     crate::manage::set_layout(&duo.da, &fb[..8], Some(Side::Bottom), Some(Align::Offset(300)), None).unwrap();
     assert!(control::request(&duo.da, Request::Reload).await.unwrap().is_some());
-    assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Bottom]));
-    assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Top]));
+    assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![spans(Side::Bottom, &[(300.0, 1920.0)])]));
+    assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![spans(Side::Top, &[(0.0, 1620.0)])]));
     let (a_sees_b, b_sees_a) = (record(&duo.da, &fb), record(&duo.db, &fa));
     assert_eq!((a_sees_b.side(), a_sees_b.align()), (Side::Bottom, Align::Offset(300)));
     assert_eq!((b_sees_a.side(), b_sees_a.align()), (Side::Top, Align::Offset(-300)));
@@ -164,7 +172,7 @@ async fn two_neighbours_share_one_edge() {
         b_sees_a.set_align(Align::Offset(-540));
     };
     let mut duo = Duo::start_with("two-left", None, setup).await;
-    duo.settle().await;
+    duo.settle_as(spans(Side::Right, &[(540.0, 1080.0)]), spans(Side::Left, &[(0.0, 540.0)])).await;
     let mut c = RawPeer::connect_as("two-left-c", &duo.db, duo.pb, |d| {
         d.side = Side::Left.to_string();
         d.set_align(Align::Offset(540));
@@ -178,6 +186,8 @@ async fn two_neighbours_share_one_edge() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    // Between them they cover all of B's left edge.
+    assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Armed::whole(Side::Left)]));
 
     duo.hb.events.send(Event::Activated { id: 1, side: Side::Left, pos: Pos::new(0.0, 100.0) }).unwrap();
     assert_eq!(next_inject(&mut duo.ha).await, Inject::MoveTo(Pos::new(1919.0, 640.0)));
@@ -217,8 +227,8 @@ async fn profile_switches_with_the_network() {
 
     let desk = NetworkId { ssids: vec!["Desk WiFi".into()], ..NetworkId::default() };
     crate::netwatch::fake::announce(&desk);
-    assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Bottom]));
-    assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Top]));
+    assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![spans(Side::Bottom, &[(300.0, 1920.0)])]));
+    assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![spans(Side::Top, &[(0.0, 1620.0)])]));
     let b_sees_a = record(&duo.db, &fa);
     assert_eq!((b_sees_a.side(), b_sees_a.align()), (Side::Top, Align::Offset(-300)));
     assert_eq!(Profiles::load(&da).unwrap().active.as_deref(), Some("desk"));
@@ -235,5 +245,87 @@ async fn profile_switches_with_the_network() {
     let (db, fa2) = (duo.db.clone(), fa.clone());
     eventually("B to get the desk layout back", move || record(&db, &fa2).align() == Align::Offset(-300)).await;
     assert_eq!(record(&da, &fb).align(), Align::Offset(300));
+    duo.stop().await;
+}
+
+/// An offset past the end of the edge (`one-mk layout B right --offset
+/// 5000`): nothing crosses and status says why, but `one-mk switch` still
+/// reaches B, and from there any part of B's edge facing A leads home
+/// (there is no overlap to aim for).
+#[tokio::test]
+async fn no_overlap_warns_and_a_switch_still_comes_home() {
+    let setup = |a_sees_b: &mut Device, b_sees_a: &mut Device| {
+        a_sees_b.set_align(Align::Offset(5000));
+        b_sees_a.set_align(Align::Offset(-5000));
+    };
+    let mut duo = Duo::start_on("no-overlap", None, setup, screen(1920, 1080), screen(1280, 800)).await;
+    let da = duo.da.clone();
+    let warned = || async {
+        let st = control::request(&da, Request::Status).await.ok().flatten().and_then(|t| Status::decode(&t));
+        st.is_some_and(|s| s.layout.warnings.iter().any(|w| w.contains("does not overlap")))
+    };
+    eventually_async("the warning", warned).await;
+    while duo.ha.capture.try_recv().is_ok() {}
+
+    let fb = duo.fb.clone();
+    assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+    loop {
+        match next_capture(&mut duo.ha).await {
+            CaptureCmd::Activate { side } => break assert_eq!(side, Side::Right),
+            CaptureCmd::SetSides(_) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
+    assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(640.0, 400.0)));
+    duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0 }).unwrap();
+    loop {
+        match next_capture(&mut duo.ha).await {
+            CaptureCmd::Release { id: 3, pos: Some(p) } => break assert_eq!(p.x, 1917.0, "just inside A's right edge: {p:?}"),
+            CaptureCmd::SetSides(_) => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    duo.stop().await;
+}
+
+/// Capture at the wall part of an edge (where a backend that can't limit
+/// its barriers to the shared part would capture): the pointer is handed
+/// straight back, and keys and clicks caught before that took effect are
+/// typed here, whole, instead of being lost.
+#[tokio::test]
+async fn input_caught_at_a_wall_is_typed_here() {
+    let setup = |a_sees_b: &mut Device, b_sees_a: &mut Device| {
+        a_sees_b.set_align(Align::Offset(300));
+        b_sees_a.set_align(Align::Offset(-300));
+    };
+    let mut duo = Duo::start_on("wall-input", None, setup, screen(1920, 1080), screen(1280, 800)).await;
+    duo.settle_as(spans(Side::Right, &[(300.0, 1080.0)]), spans(Side::Left, &[(0.0, 780.0)])).await;
+    duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 100.0) }).unwrap();
+    for ev in [
+        Event::Key { code: 30, down: true },
+        Event::Key { code: 30, down: false },
+        Event::Button { button: 0x110, down: true },
+        Event::ScrollDiscrete { dx: 0, dy: 1 },
+    ] {
+        duo.ha.events.send(ev).unwrap();
+    }
+    assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: None });
+    let mut got = Vec::new();
+    for _ in 0..6 {
+        got.push(next_inject(&mut duo.ha).await);
+    }
+    assert_eq!(
+        got,
+        [
+            Inject::Key { code: 30, down: true },
+            Inject::Key { code: 30, down: false },
+            Inject::Key { code: 30, down: false },
+            Inject::Button { button: 0x110, down: true },
+            Inject::Button { button: 0x110, down: false },
+            Inject::ScrollDiscrete { dx: 0, dy: 1 },
+        ]
+    );
+    assert!(injected(&mut duo.hb).is_empty(), "nothing went to B");
     duo.stop().await;
 }

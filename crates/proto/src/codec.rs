@@ -138,9 +138,19 @@ pub mod caps {
     /// Understands [`Control::Inhibit`](crate::Control::Inhibit) and
     /// [`Control::Sleep`](crate::Control::Sleep).
     pub const POWER: u32 = 8;
+    /// While watched and fullscreen, says [`Control::Focus`] again at least
+    /// every [`FOCUS_REPEAT`](crate::FOCUS_REPEAT), so a watcher that hears
+    /// nothing for a while can stop trusting its last "fullscreen".
+    pub const FOCUS_BEAT: u32 = 16;
     /// What this build supports.
-    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER;
+    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT;
 }
+
+/// How often a computer with [`caps::FOCUS_BEAT`] repeats `Focus` while
+/// a fullscreen window has the focus. Its controller drops relative motion
+/// (where no edge leads home) after [`FOCUS_SILENCE`] without one.
+pub const FOCUS_REPEAT: std::time::Duration = std::time::Duration::from_secs(2);
+pub const FOCUS_SILENCE: std::time::Duration = std::time::Duration::from_secs(6);
 
 /// Reliable, ordered messages on the control stream.
 #[derive(Clone, Debug, PartialEq)]
@@ -199,6 +209,8 @@ pub enum Control {
     Lock { id: u64, all: bool },
     /// From the controlled computer: its focused window is (or is no
     /// longer) fullscreen, during visit `epoch`. Gaming mode `auto` uses it.
+    /// With [`caps::FOCUS_BEAT`], "fullscreen" is said again at least every
+    /// [`FOCUS_REPEAT`] while it lasts.
     Focus { epoch: u16, fullscreen: bool },
     /// From the controller: send `Focus` now and whenever it changes during
     /// visit `epoch` (`on`), or stop (gaming mode left `auto`). Only gaming

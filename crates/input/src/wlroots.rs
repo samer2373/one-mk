@@ -162,7 +162,7 @@ async fn run(
             tokio::select! {
                 _ = &mut sleep => break,
                 cmd = cmds.recv() => match cmd {
-                    Some(CaptureCmd::SetSides(s)) => keep.sides = s,
+                    Some(CaptureCmd::SetSides(s)) => keep.sides = s.iter().map(|a| a.side).collect(),
                     Some(CaptureCmd::Activate { .. }) => { let _ = tx.send(Event::Error(NO_CAPTURE.into())); }
                     Some(CaptureCmd::Release { .. }) => {}
                     None => return,
@@ -389,7 +389,7 @@ impl State {
                     drop(guard);
                     match cmd {
                         Some(CaptureCmd::SetSides(sides)) => {
-                            self.keep.sides = sides;
+                            self.keep.sides = sides.iter().map(|a| a.side).collect();
                             self.set_edges();
                         }
                         Some(CaptureCmd::Release { id, pos }) => {

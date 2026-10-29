@@ -1,5 +1,6 @@
-//! macOS: locking the screen, keeping it awake (`caffeinate`) and putting the
-//! display to sleep (`pmset`). Compiled only; not yet run on a real Mac.
+//! macOS: locking the screen (`CGSession`, else the login framework),
+//! keeping it awake (`caffeinate`) and putting the display to sleep
+//! (`pmset`). Compiled only; not yet run on a real Mac.
 //! (What has the focus is not probed yet, so the fullscreen guard and
 //! gaming mode `auto` treat it as unknown.)
 
@@ -7,31 +8,71 @@ use super::{DisplaySleeper, Inhibitor, ScreenLocker};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// Shows the login window, which locks the session, where the old
-/// `CGSession` tool still exists; elsewhere puts the displays to sleep,
-/// which locks if "Require password after the display is turned off" is
-/// set (the default).
+/// Locks the session: the old `CGSession -suspend` tool where it still
+/// exists (it shows the login window), else `SACLockScreenImmediate` from
+/// the private `login` framework (what the menu bar's Lock Screen calls;
+/// found with `dlopen`, so a macOS without it is an error, not a crash).
+/// Nothing else: putting the display to sleep only locks with "require
+/// password" set, and would look like a lock that didn't happen (and set
+/// off sleep sync), so without either this says locking is unsupported.
 pub(super) struct Suspend;
 
 const CGSESSION: &str = "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession";
+const LOGIN_FRAMEWORK: &std::ffi::CStr = c"/System/Library/PrivateFrameworks/login.framework/Versions/Current/login";
 
 impl ScreenLocker for Suspend {
     fn lock(&mut self) -> anyhow::Result<()> {
-        let mut cmd = if Path::new(CGSESSION).exists() {
-            let mut c = Command::new(CGSESSION);
-            c.arg("-suspend");
-            c
-        } else {
-            let mut c = Command::new("pmset");
-            c.arg("displaysleepnow");
-            c
-        };
-        let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
-        // Reaped when it exits (at once), or it would stay a zombie.
-        std::thread::Builder::new().name("one-mk-lock".into()).spawn(move || {
-            let _ = child.wait();
-        })?;
-        Ok(())
+        if Path::new(CGSESSION).exists() {
+            let mut child = Command::new(CGSESSION)
+                .arg("-suspend")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?;
+            // Reaped when it exits (at once), or it would stay a zombie.
+            std::thread::Builder::new().name("one-mk-lock".into()).spawn(move || {
+                let _ = child.wait();
+            })?;
+            return Ok(());
+        }
+        match sac_lock_screen() {
+            // What it returns is undocumented; the lock itself is reported
+            // by the screen lock notifications.
+            Some(code) => {
+                tracing::debug!(code, "SACLockScreenImmediate");
+                Ok(())
+            }
+            None => anyhow::bail!(
+                "locking the screen is not supported on this version of macOS (neither CGSession nor \
+                 SACLockScreenImmediate is there); lock it with Control+Command+Q"
+            ),
+        }
+    }
+}
+
+unsafe extern "C" {
+    fn dlopen(path: *const std::ffi::c_char, mode: std::ffi::c_int) -> *mut std::ffi::c_void;
+    fn dlsym(handle: *mut std::ffi::c_void, symbol: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+}
+
+/// `RTLD_LAZY | RTLD_LOCAL` on macOS.
+const RTLD_LAZY_LOCAL: std::ffi::c_int = 0x1 | 0x4;
+
+/// Calls `SACLockScreenImmediate()`, if the login framework has it.
+fn sac_lock_screen() -> Option<std::ffi::c_int> {
+    // SAFETY: dlopen/dlsym with valid C strings; the framework stays loaded
+    // (never dlclose'd), and the symbol, if there, is `int (void)`.
+    unsafe {
+        let handle = dlopen(LOGIN_FRAMEWORK.as_ptr(), RTLD_LAZY_LOCAL);
+        if handle.is_null() {
+            return None;
+        }
+        let sym = dlsym(handle, c"SACLockScreenImmediate".as_ptr());
+        if sym.is_null() {
+            return None;
+        }
+        let lock: unsafe extern "C" fn() -> std::ffi::c_int = std::mem::transmute(sym);
+        Some(lock())
     }
 }
 

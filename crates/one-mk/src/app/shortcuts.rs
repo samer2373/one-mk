@@ -19,12 +19,17 @@ pub(super) struct Shortcuts {
     /// The capture the matcher's keys belong to.
     capture: Option<u32>,
     debounce: Debounce,
+    settings: HotkeySettings,
+    /// Computers that can be jumped to, this one included.
+    computers: usize,
+    /// A peer controls this computer: the system's shortcuts are paused.
+    controlled: bool,
 }
 
-/// The shortcuts `settings` asks for (none, with the reason, if they can't
-/// be used).
-fn bindings(settings: &HotkeySettings) -> (Bindings, Option<String>) {
-    match settings.bindings() {
+/// The shortcuts `settings` asks for with `computers` computers (none,
+/// with the reason, if they can't be used).
+fn bindings(settings: &HotkeySettings, computers: usize) -> (Bindings, Option<String>) {
+    match settings.bindings_for(computers) {
         Ok(b) => (b, None),
         Err(e) => {
             tracing::warn!("keyboard shortcuts in settings.toml: {e}");
@@ -35,8 +40,8 @@ fn bindings(settings: &HotkeySettings) -> (Bindings, Option<String>) {
 
 impl Shortcuts {
     /// Starts listening; the listener's events come from the receiver.
-    pub(super) fn start(kind: Kind, settings: &HotkeySettings) -> (Self, mpsc::UnboundedReceiver<Event>) {
-        let (bindings, problem) = bindings(settings);
+    pub(super) fn start(kind: Kind, settings: &HotkeySettings, computers: usize) -> (Self, mpsc::UnboundedReceiver<Event>) {
+        let (bindings, problem) = bindings(settings, computers);
         let (listener, rx) = one_mk_input::hotkeys::listen(kind, bindings.clone());
         let s = Shortcuts {
             listener,
@@ -46,18 +51,45 @@ impl Shortcuts {
             matcher: Matcher::default(),
             capture: None,
             debounce: Debounce::default(),
+            settings: settings.clone(),
+            computers,
+            controlled: false,
         };
         (s, rx)
     }
 
-    /// `settings.toml` was reloaded. The system is asked again only if the
-    /// shortcuts changed (on GNOME that shows a dialog).
+    /// `settings.toml` was reloaded.
     pub(super) fn reload(&mut self, settings: &HotkeySettings) {
-        let (bindings, problem) = bindings(settings);
+        self.settings = settings.clone();
+        self.apply();
+    }
+
+    /// The number of computers (this one and the paired ones) may have
+    /// changed: jumps are bound only to computers that exist.
+    pub(super) fn set_computers(&mut self, computers: usize) {
+        if std::mem::replace(&mut self.computers, computers) != computers {
+            self.apply();
+        }
+    }
+
+    /// The system is asked again only if the shortcuts changed (on GNOME
+    /// that shows a dialog).
+    fn apply(&mut self) {
+        let (bindings, problem) = bindings(&self.settings, self.computers);
         self.problem = problem;
         if bindings != self.bindings {
             self.bindings = bindings.clone();
             self.listener.set(bindings);
+        }
+    }
+
+    /// Whether a peer controls this computer. Its keys arrive through the
+    /// injector, and must not run this computer's shortcuts: the system's
+    /// listener is paused where that's possible (Windows, macOS) and what
+    /// it reports meanwhile is ignored (see `App::on_shortcut_event`).
+    pub(super) fn set_controlled(&mut self, controlled: bool) {
+        if std::mem::replace(&mut self.controlled, controlled) != controlled {
+            self.listener.pause(controlled);
         }
     }
 
@@ -80,6 +112,9 @@ impl App {
     /// `Event::Hotkey` and `Event::Hotkeys`, from the system's listener.
     pub(super) fn on_shortcut_event(&mut self, ev: Event) {
         match ev {
+            Event::Hotkey(a) if !system_shortcut_applies(self.owner.is_some()) => {
+                tracing::debug!(?a, "keyboard shortcut ignored: another computer controls this one");
+            }
             Event::Hotkey(a) => self.shortcut(a, Source::System),
             Event::Hotkeys(a) => {
                 match &a {
@@ -133,5 +168,24 @@ impl App {
             Some(e) => tracing::warn!("keyboard shortcut ({}): {}", action.describe().to_lowercase(), e.trim()),
             None => tracing::info!(?action, ?source, reply = reply.lines().next().unwrap_or(""), "keyboard shortcut"),
         }
+    }
+}
+
+/// Whether a shortcut the system reports is this computer's to act on:
+/// not while a peer controls it. Its keys arrive through the injector, and
+/// the system's shortcut service fires on them as on any (`RegisterHotKey`
+/// and the Linux portal can't tell them apart), so a chord typed on the
+/// peer for a program here would jump, lock the pointer or take control
+/// back. The peer's own shortcuts are handled on the peer.
+fn system_shortcut_applies(controlled: bool) -> bool {
+    !controlled
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn system_shortcuts_wait_while_controlled() {
+        assert!(super::system_shortcut_applies(false));
+        assert!(!super::system_shortcut_applies(true));
     }
 }

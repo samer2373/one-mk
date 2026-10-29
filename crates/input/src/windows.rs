@@ -36,7 +36,7 @@ use crate::win_logic::{
     VK_XBUTTON2, Watch, WinKey, evdev_to_win, hook_key_to_evdev, is_synthetic_mouse, repeat_timing, vk_to_evdev,
     wheel_to_wire, wire_to_wheel,
 };
-use crate::{Backend, CaptureCmd, Event, Inject};
+use crate::{Armed, Backend, CaptureCmd, Event, Inject};
 use anyhow::{Result, bail};
 use one_mk_proto::{Mods, Rect, Side};
 use std::cell::{Cell, RefCell};
@@ -198,7 +198,7 @@ struct State {
     hwnd: HWND,
     shared: Arc<Mutex<Space>>,
     space: Space,
-    sides: Vec<Side>,
+    sides: Vec<Armed>,
     cmds: std_mpsc::Receiver<CaptureCmd>,
     captured: Option<Captured>,
     /// The last activation id handed out.
@@ -658,7 +658,9 @@ impl State {
                 return (false, Effect::None);
             }
             let (dx, dy) = self.heading.update(x, y);
-            let hit = self.space.edge_hit(&self.sides, x, y, dx, dy);
+            // Only the parts of an edge that face a peer.
+            let (open, n) = crate::open_sides(&self.sides, self.space.to_logical(x, y));
+            let hit = self.space.edge_hit(&open[..n], x, y, dx, dy);
             // Only asked at an edge: a drag must not cross machines.
             let dragging = hit.is_some() && async_any_button();
             return match self.gate.check(hit, dragging) {
@@ -725,11 +727,16 @@ impl State {
         };
         if self.local.has(code) {
             // Held since before the pointer left: auto-repeat stays
-            // swallowed, the release goes to this machine.
+            // swallowed, the release goes to this machine. The daemon
+            // counted a modifier as held (`Event::Modifiers` at activation),
+            // so it hears that it no longer is.
             if down {
                 return (true, Effect::None);
             }
             self.local.set(code, false);
+            if Mods::is_modifier(code) {
+                let _ = self.tx.send(Event::LocalKeyUp { code });
+            }
             return (false, Effect::None);
         }
         // Auto-repeat (Caps Lock's too) is dropped; the peer repeats.

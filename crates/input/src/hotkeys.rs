@@ -597,6 +597,11 @@ pub enum Availability {
 trait Platform: Send {
     /// Replaces the shortcuts (none: stop listening).
     fn set(&mut self, bindings: Bindings);
+    /// Stops (`true`) or resumes reacting to the shortcuts, keeping them.
+    /// Where pausing would need the user again (the Linux portal shows a
+    /// dialog when shortcuts are bound anew), nothing happens: the daemon
+    /// ignores what arrives meanwhile.
+    fn pause(&mut self, _paused: bool) {}
 }
 
 /// Listens for the shortcuts through the system's shortcut service. Its
@@ -608,6 +613,18 @@ impl Listener {
     pub fn set(&mut self, bindings: Bindings) {
         if let Some(p) = self.0.as_mut() {
             p.set(bindings);
+        }
+    }
+
+    /// While a peer controls this computer its keys arrive through the
+    /// injector, and this computer's own shortcuts must not fire on them
+    /// (nor swallow them). Windows unregisters the shortcuts (its hotkeys
+    /// can't tell injected keys apart) and macOS lets every key through;
+    /// on Linux the chord still reaches the portal (and is swallowed by
+    /// the desktop), so the daemon drops the event instead.
+    pub fn pause(&mut self, paused: bool) {
+        if let Some(p) = self.0.as_mut() {
+            p.pause(paused);
         }
     }
 }
