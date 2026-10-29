@@ -1,4 +1,4 @@
-use crate::{Datagram, Desktop, Pos, Side};
+use crate::{Datagram, Desktop, Edge, Pos, Side};
 
 /// Result of applying a local pointer delta while controlling a peer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,6 +26,8 @@ pub struct RemoteCursor {
     pos: Pos,
     epoch: u16,
     seq: u32,
+    /// Where the pointer leaves for home, if not the whole home side.
+    exits: Option<Vec<Edge>>,
 }
 
 impl RemoteCursor {
@@ -33,7 +35,14 @@ impl RemoteCursor {
     /// fraction `t` along that edge.
     pub fn enter(desktop: Desktop, home: Side, t: f64, epoch: u16) -> Self {
         let pos = desktop.point_on_edge(home, t, 0.0);
-        Self { desktop, home, pos, epoch, seq: 0 }
+        Self { desktop, home, pos, epoch, seq: 0, exits: None }
+    }
+
+    /// Enters `desktop` at the point nearest `pos` (in its coordinates);
+    /// the pointer leaves for home only through `exits`.
+    pub fn enter_at(desktop: Desktop, home: Side, pos: Pos, exits: Vec<Edge>, epoch: u16) -> Self {
+        let pos = desktop.place(pos, home, 0.0);
+        Self { desktop, home, pos, epoch, seq: 0, exits: Some(exits) }
     }
 
     pub fn pos(&self) -> Pos {
@@ -80,10 +89,13 @@ impl RemoteCursor {
         Step::Move(self.current())
     }
 
-    /// Only pushing past the outer edge of the whole desktop leads home; an
-    /// inner edge between two monitors (or a gap beside a smaller one)
-    /// just clamps.
+    /// Only pushing past the outer edge of the whole desktop (or through one
+    /// of the `exits`) leads home; an inner edge between two monitors (or a
+    /// gap beside a smaller one) just clamps.
     fn crosses_home(&self, target: Pos) -> bool {
+        if let Some(exits) = &self.exits {
+            return exits.iter().any(|e| e.crossed(self.pos, target));
+        }
         let r = self.desktop.bounds();
         match self.home {
             Side::Left => target.x < f64::from(r.x),
@@ -162,7 +174,7 @@ fn newer(seq: u32, last: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Rect;
+    use crate::{Edge, Rect};
 
     fn desk() -> Desktop {
         Desktop::new(vec![Rect::new(0, 0, 1920, 1080)])
@@ -231,6 +243,19 @@ mod tests {
         assert_eq!(c.motion(-10.0, 0.0), Step::Still);
         // Only past the desktop's outer left edge does it leave.
         assert!(matches!(c.motion(-1921.0, 0.0), Step::Leave { .. }));
+    }
+
+    #[test]
+    fn leaves_only_through_the_exits() {
+        // Home is left, but only y 100..200 of the left edge touches it.
+        let exit = Edge { side: Side::Left, at: 0, lo: 100, hi: 200 };
+        let mut c = RemoteCursor::enter_at(desk(), Side::Left, Pos::new(-1.0, 150.0), vec![exit], 1);
+        assert_eq!(c.pos(), Pos::new(0.0, 150.0));
+        assert!(matches!(c.motion(10.0, 200.0), Step::Move(_)));
+        assert!(matches!(c.motion(-20.0, 0.0), Step::Move(_)), "y 350 is outside the exit");
+        assert_eq!(c.motion(-5.0, 0.0), Step::Still);
+        assert!(matches!(c.motion(5.0, -200.0), Step::Move(_)));
+        assert!(matches!(c.motion(-10.0, 0.0), Step::Leave { .. }));
     }
 
     #[test]

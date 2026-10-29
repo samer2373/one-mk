@@ -179,6 +179,117 @@ impl Desktop {
             Side::Bottom => r.bottom() == b.bottom(),
         })
     }
+
+    /// The parts of the screens' `side` edges with no screen of this
+    /// desktop just beyond them, wherever they are (not only on the
+    /// bounding box).
+    pub fn exposed_edges(&self, side: Side) -> Vec<Edge> {
+        let mut out = Vec::new();
+        for r in &self.screens {
+            let e = Edge::of(side, r);
+            let mut spans = vec![(e.lo, e.hi)];
+            // Screens covering the pixels just outside `e` hide that part.
+            for s in self.screens.iter().filter(|s| match side {
+                Side::Left => s.x < e.at && e.at <= s.right(),
+                Side::Right => s.x <= e.at && e.at < s.right(),
+                Side::Top => s.y < e.at && e.at <= s.bottom(),
+                Side::Bottom => s.y <= e.at && e.at < s.bottom(),
+            }) {
+                let b = Edge::of(side, s);
+                spans = spans
+                    .into_iter()
+                    .flat_map(|(lo, hi)| [(lo, hi.min(b.lo)), (lo.max(b.hi), hi)])
+                    .filter(|(lo, hi)| lo < hi)
+                    .collect();
+            }
+            out.extend(spans.into_iter().map(|(lo, hi)| Edge { side, at: e.at, lo, hi }));
+        }
+        out
+    }
+
+    /// Nearest point on a screen to `p`, then `inset` pixels in from `side`.
+    pub fn place(&self, p: Pos, side: Side, inset: f64) -> Pos {
+        let p = self.clamp(p);
+        self.clamp(match side {
+            Side::Left => Pos::new(p.x + inset, p.y),
+            Side::Right => Pos::new(p.x - inset, p.y),
+            Side::Top => Pos::new(p.x, p.y + inset),
+            Side::Bottom => Pos::new(p.x, p.y - inset),
+        })
+    }
+}
+
+/// Edges within this many pixels of each other count as touching.
+const TOUCH: i32 = 2;
+
+/// A straight piece of a desktop's `side` boundary: the line `at` (x for
+/// left/right, y for top/bottom; right/bottom are one past the last
+/// pixel, like [`Rect::right`]), from `lo` up to (not including) `hi`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Edge {
+    pub side: Side,
+    pub at: i32,
+    pub lo: i32,
+    pub hi: i32,
+}
+
+impl Edge {
+    /// The whole `side` edge of `r`.
+    pub fn of(side: Side, r: &Rect) -> Self {
+        match side {
+            Side::Left => Edge { side, at: r.x, lo: r.y, hi: r.bottom() },
+            Side::Right => Edge { side, at: r.right(), lo: r.y, hi: r.bottom() },
+            Side::Top => Edge { side, at: r.y, lo: r.x, hi: r.right() },
+            Side::Bottom => Edge { side, at: r.bottom(), lo: r.x, hi: r.right() },
+        }
+    }
+
+    /// `p` split into (across, along) this edge.
+    fn axes(&self, p: Pos) -> (f64, f64) {
+        match self.side {
+            Side::Left | Side::Right => (p.x, p.y),
+            Side::Top | Side::Bottom => (p.y, p.x),
+        }
+    }
+
+    /// How far `p` is from this segment (0 on it).
+    pub fn dist(&self, p: Pos) -> f64 {
+        let (across, along) = self.axes(p);
+        let off = along.clamp(f64::from(self.lo), f64::from(self.hi)) - along;
+        (across - f64::from(self.at)).hypot(off)
+    }
+
+    /// Whether moving from `from` to `to` goes out through this segment.
+    pub fn crossed(&self, from: Pos, to: Pos) -> bool {
+        let ((a, _), (b, along)) = (self.axes(from), self.axes(to));
+        let at = f64::from(self.at);
+        let out = match self.side {
+            Side::Left | Side::Top => a >= at && b < at,
+            Side::Right | Side::Bottom => a < at && b >= at,
+        };
+        out && along >= f64::from(self.lo) && along < f64::from(self.hi)
+    }
+}
+
+/// Where `mine` (my desktop) and `peer`, placed with its origin at
+/// `offset` in my coordinates, touch across my `side`: my exposed edges
+/// that face an exposed edge of the peer, as segments in my coordinates.
+pub fn touching(mine: &Desktop, peer: &Desktop, side: Side, offset: (i32, i32)) -> Vec<Edge> {
+    let (across, along) = match side {
+        Side::Left | Side::Right => offset,
+        Side::Top | Side::Bottom => (offset.1, offset.0),
+    };
+    let theirs = peer.exposed_edges(side.opposite());
+    let mut out = Vec::new();
+    for e in mine.exposed_edges(side) {
+        for t in &theirs {
+            let (lo, hi) = (e.lo.max(t.lo + along), e.hi.min(t.hi + along));
+            if (t.at + across - e.at).abs() <= TOUCH && lo < hi {
+                out.push(Edge { lo, hi, ..e });
+            }
+        }
+    }
+    out
 }
 
 fn dist2(a: Pos, b: Pos) -> f64 {
@@ -239,6 +350,68 @@ mod tests {
         assert_eq!(d.outer_edges(Side::Right).count(), 1);
         assert_eq!(d.outer_edges(Side::Top).count(), 2);
         assert_eq!(d.outer_edges(Side::Bottom).count(), 1);
+    }
+
+    fn mac4() -> Desktop {
+        Desktop::new(vec![
+            Rect::new(0, 0, 1920, 1080),
+            Rect::new(-2592, 98, 1512, 982),
+            Rect::new(-1080, -840, 1080, 1920),
+            Rect::new(1920, 0, 1920, 1080),
+        ])
+    }
+
+    #[test]
+    fn exposed_edges_include_inner_ones() {
+        let d = mac4();
+        // The portrait monitor's left edge is exposed only above the
+        // 1512x982 monitor beside it; the main display's is hidden.
+        assert_eq!(
+            d.exposed_edges(Side::Left),
+            vec![Edge { side: Side::Left, at: -2592, lo: 98, hi: 1080 }, Edge { side: Side::Left, at: -1080, lo: -840, hi: 98 }]
+        );
+        // Right: the portrait monitor's above the main display, and the outer one.
+        assert_eq!(
+            d.exposed_edges(Side::Right),
+            vec![Edge { side: Side::Right, at: 0, lo: -840, hi: 0 }, Edge { side: Side::Right, at: 3840, lo: 0, hi: 1080 }]
+        );
+        // Top: every screen's, including the main display's below the box top.
+        assert_eq!(d.exposed_edges(Side::Top).len(), 4);
+    }
+
+    #[test]
+    fn touching_spans() {
+        let d = mac4();
+        let peer = Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]);
+        // To the left of the portrait monitor's top part: touches only above y=98.
+        let left = Edge { side: Side::Left, at: -1080, lo: -840, hi: 98 };
+        assert_eq!(touching(&d, &peer, Side::Left, (-3000, -900)), vec![left]);
+        assert_eq!(touching(&d, &peer, Side::Left, (-3001, -900)), vec![left], "within the tolerance");
+        assert_eq!(touching(&d, &peer, Side::Left, (-3010, -900)), vec![], "a gap");
+        assert_eq!(touching(&d, &peer, Side::Left, (-3000, 0)), vec![Edge { lo: 0, ..left }], "partial");
+        assert_eq!(
+            touching(&d, &peer, Side::Right, (3840, 500)),
+            vec![Edge { side: Side::Right, at: 3840, lo: 500, hi: 1080 }]
+        );
+        // The same contact seen from the peer, in its coordinates.
+        assert_eq!(
+            touching(&peer, &d, Side::Right, (3000, 900)),
+            vec![Edge { side: Side::Right, at: 1920, lo: 60, hi: 998 }]
+        );
+    }
+
+    #[test]
+    fn translation_round_trip() {
+        let (d, peer) = (mac4(), Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]));
+        let (ox, oy) = (-3000.0, -900.0);
+        let there = peer.place(Pos::new(-1080.0 - ox, -500.0 - oy), Side::Right, 0.0);
+        assert_eq!(there, Pos::new(1920.0 - 1.0 / 256.0, 400.0));
+        let back = d.place(Pos::new(there.x + ox, there.y + oy), Side::Left, 2.0);
+        assert_eq!(back, Pos::new(-1078.0, -500.0));
+        let e = Edge { side: Side::Left, at: -1080, lo: -840, hi: 98 };
+        assert!(e.crossed(Pos::new(-1080.0, -500.0), Pos::new(-1081.0, -500.0)));
+        assert!(!e.crossed(Pos::new(-1080.0, 500.0), Pos::new(-1081.0, 500.0)), "outside the span");
+        assert_eq!(e.dist(Pos::new(-1081.0, 100.0)), 2f64.hypot(1.0));
     }
 
     #[test]
