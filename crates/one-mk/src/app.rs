@@ -82,13 +82,18 @@ pub struct Options {
     pub downloads: PathBuf,
 }
 
+fn trusted_set(t: &TrustStore) -> HashSet<Fingerprint> {
+    t.devices().iter().filter_map(|d| d.fingerprint()).collect()
+}
+
 /// What peers can use besides input: clipboard and file streams.
 #[derive(Clone)]
 pub struct Services {
     pub clip: Option<Arc<ClipSync>>,
     pub inbox: Arc<Inbox>,
-    /// A computer that was forgotten: its bulk connections end.
-    pub revoked: tokio::sync::broadcast::Sender<Fingerprint>,
+    /// Who is paired right now. A bulk connection ends when its computer is
+    /// no longer in it (a state, not an event: nothing to miss).
+    pub trusted: watch::Sender<HashSet<Fingerprint>>,
 }
 
 /// Serves the streams a peer opens on a bulk connection (clipboard and
@@ -101,6 +106,11 @@ pub async fn serve_streams(
     services: Services,
     first: (StreamKind, quinn::SendStream, quinn::RecvStream),
 ) {
+    let mut trusted = services.trusted.subscribe();
+    if !trusted.borrow_and_update().contains(&fp) {
+        conn.close(3u32.into(), b"forgotten");
+        return;
+    }
     // Limits how many bulk connections one device may hold open at once.
     let permit = match services.inbox.admit(fp) {
         Ok(p) => Arc::new(p),
@@ -115,16 +125,18 @@ pub async fn serve_streams(
         let (kind, send, recv) = first;
         tokio::spawn(async move { serve_stream(kind, &permit, &name, &services, send, recv).await });
     }
-    let mut revoked = services.revoked.subscribe();
     loop {
+        if !trusted.borrow_and_update().contains(&fp) {
+            conn.close(3u32.into(), b"forgotten");
+            break;
+        }
         let (send, mut recv) = tokio::select! {
             r = conn.accept_bi() => match r {
                 Ok(s) => s,
                 Err(_) => break,
             },
-            Ok(gone) = revoked.recv() => {
-                if gone == fp {
-                    conn.close(3u32.into(), b"forgotten");
+            r = trusted.changed() => {
+                if r.is_err() {
                     break;
                 }
                 continue;
@@ -359,7 +371,7 @@ pub async fn serve(
     let services = Services {
         clip: opts.clipboard.map(|cb| ClipSync::new(cb, node.clone())),
         inbox: Inbox::new(opts.downloads.clone()),
-        revoked: tokio::sync::broadcast::channel(8).0,
+        trusted: watch::channel(trusted_set(&trust)).0,
     };
     tracing::debug!(
         clipboard = services.clip.is_some(),
@@ -920,9 +932,7 @@ impl App {
                     // It may have been paired since we started.
                     if self.trust_reloaded.is_none_or(|t| t.elapsed() >= TRUST_RELOAD_INTERVAL) {
                         self.trust_reloaded = Some(Instant::now());
-                        if let Ok(t) = TrustStore::load(&self.dir) {
-                            self.trust = t;
-                        }
+                        self.reload_trust();
                     }
                     if !self.trust.is_trusted(&f.fingerprint) {
                         return;
@@ -1078,13 +1088,10 @@ impl App {
     /// once: its input link, and any clipboard or file connection it holds.
     fn reload_trust(&mut self) {
         let Ok(new) = TrustStore::load(&self.dir) else { return };
-        let gone: Vec<_> = self.trust.devices().iter().filter_map(|d| d.fingerprint()).filter(|fp| !new.is_trusted(fp)).collect();
         self.trust = new;
-        for fp in gone {
-            if let Some(p) = self.peers.get(&fp) {
-                p.conn.close(3u32.into(), b"forgotten");
-            }
-            let _ = self.services.revoked.send(fp);
+        self.services.trusted.send_replace(trusted_set(&self.trust));
+        for p in self.peers.iter().filter(|(fp, _)| !self.trust.is_trusted(fp)).map(|(_, p)| p) {
+            p.conn.close(3u32.into(), b"forgotten");
         }
     }
 
