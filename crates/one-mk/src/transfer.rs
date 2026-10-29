@@ -858,7 +858,7 @@ pub struct Outgoing {
 pub fn collect(paths: &[PathBuf]) -> Result<Vec<Outgoing>> {
     let mut out = Vec::new();
     for p in paths {
-        let meta = fs::metadata(p).with_context(|| format!("{}", p.display()))?;
+        let meta = fs::symlink_metadata(p).with_context(|| format!("{}", p.display()))?;
         let name = match p.file_name() {
             Some(n) => n.to_owned(),
             None => fs::canonicalize(p)?.file_name().context("cannot send the root folder")?.to_owned(),
@@ -1045,7 +1045,7 @@ async fn send_one(
 
 /// Hashes the whole file and sends the part from `offset` on.
 fn read_file(path: &Path, size: u64, offset: u64, tx: mpsc::Sender<bytes::Bytes>) -> Result<[u8; 32]> {
-    let mut file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut file = open_regular(path, size)?;
     let mut hasher = blake3::Hasher::new();
     let mut pos = 0u64;
     while pos < size {
@@ -1065,6 +1065,90 @@ fn read_file(path: &Path, size: u64, offset: u64, tx: mpsc::Sender<bytes::Bytes>
         }
     }
     Ok(hasher.finalize().into())
+}
+
+pub(crate) fn open_regular(path: &Path, size: u64) -> Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x00200000);
+    }
+    let file = options.open(path).with_context(|| format!("opening {}", path.display()))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() != size { bail!("{} changed before sending", path.display()); }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 { bail!("reparse point in outgoing file"); }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        if flags < 0 || unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    Ok(file)
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn swapped_outgoing_symlink_is_rejected() {
+    let root = std::env::temp_dir().join(format!("one-mk-open-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("selected");
+    fs::write(&path, b"selected").unwrap();
+    let checked = collect(std::slice::from_ref(&path)).unwrap().remove(0);
+    fs::remove_file(&path).unwrap();
+    fs::write(root.join("secret"), b"secrets!").unwrap();
+    std::os::unix::fs::symlink(root.join("secret"), &path).unwrap();
+    let (sender, _receiver) = mpsc::channel(1);
+    let result = read_file(&checked.path, checked.size, 0, sender);
+    fs::remove_dir_all(&root).unwrap();
+    assert!(result.is_err(), "a symlink substituted after collection must not be read");
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn swapped_outgoing_fifo_is_rejected() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = std::env::temp_dir().join(format!("one-mk-fifo-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("selected");
+    fs::write(&path, []).unwrap();
+    let checked = collect(std::slice::from_ref(&path)).unwrap().remove(0);
+    fs::remove_file(&path).unwrap();
+    let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let guard = fs::OpenOptions::new().read(true).write(true).custom_flags(libc::O_NONBLOCK).open(&path).unwrap();
+    let (sender, _receiver) = mpsc::channel(1);
+    let result = read_file(&checked.path, checked.size, 0, sender);
+    drop(guard);
+    fs::remove_dir_all(&root).unwrap();
+    assert!(result.is_err(), "a FIFO substituted after collection must not be read");
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn outgoing_handle_checks_size_and_clears_nonblocking() {
+    use std::os::fd::AsRawFd;
+    let path = std::env::temp_dir().join(format!("one-mk-size-{}", std::process::id()));
+    fs::write(&path, b"file").unwrap();
+    let file = open_regular(&path, 4).unwrap();
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    assert!(flags >= 0);
+    assert_eq!(flags & libc::O_NONBLOCK, 0);
+    fs::write(&path, b"changed length").unwrap();
+    assert!(open_regular(&path, 4).is_err());
+    fs::remove_file(&path).unwrap();
 }
 
 #[cfg(test)]

@@ -208,7 +208,7 @@ fn inspect(path: &Path, depth: usize, budget: &mut Budget) -> Result<()> {
         budget.files += 1;
         budget.bytes = budget.bytes.checked_add(metadata.len()).context("drop size overflow")?;
         if budget.files > MAX_FILES || budget.bytes > MAX_BYTES { bail!("file batch exceeds the limit of 10000 files or 1 TiB"); }
-        std::fs::File::open(path).with_context(|| format!("cannot read {}", path.display()))?;
+        crate::transfer::open_regular(path, metadata.len()).with_context(|| format!("cannot read {}", path.display()))?;
     } else { bail!("only regular files and directories may be dropped: {}", path.display()); }
     Ok(())
 }
