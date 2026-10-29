@@ -635,9 +635,73 @@ fn vk_media_to_evdev(vk: u16) -> Option<u32> {
     })
 }
 
+// ------------------------------------------------------------- fullscreen
+
+/// `GWL_STYLE` bits of a window.
+pub(crate) const WS_CAPTION: u32 = 0x00C0_0000;
+pub(crate) const WS_THICKFRAME: u32 = 0x0004_0000;
+pub(crate) const WS_MAXIMIZE: u32 = 0x0100_0000;
+
+/// Window classes of the shell: the desktop (wallpaper and icons, which
+/// covers the monitor) and the taskbars. Never fullscreen.
+const SHELL_CLASSES: [&str; 4] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
+
+/// A rectangle as Win32 gives it: left, top, right, bottom (exclusive).
+pub(crate) type Ltrb = [i32; 4];
+
+/// Whether the foreground window is fullscreen: it covers its whole
+/// monitor and has neither a caption nor the resizable frame of a
+/// maximized window. `rect` is the window as drawn (DWM's extended frame
+/// bounds; `GetWindowRect` reaches about 8 px past them on every side),
+/// `monitor` the monitor's full rect (not its work area).
+///
+/// A maximized window covers the monitor too when the taskbar hides
+/// itself or sits on another monitor, and without DWM's bounds its rect
+/// overshoots the work area anyway, hence the style checks: games and
+/// players go fullscreen as borderless popups, which a maximized window
+/// (even one drawing its own title bar) is not.
+pub(crate) fn is_fullscreen(class: &str, style: u32, rect: Ltrb, monitor: Ltrb) -> bool {
+    let [l, t, r, b] = rect;
+    let [ml, mt, mr, mb] = monitor;
+    let covers = l <= ml && t <= mt && r >= mr && b >= mb;
+    let captioned = style & WS_CAPTION == WS_CAPTION;
+    let maximized = style & WS_MAXIMIZE != 0 && style & WS_THICKFRAME != 0;
+    covers && !captioned && !maximized && !SHELL_CLASSES.contains(&class)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fullscreen_is_a_borderless_window_covering_its_monitor() {
+        const POPUP: u32 = 0x8000_0000;
+        const OVERLAPPED: u32 = WS_CAPTION | WS_THICKFRAME | 0x0008_0000 | 0x0002_0000 | 0x0001_0000;
+        let mon = [1920, 0, 3840, 1080];
+        // A borderless game or a video player, on the second monitor.
+        assert!(is_fullscreen("UnityWndClass", POPUP, mon, mon));
+        // Exclusive fullscreen may report a larger rect.
+        assert!(is_fullscreen("SDL_app", POPUP, [1910, -10, 3850, 1090], mon));
+        // Not the whole monitor.
+        assert!(!is_fullscreen("SDL_app", POPUP, [1920, 0, 3840, 1040], mon));
+        assert!(!is_fullscreen("SDL_app", POPUP, [0, 0, 1920, 1080], mon), "the other monitor");
+        // Maximized with the taskbar hidden: DWM's bounds are the monitor,
+        // GetWindowRect 8 px past it; neither is fullscreen.
+        let maximized = OVERLAPPED | WS_MAXIMIZE;
+        assert!(!is_fullscreen("Notepad", maximized, mon, mon));
+        assert!(!is_fullscreen("Notepad", maximized, [1912, -8, 3848, 1088], mon));
+        // Maximized with its own title bar (no caption style), as Electron
+        // apps and browsers draw it.
+        assert!(!is_fullscreen("Chrome_WidgetWin_1", (maximized & !WS_CAPTION) | POPUP, mon, mon));
+        // A captioned window resized over the whole monitor.
+        assert!(!is_fullscreen("Notepad", OVERLAPPED, [1912, -8, 3848, 1088], mon));
+        // A browser's F11 fullscreen drops the caption and the frame.
+        assert!(is_fullscreen("Chrome_WidgetWin_1", POPUP, mon, mon));
+        // The desktop and the taskbars.
+        for shell in ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"] {
+            assert!(!is_fullscreen(shell, POPUP, mon, mon), "{shell}");
+        }
+    }
 
     fn trio() -> Vec<Rect> {
         // A 1920x1080 primary, a 2560x1440 to its right (top-aligned) and a

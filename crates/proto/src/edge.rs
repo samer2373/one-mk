@@ -8,6 +8,16 @@
 //! a moment (a dwell, or waiting for the modifier). While it is held, the
 //! captured mouse moves a virtual pointer along the edge, and moving away
 //! from the edge hands it back where it would have been.
+//!
+//! Input captured while the pointer is held was meant for this computer,
+//! so it is typed here when the pointer is handed back. But only what can
+//! never stay held: the key-up of a key held now still comes from the real
+//! keyboard, past the injector, so a key-down replayed through the
+//! injector would never be released there (on Windows and macOS the
+//! injector would repeat it forever; on Linux the virtual keyboard would
+//! keep it down). A key is therefore typed as a tap (down and up), and the
+//! modifiers pressed while held go down just around the click, scroll or
+//! key they modify and up right after. See [`Next::Release`].
 
 use crate::{Desktop, Pos, Side};
 use std::fmt;
@@ -263,7 +273,8 @@ pub struct Approach {
     deadline: Option<Instant>,
     mods: Mods,
     /// Modifier keys pressed while held (captured, so this computer never
-    /// saw them): pressed again here if the pointer is handed back.
+    /// saw them): they modify what is typed here if the pointer is handed
+    /// back.
     swallowed: Mods,
 }
 
@@ -284,11 +295,15 @@ pub enum Next {
     Wait,
     /// Go to the peer, entering at this point of our edge.
     Cross(Pos),
-    /// Hand the pointer back at `pos`, then press these modifier keys on
-    /// this computer (they were pressed while it was held and are still down).
+    /// Hand the pointer back at `pos`, then on this computer: press the
+    /// `around` modifiers (pressed while held and still down), type `keys`
+    /// (code, down) and replay the captured click or scroll that ended the
+    /// wait, if any, then release `around` again (in reverse order).
+    /// Nothing is left down: the user's own key-ups go past the injector.
     Release {
         pos: Pos,
-        press: Vec<u32>,
+        around: Vec<u32>,
+        keys: Vec<(u32, bool)>,
     },
 }
 
@@ -349,8 +364,15 @@ impl Approach {
         if self.ready(desktop, now) { Next::Cross(self.pos) } else { Next::Wait }
     }
 
-    fn release(&mut self, pos: Pos) -> Next {
-        Next::Release { pos, press: self.swallowed.keys().filter(|&k| self.mods.held(k)).collect() }
+    /// Hands the pointer back. `around`: there is input to replay, which
+    /// the held modifiers modify (alone, pressing and releasing them would
+    /// only do harm: a lone Alt opens the menu bar on Windows).
+    fn release(&mut self, pos: Pos, around: bool, keys: Vec<(u32, bool)>) -> Next {
+        let around = match around {
+            true => self.swallowed.keys().filter(|&k| self.mods.held(k)).collect(),
+            false => Vec::new(),
+        };
+        Next::Release { pos, around, keys }
     }
 
     pub fn timer(&mut self, desktop: &Desktop, now: Instant) -> Next {
@@ -361,7 +383,7 @@ impl Approach {
     pub fn motion(&mut self, desktop: &Desktop, dx: f64, dy: f64, now: Instant) -> Next {
         let target = desktop.clamp(Pos::new(self.pos.x + dx, self.pos.y + dy));
         if depth(desktop, self.side, target) > AWAY {
-            return self.release(target);
+            return self.release(target, false, Vec::new());
         }
         // Slide along the edge, staying on it.
         let b = desktop.bounds();
@@ -383,8 +405,12 @@ impl Approach {
 
     /// A captured key while held. The required modifier is taken as the
     /// go-ahead; any other key means the user is doing something else
-    /// here, so the pointer is handed back (and the caller types the key
-    /// on this computer, so it isn't lost).
+    /// here, so the pointer is handed back and the key is typed on this
+    /// computer, so it isn't lost: a key-down as a tap (its key-up will
+    /// come from the keyboard, past the injector), a key-up as it is (this
+    /// computer saw the key go down before the capture). A modifier going
+    /// down is dropped: pressing and releasing it at once means nothing,
+    /// or worse.
     pub fn key(&mut self, desktop: &Desktop, code: u32, down: bool, now: Instant) -> Next {
         let wanted = self.guard.modifier.keys().contains(&code);
         if wanted {
@@ -393,14 +419,18 @@ impl Approach {
             return self.check(desktop, now);
         }
         let pos = self.pos;
-        self.release(pos)
+        match (down, Mods::is_modifier(code)) {
+            (false, _) => self.release(pos, false, vec![(code, false)]),
+            (true, true) => self.release(pos, false, Vec::new()),
+            (true, false) => self.release(pos, true, vec![(code, true), (code, false)]),
+        }
     }
 
     /// A captured click or scroll while held: hand the pointer back (the
-    /// caller replays it on this computer).
+    /// caller replays it on this computer, inside `around`).
     pub fn other_input(&mut self) -> Next {
         let pos = self.pos;
-        self.release(pos)
+        self.release(pos, true, Vec::new())
     }
 }
 
@@ -490,9 +520,9 @@ mod tests {
 
         // Moving away first hands the pointer back where it would be.
         let mut a = wait(Approach::start(g, &d, Side::Right, Pos::new(1919.0, 500.0), Mods::default(), false, t0));
-        let Next::Release { pos, press } = a.motion(&d, -30.0, 5.0, at(50, t0)) else { panic!() };
+        let Next::Release { pos, around, keys } = a.motion(&d, -30.0, 5.0, at(50, t0)) else { panic!() };
         assert_eq!(pos, Pos::new(1889.0, 505.0));
-        assert!(press.is_empty());
+        assert!(around.is_empty() && keys.is_empty());
     }
 
     #[test]
@@ -546,23 +576,82 @@ mod tests {
         let mut a = wait(Approach::start(g, &d, Side::Left, p, Mods::default(), false, t0));
         assert_eq!(a.modifiers(&d, Mods::from_xkb(1), t0), Next::Cross(p));
 
-        // Another key hands the pointer back, and a Shift pressed while
-        // held (and still down) is pressed again on this computer.
+        // Another key hands the pointer back and is typed on this computer.
         let g = EdgeGuard { modifier: Modifier::Alt, ..EdgeGuard::default() };
         let mut a = wait(Approach::start(g, &d, Side::Left, p, Mods::default(), false, t0));
-        assert_eq!(a.key(&d, 30, true, t0), Next::Release { pos: p, press: vec![] });
+        assert_eq!(a.key(&d, 30, true, t0), Next::Release { pos: p, around: vec![], keys: vec![(30, true), (30, false)] });
         let g = EdgeGuard { modifier: Modifier::Alt, dwell_ms: 100, ..EdgeGuard::default() };
         let mut a = wait(Approach::start(g, &d, Side::Left, p, Mods::default(), false, t0));
         assert_eq!(a.key(&d, 100, true, t0), Next::Wait, "Alt held, the dwell still runs");
-        assert_eq!(a.other_input(), Next::Release { pos: p, press: vec![100] });
+        assert_eq!(a.clone().other_input(), Next::Release { pos: p, around: vec![100], keys: vec![] }, "Alt-click");
+        assert_eq!(
+            a.key(&d, 30, true, t0),
+            Next::Release { pos: p, around: vec![100], keys: vec![(30, true), (30, false)] },
+            "Alt+A"
+        );
         let mut a = wait(Approach::start(g, &d, Side::Left, p, Mods::default(), false, t0));
         a.key(&d, 56, true, t0);
         a.key(&d, 56, false, t0);
         assert_eq!(
             a.motion(&d, 20.0, 0.0, t0),
-            Next::Release { pos: Pos::new(20.0, 500.0), press: vec![] },
+            Next::Release { pos: Pos::new(20.0, 500.0), around: vec![], keys: vec![] },
             "released again"
         );
+    }
+
+    /// Replaying what was captured while held never leaves a key down on
+    /// this computer: every key pressed here is released in the same
+    /// replay, since the user's own key-up won't come through the injector.
+    #[test]
+    fn handing_back_leaves_nothing_held() {
+        let d = desk();
+        let t0 = Instant::now();
+        let p = Pos::new(1919.0, 500.0);
+        // Every key the user may press at the edge, under every guard.
+        let keys = [30u32, 1, 28, 42, 54, 29, 97, 56, 100, 125, 126];
+        let guards = [
+            EdgeGuard { dwell_ms: 300, ..EdgeGuard::default() },
+            EdgeGuard { modifier: Modifier::Shift, dwell_ms: 300, ..EdgeGuard::default() },
+            EdgeGuard { modifier: Modifier::Alt, dwell_ms: 300, ..EdgeGuard::default() },
+        ];
+        for g in guards {
+            for &first in &keys {
+                for &then in &keys {
+                    for end in 0..3 {
+                        let mut a = wait(Approach::start(g, &d, Side::Right, p, Mods::default(), false, t0));
+                        let mut next = a.key(&d, first, true, at(10, t0));
+                        if next == Next::Wait {
+                            next = match end {
+                                0 => a.key(&d, then, true, at(20, t0)),
+                                1 => a.other_input(),
+                                _ => a.motion(&d, -50.0, 0.0, at(20, t0)),
+                            };
+                        }
+                        if next == Next::Wait {
+                            continue; // both were the guard's modifier
+                        }
+                        let Next::Release { around, keys, .. } = next else { panic!("{next:?}") };
+                        // What the injector would hold, in order.
+                        let mut held = Vec::new();
+                        let events = around.iter().map(|&c| (c, true)).chain(keys).chain(around.iter().rev().map(|&c| (c, false)));
+                        for (code, down) in events {
+                            match down {
+                                true => held.push(code),
+                                false => held.retain(|&k| k != code),
+                            }
+                        }
+                        assert!(held.is_empty(), "{g:?} {first} {then} {end}: {held:?} left down");
+                    }
+                }
+            }
+        }
+        // A modifier alone is not tapped (a lone Alt opens the menu bar).
+        let g = EdgeGuard { dwell_ms: 300, ..EdgeGuard::default() };
+        let mut a = wait(Approach::start(g, &d, Side::Right, p, Mods::default(), false, t0));
+        assert_eq!(a.key(&d, 56, true, t0), Next::Release { pos: p, around: vec![], keys: vec![] });
+        // A key-up is passed on: this computer saw the key go down.
+        let mut a = wait(Approach::start(g, &d, Side::Right, p, Mods::default(), false, t0));
+        assert_eq!(a.key(&d, 30, false, t0), Next::Release { pos: p, around: vec![], keys: vec![(30, false)] });
     }
 
     #[test]

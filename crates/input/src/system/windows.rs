@@ -1,15 +1,18 @@
-//! Windows: the foreground window compared with its monitor, and
-//! `LockWorkStation`. Compiled and unit-tested elsewhere only; not yet run
-//! on a real Windows machine.
+//! Windows: the foreground window compared with its monitor (see
+//! [`is_fullscreen`]), and `LockWorkStation`. Compiled and unit-tested
+//! elsewhere only; not yet run on a real Windows machine.
 
 use super::{FocusProbe, ScreenLocker};
+use crate::win_logic::{Ltrb, is_fullscreen};
 use one_mk_proto::Focus;
-use windows_sys::Win32::Foundation::{CloseHandle, RECT};
+use windows_sys::Win32::Foundation::{CloseHandle, HWND, RECT};
+use windows_sys::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows_sys::Win32::System::Shutdown::LockWorkStation;
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindowRect, GetWindowThreadProcessId,
+    GWL_STYLE, GetClassNameW, GetDesktopWindow, GetForegroundWindow, GetShellWindow, GetWindowLongW, GetWindowRect,
+    GetWindowThreadProcessId,
 };
 
 pub(super) struct Foreground;
@@ -25,17 +28,14 @@ impl FocusProbe for Foreground {
             let mut class = [0u16; 256];
             let n = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);
             let class = String::from_utf16_lossy(&class[..n.max(0) as usize]);
-            // The desktop (wallpaper and icons) covers the monitor too.
-            if matches!(class.as_str(), "Progman" | "WorkerW") {
-                return Some(Focus::default());
-            }
-            let mut r: RECT = std::mem::zeroed();
             let mut mi: MONITORINFO = std::mem::zeroed();
             mi.cbSize = size_of::<MONITORINFO>() as u32;
             let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-            let fullscreen = GetWindowRect(hwnd, &mut r) != 0
-                && GetMonitorInfoW(mon, &mut mi) != 0
-                && covers(&r, &mi.rcMonitor);
+            let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+            let fullscreen = match (window_bounds(hwnd), GetMonitorInfoW(mon, &mut mi) != 0) {
+                (Some(r), true) => is_fullscreen(&class, style, r, ltrb(&mi.rcMonitor)),
+                _ => false,
+            };
             let mut apps = Vec::new();
             if let Some(exe) = process_name(hwnd) {
                 apps.push(exe);
@@ -46,12 +46,27 @@ impl FocusProbe for Foreground {
     }
 }
 
-fn covers(w: &RECT, m: &RECT) -> bool {
-    w.left <= m.left && w.top <= m.top && w.right >= m.right && w.bottom >= m.bottom
+fn ltrb(r: &RECT) -> Ltrb {
+    [r.left, r.top, r.right, r.bottom]
+}
+
+/// The window as drawn: DWM's extended frame bounds, without the invisible
+/// resize borders `GetWindowRect` includes (about 8 px on each side), or
+/// `GetWindowRect` if DWM can't tell.
+fn window_bounds(hwnd: HWND) -> Option<Ltrb> {
+    // SAFETY: both calls write one RECT to a valid, correctly sized pointer.
+    unsafe {
+        let mut r: RECT = std::mem::zeroed();
+        let size = size_of::<RECT>() as u32;
+        if DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS as u32, (&mut r as *mut RECT).cast(), size) >= 0 {
+            return Some(ltrb(&r));
+        }
+        (GetWindowRect(hwnd, &mut r) != 0).then(|| ltrb(&r))
+    }
 }
 
 /// The program's file name, like `game.exe`.
-fn process_name(hwnd: windows_sys::Win32::Foundation::HWND) -> Option<String> {
+fn process_name(hwnd: HWND) -> Option<String> {
     // SAFETY: plain Win32 calls; the handle is closed before returning.
     unsafe {
         let mut pid = 0u32;

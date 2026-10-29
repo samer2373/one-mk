@@ -182,15 +182,21 @@ pub enum Control {
     /// relative, a `Button`'s `pos` means nothing and is not applied.
     PointerMode { epoch: u16, relative: bool },
     /// Lock your screen. `id` names the lock event, so a computer that
-    /// passes it on never gets it back as a new one.
-    Lock { id: u64 },
+    /// passes it on never gets it back as a new one. `all`: someone ran
+    /// `one-mk lock-all`, which every computer obeys; otherwise it is lock
+    /// sync, which only computers with lock sync on follow. (`all` is a
+    /// trailing byte: a frame without it, from a build before it, counts
+    /// as `all`, as every computer obeyed those.)
+    Lock { id: u64, all: bool },
     /// From the controlled computer: its focused window is (or is no
     /// longer) fullscreen, during visit `epoch`. Gaming mode `auto` uses it.
     Focus { epoch: u16, fullscreen: bool },
     /// From the controller: send `Focus` now and whenever it changes during
-    /// visit `epoch`. Only gaming mode `auto` asks, so nobody else pays for
-    /// looking at windows.
-    WatchFocus { epoch: u16 },
+    /// visit `epoch` (`on`), or stop (gaming mode left `auto`). Only gaming
+    /// mode `auto` asks, so nobody else pays for looking at windows. (`on`
+    /// is a trailing byte: a frame without it, from a build before it,
+    /// means on; such a build reads an "off" as "on", which it already is.)
+    WatchFocus { epoch: u16, on: bool },
 }
 
 impl Control {
@@ -271,18 +277,20 @@ impl Control {
                 w.u16(*epoch);
                 w.u8(u8::from(*relative));
             }
-            Control::Lock { id } => {
+            Control::Lock { id, all } => {
                 w.u8(16);
                 w.u64(*id);
+                w.u8(u8::from(*all));
             }
             Control::Focus { epoch, fullscreen } => {
                 w.u8(17);
                 w.u16(*epoch);
                 w.u8(u8::from(*fullscreen));
             }
-            Control::WatchFocus { epoch } => {
+            Control::WatchFocus { epoch, on } => {
                 w.u8(18);
                 w.u16(*epoch);
+                w.u8(u8::from(*on));
             }
         }
     }
@@ -326,9 +334,9 @@ impl Control {
             },
             14 => Control::Caps(r.u32()?),
             15 => Control::PointerMode { epoch: r.u16()?, relative: r.u8()? != 0 },
-            16 => Control::Lock { id: r.u64()? },
+            16 => Control::Lock { id: r.u64()?, all: r.flag_or(true)? },
             17 => Control::Focus { epoch: r.u16()?, fullscreen: r.u8()? != 0 },
-            18 => Control::WatchFocus { epoch: r.u16()? },
+            18 => Control::WatchFocus { epoch: r.u16()?, on: r.flag_or(true)? },
             t => return Err(DecodeError::UnknownTag(t)),
         };
         Ok(c)
@@ -447,6 +455,11 @@ impl Reader<'_> {
     pub(crate) fn u64(&mut self) -> Result<u64, DecodeError> {
         Ok(u64::from_le_bytes(self.take()?))
     }
+    /// A flag added at the end of a message: `default` when the sender's
+    /// build predates it and the message ends here.
+    fn flag_or(&mut self, default: bool) -> Result<bool, DecodeError> {
+        if self.0.is_empty() { Ok(default) } else { Ok(self.u8()? != 0) }
+    }
     /// Fixed-point, so always finite.
     fn pos(&mut self) -> Result<Pos, DecodeError> {
         Ok(Pos::new(from_fixed(self.i32()?), from_fixed(self.i32()?)))
@@ -556,9 +569,11 @@ mod tests {
             Control::Caps(caps::LOCAL),
             Control::PointerMode { epoch: 3, relative: true },
             Control::PointerMode { epoch: 3, relative: false },
-            Control::Lock { id: u64::MAX },
+            Control::Lock { id: u64::MAX, all: true },
+            Control::Lock { id: 7, all: false },
             Control::Focus { epoch: 4, fullscreen: true },
-            Control::WatchFocus { epoch: 5 },
+            Control::WatchFocus { epoch: 5, on: true },
+            Control::WatchFocus { epoch: 5, on: false },
         ];
         let mut buf = Vec::new();
         for m in &msgs {
@@ -598,11 +613,25 @@ mod tests {
         let new = [
             Control::Caps(0),
             Control::PointerMode { epoch: 0, relative: true },
-            Control::Lock { id: 0 },
+            Control::Lock { id: 0, all: true },
             Control::Focus { epoch: 0, fullscreen: false },
-            Control::WatchFocus { epoch: 0 },
+            Control::WatchFocus { epoch: 0, on: true },
         ];
         assert_eq!(new.iter().map(tag).collect::<Vec<_>>(), [14, 15, 16, 17, 18]);
+        // Flags added later at the end of `Lock` and `WatchFocus`: frames
+        // from builds before them decode as they meant (lock-all, watch on),
+        // and those builds read the new frames' fields they know, ignoring
+        // the extra byte.
+        let mut id = vec![16];
+        id.extend_from_slice(&9u64.to_le_bytes());
+        assert_eq!(Control::decode(&id), Ok(Control::Lock { id: 9, all: true }));
+        assert_eq!(Control::decode(&[18, 3, 0]), Ok(Control::WatchFocus { epoch: 3, on: true }));
+        let mut b = Vec::new();
+        Control::WatchFocus { epoch: 3, on: false }.encode_frame(&mut b);
+        assert_eq!(&b[2..5], &[18, 3, 0], "old fields first, at the same place");
+        b.clear();
+        Control::Lock { id: 9, all: false }.encode_frame(&mut b);
+        assert_eq!(&b[2..11], &id[..]);
         let (b, _) = Datagram::MotionBy { epoch: 0, seq: 0, sum_x: 0, sum_y: 0 }.encode();
         assert_eq!(b[0], 5);
         // A Hello is still the same bytes, so old peers still connect.

@@ -1,6 +1,11 @@
 //! Lock sync: `one-mk lock-all`, and (with `lock-sync on`) locking one
 //! computer locks the others.
 //!
+//! `lock-all` is obeyed by every connected computer: the user asked for
+//! exactly that. A lock spread by lock sync is followed only by computers
+//! with lock sync on: turning it off on a computer means its screen is
+//! not tied to the others', either way.
+//!
 //! Every lock event has a random id. A computer that locks because of a
 //! peer remembers the id and passes the same id on, never a new one, and
 //! drops ids it has seen. So a lock spreads over every link once and
@@ -51,11 +56,14 @@ impl LockSync {
         true
     }
 
-    /// A peer asks us to lock. `sync` is this computer's `lock-sync`
-    /// setting: with it on, the request goes on to the other peers too
-    /// (a lock-all from a computer not paired with all of ours).
-    pub fn on_remote(&mut self, id: u64, sync: bool, now: Instant) -> OnRemote {
-        if !self.remember(id) {
+    /// A peer asks us to lock: its `lock-all` if `all`, else its lock
+    /// sync. `sync` is this computer's `lock-sync` setting: with it off,
+    /// only a lock-all is obeyed; with it on, the request also goes on to
+    /// the other peers (a lock from a computer not paired with all of ours).
+    pub fn on_remote(&mut self, id: u64, all: bool, sync: bool, now: Instant) -> OnRemote {
+        // Remembered either way, so a copy arriving over another link is
+        // dropped too.
+        if !self.remember(id) || !(all || sync) {
             return OnRemote::Ignore;
         }
         if !self.locked {
@@ -101,8 +109,8 @@ mod tests {
         sync: Vec<LockSync>,
         on: Vec<bool>,
         links: Vec<(usize, usize)>,
-        /// (to, from, id) messages, and (computer, steps left) lock reports.
-        queue: VecDeque<(usize, usize, u64)>,
+        /// (to, from, id, all) messages, and (computer, steps left) lock reports.
+        queue: VecDeque<(usize, usize, u64, bool)>,
         reports: Vec<(usize, usize)>,
         lag: usize,
         sent: usize,
@@ -140,10 +148,10 @@ mod tests {
                 .collect()
         }
 
-        fn send(&mut self, from: usize, id: u64, except: Option<usize>) {
+        fn send(&mut self, from: usize, id: u64, all: bool, except: Option<usize>) {
             for p in self.peers(from) {
                 if Some(p) != except {
-                    self.queue.push_back((p, from, id));
+                    self.queue.push_back((p, from, id, all));
                     self.sent += 1;
                 }
             }
@@ -167,7 +175,7 @@ mod tests {
         fn lock_all(&mut self, i: usize) {
             let id = self.fresh();
             let id = self.sync[i].lock_all(id, Instant::now());
-            self.send(i, id, None);
+            self.send(i, id, true, None);
             self.lock_screen(i);
         }
 
@@ -185,7 +193,7 @@ mod tests {
             for i in due {
                 let fresh = self.fresh();
                 if let Some(id) = self.sync[i].on_local_locked(self.on[i], fresh, Instant::now()) {
-                    self.send(i, id, None);
+                    self.send(i, id, false, None);
                 }
             }
         }
@@ -194,14 +202,14 @@ mod tests {
             for _ in 0..10_000 {
                 self.tick_reports(false);
                 match self.queue.pop_front() {
-                    Some((to, from, id)) => match self.sync[to].on_remote(id, self.on[to], Instant::now()) {
+                    Some((to, from, id, all)) => match self.sync[to].on_remote(id, all, self.on[to], Instant::now()) {
                         OnRemote::Ignore => {}
                         OnRemote::Lock { lock_here, forward } => {
                             if lock_here {
                                 self.lock_screen(to);
                             }
                             if forward {
-                                self.send(to, id, Some(from));
+                                self.send(to, id, all, Some(from));
                             }
                         }
                     },
@@ -244,22 +252,49 @@ mod tests {
     #[test]
     fn a_chain_is_crossed_when_the_middle_syncs() {
         // 0 - 1 - 2: 0 and 2 are not paired.
-        let mut net = Net::new(3, &[(0, 1), (1, 2)], &[true, true, false], 2);
+        let mut net = Net::new(3, &[(0, 1), (1, 2)], &[true, true, true], 2);
         net.user_locks(0);
         net.run();
         assert_eq!(net.locks, vec![1, 1, 1]);
-        let mut net = Net::new(3, &[(0, 1), (1, 2)], &[true, false, false], 2);
+        let mut net = Net::new(3, &[(0, 1), (1, 2)], &[true, true, false], 2);
         net.user_locks(0);
         net.run();
-        assert_eq!(net.locks, vec![1, 1, 0], "1 doesn't pass it on without lock sync");
+        assert_eq!(net.locks, vec![1, 1, 0], "2 doesn't follow without lock sync");
+        let mut net = Net::new(3, &[(0, 1), (1, 2)], &[true, false, true], 2);
+        net.user_locks(0);
+        net.run();
+        assert_eq!(net.locks, vec![1, 0, 0], "1 neither follows nor passes it on without lock sync");
+        // A lock-all crosses the chain only where the middle syncs.
+        let mut net = Net::new(3, &[(0, 1), (1, 2)], &[false, true, false], 2);
+        net.lock_all(0);
+        net.run();
+        assert_eq!(net.locks, vec![1, 1, 1]);
+        let mut net = Net::new(3, &[(0, 1), (1, 2)], &[false, false, false], 2);
+        net.lock_all(0);
+        net.run();
+        assert_eq!(net.locks, vec![1, 1, 0]);
     }
 
     #[test]
-    fn sync_off_does_not_announce_but_still_obeys() {
+    fn sync_off_neither_announces_nor_follows_but_obeys_lock_all() {
         let mut net = Net::new(2, &[(0, 1)], &[false, false], 0);
         net.user_locks(0);
         assert_eq!(net.run(), 0);
         assert_eq!(net.locks, vec![1, 0]);
+        // 0 syncs, 1 doesn't: 1 stays unlocked when 0 locks...
+        let mut net = Net::new(2, &[(0, 1)], &[true, false], 0);
+        net.user_locks(0);
+        assert_eq!(net.run(), 1);
+        assert_eq!(net.locks, vec![1, 0]);
+        // ...and 0 when 1 does, since 1 doesn't announce.
+        net.user_locks(1);
+        assert_eq!(net.run(), 1);
+        assert_eq!(net.locks, vec![1, 1]);
+        // But `lock-all` from either side locks both.
+        let mut net = Net::new(2, &[(0, 1)], &[true, false], 0);
+        net.lock_all(0);
+        net.run();
+        assert_eq!(net.locks, vec![1, 1]);
     }
 
     #[test]
@@ -282,17 +317,23 @@ mod tests {
         assert_eq!(s.on_local_locked(true, 1, t0), Some(1));
         assert_eq!(s.on_local_locked(true, 2, t0), None, "reported twice");
         // Already locked when a peer asks: nothing to do here, still passed on.
-        assert_eq!(s.on_remote(7, true, t0), OnRemote::Lock { lock_here: false, forward: true });
-        assert_eq!(s.on_remote(7, true, t0), OnRemote::Ignore);
+        assert_eq!(s.on_remote(7, false, true, t0), OnRemote::Lock { lock_here: false, forward: true });
+        assert_eq!(s.on_remote(7, false, true, t0), OnRemote::Ignore);
         s.on_local_unlocked();
         // A peer's lock that this OS reports only much later counts as the user's.
-        assert_eq!(s.on_remote(8, true, t0), OnRemote::Lock { lock_here: true, forward: true });
+        assert_eq!(s.on_remote(8, false, true, t0), OnRemote::Lock { lock_here: true, forward: true });
         assert_eq!(s.on_local_locked(true, 9, t0 + CAUSE_WINDOW), Some(9));
         // Old ids are forgotten eventually, but only after many others.
         let mut s = LockSync::default();
         for id in 0..SEEN as u64 {
-            s.on_remote(id, false, t0);
+            s.on_remote(id, true, false, t0);
         }
-        assert_eq!(s.on_remote(SEEN as u64 - 1, false, t0), OnRemote::Ignore);
+        assert_eq!(s.on_remote(SEEN as u64 - 1, true, false, t0), OnRemote::Ignore);
+        // With lock sync off a synced lock is ignored, and stays ignored
+        // when it comes again over another link.
+        let mut s = LockSync::default();
+        assert_eq!(s.on_remote(1, false, false, t0), OnRemote::Ignore);
+        assert_eq!(s.on_remote(1, true, false, t0), OnRemote::Ignore);
+        assert_eq!(s.on_remote(2, true, false, t0), OnRemote::Lock { lock_here: true, forward: false });
     }
 }

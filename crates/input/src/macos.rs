@@ -1022,6 +1022,10 @@ async fn inject_loop(
 struct Injector {
     source: CFRetained<CGEventSource>,
     pos: CGPoint,
+    /// The displays, for keeping relative moves on them; read again when a
+    /// move would leave them (they may have changed), at most once a second.
+    desktop: Option<Desktop>,
+    desktop_read: Instant,
     /// Held buttons, bit n = macOS button number n.
     buttons: u32,
     mods: logic::Modifiers,
@@ -1038,6 +1042,8 @@ impl Injector {
         Self {
             source,
             pos,
+            desktop: read_desktop(),
+            desktop_read: Instant::now(),
             buttons: 0,
             mods: logic::Modifiers::default(),
             clicks: logic::ClickCounter::new(DOUBLE_CLICK_SECS, DOUBLE_CLICK_SLOP),
@@ -1082,15 +1088,21 @@ impl Injector {
                 self.pos = CGPoint::new(p.x, p.y);
                 self.post_move(dx, dy);
             }
-            // Games read the delta fields; the location is clamped by macOS
-            // and read back, so later absolute moves start from the truth.
+            // Games read the delta fields. The location is tracked here and
+            // kept on the displays, as macOS keeps the cursor, so later
+            // absolute moves start from the truth: reading it back right
+            // after the (asynchronous) post could return the old one.
             Inject::MoveBy { dx, dy } => {
                 let (dx, dy) = (f64::from(dx), f64::from(dy));
-                self.pos = CGPoint::new(self.pos.x + dx, self.pos.y + dy);
-                self.post_move(dx, dy);
-                if let Some(e) = CGEvent::new(None) {
-                    self.pos = CGEvent::location(Some(&e));
+                let to = Pos::new(self.pos.x + dx, self.pos.y + dy);
+                let off = self.desktop.as_ref().is_none_or(|d| d.screen_at(to).is_none());
+                if off && self.desktop_read.elapsed() > Duration::from_secs(1) {
+                    self.desktop = read_desktop().or(self.desktop.take());
+                    self.desktop_read = Instant::now();
                 }
+                let p = logic::moved_by(self.desktop.as_ref(), Pos::new(self.pos.x, self.pos.y), dx, dy);
+                self.pos = CGPoint::new(p.x, p.y);
+                self.post_move(dx, dy);
             }
             Inject::Button { button, down } => {
                 let Some(n) = logic::evdev_to_mac_button(button) else {
