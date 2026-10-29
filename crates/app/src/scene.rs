@@ -8,6 +8,7 @@ use crate::motion::{self, Tween};
 use crate::style::{GROUND, INK, INK_HOVER, INK2, SIGNAL, fit, mono_medium, regular, semibold};
 use crate::widgets::mix;
 use egui::{Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
+use one_mk_proto::Rect as Monitor;
 use std::ops::{Add, Mul, Sub};
 
 /// Distance between neighbouring devices on the desk, in centimetres.
@@ -182,6 +183,45 @@ impl Plane {
     }
 }
 
+/// Top left and size of the box round a group of monitors, in pixels.
+fn group(screens: &[Monitor]) -> (i32, i32, f32, f32) {
+    let (x0, y0, x1, y1) = screens.iter().fold((i32::MAX, i32::MAX, i32::MIN, i32::MIN), |(x0, y0, x1, y1), r| (x0.min(r.x), y0.min(r.y), x1.max(r.right()), y1.max(r.bottom())));
+    (x0, y0, (x1 - x0).max(1) as f32, (y1 - y0).max(1) as f32)
+}
+
+/// Half a computer's width on the desk, before scaling. Several monitors
+/// stand as one wall, as tall as a monitor and as wide as the row needs,
+/// up to two monitors' width.
+pub fn half_width(kind: Kind, screens: &[Monitor]) -> f32 {
+    match kind {
+        Kind::Laptop => 15.5,
+        Kind::Monitor if screens.len() > 1 => {
+            let (_, _, bw, bh) = group(screens);
+            (16.5 * bw / bh).clamp(29.0, 58.0)
+        }
+        Kind::Monitor => 29.0,
+    }
+}
+
+/// Where each monitor sits on a screen, as (u0, w0, u1, w1): the group
+/// keeps its shape and the monitors their sizes, scaled to fit `pl` and
+/// centred on it. Pixels of different computers don't compare, so each
+/// group fills its own screen.
+fn panels<'a>(screens: &'a [Monitor], pl: &Plane) -> impl Iterator<Item = [f32; 4]> + 'a {
+    let (x0, y0, bw, bh) = group(screens);
+    let (pw, ph) = ((pl.u.1 - pl.u.0).abs(), (pl.w.1 - pl.w.0).abs());
+    // Desk units per pixel, then as a fraction of the screen across and down.
+    let k = (pw / bw).min(ph / bh);
+    let (ku, kw) = (k / pw, k / ph);
+    let (u, w) = ((1.0 - bw * ku) / 2.0, (1.0 - bh * kw) / 2.0);
+    // A thin seam of glass between monitors that touch, in desk units.
+    let (gu, gw) = (0.25 / pw, 0.25 / ph);
+    screens.iter().map(move |r| {
+        let (u0, w0) = (u + (r.x - x0) as f32 * ku, w + (r.y - y0) as f32 * kw);
+        [u0 + gu, w0 + gw, u0 + r.w as f32 * ku - gu, w0 + r.h as f32 * kw - gw]
+    })
+}
+
 pub struct Geo {
     boxes: Vec<Box3>,
     pub screen: Plane,
@@ -218,6 +258,8 @@ pub struct Device {
     pub wall: [u32; 2],
     /// The second line on its screen: "This computer", "Linux", "Offline"…
     pub subtitle: String,
+    /// Its monitors as the daemon reports them; drawn when there is more than one.
+    pub screens: Vec<Monitor>,
     /// The line it replaced, and when, for a crossfade.
     sub_was: Option<(String, f64)>,
     /// Removed once it has faded out.
@@ -252,6 +294,7 @@ impl Device {
             hop: None,
             wall,
             subtitle: String::new(),
+            screens: Vec::new(),
             sub_was: None,
             leaving: false,
             a: 1.0,
@@ -314,7 +357,7 @@ impl Device {
         let s = self.scale * self.k;
         match self.kind {
             Kind::Monitor => {
-                let (hw, hh) = (29.0 * s, 16.5 * s);
+                let (hw, hh) = (half_width(Kind::Monitor, &self.screens) * s, 16.5 * s);
                 let cy = 13.0 * s + hh;
                 let scr = Frame3::axes(v(x, y + cy, z - 14.0));
                 Geo {
@@ -709,7 +752,7 @@ impl Scene {
         // Frame everything: centres for the usual distance, outer edges so
         // a wide row never runs off the sides of the window.
         let (lo, hi, elo, ehi) = self.devices.iter().filter(|d| !d.leaving).fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN), |(lo, hi, elo, ehi), d| {
-            let half = if d.kind == Kind::Laptop { 15.5 } else { 29.0 } * d.scale;
+            let half = half_width(d.kind, &d.screens) * d.scale;
             (lo.min(d.target.x), hi.max(d.target.x), elo.min(d.target.x - half), ehi.max(d.target.x + half))
         });
         // The empty slot beside this computer counts as part of the scene.
@@ -936,7 +979,8 @@ impl Scene {
 
     fn slot_device(&self) -> Device {
         let mut d = Device::new("", "", Kind::Monitor, false, [0, 0]);
-        d.pos = self.devices.first().map_or(V3::default(), |m| m.pos) + v(29.0 + 26.0 + 29.0 * 0.86, 0.0, 0.0);
+        let (at, half) = self.devices.first().map_or((V3::default(), 29.0), |m| (m.pos, half_width(m.kind, &m.screens).max(29.0)));
+        d.pos = at + v(half + 26.0 + 29.0 * 0.86, 0.0, 0.0);
         d.at = d.pos;
         d.scale = 0.86;
         d
@@ -1139,7 +1183,14 @@ impl Scene {
         if lit > 0.01 {
             let [c0, c1] = d.wall.map(|c| fade(rgba(hex(c), 1.0, 1.0), lit));
             let mid = mix(c0, c1, 0.5);
-            quad_colors(painter, rect(0.0, 0.0, 1.0, 1.0), [c0, mid, c1, mid], Some(fade(rgba(hex(0x30353E), 0.9, 1.0), lit)));
+            let edge = Some(fade(rgba(hex(0x30353E), 0.9, 1.0), lit));
+            if d.screens.len() > 1 {
+                for [u0, w0, u1, w1] in panels(&d.screens, pl) {
+                    quad_colors(painter, rect(u0, w0, u1, w1), [c0, mid, c1, mid], edge);
+                }
+            } else {
+                quad_colors(painter, rect(0.0, 0.0, 1.0, 1.0), [c0, mid, c1, mid], edge);
+            }
         }
 
         if let Some((_, code, t0)) = self.code.as_ref().filter(|(ids, _, _)| ids.contains(&d.id)) {
@@ -1190,7 +1241,13 @@ impl Scene {
 
         // The edges toward online neighbours: a faint line at rest, so the
         // edges can be learned; amber only while the pointer is about to
-        // cross, crossing, or has just come through.
+        // cross, crossing, or has just come through. They run along the
+        // monitors, not the empty glass round them.
+        let [gu0, gw0, gu1, gw1] = if d.screens.len() > 1 {
+            panels(&d.screens, pl).fold([1.0f32, 1.0, 0.0, 0.0], |[a, b, c, e], [u0, w0, u1, w1]| [a.min(u0), b.min(w0), c.max(u1), e.max(w1)])
+        } else {
+            [0.0, 0.0, 1.0, 1.0]
+        };
         for (j, o) in self.devices.iter().enumerate() {
             if j == i || !o.online || o.a < 0.5 || o.w > 0.01 || !(d.me || o.me) {
                 continue;
@@ -1206,11 +1263,11 @@ impl Scene {
             let flash = self.flash.as_ref().filter(|(from, to, _)| to == &d.id && from == &o.id).map_or(0.0, |(_, _, t)| 1.0 - motion::progress(now, *t, FLASH, motion::out_cubic));
             let glow = near_cursor.max(f32::from(involved)).max(flash);
             let strip = if u == 0.5 {
-                let (w0, w1) = if w == 0.0 { (0.0, 0.02) } else { (0.98, 1.0) };
-                rect(0.08, w0, 0.92, w1)
+                let (w0, w1) = if w == 0.0 { (gw0, lerp(gw0, gw1, 0.02)) } else { (lerp(gw0, gw1, 0.98), gw1) };
+                rect(lerp(gu0, gu1, 0.08), w0, lerp(gu0, gu1, 0.92), w1)
             } else {
-                let (u0, u1) = if u == 0.0 { (0.0, 0.012) } else { (0.988, 1.0) };
-                rect(u0, 0.08, u1, 0.92)
+                let (u0, u1) = if u == 0.0 { (gu0, lerp(gu0, gu1, 0.012)) } else { (lerp(gu0, gu1, 0.988), gu1) };
+                rect(u0, lerp(gw0, gw1, 0.08), u1, lerp(gw0, gw1, 0.92))
             };
             quad(painter, strip, Color32::from_white_alpha((18.0 * d.a) as u8));
             if glow > 0.01 {
@@ -1224,9 +1281,11 @@ impl Scene {
             // in at the edge it came through.
             let pop = lerp(0.85, 1.0, motion::progress(now, self.cursor_t0, motion::space(0.12), motion::out_cubic));
             let s = 3.6 / 1600.0 * pop;
+            // A wall of monitors is wider than one: keep the arrow's shape.
+            let su = if d.screens.len() > 1 { s * 29.0 / half_width(d.kind, &d.screens) } else { s };
             let arrow = [(0.0, 0.0), (0.0, 17.0), (4.2, 13.2), (7.2, 19.6), (9.8, 18.4), (6.9, 12.2), (12.2, 11.8)];
             let aspect = if d.kind == Kind::Laptop { 1470.0 / 956.0 } else { 16.0 / 9.0 };
-            let pts: Vec<Pos2> = arrow.iter().map(|(x, y)| at(cu + x * s, cw + y * s * aspect)).collect();
+            let pts: Vec<Pos2> = arrow.iter().map(|(x, y)| at(cu + x * su, cw + y * s * aspect)).collect();
             let white = fade(Color32::WHITE, d.a);
             // Not convex: draw it as two convex parts.
             painter.add(Shape::convex_polygon(vec![pts[0], pts[1], pts[2], pts[5], pts[6]], white, Stroke::NONE));
@@ -1324,6 +1383,55 @@ mod tests {
         assert!(s.devices[2].at.y > 0.5, "starts above the desk");
         settle(&mut s, t + 0.1);
         assert_eq!(s.devices[2].at, v(SPACING, 0.0, 0.0));
+    }
+
+    #[test]
+    fn every_monitor_lands_on_its_screen_in_its_shape() {
+        // A Mac with three monitors, one of them portrait, beside a laptop.
+        let mut mac = Device::new("me", "mac", Kind::Laptop, true, [0, 0]);
+        mac.screens = vec![Monitor::new(0, 0, 1920, 1080), Monitor::new(-2592, 98, 1512, 982), Monitor::new(-1080, -840, 1080, 1920), Monitor::new(1920, 0, 1920, 1080)];
+        for kind in [Kind::Laptop, Kind::Monitor] {
+            mac.kind = kind;
+            let pl = mac.geometry().screen;
+            let (pw, ph) = ((pl.u.1 - pl.u.0).abs(), (pl.w.1 - pl.w.0).abs());
+            let p: Vec<[f32; 4]> = panels(&mac.screens, &pl).collect();
+            assert_eq!(p.len(), 4);
+            for [u0, w0, u1, w1] in &p {
+                assert!(0.0 <= *u0 && u0 < u1 && *u1 <= 1.0 + 1e-6 && 0.0 <= *w0 && w0 < w1 && *w1 <= 1.0 + 1e-6, "{p:?}");
+            }
+            let size = |[u0, w0, u1, w1]: [f32; 4]| ((u1 - u0) * pw, (w1 - w0) * ph);
+            let (w, h) = size(p[2]);
+            assert!(h > w, "the portrait monitor stands upright: {w} x {h}");
+            let (w, h) = size(p[0]);
+            assert!(((w + 0.5) / (h + 0.5) - 16.0 / 9.0).abs() < 0.01, "the main one keeps 16:9, seam aside: {w} x {h}");
+            assert!(p[1][0] < p[2][0] && p[2][0] < p[0][0] && p[0][0] < p[3][0], "left to right as on the desk");
+            assert!(p[2][1] < p[0][1], "the portrait one reaches higher");
+        }
+    }
+
+    #[test]
+    fn a_desk_with_many_monitors_draws_picks_and_rests() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 430.0));
+        let mut s = two();
+        s.devices[0].screens = vec![Monitor::new(0, 0, 1920, 1080), Monitor::new(-2592, 98, 1512, 982), Monitor::new(-1080, -840, 1080, 1920), Monitor::new(1920, 0, 1920, 1080)];
+        s.devices[1].screens = vec![Monitor::new(0, 0, 1920, 1080)];
+        let half = half_width(Kind::Monitor, &s.devices[0].screens);
+        assert!(half > 29.0 && half <= 58.0, "a row of monitors stands wider than one: {half}");
+        // Where the app puts its neighbour: clear of the wider wall.
+        s.devices[1].pos.x = -(half + 26.0 + 15.5);
+        s.devices[1].target.x = s.devices[1].pos.x;
+        let t = settle(&mut s, 0.0);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            s.paint(&painter, rect);
+        });
+        out.textures_delta.clear();
+        let cam = s.camera(rect);
+        for i in 0..2 {
+            assert_eq!(s.hit(cam.pt(s.devices[i].geometry().screen.at(0.5, 0.5))), Some(i));
+        }
+        assert!(!s.step(t + 1.0, None), "monitors ask for no frames of their own");
     }
 
     #[test]

@@ -118,7 +118,7 @@ mod tests {
     use one_mk_ctl::status::PeerStatus;
 
     fn peer(name: &str, side: Side, online: bool) -> PeerStatus {
-        PeerStatus { id: format!("{name}-id"), name: name.into(), side, os: 0, online, swap: "auto".into() }
+        PeerStatus { id: format!("{name}-id"), name: name.into(), side, os: 0, online, swap: "auto".into(), screens: vec![] }
     }
 
     fn snap(peers: Vec<PeerStatus>) -> Snapshot {

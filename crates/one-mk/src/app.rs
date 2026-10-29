@@ -1134,6 +1134,7 @@ impl App {
                 os: live.map_or(d.os, |p| p.os),
                 online: live.is_some(),
                 swap: d.swap_ctrl_cmd.to_string(),
+                screens: live.and_then(|p| p.desktop.as_ref()).map_or_else(Vec::new, |d| d.screens.clone()),
             })
         });
         Status {
@@ -1143,6 +1144,7 @@ impl App {
             controlling: self.remote.as_ref().map(|r| name_of(&r.peer)),
             controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
             peers: peers.collect(),
+            screens: self.local.as_ref().map_or_else(Vec::new, |d| d.screens.clone()),
         }
     }
 

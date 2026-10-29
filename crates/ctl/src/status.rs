@@ -1,6 +1,6 @@
 //! What `one-mk status` shows, as the daemon reports it, and its wire format.
 
-use one_mk_proto::{Side, os};
+use one_mk_proto::{Rect, Side, os};
 
 /// Where a computer sits, for sentences like "Connected to B (on your right)."
 pub fn on_your(side: Side) -> &'static str {
@@ -43,6 +43,8 @@ pub struct Status {
     /// The paired computer controlling this one right now.
     pub controlled_by: Option<String>,
     pub peers: Vec<PeerStatus>,
+    /// This computer's monitors, in its logical pixels.
+    pub screens: Vec<Rect>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +56,8 @@ pub struct PeerStatus {
     pub online: bool,
     /// Ctrl/Cmd swapping for keys sent to it: `auto`, `on` or `off`.
     pub swap: String,
+    /// Its monitors, in its own logical pixels; empty while it is offline.
+    pub screens: Vec<Rect>,
 }
 
 impl Status {
@@ -68,6 +72,17 @@ impl Status {
         }
         for p in &self.peers {
             out += &format!("peer\t{}\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.swap, p.name);
+        }
+        // Monitors go on lines of their own, after the peers they belong
+        // to: older readers skip lines they don't know.
+        let screen = |who: &str, r: &Rect| format!("screen\t{who}\t{}\t{}\t{}\t{}\n", r.x, r.y, r.w, r.h);
+        for r in &self.screens {
+            out += &screen("me", r);
+        }
+        for p in &self.peers {
+            for r in &p.screens {
+                out += &screen(&p.id, r);
+            }
         }
         out
     }
@@ -93,7 +108,16 @@ impl Status {
                     os: os.parse().ok()?,
                     online: online == "1",
                     swap: swap.into(),
+                    screens: vec![],
                 }),
+                ["screen", who, x, y, w, h] => {
+                    // A line this reader can't make sense of only costs a monitor.
+                    let (Ok(x), Ok(y), Ok(w), Ok(h)) = (x.parse(), y.parse(), w.parse(), h.parse()) else { continue };
+                    let screens = if who == "me" { Some(&mut s.screens) } else { s.peers.iter_mut().find(|p| p.id == who).map(|p| &mut p.screens) };
+                    if let Some(screens) = screens {
+                        screens.push(Rect::new(x, y, w, h));
+                    }
+                }
                 _ => {}
             }
         }
@@ -131,12 +155,23 @@ mod tests {
             controlling: Some("mac mini".into()),
             controlled_by: None,
             peers: vec![
-                PeerStatus { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into() },
-                PeerStatus { id: "9999-0000".into(), name: "old pc".into(), side: Side::Top, os: 0, online: false, swap: "off".into() },
+                PeerStatus { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into(), screens: vec![Rect::new(0, 0, 1920, 1080)] },
+                PeerStatus { id: "9999-0000".into(), name: "old pc".into(), side: Side::Top, os: 0, online: false, swap: "off".into(), screens: vec![] },
             ],
+            screens: vec![Rect::new(0, 0, 1920, 1080), Rect::new(-2592, 98, 1512, 982), Rect::new(-1080, -840, 1080, 1920), Rect::new(1920, 0, 1920, 1080)],
         };
         assert_eq!(Status::decode(&s.encode()), Some(s));
         assert_eq!(Status::decode("error unknown request\n"), None);
+    }
+
+    #[test]
+    fn status_from_an_older_daemon_still_reads() {
+        let old = "ok\nname\tdesk\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t3\t1\tauto\tMacBook Air\n";
+        let s = Status::decode(old).unwrap();
+        assert!(s.screens.is_empty());
+        assert_eq!(s.peers.len(), 1);
+        assert!(s.peers[0].screens.is_empty());
+        assert_eq!(s.peers[0].name, "MacBook Air");
     }
 
     #[test]
@@ -147,7 +182,8 @@ mod tests {
             port: 24900,
             controlling: Some("mac mini".into()),
             controlled_by: None,
-            peers: vec![PeerStatus { id: "1".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into() }],
+            peers: vec![PeerStatus { id: "1".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into(), screens: vec![] }],
+            screens: vec![],
         };
         let text = s.render();
         assert!(text.starts_with("one-mk is running on desk (id abcd-ef01).\n"), "{text}");

@@ -529,24 +529,26 @@ impl App {
         if listed || self.just_paired.as_ref().is_some_and(|(_, t)| now - t > 6.0) {
             self.just_paired = None;
         }
-        let half = |kind: Kind| if kind == Kind::Laptop { 15.5 } else { 29.0 };
-        let kind_of = |o: u8| if o == os::MACOS { Kind::Laptop } else { Kind::Monitor };
-        let mut layout: Vec<(String, Side, f32)> = peers.iter().map(|p| (p.id.clone(), self.side_shown(&p.id, p.side), half(kind_of(p.os)))).collect();
+        // A computer with several monitors stands as a wall of them, laptop or not.
+        let kind_of = |o: u8, screens: &[one_mk_proto::Rect]| if o == os::MACOS && screens.len() < 2 { Kind::Laptop } else { Kind::Monitor };
+        let mut layout: Vec<(String, Side, f32)> =
+            peers.iter().map(|p| (p.id.clone(), self.side_shown(&p.id, p.side), scene::half_width(kind_of(p.os, &p.screens), &p.screens))).collect();
         if let Some((id, _)) = &self.just_paired
             && let Some(i) = self.scene.index(id)
         {
             let d = &self.scene.devices[i];
             let side = if d.target.x < 0.0 { Side::Left } else { Side::Right };
-            layout.push((id.clone(), side, half(d.kind) * d.scale));
+            layout.push((id.clone(), side, scene::half_width(d.kind, &d.screens) * d.scale));
         }
         if self.scene.index(GHOST).is_some() {
             let right = layout.iter().filter(|(_, s, _)| *s == Side::Right).count();
             let left = layout.iter().filter(|(_, s, _)| *s == Side::Left).count();
-            layout.push((GHOST.into(), if right <= left { Side::Right } else { Side::Left }, half(Kind::Monitor) * 0.86));
+            layout.push((GHOST.into(), if right <= left { Side::Right } else { Side::Left }, scene::half_width(Kind::Monitor, &[]) * 0.86));
         }
-        let places = slots(half(me_kind()), &layout);
-
         let me = &mut self.scene.devices[0];
+        me.screens = status.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
+        me.kind = if me.screens.len() > 1 { Kind::Monitor } else { me_kind() };
+        let places = slots(scene::half_width(me.kind, &me.screens), &layout);
         if let Some(s) = &status {
             me.name = s.name.clone();
         }
@@ -559,7 +561,7 @@ impl App {
             let i = match self.scene.index(&p.id) {
                 Some(i) => i,
                 None => {
-                    let mut d = Device::new(&p.id, &p.name, kind_of(p.os), false, WALLS[n % WALLS.len()]);
+                    let mut d = Device::new(&p.id, &p.name, kind_of(p.os, &p.screens), false, WALLS[n % WALLS.len()]);
                     let (pos, _) = places[&p.id];
                     let delay = if opening { 0.1 + 0.06 * (pos.x.abs() / SPACING).round() as f64 } else { 0.0 };
                     d.arrive(pos, now, delay);
@@ -571,7 +573,8 @@ impl App {
             let d = &mut self.scene.devices[i];
             d.name = p.name.clone();
             d.online = p.online;
-            d.kind = if p.os == 0 { d.kind } else { kind_of(p.os) };
+            d.kind = if p.os == 0 && p.screens.len() < 2 { d.kind } else { kind_of(p.os, &p.screens) };
+            d.screens.clone_from(&p.screens);
             d.stay(now);
             d.set_subtitle(&sub, now);
         }
