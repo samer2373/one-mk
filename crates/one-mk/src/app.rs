@@ -650,7 +650,7 @@ async fn shutdown_signal() {
 /// elsewhere: one input link per device (`App::peers`) and
 /// [`crate::transfer::MAX_CONNS_PER_PEER`] bulk connections.
 #[derive(Clone, Default)]
-struct Pending(Arc<std::sync::Mutex<PendingCounts>>);
+pub(crate) struct Pending(Arc<std::sync::Mutex<PendingCounts>>);
 
 #[derive(Default)]
 struct PendingCounts {
@@ -659,13 +659,13 @@ struct PendingCounts {
 }
 
 /// One connection being set up; released on drop.
-struct PendingPermit {
+pub(crate) struct PendingPermit {
     pending: Pending,
     fp: Fingerprint,
 }
 
 impl Pending {
-    fn admit(&self, fp: Fingerprint) -> Option<PendingPermit> {
+    pub(crate) fn admit(&self, fp: Fingerprint) -> Option<PendingPermit> {
         let mut c = self.0.lock().expect("not poisoned");
         let mine = c.per_peer.get(&fp).copied().unwrap_or(0);
         if c.total >= MAX_PENDING || mine >= MAX_PENDING_PER_PEER {
@@ -1864,6 +1864,7 @@ impl App {
         self.reload_trust();
         let text = match req {
             Request::Status => self.status().encode(),
+            Request::Invitation => return crate::invite::query(&self.dir, reply),
             Request::Reload => {
                 // `devices.toml` was reloaded above; layouts go out whatever
                 // `settings.toml` says. A settings file that can't be read

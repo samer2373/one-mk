@@ -1073,6 +1073,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("one-mk-hooks-perm-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        // The folder counts too, and a umask of 002 makes new ones group-writable.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         let f = dir.join("settings.toml");
         std::fs::write(&f, "").unwrap();
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();

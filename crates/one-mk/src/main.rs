@@ -25,6 +25,7 @@ mod hooks;
 mod hotkeys;
 mod install;
 mod integrate;
+mod invite;
 mod link;
 mod manage;
 mod netwatch;
@@ -198,6 +199,10 @@ enum Cmd {
         /// on or off; leave out to see the current setting.
         state: Option<OnOff>,
     },
+    /// Create a one-time invitation link and QR code.
+    Invite(invite::InviteArgs),
+    /// Join using an invitation link (or read it from stdin).
+    Join(invite::JoinArgs),
     /// Pair with another computer (run it on both).
     Pair {
         /// Pair with the computer at this address instead of searching the
@@ -454,6 +459,8 @@ fn run(cli: Cli) -> Result<()> {
                 integrate::refresh(&dir, custom_home);
                 paired
             }
+            Cmd::Invite(args) => invite::run(&dir, args).await,
+            Cmd::Join(args) => invite::join(&dir, args).await,
             Cmd::Devices => devices(&dir, verbose > 0),
             Cmd::Status => manage::status(&dir).await,
             Cmd::Takeback => manage::takeback(&dir).await,

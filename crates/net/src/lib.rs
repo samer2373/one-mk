@@ -3,6 +3,7 @@
 
 mod discovery;
 mod identity;
+pub mod invite;
 mod node;
 mod pairing;
 mod stream;

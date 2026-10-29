@@ -122,10 +122,10 @@ pub fn secure_dir(dir: &Path) -> Result<()> {
         if let Some(parent) = dir.parent() {
             std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
-        let mut b = std::fs::DirBuilder::new();
+        let builder = &mut std::fs::DirBuilder::new();
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
-        match b.create(dir) {
+        std::os::unix::fs::DirBuilderExt::mode(builder, 0o700);
+        match builder.create(dir) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e).with_context(|| format!("creating {}", dir.display())),

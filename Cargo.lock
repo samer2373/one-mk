@@ -3147,7 +3147,9 @@ dependencies = [
  "one-mk-input",
  "one-mk-net",
  "one-mk-proto",
+ "qrcode",
  "quinn",
+ "rand",
  "serde",
  "tokio",
  "toml 1.1.8+spec-1.1.0",
@@ -3155,6 +3157,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "zbus",
+ "zeroize",
 ]
 
 [[package]]
@@ -3188,6 +3191,7 @@ dependencies = [
  "anyhow",
  "directories",
  "one-mk-proto",
+ "zeroize",
 ]
 
 [[package]]
@@ -3220,6 +3224,7 @@ name = "one-mk-net"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "directories",
  "hostname",
  "mdns-sd",
@@ -3227,12 +3232,14 @@ dependencies = [
  "quinn",
  "rand",
  "rcgen",
+ "ring",
  "rustls",
  "serde",
  "sha2",
  "tokio",
  "toml 1.1.8+spec-1.1.0",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -3618,6 +3625,12 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

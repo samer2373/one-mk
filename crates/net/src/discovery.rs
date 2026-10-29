@@ -34,6 +34,12 @@ pub struct Discovery {
 }
 
 impl Discovery {
+    pub async fn stop(self) {
+        if let Ok(stopped) = self.daemon.shutdown() {
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(200), stopped.recv_async()).await;
+        }
+    }
+
     pub fn start(id: &Identity, port: u16, pairing: bool) -> Result<(Self, mpsc::UnboundedReceiver<Found>)> {
         let daemon = ServiceDaemon::new()?;
         skip_virtual_interfaces(&daemon)?;

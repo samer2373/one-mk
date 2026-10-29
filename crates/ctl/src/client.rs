@@ -17,6 +17,8 @@ use crate::status::TransferStatus;
 pub enum Request {
     /// Who we are, who is paired and online, and who controls whom.
     Status,
+    /// Active invitation link and expiry (private bearer credential), or none.
+    Invitation,
     /// `devices.toml` or `settings.toml` changed: apply it now.
     Reload,
     /// End the control of whichever peer controls this machine, as if
@@ -113,6 +115,7 @@ impl Request {
     pub fn name(&self) -> &'static str {
         match self {
             Request::Status => "status",
+            Request::Invitation => "invitation",
             Request::Reload => "reload",
             Request::TakeBack => "takeback",
             Request::Switch(_) => "switch",
@@ -154,6 +157,7 @@ impl Request {
         let device = || (!arg.is_empty()).then(|| arg.to_owned());
         match word {
             "status" if arg.is_empty() => Some(Request::Status),
+            "invitation" if arg.is_empty() => Some(Request::Invitation),
             "reload" if arg.is_empty() => Some(Request::Reload),
             "takeback" if arg.is_empty() => Some(Request::TakeBack),
             "lock-all" if arg.is_empty() => Some(Request::LockAll),
@@ -367,5 +371,16 @@ mod tests {
         assert_eq!(request(&dir, Request::Status, Duration::from_secs(2)).unwrap().as_deref(), Some("got status"));
         server.join().unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod invitation_tests {
+    use super::*;
+    #[test]
+    fn invitation_request_roundtrip() {
+        assert_eq!(Request::Invitation.line(), "invitation");
+        assert_eq!(Request::parse(&Request::Invitation.line()), Some(Request::Invitation));
+        assert_eq!(Request::parse("invitation secret"), None);
     }
 }

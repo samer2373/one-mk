@@ -7,3 +7,4 @@ edition = "2024"
 anyhow = "1.0.104"
 directories = "6.0.0"
 one-mk-proto = { path = "../proto" }
+zeroize = "1.9.1"
