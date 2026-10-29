@@ -12,6 +12,7 @@ mod link;
 mod manage;
 mod notify;
 mod pair;
+mod power;
 mod send;
 mod settings;
 mod steer;
@@ -244,6 +245,9 @@ enum Cmd {
     /// Show or set commands to run when the pointer arrives on or leaves
     /// this computer, or a computer connects or disconnects.
     Hooks(hooks::HooksArgs),
+    /// Keep the screensaver and sleep off on computers this one controls,
+    /// and put displays to sleep together.
+    Power(power::PowerArgs),
     /// Show this computer's name and id.
     Id,
     /// Find out why computers are not connecting, and how to fix it.
@@ -338,6 +342,7 @@ fn options(r: RunArgs) -> Result<app::Options> {
             None => default_downloads()?,
         },
         start_locked: r.start_locked,
+        power: None,
     })
 }
 
@@ -389,6 +394,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::LockAll => steer::lock_all(&dir).await,
             Cmd::LockSync { state } => settings::lock_sync(&dir, state).await,
             Cmd::Hooks(args) => hooks::run_command(&dir, args).await,
+            Cmd::Power(args) => power::run_command(&dir, args).await,
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;
                 println!("{} ({})", id.name, id.fingerprint.short());

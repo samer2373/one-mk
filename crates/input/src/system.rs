@@ -11,6 +11,16 @@
 //! | Linux | X11/XWayland windows only; Wayland-native ones are unknown | logind `Session.Lock` | logind `LockedHint` |
 //! | Windows | foreground window: borderless, covering its monitor | `LockWorkStation` | session notifications |
 //! | macOS | not yet (unknown) | `CGSession -suspend`, else display sleep | screen lock notifications |
+//!
+//! Power (see [`Power`]): keeping the screensaver and idle sleep off while a
+//! peer controls this computer, putting the display to sleep when a peer's
+//! display slept, and noticing that this one did.
+//!
+//! | | keep awake | display to sleep | display or suspend noticed |
+//! |---|---|---|---|
+//! | Linux | `org.freedesktop.ScreenSaver.Inhibit` and a logind `idle` inhibitor | GNOME's `PowerSaveMode` (Mutter), else `xset dpms force off` | Mutter `PowerSaveMode`; logind `PrepareForSleep` |
+//! | Windows | `SetThreadExecutionState(ES_DISPLAY_REQUIRED)` from a thread of its own | `SC_MONITORPOWER` | `GUID_CONSOLE_DISPLAY_STATE`, `PBT_APMSUSPEND` |
+//! | macOS | a `caffeinate -d -i` child | `pmset displaysleepnow` | not noticed (no public notification without polling) |
 
 use crate::Event;
 use one_mk_proto::Focus;
@@ -35,6 +45,61 @@ pub trait ScreenLocker: Send {
     /// Asks the OS to lock this computer's screen. Returns at once; the
     /// lock itself is reported later as `Event::ScreenLocked(true)`.
     fn lock(&mut self) -> anyhow::Result<()>;
+}
+
+/// Keeps the screensaver, display blanking and idle sleep off.
+pub trait Inhibitor: Send {
+    /// Starts keeping the screen awake, for `reason` (shown by the OS in
+    /// its list of inhibitors where it has one). Returns at once; the OS
+    /// goes back to normal when the returned guard is dropped (or this
+    /// process ends: nothing outlives it).
+    fn inhibit(&mut self, reason: &str) -> anyhow::Result<Box<dyn Send>>;
+}
+
+pub trait DisplaySleeper: Send {
+    /// Asks the OS to turn this computer's display off. Returns at once.
+    fn sleep_display(&mut self) -> anyhow::Result<()>;
+}
+
+/// What the OS tells us about this computer's power state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerEvent {
+    /// The display went to sleep or the computer is suspending (`true`);
+    /// or it woke.
+    DisplayAsleep(bool),
+}
+
+/// The power side of the OS, apart from the input backend.
+pub struct Power {
+    pub inhibitor: Box<dyn Inhibitor>,
+    pub sleeper: Box<dyn DisplaySleeper>,
+    pub events: mpsc::UnboundedReceiver<PowerEvent>,
+}
+
+/// The power functions of this OS; on Linux this also starts watching for
+/// the display sleeping and the computer suspending.
+pub fn native_power() -> Power {
+    let (tx, events) = mpsc::unbounded_channel();
+    #[cfg(target_os = "linux")]
+    {
+        linux::watch_display(tx);
+        Power { inhibitor: Box::new(linux::KeepAwake), sleeper: Box::new(linux::Dpms), events }
+    }
+    #[cfg(windows)]
+    {
+        windows::watch_display(tx);
+        Power { inhibitor: Box::new(windows::KeepAwake), sleeper: Box::new(windows::MonitorPower), events }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = tx;
+        Power { inhibitor: Box::new(macos::Caffeinate), sleeper: Box::new(macos::DisplaySleepNow), events }
+    }
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+    {
+        let _ = tx;
+        Power { inhibitor: Box::new(Unsupported), sleeper: Box::new(Unsupported), events }
+    }
 }
 
 /// The probe and locker for this OS. On Linux this also starts watching
@@ -74,6 +139,18 @@ impl FocusProbe for Unknown {
 #[allow(dead_code)] // only on OSes without a locker
 struct Unsupported;
 
+impl Inhibitor for Unsupported {
+    fn inhibit(&mut self, _: &str) -> anyhow::Result<Box<dyn Send>> {
+        anyhow::bail!("keeping the screen awake is not supported on this system")
+    }
+}
+
+impl DisplaySleeper for Unsupported {
+    fn sleep_display(&mut self) -> anyhow::Result<()> {
+        anyhow::bail!("putting the display to sleep is not supported on this system")
+    }
+}
+
 impl ScreenLocker for Unsupported {
     fn lock(&mut self) -> anyhow::Result<()> {
         anyhow::bail!("locking the screen is not supported on this system")
@@ -108,4 +185,66 @@ impl ScreenLocker for FakeLocker {
         let _ = self.events.send(Event::ScreenLocked(true));
         Ok(())
     }
+}
+
+/// For tests and `--backend null`: counts inhibits, and the ones still held.
+pub struct FakeInhibitor {
+    pub held: Arc<AtomicUsize>,
+    pub total: Arc<AtomicUsize>,
+}
+
+struct FakeHold(Arc<AtomicUsize>);
+
+impl Drop for FakeHold {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl Inhibitor for FakeInhibitor {
+    fn inhibit(&mut self, reason: &str) -> anyhow::Result<Box<dyn Send>> {
+        tracing::info!(reason, "keeping the screen awake (null backend: nothing is inhibited)");
+        self.total.fetch_add(1, Ordering::SeqCst);
+        self.held.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(FakeHold(self.held.clone())))
+    }
+}
+
+/// For tests and `--backend null`: counts display sleeps and reports the
+/// display asleep at once, as an OS would a moment later. Nothing sleeps.
+pub struct FakeSleeper {
+    pub events: mpsc::UnboundedSender<PowerEvent>,
+    pub count: Arc<AtomicUsize>,
+}
+
+impl DisplaySleeper for FakeSleeper {
+    fn sleep_display(&mut self) -> anyhow::Result<()> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        tracing::info!("display sleep requested (null backend: nothing sleeps)");
+        let _ = self.events.send(PowerEvent::DisplayAsleep(true));
+        Ok(())
+    }
+}
+
+/// Test-side ends of [`fake_power`].
+pub struct PowerHandles {
+    /// Report the display going to sleep or waking.
+    pub events: mpsc::UnboundedSender<PowerEvent>,
+    /// Inhibits held now, and in total.
+    pub held: Arc<AtomicUsize>,
+    pub inhibits: Arc<AtomicUsize>,
+    /// How often the display was asked to sleep.
+    pub sleeps: Arc<AtomicUsize>,
+}
+
+/// Power functions that do nothing but count, for tests and `--backend null`.
+pub fn fake_power() -> (Power, PowerHandles) {
+    let (tx, events) = mpsc::unbounded_channel();
+    let (held, inhibits, sleeps) = Default::default();
+    let power = Power {
+        inhibitor: Box::new(FakeInhibitor { held: Arc::clone(&held), total: Arc::clone(&inhibits) }),
+        sleeper: Box::new(FakeSleeper { events: tx.clone(), count: Arc::clone(&sleeps) }),
+        events,
+    };
+    (power, PowerHandles { events: tx, held, inhibits, sleeps })
 }

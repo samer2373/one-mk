@@ -20,7 +20,7 @@ mod windows;
 mod win_logic;
 
 pub use null::NullHandles;
-pub use system::{FocusProbe, ScreenLocker};
+pub use system::{DisplaySleeper, FocusProbe, Inhibitor, Power, PowerEvent, PowerHandles, ScreenLocker, fake_power};
 #[cfg(target_os = "linux")]
 pub use portal::{PortalProbe, probe_portals};
 
@@ -172,6 +172,15 @@ async fn native(state_dir: PathBuf) -> Result<Backend> {
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 async fn native(_state_dir: PathBuf) -> Result<Backend> {
     anyhow::bail!("no native input backend for this OS")
+}
+
+/// The power functions for a backend of `kind`: the OS's, or fakes that
+/// only count (and whose events never come).
+pub fn power(kind: Kind) -> Power {
+    match kind {
+        Kind::Native => system::native_power(),
+        Kind::Null => fake_power().0,
+    }
 }
 
 /// A backend for tests: the returned handles feed fake capture events in

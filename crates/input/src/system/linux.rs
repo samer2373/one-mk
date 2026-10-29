@@ -1,4 +1,5 @@
-//! Linux: logind for the screen lock, X11 for the focused window.
+//! Linux: logind for the screen lock, X11 for the focused window, and the
+//! D-Bus session and system buses for the screensaver and display power.
 //!
 //! GNOME and KDE on Wayland have no API for "which window has the focus"
 //! (on purpose), so only X11 windows can be seen: on an X11 session all of
@@ -7,7 +8,7 @@
 //! XWayland reports an internal window instead, and the probe says
 //! "unknown", so the fullscreen guard lets the pointer cross.
 
-use super::{FocusProbe, ScreenLocker};
+use super::{DisplaySleeper, FocusProbe, Inhibitor, PowerEvent, ScreenLocker};
 use crate::Event;
 use ashpd::zbus;
 use futures::StreamExt;
@@ -80,6 +81,141 @@ impl ScreenLocker for Logind {
         });
         Ok(())
     }
+}
+
+// ------------------------------------------------------------------ power
+
+const SCREENSAVER: &str = "org.freedesktop.ScreenSaver";
+const MUTTER_DISPLAY: &str = "org.gnome.Mutter.DisplayConfig";
+const MUTTER_PATH: &str = "/org/gnome/Mutter/DisplayConfig";
+/// `PowerSaveMode`: 0 is on, 1 standby, 2 suspend, 3 off.
+const POWER_SAVE_OFF: i32 = 3;
+
+/// Keeps the screen awake with `org.freedesktop.ScreenSaver.Inhibit`
+/// (GNOME, KDE and others implement it; the desktop forgets the inhibit if
+/// this process dies) and a logind `idle` inhibitor (which keeps logind's
+/// own idle action, such as suspend, from running). Either may be missing;
+/// only both failing is an error. The calls run on a task that holds both
+/// until the guard is dropped.
+pub(super) struct KeepAwake;
+
+impl Inhibitor for KeepAwake {
+    fn inhibit(&mut self, reason: &str) -> anyhow::Result<Box<dyn Send>> {
+        let rt = tokio::runtime::Handle::try_current()?;
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let reason = reason.to_owned();
+        rt.spawn(async move {
+            if let Err(e) = hold(&reason, released).await {
+                tracing::warn!("could not keep the screen awake: {e}");
+            }
+        });
+        Ok(Box::new(release))
+    }
+}
+
+/// Holds the inhibitors until `released` completes (its sender dropped).
+async fn hold(reason: &str, released: tokio::sync::oneshot::Receiver<()>) -> zbus::Result<()> {
+    let saver = async {
+        let conn = zbus::Connection::session().await?;
+        let proxy = zbus::Proxy::new(&conn, SCREENSAVER, "/org/freedesktop/ScreenSaver", SCREENSAVER).await?;
+        let cookie: u32 = proxy.call("Inhibit", &("one-mk", reason)).await?;
+        zbus::Result::Ok((proxy, cookie))
+    }
+    .await;
+    let idle = async {
+        let conn = zbus::Connection::system().await?;
+        let manager = zbus::Proxy::new(&conn, LOGIN1, "/org/freedesktop/login1", "org.freedesktop.login1.Manager").await?;
+        let fd: zbus::zvariant::OwnedFd = manager.call("Inhibit", &("idle", "one-mk", reason, "block")).await?;
+        zbus::Result::Ok(fd)
+    }
+    .await;
+    if let (Err(a), Err(b)) = (&saver, &idle) {
+        tracing::warn!("no screensaver inhibitor ({a}) and no logind one ({b})");
+    }
+    let _ = released.await;
+    if let Ok((proxy, cookie)) = saver {
+        let _ = proxy.call::<_, _, ()>("UnInhibit", &(cookie,)).await;
+    }
+    drop(idle); // closing the file descriptor releases logind's inhibitor
+    Ok(())
+}
+
+/// Puts the display off: GNOME's Mutter through `PowerSaveMode`, else (an
+/// X11 session) `xset dpms force off`.
+pub(super) struct Dpms;
+
+impl DisplaySleeper for Dpms {
+    fn sleep_display(&mut self) -> anyhow::Result<()> {
+        let rt = tokio::runtime::Handle::try_current()?;
+        rt.spawn(async {
+            let mutter = async {
+                let conn = zbus::Connection::session().await?;
+                let proxy = zbus::Proxy::new(&conn, MUTTER_DISPLAY, MUTTER_PATH, MUTTER_DISPLAY).await?;
+                proxy.set_property("PowerSaveMode", POWER_SAVE_OFF).await.map_err(zbus::Error::from)
+            };
+            if let Err(e) = mutter.await {
+                tracing::debug!("Mutter would not turn the display off ({e}); trying xset");
+                let xset = tokio::process::Command::new("xset")
+                    .args(["dpms", "force", "off"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .status()
+                    .await;
+                if !xset.is_ok_and(|s| s.success()) {
+                    tracing::warn!("could not turn the display off: no Mutter, and `xset dpms force off` failed");
+                }
+            }
+        });
+        Ok(())
+    }
+}
+
+/// Reports the display sleeping (GNOME's `PowerSaveMode` leaving 0) and the
+/// computer suspending or resuming (logind's `PrepareForSleep`) as
+/// `PowerEvent::DisplayAsleep`. Event-driven, like [`watch_lock`].
+pub(super) fn watch_display(events: mpsc::UnboundedSender<PowerEvent>) {
+    let tx = events.clone();
+    tokio::spawn(async move {
+        if let Err(e) = watch_power_save(&tx).await {
+            tracing::debug!("not watching the display power state: {e}");
+        }
+    });
+    tokio::spawn(async move {
+        if let Err(e) = watch_suspend(&events).await {
+            tracing::debug!("not watching for suspend: {e}");
+        }
+    });
+}
+
+async fn watch_power_save(events: &mpsc::UnboundedSender<PowerEvent>) -> zbus::Result<()> {
+    let conn = zbus::Connection::session().await?;
+    let proxy = zbus::Proxy::new(&conn, MUTTER_DISPLAY, MUTTER_PATH, MUTTER_DISPLAY).await?;
+    let mut changes = proxy.receive_property_changed::<i32>("PowerSaveMode").await;
+    let mut last = None;
+    while let Some(change) = changes.next().await {
+        let Ok(mode) = change.get().await else { continue };
+        // -1 is "not supported", 0 on; the first value is the state, not a change.
+        let asleep = mode > 0;
+        if last.replace(asleep).is_some_and(|was| was != asleep) && events.send(PowerEvent::DisplayAsleep(asleep)).is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn watch_suspend(events: &mpsc::UnboundedSender<PowerEvent>) -> zbus::Result<()> {
+    let conn = zbus::Connection::system().await?;
+    let manager = zbus::Proxy::new(&conn, LOGIN1, "/org/freedesktop/login1", "org.freedesktop.login1.Manager").await?;
+    let mut signals = manager.receive_signal("PrepareForSleep").await?;
+    while let Some(msg) = signals.next().await {
+        let Ok(suspending) = msg.body().deserialize::<bool>() else { continue };
+        if events.send(PowerEvent::DisplayAsleep(suspending)).is_err() {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// How long the daemon waits for the focused window: a probe is two round
@@ -313,5 +449,65 @@ mod tests {
         }
         let _ = p.focus();
         assert!(std::env::var_os("DISPLAY").is_none() || p.worker.is_some());
+    }
+
+    /// Reads the session manager's idea of whether idle is inhibited: true
+    /// while something (anything) holds an idle inhibitor.
+    async fn idle_inhibited() -> Option<bool> {
+        let conn = zbus::Connection::session().await.ok()?;
+        let sm = zbus::Proxy::new(&conn, "org.gnome.SessionManager", "/org/gnome/SessionManager", "org.gnome.SessionManager")
+            .await
+            .ok()?;
+        sm.call("IsInhibited", &(8u32,)).await.ok()
+    }
+
+    /// Against the real session bus, if GNOME's session manager answers:
+    /// inhibiting makes `IsInhibited(idle)` true, dropping the guard makes
+    /// it false again. Nothing is blanked or locked.
+    #[tokio::test]
+    async fn inhibit_is_seen_by_the_session_manager_and_released() {
+        let Some(before) = idle_inhibited().await else {
+            eprintln!("no GNOME session manager on the session bus: skipped");
+            return;
+        };
+        if before {
+            eprintln!("something else already inhibits idle: skipped");
+            return;
+        }
+        let guard = KeepAwake.inhibit("one-mk test").unwrap();
+        let mut seen = false;
+        for _ in 0..100 {
+            if idle_inhibited().await == Some(true) {
+                seen = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(seen, "the inhibit never showed up");
+        drop(guard);
+        let mut released = false;
+        for _ in 0..100 {
+            if idle_inhibited().await == Some(false) {
+                released = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(released, "the inhibit was not released");
+    }
+
+    /// Reads (never writes) Mutter's `PowerSaveMode`: the display is on
+    /// while tests run.
+    #[tokio::test]
+    async fn display_power_state_is_readable() {
+        let read = async {
+            let conn = zbus::Connection::session().await?;
+            let proxy = zbus::Proxy::new(&conn, MUTTER_DISPLAY, MUTTER_PATH, MUTTER_DISPLAY).await?;
+            proxy.get_property::<i32>("PowerSaveMode").await
+        };
+        match read.await {
+            Ok(mode) => assert_eq!(mode, 0, "the display should be on while tests run"),
+            Err(e) => eprintln!("no Mutter display config: skipped ({e})"),
+        }
     }
 }

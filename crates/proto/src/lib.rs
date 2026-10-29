@@ -10,6 +10,7 @@ mod keys;
 mod lock;
 pub mod mediakeys;
 mod motion;
+mod sleep;
 mod transfer;
 
 pub use codec::{Control, Datagram, DecodeError, MAX_SCREENS, StreamKind, caps, os};
@@ -21,6 +22,7 @@ pub use geometry::{Desktop, Pos, Rect, Side};
 pub use keys::{HeldKeys, swap_ctrl_meta};
 pub use lock::{CAUSE_WINDOW, LockSync, OnRemote};
 pub use motion::{MotionReceiver, Received, RelReceived, RemoteCursor, Step};
+pub use sleep::{OnRemoteSleep, SleepSync};
 pub use transfer::{Batch, ClipAck, ClipFormat, ClipHeader, FileMsg};
 
 /// Bumped on any incompatible wire change; peers refuse mismatched versions.

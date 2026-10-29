@@ -135,8 +135,11 @@ pub mod caps {
     /// Answers [`Control::WatchFocus`](crate::Control::WatchFocus) with
     /// [`Control::Focus`](crate::Control::Focus).
     pub const FOCUS: u32 = 4;
+    /// Understands [`Control::Inhibit`](crate::Control::Inhibit) and
+    /// [`Control::Sleep`](crate::Control::Sleep).
+    pub const POWER: u32 = 8;
     /// What this build supports.
-    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS;
+    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER;
 }
 
 /// Reliable, ordered messages on the control stream.
@@ -197,6 +200,14 @@ pub enum Control {
     /// is a trailing byte: a frame without it, from a build before it,
     /// means on; such a build reads an "off" as "on", which it already is.)
     WatchFocus { epoch: u16, on: bool },
+    /// From the controller, during visit `epoch`: keep the screensaver,
+    /// display blanking and idle sleep off while it lasts (`on`), or stop.
+    /// The receiver also lets go when the visit ends or the link drops, so
+    /// a controller that vanishes never leaves the screen awake.
+    Inhibit { epoch: u16, on: bool },
+    /// Put your display to sleep (sleep sync). `id` names the event, so a
+    /// computer that passes it on never gets it back as a new one.
+    Sleep { id: u64 },
 }
 
 impl Control {
@@ -292,6 +303,15 @@ impl Control {
                 w.u16(*epoch);
                 w.u8(u8::from(*on));
             }
+            Control::Inhibit { epoch, on } => {
+                w.u8(19);
+                w.u16(*epoch);
+                w.u8(u8::from(*on));
+            }
+            Control::Sleep { id } => {
+                w.u8(20);
+                w.u64(*id);
+            }
         }
     }
 
@@ -337,6 +357,8 @@ impl Control {
             16 => Control::Lock { id: r.u64()?, all: r.flag_or(true)? },
             17 => Control::Focus { epoch: r.u16()?, fullscreen: r.u8()? != 0 },
             18 => Control::WatchFocus { epoch: r.u16()?, on: r.flag_or(true)? },
+            19 => Control::Inhibit { epoch: r.u16()?, on: r.u8()? != 0 },
+            20 => Control::Sleep { id: r.u64()? },
             t => return Err(DecodeError::UnknownTag(t)),
         };
         Ok(c)
@@ -574,6 +596,9 @@ mod tests {
             Control::Focus { epoch: 4, fullscreen: true },
             Control::WatchFocus { epoch: 5, on: true },
             Control::WatchFocus { epoch: 5, on: false },
+            Control::Inhibit { epoch: 6, on: true },
+            Control::Inhibit { epoch: 6, on: false },
+            Control::Sleep { id: u64::MAX },
         ];
         let mut buf = Vec::new();
         for m in &msgs {
@@ -616,8 +641,10 @@ mod tests {
             Control::Lock { id: 0, all: true },
             Control::Focus { epoch: 0, fullscreen: false },
             Control::WatchFocus { epoch: 0, on: true },
+            Control::Inhibit { epoch: 0, on: true },
+            Control::Sleep { id: 0 },
         ];
-        assert_eq!(new.iter().map(tag).collect::<Vec<_>>(), [14, 15, 16, 17, 18]);
+        assert_eq!(new.iter().map(tag).collect::<Vec<_>>(), [14, 15, 16, 17, 18, 19, 20]);
         // Flags added later at the end of `Lock` and `WatchFocus`: frames
         // from builds before them decode as they meant (lock-all, watch on),
         // and those builds read the new frames' fields they know, ignoring

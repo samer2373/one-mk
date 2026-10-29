@@ -16,14 +16,14 @@ use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
 use one_mk_ctl::client::SwitchTo;
-use one_mk_input::{Backend, CaptureCmd, Event, FocusProbe, Inject, ScreenLocker};
+use one_mk_input::{Backend, CaptureCmd, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, PowerEvent, ScreenLocker};
 use one_mk_net::{
     ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, Swap, TrustStore, read_stream_kind,
 };
 use one_mk_proto::{
     Approach, Control, Datagram, Desktop, HeldKeys, LockSync, Mods, MotionReceiver, Next, OnRemote, Pos, Received, Rect,
-    Refusal, RelReceived, RemoteCursor, Side, Start, Step, StreamKind, caps, cycle_next, fullscreen_blocks, os,
-    sanitize_name, swap_ctrl_meta,
+    OnRemoteSleep, Refusal, RelReceived, RemoteCursor, Side, SleepSync, Start, Step, StreamKind, caps, cycle_next,
+    fullscreen_blocks, os, sanitize_name, swap_ctrl_meta,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -87,6 +87,9 @@ pub struct Options {
     pub downloads: PathBuf,
     /// Start with the pointer locked to this computer (`one-mk lock-pointer`).
     pub start_locked: bool,
+    /// The OS's power functions (screensaver, display sleep); `None` for
+    /// those of `backend`'s kind. Tests pass fakes they can watch.
+    pub power: Option<one_mk_input::Power>,
 }
 
 /// What peers can use besides input: clipboard and file streams.
@@ -198,6 +201,8 @@ struct Remote {
     peer_fullscreen: bool,
     /// We asked the peer to report that (`WatchFocus`).
     watching_focus: bool,
+    /// We asked the peer to keep its screen awake (`Inhibit`).
+    inhibit_sent: bool,
 }
 
 impl Remote {
@@ -233,6 +238,8 @@ struct Owner {
     watch_focus: bool,
     /// Whether a fullscreen window has the focus, as last told to the owner.
     focus_sent: Option<bool>,
+    /// The owner asked to keep this screen awake while it controls it.
+    inhibit: bool,
     /// Modifier keys pressed during this visit; released once more after
     /// the screen unlocks (see `App::on_screen_locked`).
     mods_pressed: Mods,
@@ -255,6 +262,7 @@ impl Owner {
             relative: false,
             watch_focus: false,
             focus_sent: None,
+            inhibit: false,
             mods_pressed: Mods::default(),
         }
     }
@@ -392,6 +400,11 @@ struct App {
     unlock_release: Mods,
     /// Runs `[hooks]` when the pointer arrives or leaves, peers come or go.
     hooks: crate::hooks::Engine,
+    inhibitor: Box<dyn Inhibitor>,
+    sleeper: Box<dyn DisplaySleeper>,
+    /// Keeps this screen awake while a peer that asked controls it.
+    awake: crate::power::Awake,
+    sleep_sync: SleepSync,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -432,6 +445,9 @@ pub async fn serve(
         tracing::warn!("settings.toml: {e:#}; using the defaults");
     }
 
+    let mut power = opts.power.unwrap_or_else(|| one_mk_input::power(opts.backend));
+    let mut power_events = std::mem::replace(&mut power.events, mpsc::unbounded_channel().1);
+    let mut power_open = true;
     let (tx, mut rx) = mpsc::unbounded_channel();
     let (link_tx, mut link_rx) = mpsc::unbounded_channel();
     let (local_screens, screens_rx) = watch::channel(Vec::new());
@@ -485,6 +501,10 @@ pub async fn serve(
         lock_sync: LockSync::default(),
         unlock_release: Mods::default(),
         hooks: Default::default(),
+        inhibitor: power.inhibitor,
+        sleeper: power.sleeper,
+        awake: Default::default(),
+        sleep_sync: SleepSync::default(),
     };
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
     if app.locked {
@@ -518,12 +538,17 @@ pub async fn serve(
             },
             Some((fp, id, ev)) = link_rx.recv() => app.on_link(fp, id, ev),
             _ = tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => app.on_timer(),
+            ev = power_events.recv(), if power_open => match ev {
+                Some(ev) => app.on_power(ev),
+                None => power_open = false,
+            },
             Some(ev) = rx.recv() => app.on_app(ev, &screens_rx),
             Some((req, reply)) = ipc.recv() => app.on_request(req, reply),
             _ = dial_tick.tick() => app.dial_missing(&screens_rx),
             _ = &mut shutdown => break,
         }
         app.sync_hooks();
+        app.sync_power();
     }
 
     if let Some(r) = app.remote.as_ref() {
@@ -995,6 +1020,7 @@ impl App {
             resends: 0,
             peer_fullscreen: false,
             watching_focus: false,
+            inhibit_sent: false,
         });
         self.apply_pointer_mode(); // gaming `auto` starts watching
         self.update_sides();
@@ -1385,6 +1411,12 @@ impl App {
                 }
             }
             Control::Lock { id: lock, all } => self.on_peer_lock(fp, lock, all),
+            Control::Sleep { id: sleep } => self.on_peer_sleep(fp, sleep),
+            Control::Inhibit { epoch, on } => {
+                if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
+                    o.inhibit = on;
+                }
+            }
             Control::WatchFocus { epoch, on } => {
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
                     o.watch_focus = on;
@@ -1444,6 +1476,67 @@ impl App {
             self.go_home(t);
         }
         self.update_sides();
+    }
+
+    /// Keeps the screen awake while a peer that asked controls this
+    /// computer, and asks the peer we control to do so for us (`[power]`).
+    fn sync_power(&mut self) {
+        let block = self.settings.power.block_screensaver_on_peers;
+        if let Some(r) = self.remote.as_mut() {
+            let caps = self.peers.get(&r.peer).map_or(0, |p| p.caps);
+            if let Some(on) = crate::power::inhibit_request(block, r.acked, caps, r.inhibit_sent) {
+                r.inhibit_sent = on;
+                if let Some(p) = self.peers.get(&r.peer) {
+                    p.ctl.send(Control::Inhibit { epoch: r.cursor.epoch(), on });
+                }
+            }
+        }
+        let want = self.owner.as_ref().is_some_and(|o| o.inhibit);
+        let inhibitor = &mut self.inhibitor;
+        self.awake.set(want, || inhibitor.inhibit("A computer is controlling this one (one-mk)"));
+    }
+
+    /// The OS says this display went to sleep (or the computer is
+    /// suspending), or woke.
+    fn on_power(&mut self, ev: PowerEvent) {
+        match ev {
+            PowerEvent::DisplayAsleep(true) => {
+                let fresh = link::random_u64();
+                let sync = self.settings.power.sleep_sync;
+                if let Some(id) = self.sleep_sync.on_local_asleep(sync, fresh, std::time::Instant::now()) {
+                    tracing::debug!("display asleep; asking the connected computers to sleep too (sleep sync)");
+                    self.send_sleep(id, None);
+                }
+            }
+            PowerEvent::DisplayAsleep(false) => self.sleep_sync.on_local_awake(),
+        }
+    }
+
+    /// Peer `fp` asks us to sleep (its sleep sync): followed only with sleep
+    /// sync on here.
+    fn on_peer_sleep(&mut self, fp: Fingerprint, id: u64) {
+        match self.sleep_sync.on_remote(id, self.settings.power.sleep_sync, std::time::Instant::now()) {
+            OnRemoteSleep::Ignore => {}
+            OnRemoteSleep::Sleep { sleep_here } => {
+                self.send_sleep(id, Some(fp));
+                if sleep_here {
+                    let name = self.peers.get(&fp).map_or("", |p| &p.name);
+                    println!("{name}'s display went to sleep; putting this one to sleep too (sleep sync).");
+                    if let Err(e) = self.sleeper.sleep_display() {
+                        tracing::warn!("{e:#}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// `Sleep { id }` to every peer that understands it, except `except`.
+    fn send_sleep(&self, id: u64, except: Option<Fingerprint>) {
+        for (fp, p) in &self.peers {
+            if Some(*fp) != except && p.caps & caps::POWER != 0 {
+                p.ctl.send(Control::Sleep { id });
+            }
+        }
     }
 
     /// Lets `[hooks]` see what changed: the pointer left or came back, a
@@ -1944,6 +2037,7 @@ mod tests {
             clipboard: None,
             downloads: std::env::temp_dir().join("one-mk-test-unused-downloads"),
             start_locked: false,
+            power: None,
         };
         let a = tokio::spawn(serve(da.clone(), opts(pa, vec![]), ba, stop(stop_rx.clone())));
         let b = tokio::spawn(serve(db.clone(), opts(pb, vec![SocketAddr::from(([127, 0, 0, 1], pa))]), bb, stop(stop_rx)));
@@ -2001,6 +2095,9 @@ mod tests {
         db: PathBuf,
         ha: NullHandles,
         hb: NullHandles,
+        /// A's and B's fake power functions.
+        powa: one_mk_input::PowerHandles,
+        powb: one_mk_input::PowerHandles,
         pb: u16,
         /// Fingerprints of A and B.
         fa: String,
@@ -2040,7 +2137,8 @@ mod tests {
                 let _ = rx.wait_for(|s| *s).await;
             };
             let (ca, cb) = clips.map_or((None, None), |(a, b)| (Some(a), Some(b)));
-            let opts = |port, connect, clipboard, dir: &std::path::Path| Options {
+            let ((power_a, powa), (power_b, powb)) = (one_mk_input::fake_power(), one_mk_input::fake_power());
+            let opts = |port, connect, clipboard, dir: &std::path::Path, power| Options {
                 backend: one_mk_input::Kind::Null,
                 port,
                 connect,
@@ -2048,11 +2146,12 @@ mod tests {
                 clipboard,
                 downloads: dir.join("downloads"),
                 start_locked: false,
+                power: Some(power),
             };
-            let a = tokio::spawn(serve(da.clone(), opts(pa, vec![], ca, &da), ba, wait(stop_rx.clone())));
+            let a = tokio::spawn(serve(da.clone(), opts(pa, vec![], ca, &da, power_a), ba, wait(stop_rx.clone())));
             let to_a = vec![SocketAddr::from(([127, 0, 0, 1], pa))];
-            let b = tokio::spawn(serve(db.clone(), opts(pb, to_a, cb, &db), bb, wait(stop_rx)));
-            Duo { da, db, ha, hb, pb, fa: ia.fingerprint.to_string(), fb: ib.fingerprint.to_string(), stop, tasks: vec![a, b] }
+            let b = tokio::spawn(serve(db.clone(), opts(pb, to_a, cb, &db, power_b), bb, wait(stop_rx)));
+            Duo { da, db, ha, hb, powa, powb, pb, fa: ia.fingerprint.to_string(), fb: ib.fingerprint.to_string(), stop, tasks: vec![a, b] }
         }
 
         /// Waits until each side has armed the edge facing the other.
@@ -2750,6 +2849,83 @@ mod tests {
         tokio::time::sleep(crate::hooks::MIN_INTERVAL).await;
         duo.leave_b().await;
         eventually("the hooks of the way back", || lines(&la) == ["leave", "enter"] && lines(&lb) == ["enter", "leave"]).await;
+        duo.stop().await;
+    }
+
+    fn held(p: &one_mk_input::PowerHandles) -> usize {
+        p.held.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn sleeps(p: &one_mk_input::PowerHandles) -> usize {
+        p.sleeps.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// `block_screensaver_on_peers`: B keeps its screen awake exactly while
+    /// A controls it, if A's setting is on; never otherwise, and not after
+    /// A's setting goes off, the pointer comes back, or A vanishes.
+    #[tokio::test]
+    async fn the_screen_is_kept_awake_only_while_controlled() {
+        let mut duo = Duo::start("awake", None).await;
+        // Off by default: a visit changes nothing.
+        duo.enter_b().await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(duo.powb.inhibits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        duo.leave_b().await;
+
+        set(&duo.da, |s| s.power.block_screensaver_on_peers = true).await;
+        duo.enter_b().await;
+        eventually("B to keep its screen awake", || held(&duo.powb) == 1).await;
+        assert_eq!(held(&duo.powa), 0, "the controller's own screen is not held");
+        duo.leave_b().await;
+        eventually("B to let go when the pointer came back", || held(&duo.powb) == 0).await;
+
+        // Turned off in the middle of a visit.
+        duo.enter_b().await;
+        eventually("B to hold again", || held(&duo.powb) == 1).await;
+        set(&duo.da, |s| s.power.block_screensaver_on_peers = false).await;
+        eventually("B to let go when the setting went off", || held(&duo.powb) == 0).await;
+        set(&duo.da, |s| s.power.block_screensaver_on_peers = true).await;
+        eventually("B to hold once more", || held(&duo.powb) == 1).await;
+
+        // The controller vanishes: no word, no Leave. The lease ends the visit.
+        let a = duo.tasks.remove(0);
+        a.abort();
+        let _ = a.await;
+        eventually("B to let go of a controller that vanished", || held(&duo.powb) == 0).await;
+        duo.stop().await;
+    }
+
+    /// `sleep_sync`: B's display sleeps when A's did, if both have it on;
+    /// not with it off, and A is never asked back (nor B's own sleep
+    /// reported by the OS announced again).
+    #[tokio::test]
+    async fn displays_sleep_together_without_echo() {
+        use one_mk_input::PowerEvent;
+        let duo = Duo::start("sleep", None).await;
+        // Off everywhere by default.
+        duo.powa.events.send(PowerEvent::DisplayAsleep(true)).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(sleeps(&duo.powb), 0);
+        duo.powa.events.send(PowerEvent::DisplayAsleep(false)).unwrap();
+
+        set(&duo.da, |s| s.power.sleep_sync = true).await;
+        set(&duo.db, |s| s.power.sleep_sync = true).await;
+        duo.powa.events.send(PowerEvent::DisplayAsleep(true)).unwrap();
+        eventually("B to sleep", || sleeps(&duo.powb) == 1).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!((sleeps(&duo.powa), sleeps(&duo.powb)), (0, 1), "no echo, and B slept once");
+
+        // B off: it neither follows nor announces.
+        duo.powa.events.send(PowerEvent::DisplayAsleep(false)).unwrap();
+        duo.powb.events.send(PowerEvent::DisplayAsleep(false)).unwrap();
+        set(&duo.db, |s| s.power.sleep_sync = false).await;
+        duo.powa.events.send(PowerEvent::DisplayAsleep(true)).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(sleeps(&duo.powb), 1);
+        // And B's own display sleeping by itself is not announced to A.
+        duo.powb.events.send(PowerEvent::DisplayAsleep(true)).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(sleeps(&duo.powa), 0);
         duo.stop().await;
     }
 

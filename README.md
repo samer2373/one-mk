@@ -58,6 +58,8 @@ soon as they connect.
 | `one-mk gaming on\|off\|auto` | Raw mouse movement for games on another computer |
 | `one-mk lock-all` | Lock this computer's screen and every connected one's |
 | `one-mk lock-sync on\|off` | Locking any computer locks the others (those with lock sync on) |
+| `one-mk hooks [--on-enter CMD] [--on-leave CMD] [--on-peer-connect CMD] [--on-peer-disconnect CMD] [--off]` | Run a command when the pointer arrives or leaves, or a computer connects or disconnects (see below) |
+| `one-mk power [--block-screensaver on\|off] [--sleep-sync on\|off]` | Keep other computers awake while you control them; sleep displays together (see below) |
 | `one-mk install` / `uninstall` | Start automatically at login / stop doing that |
 | `one-mk pair` | Pair with another computer (run on both) |
 | `one-mk layout <pc> <left\|right\|top\|bottom>` | Say where a paired computer sits |
@@ -183,6 +185,62 @@ logind on Linux, `LockWorkStation` on Windows and the login window (or
 display sleep) on macOS; noticing a lock uses logind's lock hint on Linux
 and the system's lock notifications on Windows and macOS.
 
+**Media keys.** Play/pause, stop, next and previous track, volume and mute,
+brightness (and keyboard backlight), eject, and the launch and browser keys
+cross like any other key, between any two systems that have them. They are
+carried as Linux key codes and translated on arrival: Windows types them by
+virtual key (`VK_MEDIA_*`, `VK_VOLUME_*`, ...) and macOS, where media keys are
+`NX_SYSDEFINED` events rather than key events, captures and posts those. Windows
+has no brightness, fast-forward or eject keys and macOS has no launch or browser
+keys, so those only travel between the systems that have them (a Mac's
+fast-forward and rewind skip tracks on Windows). Holding volume or brightness
+repeats; play/pause and the other once-per-press keys never do, and a media key
+is released like any other when the pointer comes back or the link drops. The
+mapping table, with every key's Linux, Windows and macOS code, is in
+`crates/proto/src/mediakeys.rs`. The macOS and Windows sides compile and are
+unit-tested but have not been run on real hardware.
+
+**Run a command when the pointer moves.** `one-mk hooks --on-enter 'notify-send
+one-mk here' --on-leave '/usr/local/bin/lights off'` (or `[hooks]` in
+`settings.toml`) runs a command when the pointer arrives on this computer
+(`on_enter`: a peer took control, or your own pointer came back) and when it
+leaves (`on_leave`), and `on_peer_connect` / `on_peer_disconnect` when a
+computer connects or goes away. The command gets `ONE_MK_EVENT` (`enter`,
+`leave`, `peer_connect`, `peer_disconnect`), `ONE_MK_PEER` (the other
+computer's name), `ONE_MK_PEER_ID` and `ONE_MK_SIDE` (which side of this
+screen the other computer is on). In the file a command is an array
+(`on_enter = ["/usr/bin/notify-send", "one-mk", "hello"]`) or a string that is
+split into words with shell-style quotes, **without a shell**: nothing is
+expanded (`$HOME`, `~`, `*`, pipes and redirections are ordinary characters).
+`one-mk hooks --shell on` runs strings through `sh -c` (`cmd /C` on Windows)
+instead. A command is killed after 5 seconds (`--timeout SECS`, at most 60),
+runs on its own task so one-mk never waits for it, runs at most once per event
+per 500 ms (more are dropped) and at most 8 at a time. **Hooks run with your
+rights, from `settings.toml`:** anyone who can write that file can run programs
+as you. one-mk warns when it is writable by its group or everyone (and
+`one-mk hooks` makes it private); keep it that way.
+
+**Screensaver and sleep.** `one-mk power --block-screensaver on`: while this
+computer controls another one, that one's screensaver, display blanking and idle
+sleep stay off, and it lets go the moment control ends (the pointer comes back,
+its own input takes over, the connection drops). `one-mk power --sleep-sync on`
+(off by default; set it on every computer that should join in): when this
+computer's display goes to sleep, or it suspends, the connected computers with
+sleep sync on put their displays to sleep too. Each sleep is passed on once and
+never comes back. Waking isn't synced: any input wakes a display, and the
+pointer arriving on a computer is input. Both computers need a build that has these
+features (older peers are not asked). Limits: on Linux, keeping awake uses
+`org.freedesktop.ScreenSaver` and a logind idle inhibitor (GNOME and KDE
+answer), turning a display off uses GNOME's Mutter (else `xset dpms force off`
+on X11), and noticing a display sleep works on GNOME (Mutter's `PowerSaveMode`)
+plus logind's suspend signal anywhere; a suspend is announced only as fast as
+the network lets it, before the machine is down. On Windows it is
+`SetThreadExecutionState`, `SC_MONITORPOWER` and the console display state
+notification; on macOS a `caffeinate` child and `pmset displaysleepnow`, and a
+Mac's own display sleep is not noticed (it can follow others, not lead). Only
+Linux has been tried against a real session; Windows and macOS compile and are
+unit-tested only.
+
 **Taking a computer back.** When someone else's pointer is on your computer,
 you can take it back:
 
@@ -294,6 +352,9 @@ the system wakes it, and the cost is a few MB of memory.
   settings folder.
 - Settings and the private key live in your user's config folder
   (`~/.config/one-mk` on Linux).
+- Hooks (`one-mk hooks`) run commands with your rights from `settings.toml`;
+  keep that file writable by you only (one-mk warns if it isn't), and prefer
+  the array form, which never goes near a shell.
 
 ## Measure it
 

@@ -34,6 +34,8 @@ pub struct Settings {
     pub lock_sync: bool,
     /// Commands to run when the pointer arrives or leaves (see `hooks.rs`).
     pub hooks: crate::hooks::Hooks,
+    /// Screensaver and sleep sync (see `power.rs`).
+    pub power: crate::power::PowerSettings,
 }
 
 impl Default for Settings {
@@ -45,6 +47,7 @@ impl Default for Settings {
             gaming: Gaming::default(),
             lock_sync: false,
             hooks: crate::hooks::Hooks::default(),
+            power: crate::power::PowerSettings::default(),
         }
     }
 }

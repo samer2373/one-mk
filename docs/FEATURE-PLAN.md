@@ -82,9 +82,9 @@ Known gaps:
 | 2C | Windows service for the login screen and UAC | none | Service in SYSTEM plus a helper in the user session. Untestable here. | todo |
 | 2D | Layout editor: several monitors per computer, unaligned edges, push-toward-it learning | 1C edge work | Extends `crates/proto/src/geometry.rs` and the window. | todo |
 | 2E | Location profiles: layout switches by Wi-Fi network | 2D | | todo |
-| 2F | Screensaver and sleep sync; block screensaver on peers | 1C lock sync | | todo |
-| 2G | Multimedia keys across computers | none | Per-OS key mapping in `crates/proto/src/keys.rs`. | todo |
-| 2H | Run a command on screen enter and exit | 1C | Small, scriptable. | todo |
+| 2F | Screensaver and sleep sync; block screensaver on peers | 1C lock sync | `[power]`, `one-mk power`; `Control::Inhibit`/`Sleep` + `caps::POWER`; `proto/sleep.rs`, `one-mk/power.rs`, `input/system` (`Inhibitor`, `DisplaySleeper`). Linux verified against the real session bus (read-only); Windows/macOS compile-only. macOS can't notice its own display sleep. | done (Linux verified) |
+| 2G | Multimedia keys across computers | none | `crates/proto/src/mediakeys.rs` is the table (evdev / Windows VK / macOS NX_KEYTYPE); Windows types by VK, macOS captures and posts `NX_SYSDEFINED`; only volume/brightness repeat. Windows/macOS compile-only, not tested on real hardware. | done (Linux/null verified) |
+| 2H | Run a command on screen enter and exit | 1C | `[hooks]`, `one-mk hooks`, `crates/one-mk/src/hooks.rs`: no shell by default, timeout, rate limit, env vars, permission warning. Two-daemon test proves enter and leave. | done |
 
 ## Wave 3
 
