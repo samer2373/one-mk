@@ -1000,9 +1000,13 @@ impl App {
     fn apply_pointer_mode(&mut self) {
         let Some(r) = self.remote.as_mut() else { return };
         let Some(p) = self.peers.get(&r.peer) else { return };
-        if self.settings.gaming == Gaming::Auto && p.caps & caps::FOCUS != 0 && !r.watching_focus {
-            r.watching_focus = true;
-            p.ctl.send(Control::WatchFocus { epoch: r.cursor.epoch() });
+        // Watch the peer's focus only for gaming `auto`, and stop it from
+        // looking at every click once that is switched off.
+        let watch = self.settings.gaming == Gaming::Auto && p.caps & caps::FOCUS != 0;
+        if watch != r.watching_focus {
+            r.watching_focus = watch;
+            r.peer_fullscreen &= watch;
+            p.ctl.send(Control::WatchFocus { epoch: r.cursor.epoch(), on: watch });
         }
         let want = wants_relative(self.settings.gaming, p.caps, r.peer_fullscreen);
         if r.cursor.set_relative(want) {
@@ -1154,12 +1158,18 @@ impl App {
     }
 
     /// Tells the owner whether a fullscreen window has the focus here (for
-    /// its gaming mode `auto`), if it asked, that changed and this OS can
-    /// tell. Asked when it starts watching and on every click, which is
-    /// when focus moves.
+    /// its gaming mode `auto`), if it asked and that changed. Asked when it
+    /// starts watching and on every click, which is when focus moves. When
+    /// this OS can't tell (a Wayland-native window), "fullscreen" is taken
+    /// back if it was said, or the owner would stay in relative mode, where
+    /// no edge leads home; otherwise nothing is said.
     fn report_focus(&mut self) {
         let Some(o) = self.owner.as_mut().filter(|o| o.watch_focus) else { return };
-        let Some(fullscreen) = self.focus.focus().map(|f| f.fullscreen) else { return };
+        let fullscreen = match self.focus.focus() {
+            Some(f) => f.fullscreen,
+            None if o.focus_sent == Some(true) => false,
+            None => return,
+        };
         if o.focus_sent.replace(fullscreen) == Some(fullscreen) {
             return;
         }
@@ -1369,10 +1379,11 @@ impl App {
                     self.apply_pointer_mode();
                 }
             }
-            Control::Lock { id: lock } => self.on_peer_lock(fp, lock),
-            Control::WatchFocus { epoch } => {
+            Control::Lock { id: lock, all } => self.on_peer_lock(fp, lock, all),
+            Control::WatchFocus { epoch, on } => {
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
-                    o.watch_focus = true;
+                    o.watch_focus = on;
+                    o.focus_sent = None;
                     self.report_focus();
                 }
             }
@@ -1480,7 +1491,7 @@ impl App {
             Request::LockAll => {
                 let id = self.lock_sync.lock_all(link::random_u64(), std::time::Instant::now());
                 for p in self.peers.values() {
-                    p.ctl.send(Control::Lock { id });
+                    p.ctl.send(Control::Lock { id, all: true });
                 }
                 let n = self.peers.len();
                 println!("Locking this computer{}.", if n > 0 { " and the connected ones" } else { "" });
@@ -1665,27 +1676,31 @@ impl App {
                 println!("This computer locked; locking the connected ones too (lock sync).");
             }
             for p in self.peers.values() {
-                p.ctl.send(Control::Lock { id });
+                p.ctl.send(Control::Lock { id, all: false });
             }
         }
         self.let_go_for_lock();
     }
 
-    /// Peer `fp` asks us to lock (its `lock-all`, or its lock sync).
-    fn on_peer_lock(&mut self, fp: Fingerprint, id: u64) {
-        match self.lock_sync.on_remote(id, self.settings.lock_sync, std::time::Instant::now()) {
+    /// Peer `fp` asks us to lock: its `lock-all` (`all`), obeyed always,
+    /// or its lock sync, followed only with lock sync on here.
+    fn on_peer_lock(&mut self, fp: Fingerprint, id: u64, all: bool) {
+        match self.lock_sync.on_remote(id, all, self.settings.lock_sync, std::time::Instant::now()) {
             OnRemote::Ignore => {}
             OnRemote::Lock { lock_here, forward } => {
                 if forward {
                     for (other, p) in &self.peers {
                         if *other != fp {
-                            p.ctl.send(Control::Lock { id });
+                            p.ctl.send(Control::Lock { id, all });
                         }
                     }
                 }
                 if lock_here {
                     let name = self.peers.get(&fp).map_or("", |p| &p.name);
-                    println!("{name} locked its screen; locking this one too.");
+                    match all {
+                        true => println!("{name} asked to lock every computer (lock-all); locking this one."),
+                        false => println!("{name} locked its screen; locking this one too (lock sync)."),
+                    }
                     self.lock_screen();
                 }
             }
@@ -2983,6 +2998,65 @@ mod tests {
         eventually("A to lock", || duo.ha.locks.load(SeqCst) == 2).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!((duo.ha.locks.load(SeqCst), duo.hb.locks.load(SeqCst)), (2, 1), "no echo");
+        duo.stop().await;
+    }
+
+    /// Gaming `auto`: once B can't tell what has the focus (a Wayland-native
+    /// window clicked after an XWayland game quit), the fullscreen it said
+    /// is taken back, so A doesn't stay relative with no edge leading home.
+    /// Switching gaming off stops B looking at the focus on every click.
+    #[tokio::test]
+    async fn gaming_auto_unknown_focus_and_switching_it_off() {
+        use std::sync::atomic::Ordering::SeqCst;
+        async fn click(duo: &mut Duo) {
+            for down in [true, false] {
+                duo.ha.events.send(Event::Button { button: 0x110, down }).unwrap();
+                loop {
+                    match next_inject(&mut duo.hb).await {
+                        Inject::Button { down: d, .. } if d == down => break,
+                        Inject::MoveTo(_) | Inject::MoveBy { .. } => {}
+                        other => panic!("unexpected {other:?}"),
+                    }
+                }
+            }
+        }
+        let mut duo = Duo::start("gaming-unknown", None).await;
+        set(&duo.da, |s| s.gaming = Gaming::Auto).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec![] });
+        duo.enter_b().await;
+        eventually_async("relative motion", || async { status(&duo.da).await.relative }).await;
+        *duo.hb.focus.lock().unwrap() = None;
+        click(&mut duo).await;
+        eventually_async("absolute motion", || async { !status(&duo.da).await.relative }).await;
+
+        set(&duo.da, |s| s.gaming = Gaming::Off).await;
+        let probes = duo.hb.focus_probes.load(SeqCst);
+        *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec![] });
+        click(&mut duo).await;
+        click(&mut duo).await;
+        assert_eq!(duo.hb.focus_probes.load(SeqCst), probes, "B stopped looking");
+        assert!(!status(&duo.da).await.relative);
+        // And `auto` again starts it again, within the same visit.
+        set(&duo.da, |s| s.gaming = Gaming::Auto).await;
+        eventually_async("relative motion again", || async { status(&duo.da).await.relative }).await;
+        duo.stop().await;
+    }
+
+    /// A computer with lock sync off doesn't follow another's lock (sync
+    /// is off there for a reason), but obeys an explicit `lock-all`.
+    #[tokio::test]
+    async fn lock_sync_off_obeys_only_lock_all() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let duo = Duo::start("lock-off", None).await;
+        set(&duo.da, |s| s.lock_sync = true).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        duo.ha.events.send(Event::ScreenLocked(true)).unwrap(); // the user locks A
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(duo.hb.locks.load(SeqCst), 0, "B has lock sync off");
+        duo.ha.events.send(Event::ScreenLocked(false)).unwrap();
+        assert_eq!(ask(&duo.da, Request::LockAll).await, "ok\n1\n");
+        eventually("B to lock", || duo.hb.locks.load(SeqCst) == 1).await;
         duo.stop().await;
     }
 

@@ -57,7 +57,7 @@ soon as they connect.
 | `one-mk edge [options]` | Rules for crossing edges (see below) |
 | `one-mk gaming on\|off\|auto` | Raw mouse movement for games on another computer |
 | `one-mk lock-all` | Lock this computer's screen and every connected one's |
-| `one-mk lock-sync on\|off` | Locking any computer locks the others |
+| `one-mk lock-sync on\|off` | Locking any computer locks the others (those with lock sync on) |
 | `one-mk install` / `uninstall` | Start automatically at login / stop doing that |
 | `one-mk pair` | Pair with another computer (run on both) |
 | `one-mk layout <pc> <left\|right\|top\|bottom>` | Say where a paired computer sits |
@@ -175,8 +175,9 @@ applies to these movements outside games.
 
 **Lock every screen.** `one-mk lock-all` locks this computer and asks every
 connected one to lock too. With `one-mk lock-sync on`, locking this computer
-in any way locks the others (each lock is passed on once, so it never comes
-back). Anything held down is let go before a screen locks, and modifier keys
+in any way locks the others that have lock sync on too (each lock is passed
+on once, so it never comes back); a computer with lock sync off follows only
+`lock-all`. Anything held down is let go before a screen locks, and modifier keys
 are released once more after it unlocks, so no key stays stuck. Locking uses
 logind on Linux, `LockWorkStation` on Windows and the login window (or
 display sleep) on macOS; noticing a lock uses logind's lock hint on Linux
