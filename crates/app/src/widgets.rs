@@ -174,7 +174,8 @@ pub fn switch(ui: &mut Ui, row: Rect, id: Id, label: &str, on: bool, enabled: bo
     let fill = tween(&ctx, id.with("track"), f32::from(on), motion::fade(0.2), motion::linear);
     let hover = tween(&ctx, id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
     let p = ui.painter();
-    p.text(row.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), if enabled { INK } else { INK2 });
+    let shown = fit(p, label, &regular(T_BODY), row.width() - 46.0);
+    p.text(row.left_center(), Align2::LEFT_CENTER, &shown, regular(T_BODY), if enabled { INK } else { INK2 });
     let track = Rect::from_min_size(pos2(row.right() - 34.0, row.center().y - 10.0), vec2(34.0, 20.0));
     let off = mix(TRACK_OFF, Color32::from_rgb(0x46, 0x4F, 0x5C), hover);
     // On is told by fill and knob side, in ink: amber stays for crossings
@@ -189,8 +190,12 @@ pub fn switch(ui: &mut Ui, row: Rect, id: Id, label: &str, on: bool, enabled: bo
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let (label, enabled) = (label.to_owned(), r.enabled());
-    r.widget_info(move || WidgetInfo::selected(Role::Switch, enabled, on, &label));
-    r
+    let cut = shown != label;
+    r.widget_info({
+        let label = label.clone();
+        move || WidgetInfo::selected(Role::Switch, enabled, on, &label)
+    });
+    if cut { r.on_hover_text(label) } else { r }
 }
 
 /// A row of choices with a pill that slides to the chosen one: the tabs
@@ -202,7 +207,8 @@ pub struct Pills<'a> {
     pub labels: &'a [&'a str],
     /// What each choice is called for screen readers.
     pub names: Vec<String>,
-    pub chosen: usize,
+    /// `None`: none of them (a value set some other way).
+    pub chosen: Option<usize>,
     pub enabled: Vec<bool>,
     pub role: Role,
     pub font: f32,
@@ -221,11 +227,15 @@ impl Pills<'_> {
         let ctx = ui.ctx().clone();
         let p = ui.painter().clone();
         p.rect(self.track, CornerRadius::same(self.radius + 3), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
-        let to = self.cells[self.chosen.min(self.cells.len() - 1)];
+        let to = self.cells[self.chosen.unwrap_or(0).min(self.cells.len() - 1)];
         let secs = motion::space(0.22);
         let x = tween(&ctx, self.id.with("x"), to.left(), secs, motion::out_quart);
         let w = tween(&ctx, self.id.with("w"), to.width(), secs, motion::out_quart);
-        p.rect_filled(Rect::from_min_size(pos2(x, to.top()), vec2(w, to.height())), CornerRadius::same(self.radius), PILL);
+        let shown = tween(&ctx, self.id.with("shown"), f32::from(self.chosen.is_some()), motion::fade(0.15), motion::linear);
+        if shown > 0.0 {
+            let pill = Rect::from_min_size(pos2(x, to.top()), vec2(w, to.height()));
+            p.rect_filled(pill, CornerRadius::same(self.radius), PILL.gamma_multiply(shown));
+        }
         let mut picked = None;
         // egui moves focus with the arrows but doesn't report it as gained,
         // so remember which choice had it last frame.
@@ -234,7 +244,7 @@ impl Pills<'_> {
         for (k, cell) in self.cells.iter().enumerate() {
             let enabled = self.enabled[k];
             let r = ui.interact(*cell, self.id.with(k), if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
-            let on = k == self.chosen;
+            let on = Some(k) == self.chosen;
             // Arrowing onto a choice chooses it, as radio groups do.
             if r.has_focus() {
                 now_focused = Some(k);
@@ -258,6 +268,139 @@ impl Pills<'_> {
         ctx.data_mut(|d| d.insert_temp(self.id.with("focus"), now_focused));
         picked
     }
+}
+
+/// A one-line text field. `text` is edited in place; the response says
+/// when it lost focus or Enter was pressed (to apply what was typed).
+#[allow(clippy::too_many_arguments)]
+pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, label: &str, enabled: bool, mono_text: bool) -> Response {
+    let enabled = enabled && !locked(ui);
+    let font = if mono_text { mono(T_META) } else { regular(T_BODY) };
+    let focused = ui.memory(|m| m.has_focus(id));
+    let hover = ui.rect_contains_pointer(rect) && enabled;
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(7), if enabled { GROUND } else { PANEL });
+    let edge = if focused { INK2 } else if hover { TRACK_EDGE } else { LINE };
+    p.rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, edge), StrokeKind::Inside);
+    let edit = egui::TextEdit::singleline(text)
+        .id(id)
+        .font(font)
+        .text_color(if enabled { INK } else { INK2 })
+        .hint_text(egui::RichText::new(hint).color(OFF))
+        .frame(egui::Frame::NONE)
+        .margin(egui::Margin::ZERO)
+        .align(Align2::LEFT_CENTER)
+        .desired_width(rect.width() - 18.0);
+    let r = ui.add_enabled_ui(enabled, |ui| ui.put(rect.shrink2(vec2(9.0, 0.0)), edit)).inner;
+    if r.has_focus() {
+        ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(9), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
+    }
+    let label = label.to_owned();
+    ui.ctx().accesskit_node_builder(id, |n| n.set_label(label));
+    r
+}
+
+/// A thin bar `frac` full (amber: something crossing); `None` while the
+/// size isn't known: a short segment instead, still.
+pub fn progress_bar(ui: &Ui, rect: Rect, id: Id, frac: Option<f32>) {
+    let p = ui.painter();
+    let r = CornerRadius::same((rect.height() / 2.0) as u8);
+    p.rect_filled(rect, r, TRACK_OFF);
+    let shown = tween(ui.ctx(), id, frac.unwrap_or(0.0), motion::space(0.3), motion::out_cubic);
+    let w = match frac {
+        Some(_) => rect.width() * shown.clamp(0.0, 1.0),
+        None => rect.width() * 0.18,
+    };
+    if w > 0.5 {
+        p.rect_filled(Rect::from_min_size(rect.min, vec2(w.max(rect.height()), rect.height())), r, SIGNAL);
+    }
+}
+
+/// A clipboard (a board, its clip, two lines of text) and an arrow
+/// beside it: going out (`send`) or coming in.
+pub fn draw_clip(p: &Painter, rect: Rect, col: Color32, send: bool) {
+    let c = rect.center();
+    let st = Stroke::new(1.4, col);
+    let body = Rect::from_min_size(pos2(c.x - 8.5, c.y - 6.0), vec2(10.0, 13.0));
+    p.rect_stroke(body, CornerRadius::same(2), st, StrokeKind::Middle);
+    let clip = Rect::from_center_size(pos2(body.center().x, body.top()), vec2(5.0, 3.0));
+    p.rect_filled(clip, CornerRadius::same(1), col);
+    for k in [0.0, 3.0] {
+        p.line_segment([pos2(body.left() + 2.5, c.y + k), pos2(body.right() - 2.5, c.y + k)], Stroke::new(1.0, col));
+    }
+    // The arrow points away from the board, or at it.
+    let (a, b, y) = (body.right() + 2.0, body.right() + 8.5, c.y - 1.0);
+    let (from, to) = if send { (a, b) } else { (b, a) };
+    let dir = if send { 1.0 } else { -1.0 };
+    p.line_segment([pos2(from, y), pos2(to, y)], st);
+    p.line_segment([pos2(to, y), pos2(to - 2.8 * dir, y - 2.8)], st);
+    p.line_segment([pos2(to, y), pos2(to - 2.8 * dir, y + 2.8)], st);
+}
+
+/// Three dots in a row: more choices.
+pub fn draw_dots(p: &Painter, rect: Rect, col: Color32) {
+    for k in [-1.0, 0.0, 1.0] {
+        p.circle_filled(rect.center() + vec2(k * 5.0, 0.0), 1.6, col);
+    }
+}
+
+/// Geist Mono kerns `--` so that egui draws the second dash on top of
+/// the next letter (`run --port` reads `run--port`). Kerning stops at a
+/// section's end, so mono text is cut between neighbouring dashes.
+fn mono_pieces(text: &str) -> Vec<&str> {
+    let mut out = vec![];
+    let mut start = 0;
+    let b = text.as_bytes();
+    for i in 0..b.len().saturating_sub(1) {
+        if b[i] == b'-' && b[i + 1] == b'-' {
+            out.push(&text[start..=i]);
+            start = i + 1;
+        }
+    }
+    out.push(&text[start..]);
+    out
+}
+
+/// Adds a section of its own (`LayoutJob::append` would merge it into
+/// the one before, and shape them together again).
+fn push_piece(job: &mut egui::text::LayoutJob, text: &str, format: egui::TextFormat) {
+    let start = job.text.len();
+    job.text += text;
+    let byte_range = egui::epaint::text::ByteIndex(start)..egui::epaint::text::ByteIndex(job.text.len());
+    job.sections.push(egui::text::LayoutSection { leading_space: 0.0, byte_range, format });
+}
+
+/// One line of mono text, shortened to `max_w`, placed like `Painter::text`.
+pub fn mono_text(p: &Painter, pos: Pos2, align: Align2, text: &str, size: f32, col: Color32, max_w: f32) -> Rect {
+    let font = mono(size);
+    let text = fit(p, text, &font, max_w);
+    let mut job = egui::text::LayoutJob::default();
+    for piece in mono_pieces(&text) {
+        push_piece(&mut job, piece, egui::TextFormat::simple(font.clone(), col));
+    }
+    let g = p.layout_job(job);
+    let rect = align.anchor_size(pos, g.size());
+    p.galley(rect.min, g, col);
+    rect
+}
+
+/// Wrapped text where `like this` is a command, set in mono; returns its height.
+pub fn para_code(ui: &Ui, pos: Pos2, width: f32, text: &str, font: FontId, col: Color32) -> f32 {
+    let size = font.size;
+    let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: width, ..Default::default() }, ..Default::default() };
+    for (k, part) in text.split('`').enumerate() {
+        let code = k % 2 == 1;
+        let f = if code { mono(size - 1.0) } else { font.clone() };
+        let mut fmt = egui::TextFormat::simple(f, col);
+        fmt.line_height = Some((size * LEADING).round());
+        for piece in if code { mono_pieces(part) } else { vec![part] } {
+            push_piece(&mut job, piece, fmt.clone());
+        }
+    }
+    let g = ui.painter().layout_job(job);
+    let h = g.size().y;
+    ui.painter().galley(pos, g, col);
+    h
 }
 
 /// Wrapped text; returns its height.
@@ -303,7 +446,7 @@ mod tests {
                         cells: Pills::even(track, 3, 2.0),
                         labels: &labels,
                         names: labels.iter().map(|l| (*l).to_owned()).collect(),
-                        chosen,
+                        chosen: Some(chosen),
                         enabled: vec![true; 3],
                         role: Role::RadioButton,
                         font: T_BODY,
@@ -321,6 +464,22 @@ mod tests {
             arrowed = key;
         }
         assert_eq!(chosen, 1);
+    }
+
+    #[test]
+    fn dashes_in_mono_text_keep_their_room() {
+        assert_eq!(mono_pieces("one-mk run --port 1"), ["one-mk run -", "-port 1"]);
+        assert_eq!(mono_pieces("---x"), ["-", "-", "-x"]);
+        assert_eq!(mono_pieces("plain"), ["plain"]);
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let p = ctx.layer_painter(egui::LayerId::background());
+            let r = mono_text(&p, Pos2::ZERO, Align2::LEFT_TOP, "run --port", 12.0, INK, 500.0);
+            let plain = p.layout_no_wrap("run x-port".into(), mono(12.0), INK).size().x;
+            assert!((r.width() - plain).abs() < 0.5, "every character a full cell: {} vs {plain}", r.width());
+        });
+        out.textures_delta.clear();
     }
 
     #[test]

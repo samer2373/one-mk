@@ -3,11 +3,16 @@
 //! Everything shown comes from the running daemon; everything changed goes
 //! through it.
 
+mod cells;
+mod pages;
+mod plan;
+
 use crate::daemon::{Event, Job, Latency, Link};
 use crate::motion::{self, tween};
 use crate::pairing::{Pairing, Step};
 use crate::scene::{self, Cargo, Device, Kind, SPACING, Scene, v};
 use crate::style::*;
+use crate::view::{Check, Prefs};
 use crate::widgets::{self, Look, Pills, a11y_text, button, button_width, mix, para, switch, text_width};
 use egui::accesskit::{Live, Role};
 use egui::{Align2, Color32, CornerRadius, Id, Key, Modifiers, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
@@ -18,7 +23,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
 const TOP_H: f32 = 56.0;
-const PANEL_H: f32 = 160.0;
+const PANEL_H: f32 = 196.0;
 /// Inner padding of the panel's cells.
 const PAD: f32 = 20.0;
 const GHOST: &str = "\u{0}pairing";
@@ -29,10 +34,32 @@ const ME_WALL: [u32; 2] = [0x1D2D3C, 0x0D151E];
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tab {
     Desk,
+    Layout,
     Files,
     Keyboard,
+    Health,
+    Advanced,
 }
-const TABS: [(Tab, &str); 3] = [(Tab::Desk, "Desk"), (Tab::Files, "Clipboard & files"), (Tab::Keyboard, "Keyboard")];
+/// Each tab, and a shorter name for narrow windows.
+const TABS: [(Tab, &str, &str); 6] = [
+    (Tab::Desk, "Desk", "Desk"),
+    (Tab::Layout, "Layout", "Layout"),
+    (Tab::Files, "Clipboard & files", "Files"),
+    (Tab::Keyboard, "Keyboard", "Keyboard"),
+    (Tab::Health, "Health", "Health"),
+    (Tab::Advanced, "Advanced", "Advanced"),
+];
+
+impl Tab {
+    /// Tabs that show the desk of computers.
+    fn desk(self) -> bool {
+        matches!(self, Tab::Desk | Tab::Files | Tab::Keyboard)
+    }
+    /// Tabs that mean something while one·mk is off.
+    fn when_off(self) -> bool {
+        matches!(self, Tab::Desk | Tab::Health | Tab::Advanced)
+    }
+}
 const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"), (Side::Top, "Above"), (Side::Bottom, "Below")];
 const SWAPS: [(&str, &str); 3] = [("auto", "Auto"), ("on", "Always swap"), ("off", "Never swap")];
 
@@ -103,8 +130,14 @@ enum Cell {
     Head(String, String),
     Inspector(Option<String>),
     Clipboard,
-    Settings,
+    /// This computer's switches.
+    Controls,
+    FilesHead(String, String),
+    FilesSettings,
     Swaps,
+    Arrange(Option<String>),
+    LineUp(Option<String>),
+    Profiles,
 }
 
 struct Slot {
@@ -156,6 +189,27 @@ pub struct App {
     /// after the key, and arrowing onto a choice picks it).
     arrowed: bool,
     arrow_down: bool,
+    /// `settings.toml` as it is now.
+    prefs: Prefs,
+    /// The last `one-mk doctor` report, and when it came.
+    doctor: Option<(Result<Vec<Check>, String>, f64)>,
+    /// A fix just copied (its row), and when, to say so.
+    copied: Option<(usize, f64)>,
+    /// Alignments chosen here and not yet reported back, and when.
+    pending_align: HashMap<String, (Side, one_mk_proto::Align, f64)>,
+    pending_lock: Option<(bool, f64)>,
+    plan_drag: Option<plan::PlanDrag>,
+    /// The computer on the plan the keyboard is on.
+    plan_focus: Option<String>,
+    /// An arrow-key move on the plan, applied once the keys rest.
+    nudge: Option<(String, f64)>,
+    /// Text being typed into fields, by field.
+    drafts: HashMap<String, String>,
+    /// The profile whose options are open, and whether to scroll to it.
+    profile_open: Option<String>,
+    profile_scroll: bool,
+    /// When the tab last changed (the page fades in).
+    tab_at: f64,
     fonts: Fallbacks,
     size: egui::Vec2,
     now: f64,
@@ -299,7 +353,14 @@ impl App {
         match std::env::var("ONE_MK_APP_TAB").as_deref() {
             Ok("files") => tab = Tab::Files,
             Ok("keyboard") => tab = Tab::Keyboard,
+            Ok("layout") => tab = Tab::Layout,
+            Ok("health") => tab = Tab::Health,
+            Ok("advanced") => tab = Tab::Advanced,
             _ => {}
+        }
+        #[cfg(debug_assertions)]
+        if let Some(z) = std::env::var("ONE_MK_APP_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()) {
+            cc.egui_ctx.set_zoom_factor(z);
         }
         let slot = || Slot { cell: None, was: None, at: f64::NEG_INFINITY };
         Ok(Self {
@@ -332,6 +393,18 @@ impl App {
             drop_pos_fresh: false,
             arrowed: false,
             arrow_down: false,
+            prefs: Prefs::default(),
+            doctor: None,
+            copied: None,
+            pending_align: HashMap::new(),
+            pending_lock: None,
+            plan_drag: None,
+            plan_focus: None,
+            nudge: None,
+            drafts: HashMap::new(),
+            profile_open: None,
+            profile_scroll: false,
+            tab_at: f64::NEG_INFINITY,
             fonts: Fallbacks::default(),
             size: vec2(size[0], size[1]),
             now: 0.0,
@@ -389,7 +462,22 @@ impl App {
                     self.busy.retain(|j| j != &what);
                     self.finished(what, error, now);
                 }
+                Event::Prefs(p) => self.prefs = p,
+                Event::Doctor(d) => self.doctor = Some((d, now)),
             }
+        }
+        // Health is open and nothing ran yet: run the checks.
+        if self.tab == Tab::Health && self.doctor.is_none() && !self.busy.contains(&Job::Doctor) && self.status.is_some() {
+            self.doctor_on_open();
+        }
+        self.settle_nudge(now);
+        let before = self.pending_align.len();
+        self.pending_align.retain(|id, (_, _, t)| now - *t < 5.0 || self.nudge.as_ref().is_some_and(|(n, _)| n == id));
+        if self.pending_lock.is_some_and(|(_, t)| now - t > 5.0) {
+            self.pending_lock = None;
+        }
+        if self.pending_align.len() != before {
+            self.sync_scene();
         }
         self.pairing_steps(now);
         // A side the daemon never confirmed: show what it really has.
@@ -404,8 +492,16 @@ impl App {
     /// A command finished: say how it went, and undo what it promised if it failed.
     fn finished(&mut self, what: Job, error: Option<String>, now: f64) {
         let Some(e) = error else {
-            if let Job::Send { to, count } = what {
-                self.toast(format!("Sent {} to {to}", items(count)), now);
+            match what {
+                Job::Send { to, count } => self.toast(format!("Sent {} to {to}", items(count)), now),
+                Job::Clip { send: true, name, .. } => self.toast(format!("Sent this clipboard to {name}"), now),
+                Job::Clip { send: false, name, .. } => self.toast(format!("Copied {name}'s clipboard here"), now),
+                Job::Profile { verb: "save", name } => self.toast(format!("Saved this layout as “{name}”"), now),
+                Job::Profile { verb: "use", name } => self.toast(format!("Using the layout “{name}”"), now),
+                Job::Profile { verb: "delete", name } => self.toast(format!("Deleted the layout “{name}”"), now),
+                Job::ProfileAuto { name, ssid: Some(ssid) } => self.toast(format!("“{name}” comes on by itself on Wi-Fi “{ssid}”"), now),
+                Job::ProfileAuto { name, ssid: None } => self.toast(format!("“{name}” no longer comes on by itself"), now),
+                _ => {}
             }
             return;
         };
@@ -436,6 +532,41 @@ impl App {
             }
             Job::Start => self.toast_error("one·mk didn't start.", e, now),
             Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
+            Job::Align { id, name, .. } => {
+                self.pending_align.remove(&id);
+                self.sync_scene();
+                self.toast_error(format!("Couldn't line up {name}. The plan went back to where it was; try again."), e, now);
+            }
+            Job::Profile { verb, name } => {
+                let what = match verb {
+                    "save" => format!("save this layout as “{name}”"),
+                    "delete" => format!("delete “{name}”"),
+                    _ => format!("switch to “{name}”"),
+                };
+                self.toast_error(format!("Couldn't {what}."), e, now);
+            }
+            Job::ProfileAuto { name, .. } => self.toast_error(format!("Couldn't change when “{name}” comes on by itself."), e, now),
+            Job::Switch { name, to } => {
+                let place = if to == "here" { "here".to_owned() } else { format!("to {name}") };
+                self.toast_error(format!("Couldn't move the mouse and keyboard {place}. Check that it's connected, then try again."), e, now);
+            }
+            Job::LockPointer(on) => {
+                self.pending_lock = None;
+                let word = if on { "keep the pointer here" } else { "let the pointer cross again" };
+                self.toast_error(format!("Couldn't {word}."), e, now);
+            }
+            Job::LockAll => self.toast_error("Couldn't lock the screens.", e, now),
+            Job::Clip { send, name, .. } => {
+                let what = if send { format!("send this clipboard to {name}") } else { format!("get {name}'s clipboard") };
+                self.toast_error(format!("Couldn't {what}."), e, now);
+            }
+            Job::Set { what, .. } => {
+                // Show what is really saved.
+                self.prefs = self.link.prefs();
+                self.toast_error(format!("Couldn't change {what}."), e, now);
+            }
+            Job::Doctor => {}
+            Job::EditSettings => self.toast_error("Couldn't open settings.toml.", e, now),
         }
     }
 
@@ -525,6 +656,17 @@ impl App {
         // The daemon has caught up with a side or a swap chosen here.
         self.pending_side.retain(|id, (side, _)| peers.iter().any(|p| &p.id == id && p.side != *side));
         self.pending_swap.retain(|id, swap| peers.iter().any(|p| &p.id == id && &p.swap != swap));
+        if let Some(s) = &status {
+            // The daemon has caught up with an alignment chosen here.
+            self.pending_align.retain(|id, (side, align, _)| {
+                let real = s.peers.iter().find(|p| &p.id == id).map(|p| p.side);
+                let a = s.layout.place(id).map(|p| p.align);
+                real != Some(*side) || a != Some(*align)
+            });
+            if self.pending_lock.is_some_and(|(on, _)| on == s.pointer_locked) {
+                self.pending_lock = None;
+            }
+        }
         let listed = self.just_paired.as_ref().is_some_and(|(j, _)| peers.iter().any(|p| &p.id == j));
         if listed || self.just_paired.as_ref().is_some_and(|(_, t)| now - t > 6.0) {
             self.just_paired = None;
@@ -611,7 +753,7 @@ impl App {
         }
         let swap = self.pending_swap.get(&p.id).unwrap_or(&p.swap);
         match self.tab {
-            Tab::Desk => os_name(p.os).into(),
+            Tab::Desk | Tab::Layout | Tab::Health | Tab::Advanced => os_name(p.os).into(),
             Tab::Files => "Drop files here".into(),
             Tab::Keyboard => {
                 let swapped = match swap.as_str() {
@@ -673,6 +815,10 @@ impl App {
 
     fn start_pairing(&mut self, now: f64) {
         self.pending_drop = None;
+        // The new computer joins the desk: show it.
+        if !self.tab.desk() {
+            self.set_tab(Tab::Desk);
+        }
         match Pairing::start(&self.link.daemon, &self.link.home_args(), self.ctx.clone()) {
             Ok(proc) => {
                 let me = self.running().map(|s| s.name.clone()).unwrap_or_default();
@@ -1000,6 +1146,20 @@ impl App {
             painter.text(p, Align2::CENTER_CENTER, "Drop on a computer to send", semibold(T_BODY), SIGNAL);
             return;
         }
+        // Transfers the daemon reports: the first one, with its bar (the
+        // Files tab lists them all below).
+        if let Some(t) = self.running().and_then(|s| s.transfers.first()).filter(|_| self.tab != Tab::Files) {
+            let (title, detail, frac) = crate::view::transfer_lines(t);
+            let more = self.running().map_or(0, |s| s.transfers.len() - 1);
+            let text = if more > 0 { format!("{title} · {detail} · and {more} more") } else { format!("{title} · {detail}") };
+            let text = fit(painter, &text, &regular(T_META), rect.width() - 80.0);
+            painter.text(p - vec2(0.0, 6.0), Align2::CENTER_CENTER, text, regular(T_META), INK2);
+            let bar = Rect::from_center_size(p + vec2(0.0, 9.0), vec2(220.0f32.min(rect.width() - 80.0), 3.0));
+            painter.rect_filled(bar, CornerRadius::same(2), TRACK_OFF);
+            let w = bar.width() * frac.unwrap_or(0.18);
+            painter.rect_filled(Rect::from_min_size(bar.min, vec2(w.max(3.0), bar.height())), CornerRadius::same(2), SIGNAL);
+            return;
+        }
         let sending: Vec<String> = self.busy.iter().filter_map(|j| if let Job::Send { to, count } = j { Some(format!("{} to {to}", items(*count))) } else { None }).collect();
         if !sending.is_empty() {
             let text = fit(painter, &format!("Sending {}…", sending.join(", ")), &regular(T_META), rect.width() - 80.0);
@@ -1053,12 +1213,27 @@ impl App {
 
         draw_lockup(&p, &self.lockup, pos2(rect.left() + 18.0, rect.center().y), 22.0);
 
-        // Tabs. With one·mk off only the desk has anything to show.
+        // Tabs. With one·mk off only some have anything to show. In a
+        // narrow window the names get shorter, then the padding smaller.
         let off = self.off();
-        let labels: Vec<&str> = TABS.iter().map(|(_, l)| *l).collect();
-        let widths: Vec<f32> = labels.iter().map(|l| text_width(ui, l, semibold(T_BODY)) + 26.0).collect();
-        let total = widths.iter().sum::<f32>() + 2.0 * (TABS.len() - 1) as f32 + 6.0;
-        let track = Rect::from_center_size(rect.center(), vec2(total, 34.0));
+        let action_w = button_width(ui, &self.action().0) + 16.0;
+        let lockup_w = 18.0 + 22.0 * self.lockup.size()[0] as f32 / self.lockup.size()[1] as f32 + 16.0;
+        let room = rect.width() - 2.0 * lockup_w.max(action_w + 8.0);
+        let room_off_centre = rect.width() - lockup_w - action_w - 16.0;
+        let mut pick = None;
+        for (short, pad) in [(false, 26.0), (true, 26.0), (true, 18.0), (true, 12.0)] {
+            let labels: Vec<&str> = TABS.iter().map(|t| if short { t.2 } else { t.1 }).collect();
+            let widths: Vec<f32> = labels.iter().map(|l| text_width(ui, l, semibold(T_BODY)) + pad).collect();
+            let total = widths.iter().sum::<f32>() + 2.0 * (TABS.len() - 1) as f32 + 6.0;
+            pick = Some((labels, widths, total));
+            if total <= room_off_centre {
+                break;
+            }
+        }
+        let (labels, widths, total) = pick.expect("one choice at least");
+        // Centred in the bar when it fits there, else between the logo and the button.
+        let cx = if total <= room { rect.center().x } else { rect.left() + lockup_w + (room_off_centre - total) / 2.0 + total / 2.0 };
+        let track = Rect::from_center_size(pos2(cx, rect.center().y), vec2(total, 34.0));
         let mut x = track.left() + 3.0;
         let cells: Vec<Rect> = widths
             .iter()
@@ -1073,28 +1248,29 @@ impl App {
             track,
             cells,
             labels: &labels,
-            names: labels.iter().map(|l| (*l).to_owned()).collect(),
-            chosen: TABS.iter().position(|(t, _)| *t == self.tab).unwrap_or(0),
-            enabled: TABS.iter().map(|(t, _)| !off || *t == Tab::Desk).collect(),
+            names: TABS.iter().map(|t| t.1.to_owned()).collect(),
+            chosen: TABS.iter().position(|t| t.0 == self.tab),
+            enabled: TABS.iter().map(|t| !off || t.0.when_off()).collect(),
             role: Role::Tab,
             font: T_BODY,
             radius: 7,
         };
+        let cells = tabs.cells.clone();
         if let Some(k) = tabs.show(ui, self.arrowed) {
             self.set_tab(TABS[k].0);
+        }
+        // A dot on Health when something there needs attention.
+        let trouble = self.running().is_some_and(|s| !s.input.is_empty())
+            || self.doctor.as_ref().is_some_and(|(d, _)| d.as_ref().is_ok_and(|c| c.iter().any(|c| c.verdict == crate::view::Verdict::Fail)));
+        if trouble && let Some(k) = TABS.iter().position(|t| t.0 == Tab::Health) {
+            let c = cells[k];
+            ui.painter().circle_filled(pos2(c.right() - 7.0, c.top() + 7.0), 3.0, ERROR);
         }
 
         // The one action that matters most right now. A sheet owns its own
         // way out, so the button steps aside while one is open.
-        let controlled = self.running().is_some_and(|s| s.controlled_by.is_some());
-        let (label, look, enabled, job) = match self.status.as_ref() {
-            Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
-            Some(None) => ("Start one·mk", Look::Primary, true, Some(Job::Start)),
-            _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
-            _ if controlled => ("Take back", Look::Primary, true, Some(Job::TakeBack)),
-            _ if self.running().is_some_and(|s| !s.peers.is_empty()) => ("Pair another computer", Look::Quiet, true, None),
-            _ => ("Pair a computer", Look::Primary, true, None),
-        };
+        let (label, look, enabled, job) = self.action();
+        let label = label.as_str();
         let shown = tween(ui.ctx(), Id::unique("action-shown"), f32::from(self.status.is_some() && !self.sheet_open()), motion::fade(0.12), motion::linear);
         if shown < 0.01 {
             return;
@@ -1119,9 +1295,29 @@ impl App {
         }
     }
 
+    /// The top bar's button: what it says and does.
+    fn action(&self) -> (String, Look, bool, Option<Job>) {
+        let controlled = self.running().is_some_and(|s| s.controlled_by.is_some());
+        let narrow = self.ctx.content_rect().width() < 900.0;
+        let (label, look, enabled, job) = match self.status.as_ref() {
+            Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
+            Some(None) => ("Start one·mk", Look::Primary, true, Some(Job::Start)),
+            _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
+            _ if controlled => ("Take back", Look::Primary, true, Some(Job::TakeBack)),
+            _ if self.running().is_some_and(|s| !s.peers.is_empty()) => (if narrow { "Pair another" } else { "Pair another computer" }, Look::Quiet, true, None),
+            _ => ("Pair a computer", Look::Primary, true, None),
+        };
+        (label.to_owned(), look, enabled, job)
+    }
+
     fn set_tab(&mut self, tab: Tab) {
         if tab != self.tab {
             self.tab = tab;
+            self.tab_at = self.now;
+            self.plan_drag = None;
+            if tab == Tab::Health {
+                self.doctor_on_open();
+            }
             self.sync_scene();
         }
     }
@@ -1143,6 +1339,10 @@ impl App {
         }
         if let Some(p) = &s.controlling {
             return (format!("Controlling {p}"), "Move the pointer back across the lit edge to return.".into());
+        }
+        // The desktop hasn't allowed input sharing yet: that comes first.
+        if !s.input.is_empty() && !s.peers.is_empty() {
+            return ("Waiting for this computer's permission".into(), s.input.join(" "));
         }
         let online: Vec<_> = s.peers.iter().filter(|p| p.online).collect();
         let away = match s.peers.len() - online.len() {
@@ -1167,13 +1367,22 @@ impl App {
     /// What each cell of the panel shows in this state, and where.
     fn cells(&self, rect: Rect) -> Vec<(Cell, Rect)> {
         let w = rect.width();
-        let x = [0.0, w * 0.4, w * 0.71, w];
+        let x = match self.tab {
+            Tab::Layout => [0.0, w * 0.3, w * 0.6, w],
+            Tab::Files => [0.0, w * 0.34, w * 0.63, w],
+            _ => [0.0, w * 0.34, w * 0.66, w],
+        };
         let cell = |a: usize, b: usize| Rect::from_min_max(pos2(rect.left() + x[a] + PAD, rect.top() + PAD), pos2(rect.left() + x[b] - PAD, rect.bottom() - PAD));
         let (t, s) = self.headline_text();
         match self.tab {
             // Off, there is nothing to inspect: the message takes the room.
-            Tab::Desk if self.off() => vec![(Cell::Head(t, s), cell(0, 2)), (Cell::Settings, cell(2, 3))],
-            Tab::Desk => vec![(Cell::Head(t, s), cell(0, 1)), (Cell::Inspector(self.selected_id()), cell(1, 2)), (Cell::Settings, cell(2, 3))],
+            Tab::Desk if self.off() => vec![(Cell::Head(t, s), cell(0, 2)), (Cell::Controls, cell(2, 3))],
+            Tab::Desk => vec![(Cell::Head(t, s), cell(0, 1)), (Cell::Inspector(self.selected_id()), cell(1, 2)), (Cell::Controls, cell(2, 3))],
+            Tab::Layout => {
+                let sel = self.selected_id().filter(|id| id != "me");
+                vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
+            }
+            Tab::Health | Tab::Advanced => vec![],
             Tab::Files => {
                 let any = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
                 let sub = if any {
@@ -1181,7 +1390,7 @@ impl App {
                 } else {
                     "No computer is connected right now. Files can go to one once it's on and connected."
                 };
-                vec![(Cell::Head("Drop files on a computer".into(), sub.into()), cell(0, 1)), (Cell::Clipboard, cell(1, 2)), (Cell::Settings, cell(2, 3))]
+                vec![(Cell::FilesHead("Drop files on a computer".into(), sub.into()), cell(0, 1)), (Cell::Clipboard, cell(1, 2)), (Cell::FilesSettings, cell(2, 3))]
             }
             Tab::Keyboard => {
                 let sub = "Swap them for keys sent to another computer, so shortcuts like copy and paste use the same keys everywhere. Auto swaps only between a Mac and a PC.";
@@ -1249,14 +1458,14 @@ impl App {
                 a11y_text(ui, Id::unique("headline"), at, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
             }
             Cell::Inspector(sel) => self.inspector(ui, r, sel.clone(), now),
-            Cell::Clipboard => {
-                let th = para(ui, r.left_top(), r.width(), "Clipboard", semibold(T_TITLE), INK);
-                let text = "Copy on one computer, paste on another. It follows the pointer.";
-                para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), text, regular(T_BODY), INK2);
-                a11y_text(ui, Id::unique("clipboard"), r, Role::Label, &format!("Clipboard. {text}"), None);
-            }
-            Cell::Settings => self.settings(ui, r),
+            Cell::Clipboard => self.clipboard_cell(ui, r),
+            Cell::Controls => self.controls(ui, r),
+            Cell::FilesHead(t, s) => self.files_head(ui, r, t, s),
+            Cell::FilesSettings => self.files_settings(ui, r),
             Cell::Swaps => self.swaps(ui, r),
+            Cell::Arrange(sel) => self.arrange_cell(ui, r, sel.clone()),
+            Cell::LineUp(sel) => self.line_up_cell(ui, r, sel.clone()),
+            Cell::Profiles => self.profiles_cell(ui, r),
         }
     }
 
@@ -1275,6 +1484,7 @@ impl App {
             info_row(ui, c, c.top() + 42.0, "ID", &status.id, true, 1.0);
             info_row(ui, c, c.top() + 66.0, "Paired", &paired, false, 1.0);
             info_row(ui, c, c.top() + 90.0, "System", os_name(me_os()), false, 1.0);
+            self.quick_actions(ui, c, c.top() + 114.0, None);
             return;
         };
         let mut room = if peer.online { chip(ui, c, "Connected", Some(true)) } else { chip(ui, c, "Offline", Some(false)) };
@@ -1306,7 +1516,7 @@ impl App {
             cells: Pills::even(track, 4, 2.0),
             labels: &labels,
             names: PLACES.iter().map(|(_, l)| format!("Position of {}: {l}", peer.name)).collect(),
-            chosen: PLACES.iter().position(|(s, _)| *s == side).unwrap_or(0),
+            chosen: PLACES.iter().position(|(s, _)| *s == side),
             enabled: vec![true; 4],
             role: Role::RadioButton,
             font: if c.width() >= 230.0 { T_BODY } else { T_META },
@@ -1316,11 +1526,12 @@ impl App {
             self.choose_side(&peer.id, PLACES[k].0, true);
         }
 
-        let (y0, y1) = (c.top() + 72.0, c.top() + 96.0);
+        let (y0, y1) = (c.top() + 70.0, c.top() + 92.0);
         if !peer.online {
             info_row(ui, c, y0, "System", os_name(peer.os), false, 1.0);
             return;
         }
+        self.quick_actions(ui, c, c.top() + 116.0, Some(&peer));
         match self.latency.get(&peer.id) {
             Some(m) => {
                 // New numbers count over from the old ones, in fixed-width digits.
@@ -1345,35 +1556,6 @@ impl App {
                     self.measure(&peer.id);
                 }
             }
-        }
-    }
-
-    /// Settings that apply to this computer, as a short list of rows.
-    fn settings(&mut self, ui: &mut Ui, c: Rect) {
-        let row_h = 36.0;
-        let top = c.top() - 8.0;
-        let on = self.autostart.unwrap_or(false);
-        let busy = self.busy.iter().any(|j| matches!(j, Job::Autostart(_)));
-        let r0 = Rect::from_min_size(pos2(c.left(), top), vec2(c.width(), row_h));
-        let r = switch(ui, r0, Id::unique("autostart"), "Start at login", on, self.autostart.is_some() && !busy);
-        if self.autostart.is_none() {
-            r.on_hover_text("Checking…");
-        } else if r.clicked() {
-            // Shown at once; the link reports what really happened.
-            self.busy.push(Job::Autostart(!on));
-            self.autostart = Some(!on);
-            self.link.set_autostart(!on);
-        }
-        ui.painter().hline(c.x_range(), top + row_h, Stroke::new(1.0, LINE));
-        let r1 = Rect::from_min_size(pos2(c.left(), top + row_h), vec2(c.width(), row_h));
-        ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), INK);
-        let label = "Open";
-        let bw = button_width(ui, label) - 4.0;
-        let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 14.0), vec2(bw, 28.0));
-        let busy = self.busy.contains(&Job::Open);
-        if button(ui, b, Id::unique("open-dl"), label, Look::Quiet, !busy, Some("Open received files folder")).clicked() {
-            self.busy.push(Job::Open);
-            self.link.open_downloads();
         }
     }
 
@@ -1413,7 +1595,7 @@ impl App {
                     cells: Pills::even(seg, 3, 2.0),
                     labels: &labels,
                     names: SWAPS.iter().map(|(_, l)| format!("Ctrl and Cmd for {}: {l}", peer.name)).collect(),
-                    chosen: SWAPS.iter().position(|(v, _)| v == current).unwrap_or(0),
+                    chosen: SWAPS.iter().position(|(v, _)| v == current),
                     enabled: vec![true; 3],
                     role: Role::RadioButton,
                     font: if seg.width() >= 270.0 { T_BODY } else { T_META },
@@ -1756,14 +1938,14 @@ impl App {
 
     // ---------- keys ----------
 
-    /// Ctrl+1, 2, 3 switch tabs (Cmd on a Mac).
+    /// Ctrl+1 to 6 switch tabs (Cmd on a Mac).
     fn shortcuts(&mut self, ui: &Ui) {
         if widgets::locked(ui) {
             return;
         }
         let off = self.off();
-        for (k, key) in [Key::Num1, Key::Num2, Key::Num3].into_iter().enumerate() {
-            if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || k == 0) {
+        for (k, key) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6].into_iter().enumerate() {
+            if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || TABS[k].0.when_off()) {
                 self.set_tab(TABS[k].0);
             }
         }
@@ -1802,7 +1984,7 @@ impl eframe::App for App {
             ui.ctx().request_repaint();
         }
         self.handle_events(now);
-        if self.off() && self.tab != Tab::Desk {
+        if self.off() && !self.tab.when_off() {
             self.set_tab(Tab::Desk);
         }
         widgets::set_locked(ui.ctx(), self.sheet_open());
@@ -1812,9 +1994,49 @@ impl eframe::App for App {
         let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - PANEL_H), full.max);
         let desk = Rect::from_min_max(full.min, pos2(full.right(), panel.top()));
         let top = Rect::from_min_size(full.min, vec2(full.width(), TOP_H));
-        self.desk(ui, desk, now);
+        // Files let go over a page without the desk: ask where they go.
+        if !self.tab.desk() {
+            let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+            if !dropped.is_empty() {
+                self.set_tab(Tab::Files);
+                self.drop_files(dropped, None, now);
+            }
+        }
+        // A new page rises in.
+        let e = motion::progress(now, self.tab_at, motion::fade(0.18), motion::out_cubic);
+        if e < 1.0 {
+            ui.ctx().request_repaint();
+        }
+        let page = |ui: &mut Ui, r: Rect, salt: &str| {
+            let mut child = ui.new_child(UiBuilder::new().max_rect(r.translate(vec2(0.0, motion::space(4.0) * (1.0 - e)))).id_salt(salt.to_owned()));
+            child.set_clip_rect(r);
+            child.set_opacity(e);
+            child
+        };
+        match self.tab {
+            t if t.desk() => self.desk(ui, desk, now),
+            Tab::Layout => {
+                let mut child = page(ui, desk, "plan");
+                self.plan(&mut child, desk, now);
+            }
+            _ => {}
+        }
+        let body = Rect::from_min_max(pos2(full.left(), top.bottom()), full.max);
+        match self.tab {
+            Tab::Health => {
+                let mut child = page(ui, body, "health");
+                self.health(&mut child, body, now);
+            }
+            Tab::Advanced => {
+                let mut child = page(ui, body, "advanced");
+                self.advanced(&mut child, body);
+            }
+            _ => {}
+        }
         self.top_bar(ui, top, now);
-        self.panel(ui, panel, now);
+        if !matches!(self.tab, Tab::Health | Tab::Advanced) {
+            self.panel(ui, panel, now);
+        }
         widgets::set_locked(ui.ctx(), false);
         // The sheet sits over the panel, leaving the desk room to show
         // what is being paired.
@@ -1841,6 +2063,12 @@ impl eframe::App for App {
 ///   shows start at login as on;
 /// - `ONE_MK_APP_CONFIRM=1` says the codes match a second after they
 ///   show, and keeps the "paired" sheet up.
+/// - `ONE_MK_APP_TAB=layout|health|advanced` (and files, keyboard);
+///   `ONE_MK_APP_PLAN_DRAG=px` carries the chosen computer along its edge
+///   on the plan; `ONE_MK_APP_PROFILE=name` opens a profile's options;
+///   `ONE_MK_APP_DOCTOR=file.json` shows that report instead of running
+///   `one-mk doctor`; `ONE_MK_APP_ZOOM=2` draws everything twice as big
+///   (a high-density screen); `ONE_MK_APP_SIZE=WxH` (main.rs).
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(debug_assertions)]
 mod debug {
@@ -1881,8 +2109,16 @@ mod debug {
         if ready && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
             ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
             if let Some(id) = app.selected_id() {
-                ctx.memory_mut(|m| m.request_focus(Id::unique(("position", &id)).with(1usize)));
+                let target = match app.tab {
+                    Tab::Layout => Id::unique(("plan-device", &id)),
+                    _ => Id::unique(("position", &id)).with(1usize),
+                };
+                ctx.memory_mut(|m| m.request_focus(target));
             }
+        }
+        if ready && let Some(name) = var("ONE_MK_APP_PROFILE") && once(&ctx, "profile") {
+            app.profile_open = Some(name);
+            app.profile_scroll = true;
         }
         if var("ONE_MK_APP_AUTOSTART").is_some() {
             app.autostart = Some(true);

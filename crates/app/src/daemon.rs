@@ -3,7 +3,8 @@
 //! same way the command line and the tray do. Every slow step runs on its
 //! own thread and reports back as an [`Event`], waking the window.
 
-use one_mk_ctl::client::{self, Request};
+use crate::view::{self, Check, Prefs};
+use one_mk_ctl::client::{self, Request, SwitchTo, Toggle};
 use one_mk_ctl::install::{self, Launch};
 use one_mk_ctl::proc;
 use one_mk_ctl::status::Status;
@@ -23,6 +24,10 @@ pub enum Event {
     /// A command finished: what it was for, and its error if it failed.
     Done { what: Job, error: Option<String> },
     Latency(Latency),
+    /// `settings.toml` or `profiles.toml` as they are now.
+    Prefs(Prefs),
+    /// `one-mk doctor --json`: the checks, or why they couldn't be run.
+    Doctor(Result<Vec<Check>, String>),
 }
 
 /// A command the window started, with what it needs to report on it.
@@ -38,6 +43,22 @@ pub enum Job {
     /// Measuring the computer with this id.
     Measure(String),
     Open,
+    /// Lining a computer's edge up with ours.
+    Align { id: String, name: String, side: one_mk_proto::Side, align: one_mk_proto::Align },
+    /// `one-mk profile <verb> <name>`.
+    Profile { verb: &'static str, name: String },
+    /// Switching automatically to a profile on a Wi-Fi network (`None`: off).
+    ProfileAuto { name: String, ssid: Option<String> },
+    /// The mouse and keyboard to a computer (an id, or `here`).
+    Switch { to: String, name: String },
+    LockPointer(bool),
+    LockAll,
+    /// Sending this clipboard to a computer (`send`), or fetching its.
+    Clip { send: bool, id: String, name: String },
+    /// A setting changed with `one-mk <args>`; `what` names it in a sentence.
+    Set { what: String, args: Vec<String> },
+    Doctor,
+    EditSettings,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,7 +126,15 @@ impl Link {
             link.send(Event::Autostart(install::is_installed()));
             let mut last: Option<Option<Status>> = None;
             let mut gone = 0;
+            let mut stamp = None;
             loop {
+                // Settings live in files, not in the status: look at them
+                // whenever they change (a stat per look).
+                let now = link.prefs_stamp();
+                if stamp != Some(now) {
+                    stamp = Some(now);
+                    link.send(Event::Prefs(link.prefs()));
+                }
                 let Ok(now) = link.status() else {
                     std::thread::sleep(POLL);
                     continue;
@@ -126,6 +155,19 @@ impl Link {
                 std::thread::sleep(POLL);
             }
         });
+    }
+
+    fn prefs_stamp(&self) -> [Option<(std::time::SystemTime, u64)>; 2] {
+        let look = |f: &str| std::fs::metadata(self.dir.join(f)).ok().map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()));
+        [look("settings.toml"), look("profiles.toml")]
+    }
+
+    pub fn prefs(&self) -> Prefs {
+        let read = |f: &str| std::fs::read_to_string(self.dir.join(f));
+        let settings = read("settings.toml");
+        let mut p = Prefs::read(settings.as_deref().unwrap_or(""), &read("profiles.toml").unwrap_or_default());
+        p.unreadable = settings.as_ref().is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound);
+        p
     }
 
     /// Runs `f` on its own thread and reports how it went.
@@ -177,6 +219,120 @@ impl Link {
         let (id, value) = (peer.to_owned(), swap.to_owned());
         let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into() };
         self.job(what, move |l| l.one_mk(&["layout", &id, "--swap-ctrl-cmd", &value]).map(drop));
+    }
+
+    pub fn set_align(&self, peer: &str, name: &str, side: one_mk_proto::Side, align: one_mk_proto::Align) {
+        let (id, word, offset) = (peer.to_owned(), side.to_string(), align.to_string());
+        let what = Job::Align { id: peer.into(), name: name.into(), side, align };
+        self.job(what, move |l| l.one_mk(&["layout", &id, &word, "--offset", &offset]).map(drop));
+    }
+
+    /// `one-mk profile use|save|delete <name>`.
+    pub fn profile(&self, verb: &'static str, name: &str) {
+        let n = name.to_owned();
+        self.job(Job::Profile { verb, name: name.into() }, move |l| l.one_mk(&["profile", verb, &n]).map(drop));
+    }
+
+    pub fn profile_auto(&self, name: &str, ssid: Option<String>) {
+        let n = name.to_owned();
+        let what = Job::ProfileAuto { name: name.into(), ssid: ssid.clone() };
+        self.job(what, move |l| match &ssid {
+            Some(s) => l.one_mk(&["profile", "auto", &n, "--ssid", s]).map(drop),
+            None => l.one_mk(&["profile", "auto", &n, "--off"]).map(drop),
+        });
+    }
+
+    /// Moves the mouse and keyboard to `to` (a peer's id, or `here`).
+    pub fn switch(&self, to: &str, name: &str) {
+        let target = if to == "here" { SwitchTo::Here } else { SwitchTo::Device(to.to_owned()) };
+        self.job(Job::Switch { to: to.into(), name: name.into() }, move |l| l.ask(Request::Switch(target)));
+    }
+
+    pub fn lock_pointer(&self, on: bool) {
+        let t = if on { Toggle::On } else { Toggle::Off };
+        self.job(Job::LockPointer(on), move |l| l.ask(Request::LockPointer(t)));
+    }
+
+    pub fn lock_all(&self) {
+        self.job(Job::LockAll, |l| l.ask(Request::LockAll));
+    }
+
+    pub fn clip(&self, send: bool, peer: &str, name: &str) {
+        let id = peer.to_owned();
+        let req = if send { Request::ClipSend(Some(id)) } else { Request::ClipGet(Some(id)) };
+        self.job(Job::Clip { send, id: peer.into(), name: name.into() }, move |l| l.ask(req));
+    }
+
+    /// Changes a setting with `one-mk <args>`; `what` names it for an error.
+    pub fn set(&self, what: &str, args: &[&str]) {
+        let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+        let job = Job::Set { what: what.into(), args: args.clone() };
+        self.job(job, move |l| l.one_mk(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(drop));
+    }
+
+    /// Runs `one-mk doctor --json` and reports the checks.
+    pub fn doctor(&self) {
+        self.job(Job::Doctor, |l| {
+            let result = l.run_doctor();
+            l.send(Event::Doctor(result));
+            Ok(())
+        });
+    }
+
+    fn run_doctor(&self) -> Result<Vec<Check>, String> {
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os("ONE_MK_APP_DOCTOR") {
+            // Development aid: a report to show instead of a real check.
+            std::thread::sleep(Duration::from_millis(600));
+            let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+            return view::parse_doctor(&text).ok_or_else(|| "could not read the report".into());
+        }
+        let mut cmd = Command::new(&self.daemon);
+        cmd.args(["doctor", "--json"]).args(self.home_args()).stdin(Stdio::null());
+        // It says what it found on stdout, also when something failed.
+        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("one-mk didn't start: {e}"))?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        view::parse_doctor(&text).ok_or_else(|| {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let err = err.trim().trim_start_matches("one-mk: ");
+            if err.is_empty() { "one-mk doctor gave no report".to_owned() } else { err.to_owned() }
+        })
+    }
+
+    /// Opens `settings.toml` in the system's editor (made first, private,
+    /// if there is none yet).
+    pub fn edit_settings(&self) {
+        self.job(Job::EditSettings, |l| {
+            let path = l.dir.join("settings.toml");
+            if !path.exists() {
+                std::fs::create_dir_all(&l.dir)?;
+                let mut o = std::fs::OpenOptions::new();
+                o.write(true).create_new(true);
+                #[cfg(unix)]
+                std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+                drop(o.open(&path));
+            }
+            let (opener, args): (&str, Vec<String>) = if cfg!(target_os = "macos") {
+                ("open", vec!["-t".into(), path.display().to_string()])
+            } else if cfg!(windows) {
+                ("notepad", vec![path.display().to_string()])
+            } else {
+                ("xdg-open", vec![path.display().to_string()])
+            };
+            proc::spawn_detached(std::path::Path::new(opener), &args, None)
+                .map_err(|e| anyhow::anyhow!("{opener} didn't start ({e}). The file is {}", path.display()))
+        });
+    }
+
+    /// One request to the running daemon; its error if it refused.
+    fn ask(&self, req: Request) -> anyhow::Result<()> {
+        let timeout = req.reply_timeout();
+        let Some(reply) = client::request(&self.dir, req, timeout)? else { anyhow::bail!("one-mk is not running") };
+        let reply = reply.trim();
+        match reply.strip_prefix("error") {
+            Some(e) => anyhow::bail!("{}", e.trim_start_matches([' ', ':'])),
+            None => Ok(()),
+        }
     }
 
     pub fn take_back(&self) {
