@@ -80,7 +80,7 @@ async fn serve_conn<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, token: Option<S
     })
     .await;
     let Ok(Ok(Some(line))) = read else { return };
-    let reply = match Request::parse(line.trim()) {
+    let reply = zeroize::Zeroizing::new(match Request::parse(line.trim()) {
         Some(req) => {
             // Some requests (a clipboard over a slow link) take longer than the rest.
             let patience = req.reply_timeout();
@@ -89,7 +89,7 @@ async fn serve_conn<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, token: Option<S
             tokio::time::timeout(patience, reply_rx).await.map_or_else(|_| String::new(), Result::unwrap_or_default)
         }
         None => "error unknown request\n".to_owned(),
-    };
+    });
     let _ = tokio::time::timeout(TIMEOUT, async {
         s.write_all(reply.as_bytes()).await?;
         s.shutdown().await

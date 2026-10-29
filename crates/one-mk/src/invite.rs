@@ -2,17 +2,18 @@
 use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
 use one_mk_ctl::client::Request;
-use one_mk_ctl::status::InvitationStatus;
 use one_mk_net::{Device, Discovery, Identity, Node, Peer, TrustStore};
 use one_mk_net::invite::{Invitation, InvitationState, InviteSession, MAX_LINK, STEP_TIMEOUT};
 use one_mk_proto::{DEFAULT_PORT, Side, sanitize_name};
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, IsTerminal, Read, Write};
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Args)]
 pub struct InviteArgs {
@@ -40,6 +41,9 @@ pub struct InviteArgs {
 pub struct JoinArgs {
     /// Invitation link. Omit to read one line from stdin (avoids shell history).
     link: Option<String>,
+    /// Trust the pinned host without prompting (required for non-terminal stdin).
+    #[arg(long)]
+    yes: bool,
     /// Port used later by `run` on this computer.
     #[arg(long, default_value_t = DEFAULT_PORT, value_parser = clap::value_parser!(u16).range(1..))]
     service_port: u16,
@@ -97,46 +101,65 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
         addrs.sort();
         addrs.dedup();
         addrs.truncate(8);
-        if addrs.is_empty() { addrs.push(SocketAddr::from(([127, 0, 0, 1], local.port()))); }
         addrs
     };
     let invitation = Invitation::new(identity.fingerprint, addrs, args.service_port, args.expires)?;
     let state = Arc::new(InvitationState::new(&invitation));
-    let status = InvitationStatus { link: invitation.link(), expires: invitation.expires };
+    let mut link = invitation.link();
+    let wall_expiry = invitation.expires;
     drop(invitation);
     // Browse-only would not advertise A's name. Use the same pairing
     // advertisement as `pair`; numeric-pairing clients fail closed.
-    let _discovery = if args.no_discovery { None } else {
+    let mut discovery = if args.no_discovery { None } else {
         match Discovery::start(identity, local.port(), true) {
             Ok((d, _)) => Some(d),
             Err(e) => { eprintln!("mDNS unavailable; use the link's direct addresses: {e}"); None }
         }
     };
     println!("Invitation from {} ({})", sanitize_name(&identity.name), identity.fingerprint);
-    println!("Expires at Unix time {}. One use; closing this process cancels it.", status.expires);
+    println!("Expires at Unix time {wall_expiry}. One use; closing this process cancels it.");
     println!("Treat this link like a password: whoever uses it first can request trust.");
-    println!("{}", status.link);
-    print_qr(&status.link)?;
+    println!("{}", link.as_str());
+    print_qr(&link)?;
     println!("{}", if args.no_confirm { "WARNING: --no-confirm: the first valid joiner will be trusted automatically." } else { "Approval required here: you will see the joiner's name and fingerprint before trusting it." });
     std::io::stdout().flush()?;
 
     let pending = crate::app::Pending::default();
     let mut attempts = JoinSet::new();
+    let mut sources = SourceLimit::default();
+    let mut clock = tokio::time::interval(Duration::from_millis(250));
     let end = tokio::time::Instant::from_std(state.deadline);
     let result = loop {
+        if state.expired() {
+            break Err(anyhow::anyhow!("invitation expired; create a new one"));
+        }
+        if !state.active() {
+            link.zeroize();
+            withdraw(&mut discovery).await;
+            if attempts.is_empty() { break Err(anyhow::anyhow!("invitation burned or expired; create a new one")); }
+        }
         tokio::select! {
+            _ = clock.tick() => {}
             _ = tokio::signal::ctrl_c() => { break Ok(()); }
             _ = tokio::time::sleep_until(end) => { break Err(anyhow::anyhow!("invitation expired; create a new one")); }
             Some((req, reply)) = control.recv() => {
                 let text = match req {
-                    Request::Invitation if state.active() => status.encode(),
+                    Request::Invitation if state.active() => format!("invitation\t{wall_expiry}\t{}\n", link.as_str()),
                     Request::Status => "invitation process\n".into(),
                     _ => "none\n".into(),
                 };
                 let _ = reply.send(text);
             }
-            Some(accepted) = node.accept(), if state.active() => {
+            Some(accepted) = node.accept() => {
                 let peer = accepted?;
+                if !state.active() {
+                    peer.conn.close(3u32.into(), b"invitation already used or expired");
+                    continue;
+                }
+                if !sources.admit(peer.conn.remote_address().ip()) {
+                    peer.conn.close(4u32.into(), b"invitation busy");
+                    continue;
+                }
                 let Some(permit) = pending.admit(peer.fingerprint) else {
                     peer.conn.close(4u32.into(), b"busy");
                     continue;
@@ -152,16 +175,19 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                 let (peer, exchange, _permit) = done?;
                 match exchange {
                     Ok(Ok(session)) => {
+                        link.zeroize();
+                        withdraw(&mut discovery).await;
                         attempts.abort_all();
                         // Continue serving the UI while approval is pending, but
                         // never expose the already-burned invitation again.
-                        let decision = approve_and_save(dir, &peer, session, !args.no_confirm, end, status.expires);
+                        let decision = approve_and_save(dir, &peer, session, !args.no_confirm, end, wall_expiry);
                         tokio::pin!(decision);
                         loop {
                             tokio::select! {
                                 res = &mut decision => break res,
                                 _ = tokio::signal::ctrl_c() => break Ok(()),
                                 Some((_, reply)) = control.recv() => { let _ = reply.send("none\n".into()); }
+                                Some(accepted) = node.accept() => { accepted?.conn.close(3u32.into(), b"invitation already used or expired"); }
                             }
                         }?;
                         break Ok(());
@@ -176,71 +202,150 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
         }
     };
     state.burn();
+    link.zeroize();
+    withdraw(&mut discovery).await;
     attempts.abort_all();
     result
 }
 
-async fn approve_and_save(dir: &Path, peer: &Peer, session: InviteSession, confirm: bool, expiry: tokio::time::Instant, wall_expiry: u64) -> Result<()> {
+async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, confirm: bool, expiry: tokio::time::Instant, wall_expiry: u64) -> Result<()> {
     let name = session.peer_name.clone();
     let port = session.service_port;
-    println!("\n>>> {} joined: certificate {} <<<", name, peer.fingerprint);
+    println!("\n>>> {} joined: certificate {} <<<", name, grouped(peer.fingerprint));
     println!("Invitation consumed. This device is NOT trusted yet.");
     std::io::stdout().flush()?;
     let end = expiry.min(tokio::time::Instant::now() + Duration::from_secs(120));
     let accept = if confirm {
-        println!("Trust this device with your keyboard, mouse and shared clipboard? [y/N]");
+        println!("Does the other computer show {}? Trust it with your keyboard, mouse and shared clipboard? [y/N]", session.code);
         std::io::stdout().flush()?;
-        tokio::time::timeout_at(end, read_stdin(64)).await.ok().and_then(Result::ok).is_some_and(|s| s.trim().eq_ignore_ascii_case("y"))
-    } else { true };
-    ensure!(tokio::time::Instant::now() < end && one_mk_net::invite::unix_now() < wall_expiry, "invitation approval expired");
+        read_approval(end, Some(wall_expiry)).await
+    } else { println!("WARNING: --no-confirm skips comparing code {} and approves automatically.", session.code); true };
+    let accept = accept && tokio::time::Instant::now() < end && one_mk_net::invite::unix_now() < wall_expiry;
     let ok = tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")??;
     if !ok { bail!("device refused; invitation consumed; nothing saved here"); }
-    ensure!(tokio::time::Instant::now() < expiry && one_mk_net::invite::unix_now() < wall_expiry, "invitation approval expired");
     save(dir, peer, &name, port, Side::Left).await?;
+    acknowledge(session).await?;
     println!("Trusted {name} ({}).", peer.fingerprint);
     Ok(())
 }
 
 pub async fn join(dir: &Path, args: JoinArgs) -> Result<()> {
+    ensure!(args.yes || std::io::stdin().is_terminal(), "non-interactive stdin requires --yes; this skips host trust approval");
     let text = match args.link {
-        Some(s) => s,
+        Some(s) => { eprintln!("WARNING: positional invitation links are visible in process arguments and may remain in shell history; prefer `one-mk join`."); Zeroizing::new(s) }
         None => { eprintln!("Paste the invitation link, then Enter:"); read_stdin(MAX_LINK + 1).await? }
     };
     let invitation = Invitation::parse(text.trim())?;
+    drop(text);
     ensure!(!invitation.is_expired(), "invitation expired");
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let node = Node::bind_any(identity.clone(), 0)?;
-    let result = join_inner(dir, &node, &identity, &invitation, args.service_port).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let mut result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline).await;
+    if result.as_ref().is_err_and(|error| format!("{error:#}").contains("busy")) {
+        tokio::time::sleep(Duration::from_millis(150 + u64::from(rand::random::<u8>()))).await;
+        result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline).await;
+    }
     node.shutdown(Duration::from_millis(200)).await;
     result
 }
 
-async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &Invitation, service_port: u16) -> Result<()> {
-    let mut addrs = invitation.addrs.clone();
-    // mDNS is an untrusted fallback. Only a matching TLS certificate can
-    // receive our proof, regardless of which address found the server.
-    if let Ok(Ok(resolved)) = tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host((invitation.mdns.as_str(), invitation.addrs[0].port()))).await {
-        for addr in resolved.take(8) { if !addrs.contains(&addr) { addrs.push(addr); } }
-    }
+async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &Invitation, service_port: u16, yes: bool, deadline: tokio::time::Instant) -> Result<()> {
     let mut connected = None;
-    for addr in addrs {
-        match node.connect_timeout(addr, Duration::from_secs(3)).await {
-            Ok(peer) if peer.fingerprint == invitation.fingerprint => { connected = Some(peer); break; }
-            Ok(peer) => peer.conn.close(1u32.into(), b"certificate mismatch"),
-            Err(_) => {}
+    let mut tried = HashSet::new();
+    for addr in &invitation.addrs {
+        if tokio::time::Instant::now() >= deadline { break; }
+        if !tried.insert(*addr) { continue; }
+        let end = deadline.min(tokio::time::Instant::now() + Duration::from_secs(2));
+        match tokio::time::timeout_at(end, node.connect_pinned(*addr, invitation.fingerprint)).await {
+            Ok(Ok(peer)) => { connected = Some(peer); break; }
+            Ok(Err(error)) if format!("{error:#}").contains("busy") => return Err(error),
+            _ => {}
         }
+        if tokio::time::Instant::now() >= deadline { break; }
+    }
+    if connected.is_none() && tried.len() < 8 && tokio::time::Instant::now() < deadline
+        && let Ok((discovery, mut found)) = Discovery::browse(identity) {
+        let end = deadline.min(tokio::time::Instant::now() + Duration::from_secs(2));
+        'browse: while let Ok(Some(found)) = tokio::time::timeout_at(end, found.recv()).await {
+            if found.fingerprint != invitation.fingerprint || !found.pairing { continue; }
+            for addr in found.addrs {
+                if !one_mk_net::invite::usable_address(addr.ip()) || tried.contains(&addr) { continue; }
+                if tried.len() >= 8 || tokio::time::Instant::now() >= end { break 'browse; }
+                tried.insert(addr);
+                let attempt_end = end.min(tokio::time::Instant::now() + Duration::from_secs(2));
+                match tokio::time::timeout_at(attempt_end, node.connect_pinned(addr, invitation.fingerprint)).await {
+                    Ok(Ok(peer)) => { connected = Some(peer); break 'browse; }
+                    Ok(Err(error)) if format!("{error:#}").contains("busy") => { discovery.stop().await; return Err(error); }
+                    _ => {}
+                }
+            }
+        }
+        discovery.stop().await;
     }
     let peer = connected.context("could not reach the invitation's pinned computer (offline, expired, or certificate mismatch)")?;
-    let session = tokio::time::timeout(STEP_TIMEOUT, InviteSession::join(&peer, identity.fingerprint, &identity.name, service_port, invitation)).await.context("invitation exchange timed out")??;
+    let mut session = tokio::time::timeout(STEP_TIMEOUT, InviteSession::join(&peer, identity.fingerprint, &identity.name, service_port, invitation)).await.context("invitation exchange timed out")??;
     let name = session.peer_name.clone();
     let port = session.service_port;
-    println!("Authenticated {name} ({}). Waiting for approval there...", peer.fingerprint);
-    let remaining = Duration::from_secs(invitation.expires.saturating_sub(one_mk_net::invite::unix_now())).min(Duration::from_secs(120));
-    ensure!(tokio::time::timeout(remaining, session.confirm(true)).await.context("invitation approval expired")??, "invitation declined");
-    ensure!(!invitation.is_expired(), "invitation approval expired");
+    println!("Authenticated {name} ({}).", grouped(peer.fingerprint));
+    println!("Your code: {} (the other computer will ask you to compare it)", session.code);
+    let end = tokio::time::Instant::now() + Duration::from_secs(120);
+    let accept = if yes {
+        println!("WARNING: --yes skips the host trust prompt; verify the code on the host unless it uses --no-confirm.");
+        true
+    } else {
+        println!("Trust {name} ({})? [y/N]", grouped(peer.fingerprint));
+        std::io::stdout().flush()?;
+        read_approval(end, None).await
+    };
+    std::io::stdout().flush()?;
+    ensure!(tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")??, "invitation declined; nothing saved here");
     save(dir, &peer, &name, port, Side::Right).await?;
+    acknowledge(session).await?;
     println!("Trusted {name} ({}). Start `one-mk run` on both computers.", peer.fingerprint);
     Ok(())
+}
+
+async fn withdraw(discovery: &mut Option<Discovery>) {
+    if let Some(discovery) = discovery.take() { discovery.stop().await; }
+}
+
+async fn read_approval(end: tokio::time::Instant, wall_expiry: Option<u64>) -> bool {
+    let input = read_stdin(64);
+    tokio::pin!(input);
+    let mut clock = tokio::time::interval(Duration::from_millis(250));
+    loop {
+        tokio::select! {
+            result = &mut input => return result.is_ok_and(|text| text.trim().eq_ignore_ascii_case("y")),
+            _ = tokio::time::sleep_until(end) => return false,
+            _ = clock.tick() => {
+                if wall_expiry.is_some_and(|expiry| one_mk_net::invite::unix_now() >= expiry) { return false; }
+            }
+        }
+    }
+}
+
+async fn acknowledge(session: InviteSession) -> Result<()> {
+    tokio::time::timeout(STEP_TIMEOUT, session.committed()).await.context("Trust saved locally, but peer commit is uncertain. Run `one-mk forget <peer>` on both computers and create a new invitation.")?
+        .context("Trust saved locally, but peer commit is uncertain. Run `one-mk forget <peer>` on both computers and create a new invitation.")
+}
+
+fn grouped(fingerprint: one_mk_net::Fingerprint) -> String {
+    fingerprint.to_string().as_bytes().chunks(4).map(|part| std::str::from_utf8(part).expect("hex")).collect::<Vec<_>>().join(" ")
+}
+
+#[derive(Default)]
+struct SourceLimit(HashMap<std::net::IpAddr, (std::time::Instant, u16)>);
+
+impl SourceLimit {
+    fn admit(&mut self, source: std::net::IpAddr) -> bool {
+        let now = std::time::Instant::now();
+        self.0.retain(|_, (start, _)| now.duration_since(*start) < Duration::from_secs(1));
+        if self.0.len() >= 256 { return false; }
+        let (_, count) = self.0.entry(source.to_canonical()).or_insert((now, 0));
+        *count = count.saturating_add(1);
+        *count <= 32
+    }
 }
 
 async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, side: Side) -> Result<()> {
@@ -254,12 +359,12 @@ async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, side: Side) -> Res
     Ok(())
 }
 
-async fn read_stdin(limit: usize) -> Result<String> {
+async fn read_stdin(limit: usize) -> Result<Zeroizing<String>> {
     // A dedicated OS thread can be abandoned at process exit; tokio stdin
     // would keep runtime shutdown blocked when an invitation expires.
     let (tx, rx) = oneshot::channel();
     std::thread::spawn(move || {
-        let mut text = String::new();
+        let mut text = Zeroizing::new(String::new());
         let result = std::io::stdin().lock().take(limit as u64).read_line(&mut text).map(|_| text);
         let _ = tx.send(result);
     });
@@ -286,6 +391,26 @@ fn print_qr(link: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_limits_are_bounded_and_do_not_change_invitations() {
+        let mut limit = SourceLimit::default();
+        let source = "192.0.2.1".parse().unwrap();
+        for _ in 0..32 { assert!(limit.admit(source)); }
+        for _ in 0..2000 { assert!(!limit.admit(source)); }
+        assert!(limit.admit("192.0.2.2".parse().unwrap()));
+        limit.0.get_mut(&source).unwrap().0 -= Duration::from_secs(1);
+        assert!(limit.admit(source));
+        for address in 0..300 { limit.admit(std::net::Ipv4Addr::from(0xc6336400 + address).into()); }
+        assert!(limit.0.len() <= 256);
+    }
+
+    #[test]
+    fn fingerprint_prompt_contains_all_grouped_hex_digits() {
+        let fingerprint = one_mk_net::Fingerprint([0xab; 32]);
+        let text = grouped(fingerprint);
+        assert_eq!(text.replace(' ', ""), fingerprint.to_string());
+        assert_eq!(text.split(' ').count(), 16);
+    }
     #[test]
     fn bounded_expiry() {
         for (s, seconds) in [("1s", 1), ("10m", 600), ("1h", 3600), ("120", 120)] { assert_eq!(duration(s).unwrap().as_secs(), seconds); }

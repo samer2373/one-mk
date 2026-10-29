@@ -110,6 +110,18 @@ impl Node {
         }
     }
 
+    pub async fn connect_pinned(&self, addr: SocketAddr, expected: Fingerprint) -> Result<Peer> {
+        let mut client = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls::pinned_client_config(&self.identity, expected)?)?));
+        client.transport_config(Arc::new(transport()));
+        let conn = self.endpoint.connect_with(client, addr, "one-mk")?.await?;
+        let peer = Self::peer(conn, true)?;
+        if peer.fingerprint == self.identity.fingerprint {
+            peer.conn.close(0u32.into(), b"self");
+            bail!("invitation points to this computer");
+        }
+        Ok(peer)
+    }
+
     /// Waits for the next authenticated incoming connection. `None` once
     /// the node is closed.
     ///

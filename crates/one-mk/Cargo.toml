@@ -18,12 +18,14 @@ one-mk-net = { version = "0.1.0", path = "../net" }
 one-mk-proto = { version = "0.1.0", path = "../proto" }
 quinn = { version = "0.11.12", default-features = false }
 qrcode = { version = "0.14.1", default-features = false }
+rand = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-std", "io-util", "net", "process"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-normalization = "0.1.26"
+zeroize = "1.9.1"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.191"

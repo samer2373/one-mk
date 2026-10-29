@@ -8,7 +8,7 @@ fn node() -> Node {
     Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap()
 }
 fn link(a: &Node) -> Invitation {
-    Invitation::new(a.identity().fingerprint, vec![a.local_addr().unwrap()], 24900, Duration::from_secs(60)).unwrap()
+    Invitation::new(a.identity().fingerprint, vec!["192.168.1.2:1234".parse().unwrap()], 24900, Duration::from_secs(60)).unwrap()
 }
 async fn peers(a: &Node, b: &Node) -> (Peer, Peer) {
     let (pb, pa) = tokio::join!(b.connect(a.local_addr().unwrap()), a.accept());
@@ -19,12 +19,12 @@ async fn exchange(a: &Node, b: &Node, link: &Invitation, state: &InvitationState
     tokio::time::timeout(Duration::from_secs(3), async {
         tokio::join!(async {
             match InviteSession::accept(&pa, a.identity().fingerprint, "A", 24900, state).await {
-                Ok(s) => s.confirm(true).await.unwrap_or(false),
+                Ok(mut s) => s.confirm(true).await.unwrap_or(false),
                 Err(_) => { pa.conn.close(1u32.into(), b"rejected"); false }
             }
         }, async {
             match InviteSession::join(&pb, claimed_b, "B", 24901, link).await {
-                Ok(s) => s.confirm(true).await.unwrap_or(false),
+                Ok(mut s) => s.confirm(true).await.unwrap_or(false),
                 Err(_) => { pb.conn.close(1u32.into(), b"rejected"); false }
             }
         })
@@ -41,7 +41,8 @@ async fn invitation_pairs_without_human_input_and_persists_both_devices() {
         InviteSession::accept(&pa, a.identity().fingerprint, "A", 24900, &state),
         InviteSession::join(&pb, b.identity().fingerprint, "B", 24901, &invitation)
     );
-    let (sa, sb) = (sa.unwrap(), sb.unwrap());
+    let (mut sa, mut sb) = (sa.unwrap(), sb.unwrap());
+    assert_eq!(sa.code, sb.code);
     assert_eq!((sa.peer_name.as_str(), sb.peer_name.as_str()), ("B", "A"));
     assert_eq!((sa.service_port, sb.service_port), (24901, 24900));
     let (ca, cb) = tokio::join!(sa.confirm(true), sb.confirm(true));
@@ -56,6 +57,8 @@ async fn invitation_pairs_without_human_input_and_persists_both_devices() {
         assert!(TrustStore::load(&dir).unwrap().is_trusted(&peer.fingerprint));
         std::fs::remove_dir_all(dir).unwrap();
     }
+    let (committed_a, committed_b) = tokio::join!(sa.committed(), sb.committed());
+    committed_a.unwrap(); committed_b.unwrap();
     a.close(); b.close();
 }
 
@@ -117,14 +120,15 @@ async fn refusal_burns_invitation_without_confirming_either_side() {
         InviteSession::accept(&pa, a.identity().fingerprint, "A", 24900, &state),
         InviteSession::join(&pb, b.identity().fingerprint, "B", 24901, &invitation)
     );
-    let (ca, cb) = tokio::join!(sa.unwrap().confirm(false), sb.unwrap().confirm(true));
+    let (mut sa, mut sb) = (sa.unwrap(), sb.unwrap());
+    let (ca, cb) = tokio::join!(sa.confirm(false), sb.confirm(true));
     assert!(!ca.unwrap() && !cb.unwrap());
     assert!(!state.active());
     a.close(); b.close();
 }
 
 #[tokio::test]
-async fn fifth_wrong_proof_burns_even_for_the_rightful_joiner() {
+async fn wrong_secret_cannot_name_or_burn_the_invitation() {
     let (a, b) = (node(), node());
     let invitation = link(&a);
     let state = InvitationState::new(&invitation);
@@ -134,7 +138,62 @@ async fn fifth_wrong_proof_burns_even_for_the_rightful_joiner() {
     *bytes.last_mut().unwrap() ^= 1;
     let wrong = Invitation::parse(&format!("{prefix}&d={}", URL_SAFE_NO_PAD.encode(bytes))).unwrap();
     for _ in 0..5 { assert_eq!(exchange(&a, &b, &wrong, &state, b.identity().fingerprint).await, (false, false)); }
-    assert!(!state.active());
-    assert_eq!(exchange(&a, &b, &invitation, &state, b.identity().fingerprint).await, (false, false));
+    assert!(state.active());
+    assert_eq!(exchange(&a, &b, &invitation, &state, b.identity().fingerprint).await, (true, true));
     a.close(); b.close();
+}
+
+#[tokio::test]
+async fn copied_link_impostor_with_same_name_has_a_different_code() {
+    let (host, real, impostor) = (node(), node(), node());
+    let invitation = link(&host);
+    let mut codes = Vec::new();
+    for joiner in [&impostor, &real] {
+        let state = InvitationState::new(&invitation);
+        let (incoming, outgoing) = peers(&host, joiner).await;
+        let (host_session, join_session) = tokio::join!(
+            InviteSession::accept(&incoming, host.identity().fingerprint, "Host", 24900, &state),
+            InviteSession::join(&outgoing, joiner.identity().fingerprint, "B", 24901, &invitation)
+        );
+        let (mut host_session, mut join_session) = (host_session.unwrap(), join_session.unwrap());
+        assert_eq!(host_session.code, join_session.code);
+        codes.push(host_session.code.clone());
+        let (host_decision, join_decision) = tokio::join!(host_session.confirm(false), join_session.confirm(true));
+        assert!(!host_decision.unwrap() && !join_decision.unwrap());
+        incoming.conn.close(0u32.into(), b"test complete");
+    }
+    assert_ne!(codes[0], codes[1]);
+    host.close(); real.close(); impostor.close();
+}
+
+#[tokio::test]
+async fn pinned_handshake_rejects_impostor_before_client_authentication() {
+    let (host, joiner) = (node(), node());
+    let expected = Identity::ephemeral().unwrap().fingerprint;
+    let (result, accepted) = tokio::join!(
+        tokio::time::timeout(Duration::from_secs(2), joiner.connect_pinned(host.local_addr().unwrap(), expected)),
+        tokio::time::timeout(Duration::from_millis(300), host.accept())
+    );
+    assert!(result.unwrap().is_err());
+    assert!(accepted.is_err(), "server must not receive an authenticated client certificate");
+    host.close(); joiner.close();
+}
+
+#[tokio::test]
+async fn lost_commit_ack_reports_uncertainty_instead_of_success() {
+    let (host, joiner) = (node(), node());
+    let invitation = link(&host);
+    let state = InvitationState::new(&invitation);
+    let (incoming, outgoing) = peers(&host, &joiner).await;
+    let (host_session, join_session) = tokio::join!(
+        InviteSession::accept(&incoming, host.identity().fingerprint, "A", 24900, &state),
+        InviteSession::join(&outgoing, joiner.identity().fingerprint, "B", 24901, &invitation)
+    );
+    let (mut host_session, mut join_session) = (host_session.unwrap(), join_session.unwrap());
+    let (host_yes, join_yes) = tokio::join!(host_session.confirm(true), join_session.confirm(true));
+    assert!(host_yes.unwrap() && join_yes.unwrap());
+    drop(join_session);
+    outgoing.conn.close(0u32.into(), b"simulated crash before saving");
+    assert!(tokio::time::timeout(Duration::from_secs(2), host_session.committed()).await.unwrap().is_err());
+    host.close(); joiner.close();
 }

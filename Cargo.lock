@@ -3149,6 +3149,7 @@ dependencies = [
  "one-mk-proto",
  "qrcode",
  "quinn",
+ "rand",
  "serde",
  "tokio",
  "toml 1.1.8+spec-1.1.0",
@@ -3156,6 +3157,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-normalization",
  "zbus",
+ "zeroize",
 ]
 
 [[package]]
@@ -3189,6 +3191,7 @@ dependencies = [
  "anyhow",
  "directories",
  "one-mk-proto",
+ "zeroize",
 ]
 
 [[package]]

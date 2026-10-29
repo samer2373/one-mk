@@ -572,6 +572,9 @@ pub struct InvitationStatus {
     pub link: String,
     pub expires: u64,
 }
+impl Drop for InvitationStatus {
+    fn drop(&mut self) { zeroize::Zeroize::zeroize(&mut self.link); }
+}
 impl InvitationStatus {
     pub fn encode(&self) -> String { format!("invitation\t{}\t{}\n", self.expires, self.link) }
     pub fn decode(text: &str) -> Option<Self> {
