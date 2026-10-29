@@ -224,15 +224,15 @@ impl LocalInputGate {
 
 // ---------------------------------------------------------------- backoff
 
-/// Delays between attempts to re-create a lost session: 1 s, 2 s, 5 s,
-/// 10 s, 20 s, then every 30 s.
+/// Delays between attempts to re-create a lost session: 1 s, 2 s, 4 s,
+/// 8 s, 16 s, then every 30 s.
 #[derive(Debug, Default)]
 pub(crate) struct Backoff {
     step: usize,
 }
 
 impl Backoff {
-    const STEPS: [u64; 6] = [1, 2, 5, 10, 20, 30];
+    const STEPS: [u64; 6] = [1, 2, 4, 8, 16, 30];
 
     pub(crate) fn next_delay(&mut self) -> Duration {
         let s = Self::STEPS[self.step.min(Self::STEPS.len() - 1)];
@@ -386,7 +386,7 @@ mod tests {
     fn backoff_steps() {
         let mut b = Backoff::default();
         let secs: Vec<u64> = (0..8).map(|_| b.next_delay().as_secs()).collect();
-        assert_eq!(secs, vec![1, 2, 5, 10, 20, 30, 30, 30]);
+        assert_eq!(secs, vec![1, 2, 4, 8, 16, 30, 30, 30]);
         b.reset();
         assert_eq!(b.next_delay().as_secs(), 1);
     }

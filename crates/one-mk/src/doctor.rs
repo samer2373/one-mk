@@ -472,7 +472,9 @@ fn linux_firewall(f: &Firewall, port: u16) -> Outcome {
     }
 }
 
-pub fn portal_check(os: Os, p: Option<&Portals>) -> Check {
+/// `running`: what the running daemon's input backend reports (waiting
+/// for the permission dialog, permission declined, retrying).
+pub fn portal_check(os: Os, p: Option<&Portals>, running: &[String]) -> Check {
     let title = "Permissions";
     let out = match (os, p) {
         (Os::Linux, Some(p)) => linux_portals(p),
@@ -480,6 +482,14 @@ pub fn portal_check(os: Os, p: Option<&Portals>) -> Check {
             "Not checked on macOS. Allow one-mk under System Settings > Privacy & Security > Accessibility and Input Monitoring.",
         ),
         _ => Outcome::skip("Nothing to check on this system."),
+    };
+    let out = match running {
+        [] => out,
+        _ if out.status == Status::Fail => out,
+        lines => Outcome::warn(
+            format!("The running one-mk says: {}", lines.join(" ")),
+            "Do as it says; `one-mk status` shows it until it is resolved.",
+        ),
     };
     check("input", title, out)
 }
@@ -776,7 +786,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.push(port_check(&daemon, &port_facts));
     checks.push(mdns_check(&daemon, &mdns));
     checks.push(firewall_check(os, &firewall, port));
-    checks.push(portal_check(os, portals.as_ref()));
+    checks.push(portal_check(os, portals.as_ref(), daemon.status().map_or(&[], |s| &s.input)));
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
     checks.push(network_check(&addrs));
     let seen = mdns.seen.as_deref().unwrap_or_default();
@@ -1311,21 +1321,29 @@ mod tests {
     #[test]
     fn portal_decisions() {
         let ok = Some(Ok(()));
-        let c = portal_check(Os::Linux, Some(&portals(ok, ok, true, true)));
+        let c = portal_check(Os::Linux, Some(&portals(ok, ok, true, true)), &[]);
         assert_eq!(st(&c), Status::Pass);
-        let c = portal_check(Os::Linux, Some(&portals(ok, ok, true, false)));
+        let c = portal_check(Os::Linux, Some(&portals(ok, ok, true, false)), &[]);
         assert_eq!(st(&c), Status::Warn);
         assert!(c.outcome.fix.unwrap().contains("one-mk run"));
-        let c = portal_check(Os::Linux, Some(&portals(Some(Err("not found")), ok, true, true)));
+        let c = portal_check(Os::Linux, Some(&portals(Some(Err("not found")), ok, true, true)), &[]);
         assert_eq!(st(&c), Status::Fail);
-        let c = portal_check(Os::Linux, Some(&portals(ok, Some(Err("no")), true, true)));
+        let c = portal_check(Os::Linux, Some(&portals(ok, Some(Err("no")), true, true)), &[]);
         assert_eq!(st(&c), Status::Fail);
-        let c = portal_check(Os::Linux, Some(&portals(None, None, true, true)));
+        let c = portal_check(Os::Linux, Some(&portals(None, None, true, true)), &[]);
         assert_eq!(st(&c), Status::Warn);
-        let c = portal_check(Os::Linux, Some(&portals(ok, ok, false, true)));
+        let c = portal_check(Os::Linux, Some(&portals(ok, ok, false, true)), &[]);
         assert_eq!(st(&c), Status::Warn);
-        assert_eq!(st(&portal_check(Os::Windows, None)), Status::Skip);
-        assert_eq!(st(&portal_check(Os::Mac, None)), Status::Skip);
+        assert_eq!(st(&portal_check(Os::Windows, None, &[])), Status::Skip);
+        assert_eq!(st(&portal_check(Os::Mac, None, &[])), Status::Skip);
+        // What the running daemon reports comes first, unless the desktop
+        // can't do it at all.
+        let waiting = ["Waiting for your approval: allow one-mk in the desktop's dialog.".to_owned()];
+        let c = portal_check(Os::Linux, Some(&portals(ok, ok, true, true)), &waiting);
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.detail.contains("Waiting for your approval"), "{}", c.outcome.detail);
+        let c = portal_check(Os::Linux, Some(&portals(Some(Err("not found")), ok, true, true)), &waiting);
+        assert_eq!(st(&c), Status::Fail);
     }
 
     #[test]

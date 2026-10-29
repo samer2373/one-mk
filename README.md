@@ -516,9 +516,22 @@ and exits with status 1 if something failed.
 - **`one-mk status` says it is not running.** Start it with `one-mk run`, or
   use `one-mk install` so it starts at login. On Linux with systemd, the log
   is `journalctl --user -u one-mk`.
-- **GNOME asks for permission.** On Wayland, GNOME shows a dialog the first
-  time asking to allow input capture and remote control. Allow it. If you
-  dismissed it, run `one-mk run` again.
+- **The desktop asks for permission (Linux).** On Wayland, one-mk prints
+  "Waiting for your approval: ..." while the desktop's dialog is open, and
+  waits as long as you need. The remote-control permission is remembered
+  (`remote-desktop.token` in the config folder, readable by you only), so it
+  is asked once. GNOME 50 can't remember the input-capture permission yet,
+  so that dialog comes up each time one-mk starts (KDE, and newer desktops
+  with InputCapture version 2, remember it in `input-capture.token`). If
+  you declined, `one-mk status` says so; restart one-mk to be asked again.
+  If the desktop no longer takes the saved permission, one-mk deletes it
+  and asks again by itself.
+- **The pointer or a key seems stuck (Linux).** Press Ctrl+Alt+Shift+Esc.
+  one-mk also lets go by itself whenever the desktop session drops (portal
+  restart, session bus restart, a monitor change that closes the session),
+  when the screen locks and before the computer sleeps; it then reconnects
+  in the background (after 1, 2, 4 ... up to 30 seconds). `one-mk status`
+  shows a line while it is reconnecting or waiting for you.
 - **macOS.** Allow one-mk under System Settings > Privacy & Security >
   Accessibility and Input Monitoring, then start it again. (Not yet tested on
   real hardware.)

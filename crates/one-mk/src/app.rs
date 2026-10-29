@@ -420,6 +420,8 @@ struct App {
     auto_profile: Option<String>,
     /// A network change has been seen since starting.
     network_seen: bool,
+    /// What the input backend says needs the user, by part (`Event::Status`).
+    input_problems: std::collections::BTreeMap<&'static str, String>,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -525,6 +527,7 @@ pub async fn serve(
         watching_network: false,
         auto_profile: None,
         network_seen: false,
+        input_problems: Default::default(),
     };
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
     if app.locked {
@@ -888,6 +891,15 @@ impl App {
                 }
             }
             Event::Error(msg) => tracing::error!("{msg}"),
+            Event::Status { part, problem: Some(p) } => {
+                if self.input_problems.get(part) != Some(&p) {
+                    println!("{p}");
+                    self.input_problems.insert(part, p);
+                }
+            }
+            Event::Status { part, problem: None } => {
+                self.input_problems.remove(part);
+            }
         }
     }
 
@@ -1765,6 +1777,7 @@ impl App {
                 profiles: profiles.names(),
                 profile: profiles.active,
             }),
+            input: self.input_problems.values().cloned().collect(),
         }
     }
 
@@ -3560,6 +3573,34 @@ mod tests {
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 125, down: false }, "the modifier again");
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(injected(&mut duo.hb), vec![]);
+        duo.stop().await;
+    }
+
+    /// What the input backend says needs the user (a permission dialog
+    /// to approve) shows in `one-mk status` until it says all is well.
+    #[tokio::test]
+    async fn input_problems_show_in_status() {
+        let duo = Duo::start("input-status", None).await;
+        let waiting = "Waiting for your approval: allow one-mk in the desktop's dialog.";
+        duo.ha.events.send(Event::Status { part: "control", problem: Some(waiting.into()) }).unwrap();
+        let mut seen = Vec::new();
+        for _ in 0..100 {
+            seen = status(&duo.da).await.input;
+            if !seen.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(seen, [waiting]);
+        duo.ha.events.send(Event::Status { part: "control", problem: None }).unwrap();
+        for _ in 0..100 {
+            seen = status(&duo.da).await.input;
+            if seen.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(seen.is_empty(), "{seen:?}");
         duo.stop().await;
     }
 

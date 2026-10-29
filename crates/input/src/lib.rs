@@ -70,6 +70,11 @@ pub enum Event {
     Hotkeys(hotkeys::Availability),
     /// A part of the backend failed; the message is shown to the user.
     Error(String),
+    /// How a part of the backend is doing, for `one-mk status`: `Some`
+    /// says in one line what is wrong or what the user must do (approve
+    /// the desktop's permission dialog), `None` that it works (again).
+    /// `part` tells the parts apart ("capture", "control"). Sent on changes.
+    Status { part: &'static str, problem: Option<String> },
 }
 
 /// From the daemon to the capture side.
