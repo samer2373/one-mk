@@ -222,8 +222,16 @@ struct Remote {
     peer_fullscreen: bool,
     /// When the peer last said what has its focus.
     focus_heard: Instant,
-    /// We asked the peer to report that (`WatchFocus`).
-    watching_focus: bool,
+    /// We asked the peer to report whether a fullscreen window has its
+    /// focus (gaming `auto`), and which app has it (per-app input rules),
+    /// with `WatchFocus`.
+    watching_fullscreen: bool,
+    watching_app: bool,
+    /// The names of the app with the focus there, as the peer last said
+    /// (empty: unknown, so no per-app rule applies), and whether it said
+    /// anything about it this visit.
+    peer_apps: Vec<String>,
+    apps_heard: bool,
     /// We asked the peer to keep its screen awake (`Inhibit`).
     inhibit_sent: bool,
     /// Key mapper, pointer, scroll and button tuning for this peer.
@@ -259,10 +267,14 @@ struct Owner {
     /// The owner sends relative motion (gaming mode), so its clicks carry
     /// no position to apply.
     relative: bool,
-    /// The owner asked to hear whether a fullscreen window has the focus.
+    /// The owner asked to hear what has the focus: whether a fullscreen
+    /// window has it, which app has it (only it is ever told that), or both.
     watch_focus: bool,
-    /// Whether a fullscreen window has the focus, as last told to the owner.
-    focus_sent: Option<bool>,
+    watch_fullscreen: bool,
+    watch_app: bool,
+    /// Whether a fullscreen window has the focus, and the app's names, as
+    /// last told to the owner.
+    focus_sent: Option<(bool, Vec<String>)>,
     /// When to look at the focus again (see `App::report_focus`).
     focus_check: Option<Instant>,
     /// The owner asked to keep this screen awake while it controls it.
@@ -288,6 +300,8 @@ impl Owner {
             last_input: now,
             relative: false,
             watch_focus: false,
+            watch_fullscreen: false,
+            watch_app: false,
             focus_sent: None,
             focus_check: None,
             inhibit: false,
@@ -1183,7 +1197,7 @@ impl App {
         let peer = &self.peers[&fp];
         let setting = self.trust.get(&fp).map_or(Swap::Auto, |d| d.swap_ctrl_cmd);
         let swap = swap_applies(setting, os::local(), peer.os);
-        let tune = self.tune_for(fp, swap);
+        let tune = self.tune_for(fp, swap, &[]);
         let epoch = cursor.epoch();
         peer.ctl.send(Control::Enter { epoch, pos: cursor.pos() });
         if wants_relative(self.settings.gaming, peer.caps, false) && cursor.set_relative(true) {
@@ -1206,7 +1220,10 @@ impl App {
             resends: 0,
             peer_fullscreen: false,
             focus_heard: now,
-            watching_focus: false,
+            watching_fullscreen: false,
+            watching_app: false,
+            peer_apps: Vec::new(),
+            apps_heard: false,
             inhibit_sent: false,
             tune,
         });
@@ -1217,15 +1234,25 @@ impl App {
     /// Switches the visit in progress between absolute and relative motion
     /// when gaming mode, the peer's abilities or its fullscreen state say so.
     fn apply_pointer_mode(&mut self) {
+        let Some(fp) = self.remote.as_ref().map(|r| r.peer) else { return };
+        let app = self.peers.get(&fp).is_some_and(|p| p.caps & caps::FOCUS_APP != 0) && !self.app_rules_for(fp).is_empty();
         let Some(r) = self.remote.as_mut() else { return };
         let Some(p) = self.peers.get(&r.peer) else { return };
-        // Watch the peer's focus only for gaming `auto`, and stop it from
-        // looking at every click once that is switched off.
-        let watch = self.settings.gaming == Gaming::Auto && p.caps & caps::FOCUS != 0;
-        if watch != r.watching_focus {
-            r.watching_focus = watch;
-            r.peer_fullscreen &= watch;
-            p.ctl.send(Control::WatchFocus { epoch: r.cursor.epoch(), on: watch });
+        // Watch the peer's focus only for gaming `auto` and per-app rules,
+        // and stop it from looking at every click once neither wants it.
+        let fullscreen = self.settings.gaming == Gaming::Auto && p.caps & caps::FOCUS != 0;
+        if (fullscreen, app) != (r.watching_fullscreen, r.watching_app) {
+            r.watching_fullscreen = fullscreen;
+            r.watching_app = app;
+            r.peer_fullscreen &= fullscreen;
+            // Not fullscreen as well only if it understands that.
+            let only_app = app && !fullscreen;
+            p.ctl.send(Control::WatchFocus { epoch: r.cursor.epoch(), on: fullscreen || app, app, fullscreen: !only_app });
+            if !app && !std::mem::take(&mut r.peer_apps).is_empty() {
+                r.apps_heard = false;
+                self.retune();
+                return self.apply_pointer_mode();
+            }
         }
         let want = wants_relative(self.settings.gaming, p.caps, r.peer_fullscreen);
         if r.cursor.set_relative(want) {
@@ -1410,18 +1437,30 @@ impl App {
     /// OS can't tell (a Wayland-native window), "fullscreen" is taken back
     /// if it was said, or the owner would stay in relative mode, where no
     /// edge leads home; otherwise nothing is said.
+    ///
+    /// The app's names go along only if the owner asked for them (its
+    /// per-app input rules), only to it, and are said again whenever they
+    /// change, at the same moments: no timer looks for them. When this OS
+    /// can't tell (again a Wayland-native window), the app is unknown,
+    /// which the owner hears if it had been told one.
     fn report_focus(&mut self) {
         let Some(o) = self.owner.as_mut() else { return };
         o.focus_check = None;
         if !o.watch_focus {
             return;
         }
-        let fullscreen = match self.focus.focus() {
-            Some(f) => f.fullscreen,
-            None if o.focus_sent == Some(true) => false,
-            None => return,
+        let probe = self.focus.focus();
+        let fullscreen = o.watch_fullscreen && probe.as_ref().is_some_and(|f| f.fullscreen);
+        let apps = match &probe {
+            Some(f) if o.watch_app => one_mk_proto::appmatch::clean_names(&f.apps),
+            _ => Vec::new(),
         };
-        let changed = o.focus_sent.replace(fullscreen) != Some(fullscreen);
+        let state = (fullscreen, apps);
+        // Nothing said yet and nothing known: nothing to say.
+        let changed = o.focus_sent.as_ref().map_or(probe.is_some(), |sent| *sent != state);
+        if changed {
+            o.focus_sent = Some(state.clone());
+        }
         if fullscreen {
             o.focus_check = Some(Instant::now() + FOCUS_REPEAT);
         }
@@ -1429,7 +1468,11 @@ impl App {
             return;
         }
         if let Some(p) = self.peers.get(&o.peer).filter(|p| p.id == o.link) {
-            p.ctl.send(Control::Focus { epoch: o.epoch, fullscreen });
+            let (fullscreen, apps) = state;
+            if changed && o.watch_app {
+                tracing::debug!(?apps, "telling the controlling computer which app has the focus");
+            }
+            p.ctl.send(Control::Focus { epoch: o.epoch, fullscreen, apps });
         }
     }
 
@@ -1653,10 +1696,18 @@ impl App {
                     o.relative = relative;
                 }
             }
-            Control::Focus { epoch, fullscreen } => {
+            Control::Focus { epoch, fullscreen, apps } => {
                 if let Some(r) = self.remote.as_mut().filter(|r| r.peer == fp && r.cursor.epoch() == epoch) {
-                    r.peer_fullscreen = fullscreen;
+                    r.peer_fullscreen = fullscreen && r.watching_fullscreen;
                     r.focus_heard = Instant::now();
+                    if r.watching_app {
+                        r.apps_heard = true;
+                        if apps != r.peer_apps {
+                            tracing::debug!(?apps, "the app with the focus on the other computer changed");
+                            r.peer_apps = apps;
+                            self.retune(); // per-app rules on or off
+                        }
+                    }
                     self.apply_pointer_mode();
                 }
             }
@@ -1667,9 +1718,11 @@ impl App {
                     o.inhibit = on;
                 }
             }
-            Control::WatchFocus { epoch, on } => {
+            Control::WatchFocus { epoch, on, app, fullscreen } => {
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
                     o.watch_focus = on;
+                    o.watch_fullscreen = on && fullscreen;
+                    o.watch_app = on && app;
                     o.focus_sent = None;
                     self.report_focus();
                 }
@@ -1908,7 +1961,7 @@ impl App {
         self.apply_pointer_mode();
         self.sync_sides();
         self.shortcuts.reload(&self.settings.hotkeys);
-        let paired: Vec<_> = self.trust.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone())).collect();
+        let paired: Vec<_> = self.trust.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone(), d.os)).collect();
         for p in self.settings.input.check(&paired) {
             tracing::warn!("input tuning in settings.toml: {p}");
         }
@@ -2035,6 +2088,7 @@ impl App {
                 warnings: self.conflicts.clone(),
             }),
             input: self.input_problems.values().cloned().collect(),
+            tuning: self.app_rule_notes(),
         }
     }
 
@@ -4125,7 +4179,7 @@ mod tests {
                 break;
             }
         }
-        c.send(Control::Focus { epoch, fullscreen: true }).await;
+        c.send(Control::Focus { epoch, fullscreen: true, apps: vec![] }).await;
         eventually_async("relative motion", || async { status(&db).await.relative }).await;
         let since = Instant::now();
         // Then nothing more from C.

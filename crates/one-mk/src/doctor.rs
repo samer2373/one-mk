@@ -607,7 +607,14 @@ pub struct Tuning {
     pub summary: Option<String>,
     /// Rules that can't work, conflict or never apply.
     pub problems: Vec<String>,
+    /// What to know about rules that do (where rules for apps can't see
+    /// the app).
+    pub notes: Vec<String>,
 }
+
+/// Why rules for apps don't apply to Wayland windows on Linux.
+pub const WAYLAND_APPS: &str = "Rules for apps see only X11 (XWayland) windows on a Linux computer: GNOME and KDE don't tell \
+a background program which Wayland window has the focus, so in those windows the rules for apps don't apply";
 
 /// Input tuning: skipped when nothing is set; the problems
 /// `one-mk keymap check` would print, if any.
@@ -615,9 +622,11 @@ pub fn tuning_check(t: Option<&Tuning>) -> Check {
     let out = match t {
         None => Outcome::skip("settings.toml can't be read (see the settings check)."),
         Some(Tuning { summary: None, .. }) => Outcome::skip("No key, button, pointer or scroll rules are set."),
-        Some(Tuning { summary: Some(s), problems }) if problems.is_empty() => Outcome::pass(s.clone()),
-        Some(Tuning { problems, .. }) => Outcome::warn(
-            format!("{}.", problems.join("; ")),
+        Some(Tuning { summary: Some(s), problems, notes }) if problems.is_empty() => {
+            Outcome::pass(notes.iter().fold(s.clone(), |all, n| format!("{all} {n}.")))
+        }
+        Some(Tuning { problems, notes, .. }) => Outcome::warn(
+            format!("{}.", problems.iter().chain(notes).cloned().collect::<Vec<_>>().join("; ")),
             "See `one-mk keymap check`, and fix or remove those rules (`one-mk keymap`, `buttons`, `pointer`, `scroll`, or [input] in settings.toml).",
         ),
     };
@@ -627,9 +636,11 @@ pub fn tuning_check(t: Option<&Tuning>) -> Check {
 fn probe_tuning(dir: &Path) -> Option<Tuning> {
     let input = Settings::load(dir).ok()?.input;
     let paired = TrustStore::load(dir)
-        .map(|t| t.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone())).collect::<Vec<_>>())
+        .map(|t| t.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone(), d.os)).collect::<Vec<_>>())
         .unwrap_or_default();
-    Some(Tuning { summary: input.summary(), problems: input.check(&paired) })
+    let linux = paired.iter().any(|(.., o)| *o == one_mk_proto::os::LINUX);
+    let notes = if input.uses_apps() && linux { vec![WAYLAND_APPS.to_owned()] } else { Vec::new() };
+    Some(Tuning { summary: input.summary(), problems: input.check(&paired), notes })
 }
 
 pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
@@ -1579,6 +1590,7 @@ mod tests {
         let t = |summary: Option<&str>, problems: &[&str]| Tuning {
             summary: summary.map(str::to_owned),
             problems: problems.iter().map(|p| p.to_string()).collect(),
+            notes: Vec::new(),
         };
         assert_eq!(st(&tuning_check(None)), Status::Skip);
         assert_eq!(st(&tuning_check(Some(&t(None, &[])))), Status::Skip);
@@ -1593,6 +1605,12 @@ mod tests {
         std::fs::write(dir.join("settings.toml"), "[[input.keymap.rule]]\nfrom = \"capslok\"\nto = \"esc\"\n").unwrap();
         let found = probe_tuning(&dir).unwrap();
         assert!(found.problems[0].contains("\"capslok\" is not a key name"), "{found:?}");
+        assert!(found.notes.is_empty());
+        // Rules for apps, and a Linux computer paired: where they can't see.
+        let with_app = Tuning { notes: vec![WAYLAND_APPS.into()], ..t(Some("Input tuning: 1 key rule."), &[]) };
+        let noted = tuning_check(Some(&with_app));
+        assert_eq!(st(&noted), Status::Pass);
+        assert!(noted.outcome.detail.contains("Wayland window has the focus"), "{}", noted.outcome.detail);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

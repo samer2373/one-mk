@@ -15,6 +15,7 @@ use one_mk_proto::keynames::{self, Trigger};
 use one_mk_proto::pointer::{self, Accel, PointerTune};
 use one_mk_proto::remap::{self, Keymap, Output, RuleSpec, What};
 use one_mk_proto::scroll::{self, ModScroll, Natural, ScrollConfig};
+use one_mk_proto::appmatch::AppPattern;
 use one_mk_proto::os;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -269,7 +270,8 @@ pub struct KeyRule {
     pub timeout_ms: Option<u32>,
     #[serde(default, skip_serializing_if = "Scope::is_global")]
     pub scope: Scope,
-    /// Reserved for per-app rules (plan 4D): a rule with it is not used yet.
+    /// Only while this app has the focus on the computer input goes to
+    /// (see `one_mk_proto::appmatch`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
 }
@@ -493,6 +495,36 @@ pub struct PeerFacts<'a> {
     /// Its full fingerprint, in hex.
     pub id: &'a str,
     pub os: u8,
+    /// The names of the app with the focus there, as it said (empty: it
+    /// didn't, or can't tell; then no rule for an app applies).
+    pub apps: &'a [String],
+}
+
+/// How much a rule for an app outranks one without: any scope's rule for
+/// the focused app beats every rule that names no app.
+const APP_RANK: u8 = 3;
+
+/// How a rule's `app` bears on `peer`: what it adds to the rule's rank if
+/// it applies, `None` if it doesn't, an error if it can't be used.
+fn app_rank(app: &Option<String>, peer: &PeerFacts) -> Result<Option<u8>, String> {
+    let Some(a) = app else { return Ok(Some(0)) };
+    let p: AppPattern = a.parse()?;
+    Ok(p.matches(peer.apps).then_some(APP_RANK))
+}
+
+/// A rule's whole rank for `peer` (scope, then app), `None` if it doesn't
+/// apply. A rule whose `app` can't be used never applies.
+fn rank_for(scope: &Scope, app: &Option<String>, peer: &PeerFacts) -> Option<u8> {
+    Some(scope.rank(peer)? + app_rank(app, peer).ok()??)
+}
+
+/// Whether two rules' `app` say the same (one rule replaces the other).
+fn same_app(a: &Option<String>, b: &Option<String>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.trim().eq_ignore_ascii_case(b.trim()),
+        _ => false,
+    }
 }
 
 /// Everything that applies to one computer.
@@ -524,9 +556,14 @@ impl TuningSettings {
         let buttons = self.button.iter().enumerate().map(|(i, r)| (place("input.button", i), &r.scope, &r.app, r.spec()));
         for (n, (at, scope, app, spec)) in keys.chain(buttons).enumerate() {
             let Some(rank) = scope.rank(peer) else { continue };
-            if app.is_some() {
-                continue; // per-app rules: plan 4D
-            }
+            let rank = match app_rank(app, peer) {
+                Ok(Some(r)) => rank + r,
+                Ok(None) => continue,
+                Err(e) => {
+                    warnings.push(format!("{at} skipped: {e}"));
+                    continue;
+                }
+            };
             match spec {
                 Ok(s) => found.push((rank, n, s, at)),
                 Err(e) => warnings.push(format!("{at} skipped: {e}")),
@@ -573,7 +610,7 @@ impl TuningSettings {
     /// Pointer rules for `peer`, field by field, the most specific last.
     fn pointer_for(&self, peer: &PeerFacts) -> (PointerTune, Vec<String>) {
         let mut rules: Vec<(u8, &PointerRule)> =
-            self.pointer.iter().filter(|r| r.app.is_none()).filter_map(|r| Some((r.scope.rank(peer)?, r))).collect();
+            self.pointer.iter().filter_map(|r| Some((rank_for(&r.scope, &r.app, peer)?, r))).collect();
         rules.sort_by_key(|(rank, _)| *rank);
         let mut p = PointerRule::default();
         for (_, r) in rules {
@@ -603,8 +640,7 @@ impl TuningSettings {
             .scroll
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.app.is_none())
-            .filter_map(|(i, r)| Some((r.scope.rank(peer)?, i, r)))
+            .filter_map(|(i, r)| Some((rank_for(&r.scope, &r.app, peer)?, i, r)))
             .collect();
         rules.sort_by_key(|(rank, i, r)| (*rank, r.device.is_some(), *i));
         let params = |device: Device| {
@@ -656,33 +692,72 @@ impl TuningSettings {
         (cfg, warnings)
     }
 
+    /// Every rule's place, scope and app: key rules, pointer, scroll and
+    /// button settings, in that order.
+    fn scoped(&self) -> impl Iterator<Item = (String, &Scope, &Option<String>)> {
+        let keys = self.keymap.rule.iter().enumerate().map(|(i, r)| (place("input.keymap.rule", i), &r.scope, &r.app));
+        let pointer = self.pointer.iter().enumerate().map(|(i, r)| (place("input.pointer", i), &r.scope, &r.app));
+        let scroll = self.scroll.iter().enumerate().map(|(i, r)| (place("input.scroll", i), &r.scope, &r.app));
+        let buttons = self.button.iter().enumerate().map(|(i, r)| (place("input.button", i), &r.scope, &r.app));
+        keys.chain(pointer).chain(scroll).chain(buttons)
+    }
+
+    /// Whether any rule names an app.
+    pub fn uses_apps(&self) -> bool {
+        self.scoped().any(|(_, _, app)| app.is_some())
+    }
+
+    /// The apps that rules for `peer` name (usable patterns, as written,
+    /// each once). While there are any, the daemon asks `peer` which app
+    /// has its focus; otherwise it never does.
+    pub fn apps_for(&self, peer: &PeerFacts) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (_, scope, app) in self.scoped() {
+            if let Some(a) = app
+                && scope.rank(peer).is_some()
+                && let Ok(p) = a.parse::<AppPattern>()
+                && !out.contains(&p.to_string())
+            {
+                out.push(p.to_string());
+            }
+        }
+        out
+    }
+
     /// Every problem, for `one-mk keymap check` and `one-mk doctor`:
     /// rules that can't be read, conflicts, rules nothing can reach,
     /// computers that aren't paired, settings this computer can't do.
-    /// `paired` are the paired computers' names and ids.
-    pub fn check(&self, paired: &[(String, String)]) -> Vec<String> {
+    /// `paired` are the paired computers' names, ids and OSes.
+    pub fn check(&self, paired: &[(String, String, u8)]) -> Vec<String> {
         let mut out = Vec::new();
-        // Every scope in use, checked as a computer it would apply to.
+        // Every scope in use, checked as a computer it would apply to, and
+        // every app named plainly, as the focused app there.
         let mut scopes: Vec<&Scope> = Vec::new();
-        let all_scopes = self
-            .keymap
-            .rule
-            .iter()
-            .map(|r| (&r.scope, &r.app))
-            .chain(self.button.iter().map(|r| (&r.scope, &r.app)))
-            .chain(self.pointer.iter().map(|r| (&r.scope, &r.app)))
-            .chain(self.scroll.iter().map(|r| (&r.scope, &r.app)));
-        let mut apps = 0;
-        for (scope, app) in all_scopes {
-            if app.is_some() {
-                apps += 1;
-            }
+        let mut plain_apps: Vec<String> = Vec::new();
+        for (at, scope, app) in self.scoped() {
             if !scopes.contains(&scope) {
                 scopes.push(scope);
             }
-        }
-        if apps > 0 {
-            out.push(format!("{apps} rule(s) have `app` set: per-app rules are not supported yet, so they are not used"));
+            let Some(app) = app else { continue };
+            let p = match app.parse::<AppPattern>() {
+                Ok(p) => p,
+                Err(e) => {
+                    out.push(format!("{at}: {e}"));
+                    continue;
+                }
+            };
+            let target = match scope {
+                Scope::Global => None,
+                Scope::Os(o) => Some(*o),
+                Scope::Peer(name) => paired.iter().find(|(n, id, _)| peer_matches(name, n, id)).map(|(.., o)| *o),
+            };
+            if let Some(why) = target.and_then(|o| p.never_on(o)) {
+                out.push(format!("{at}: {why}"));
+            }
+            let plain = app.trim();
+            if !p.is_negated() && !plain.contains('*') && !plain_apps.iter().any(|a| a.eq_ignore_ascii_case(plain)) {
+                plain_apps.push(plain.to_owned());
+            }
         }
         for (i, r) in self.keymap.rule.iter().enumerate() {
             if let Err(e) = r.spec() {
@@ -696,25 +771,32 @@ impl TuningSettings {
         }
         for s in &scopes {
             if let Scope::Peer(p) = s
-                && !paired.iter().any(|(name, id)| peer_matches(p, name, id))
+                && !paired.iter().any(|(name, id, _)| peer_matches(p, name, id))
             {
                 out.push(format!("rules for {p:?} never apply: no paired computer is called that"));
             }
         }
+        let focused: Vec<Vec<String>> = std::iter::once(Vec::new()).chain(plain_apps.into_iter().map(|a| vec![a])).collect();
         for s in &scopes {
-            let facts = match s {
-                Scope::Global => PeerFacts { name: "", id: "", os: os::UNKNOWN },
-                Scope::Os(o) => PeerFacts { name: "", id: "", os: *o },
-                Scope::Peer(p) => PeerFacts { name: p, id: "", os: os::UNKNOWN },
-            };
-            let (specs, warnings) = self.specs(&facts);
-            out.extend(warnings.into_iter().filter(|w| !w.contains(" skipped: ")));
-            let target = remap::Target { os: facts.os, swap: false };
-            match Keymap::compile(&specs, target, self.keymap.tap()) {
-                Ok(c) => out.extend(c.warnings),
-                Err(e) => out.push(format!("for {s}: {e}")),
+            for apps in &focused {
+                let facts = match s {
+                    Scope::Global => PeerFacts { name: "", id: "", os: os::UNKNOWN, apps },
+                    Scope::Os(o) => PeerFacts { name: "", id: "", os: *o, apps },
+                    Scope::Peer(p) => PeerFacts { name: p, id: "", os: os::UNKNOWN, apps },
+                };
+                let (specs, warnings) = self.specs(&facts);
+                out.extend(warnings.into_iter().filter(|w| !w.contains(" skipped: ")));
+                let target = remap::Target { os: facts.os, swap: false };
+                let what = match apps.first() {
+                    Some(a) => format!("{s}, in app {a}"),
+                    None => s.to_string(),
+                };
+                match Keymap::compile(&specs, target, self.keymap.tap()) {
+                    Ok(c) => out.extend(c.warnings),
+                    Err(e) => out.push(format!("for {what}: {e}")),
+                }
+                out.extend(self.scroll_for(&facts).1);
             }
-            out.extend(self.scroll_for(&facts).1);
         }
         for (i, r) in self.pointer.iter().enumerate() {
             if r.acceleration.is_some_and(|a| a != AccelMode::System) && !RAW_MOTION {
@@ -778,16 +860,28 @@ fn check_scope(dir: &Path, scope: &Scope) -> Result<()> {
     Ok(())
 }
 
-fn paired(dir: &Path) -> Vec<(String, String)> {
+fn paired(dir: &Path) -> Vec<(String, String, u8)> {
     TrustStore::load(dir)
-        .map(|t| t.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone())).collect())
+        .map(|t| t.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone(), d.os)).collect())
         .unwrap_or_default()
 }
 
-fn scope_suffix(scope: &Scope) -> String {
-    match scope {
-        Scope::Global => String::new(),
-        s => format!(" (for {s})"),
+/// A rule's `app` in words: "only in app code", "in every app but code".
+pub fn app_words(app: &str) -> String {
+    let app = app.trim();
+    match app.strip_prefix('!') {
+        Some(not) => format!("in every app but {}", not.trim_start()),
+        None => format!("only in app {app}"),
+    }
+}
+
+/// Where a rule applies, as a suffix: " (for Laptop, only in app code)".
+fn where_suffix(scope: &Scope, app: &Option<String>) -> String {
+    match (scope, app) {
+        (Scope::Global, None) => String::new(),
+        (Scope::Global, Some(a)) => format!(" ({})", app_words(a)),
+        (s, None) => format!(" (for {s})"),
+        (s, Some(a)) => format!(" (for {s}, {})", app_words(a)),
     }
 }
 
@@ -799,6 +893,12 @@ pub struct ScopeArgs {
     /// Only for computers running this OS: mac, windows or linux.
     #[arg(long, value_name = "OS")]
     pub os: Option<String>,
+    /// Only while this app has the focus on the other computer: a program
+    /// file on Windows (chrome.exe), a bundle id on a Mac
+    /// (com.apple.Terminal), a window class on Linux (firefox). `*` matches
+    /// anything, `!` in front means every app but this one.
+    #[arg(long, value_name = "NAME")]
+    pub app: Option<String>,
 }
 
 impl ScopeArgs {
@@ -806,6 +906,18 @@ impl ScopeArgs {
         let s = Scope::from_args(self.peer.as_deref(), self.os.as_deref())?;
         check_scope(dir, &s)?;
         Ok(s)
+    }
+
+    /// `--app`, checked; also says when it can't match on the scope's OS.
+    fn app(&self) -> Result<Option<String>> {
+        let Some(a) = &self.app else { return Ok(None) };
+        let p: AppPattern = a.parse().map_err(anyhow::Error::msg)?;
+        if let Some(o) = self.os.as_deref().and_then(|o| parse_os(o).ok())
+            && let Some(why) = p.never_on(o)
+        {
+            bail!("{why}");
+        }
+        Ok(Some(p.to_string()))
     }
 }
 
@@ -852,11 +964,11 @@ pub enum KeymapCmd {
     Check,
 }
 
-fn find_key_rule(rules: &[KeyRule], from: &Trigger, layer: &Option<String>, scope: &Scope) -> Option<usize> {
+fn find_key_rule(rules: &[KeyRule], from: &Trigger, layer: &Option<String>, scope: &Scope, app: &Option<String>) -> Option<usize> {
     let layer = layer.as_ref().map(|l| l.to_ascii_lowercase());
     rules.iter().position(|r| {
         r.scope == *scope
-            && r.app.is_none()
+            && same_app(&r.app, app)
             && r.layer.as_ref().map(|l| l.to_ascii_lowercase()) == layer
             && r.from.parse::<Trigger>().is_ok_and(|t| t == *from)
     })
@@ -869,8 +981,7 @@ fn list_keymap(s: &TuningSettings) {
     }
     println!("Key rules (applied to keys sent to other computers):");
     for r in &s.keymap.rule {
-        let app = if r.app.is_some() { " [app: not used yet]" } else { "" };
-        println!("  {}{}{app}", r.describe(), scope_suffix(&r.scope));
+        println!("  {}{}", r.describe(), where_suffix(&r.scope, &r.app));
     }
     if let Some(ms) = s.keymap.tap_ms {
         println!("Tap/hold keys decide after {ms} ms.");
@@ -887,6 +998,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             settings::apply(dir).await?;
         }
         KeymapCmd::Add { from, to, tap, hold, layer, timeout_ms, scope } => {
+            let app = scope.app()?;
             let scope = scope.scope(dir)?;
             let to = match to.len() {
                 0 => None,
@@ -896,7 +1008,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             if to.is_some() && tap.is_some() {
                 bail!("give TO, or --tap and --hold, not both");
             }
-            let rule = KeyRule { from, to, tap, hold, layer, timeout_ms, scope: scope.clone(), app: None };
+            let rule = KeyRule { from, to, tap, hold, layer, timeout_ms, scope: scope.clone(), app: app.clone() };
             let spec = rule.spec().map_err(anyhow::Error::msg)?;
             if keynames::is_button(u32::from(spec.from.key)) {
                 bail!("{} is a mouse button: use `one-mk buttons map`", spec.from);
@@ -909,29 +1021,32 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             let shown = rule.describe();
             Settings::update(dir, |s| {
                 let rules = &mut s.input.keymap.rule;
-                match find_key_rule(rules, &spec.from, &rule.layer, &scope) {
+                match find_key_rule(rules, &spec.from, &rule.layer, &scope, &app) {
                     Some(i) => rules[i] = rule,
                     None => rules.push(rule),
                 }
-                // The whole keymap must still compile (layers, sizes).
-                let facts = PeerFacts { name: "", id: "", os: os::UNKNOWN };
+                // The whole keymap must still compile (layers, sizes), also
+                // with the rule's app focused.
+                let focused: Vec<String> = app.iter().filter(|a| !a.starts_with('!') && !a.contains('*')).cloned().collect();
+                let facts = PeerFacts { name: "", id: "", os: os::UNKNOWN, apps: &focused };
                 let (specs, _) = s.input.specs(&facts);
                 Keymap::compile(&specs, remap::Target { os: os::UNKNOWN, swap: false }, s.input.keymap.tap())
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 Ok(())
             })?;
-            println!("{shown}{}.", scope_suffix(&scope));
+            println!("{shown}{}.", where_suffix(&scope, &app));
             settings::apply(dir).await?;
         }
         KeymapCmd::Remove { from, layer, scope } => {
+            let app = scope.app.clone();
             let scope = Scope::from_args(scope.peer.as_deref(), scope.os.as_deref())?;
             let t: Trigger = from.parse().map_err(|e: keynames::NameError| anyhow::anyhow!("{e}"))?;
             let removed = Settings::update(dir, |s| {
-                Ok(find_key_rule(&s.input.keymap.rule, &t, &layer, &scope).map(|i| s.input.keymap.rule.remove(i)))
+                Ok(find_key_rule(&s.input.keymap.rule, &t, &layer, &scope, &app).map(|i| s.input.keymap.rule.remove(i)))
             })?;
             match removed {
-                Some(r) => println!("Removed {}{}.", r.describe(), scope_suffix(&scope)),
-                None => bail!("there is no rule for {t}{}{} (see `one-mk keymap list`)", layer.map_or_else(String::new, |l| format!(" in layer {l}")), scope_suffix(&scope)),
+                Some(r) => println!("Removed {}{}.", r.describe(), where_suffix(&r.scope, &r.app)),
+                None => bail!("there is no rule for {t}{}{} (see `one-mk keymap list`)", layer.map_or_else(String::new, |l| format!(" in layer {l}")), where_suffix(&scope, &app)),
             }
             settings::apply(dir).await?;
         }
@@ -988,7 +1103,7 @@ fn describe_pointer(s: &TuningSettings) {
         if let Some(a) = r.acceleration {
             parts.push(format!("acceleration {a}"));
         }
-        println!("Pointer{}: {}.", scope_suffix(&r.scope), if parts.is_empty() { "unchanged".into() } else { parts.join(", ") });
+        println!("Pointer{}: {}.", where_suffix(&r.scope, &r.app), if parts.is_empty() { "unchanged".into() } else { parts.join(", ") });
     }
 }
 
@@ -997,6 +1112,7 @@ pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
         describe_pointer(&Settings::load(dir)?.input);
         return Ok(());
     }
+    let app = args.scope.app()?;
     let scope = args.scope.scope(dir)?;
     if let Some(v) = args.speed
         && !(v.is_finite() && (pointer::MIN_SPEED..=pointer::MAX_SPEED).contains(&v))
@@ -1011,24 +1127,27 @@ pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
     }
     let s = Settings::update(dir, |s| {
         let rules = &mut s.input.pointer;
-        let at = rules.iter().position(|r| r.scope == scope && r.app.is_none());
+        let at = rules.iter().position(|r| r.scope == scope && same_app(&r.app, &app));
         if args.reset {
             if let Some(i) = at {
                 rules.remove(i);
             }
             return Ok(s.input.clone());
         }
+        let blank = PointerRule { scope: scope.clone(), app: app.clone(), ..Default::default() };
         let i = at.unwrap_or_else(|| {
-            rules.push(PointerRule { scope: scope.clone(), ..Default::default() });
+            rules.push(blank.clone());
             rules.len() - 1
         });
+        // The defaults matter only where they override something.
+        let overrides = !scope.is_global() || app.is_some();
         if let Some(v) = args.speed {
-            rules[i].speed = (v != 1.0 || !scope.is_global()).then_some(v);
+            rules[i].speed = (v != 1.0 || overrides).then_some(v);
         }
         if let Some(a) = args.accel {
-            rules[i].acceleration = (a != AccelMode::System || !scope.is_global()).then_some(a);
+            rules[i].acceleration = (a != AccelMode::System || overrides).then_some(a);
         }
-        if rules[i] == (PointerRule { scope: scope.clone(), ..Default::default() }) {
+        if rules[i] == blank {
             rules.remove(i);
         }
         Ok(s.input.clone())
@@ -1099,7 +1218,7 @@ fn describe_scroll(s: &TuningSettings) {
             parts.push(format!("{m}: {b}"));
         }
         let device = r.device.map_or("", |d| if d == Device::Wheel { " (wheels)" } else { " (touchpads)" });
-        println!("Scrolling{device}{}: {}.", scope_suffix(&r.scope), if parts.is_empty() { "unchanged".into() } else { parts.join(", ") });
+        println!("Scrolling{device}{}: {}.", where_suffix(&r.scope, &r.app), if parts.is_empty() { "unchanged".into() } else { parts.join(", ") });
     }
 }
 
@@ -1120,6 +1239,7 @@ pub async fn scroll_command(dir: &Path, args: ScrollArgs) -> Result<()> {
         describe_scroll(&Settings::load(dir)?.input);
         return Ok(());
     }
+    let app = args.scope.app()?;
     let scope = args.scope.scope(dir)?;
     if let Some(v) = args.speed
         && !(v.is_finite() && (scroll::MIN_SPEED..=scroll::MAX_SPEED).contains(&v))
@@ -1137,15 +1257,16 @@ pub async fn scroll_command(dir: &Path, args: ScrollArgs) -> Result<()> {
     }
     let s = Settings::update(dir, |s| {
         let rules = &mut s.input.scroll;
-        let at = rules.iter().position(|r| r.scope == scope && r.device == args.device && r.app.is_none());
+        let at = rules.iter().position(|r| r.scope == scope && r.device == args.device && same_app(&r.app, &app));
         if args.reset {
             if let Some(i) = at {
                 rules.remove(i);
             }
             return Ok(s.input.clone());
         }
+        let blank = ScrollRule { scope: scope.clone(), device: args.device, app: app.clone(), ..Default::default() };
         let i = at.unwrap_or_else(|| {
-            rules.push(ScrollRule { scope: scope.clone(), device: args.device, ..Default::default() });
+            rules.push(blank.clone());
             rules.len() - 1
         });
         let r = &mut rules[i];
@@ -1162,7 +1283,7 @@ pub async fn scroll_command(dir: &Path, args: ScrollArgs) -> Result<()> {
                 None => r.modifiers.remove(name),
             };
         }
-        if *r == (ScrollRule { scope: scope.clone(), device: args.device, ..Default::default() }) {
+        if *r == blank {
             rules.remove(i);
         }
         Ok(s.input.clone())
@@ -1211,7 +1332,7 @@ fn list_buttons(s: &TuningSettings) {
     }
     println!("Button rules:");
     for r in &s.button {
-        println!("  {} -> {}{}", r.from.describe(), r.to.describe(), scope_suffix(&r.scope));
+        println!("  {} -> {}{}", r.from.describe(), r.to.describe(), where_suffix(&r.scope, &r.app));
     }
 }
 
@@ -1225,7 +1346,7 @@ fn button_from(s: &str) -> Result<(ButtonFrom, Trigger)> {
 }
 
 fn set_button(rules: &mut Vec<ButtonRule>, rule: ButtonRule, t: &Trigger) {
-    let at = rules.iter().position(|r| r.scope == rule.scope && r.app.is_none() && r.from.trigger().is_ok_and(|x| x == *t));
+    let at = rules.iter().position(|r| r.scope == rule.scope && same_app(&r.app, &rule.app) && r.from.trigger().is_ok_and(|x| x == *t));
     match at {
         Some(i) => rules[i] = rule,
         None => rules.push(rule),
@@ -1239,12 +1360,13 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             return Ok(());
         }
         ButtonsCmd::Map { button, to, scope } => {
+            let app = scope.app()?;
             let scope = scope.scope(dir)?;
             let (from, t) = button_from(&button)?;
             let to = if to.len() == 1 { To::One(to[0].clone()) } else { To::Many(to) };
-            let rule = ButtonRule { from, to, scope, app: None };
+            let rule = ButtonRule { from, to, scope, app };
             rule.spec().map_err(anyhow::Error::msg)?;
-            let line = format!("{} -> {}{}", rule.from.describe(), rule.to.describe(), scope_suffix(&rule.scope));
+            let line = format!("{} -> {}{}", rule.from.describe(), rule.to.describe(), where_suffix(&rule.scope, &rule.app));
             Settings::update(dir, |s| {
                 set_button(&mut s.input.button, rule, &t);
                 Ok(())
@@ -1252,27 +1374,31 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             println!("{line}.");
         }
         ButtonsCmd::Unmap { button, scope } => {
+            let app = scope.app.clone();
             let scope = Scope::from_args(scope.peer.as_deref(), scope.os.as_deref())?;
             let (_, t) = button_from(&button)?;
             let removed = Settings::update(dir, |s| {
-                let at = s.input.button.iter().position(|r| r.scope == scope && r.from.trigger().is_ok_and(|x| x == t));
+                let at = s.input.button.iter().position(|r| {
+                    r.scope == scope && same_app(&r.app, &app) && r.from.trigger().is_ok_and(|x| x == t)
+                });
                 Ok(at.map(|i| s.input.button.remove(i)))
             })?;
             if removed.is_none() {
-                bail!("there is no rule for {button}{} (see `one-mk buttons list`)", scope_suffix(&scope));
+                bail!("there is no rule for {button}{} (see `one-mk buttons list`)", where_suffix(&scope, &app));
             }
-            println!("Button {button} is sent as it is again{}.", scope_suffix(&scope));
+            println!("Button {button} is sent as it is again{}.", where_suffix(&scope, &app));
         }
         ButtonsCmd::Preset { name: _, scope } => {
+            let app = scope.app()?;
             let scope = scope.scope(dir)?;
             Settings::update(dir, |s| {
                 for (n, to) in [(4, "back"), (5, "forward")] {
-                    let rule = ButtonRule { from: ButtonFrom::Number(n), to: To::One(to.into()), scope: scope.clone(), app: None };
+                    let rule = ButtonRule { from: ButtonFrom::Number(n), to: To::One(to.into()), scope: scope.clone(), app: app.clone() };
                     set_button(&mut s.input.button, rule, &Trigger::key(keynames::button_code(n).unwrap() as u16));
                 }
                 Ok(())
             })?;
-            println!("Buttons 4 and 5 go back and forward{} (Alt+Left/Right; Cmd+[ and Cmd+] on a Mac).", scope_suffix(&scope));
+            println!("Buttons 4 and 5 go back and forward{} (Alt+Left/Right; Cmd+[ and Cmd+] on a Mac).", where_suffix(&scope, &app));
         }
         ButtonsCmd::Clear => {
             let n = Settings::update(dir, |s| Ok(std::mem::take(&mut s.input.button).len()))?;
@@ -1289,7 +1415,263 @@ mod tests {
     const ID: &str = "abcdef0123456789";
 
     fn facts(os: u8) -> PeerFacts<'static> {
-        PeerFacts { name: "Laptop", id: ID, os }
+        PeerFacts { name: "Laptop", id: ID, os, apps: &[] }
+    }
+
+    /// What the rule for `from` does for `peer`, if there is one.
+    fn rule_for(t: &TuningSettings, peer: &PeerFacts, from: &str) -> Option<What> {
+        let from: Trigger = from.parse().unwrap();
+        t.specs(peer).0.into_iter().find(|s| s.from == from && s.layer.is_none()).map(|s| s.what)
+    }
+
+    fn with_app<'a>(os: u8, apps: &'a [String]) -> PeerFacts<'a> {
+        PeerFacts { apps, ..facts(os) }
+    }
+
+    fn names(n: &[&str]) -> Vec<String> {
+        n.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    const PER_APP: &str = r#"
+[[input.keymap.rule]]
+from = "ctrl+space"
+to = "f13"
+app = "code"
+scope = { os = "mac" }
+
+[[input.keymap.rule]]
+from = "capslock"
+to = "esc"
+
+[[input.keymap.rule]]
+from = "capslock"
+to = "lctrl"
+app = "com.microsoft.VSCode"
+
+[[input.keymap.rule]]
+from = "f1"
+to = "f2"
+app = "!code"
+
+[[input.keymap.rule]]
+from = "f3"
+to = "f4"
+app = "co\u0007de"
+
+[[input.pointer]]
+speed = 2.0
+app = "game*"
+
+[[input.scroll]]
+speed = 3.0
+app = "chrome"
+
+[[input.button]]
+from = 4
+to = "back"
+app = "firefox"
+"#;
+
+    /// A rule with `app` applies only while the computer input goes to
+    /// says that app has the focus; it beats the same key's rule without
+    /// one; unknown (not said, or can't tell) means it doesn't apply, `!`
+    /// rules included.
+    #[test]
+    fn per_app_rules_apply_only_while_their_app_has_the_focus() {
+        let t = load(PER_APP);
+        let to = |s: &str| Some(What::To(s.parse().unwrap()));
+        let unknown = with_app(os::MACOS, &[]);
+        assert_eq!(rule_for(&t, &unknown, "capslock"), to("esc"));
+        assert_eq!(rule_for(&t, &unknown, "ctrl+space"), None);
+        assert_eq!(rule_for(&t, &unknown, "f1"), None, "a ! rule needs a known app too");
+        assert_eq!(rule_for(&t, &unknown, "button4"), None);
+        let r = t.resolve(&unknown, false);
+        assert_eq!(r.pointer.speed(), 1.0);
+        assert_eq!(r.scroll.wheel.speed_y, 1.0);
+
+        let vscode = names(&["com.microsoft.VSCode", "Code"]);
+        let mac = with_app(os::MACOS, &vscode);
+        assert_eq!(rule_for(&t, &mac, "ctrl+space"), to("f13"));
+        assert_eq!(rule_for(&t, &mac, "capslock"), to("lctrl"), "the app's rule beats the general one");
+        assert_eq!(rule_for(&t, &mac, "f1"), None);
+        assert!(t.specs(&mac).1.iter().all(|w| !w.contains("same scope")), "{:?}", t.specs(&mac).1);
+
+        let code = names(&["code", "Code"]);
+        assert_eq!(rule_for(&t, &with_app(os::LINUX, &code), "ctrl+space"), None, "for Macs only");
+        let vim = names(&["vim"]);
+        assert_eq!(rule_for(&t, &with_app(os::LINUX, &vim), "f1"), to("f2"));
+        assert_eq!(rule_for(&t, &with_app(os::LINUX, &vim), "capslock"), to("esc"));
+
+        let game = names(&["GameLauncher.exe", "UnityWndClass"]);
+        assert_eq!(t.resolve(&with_app(os::WINDOWS, &game), false).pointer.speed(), 2.0);
+        let chrome = names(&["chrome.exe"]);
+        assert_eq!(t.resolve(&with_app(os::WINDOWS, &chrome), false).scroll.wheel.speed_y, 3.0);
+        let firefox = names(&["firefox", "Firefox"]);
+        assert_eq!(rule_for(&t, &with_app(os::LINUX, &firefox), "button4"), to("back"));
+        // A pattern that can't be meant costs only its rule.
+        let w = t.resolve(&with_app(os::LINUX, &vim), false).warnings.join("\n");
+        assert!(w.contains("input.keymap.rule #5 skipped: app: control"), "{w}");
+        // Which app patterns could matter to a computer.
+        assert_eq!(t.apps_for(&facts(os::MACOS)), ["code", "com.microsoft.VSCode", "!code", "game*", "chrome", "firefox"]);
+        assert_eq!(t.apps_for(&facts(os::LINUX)).len(), 5);
+        assert!(load("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\n").apps_for(&facts(os::LINUX)).is_empty());
+        // Round trip through the file format.
+        let back = load(&toml::to_string_pretty(&Settings { input: t.clone(), ..Default::default() }).unwrap());
+        assert_eq!(back, t);
+    }
+
+    /// Random keys, timer runs and changes of the focused app (to apps
+    /// with rules of their own, apps without, and unknown), resolved as the
+    /// daemon does and handed to the mapper the way a reload is: the
+    /// target never sees a key released that isn't down or pressed twice
+    /// (but by a repeat), and nothing is left down once every key is up.
+    #[test]
+    fn app_changes_never_leave_a_key_stuck() {
+        use one_mk_proto::remap::{Emit, Mapper};
+        use std::collections::BTreeSet;
+        let t = load(
+            r#"
+[[input.keymap.rule]]
+from = "capslock"
+tap = "esc"
+hold = "lctrl"
+
+[[input.keymap.rule]]
+from = "capslock"
+to = "lmeta"
+app = "code"
+
+[[input.keymap.rule]]
+from = "ralt"
+to = "layer:nav"
+
+[[input.keymap.rule]]
+from = "h"
+to = "left"
+layer = "nav"
+
+[[input.keymap.rule]]
+from = "ralt"
+tap = "esc"
+hold = "layer:nav"
+app = "firefox"
+
+[[input.keymap.rule]]
+from = "h"
+to = "ctrl+shift+tab"
+layer = "nav"
+app = "firefox"
+
+[[input.keymap.rule]]
+from = "lshift"
+tap = "lshift"
+hold = "layer:nav"
+app = "!code"
+
+[[input.keymap.rule]]
+from = "a"
+to = ["ctrl+a", "lshift"]
+app = "game*"
+
+[[input.button]]
+from = 1
+to = "button3"
+app = "code"
+"#,
+        );
+        let apps: [&[&str]; 5] = [&[], &["code", "Code"], &["firefox"], &["gamelauncher.exe"], &["vim"]];
+        let apps: Vec<Vec<String>> = apps.iter().map(|a| names(a)).collect();
+        let keymaps: Vec<_> = apps.iter().map(|a| t.resolve(&with_app(os::LINUX, a), false).keymap).collect();
+        for (i, k) in keymaps.iter().enumerate() {
+            assert!(!k.is_empty(), "{:?}", apps[i]);
+        }
+        // What the target sees: every up for a key down, a down for a key
+        // already down only by a repeat.
+        fn wire(down: &mut BTreeSet<u32>, out: Vec<Emit>, repeat: bool, stream: usize) {
+            for e in out {
+                if let Emit::Key { code, down: d } = e {
+                    if d {
+                        assert!(down.insert(code) || repeat, "stream {stream}: {code} pressed twice");
+                    } else {
+                        assert!(down.remove(&code), "stream {stream}: {code} released but not down");
+                    }
+                }
+            }
+        }
+        let keys = [58, 100, 35, 42, 30, 29, 0x110, 15];
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut rng = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for stream in 0..3000 {
+            let mut m = Mapper::new(keymaps[0].clone());
+            let mut down = BTreeSet::new();
+            let mut phys = BTreeSet::new();
+            let mut now = std::time::Instant::now();
+            for _ in 0..rng(120) + 1 {
+                let mut out = Vec::new();
+                let mut repeat = false;
+                match rng(10) {
+                    0..=5 => {
+                        let k = keys[rng(keys.len())];
+                        let press = rng(2) == 0;
+                        repeat = press && phys.contains(&k);
+                        if press {
+                            phys.insert(k);
+                        } else {
+                            phys.remove(&k);
+                        }
+                        m.key(k, press, now, &mut |e| out.push(e));
+                    }
+                    6 => {
+                        now += Duration::from_millis(rng(300) as u64);
+                        m.timer(now, &mut |e| out.push(e));
+                    }
+                    _ => m.set_keymap(keymaps[rng(keymaps.len())].clone(), &mut |e| out.push(e)),
+                }
+                wire(&mut down, out, repeat, stream);
+            }
+            for k in std::mem::take(&mut phys) {
+                let mut out = Vec::new();
+                m.key(k, false, now, &mut |e| out.push(e));
+                wire(&mut down, out, false, stream);
+            }
+            assert!(down.is_empty(), "stream {stream}: left down {down:?}");
+            assert!(m.is_idle());
+        }
+    }
+
+    /// Among rules for an app, the more specific scope wins, as without.
+    #[test]
+    fn per_app_rules_keep_scope_order() {
+        let t = load(
+            r#"
+[[input.keymap.rule]]
+from = "a"
+to = "b"
+app = "code"
+
+[[input.keymap.rule]]
+from = "a"
+to = "c"
+app = "code"
+scope = { peer = "laptop" }
+
+[[input.keymap.rule]]
+from = "a"
+to = "d"
+scope = { peer = "laptop" }
+"#,
+        );
+        let code = names(&["code"]);
+        assert_eq!(rule_for(&t, &with_app(os::LINUX, &code), "a"), Some(What::To("c".parse().unwrap())));
+        let other = PeerFacts { name: "Desk", id: "ffff", os: os::LINUX, apps: &code };
+        assert_eq!(rule_for(&t, &other, "a"), Some(What::To("b".parse().unwrap())));
+        let vim = names(&["vim"]);
+        assert_eq!(rule_for(&t, &with_app(os::LINUX, &vim), "a"), Some(What::To("d".parse().unwrap())));
     }
 
     fn load(toml: &str) -> TuningSettings {
@@ -1352,7 +1734,7 @@ to = "back"
         assert_eq!(mac.pointer.speed(), 1.5);
         assert_eq!(mac.scroll.modifiers[1], ModScroll::Horizontal);
         assert_eq!(mac.scroll.modifiers[2], ModScroll::Multiply(5.0));
-        let other = PeerFacts { name: "Desk", id: "ffff", os: os::WINDOWS };
+        let other = PeerFacts { name: "Desk", id: "ffff", os: os::WINDOWS, apps: &[] };
         let win = t.resolve(&other, false);
         assert_eq!(win.pointer.speed(), 1.0, "not the laptop");
         assert_eq!(win.scroll.wheel.mode, scroll::Mode::Discrete);
@@ -1408,15 +1790,15 @@ scope = { peer = "Laptop" }
         let first = |p: &PeerFacts| t.specs(p).0[0].what.clone();
         let to = |s: &str| What::To(s.parse().unwrap());
         assert_eq!(first(&facts(os::MACOS)), to("lctrl"));
-        assert_eq!(first(&PeerFacts { name: "x", id: "0000", os: os::MACOS }), to("lmeta"));
-        assert_eq!(first(&PeerFacts { name: "x", id: "0000", os: os::LINUX }), to("esc"));
+        assert_eq!(first(&PeerFacts { name: "x", id: "0000", os: os::MACOS, apps: &[] }), to("lmeta"));
+        assert_eq!(first(&PeerFacts { name: "x", id: "0000", os: os::LINUX, apps: &[] }), to("esc"));
         // By id prefix too.
-        assert_eq!(first(&PeerFacts { name: "renamed", id: ID, os: os::LINUX }), to("esc"));
+        assert_eq!(first(&PeerFacts { name: "renamed", id: ID, os: os::LINUX, apps: &[] }), to("esc"));
         let by_id = TuningSettings {
             keymap: KeymapSettings { rule: vec![rule("lctrl", Scope::Peer("abcd-ef01".into()))], ..Default::default() },
             ..Default::default()
         };
-        assert_eq!(by_id.specs(&PeerFacts { name: "renamed", id: ID, os: os::LINUX }).0.len(), 1);
+        assert_eq!(by_id.specs(&PeerFacts { name: "renamed", id: ID, os: os::LINUX, apps: &[] }).0.len(), 1);
         assert!(t.specs(&facts(os::MACOS)).1.is_empty(), "overrides are not conflicts");
     }
 
@@ -1449,7 +1831,19 @@ scope = { peer = "nobody" }
 [[input.keymap.rule]]
 from = "a"
 to = "b"
-app = "firefox"
+app = "chrome.exe"
+scope = { os = "mac" }
+
+[[input.keymap.rule]]
+from = "c"
+to = "d"
+app = "com.apple.Terminal"
+scope = { peer = "Laptop" }
+
+[[input.keymap.rule]]
+from = "e"
+to = "f"
+app = ""
 
 [[input.button]]
 from = 9
@@ -1463,13 +1857,15 @@ speed = 20.0
 acceleration = "off"
 "#,
         );
-        let problems = t.check(&[("Laptop".into(), ID.into())]).join("\n");
+        let problems = t.check(&[("Laptop".into(), ID.into(), os::WINDOWS)]).join("\n");
         for says in [
             "#2: another rule for capslock in the same scope comes first",
             "input.keymap.rule #3: from: \"capslok\" is not a key name",
             "layer \"nav\" is never switched on",
             "rules for \"nobody\" never apply",
-            "1 rule(s) have `app` set",
+            "input.keymap.rule #6: app \"chrome.exe\" never matches on a Mac",
+            "input.keymap.rule #7: app \"com.apple.Terminal\" never matches on Windows",
+            "input.keymap.rule #8: app: give a program name",
             "input.button #1: button 9: buttons are numbered 1 to 8",
             "modifier \"hyper\"",
             "speed 20 is outside 0.1 to 10",

@@ -103,6 +103,9 @@ pub struct Status {
     /// What the input backend needs the user to know or do, one line each
     /// (e.g. approve the desktop's permission dialog); empty when it works.
     pub input: Vec<String>,
+    /// Input tuning that isn't in force and why, one line each (rules for
+    /// an app on a computer that doesn't say which app has its focus).
+    pub tuning: Vec<String>,
     /// Where the computers are, in detail (boxed: most readers never look,
     /// and it would double the size of every `Status`).
     pub layout: Box<LayoutStatus>,
@@ -335,6 +338,9 @@ impl Status {
         for line in &self.layout.warnings {
             out += &format!("warning\t{}\n", line.replace(['\t', '\n', '\r'], " "));
         }
+        for line in &self.tuning {
+            out += &format!("tuning\t{}\n", line.replace(['\t', '\n', '\r'], " "));
+        }
         for t in &self.transfers {
             out += &format!(
                 "transfer\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -385,6 +391,7 @@ impl Status {
                 }),
                 ["input", v] => s.input.push(v.into()),
                 ["warning", v] => s.layout.warnings.push(v.into()),
+                ["tuning", v] => s.tuning.push(v.into()),
                 // Cosmetic: a line that doesn't parse is skipped, not fatal.
                 ["transfer", id, dir, files, done, total, rate, peer] => s.transfers.extend(|| -> Option<_> {
                     Some(TransferStatus {
@@ -421,7 +428,7 @@ impl Status {
             (_, Some(p)) => format!("{p} is controlling this computer right now. {}\n", takeback_hint()),
             _ => "The mouse and keyboard are on this computer.\n".to_owned(),
         };
-        for line in self.input.iter().chain(&self.layout.warnings) {
+        for line in self.input.iter().chain(&self.layout.warnings).chain(&self.tuning) {
             out += &format!("{line}\n");
         }
         if self.pointer_locked {
@@ -500,12 +507,13 @@ mod tests {
             lock_sync: true,
             edges: "dead corners 20 px, dwell 300 ms".into(),
             input: vec!["Waiting for your approval: allow one-mk in the desktop's dialog.".into()],
+            tuning: vec!["Rule for app code not active: mac mini does not report its focused app (why).".into()],
             backend: InputBackend::Null,
             ..s
         };
         assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
         let text = s.render();
-        for want in ["Input backend: null", "locked to this computer", "screen is locked", "Edges: dead corners 20 px", "Gaming mode: auto (relative", "Lock sync is on", "Waiting for your approval"] {
+        for want in ["Input backend: null", "locked to this computer", "screen is locked", "Edges: dead corners 20 px", "Gaming mode: auto (relative", "Lock sync is on", "Waiting for your approval", "Rule for app code not active"] {
             assert!(text.contains(want), "{want}: {text}");
         }
         assert_eq!(Status::decode("error unknown request\n"), None);

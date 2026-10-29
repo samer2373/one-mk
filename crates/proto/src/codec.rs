@@ -142,8 +142,13 @@ pub mod caps {
     /// every [`FOCUS_REPEAT`](crate::FOCUS_REPEAT), so a watcher that hears
     /// nothing for a while can stop trusting its last "fullscreen".
     pub const FOCUS_BEAT: u32 = 16;
+    /// Says which app has its focus (the names in
+    /// [`Control::Focus`](crate::Control::Focus)) when
+    /// [`Control::WatchFocus`](crate::Control::WatchFocus) asks for it, and
+    /// can be asked for that alone. Per-app input rules use it.
+    pub const FOCUS_APP: u32 = 32;
     /// What this build supports.
-    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT;
+    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT | FOCUS_APP;
 }
 
 /// How often a computer with [`caps::FOCUS_BEAT`] repeats `Focus` while
@@ -217,13 +222,25 @@ pub enum Control {
     /// longer) fullscreen, during visit `epoch`. Gaming mode `auto` uses it.
     /// With [`caps::FOCUS_BEAT`], "fullscreen" is said again at least every
     /// [`FOCUS_REPEAT`] while it lasts.
-    Focus { epoch: u16, fullscreen: bool },
+    ///
+    /// `apps`: with [`caps::FOCUS_APP`], when asked for, the names the
+    /// focused app goes by (see [`appmatch`](crate::appmatch)), cleaned
+    /// when read; empty when it isn't known or wasn't asked for. Trailing
+    /// (a count, then the names): older builds read the rest and skip it,
+    /// and a frame from them has no app.
+    Focus { epoch: u16, fullscreen: bool, apps: Vec<String> },
     /// From the controller: send `Focus` now and whenever it changes during
-    /// visit `epoch` (`on`), or stop (gaming mode left `auto`). Only gaming
-    /// mode `auto` asks, so nobody else pays for looking at windows. (`on`
-    /// is a trailing byte: a frame without it, from a build before it,
-    /// means on; such a build reads an "off" as "on", which it already is.)
-    WatchFocus { epoch: u16, on: bool },
+    /// visit `epoch` (`on`), or stop. Only gaming mode `auto` and per-app
+    /// rules ask, so nobody else pays for looking at windows. (`on` is a
+    /// trailing byte: a frame without it, from a build before it, means on;
+    /// such a build reads an "off" as "on", which it already is.)
+    ///
+    /// What to report, a later trailing byte for peers with
+    /// [`caps::FOCUS_APP`]: `app`, the focused app's names too (only ever
+    /// sent to the computer that asked, while it controls this one), and
+    /// `fullscreen`, whether a fullscreen window has the focus (with its
+    /// repeats). Without the byte: fullscreen only, as before.
+    WatchFocus { epoch: u16, on: bool, app: bool, fullscreen: bool },
     /// From the controller, during visit `epoch`: keep the screensaver,
     /// display blanking and idle sleep off while it lasts (`on`), or stop.
     /// The receiver also lets go when the visit ends or the link drops, so
@@ -326,15 +343,21 @@ impl Control {
                 w.u64(*id);
                 w.u8(u8::from(*all));
             }
-            Control::Focus { epoch, fullscreen } => {
+            Control::Focus { epoch, fullscreen, apps } => {
                 w.u8(17);
                 w.u16(*epoch);
                 w.u8(u8::from(*fullscreen));
+                let apps = &apps[..apps.len().min(crate::appmatch::MAX_APP_NAMES)];
+                w.u8(apps.len() as u8);
+                for a in apps {
+                    w.str(a);
+                }
             }
-            Control::WatchFocus { epoch, on } => {
+            Control::WatchFocus { epoch, on, app, fullscreen } => {
                 w.u8(18);
                 w.u16(*epoch);
                 w.u8(u8::from(*on));
+                w.u8(u8::from(*app) | if *fullscreen { 0 } else { 2 });
             }
             Control::Inhibit { epoch, on } => {
                 w.u8(19);
@@ -389,8 +412,12 @@ impl Control {
             14 => Control::Caps(r.u32()?),
             15 => Control::PointerMode { epoch: r.u16()?, relative: r.u8()? != 0 },
             16 => Control::Lock { id: r.u64()?, all: r.flag_or(true)? },
-            17 => Control::Focus { epoch: r.u16()?, fullscreen: r.u8()? != 0 },
-            18 => Control::WatchFocus { epoch: r.u16()?, on: r.flag_or(true)? },
+            17 => Control::Focus { epoch: r.u16()?, fullscreen: r.u8()? != 0, apps: r.app_names()? },
+            18 => {
+                let (epoch, on) = (r.u16()?, r.flag_or(true)?);
+                let what = if r.0.is_empty() { 0 } else { r.u8()? };
+                Control::WatchFocus { epoch, on, app: what & 1 != 0, fullscreen: what & 2 == 0 }
+            }
             19 => Control::Inhibit { epoch: r.u16()?, on: r.u8()? != 0 },
             20 => Control::Sleep { id: r.u64()? },
             t => return Err(DecodeError::UnknownTag(t)),
@@ -515,6 +542,22 @@ impl Reader<'_> {
     /// build predates it and the message ends here.
     fn flag_or(&mut self, default: bool) -> Result<bool, DecodeError> {
         if self.0.is_empty() { Ok(default) } else { Ok(self.u8()? != 0) }
+    }
+    /// [`Control::Focus`]'s trailing app names, cleaned; none when the
+    /// sender's build predates them.
+    fn app_names(&mut self) -> Result<Vec<String>, DecodeError> {
+        if self.0.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n = self.u8()?;
+        let mut names = Vec::with_capacity(usize::from(n).min(crate::appmatch::MAX_APP_NAMES));
+        for _ in 0..n {
+            let s = self.str()?;
+            if names.len() < crate::appmatch::MAX_APP_NAMES * 2 {
+                names.push(s);
+            }
+        }
+        Ok(crate::appmatch::clean_names(&names))
     }
     /// [`Control::Layout`]'s trailing alignment.
     fn align(&mut self) -> Result<Option<Align>, DecodeError> {
@@ -643,9 +686,12 @@ mod tests {
             Control::PointerMode { epoch: 3, relative: false },
             Control::Lock { id: u64::MAX, all: true },
             Control::Lock { id: 7, all: false },
-            Control::Focus { epoch: 4, fullscreen: true },
-            Control::WatchFocus { epoch: 5, on: true },
-            Control::WatchFocus { epoch: 5, on: false },
+            Control::Focus { epoch: 4, fullscreen: true, apps: vec![] },
+            Control::Focus { epoch: 4, fullscreen: false, apps: vec!["chrome.exe".into(), "Chrome_WidgetWin_1".into()] },
+            Control::WatchFocus { epoch: 5, on: true, app: false, fullscreen: true },
+            Control::WatchFocus { epoch: 5, on: true, app: true, fullscreen: false },
+            Control::WatchFocus { epoch: 5, on: true, app: true, fullscreen: true },
+            Control::WatchFocus { epoch: 5, on: false, app: false, fullscreen: true },
             Control::Inhibit { epoch: 6, on: true },
             Control::Inhibit { epoch: 6, on: false },
             Control::Sleep { id: u64::MAX },
@@ -661,6 +707,28 @@ mod tests {
             rest = &rest[2 + len..];
         }
         assert!(rest.is_empty());
+    }
+
+    /// A peer's app names are cleaned as they are read: invisible and
+    /// control characters go, at most `MAX_APP_NAMES` are kept, a count
+    /// that runs past the frame is truncation, not a panic.
+    #[test]
+    fn focus_app_names_from_a_peer_are_cleaned() {
+        let mut body = vec![17, 1, 0, 0, 6];
+        for n in ["co\u{1b}[2Kde", "", "Code", "code", "x\u{202E}y", "a"] {
+            body.push(n.len() as u8);
+            body.extend_from_slice(n.as_bytes());
+        }
+        let Ok(Control::Focus { apps, .. }) = Control::decode(&body) else { panic!() };
+        assert_eq!(apps, ["co[2Kde", "Code", "xy", "a"]);
+        assert_eq!(Control::decode(&[17, 1, 0, 0, 3, 1, b'a']), Err(DecodeError::Truncated));
+        assert_eq!(Control::decode(&[17, 1, 0, 0, 1, 2, 0xff, 0xfe]), Err(DecodeError::BadString));
+        let long = Control::Focus { epoch: 1, fullscreen: false, apps: vec!["é".repeat(1000); 9] };
+        let mut b = Vec::new();
+        long.encode_frame(&mut b);
+        let Ok(Control::Focus { apps, .. }) = Control::decode(&b[2..]) else { panic!() };
+        assert_eq!(apps.len(), 1, "the same name, nine times");
+        assert!(apps[0].chars().count() <= crate::appmatch::MAX_APP_LEN);
     }
 
     #[test]
@@ -689,8 +757,8 @@ mod tests {
             Control::Caps(0),
             Control::PointerMode { epoch: 0, relative: true },
             Control::Lock { id: 0, all: true },
-            Control::Focus { epoch: 0, fullscreen: false },
-            Control::WatchFocus { epoch: 0, on: true },
+            Control::Focus { epoch: 0, fullscreen: false, apps: vec![] },
+            Control::WatchFocus { epoch: 0, on: true, app: false, fullscreen: true },
             Control::Inhibit { epoch: 0, on: true },
             Control::Sleep { id: 0 },
         ];
@@ -702,13 +770,28 @@ mod tests {
         let mut id = vec![16];
         id.extend_from_slice(&9u64.to_le_bytes());
         assert_eq!(Control::decode(&id), Ok(Control::Lock { id: 9, all: true }));
-        assert_eq!(Control::decode(&[18, 3, 0]), Ok(Control::WatchFocus { epoch: 3, on: true }));
+        let watch = |on, app, fullscreen| Control::WatchFocus { epoch: 3, on, app, fullscreen };
+        assert_eq!(Control::decode(&[18, 3, 0]), Ok(watch(true, false, true)));
+        assert_eq!(Control::decode(&[18, 3, 0, 0]), Ok(watch(false, false, true)));
         let mut b = Vec::new();
-        Control::WatchFocus { epoch: 3, on: false }.encode_frame(&mut b);
-        assert_eq!(&b[2..5], &[18, 3, 0], "old fields first, at the same place");
+        watch(false, false, true).encode_frame(&mut b);
+        assert_eq!(&b[2..6], &[18, 3, 0, 0], "old fields first, at the same place");
+        // What to report came later still: absent, it is the fullscreen
+        // state only, as before.
+        b.clear();
+        watch(true, true, false).encode_frame(&mut b);
+        assert_eq!(&b[2..7], &[18, 3, 0, 1, 1 | 2]);
+        // `Focus` grew the app's names at its end: a frame without them
+        // (an older build) means "not known", and an older build reads
+        // the epoch and fullscreen flag of a new one where they always were.
+        assert_eq!(Control::decode(&[17, 4, 0, 1]), Ok(Control::Focus { epoch: 4, fullscreen: true, apps: vec![] }));
+        b.clear();
+        Control::Focus { epoch: 4, fullscreen: true, apps: vec!["chrome.exe".into()] }.encode_frame(&mut b);
+        assert_eq!(&b[2..6], &[17, 4, 0, 1]);
         b.clear();
         Control::Lock { id: 9, all: false }.encode_frame(&mut b);
         assert_eq!(&b[2..11], &id[..]);
+        assert_eq!(caps::FOCUS_APP, 32, "a bit of its own");
         let (b, _) = Datagram::MotionBy { epoch: 0, seq: 0, sum_x: 0, sum_y: 0 }.encode();
         assert_eq!(b[0], 5);
         // A Hello is still the same bytes, so old peers still connect.

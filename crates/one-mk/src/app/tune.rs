@@ -49,22 +49,58 @@ pub(super) enum ScrollIn {
 }
 
 impl App {
-    /// The tuning for a visit to `fp`, whose Ctrl/Cmd are swapped or not.
-    pub(super) fn tune_for(&self, fp: Fingerprint, swap: bool) -> Tune {
+    /// The tuning for a visit to `fp`, whose Ctrl/Cmd are swapped or not,
+    /// while the app going by `apps` has the focus there (none: unknown).
+    pub(super) fn tune_for(&self, fp: Fingerprint, swap: bool, apps: &[String]) -> Tune {
         let (name, os) = self.peers.get(&fp).map_or(("", one_mk_proto::os::UNKNOWN), |p| (p.name.as_str(), p.os));
         let id = fp.to_string();
-        let r = self.settings.input.resolve(&PeerFacts { name, id: &id, os }, swap);
+        let r = self.settings.input.resolve(&PeerFacts { name, id: &id, os, apps }, swap);
         for w in &r.warnings {
             tracing::debug!(peer = %name, "input tuning: {w}");
         }
         Tune::new(r)
     }
 
-    /// `settings.toml` was reloaded: the visit in progress follows the new
-    /// rules (what is held stays held until released, see `Mapper::set_keymap`).
+    /// The apps that rules for `fp` name: while there are any, the visit
+    /// asks it which app has its focus.
+    pub(super) fn app_rules_for(&self, fp: Fingerprint) -> Vec<String> {
+        let Some(p) = self.peers.get(&fp) else { return Vec::new() };
+        let id = fp.to_string();
+        self.settings.input.apps_for(&PeerFacts { name: &p.name, id: &id, os: p.os, apps: &[] })
+    }
+
+    /// Why rules for apps on a connected computer are not in force, one
+    /// line per computer, for `one-mk status`: it can't say which app has
+    /// its focus (an older one-mk), or said it can't tell.
+    pub(super) fn app_rule_notes(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (fp, p) in &self.peers {
+            let apps = self.app_rules_for(*fp);
+            let visit = self.remote.as_ref().filter(|r| r.peer == *fp);
+            let why = if p.caps & one_mk_proto::caps::FOCUS_APP == 0 {
+                "its one-mk is older than per-app rules"
+            } else if visit.is_some_and(|r| r.apps_heard && r.peer_apps.is_empty()) {
+                "it can't tell which app has the focus right now, as with Wayland windows on Linux"
+            } else {
+                continue;
+            };
+            if !apps.is_empty() {
+                let rules = if apps.len() == 1 { "Rule for app" } else { "Rules for apps" };
+                out.push(format!("{rules} {} not active: {} does not report its focused app ({why}).", apps.join(", "), p.name));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// `settings.toml` was reloaded, or another app has the focus on the
+    /// computer in use: the visit in progress follows the rules that apply
+    /// now. What is held stays held, by the code it was pressed as, until
+    /// released; a tap/hold key not decided yet counts as held and layers
+    /// end (see `Mapper::set_keymap`); the same rules change nothing.
     pub(super) fn retune(&mut self) {
         let Some(r) = self.remote.as_ref() else { return };
-        let new = self.tune_for(r.peer, r.swap);
+        let new = self.tune_for(r.peer, r.swap, &r.peer_apps);
         let Some(r) = self.remote.as_mut() else { return };
         let t = &mut r.tune;
         t.pointer = new.pointer;
@@ -211,7 +247,7 @@ mod tests {
         let mut s = TuningSettings::default();
         s.keymap.rule =
             vec![KeyRule { from: "capslock".into(), tap: Some("esc".into()), hold: Some("lctrl".into()), ..Default::default() }];
-        Tune::new(s.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX }, false))
+        Tune::new(s.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX, apps: &[] }, false))
     }
 
     /// The daemon's loop sleeps until `Tune::deadline` (as `next_deadline`

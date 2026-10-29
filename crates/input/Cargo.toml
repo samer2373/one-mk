@@ -32,4 +32,4 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Wi
 objc2 = "0.6.5"
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFMachPort", "CFDate", "CFDictionary", "CFString", "CFNumber", "CFCGTypes", "CFPreferences", "CFNotificationCenter"] }
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "libc", "CGDirectDisplay", "CGDisplayConfiguration", "CGError", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGSession"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSEvent", "NSGraphicsContext", "objc2-core-graphics", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSEvent", "NSGraphicsContext", "NSRunningApplication", "objc2-core-graphics", "objc2-core-foundation"] }

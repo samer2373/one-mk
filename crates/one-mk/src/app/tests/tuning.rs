@@ -209,3 +209,151 @@ async fn pointer_speed_scales_the_remote_motion() {
     assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(20.0, 550.5)));
     duo.stop().await;
 }
+
+/// Sets what B's (fake) focus probe says: a window of the app going by
+/// `apps`, or (`None`) a window it can't tell (Wayland-native).
+fn focus_b(duo: &Duo, apps: Option<&[&str]>) {
+    let focus = apps.map(|a| one_mk_proto::Focus { fullscreen: false, apps: a.iter().map(|s| (*s).to_owned()).collect() });
+    *duo.hb.focus.lock().unwrap() = focus;
+}
+
+/// A click on B (which makes B look at its focus again, as a click may
+/// move it there).
+async fn click(duo: &mut Duo) {
+    duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+    duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
+    assert_eq!(
+        next_n(duo, 2).await,
+        [Inject::Button { button: 0x110, down: true }, Inject::Button { button: 0x110, down: false }]
+    );
+}
+
+/// The next absolute position B's pointer is moved to.
+async fn next_pos(duo: &mut Duo) -> Pos {
+    loop {
+        if let Inject::MoveTo(p) = next_inject(&mut duo.hb).await {
+            return p;
+        }
+    }
+}
+
+/// The pointer speed in force for B: how far 10 px of A's mouse moves it
+/// (there and back, so it stays put).
+async fn speed(duo: &mut Duo) -> f64 {
+    duo.ha.events.send(Event::Motion { dx: 10.0, dy: 0.0 }).unwrap();
+    let there = next_pos(duo).await;
+    duo.ha.events.send(Event::Motion { dx: -10.0, dy: 0.0 }).unwrap();
+    let back = next_pos(duo).await;
+    (there.x - back.x) / 10.0
+}
+
+/// Waits until B's report of its focus has reached A's rules: the
+/// pointer speed for the app is in force (or isn't).
+async fn until_speed(duo: &mut Duo, want: f64) {
+    for _ in 0..200 {
+        if speed(duo).await == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("pointer speed {want} never came into force");
+}
+
+/// Rules for an app follow the app with the focus on B: B says which
+/// after a click (once the click has acted), A's rules switch on and off
+/// mid-visit, a key held through a switch is released as it was pressed,
+/// and an app B can't name turns the rules for apps off, which `one-mk
+/// status` explains.
+#[tokio::test]
+async fn per_app_rules_follow_the_peers_focused_app() {
+    let mut duo = Duo::start("tune-apps", None).await;
+    set(&duo.da, |s| {
+        s.input.keymap.rule = vec![to("capslock", "esc"), KeyRule { app: Some("code".into()), ..to("capslock", "lctrl") }];
+        s.input.pointer = vec![PointerRule { speed: Some(2.0), app: Some("code".into()), ..Default::default() }];
+    })
+    .await;
+    focus_b(&duo, Some(&["firefox", "Firefox"]));
+    duo.enter_b().await;
+    eventually("B looked at its focus", || duo.hb.focus_probes.load(std::sync::atomic::Ordering::SeqCst) > 0).await;
+    duo.ha.events.send(Event::Motion { dx: 100.0, dy: 0.0 }).unwrap(); // away from the edge
+    next_pos(&mut duo).await;
+    assert_eq!(speed(&mut duo).await, 1.0);
+    press(&duo, &[(CAPS, true), (CAPS, false)]);
+    assert_eq!(next_n(&mut duo, 2).await, [key(ESC, true), key(ESC, false)]);
+
+    // Into the editor on B.
+    focus_b(&duo, Some(&["code", "Code"]));
+    click(&mut duo).await;
+    until_speed(&mut duo, 2.0).await;
+    press(&duo, &[(CAPS, true), (CAPS, false)]);
+    assert_eq!(next_n(&mut duo, 2).await, [key(LCTRL, true), key(LCTRL, false)]);
+
+    // Held as Ctrl while the focus moves on: still released as Ctrl.
+    press(&duo, &[(CAPS, true)]);
+    assert_eq!(next_n(&mut duo, 1).await, [key(LCTRL, true)]);
+    focus_b(&duo, Some(&["firefox", "Firefox"]));
+    click(&mut duo).await;
+    until_speed(&mut duo, 1.0).await;
+    press(&duo, &[(CAPS, false), (CAPS, true), (CAPS, false)]);
+    assert_eq!(next_n(&mut duo, 3).await, [key(LCTRL, false), key(ESC, true), key(ESC, false)]);
+    assert!(status(&duo.da).await.tuning.is_empty(), "B says which app it is");
+
+    // A window B can't name: rules for apps are off (not left on).
+    focus_b(&duo, Some(&["code"]));
+    click(&mut duo).await;
+    until_speed(&mut duo, 2.0).await;
+    focus_b(&duo, None);
+    click(&mut duo).await;
+    until_speed(&mut duo, 1.0).await;
+    press(&duo, &[(CAPS, true), (CAPS, false)]);
+    assert_eq!(next_n(&mut duo, 2).await, [key(ESC, true), key(ESC, false)]);
+    let notes = status(&duo.da).await.tuning;
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].starts_with("Rule for app code not active: ") && notes[0].contains("does not report its focused app"), "{notes:?}");
+    duo.ha.events.send(Event::Motion { dx: -500.0, dy: 0.0 }).unwrap();
+    assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { pos: Some(_), .. }), "home");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(injected(&mut duo.hb).iter().all(|i| !matches!(i, Inject::Key { .. })), "nothing was left to release");
+    duo.stop().await;
+}
+
+/// B says which app has its focus only to the computer controlling it,
+/// only once asked for exactly that, and only until told to stop; a
+/// controller that asks the old way (fullscreen only) never hears it.
+#[tokio::test]
+async fn the_focused_app_goes_only_to_a_controller_that_asks() {
+    let duo = Duo::start("tune-app-ask", None).await;
+    let mut c = RawPeer::connect("tune-app-ask-c", &duo.db, duo.pb).await;
+    c.send(Control::Caps(caps::LOCAL)).await;
+    *duo.hb.focus.lock().unwrap() = Some(one_mk_proto::Focus { fullscreen: true, apps: vec!["code".into()] });
+    c.send(Control::Enter { epoch: 5, pos: Pos::new(5.0, 5.0) }).await;
+    loop {
+        if c.next().await == (Control::EnterAck { epoch: 5 }) {
+            break;
+        }
+    }
+    async fn next_focus(c: &mut RawPeer) -> Control {
+        loop {
+            let m = c.next().await;
+            if matches!(m, Control::Focus { .. }) {
+                return m;
+            }
+        }
+    }
+    // As an older build asks: no byte saying what to report.
+    c.send_body(&[18, 5, 0, 1]).await;
+    assert_eq!(next_focus(&mut c).await, Control::Focus { epoch: 5, fullscreen: true, apps: vec![] });
+    c.send(Control::WatchFocus { epoch: 5, on: true, app: true, fullscreen: false }).await;
+    assert_eq!(next_focus(&mut c).await, Control::Focus { epoch: 5, fullscreen: false, apps: vec!["code".into()] });
+    // The focus moves after a click.
+    *duo.hb.focus.lock().unwrap() = Some(one_mk_proto::Focus { fullscreen: true, apps: vec!["firefox".into()] });
+    c.send(Control::Button { button: 0x110, down: true, seq: 1, pos: Pos::new(5.0, 5.0) }).await;
+    assert_eq!(next_focus(&mut c).await, Control::Focus { epoch: 5, fullscreen: false, apps: vec!["firefox".into()] });
+    // Asked to stop: nothing more, whatever happens.
+    c.send(Control::WatchFocus { epoch: 5, on: false, app: false, fullscreen: true }).await;
+    *duo.hb.focus.lock().unwrap() = Some(one_mk_proto::Focus { fullscreen: false, apps: vec!["code".into()] });
+    c.send(Control::Button { button: 0x110, down: false, seq: 2, pos: Pos::new(5.0, 5.0) }).await;
+    c.send(Control::Button { button: 0x110, down: true, seq: 3, pos: Pos::new(5.0, 5.0) }).await;
+    assert!(tokio::time::timeout(FOCUS_SETTLE * 5, next_focus(&mut c)).await.is_err(), "B said nothing more");
+    duo.stop().await;
+}
