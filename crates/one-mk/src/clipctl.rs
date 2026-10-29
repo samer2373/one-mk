@@ -198,7 +198,10 @@ pub async fn notify(dir: &Path, state: Option<OnOff>) -> Result<()> {
         println!("A notification when files arrive: {}.", if s.notify_files { "on" } else { "off" });
         return Ok(());
     };
-    Settings::update(dir, |s| Ok(s.notify_files = on))?;
+    Settings::update(dir, |s| {
+        s.notify_files = on;
+        Ok(())
+    })?;
     println!("A notification when files arrive: {}.", if on { "on" } else { "off" });
     applied(dir).await
 }

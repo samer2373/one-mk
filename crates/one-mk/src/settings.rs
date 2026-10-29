@@ -479,7 +479,10 @@ const FULLSCREEN_LINUX: &str = "Note: on Wayland only programs running through X
 
 /// `one-mk gaming on|off|auto`.
 pub async fn gaming(dir: &Path, mode: Gaming) -> Result<()> {
-    Settings::update(dir, |s| Ok(s.gaming = mode))?;
+    Settings::update(dir, |s| {
+        s.gaming = mode;
+        Ok(())
+    })?;
     match mode {
         Gaming::Off => println!("Gaming mode is off: the pointer moves by position, and edges lead back."),
         Gaming::On => println!(
@@ -496,7 +499,10 @@ pub async fn gaming(dir: &Path, mode: Gaming) -> Result<()> {
 
 /// `one-mk lock-sync on|off`.
 pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
-    Settings::update(dir, |s| Ok(s.lock_sync = on))?;
+    Settings::update(dir, |s| {
+        s.lock_sync = on;
+        Ok(())
+    })?;
     if on {
         println!("Lock sync is on: locking this computer locks the connected ones (if they run one-mk too).");
     } else {
@@ -696,7 +702,11 @@ mod tests {
     #[test]
     fn a_failed_update_or_a_bad_file_changes_nothing() {
         let dir = temp_dir("failed-update");
-        Settings::update(&dir, |s| Ok(s.lock_sync = true)).unwrap();
+        Settings::update(&dir, |s| {
+            s.lock_sync = true;
+            Ok(())
+        })
+        .unwrap();
         let before = std::fs::read_to_string(dir.join(FILE)).unwrap();
         let refused = Settings::update(&dir, |s| -> Result<()> {
             s.lock_sync = false;
@@ -706,7 +716,11 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), before);
         // A hand edit that doesn't parse is not overwritten by a command line change.
         std::fs::write(dir.join(FILE), "clipboard = [").unwrap();
-        assert!(Settings::update(&dir, |s| Ok(s.lock_sync = true)).is_err());
+        let bad = Settings::update(&dir, |s| {
+            s.lock_sync = true;
+            Ok(())
+        });
+        assert!(bad.is_err());
         assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), "clipboard = [");
         let _ = std::fs::remove_dir_all(dir);
     }
