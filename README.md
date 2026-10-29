@@ -132,6 +132,7 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 | `one-mk keymap [list\|add\|remove\|clear\|check]` | Change what keys do on the other computers: remaps, combos, tap/hold, layers, actions (see below) |
 | `one-mk buttons [list\|map N TO\|preset side-back-forward\|clear]` | Remap mouse buttons on the other computers |
 | `one-mk pointer [--speed X]` / `one-mk scroll [options]` | Pointer speed; scroll direction, natural scrolling, speed, notches, Shift-scroll |
+| `one-mk pointer-overlay [auto\|always\|never]` | Draw the pointer here while another computer controls this one and it has no mouse (see below) |
 | `one-mk install` / `uninstall` | Start automatically at login (and add the file manager's "Send to" entries) / stop doing that |
 | `one-mk integrate [--remove]` | Add or remove "Send to <computer>" in the file manager only (see below) |
 | `one-mk pair` | Pair with another computer (run on both) |
@@ -408,6 +409,19 @@ the other computer has a fullscreen window in front, where it can tell (see
 above). Both computers need this version of one-mk; with an older one,
 positions are sent as before. On Windows, the pointer speed setting also
 applies to these movements outside games.
+
+**A pointer on a computer with no mouse.** A laptop used with the lid
+closed, a headless box or a tablet often shows no pointer at all while
+another computer controls it (Windows hides it when no mouse is installed).
+There one-mk draws a small arrow of its own at the pointer while it is
+controlled: `one-mk pointer-overlay auto` (the default) does this only when
+the OS shows none for lack of a mouse, `always` whenever this computer is
+controlled, `never` not at all. Nothing runs until it is needed, and the
+arrow goes as soon as control ends or a mouse is plugged in. Windows and
+macOS (written, not yet tried on real machines); on X11 the pointer always
+shows, so it isn't needed (`always` still draws it); on Wayland the desktop
+draws the pointer and nothing else can, so it isn't available (`one-mk
+doctor` says which). Details in [docs/NO-MOUSE-POINTER.md](docs/NO-MOUSE-POINTER.md).
 
 **Lock every screen.** `one-mk lock-all` locks this computer and asks every
 connected one to lock too. With `one-mk lock-sync on`, locking this computer
@@ -742,7 +756,8 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
 
 Start with `one-mk doctor`. It checks that one-mk is running and paired,
 the port, discovery, the firewall, the desktop permission (Linux), the
-keyboard shortcuts and the network, and prints a plain fix for each problem.
+keyboard shortcuts, the pointer drawn on a computer with no mouse and the
+network, and prints a plain fix for each problem.
 It only reads: it never changes your firewall or settings, needs no root,
 and exits with status 1 if something failed.
 

@@ -31,6 +31,7 @@ mod manage;
 mod netwatch;
 mod notify;
 mod pair;
+mod pointeroverlay;
 mod power;
 mod profiles;
 mod send;
@@ -310,6 +311,13 @@ enum Cmd {
     },
     /// Pointer speed on the computers this one controls.
     Pointer(tuning::PointerArgs),
+    /// Draw the pointer here while another computer controls this one and
+    /// this one shows none (no mouse attached): auto (the default), always
+    /// or never. Without a value: show the setting.
+    PointerOverlay {
+        #[arg(value_name = "auto|always|never", value_parser = ["auto", "always", "never"])]
+        mode: Option<String>,
+    },
     /// Scrolling on the computers this one controls: direction, natural,
     /// speed, smooth or by notches, modifier keys.
     Scroll(tuning::ScrollArgs),
@@ -371,6 +379,11 @@ impl From<Backend> for one_mk_input::Kind {
 }
 
 fn main() -> ExitCode {
+    // The macOS pointer window runs in a helper: this program, started by
+    // the daemon with this argument (see one_mk_input::cursoroverlay).
+    if std::env::args_os().nth(1).is_some_and(|a| a == one_mk_input::cursoroverlay::HELPER_ARG) {
+        one_mk_input::cursoroverlay::run_helper();
+    }
     let cli = Cli::parse();
     let verbose = cli.verbose;
     let level = match verbose {
@@ -489,6 +502,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Power(args) => power::run_command(&dir, args).await,
             Cmd::Keymap { cmd } => tuning::keymap(&dir, cmd).await,
             Cmd::Pointer(args) => tuning::pointer_command(&dir, args).await,
+            Cmd::PointerOverlay { mode } => pointeroverlay::command(&dir, mode.as_deref()).await,
             Cmd::Scroll(args) => tuning::scroll_command(&dir, args).await,
             Cmd::Buttons { cmd } => tuning::buttons(&dir, cmd).await,
             Cmd::Id => {

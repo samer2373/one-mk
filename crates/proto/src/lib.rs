@@ -12,6 +12,7 @@ mod layout;
 mod lock;
 pub mod mediakeys;
 mod motion;
+pub mod overlay;
 pub mod pointer;
 pub mod remap;
 pub mod scroll;
