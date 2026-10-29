@@ -6,6 +6,13 @@
 //! Key and button codes are Linux evdev codes on all platforms.
 
 mod common_logic;
+pub mod cursoroverlay;
+#[cfg(target_os = "macos")]
+mod cursoroverlay_macos;
+#[cfg(windows)]
+mod cursoroverlay_windows;
+#[cfg(target_os = "linux")]
+mod cursoroverlay_x11;
 pub mod hotkeys;
 #[cfg(any(target_os = "linux", test))]
 mod linux_logic;
@@ -30,6 +37,7 @@ mod xkb;
 #[cfg(any(windows, test))]
 mod win_logic;
 
+pub use cursoroverlay::InjectTx;
 pub use null::NullHandles;
 pub use system::{DisplaySleeper, FocusProbe, Inhibitor, Power, PowerEvent, PowerHandles, ScreenLocker, fake_power};
 #[cfg(target_os = "linux")]
