@@ -46,7 +46,9 @@ impl Xvfb {
 
 impl Drop for Xvfb {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        // SIGTERM, so it removes its socket and lock file.
+        // SAFETY: plain kill(2) on our own child.
+        unsafe { libc::kill(self.child.id() as i32, libc::SIGTERM) };
         let _ = self.child.wait();
     }
 }
