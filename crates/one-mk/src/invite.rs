@@ -14,6 +14,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use zeroize::{Zeroize, Zeroizing};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Args)]
 pub struct InviteArgs {
@@ -127,6 +128,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
     let pending = crate::app::Pending::default();
     let mut attempts = JoinSet::new();
     let mut sources = SourceLimit::default();
+    let slots = AttemptSlots::default();
     let mut clock = tokio::time::interval(Duration::from_millis(250));
     let end = tokio::time::Instant::from_std(state.deadline);
     let result = loop {
@@ -139,6 +141,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
             if attempts.is_empty() { break Err(anyhow::anyhow!("invitation burned or expired; create a new one")); }
         }
         tokio::select! {
+            biased;
             _ = clock.tick() => {}
             _ = tokio::signal::ctrl_c() => { break Err(anyhow::anyhow!("invitation cancelled")); }
             _ = tokio::time::sleep_until(end) => { break Err(anyhow::anyhow!("invitation expired; create a new one")); }
@@ -150,30 +153,6 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                 };
                 let _ = reply.send(text);
             }
-            Some(accepted) = node.accept() => {
-                let peer = accepted?;
-                if !state.active() {
-                    peer.conn.close(3u32.into(), b"invitation already used or expired");
-                    continue;
-                }
-                if !sources.admit(peer.conn.remote_address().ip()) {
-                    peer.conn.close(4u32.into(), b"invitation busy");
-                    continue;
-                }
-                if attempts.len() >= 128 {
-                    peer.conn.close(4u32.into(), b"busy");
-                    continue;
-                }
-                let (identity, state) = (identity.clone(), state.clone());
-                let pending = pending.clone();
-                let service_port = args.service_port;
-                attempts.spawn(async move {
-                    let exchange = tokio::time::timeout(STEP_TIMEOUT, InviteSession::accept_with_admission(&peer, identity.fingerprint, &identity.name, service_port, &state, || {
-                        pending.admit(peer.fingerprint).context("invitation busy")
-                    })).await;
-                    (peer, exchange)
-                });
-            }
             Some(done) = attempts.join_next(), if !attempts.is_empty() => {
                 let (peer, exchange) = done?;
                 match exchange {
@@ -183,12 +162,13 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                         attempts.abort_all();
                         // Continue serving the UI while approval is pending, but
                         // never expose the already-burned invitation again.
-                        let decision = approve_and_save(dir, &peer, session, !args.no_confirm, end, wall_expiry);
+                        let saved = AtomicBool::new(false);
+                        let decision = approve_and_save(dir, &peer, session, !args.no_confirm, end, wall_expiry, &saved);
+                        let decision = approval_until_cancelled(decision, tokio::signal::ctrl_c(), &saved);
                         tokio::pin!(decision);
                         loop {
                             tokio::select! {
                                 res = &mut decision => break res,
-                                _ = tokio::signal::ctrl_c() => break Err(anyhow::anyhow!("invitation cancelled during approval")),
                                 Some((_, reply)) = control.recv() => { let _ = reply.send("none\n".into()); }
                                 Some(accepted) = node.accept() => { accepted?.conn.close(3u32.into(), b"invitation already used or expired"); }
                             }
@@ -202,6 +182,34 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                     }
                 }
             }
+            Some(accepted) = node.accept() => {
+                let peer = accepted?;
+                let handshake = tokio::time::Instant::now();
+                if !state.active() {
+                    peer.conn.close(3u32.into(), b"invitation already used or expired");
+                    continue;
+                }
+                if !sources.admit(peer.conn.remote_address().ip()) {
+                    peer.conn.close(4u32.into(), b"invitation busy");
+                    continue;
+                }
+                let source = peer.conn.remote_address().ip().to_canonical();
+                let Some(slot) = slots.acquire(source, attempts.len(), sources.subnet_limited(source), handshake) else {
+                    peer.conn.close(4u32.into(), b"busy");
+                    continue;
+                };
+                let (identity, state) = (identity.clone(), state.clone());
+                let pending = pending.clone();
+                let service_port = args.service_port;
+                attempts.spawn(async move {
+                    let mut slot = Some(slot);
+                    let exchange = tokio::time::timeout(STEP_TIMEOUT, InviteSession::accept_with_admission(&peer, identity.fingerprint, &identity.name, service_port, &state, || {
+                        slot.take();
+                        pending.admit(peer.fingerprint).context("invitation busy")
+                    })).await;
+                    (peer, exchange)
+                });
+            }
         }
     };
     state.burn();
@@ -211,7 +219,18 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
     result
 }
 
-async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, confirm: bool, expiry: tokio::time::Instant, wall_expiry: u64) -> Result<()> {
+async fn approval_until_cancelled<T>(decision: impl std::future::Future<Output = Result<T>>, signal: impl std::future::Future, saved: &AtomicBool) -> Result<T> {
+    tokio::pin!(decision);
+    tokio::select! {
+        result = &mut decision => result,
+        _ = signal => {
+            if saved.load(Ordering::SeqCst) { decision.await }
+            else { Err(anyhow::anyhow!("invitation cancelled during approval; nothing saved here")) }
+        },
+    }
+}
+
+async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, confirm: bool, expiry: tokio::time::Instant, wall_expiry: u64, saved: &AtomicBool) -> Result<()> {
     let name = session.peer_name.clone();
     let port = session.service_port;
     println!("\n>>> {} joined: certificate {} <<<", name, grouped(peer.fingerprint));
@@ -226,7 +245,7 @@ async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, c
     let accept = accept && tokio::time::Instant::now() < end && one_mk_net::invite::unix_now() < wall_expiry;
     let ok = tokio::time::timeout(STEP_TIMEOUT, session.confirm(accept)).await.context("invitation approval transport timed out")??;
     if !ok { bail!("device refused; invitation consumed; nothing saved here"); }
-    save(dir, peer, &name, port, Side::Left).await?;
+    save_marked(dir, peer, &name, port, Side::Left, saved).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}).", peer.fingerprint);
     Ok(())
@@ -245,8 +264,11 @@ pub async fn join(dir: &Path, args: JoinArgs) -> Result<()> {
     let node = Node::bind_any(identity.clone(), 0)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     let mut result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline).await;
-    if result.as_ref().is_err_and(|error| format!("{error:#}").contains("busy")) {
-        tokio::time::sleep(Duration::from_millis(150 + u64::from(rand::random::<u8>()))).await;
+    for _ in 0..3 {
+        if !result.as_ref().is_err_and(|error| format!("{error:#}").contains("busy")) { break; }
+        let wait = Duration::from_millis(300 + u64::from(rand::random::<u16>()) % 601);
+        if tokio::time::Instant::now() + wait >= deadline { break; }
+        tokio::time::sleep(wait).await;
         result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline).await;
     }
     node.shutdown(Duration::from_millis(200)).await;
@@ -338,16 +360,71 @@ fn grouped(fingerprint: one_mk_net::Fingerprint) -> String {
 }
 
 #[derive(Default)]
-struct SourceLimit(HashMap<std::net::IpAddr, (std::time::Instant, u16)>);
+struct SourceLimit(HashMap<std::net::IpAddr, (std::time::Instant, u16)>, HashMap<std::net::Ipv6Addr, SubnetRate>);
+
+struct SubnetRate {
+    started: std::time::Instant,
+    addresses: HashSet<std::net::Ipv6Addr>,
+    count: u16,
+}
+
+fn subnet(source: std::net::Ipv6Addr) -> std::net::Ipv6Addr {
+    (u128::from(source) & (u128::MAX << 64)).into()
+}
+
+#[derive(Default)]
+struct AttemptSlots(Arc<std::sync::Mutex<HashMap<std::net::IpAddr, usize>>>);
+
+struct AttemptSlot {
+    active: Arc<std::sync::Mutex<HashMap<std::net::IpAddr, usize>>>,
+    source: std::net::IpAddr,
+}
+
+impl AttemptSlots {
+    fn acquire(&self, source: std::net::IpAddr, total: usize, subnet_limited: bool, handshake: tokio::time::Instant) -> Option<AttemptSlot> {
+        let mut active = self.0.lock().unwrap();
+        let concurrent: usize = active.iter().filter(|(address, _)| {
+            **address == source || (subnet_limited && matches!((**address, source), (std::net::IpAddr::V6(first), std::net::IpAddr::V6(second)) if subnet(first) == subnet(second)))
+        }).map(|(_, count)| *count).sum();
+        if total >= 128 || concurrent >= 4 { return None; }
+        if total >= 120 && (concurrent != 0 || handshake.elapsed() > Duration::from_secs(1)) { return None; }
+        *active.entry(source).or_default() += 1;
+        Some(AttemptSlot { active: self.0.clone(), source })
+    }
+}
+
+impl Drop for AttemptSlot {
+    fn drop(&mut self) {
+        let mut active = self.active.lock().unwrap();
+        if let Some(count) = active.get_mut(&self.source) {
+            *count -= 1;
+            if *count == 0 { active.remove(&self.source); }
+        }
+    }
+}
 
 impl SourceLimit {
+    fn subnet_limited(&self, source: std::net::IpAddr) -> bool {
+        match source.to_canonical() {
+            std::net::IpAddr::V6(address) => self.1.get(&subnet(address)).is_some_and(|rate| rate.addresses.len() > 8),
+            _ => false,
+        }
+    }
+
     fn admit(&mut self, source: std::net::IpAddr) -> bool {
         let now = std::time::Instant::now();
         self.0.retain(|_, (start, _)| now.duration_since(*start) < Duration::from_secs(1));
-        let source = match source.to_canonical() {
-            std::net::IpAddr::V6(address) => std::net::IpAddr::V6((u128::from(address) & (u128::MAX << 64)).into()),
-            address => address,
-        };
+        self.1.retain(|_, rate| now.duration_since(rate.started) < Duration::from_secs(1));
+        let source = source.to_canonical();
+        if let std::net::IpAddr::V6(address) = source {
+            let prefix = subnet(address);
+            if self.1.len() >= 256 && !self.1.contains_key(&prefix)
+                && let Some(oldest) = self.1.iter().min_by_key(|(_, rate)| rate.started).map(|(prefix, _)| *prefix) { self.1.remove(&oldest); }
+            let rate = self.1.entry(prefix).or_insert_with(|| SubnetRate { started: now, addresses: HashSet::new(), count: 0 });
+            if rate.addresses.len() <= 8 { rate.addresses.insert(address); }
+            rate.count = rate.count.saturating_add(1);
+            if rate.addresses.len() > 8 && rate.count > 32 { return false; }
+        }
         if self.0.len() >= 256 && !self.0.contains_key(&source)
             && let Some(oldest) = self.0.iter().min_by_key(|(_, (start, _))| *start).map(|(address, _)| *address) { self.0.remove(&oldest); }
         let (_, count) = self.0.entry(source).or_insert((now, 0));
@@ -357,12 +434,17 @@ impl SourceLimit {
 }
 
 async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, side: Side) -> Result<()> {
+    save_marked(dir, peer, name, port, side, &AtomicBool::new(false)).await
+}
+
+async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, side: Side, saved: &AtomicBool) -> Result<()> {
     // Reload immediately before writing, as ordinary pairing does not own
     // the daemon's in-memory trust store.
     let mut trust = TrustStore::load(dir)?;
     let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), port);
     trust.upsert(Device { name: name.to_owned(), fingerprint: peer.fingerprint.to_string(), side: side.to_string(), addrs: vec![addr.to_string()], ..Device::default() });
     trust.save()?;
+    saved.store(true, Ordering::SeqCst);
     let _ = crate::control::request(dir, Request::Reload).await;
     Ok(())
 }
@@ -410,6 +492,162 @@ fn print_qr(link: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    async fn cancellation_after_save_waits_for_commit() {
+        let saved = AtomicBool::new(true);
+        let (signal, signalled) = oneshot::channel::<()>();
+        let (commit, committed) = oneshot::channel::<()>();
+        let decision = async { committed.await.unwrap(); Ok(()) };
+        let task = approval_until_cancelled(decision, signalled, &saved);
+        tokio::pin!(task);
+        signal.send(()).unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(10), &mut task).await.is_err(), "saved trust must not report cancellation");
+        commit.send(()).unwrap();
+        task.await.unwrap();
+    }
+
+    #[test]
+    fn pre_id_sources_cannot_fill_the_shared_slots() {
+        let slots = AttemptSlots::default();
+        let source = "192.0.2.1".parse().unwrap();
+        let held: Vec<_> = (0..4).map(|_| slots.acquire(source, 0, false, tokio::time::Instant::now()).unwrap()).collect();
+        assert!(slots.acquire(source, 4, false, tokio::time::Instant::now()).is_none());
+        drop(held);
+        assert!(slots.acquire(source, 0, false, tokio::time::Instant::now()).is_some());
+    }
+
+    #[test]
+    fn reserved_slots_require_a_fresh_idle_source() {
+        let slots = AttemptSlots::default();
+        let source = "192.0.2.1".parse().unwrap();
+        let fresh = tokio::time::Instant::now();
+        assert!(slots.acquire(source, 120, false, fresh - Duration::from_secs(2)).is_none());
+        let held = slots.acquire(source, 120, false, fresh).unwrap();
+        assert!(slots.acquire(source, 121, false, fresh).is_none());
+        assert!(slots.acquire("192.0.2.2".parse().unwrap(), 121, false, fresh).is_some());
+        assert!(slots.acquire("192.0.2.3".parse().unwrap(), 128, false, fresh).is_none());
+        drop(held);
+        assert!(slots.acquire(source, 120, false, fresh).is_some());
+    }
+
+    #[test]
+    fn global_reservation_stays_available_under_source_rotation() {
+        let slots = AttemptSlots::default();
+        let fresh = tokio::time::Instant::now();
+        let mut held = Vec::new();
+        for address in 1..=30 {
+            let source = std::net::Ipv4Addr::new(192, 0, 2, address).into();
+            for _ in 0..4 { held.push(slots.acquire(source, held.len(), false, fresh).unwrap()); }
+        }
+        assert!(slots.acquire("192.0.2.1".parse().unwrap(), held.len(), false, fresh).is_none());
+        for address in 31..=38 {
+            let source = std::net::Ipv4Addr::new(192, 0, 2, address).into();
+            held.push(slots.acquire(source, held.len(), false, fresh).unwrap());
+        }
+        assert_eq!(held.len(), 128);
+        assert!(slots.acquire("192.0.2.39".parse().unwrap(), held.len(), false, fresh).is_none());
+        held.clear();
+        assert!(slots.acquire("192.0.2.39".parse().unwrap(), 0, false, fresh).is_some());
+    }
+
+    #[test]
+    fn ipv6_concurrent_cap_includes_pre_rotation_connections() {
+        let slots = AttemptSlots::default();
+        let fresh = tokio::time::Instant::now();
+        let held: Vec<_> = (1..=8).map(|address| slots.acquire(format!("2001:db8::{address}").parse().unwrap(), 0, false, fresh).unwrap()).collect();
+        assert!(slots.acquire("2001:db8::9".parse().unwrap(), held.len(), true, fresh).is_none());
+        drop(held);
+        assert!(slots.acquire("2001:db8::9".parse().unwrap(), 0, true, fresh).is_some());
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_save_saves_nothing() {
+        let result = approval_until_cancelled(std::future::pending::<Result<()>>(), std::future::ready(()), &AtomicBool::new(false)).await;
+        assert!(result.unwrap_err().to_string().contains("nothing saved here"));
+    }
+
+    async fn refill_slowloris(address: SocketAddr, source: &str, stop: Arc<AtomicBool>) -> usize {
+        let node = Node::bind(Arc::new(Identity::ephemeral().unwrap()), source.parse().unwrap()).unwrap();
+        let mut held = Vec::<Peer>::new();
+        let mut attempts = 0;
+        let mut clock = tokio::time::interval(Duration::from_millis(30));
+        while !stop.load(Ordering::SeqCst) {
+            clock.tick().await;
+            attempts += 1;
+            held.retain(|peer| peer.conn.close_reason().is_none());
+            if let Ok(Ok(peer)) = tokio::time::timeout(Duration::from_millis(200), node.connect(address)).await { held.push(peer); }
+        }
+        node.shutdown(Duration::from_millis(200)).await;
+        attempts
+    }
+
+    #[tokio::test]
+    async fn continuously_refilled_three_source_slowloris_allows_real_join() {
+        let dir = std::env::temp_dir().join(format!("one-mk-continuous-invite-{}", std::process::id()));
+        let host_dir = dir.join("host");
+        let host_home = host_dir.clone();
+        let host = tokio::spawn(async move {
+            run(&host_home, InviteArgs { expires: Duration::from_secs(30), confirm: false, no_confirm: true, listen: None, no_discovery: true, service_port: 24900 }).await
+        });
+        let invitation = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(Some(reply)) = crate::control::request(&bridge_dir(&host_dir), Request::Invitation).await
+                    && let Some(link) = reply.trim().split('\t').nth(2) {
+                        break Invitation::parse(link).unwrap();
+                    }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.unwrap();
+        let address = SocketAddr::new("127.0.0.1".parse().unwrap(), invitation.addrs[0].port());
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut attackers = JoinSet::new();
+        for source in ["127.0.0.2:0", "127.0.0.3:0", "127.0.0.4:0"] {
+            let stop = stop.clone();
+            attackers.spawn(async move { refill_slowloris(address, source, stop).await });
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let identity = Arc::new(Identity::ephemeral().unwrap());
+        let joiner = Node::bind(identity.clone(), "127.0.0.5:0".parse().unwrap()).unwrap();
+        let mut local_invitation = invitation;
+        local_invitation.addrs = vec![address];
+        let result = tokio::time::timeout(Duration::from_secs(5), join_inner(&dir.join("joiner"), &joiner, &identity, &local_invitation, 24901, true, tokio::time::Instant::now() + Duration::from_secs(4))).await;
+        stop.store(true, Ordering::SeqCst);
+        let mut attempts = 0;
+        while let Some(done) = attackers.join_next().await { attempts += done.unwrap(); }
+        joiner.shutdown(Duration::from_millis(200)).await;
+        let host_result = tokio::time::timeout(Duration::from_secs(2), host).await.unwrap().unwrap();
+        assert!(attempts >= 90, "continuous three-source refill ran only {attempts} attempts");
+        result.unwrap().unwrap();
+        host_result.unwrap();
+        assert_eq!(TrustStore::load(&host_dir).unwrap().devices().len(), 1);
+        eprintln!("three-source slow-loris: {attempts} TLS attempts over >=3s; real join completed and trust saved");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "manual CLI stress helper: set ONE_MK_TEST_INVITE_ADDR to the loopback pairing listener"]
+    async fn flood_cli_invitation_listener() {
+        let address = std::env::var("ONE_MK_TEST_INVITE_ADDR").unwrap().parse().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut attackers = JoinSet::new();
+        for source in ["127.0.0.2:0", "127.0.0.3:0", "127.0.0.4:0"] {
+            let stop = stop.clone();
+            attackers.spawn(async move { refill_slowloris(address, source, stop).await });
+        }
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        stop.store(true, Ordering::SeqCst);
+        let mut attempts = 0;
+        while let Some(done) = attackers.join_next().await { attempts += done.unwrap(); }
+        eprintln!("continuous three-source loopback flood: {attempts} TLS attempts in 6s");
+    }
+
+    #[test]
+    fn ordinary_ipv6_neighbors_have_independent_rate_budgets() {
+        let mut limit = SourceLimit::default();
+        for _ in 0..32 { assert!(limit.admit("2001:db8::1".parse().unwrap())); }
+        assert!(limit.admit("2001:db8::2".parse().unwrap()));
+    }
+
+    #[tokio::test]
     async fn invitation_pairs_across_expiry_and_persists_via_production_save() {
         for host_first in [true, false] {
             let host = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
@@ -429,7 +667,7 @@ mod tests {
             let join_dir = dir.join("joiner");
             let (host_result, join_result) = tokio::join!(async {
                 if !host_first { tokio::time::sleep(Duration::from_millis(100)).await; }
-                approve_and_save(&host_dir, &incoming, host_session, false, tokio::time::Instant::now() + Duration::from_millis(50), invitation.expires).await
+                approve_and_save(&host_dir, &incoming, host_session, false, tokio::time::Instant::now() + Duration::from_millis(50), invitation.expires, &AtomicBool::new(false)).await
             }, async {
                 if host_first { tokio::time::sleep(Duration::from_millis(150)).await; }
                 ensure!(join_session.confirm(true).await?, "host declined");
