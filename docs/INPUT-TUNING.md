@@ -331,17 +331,46 @@ in scopes, and acceleration modes this computer can't do).
 * Pointer acceleration `off`/`curve`: see the table above.
 * Natural scrolling assumes this computer uses its OS default direction.
 
-## For the window (4B)
+## The window (4B)
 
-The window (`crates/app`) depends on `one-mk-proto` and runs the `one-mk`
-binary for changes:
+The **Keys & mouse** tab (`crates/app/src/app/keys.rs`; everything that
+isn't drawing is in `crates/app/src/tune.rs` and unit-tested) reads
+`[input]` from `settings.toml` with the window's own small reader and
+changes it only through the commands below, so the window and the command
+line can't disagree. It uses:
 
 * names: `one_mk_proto::keynames::{parse_key, key_name, Chord, Trigger}`
   (`FromStr` + `Display`, round-trip), `one_mk_proto::remap::Output`
-  (`FromStr` + `Display`), `one_mk_proto::keynames::all_names()` for a picker,
-  `one_mk_proto::keynames::button_number`/`button_code` for buttons;
-* changes: `one-mk keymap add|remove|clear`, `one-mk pointer ...`,
-  `one-mk scroll ...`, `one-mk buttons ...` (validated, locked, applied
-  live); `one-mk keymap check` (exit status 1 and one line per problem);
-* display: `one-mk keymap list`, `one-mk buttons list`, or read
-  `settings.toml` `[input]` (format above).
+  (`FromStr` + `Display`), `one_mk_proto::keynames::all_names()` for the
+  searchable list, `one_mk_proto::keynames::button_number`/`button_code`
+  for buttons;
+* changes: `one-mk keymap add|remove`, `one-mk pointer ...`, `one-mk scroll
+  ...`, `one-mk buttons map|unmap|preset` (validated, locked, applied live),
+  run on one worker thread, one command at a time; options come first and
+  then `--`, so a key or computer name is never read as an option. Before a
+  rule is sent, the window makes the same checks as `one-mk keymap add`
+  (the rule reads, it isn't a mouse button, a tap/hold key builds alone, the
+  whole keymap still builds) and shows the message inline;
+* problems: `one-mk keymap check` (exit status 1 and one line per problem),
+  run after every change and shown above the rule list;
+* the **Test it** box: the rules that apply to the computers chosen in
+  **For:**, resolved like the daemon does (a computer beats an OS beats
+  everything) and compiled with `remap::Keymap::compile`, go through a
+  `remap::Mapper` in the window. Keys typed there show what would be sent
+  (actions are shown, never run) and how a tap/hold key was decided (let go
+  within the time, held past it, or another key pressed). The mapper's only
+  timer runs while a tap/hold key is undecided and the window is drawing.
+
+Keys are captured from egui's key events by their physical position
+(`physical_key`) and mapped to evdev codes (`tune::evdev_of`). egui can't
+report some keys, so those are picked from the list instead: the keypad
+(egui folds it into the main keys: Keypad 7 arrives as 7), Fn (usually
+handled inside the keyboard), the Japanese and Korean keys, brightness,
+keyboard light and microphone keys, F25 and up, and keys the desktop keeps
+for itself (Super on GNOME, Print Screen, often the media keys). Ctrl+C,
+Ctrl+X and Ctrl+V reach egui as Copy, Cut and Paste and are read as C, X
+and V. Esc cancels a capture (to make a key become Esc, pick Esc from the
+list).
+
+Ctrl+Alt+Shift+Esc is matched before the mapper, so it always works; the
+tab says so under the test box.

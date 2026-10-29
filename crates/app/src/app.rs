@@ -4,6 +4,7 @@
 //! through it.
 
 mod cells;
+mod keys;
 mod pages;
 mod plan;
 
@@ -36,15 +37,17 @@ enum Tab {
     Desk,
     Layout,
     Files,
+    Keys,
     Health,
     Advanced,
 }
 /// Each tab, and a shorter name for narrow windows. Settings most people
 /// never change (Ctrl and Cmd, gaming mode, edge rules) live in Advanced.
-const TABS: [(Tab, &str, &str); 5] = [
+const TABS: [(Tab, &str, &str); 6] = [
     (Tab::Desk, "Desk", "Desk"),
     (Tab::Layout, "Layout", "Layout"),
     (Tab::Files, "Clipboard & files", "Files"),
+    (Tab::Keys, "Keys & mouse", "Keys"),
     (Tab::Health, "Health", "Health"),
     (Tab::Advanced, "Advanced", "Advanced"),
 ];
@@ -56,7 +59,7 @@ impl Tab {
     }
     /// Tabs that mean something while one·mk is off.
     fn when_off(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Health | Tab::Advanced)
+        matches!(self, Tab::Desk | Tab::Keys | Tab::Health | Tab::Advanced)
     }
 }
 const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"), (Side::Top, "Above"), (Side::Bottom, "Below")];
@@ -203,6 +206,8 @@ pub struct App {
     plan_focus: Option<String>,
     /// An arrow-key move on the plan, applied once the keys rest.
     nudge: Option<(String, f64)>,
+    /// The Keys & mouse page.
+    keys: keys::KeysUi,
     /// Text being typed into fields, by field.
     drafts: HashMap<String, String>,
     /// The profile whose options are open, and whether to scroll to it.
@@ -356,6 +361,7 @@ impl App {
             Ok("layout") => tab = Tab::Layout,
             Ok("health") => tab = Tab::Health,
             Ok("advanced") => tab = Tab::Advanced,
+            Ok("keys") => tab = Tab::Keys,
             _ => {}
         }
         #[cfg(debug_assertions)]
@@ -401,6 +407,7 @@ impl App {
             plan_drag: None,
             plan_focus: None,
             nudge: None,
+            keys: keys::KeysUi::new(),
             drafts: HashMap::new(),
             profile_open: None,
             profile_scroll: false,
@@ -462,8 +469,16 @@ impl App {
                     self.busy.retain(|j| j != &what);
                     self.finished(what, error, now);
                 }
-                Event::Prefs(p) => self.prefs = p,
+                Event::Prefs(p) => {
+                    self.prefs = p;
+                    self.keys.check_due = true;
+                    // What was being dragged or typed is saved now.
+                    if !self.busy.iter().any(|j| matches!(j, Job::Tune { .. })) {
+                        self.keys.drafts.clear();
+                    }
+                }
                 Event::Doctor(d) => self.doctor = Some((d, now)),
+                Event::KeymapCheck(r) => self.keys.problems = Some(r),
             }
         }
         // Health is open and nothing ran yet: run the checks.
@@ -501,6 +516,7 @@ impl App {
                 Job::Profile { verb: "delete", name } => self.toast(format!("Deleted the layout “{name}”"), now),
                 Job::ProfileAuto { name, ssid: Some(ssid) } => self.toast(format!("“{name}” comes on by itself on Wi-Fi “{ssid}”"), now),
                 Job::ProfileAuto { name, ssid: None } => self.toast(format!("“{name}” no longer comes on by itself"), now),
+                Job::Tune { area, what, .. } => self.tuned(area, &what, None),
                 _ => {}
             }
             return;
@@ -566,6 +582,8 @@ impl App {
                 self.toast_error(format!("Couldn't change {what}."), e, now);
             }
             Job::Doctor => {}
+            // Shown where the change was made, not as a toast.
+            Job::Tune { area, what, .. } => self.tuned(area, &what, e),
             Job::EditSettings => self.toast_error("Couldn't open settings.toml.", e, now),
         }
     }
@@ -1373,7 +1391,7 @@ impl App {
                 let sel = self.selected_id().filter(|id| id != "me");
                 vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
             }
-            Tab::Health | Tab::Advanced => vec![],
+            Tab::Health | Tab::Advanced | Tab::Keys => vec![],
             Tab::Files => {
                 let any = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
                 let sub = if any {
@@ -1926,7 +1944,7 @@ impl App {
 
     /// Ctrl+1 to 6 switch tabs (Cmd on a Mac).
     fn shortcuts(&mut self, ui: &Ui) {
-        if widgets::locked(ui) {
+        if widgets::locked(ui) || self.keys_grab(ui.ctx()) {
             return;
         }
         let off = self.off();
@@ -2018,10 +2036,14 @@ impl eframe::App for App {
                 let mut child = page(ui, body, "advanced");
                 self.advanced(&mut child, body);
             }
+            Tab::Keys => {
+                let mut child = page(ui, body, "keys");
+                self.keys_page(&mut child, body, now);
+            }
             _ => {}
         }
         self.top_bar(ui, top, now);
-        if !matches!(self.tab, Tab::Health | Tab::Advanced) {
+        if !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys) {
             self.panel(ui, panel, now);
         }
         widgets::set_locked(ui.ctx(), false);
@@ -2056,6 +2078,14 @@ impl eframe::App for App {
 ///   `ONE_MK_APP_DOCTOR=file.json` shows that report instead of running
 ///   `one-mk doctor`; `ONE_MK_APP_ZOOM=2` draws everything twice as big
 ///   (a high-density screen); `ONE_MK_APP_SIZE=WxH` (main.rs).
+/// - `ONE_MK_APP_TAB=keys`: `ONE_MK_APP_KEYS=mouse` shows the mouse;
+///   `ONE_MK_APP_KEY_SCOPE=mac|windows|linux|NAME` chooses "For:";
+///   `ONE_MK_APP_KEY=capslock` opens that key (`ONE_MK_APP_KEY_MORE=1`
+///   with "hold for another key" open, `ONE_MK_APP_KEY_CAPTURE=1` waiting
+///   for a key, `ONE_MK_APP_KEY_PICK=query` with the list open);
+///   `ONE_MK_APP_KEY_CHOOSE=esc` makes the opened key that, as a click
+///   would; `ONE_MK_APP_BUTTON=4` opens a mouse button; `ONE_MK_APP_KEY_TEST=
+///   58d0,58u85` types into the test box (code, down/up, ms).
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(debug_assertions)]
 mod debug {
@@ -2093,7 +2123,7 @@ mod debug {
         if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
             app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("one-mk didn't answer within 3 seconds".into()), now);
         }
-        if ready && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
+        if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
             ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
             if let Some(id) = app.selected_id() {
                 let target = match app.tab {
@@ -2106,6 +2136,46 @@ mod debug {
         if ready && let Some(name) = var("ONE_MK_APP_PROFILE") && once(&ctx, "profile") {
             app.profile_open = Some(name);
             app.profile_scroll = true;
+        }
+        // The Keys & mouse page.
+        if app.tab == Tab::Keys && app.status.is_some() && once(&ctx, "keys") {
+            if var("ONE_MK_APP_KEYS").as_deref() == Some("mouse") {
+                app.keys.view = keys::View::Mouse;
+            }
+            if let Some(s) = var("ONE_MK_APP_KEY_SCOPE") {
+                app.keys.scope = match s.as_str() {
+                    "mac" => crate::tune::Scope::Os(os::MACOS),
+                    "windows" => crate::tune::Scope::Os(os::WINDOWS),
+                    "linux" => crate::tune::Scope::Os(os::LINUX),
+                    _ => crate::tune::Scope::Peer(s),
+                };
+            }
+            if let Some(code) = var("ONE_MK_APP_KEY").and_then(|k| one_mk_proto::keynames::parse_key(&k).ok()) {
+                app.select_key(code as u16, None);
+                app.keys.more |= var("ONE_MK_APP_KEY_MORE").is_some();
+                if var("ONE_MK_APP_KEY_CAPTURE").is_some() {
+                    app.keys.capture = Some((keys::Want::To, crate::tune::Capture::default()));
+                }
+                if let Some(q) = var("ONE_MK_APP_KEY_PICK") {
+                    app.keys.picker = Some((keys::Want::To, q));
+                }
+            }
+            if let Some(v) = var("ONE_MK_APP_KEY_CHOOSE").filter(|_| app.keys.selected.is_some()) {
+                app.choose(keys::Want::To, v);
+            }
+            if let Some(n) = var("ONE_MK_APP_BUTTON").and_then(|n| n.parse().ok()) {
+                app.keys.button = Some(n);
+                if var("ONE_MK_APP_KEY_PICK").is_some() {
+                    app.keys.picker = Some((keys::Want::Button, String::new()));
+                }
+            }
+            if var("ONE_MK_APP_FOCUS").is_some() {
+                ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
+                ctx.memory_mut(|m| m.request_focus(Id::unique(("cap", app.keys.focus_key))));
+            }
+        }
+        if app.tab == Tab::Keys && now > 1.0 && let Some(spec) = var("ONE_MK_APP_KEY_TEST") && once(&ctx, "key-test") {
+            app.debug_type(&ctx, &spec);
         }
         if var("ONE_MK_APP_AUTOSTART").is_some() {
             app.autostart = Some(true);

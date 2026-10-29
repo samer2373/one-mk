@@ -550,7 +550,9 @@ Good to know:
   curve needs raw mouse motion, which no backend reads yet; turn
   acceleration off in this computer's settings instead.
 
-Details and the design: [docs/INPUT-TUNING.md](docs/INPUT-TUNING.md).
+The window's **Keys & mouse** tab does all of this by clicking (and a key
+press), and can try the rules before they are used. Details and the design:
+[docs/INPUT-TUNING.md](docs/INPUT-TUNING.md).
 
 ## Why it feels good
 
@@ -604,6 +606,20 @@ Open it from the tray ("Open one·mk…", or a left click on Linux) or run
 - **Clipboard & files:** what the clipboard shares and whether others may
   get it, notifications, the received files folder, the clipboard's size
   limit, and each transfer with a progress bar;
+- **Keys & mouse:** a drawn keyboard: click a key (or move to it with the
+  arrows and press Enter), then press the key it should become, pick it from
+  a searchable list, or make it do nothing; "hold for another key" is under
+  More. Changed keys are marked on the drawing and listed as sentences
+  ("Caps Lock → Esc when tapped, Ctrl when held"), with quick setups (Caps
+  Lock as Esc/Ctrl, swap Alt and Super, swap Ctrl and Cmd for Mac keyboards,
+  arrow keys on Right Alt + HJKL), problems from `one-mk keymap check`, and
+  **For:** all computers, one OS or one computer. A **Test it** box runs your
+  rules right there (nothing is sent) and shows what the other computer would
+  get, and whether a tap/hold key counted as a tap or a hold. On the Mouse
+  side: what each button does (another button, a key or shortcut, switching
+  computers, locking, a media key, a command), pointer speed, and scrolling
+  (direction, speed, steps, natural scrolling, Shift to scroll sideways).
+  Acceleration Off and Curve show why they can't be used yet;
 - **Health:** the results of `one-mk doctor` (run when the page opens and on
   **Recheck**), each with its fix and a button to copy the command (or, for
   starting and pairing, the window's own button), plus what one-mk says
@@ -615,7 +631,7 @@ Open it from the tray ("Open one·mk…", or a left click on Linux) or run
   commands to run on events (edit them in `settings.toml`).
 
 Every change goes through the same `one-mk` commands you would type, so
-the command line and the window always agree. Ctrl+1 to Ctrl+5 switch
+the command line and the window always agree. Ctrl+1 to Ctrl+6 switch
 tabs.
 
 When the mouse and keyboard move to another computer, the pointer is drawn

@@ -13,7 +13,7 @@ const EDGE_ROW: f32 = 38.0;
 const MODS: [(&str, &str); 4] = [("none", "None"), ("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
 
 /// A card: a raised panel with a title.
-fn card(ui: &Ui, r: Rect, title: &str) -> Rect {
+pub(super) fn card(ui: &Ui, r: Rect, title: &str) -> Rect {
     let p = ui.painter();
     p.rect(r, CornerRadius::same(12), PANEL, Stroke::new(1.0, LINE), StrokeKind::Inside);
     p.text(r.left_top() + vec2(18.0, 26.0), Align2::LEFT_CENTER, title, semibold(T_TITLE), INK);

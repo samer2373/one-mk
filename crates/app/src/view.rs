@@ -15,24 +15,35 @@ use std::collections::HashMap;
 pub enum Val {
     Bool(bool),
     Int(i64),
+    Float(f64),
     Str(String),
     List(Vec<Val>),
-    /// Anything else (dates, floats, inline tables): kept as written.
+    /// `{ os = "mac" }`, keys in the order written.
+    Table(Vec<(String, Val)>),
+    /// Anything else (dates): kept as written.
     Other(String),
 }
 
 impl Val {
-    fn as_bool(&self) -> Option<bool> {
+    pub fn as_bool(&self) -> Option<bool> {
         if let Val::Bool(b) = self { Some(*b) } else { None }
     }
-    fn as_int(&self) -> Option<i64> {
+    pub fn as_int(&self) -> Option<i64> {
         if let Val::Int(n) = self { Some(*n) } else { None }
     }
-    fn as_str(&self) -> Option<&str> {
+    pub fn as_str(&self) -> Option<&str> {
         if let Val::Str(s) = self { Some(s) } else { None }
     }
+    /// A number, whole or not.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Val::Float(x) => Some(*x),
+            Val::Int(n) => Some(*n as f64),
+            _ => None,
+        }
+    }
     /// Strings in a list (a one-word string counts as a list of one).
-    fn words(&self) -> Vec<String> {
+    pub fn words(&self) -> Vec<String> {
         match self {
             Val::Str(s) => vec![s.clone()],
             Val::List(l) => l.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect(),
@@ -43,6 +54,8 @@ impl Val {
 
 /// One `key = value` line: under which table (`edge.left`; empty at the
 /// top), which repeat of an `[[array]]` table (0 otherwise), and the key.
+/// A table inside an array's repeat (`[input.keymap.rule.scope]` after
+/// `[[input.keymap.rule]]`) has the index of that repeat.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     pub table: String,
@@ -75,7 +88,12 @@ pub fn read_toml(text: &str) -> Vec<Entry> {
         }
         if let Some(name) = t.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
             table = name.trim().to_owned();
-            index = 0;
+            // Inside the latest repeat of the longest array it belongs to.
+            index = counts
+                .iter()
+                .filter(|(a, _)| table.strip_prefix(a.as_str()).is_some_and(|rest| rest.starts_with('.')))
+                .max_by_key(|(a, _)| a.len())
+                .map_or(0, |(_, n)| n - 1);
             continue;
         }
         let Some((key, rest)) = t.split_once('=') else { continue };
@@ -166,11 +184,26 @@ fn parse_val(s: &str) -> Val {
     if let Ok(n) = s.replace('_', "").parse::<i64>() {
         return Val::Int(n);
     }
+    let numeric = s.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+');
+    if numeric && let Ok(x) = s.replace('_', "").parse::<f64>() {
+        return Val::Float(x);
+    }
     if let Some(text) = unquote(s) {
         return Val::Str(text);
     }
     if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
         return Val::List(split_list(inner).iter().map(|v| parse_val(v)).collect());
+    }
+    if let Some(inner) = s.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
+        let pairs = split_list(inner)
+            .iter()
+            .filter_map(|kv| {
+                let (k, v) = kv.split_once('=')?;
+                let k = k.trim();
+                Some((unquote(k).unwrap_or_else(|| k.to_owned()), parse_val(v)))
+            })
+            .collect();
+        return Val::Table(pairs);
     }
     Val::Other(s.to_owned())
 }
@@ -188,8 +221,8 @@ fn split_list(s: &str) -> Vec<String> {
             }
             (Some(q), c) if c == q && !escaped => quote = None,
             (None, '"' | '\'') => quote = Some(c),
-            (None, '[') => depth += 1,
-            (None, ']') => depth -= 1,
+            (None, '[' | '{') => depth += 1,
+            (None, ']' | '}') => depth -= 1,
             (None, ',') if depth == 0 => {
                 out.push(std::mem::take(&mut cur));
                 continue;
@@ -235,6 +268,8 @@ pub struct Prefs {
     pub hooks_shell: bool,
     /// Profile name: when it switches by itself, in words.
     pub auto: HashMap<String, String>,
+    /// `[input]`: keys, buttons, pointer and scrolling.
+    pub input: crate::tune::Input,
     /// `settings.toml` couldn't be read (the window shows defaults).
     pub unreadable: bool,
 }
@@ -300,6 +335,7 @@ impl Prefs {
             hooks_timeout: num("hooks", "timeout_secs", 5).max(1) as u64,
             hooks_shell: flag("hooks", "shell", false),
             auto,
+            input: crate::tune::Input::read(&e),
             unreadable: false,
         }
     }
@@ -838,6 +874,20 @@ name = "Café, 2nd floor"
         assert_eq!((e[2].table.as_str(), &e[2].val), ("t", &Val::List(vec![Val::List(vec![Val::Int(1), Val::Int(2)]), Val::List(vec![Val::Int(3)])])));
         assert_eq!(e[3].val, Val::Int(1000));
         assert_eq!(e.len(), 4, "a line that isn't key = value is skipped");
+    }
+
+    #[test]
+    fn toml_reader_handles_inline_tables_floats_and_tables_in_repeats() {
+        let e = read_toml(
+            "[[r]]\nscope = { os = \"mac\", n = [1, 2] }\nspeed = 1.5\n[r.scope]\nos = \"linux\"\n[[r]]\nx = -0.25\n[r.scope]\npeer = \"a, b\"\n[other]\ny = 1e3\n",
+        );
+        let table = Val::Table(vec![("os".into(), Val::Str("mac".into())), ("n".into(), Val::List(vec![Val::Int(1), Val::Int(2)]))]);
+        assert_eq!((e[0].table.as_str(), e[0].index, &e[0].val), ("r", 0, &table));
+        assert_eq!(e[1].val, Val::Float(1.5));
+        assert_eq!((e[2].table.as_str(), e[2].index), ("r.scope", 0), "a table inside the first repeat");
+        assert_eq!((e[3].table.as_str(), e[3].index, e[3].val.as_f64()), ("r", 1, Some(-0.25)));
+        assert_eq!((e[4].table.as_str(), e[4].index, e[4].val.as_str()), ("r.scope", 1, Some("a, b")));
+        assert_eq!((e[5].table.as_str(), e[5].index, e[5].val.as_f64()), ("other", 0, Some(1000.0)));
     }
 
     #[test]
