@@ -15,7 +15,8 @@
 //! keyboard, past the injector, so a key-down replayed through the
 //! injector would never be released there (on Windows and macOS the
 //! injector would repeat it forever; on Linux the virtual keyboard would
-//! keep it down). A key is therefore typed as a tap (down and up), and the
+//! keep it down). A key is therefore typed as a tap (down and up), a click
+//! as a whole click (the same holds for buttons), and the
 //! modifiers pressed while held go down just around the click, scroll or
 //! key they modify and up right after. See [`Next::Release`].
 
@@ -297,8 +298,9 @@ pub enum Next {
     Cross(Pos),
     /// Hand the pointer back at `pos`, then on this computer: press the
     /// `around` modifiers (pressed while held and still down), type `keys`
-    /// (code, down) and replay the captured click or scroll that ended the
-    /// wait, if any, then release `around` again (in reverse order).
+    /// (code, down) and replay the captured click (as a whole click: down
+    /// and up) or scroll that ended the wait, if any, then release `around`
+    /// again (in reverse order).
     /// Nothing is left down: the user's own key-ups go past the injector.
     Release {
         pos: Pos,

@@ -979,11 +979,19 @@ impl App {
                 // Captured while held, but meant for this computer. Every
                 // key pressed here is released here too: the user's own
                 // key-ups bypass the injector, which would hold (and on
-                // Windows and macOS repeat) anything left down.
+                // Windows and macOS repeat) anything left down. A click
+                // likewise: its real button-up either reaches the system
+                // past the injector (whose own press would then stay down
+                // on Wayland and macOS) or was captured too and goes
+                // nowhere, so it is replayed as a whole click.
                 let press = around.iter().map(|&code| Inject::Key { code, down: true });
                 let typed = keys.into_iter().map(|(code, down)| Inject::Key { code, down });
+                let up = match input {
+                    Some(Inject::Button { button, down: true }) => Some(Inject::Button { button, down: false }),
+                    _ => None,
+                };
                 let release = around.iter().rev().map(|&code| Inject::Key { code, down: false });
-                for i in press.chain(typed).chain(input).chain(release) {
+                for i in press.chain(typed).chain(input).chain(up).chain(release) {
                     let _ = self.inject.send(i);
                 }
             }
@@ -3337,7 +3345,7 @@ mod tests {
         duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(1919.0, 540.0)) });
         let mut got = Vec::new();
-        for _ in 0..3 {
+        for _ in 0..4 {
             got.push(next_inject(&mut duo.ha).await);
         }
         assert_eq!(
@@ -3345,11 +3353,34 @@ mod tests {
             vec![
                 Inject::Key { code: 42, down: true },
                 Inject::Button { button: 0x110, down: true },
+                Inject::Button { button: 0x110, down: false },
                 Inject::Key { code: 42, down: false },
             ]
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(injected(&mut duo.ha), vec![]);
+        assert_eq!(injected(&mut duo.hb), vec![], "never crossed");
+        duo.stop().await;
+    }
+
+    /// A click while held at the edge is replayed here as a whole click:
+    /// its real button-up may have been captured too (and is then dropped,
+    /// nothing being captured any more), or reach the system past the
+    /// injector, which on Wayland and macOS would keep the replayed press
+    /// down. Either way no button stays held.
+    #[tokio::test]
+    async fn click_at_the_edge_leaves_no_button_held() {
+        let mut duo = Duo::start("handback-click", None).await;
+        set(&duo.da, |s| s.edge.all.dwell_ms = Some(5000)).await;
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        // The button-up, captured before the release took effect.
+        duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(1919.0, 540.0)) });
+        assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: true });
+        assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: false });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(injected(&mut duo.ha), vec![], "the captured button-up adds nothing");
         assert_eq!(injected(&mut duo.hb), vec![], "never crossed");
         duo.stop().await;
     }
