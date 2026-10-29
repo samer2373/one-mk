@@ -24,7 +24,7 @@ use one_mk_net::{
 use one_mk_proto::{
     Align, Approach, Control, Datagram, Desktop, HeldKeys, LockSync, Mods, MotionReceiver, Next, OnRemote,
     OnRemoteSleep, Pos, Received, Rect, Refusal, RelReceived, RemoteCursor, Seam, Side, SleepSync, Start, Step,
-    StreamKind, caps, cycle_next, fullscreen_blocks, os, overlaps, sanitize_name, swap_ctrl_meta,
+    StreamKind, caps, cycle_next, fullscreen_blocks, os, overlaps, sanitize_name,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -35,6 +35,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
 mod shortcuts;
+mod tune;
 
 /// While the pointer is on a peer, resend its position at least this often
 /// so Wi-Fi radios never doze off between mouse movements, and the peer
@@ -211,6 +212,8 @@ struct Remote {
     watching_focus: bool,
     /// We asked the peer to keep its screen awake (`Inhibit`).
     inhibit_sent: bool,
+    /// Key mapper, pointer, scroll and button tuning for this peer.
+    tune: tune::Tune,
 }
 
 impl Remote {
@@ -771,8 +774,10 @@ fn coalesce(
     cursor: &mut RemoteCursor,
     (dx, dy): (f64, f64),
     events: &mut mpsc::UnboundedReceiver<Event>,
+    tune: impl Fn(f64, f64) -> (f64, f64),
 ) -> Coalesced {
     let mut out = Coalesced::default();
+    let (dx, dy) = tune(dx, dy);
     let mut step = cursor.motion(dx, dy);
     for _ in 0..MAX_COALESCE {
         match step {
@@ -784,7 +789,10 @@ fn coalesce(
             Step::Still => {}
         }
         match events.try_recv() {
-            Ok(Event::Motion { dx, dy }) => step = cursor.motion(dx, dy),
+            Ok(Event::Motion { dx, dy }) => {
+                let (dx, dy) = tune(dx, dy);
+                step = cursor.motion(dx, dy);
+            }
             Ok(ev) => {
                 out.next = Some(ev);
                 return out;
@@ -854,8 +862,7 @@ impl App {
             Event::Button { button, down } => {
                 let Some(r) = self.remote.as_mut() else { return };
                 if r.held.update(button, down) {
-                    let msg = Control::Button { button, down, seq: r.cursor.seq(), pos: r.cursor.pos() };
-                    self.send_input(msg);
+                    self.tuned_key(button, down);
                 }
             }
             Event::Key { code, down } => {
@@ -866,14 +873,14 @@ impl App {
                     self.go_home();
                     return;
                 }
-                let wire = if r.swap { swap_ctrl_meta(code) } else { code };
+                // Remapped (then Ctrl/Cmd swapped) in `tune.rs`.
                 if r.held.update(code, down) {
-                    self.send_input(Control::Key { code: wire, down });
+                    self.tuned_key(code, down);
                 }
             }
-            Event::Scroll { dx, dy } => self.send_input(Control::Scroll { dx: dx as f32, dy: dy as f32 }),
-            Event::ScrollDiscrete { dx, dy } => self.send_input(Control::ScrollDiscrete { dx, dy }),
-            Event::ScrollStop => self.send_input(Control::ScrollStop),
+            Event::Scroll { dx, dy } => self.tuned_scroll(tune::ScrollIn::Smooth(dx, dy)),
+            Event::ScrollDiscrete { dx, dy } => self.tuned_scroll(tune::ScrollIn::Discrete(dx, dy)),
+            Event::ScrollStop => self.tuned_scroll(tune::ScrollIn::Stop),
             Event::LocalInput => {
                 if self.owner.is_some() {
                     tracing::info!("this computer's own mouse or keyboard was used; it takes back control");
@@ -907,7 +914,8 @@ impl App {
     /// Returns the event that ended the run, to be handled next.
     fn on_motion(&mut self, dx: f64, dy: f64, events: &mut mpsc::UnboundedReceiver<Event>) -> Option<Event> {
         let r = self.remote.as_mut()?;
-        let c = coalesce(&mut r.cursor, (dx, dy), events);
+        let tune = &r.tune;
+        let c = coalesce(&mut r.cursor, (dx, dy), events, |dx, dy| tune.motion(dx, dy));
         if let Some(d) = c.moved
             && r.acked
         {
@@ -1045,6 +1053,7 @@ impl App {
         let peer = &self.peers[&fp];
         let setting = self.trust.get(&fp).map_or(Swap::Auto, |d| d.swap_ctrl_cmd);
         let swap = swap_applies(setting, os::local(), peer.os);
+        let tune = self.tune_for(fp, swap);
         let epoch = cursor.epoch();
         peer.ctl.send(Control::Enter { epoch, pos: cursor.pos() });
         if wants_relative(self.settings.gaming, peer.caps, false) && cursor.set_relative(true) {
@@ -1068,6 +1077,7 @@ impl App {
             peer_fullscreen: false,
             watching_focus: false,
             inhibit_sent: false,
+            tune,
         });
         self.apply_pointer_mode(); // gaming `auto` starts watching
         self.update_sides();
@@ -1099,6 +1109,7 @@ impl App {
     /// Ends the visit to a peer (which releases anything still held there),
     /// without touching capture.
     fn end_visit(&mut self) -> Option<Remote> {
+        self.release_tuned();
         let r = self.remote.take()?;
         if let Some(p) = self.peers.get(&r.peer) {
             p.ctl.send(Control::Leave);
@@ -1149,6 +1160,9 @@ impl App {
         // switch only until capture starts: otherwise nothing ticks.
         let waits = self.approach.as_ref().and_then(|(_, a)| a.deadline()).map(Instant::from_std);
         let waits = waits.into_iter().chain(self.switching.map(|(_, until)| until)).min();
+        // A tap/hold key waiting to be decided.
+        let tap = self.remote.as_ref().and_then(|r| r.tune.deadline()).map(Instant::from_std);
+        let waits = waits.into_iter().chain(tap).min();
         let lease = self.owner.as_ref().map(|o| (o.last_rx + LEASE).min(o.last_input + IDLE));
         let lease = lease.into_iter().chain(waits).min();
         let visit = self.remote.as_ref().map(|r| {
@@ -1185,6 +1199,7 @@ impl App {
             tracing::info!("no input from the controlling computer for {} s; it lets go", IDLE.as_secs());
             self.end_owner(true);
         }
+        self.tune_timer(now.into_std());
         let Some(r) = self.remote.as_mut() else { return };
         if !r.acked {
             if now >= r.entered_at + ENTER_TIMEOUT {
@@ -1664,6 +1679,11 @@ impl App {
         self.apply_pointer_mode();
         self.sync_sides();
         self.shortcuts.reload(&self.settings.hotkeys);
+        let paired: Vec<_> = self.trust.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone())).collect();
+        for p in self.settings.input.check(&paired) {
+            tracing::warn!("input tuning in settings.toml: {p}");
+        }
+        self.retune();
         Ok(())
     }
 
@@ -2514,7 +2534,7 @@ mod tests {
         tx.send(Event::Motion { dx: -100.0, dy: 10.0 }).unwrap();
         tx.send(Event::Key { code: 30, down: true }).unwrap();
         tx.send(Event::Motion { dx: 1.0, dy: 0.0 }).unwrap();
-        let out = coalesce(&mut c, (10.0, 0.0), &mut rx);
+        let out = coalesce(&mut c, (10.0, 0.0), &mut rx, |dx, dy| (dx, dy));
         let pos = Pos::new(1920.0 - 1.0 / 256.0 - 100.0, 550.0);
         assert_eq!(out.moved, Some(Datagram::Motion { epoch: 1, seq: 3, pos }));
         assert_eq!(out.leave, None);
@@ -2525,7 +2545,7 @@ mod tests {
         // Leaving ends the run after the position reached so far.
         tx.send(Event::Motion { dx: -5000.0, dy: 0.0 }).unwrap();
         tx.send(Event::Motion { dx: 1.0, dy: 0.0 }).unwrap();
-        let out = coalesce(&mut c, (1.0, 0.0), &mut rx);
+        let out = coalesce(&mut c, (1.0, 0.0), &mut rx, |dx, dy| (dx, dy));
         assert!(matches!(out.moved, Some(Datagram::Motion { seq: 4, .. })));
         assert!(out.leave.is_some());
         assert_eq!(out.next, None);
@@ -3616,6 +3636,10 @@ mod tests {
     /// Offsets, walls, multi-monitor crossings and layout sync between
     /// daemons (in `app/tests/layout.rs`).
     mod layout;
+
+    /// Key mapper, button, scroll and pointer tuning between daemons (in
+    /// `app/tests/tuning.rs`).
+    mod tuning;
 
     #[test]
     fn swaps_only_between_a_mac_and_something_else() {

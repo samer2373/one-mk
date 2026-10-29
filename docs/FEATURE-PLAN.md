@@ -173,7 +173,7 @@ the PC, with one mouse), plus a keyboard mapper for any key.
 
 | ID | Task | Depends on | Notes | Status |
 |---|---|---|---|---|
-| 4A | Core: pure rule engines in `crates/proto` (key mapper with tap/hold, layers and combos; pointer speed/acceleration; scroll direction, speed, discrete mode and modifier-scroll; button remap), wired into the send path, `settings.toml` tables, CLI `one-mk keymap\|pointer\|scroll\|buttons` | wave 2 merged | Scope: global and per target computer. Hot path must stay allocation-free. | todo |
+| 4A | Core: pure rule engines in `crates/proto` (key mapper with tap/hold, layers and combos; pointer speed/acceleration; scroll direction, speed, discrete mode and modifier-scroll; button remap), wired into the send path, `settings.toml` tables, CLI `one-mk keymap\|pointer\|scroll\|buttons` | wave 2 merged | Scope: global, per target OS, per target computer. Design: `docs/INPUT-TUNING.md`. Mapper: no allocation per event (benchmark test: ~55 M events/s release). Acceleration `off`/`curve` implemented in `proto/pointer.rs` but refused: no backend reports raw motion yet (Windows Raw Input / macOS IOHID are follow-ups; Linux libei can't). Middle-click autoscroll not done. | done |
 | 4B | Window panels: keyboard mapper editor (click a key, press the key it becomes), pointer and scroll tuning, button map | 4A, UI task | | todo |
 | 4C | Local-only remapping where the OS allows it (Windows low-level hook, macOS event tap) | 4A | Not possible on Wayland without root: documented limit. | todo |
 | 4D | Per-app rules via the focus probe (receiving or sending side) | 4A | Best effort: Windows, X11 windows; macOS probe is a stub. | todo |

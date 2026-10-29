@@ -22,6 +22,7 @@ mod settings;
 mod steer;
 mod track;
 mod transfer;
+mod tuning;
 
 use anyhow::{Context, Result};
 use clipctl::OnOff;
@@ -280,6 +281,22 @@ enum Cmd {
     /// Keep the screensaver and sleep off on computers this one controls,
     /// and put displays to sleep together.
     Power(power::PowerArgs),
+    /// Change what keys do on the computers this one controls: remaps,
+    /// combos, tap/hold keys, layers, actions (see docs/INPUT-TUNING.md).
+    Keymap {
+        #[command(subcommand)]
+        cmd: Option<tuning::KeymapCmd>,
+    },
+    /// Pointer speed on the computers this one controls.
+    Pointer(tuning::PointerArgs),
+    /// Scrolling on the computers this one controls: direction, natural,
+    /// speed, smooth or by notches, modifier keys.
+    Scroll(tuning::ScrollArgs),
+    /// Remap mouse buttons on the computers this one controls.
+    Buttons {
+        #[command(subcommand)]
+        cmd: Option<tuning::ButtonsCmd>,
+    },
     /// Show this computer's name and id.
     Id,
     /// Find out why computers are not connecting, and how to fix it.
@@ -447,6 +464,10 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::LockSync { state } => settings::lock_sync(&dir, state).await,
             Cmd::Hooks(args) => hooks::run_command(&dir, args).await,
             Cmd::Power(args) => power::run_command(&dir, args).await,
+            Cmd::Keymap { cmd } => tuning::keymap(&dir, cmd).await,
+            Cmd::Pointer(args) => tuning::pointer_command(&dir, args).await,
+            Cmd::Scroll(args) => tuning::scroll_command(&dir, args).await,
+            Cmd::Buttons { cmd } => tuning::buttons(&dir, cmd).await,
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;
                 println!("{} ({})", id.name, id.fingerprint.short());

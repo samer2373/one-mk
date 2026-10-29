@@ -374,6 +374,8 @@ pub struct Engine {
     known: HashMap<Fingerprint, Known>,
     limit: RateLimit,
     running: Arc<AtomicUsize>,
+    /// When each key action's command last ran (see [`Engine::run_action`]).
+    actions: HashMap<String, Instant>,
 }
 
 impl Engine {
@@ -388,7 +390,9 @@ impl Engine {
     ) {
         if !cfg.any() {
             if self.primed {
-                *self = Engine::default();
+                // What runs (and key actions' limits) outlive the hooks.
+                let (running, actions) = (std::mem::take(&mut self.running), std::mem::take(&mut self.actions));
+                *self = Engine { running, actions, ..Engine::default() };
             }
             return;
         }
@@ -471,17 +475,45 @@ impl Engine {
                 return;
             }
         };
+        self.spawn(ev.as_str(), argv, env(ev, peer).into(), cfg.timeout());
+    }
+
+    /// Runs `cmd` for a key mapped to `run: ...` (see `tuning.rs`), the way
+    /// hooks run: split into words without a shell (whatever `shell` says:
+    /// a key repeats too easily for that), killed after `timeout_secs`, at
+    /// most once per [`MIN_INTERVAL`] per command and [`MAX_RUNNING`] at a
+    /// time with the hooks. `peer` is the computer the keys go to (name,
+    /// short id), for `ONE_MK_PEER` and `ONE_MK_PEER_ID`.
+    pub fn run_action(&mut self, cfg: &Hooks, cmd: &str, peer: Option<(String, String)>) {
+        let now = Instant::now();
+        if self.actions.get(cmd).is_some_and(|t| now.saturating_duration_since(*t) < MIN_INTERVAL) {
+            tracing::debug!("key action dropped: it ran less than {MIN_INTERVAL:?} ago");
+            return;
+        }
+        if self.actions.len() >= 64 {
+            self.actions.clear();
+        }
+        self.actions.insert(cmd.to_owned(), now);
+        let argv = match Command::Line(cmd.to_owned()).argv(false) {
+            Ok(a) => a,
+            Err(e) => return tracing::warn!("key action `run: {cmd}` not run: {e}"),
+        };
+        let (name, id) = peer.unwrap_or_default();
+        let env = vec![("ONE_MK_EVENT", "key".to_owned()), ("ONE_MK_PEER", name), ("ONE_MK_PEER_ID", id)];
+        self.spawn("key", argv, env, cfg.timeout());
+    }
+
+    /// Starts `argv` on its own task, unless [`MAX_RUNNING`] already run.
+    fn spawn(&self, label: &'static str, argv: Vec<String>, env: Vec<(&'static str, String)>, timeout: Duration) {
         if self.running.fetch_add(1, Ordering::SeqCst) >= MAX_RUNNING {
             self.running.fetch_sub(1, Ordering::SeqCst);
-            tracing::warn!(event = ev.as_str(), "hook dropped: {MAX_RUNNING} are still running");
+            tracing::warn!(event = label, "hook dropped: {MAX_RUNNING} are still running");
             return;
         }
         let running = Running(self.running.clone());
-        let env = env(ev, peer);
-        let timeout = cfg.timeout();
         tokio::spawn(async move {
             let _running = running;
-            run(ev, &argv, &env, timeout).await;
+            run(label, &argv, &env, timeout).await;
         });
     }
 }
@@ -496,7 +528,7 @@ impl Drop for Running {
 }
 
 /// Runs one hook to its end or the timeout, and reaps it.
-async fn run(ev: Event, argv: &[String], env: &[(&'static str, String)], timeout: Duration) {
+async fn run(label: &'static str, argv: &[String], env: &[(&'static str, String)], timeout: Duration) {
     let mut cmd = tokio::process::Command::new(&argv[0]);
     cmd.args(&argv[1..])
         .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
@@ -509,17 +541,17 @@ async fn run(ev: Event, argv: &[String], env: &[(&'static str, String)], timeout
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!(event = ev.as_str(), "hook {:?} did not start: {e}", argv[0]);
+            tracing::warn!(event = label, "hook {:?} did not start: {e}", argv[0]);
             return;
         }
     };
     let pid = child.id();
     match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(Ok(status)) if status.success() => tracing::debug!(event = ev.as_str(), "hook finished"),
-        Ok(Ok(status)) => tracing::warn!(event = ev.as_str(), "hook {:?} failed: {status}", argv[0]),
-        Ok(Err(e)) => tracing::warn!(event = ev.as_str(), "hook {:?}: {e}", argv[0]),
+        Ok(Ok(status)) if status.success() => tracing::debug!(event = label, "hook finished"),
+        Ok(Ok(status)) => tracing::warn!(event = label, "hook {:?} failed: {status}", argv[0]),
+        Ok(Err(e)) => tracing::warn!(event = label, "hook {:?}: {e}", argv[0]),
         Err(_) => {
-            tracing::warn!(event = ev.as_str(), "hook {:?} killed after {} s", argv[0], timeout.as_secs());
+            tracing::warn!(event = label, "hook {:?} killed after {} s", argv[0], timeout.as_secs());
             #[cfg(unix)]
             if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) {
                 // SAFETY: plain syscall; the group was created for this child
@@ -869,18 +901,18 @@ mod tests {
         let script = format!("echo \"$ONE_MK_EVENT $ONE_MK_PEER $ONE_MK_SIDE\" >> {}", out.display());
         let argv = vec!["/bin/sh".to_owned(), "-c".to_owned(), script];
         let p = PeerInfo { name: "other pc".into(), id: "x".into(), side: Side::Right };
-        run(Event::Enter, &argv, &env(Event::Enter, &p), Duration::from_secs(5)).await;
+        run(Event::Enter.as_str(), &argv, &env(Event::Enter, &p), Duration::from_secs(5)).await;
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "enter other pc right\n");
 
         // A hook that outlives its timeout is killed, with what it started.
         let marker = dir.join("late");
         let slow = vec!["/bin/sh".to_owned(), "-c".to_owned(), format!("sleep 30 & sleep 30; touch {}", marker.display())];
         let t = Instant::now();
-        run(Event::Leave, &slow, &env(Event::Leave, &p), Duration::from_millis(200)).await;
+        run(Event::Leave.as_str(), &slow, &env(Event::Leave, &p), Duration::from_millis(200)).await;
         assert!(t.elapsed() < Duration::from_secs(5));
         assert!(!marker.exists());
         // A program that doesn't exist is just reported.
-        run(Event::Leave, &["/nonexistent/program".to_owned()], &[], Duration::from_secs(1)).await;
+        run(Event::Leave.as_str(), &["/nonexistent/program".to_owned()], &[], Duration::from_secs(1)).await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

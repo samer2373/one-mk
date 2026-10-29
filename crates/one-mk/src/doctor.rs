@@ -593,6 +593,38 @@ pub fn hotkey_check(d: &Daemon, portal: Option<&Result<u32, String>>) -> Check {
     check("hotkeys", "Keyboard shortcuts", out)
 }
 
+/// `[input]` in settings.toml, read from the file (`None`: it can't be read).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tuning {
+    /// What is set, in a line; `None` when nothing is.
+    pub summary: Option<String>,
+    /// Rules that can't work, conflict or never apply.
+    pub problems: Vec<String>,
+}
+
+/// Input tuning: skipped when nothing is set; the problems
+/// `one-mk keymap check` would print, if any.
+pub fn tuning_check(t: Option<&Tuning>) -> Check {
+    let out = match t {
+        None => Outcome::skip("settings.toml can't be read (see the settings check)."),
+        Some(Tuning { summary: None, .. }) => Outcome::skip("No key, button, pointer or scroll rules are set."),
+        Some(Tuning { summary: Some(s), problems }) if problems.is_empty() => Outcome::pass(s.clone()),
+        Some(Tuning { problems, .. }) => Outcome::warn(
+            format!("{}.", problems.join("; ")),
+            "See `one-mk keymap check`, and fix or remove those rules (`one-mk keymap`, `buttons`, `pointer`, `scroll`, or [input] in settings.toml).",
+        ),
+    };
+    check("input-tuning", "Input tuning", out)
+}
+
+fn probe_tuning(dir: &Path) -> Option<Tuning> {
+    let input = Settings::load(dir).ok()?.input;
+    let paired = TrustStore::load(dir)
+        .map(|t| t.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone())).collect::<Vec<_>>())
+        .unwrap_or_default();
+    Some(Tuning { summary: input.summary(), problems: input.check(&paired) })
+}
+
 pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
     let port = port_of(d);
     paired
@@ -811,6 +843,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.push(firewall_check(os, &firewall, port));
     checks.push(portal_check(os, portals.as_ref(), daemon.status().map_or(&[], |s| &s.input)));
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
+    checks.push(tuning_check(probe_tuning(dir).as_ref()));
     checks.push(network_check(&addrs));
     let seen = mdns.seen.as_deref().unwrap_or_default();
     checks.extend(peer_checks(&daemon, &paired, seen));
@@ -1507,5 +1540,27 @@ mod tests {
             check("d", "", Outcome::fail("", "")),
         ];
         assert_eq!(summarize(&checks), Summary { pass: 1, skip: 1, warn: 1, fail: 1 });
+    }
+
+    #[test]
+    fn input_tuning() {
+        let t = |summary: Option<&str>, problems: &[&str]| Tuning {
+            summary: summary.map(str::to_owned),
+            problems: problems.iter().map(|p| p.to_string()).collect(),
+        };
+        assert_eq!(st(&tuning_check(None)), Status::Skip);
+        assert_eq!(st(&tuning_check(Some(&t(None, &[])))), Status::Skip);
+        let ok = tuning_check(Some(&t(Some("Input tuning: 1 key rule."), &[])));
+        assert_eq!((st(&ok), ok.id.as_str()), (Status::Pass, "input-tuning"));
+        let bad = tuning_check(Some(&t(Some("x"), &["a: conflict", "b: typo"])));
+        assert_eq!(st(&bad), Status::Warn);
+        assert_eq!(bad.outcome.detail, "a: conflict; b: typo.");
+        // From a real settings folder.
+        let dir = std::env::temp_dir().join(format!("one-mk-doctor-tuning-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.toml"), "[[input.keymap.rule]]\nfrom = \"capslok\"\nto = \"esc\"\n").unwrap();
+        let found = probe_tuning(&dir).unwrap();
+        assert!(found.problems[0].contains("\"capslok\" is not a key name"), "{found:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

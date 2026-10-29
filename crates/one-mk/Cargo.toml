@@ -31,3 +31,7 @@ libc = "0.2.191"
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 futures-util = { version = "0.3.34", default-features = false }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+# Paused time in tests (the tap/hold timer).
+tokio = { version = "1.54.1", features = ["test-util"] }
