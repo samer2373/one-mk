@@ -58,12 +58,18 @@ one-mk layout "laptop" bottom --offset center
 
 On computer A, run `one-mk invite --expires 10m`. Privately transfer its
 one-time link or QR code to B. On B, run `one-mk join` and paste the link
-(or use `one-mk join '<link>'`). No numeric code comparison is needed.
+(prefer stdin: positional links are visible in process arguments and shell
+history). B prints **Your code: 123456**. Compare that code with A's prompt
+over a trusted channel; a familiar device name is not enough.
 
-A shows B's name and full fingerprint and asks for `y` before trusting it
-(`--confirm`, the default). For unattended A, explicitly use
+A shows B's name, full fingerprint and comparison code and asks for `y`
+(`--confirm`, the default). B also shows A's full grouped fingerprint and
+asks whether to trust A before confirming. Non-interactive B requires
+`one-mk join --yes`, which skips B's trust prompt. For unattended A, use
 `one-mk invite --no-confirm`: **anyone holding the link can join if they
-use it first**. Treat the link like a password, including in chat history.
+use it first**. Skipping both prompts removes human verification. Headless
+stdout/QR output may enter a journal. Treat the link like a password,
+including in chat history.
 It expires, works once, and dies when the invitation process closes.
 Start sharing with `one-mk run` on both; use `one-mk forget <id>` to revoke.
 See [invitation security and protocol](docs/PAIRING-INVITE.md).

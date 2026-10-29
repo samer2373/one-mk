@@ -1,280 +1,246 @@
 # Pairing invitations (3H)
 
-`one-mk invite --expires 10m` on A prints a one-use `onemk://pair?...`
-link and ANSI QR code. Transfer the link privately to B, then run
-`one-mk join '<link>'` there, or run `one-mk join` and paste one line on
-stdin to avoid putting the credential in shell history/process arguments.
-There is no automatic clipboard access or OS URL-handler registration.
+## Use and approval
 
-A prints **`>>> B joined: certificate <full SHA-256 fingerprint> <<<`**
-after a valid proof. By default (`--confirm`), A must type `y` before either
-side trusts the other. Anything else refuses. This can be done over an
-existing remote terminal; no code comparison at the two screens is needed.
-For unattended A, explicitly use `--no-confirm`: the first valid joiner is
-then trusted automatically. That is a significant security choice.
-Names are sanitized but self-asserted; an attacker can name their device B.
-A full fingerprint identifies the device, but is only useful for approval
-if the operator already knows which fingerprint to expect.
+On A, run `one-mk invite --expires 10m`. Privately transfer its one-use
+`onemk://pair?...` link or terminal QR to B. On B, run `one-mk join` and
+paste the link. There is no automatic clipboard access or URL handler.
+The positional `one-mk join '<link>'` remains supported, but warns that the
+credential is exposed in process arguments (including `/proc/.../cmdline`
+where readable) and possibly shell history. Prefer stdin and a private,
+authenticated transfer channel.
 
-The lifetime defaults to 10 minutes, accepts seconds/minutes/hours, and is
-limited to 1 second–1 hour. Confirmation has a 120-second timeout and must
-finish before expiry. Closing the invitation process, refusing, or losing
-the connection after a valid proof consumes the invitation. Generate a new
-one to retry. Invitations **die with the process** and never survive a
-restart, including restarting the invitation process after a daemon restart.
-The sharing daemon can restart independently while `invite` remains open.
+After mutual proofs, B prints:
 
-## Link and wire protocol
+```text
+Your code: 123456 (the other computer will ask you to compare it)
+Trust <A's name> (<full fingerprint grouped in four-digit chunks>)? [y/N]
+```
 
-The link is `onemk://pair?v=1&d=<URL-safe base64 without padding>`. Its
-bounded binary payload is:
+A shows B's self-asserted name, full grouped fingerprint and independently
+computed code, asking `Does the other computer show 123456?` before trust.
+Compare the code actually displayed on the intended B over a trusted
+channel. Type `y` on both computers only if the code and host identity are
+right. Anything else refuses. Prompts have a maximum two-minute answer
+window; A's is additionally bounded by invitation expiry. A valid proof
+consumes the link **before** either prompt or trust save. Refusal or an
+interrupted exchange requires a fresh invitation.
 
-1. Version byte `1`, A's 32-byte SHA-256 certificate fingerprint, absolute
-   expiry (u64 Unix seconds, big endian), A's sharing service port (u16).
-2. Length-prefixed mDNS host (`one-mk-<short fingerprint>.local.`), address
-   count (1–8), and length-prefixed IP:pairing-port addresses. All lengths
-   are u16 big endian. All addresses must use the same nonzero pairing port.
-3. A cryptographically random 32-byte (256-bit) secret.
+The six-digit short authentication string (SAS) is neither the secret nor
+a reusable password. It depends on the secret and full session transcript,
+including B's certificate and the TLS connection. An impostor using a copied
+link first with B's hostname produces the impostor's code, not one the real
+B printed. Names alone prove nothing. Six digits offer approximately a
+one-in-a-million accidental match, not 256-bit human verification. A
+compromised comparison channel defeats this protection.
 
-The decoder bounds the URL at 1600 ASCII bytes, validates lengths, address
-count, ports, mDNS host, versions, UTF-8, and trailing/truncated data. The
-mDNS name and addresses are routing hints. They never establish identity.
-A's certificate is pinned to the fingerprint from the link **before B
-opens a pairing stream or sends a proof**. Mutual TLS verifies possession
-of each certificate's private key, as in normal pairing.
+`--confirm` is A's default. `invite --no-confirm` explicitly skips A's
+prompt and loudly says so, including the skipped comparison code. B's
+`join --yes` skips its host trust prompt and is **required** for non-terminal
+stdin, including scripts piping a link. B still prints its code and warning.
+With both options, a stolen link used first can establish trust without any
+human check. On headless hosts, stdout containing the link/QR may enter a
+system journal, supervisor log, CI log or terminal recording.
 
-The exchange uses the existing QUIC `StreamKind::Pairing`, with a distinct
-invitation marker `ff ff 4f 4d 4b 49 01`. No `PROTOCOL_VERSION` or ALPN
-change is needed. Old numeric-pairing code rejects the initial `ffff` as an
-oversized name, and invitation code rejects old numeric-pairing messages.
-There is no downgrade or automatic fallback to a different pairing mode.
-The existing commit/reveal numeric pairing implementation is unchanged.
+Lifetimes accept seconds/minutes/hours: 1 second to 1 hour, default 10
+minutes. Start sharing afterward with `one-mk run` on both computers.
+`one-mk forget <id>` revokes saved trust; invitation expiry does not revoke
+an already-paired device. QR rendering uses `qrcode` 0.14.1 (MIT OR
+Apache-2.0), default features disabled, with an ANSI four-module quiet zone.
+Terminal wrapping can damage a QR; widen the terminal or transfer the link.
 
-Messages, in order (A is always the invitation responder):
+## Link, transport and protocol
 
-1. **B → A:** marker; invitation ID `SHA256(public link payload excluding
-   secret)`; B's length-prefixed name, service port, random 32-byte nonce Nb.
-2. **A → B:** A's length-prefixed name, service port, random 32-byte nonce Na.
-3. **B → A:** `HMAC-SHA256(secret, length("join") || "join" || transcript)`.
-4. **A → B:** after atomic check-and-burn,
-   `HMAC-SHA256(secret, length("accept") || "accept" || transcript)`.
-5. **Both → other:** one byte local decision (1=yes, 0=no), then stream FIN.
-   Only two yes decisions permit saving trust. A's decision follows its
-   prompt unless `--no-confirm` was explicitly requested.
+The strictly parsed, bounded base64url link contains a version, A's full
+SHA-256 certificate fingerprint, Unix expiry, service port, fingerprint-
+derived `.local.` hostname, 1–8 direct numeric addresses and a random
+256-bit bearer secret. Ports must be nonzero and listener ports agree.
+Unspecified, multicast, loopback, IPv4 broadcast, IPv4-mapped equivalents
+and scope-less IPv6 link-local addresses are rejected. `--listen IP:PORT`
+requires a usable unicast address; a host without one fails rather than
+emitting a loopback link.
 
-The transcript is a canonical series of u16-length-prefixed fields:
-`"one-mk invitation v1"`, invitation ID, A fingerprint, B fingerprint,
-A name, B name, A service port, B service port, Na, Nb, and 32 bytes of TLS
-exported keying material (label `"one-mk invitation v1"`, context invitation
-ID). Fields and roles cannot be concatenated ambiguously or reflected.
-Names/ports are bound before approval. The TLS exporter additionally binds
-proofs to the exact connection, even if nonces were accidentally repeated.
+B tries direct addresses **before** mDNS. The fallback uses `mdns-sd`'s
+local service browser, never system/unicast DNS for `.local`. Only matching
+fingerprint hints in pairing mode are considered, with address filtering
+and eight distinct candidates per pass. An eight-second connection budget
+is shared with one optional busy retry; each dial is at most two seconds.
+mDNS gets at most two seconds of the remaining budget. A busy refusal is
+retried once after 150–405 ms random delay. None of this promises availability.
 
-**The secret is never a network message**, including inside TLS: only keyed
-MACs are transmitted. Without the 256-bit key, a network observer cannot
-compute a proof from its transcript. A uses `ring::hmac::verify`, which
-compares the MAC in constant time; B uses the same verifier for A's reply.
-The server never compares secrets or MACs using ordinary equality.
+TLS 1.3/QUIC uses the existing Node stack. B pins A's exact fingerprint
+**inside rustls's server certificate verifier**, retaining handshake
+signature checks. A mismatching server is rejected before B sends its
+permanent client certificate or invitation proof. A real pinned host still
+learns B's identity even if pairing is later refused.
 
-## State, limits, and idle cost
+Invitation messages on the pairing stream:
 
-A stores a secret in a zeroizing allocation behind one mutex. Valid proof
-verification and consumption happen under that mutex, before any reply or
-approval prompt. Concurrent valid proofs therefore have exactly one winner.
-Five bad MACs for the active invitation burn it, even across certificates
-and IP addresses. Malformed handshakes and unknown invitation IDs do not
-exercise the MAC oracle; they are rejected under the admission/time limits.
-Refusal never restores a used secret. Expiry checks use both wall time and a
-monotonic deadline so moving A's clock backward cannot prolong the link.
-B also checks its wall clock; a badly skewed clock can reject a valid link.
+1. B sends the invitation marker, `HMAC-SHA256(secret, "one-mk invite id v1")`,
+   B's length-prefixed name, service port and random 32-byte nonce.
+2. A replies with availability byte `1`; unknown/unavailable IDs get refusal
+   byte `0`. Only an active matching ID receives A's name, port and nonce.
+3. B sends `HMAC-SHA256(secret, length("join") || "join" || transcript)`.
+4. A verifies and atomically burns the invitation, computes the SAS under
+   the same lock, and sends the analogous `"accept"` role MAC.
+5. Both compute the `"sas"` role MAC. Its first four bytes, big-endian modulo
+   1,000,000, are displayed as six digits. Both send local decision bytes.
+6. Only mutual approval permits saving trust. After a successful local save,
+   each sends committed byte `2` and FIN, then awaits the other's commit.
+   Normal `Trusted ...` success is printed only after that acknowledgment.
 
-This is a temporary pairing listener using the same `Node::bind_any` /
-`Node::accept` machinery as `one-mk pair`, not a second TLS stack or a bypass
-on the sharing daemon. Node's existing limits remain: 16 concurrent/queued
-TLS handshakes, 4 handshakes per IP, a 3-second handshake timeout. Invitation
-attempts additionally reuse `app::Pending`: 16 total, 4 per certificate,
-with permits held through result delivery and a 10-second exchange timeout.
-The state is checked again when a proof arrives. Accepted peer connections
-are closed on failure or process completion. QUIC transport stream limits
-remain in effect. No polling timer is introduced; the idle listener waits
-on accepts, the private control channel, Ctrl+C, and a single expiry timer.
-mDNS retains the existing discovery behavior when enabled.
+The production transcript has u16-length-prefixed fields: domain
+`"one-mk invitation v1"`, invitation ID, both full fingerprints, both names,
+both service ports, both nonces and 32 bytes of TLS exported keying material
+(same domain label; ID as context). Roles prevent reflection and the exporter
+binds proofs/SAS to the exact TLS connection. The secret itself is never an
+invitation message. `ring::hmac::verify` checks proofs in constant time.
+This pre-merge wire revision is incompatible with earlier invitation builds;
+update both computers. Existing numeric pairing is unchanged.
 
-Secrets are not saved to configuration, trust files, status logs, or the
-normal status response. The printed link/QR and temporary UI response are
-necessarily copies of the credential; terminal scrollback, crash dumps,
-swap, and same-user processes are outside the memory-erasure guarantee.
-The invitation state and decoded secret buffers use `zeroize`; this is not
-a claim that every displayed or encoded copy can be erased.
+## State, limits and clocks
 
-## Threat model
+A holds the secret in a zeroizing allocation under one mutex. Exactly one
+valid proof wins across racing connections. Five bad proofs for the
+**correct secret-derived ID** burn the invitation. Unknown IDs never change
+its guess counter or secret. Public fingerprint, advertised addresses and
+estimated expiry do not reveal the ID. The original implementation derived
+it from public data: the earlier documentation understated a practical LAN
+attack that guessed public payload/expiry values to name and burn links.
+This revision closes that route, not all denial of service.
 
-- **Shoulder surfing / QR photography / chat history:** anyone who reads
-  the link has the complete bearer credential. They can join once **if they
-  use it first**, subject to A's default approval. Delete shared copies and
-  prefer a private authenticated transfer channel. Expiry limits exposure,
-  but does not make posting an active link publicly safe.
-- **Intercepted before use:** stealing the original link allows racing B.
-  With `--no-confirm`, the winner gets full paired-device privileges. With
-  confirmation, A can refuse, but a familiar-looking name is not proof of
-  the intended person's identity. If the attacker can replace the entire
-  out-of-band link, they can substitute their own server identity and
-  secret; the protocol cannot authenticate a compromised delivery channel.
-- **Hostile LAN race:** a LAN device without the secret cannot produce a
-  valid proof or acquire trust. It can exhaust handshake/attempt slots or,
-  if it knows the invitation ID, send five wrong proofs to burn the link.
-  This deliberate fail-closed denial of service is preferable to an
-  unlimited guessing oracle. The limits bound resources, not availability
-  on an actively hostile network.
-- **Replay / opening twice:** a captured proof is tied to both TLS
-  certificates, names, ports, nonces, and this TLS connection. Replaying it
-  on another connection fails. Reusing the whole link after valid use,
-  refusal, or expiry fails. The same legitimate B must obtain a fresh link
-  after an interrupted attempt that already proved knowledge.
-- **MITM / forged mDNS / substituted address:** TLS proves possession of the
-  certificate private keys, and B pins A to the out-of-band fingerprint.
-  A fake server with another certificate is rejected before receiving a
-  proof. Relay/modified proofs fail the transcript and TLS exporter MAC.
-  A packet relay can forward encrypted traffic but cannot change identities
-  or obtain the secret. Observers may learn IPs and traffic timing.
-- **What a link holder cannot do:** merely reading the link does not reveal
-  A's TLS private key, impersonate A's certificate, decrypt other sessions,
-  pair multiple devices with one invitation, or reuse it after expiry/use.
-  A device that wins and is trusted keeps normal paired-device access
-  after the invitation expires; revoke it with `one-mk forget <id>`.
-- **Local access:** same-user code can read the private control socket and
-  identity files and is already within the trust boundary. Unix uses a
-  0700 directory and 0600 control socket; other systems use the existing
-  authenticated loopback control transport and per-user directory policy.
-  Windows identity storage's existing ACL limitation remains unchanged.
+Separate source admission allows 32 attempts per canonical source IP per
+one-second bucket, with at most 256 recent buckets and eviction of expired
+entries. At capacity, unknown sources are refused. Node retains 16 concurrent
+TLS handshakes / 4 per IP and a three-second handshake timeout. Invitation
+proofs retain 16 pending attempts / 4 per certificate and a ten-second
+exchange timeout. Unknown-ID refusals disclose no name, nonce or proof
+validity. Late joins get explicit protocol/QUIC application-close refusals,
+including during approval, rather than a ten-second stream timeout.
 
-Trust saving, like numeric pairing, is not a distributed transaction. A
-crash, disk failure, or connection loss around final confirmation can leave
-only one device saved. The invitation remains burned; inspect `devices`,
-forget any unintended entry, and create a new invitation. Concurrent edits
-to `devices.toml` have the existing trust-store last-writer behavior. The
-invitation listener is single-instance per home via a local file lock.
+Both monotonic and wall clocks bound availability. A 250 ms check detects
+forward wall jumps while idle; A's approval reader also checks wall expiry.
+Either clock expiring ends availability, wipes the retained link and stops
+mDNS advertising, with a bounded wait for the daemon's goodbye cleanup.
+A valid proof likewise clears the link and withdraws discovery before the
+host prompt. B initially checks expiry, but **only A decides invitation
+expiry for the final decision**, just before its approval byte. Neither
+side rechecks invitation expiry after mutual approval, avoiding one-sided
+trust caused solely by crossing expiry then. Independent human/transport
+timeouts still apply; an initially skewed B clock can reject a valid link.
 
-## Control hook and integration
+## Residual risks and recovery
 
-`one_mk_ctl::client::Request::Invitation` encodes/parses `invitation` and
-returns `invitation\t<Unix expiry>\t<link>\n`, or `none\n`. The additive
-`InvitationStatus` codec handles this separately from ordinary `Status`.
-A sharing daemon forwards the request asynchronously to the active invite
-process's private control endpoint under `<home>/invitation`; a UI can query
-that endpoint directly when no daemon runs. Only endpoint/lock metadata is
-on disk, never the link. No app/tray edits are needed. After consumption,
-including while A's approval is pending, the hook immediately returns none.
-After process exit or expiry it cannot recover an invitation.
-
-`--listen IP:PORT` and `--no-discovery` support isolated/testing networks.
-The default pairing port is ephemeral. `--service-port` on each command
-specifies that computer's later `run` port (default 24900); the MAC binds it
-and both trust stores remember it. Discovery and a best-effort bounded
-mDNS lookup are only fallback hints when direct addresses have changed.
-
-QR encoding uses `qrcode` 0.14.1 (MIT OR Apache-2.0), a small, established,
-passively maintained Rust encoder. All default features are disabled:
-no image library and no transitive dependencies. The CLI draws black/white
-ANSI half blocks with a four-module quiet zone. Terminal wrapping can damage
-a large QR: widen the terminal or use the printed link. QR scanning on a
-phone does not install a URL handler or replace the `join` command.
+- A link holder can race B, consume the link, or deliberately burn it.
+  Default comparison/approval prevents a familiar hostname being sufficient,
+  but cannot restore a consumed invitation.
+- A hostile LAN can still saturate bandwidth, handshakes, buckets or pending
+  slots. Devices sharing a source IP share its limit; allow one second to
+  recover after a flood stops. Distributed flooding is not solved.
+- Replacing the entire delivered link substitutes a different pinned host
+  and secret. Neither pinning nor SAS authenticates compromised delivery or
+  comparison channels. Compromised endpoints are outside the threat model.
+- Saving trust is **not a distributed transaction**. Crash, disk failure,
+  disconnection or lost acknowledgment between approval and commit can leave
+  one side saved, or both saved with one side uncertain. On acknowledgment
+  failure after local save, the command says:
+  `Trust saved locally, but peer commit is uncertain. Run one-mk forget
+  <peer> on both computers and create a new invitation.` Inspect `devices`,
+  forget the peer on each side that has it, then use a fresh invitation.
+  No automatic rollback is claimed. Concurrent trust-file edits retain
+  existing last-writer behavior.
+- Owned secret fields, encoded links, stdin buffers, invitation status
+  objects and server control-response buffers use zeroizing wrappers/drop
+  cleanup. A drops its original Invitation after creating state and wipes
+  its retained link at burn/expiry; no link is saved to configuration.
+  Terminal/QR renderer copies, argv, UI clients, journals, swap, allocator/
+  compiler copies and crash dumps cannot be comprehensively recalled or
+  erased. This is not a complete process-memory-erasure guarantee.
+- The private control hook returns `invitation\t<expiry>\t<link>\n` only
+  while active, otherwise `none\n`. A sharing daemon forwards it to the
+  invitation endpoint under `<home>/invitation`. Only endpoint/lock metadata,
+  not the link, goes on disk. Same-user processes can access this and identity
+  files and are inside the local trust boundary. Existing Unix permissions
+  and Windows identity ACL limitations remain unchanged.
 
 ## Validation
 
-Unit tests cover strict link round trips, truncations at every byte,
-oversized/non-ASCII/malformed and wrong-version links; wall and monotonic
-expiry; single use; five-guess burn; role/transcript MAC binding; concurrent
-valid proof races; and replay across two real TLS connections even with
-identical nonces. Network integration tests exercise two nodes and persisted
-trust without human input, wrong secret, expiry, reuse, a different client
-certificate, an impersonated server certificate (no stream opened), refusal,
-and five wrong guesses followed by the correct secret. Existing numeric
-pairing loopback tests continue to run unchanged.
+Public-ID dependency and invalid-address regressions were run against the
+original implementation first and failed. Tests now call production
+transcript construction and independently change ID, both fingerprints,
+names, ports and nonces; role separation and replay over a second TLS
+exporter are checked. SAS agreement, secret/certificate dependence, and a
+copied-link/same-hostname impostor are covered. The impostor test uses fresh
+state to calculate the intended B's hypothetical code; an already-used
+invitation never admits a second real join.
 
-The implementation report records workspace tests, clippy, cross-target
-checks and a real two-process invitation / two-daemon null-backend smoke.
-Windows and macOS are compile-checked only, not tested on real hardware.
+A wire-level loopback test sends 1,000 wrong-ID streams plus 1,000 wrong-proof
+with wrong-ID streams, then successfully performs the real proof/approval on
+the still-active invitation. A unit test checks state directly. TLS tests
+inspect the server's certificate state during an in-memory handshake: a
+rejected pin discloses no client certificate. Other tests cover source
+limits, strict parsing, clocks, single-use races, refusal, actual persistence,
+commit acknowledgment loss, stdin refusal without `--yes` and argv warnings.
 
-### Recorded implementation validation (2026-10-29)
+Reproducible Linux PTY/process smoke:
 
-Branch: `t3/implement-pair-invite-flow`, based on `311dc81` (the next
-commit in the baseline history is `55c8b00 Plan: wave 4...`).
-
-- `cargo test -j 3 --workspace --offline`: **402 passed, 3 existing ignored**.
-- `cargo clippy -j 3 --workspace --all-targets --offline`: clean, no warnings.
-- `cargo clippy -j 3 --target x86_64-pc-windows-msvc -p one-mk-input -p one-mk-proto -p one-mk-ctl --all-targets --offline`: clean.
-- The equivalent `aarch64-apple-darwin` command: clean.
-- `cargo build -j 3 -p one-mk --offline`: passed, debug build only.
-- `git diff --check`: clean. No `cargo fmt`, release build, or real input
-  backend was run. Tests needed local socket permissions outside the sandbox.
-
-The following is actual output from separate CLI processes and two running
-null-backend daemons, with homes under
-`/tmp/one-mk-invite-smoke-pkxa7oh_/{A,B}`. The report abbreviates those paths
-as A/B and omits the consumed bearer link and ANSI QR rows. Both processes
-use the host's real name, so their different fingerprints distinguish them.
-A's daemon used port 56900; B's service port is recorded below. Both daemons
-used `run --backend null --no-discovery --port <port> --no-clipboard
---no-notify`, with hotkeys disabled in their temporary settings. All
-processes were stopped. No real user configuration was accessed.
-
-```text
-Active invitation control hook: link + expiry matched through daemon.
-
-Second invitation process: refused by single-instance lock.
-
-$ one-mk --home B join <one-time-link> --service-port 52263
-WARN /tmp/one-mk-invite-smoke-pkxa7oh_/B was accessible to others (mode 775); fixing
-Authenticated samer-Victus (6d58f87e519fdcdd140724725eaeef20c7e6db96d2c8019104b6dc02c9c4991e). Waiting for approval there...
-Trusted samer-Victus (6d58f87e519fdcdd140724725eaeef20c7e6db96d2c8019104b6dc02c9c4991e). Start `one-mk run` on both computers.
-
-$ one-mk --home A invite --no-confirm --expires 2m --listen 127.0.0.1:0 --no-discovery --service-port 56900
-Invitation from samer-Victus (6d58f87e519fdcdd140724725eaeef20c7e6db96d2c8019104b6dc02c9c4991e)
-Expires at Unix time 1793235995. One use; closing this process cancels it.
-Treat this link like a password: whoever uses it first can request trust.
-WARNING: --no-confirm: the first valid joiner will be trusted automatically.
-
->>> samer-Victus joined: certificate 1cd2618fa5adcc604aa96ff7e18614c10782cbc58190edaeb43c901045bb9985 <<<
-Invitation consumed. This device is NOT trusted yet.
-Trusted samer-Victus (1cd2618fa5adcc604aa96ff7e18614c10782cbc58190edaeb43c901045bb9985).
-
-Consumed invitation control hook: none.
-
-$ one-mk --home A devices
-NAME                     ID         SIDE
-samer-Victus             1cd2-618f  left
-
-$ one-mk --home B devices
-NAME                     ID         SIDE
-samer-Victus             6d58-f87e  right
-
-$ one-mk --home A switch next
-The mouse and keyboard are going to samer-Victus.
-
-$ one-mk --home A status
-one-mk is running on samer-Victus (id 6d58-f87e).
-The mouse and keyboard are controlling samer-Victus right now.
-  samer-Victus             Linux      on your left   online
-
-$ one-mk --home A switch here
-The mouse and keyboard are back on this computer (left samer-Victus).
-
-Default approval + stdin join: no trust before y; refusal saved neither device and removed active link.
-
-Explicit --confirm + y: both devices saved.
-
-Expiry while approval pending: both commands failed; neither trust store was created.
-
-1-second expiry: process exited without stdin; no lingering listener.
-
-All smoke checks passed; all child processes stopped in cleanup.
+```sh
+cargo test -j 3 --workspace
+cargo clippy -j 3 --workspace --all-targets -- -D warnings
+cargo build -j 3 -p one-mk
+cargo build -j 3 -p one-mk-net --example invite_probe
+python3 scripts/test-invite-security.py
 ```
 
-Unverified: physical camera scanning of the terminal QR, mDNS/address
-fallback on a real multi-computer LAN, and Windows/macOS runtime behavior.
-The QR encoder was checked for its permissive license and dependency set;
-no independent cryptographic audit or manual scan is claimed. The intentional
-security trade-offs are bearer-link theft/racing, fail-closed denial of
-service after five wrong proofs, memory-only invitations, and possible
-one-sided trust after a crash around final confirmation, as explained above.
+The script uses only `/tmp` homes and invite/join/devices commands, checks
+the UI hook, starts a public-data-only hostile process, compares actual PTY
+codes before approving, and tests scripts, refusal, late joins and expiry.
+Every started process is cleaned up. Since link loopback literals are
+rejected, the process test uses a usable local unicast address (locally
+routed on the same computer); Rust wire tests use `127.0.0.1` sockets.
+No live input backend, normal user config, `cargo fmt` or fat-LTO build is
+used. Physical QR scanning, multi-machine discovery and Windows/macOS runtime
+behavior remain unverified. Compile checks are not runtime validation.
+
+### Recorded validation (2026-10-29)
+
+`cargo test -j 3 --workspace`: **414 passed, 3 existing ignored, 0 failed**.
+Workspace clippy and the following target checks pass with `-- -D warnings`:
+
+```sh
+cargo clippy -j 3 --workspace --all-targets -- -D warnings
+cargo clippy -j 3 --target x86_64-pc-windows-msvc -p one-mk-net -p one-mk-input -p one-mk-proto -p one-mk-ctl --all-targets -- -D warnings
+cargo clippy -j 3 --target aarch64-apple-darwin -p one-mk-net -p one-mk-input -p one-mk-proto -p one-mk-ctl --all-targets -- -D warnings
+```
+
+On this Linux host, ring's cross-target C compilation used temporary Clang
+21/LLVM tools and genuine Zig 0.13.0 libc headers, not an installed platform
+SDK. `CC_<target>`/`AR_<target>` selected those tools; `CFLAGS_<target>` used
+`-nostdlibinc -isystem <headers>/any-macos-any` or `any-windows-any`.
+The Windows C flags additionally used `-fgnuc-version=4.2.1` so MinGW headers
+select GNU-style declaration attributes accepted by Clang's MSVC target.
+The Rust targets remained exactly those shown above. No target cfg override,
+Rust warning suppression, dependency patch or fabricated header was used.
+The net crate's existing Windows-only unnecessary mutable binding was fixed
+without changing directory permissions or behavior.
+
+Captured real-process output (invitation bearer links deliberately omitted):
+
+```text
+Same-host unicast endpoint: 192.168.1.18 (loopback link literals intentionally rejected)
+Public-only attacker: 1000 wrong-ID + 1000 wrong-proof/wrong-ID attempts; 256 explicitly refused, 1744 source-rate-limited; no secret supplied.
+Late join: explicit 'invitation already used or expired'; active UI link cleared.
+B: Your code: 057186 (the other computer will ask you to compare it)
+A: Does the other computer show 057186? Trust it with your keyboard, mouse and shared clipboard? [y/N] -> y
+B: Trust samer-Victus (11b2 5e58 834b e49e b62d ebc0 76d2 2f96 e38f 369b 2113 2def 6baf 18bf 87e9 d864)? [y/N] -> y
+A devices:
+NAME                     ID         SIDE    ADDRESS
+samer-Victus             0ff7-4311  left    192.168.1.18:24900
+B devices:
+NAME                     ID         SIDE    ADDRESS
+samer-Victus             11b2-5e58  right   192.168.1.18:24900
+Scripted --yes / --no-confirm: both warnings printed; both devices saved.
+Joiner refusal: neither trust store created.
+Expiry during approval: both commands fail; neither trust store created.
+All smoke checks passed; all started processes exited or are stopped in cleanup.
+```
