@@ -249,8 +249,8 @@ the PC, with one mouse), plus a keyboard mapper for any key.
   request the CLI uses. Settings are read from `settings.toml` /
   `profiles.toml` (a small reader, no new dependency) when their mtime
   changes, only while the window is open.
-- **Tray.** Switch to / Switch back here, Send clipboard to, Lock pointer
-  here (checkmark), Lock all computers, one line per running transfer; more
+- **Tray.** Switch to / Switch back here, Send clipboard to, Keep the
+  pointer here (checkmark), Lock every screen, one line per running transfer; more
   than three computers go into submenus. No new polling.
 - **Verified here:** unit tests (view model: TOML reader, doctor JSON,
   offset snapping, placement, seam/walls, transfer text, chord labels; tray

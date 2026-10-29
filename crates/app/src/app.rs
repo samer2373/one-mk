@@ -1930,9 +1930,10 @@ impl App {
             return;
         }
         let off = self.off();
-        for (k, key) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6].into_iter().enumerate() {
-            if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || TABS[k].0.when_off()) {
-                self.set_tab(TABS[k].0);
+        // Ctrl+1 to Ctrl+5: one key per tab, however many there are.
+        for (key, (tab, _, _)) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6].into_iter().zip(TABS) {
+            if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || tab.when_off()) {
+                self.set_tab(tab);
             }
         }
     }
