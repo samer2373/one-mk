@@ -151,60 +151,67 @@ mod nm {
     const RETRY_MIN: Duration = Duration::from_secs(1);
     const RETRY_MAX: Duration = Duration::from_secs(60);
 
+    struct Retry(Duration);
+
+    impl Default for Retry {
+        fn default() -> Self { Self(RETRY_MIN) }
+    }
+
+    impl Retry {
+        fn failed(&mut self, stable: Duration) -> Duration {
+            if stable >= RETRY_MAX { self.0 = RETRY_MIN; }
+            let delay = self.0;
+            self.0 = (delay * 2).min(RETRY_MAX);
+            delay
+        }
+    }
+
     pub(super) struct NetworkManager;
 
     impl NetworkWatcher for NetworkManager {
         fn start(self: Box<Self>, on_change: OnChange) {
             tokio::spawn(async move {
-                if let Err(e) = watch_forever(&on_change).await {
-                    tracing::info!(
-                        "the system bus is not available ({e}), so layout profiles don't switch by themselves; \
-                         `one-mk profile use <name>` works"
-                    );
-                }
+                watch_forever(&on_change).await;
             });
         }
     }
 
-    /// Watches NetworkManager for as long as the system bus is there. When
-    /// it isn't running, or its notifications end, this sleeps (no timer)
-    /// until it is on the bus again, then watches again.
-    async fn watch_forever(on_change: &OnChange) -> zbus::Result<()> {
-        let mut backoff = RETRY_MIN;
+    /// Reconnects after any bus failure. On a healthy bus without
+    /// NetworkManager, waits for its owner notification without polling.
+    async fn watch_forever(on_change: &OnChange) {
+        watch_forever_using(on_change, zbus::Connection::system).await;
+    }
+
+    async fn watch_forever_using<F, Fut>(on_change: &OnChange, mut connect: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = zbus::Result<zbus::Connection>>,
+    {
+        let mut retry = Retry::default();
         let mut said = false;
         loop {
-            let conn = zbus::Connection::system().await?;
-            let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
-            let mut owners = dbus.receive_name_owner_changed_with_args(&[(0, NM)]).await?;
-            loop {
-                let started = std::time::Instant::now();
-                match watch(&conn, on_change).await {
-                    Ok(()) => tracing::debug!("NetworkManager's change notifications ended; watching again"),
-                    Err(e) if !said => tracing::info!(
-                        "NetworkManager is not available ({e}), so layout profiles don't switch by themselves \
-                         until it is; `one-mk profile use <name>` works"
-                    ),
-                    Err(e) => tracing::debug!("NetworkManager: {e}"),
-                }
-                said = true;
-                if started.elapsed() > RETRY_MAX {
-                    backoff = RETRY_MIN;
-                }
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(RETRY_MAX);
-                // Until NetworkManager is on the bus (again).
-                let mut bus_gone = false;
-                while !dbus.name_has_owner(zbus::names::BusName::try_from(NM)?).await? {
-                    if owners.next().await.is_none() {
-                        bus_gone = true;
-                        break;
-                    }
-                }
-                if bus_gone {
-                    break; // connect again
-                }
+            let started = std::time::Instant::now();
+            let result = async {
+                let conn = connect().await?;
+                watch_connection(&conn, on_change).await
+            }.await;
+            match result {
+                Ok(()) => tracing::debug!("NetworkManager's change notifications ended; reconnecting"),
+                Err(error) if !said => tracing::info!("NetworkManager or the system bus is not available ({error}); retrying; `one-mk profile use <name>` works"),
+                Err(error) => tracing::debug!("NetworkManager: {error}; reconnecting"),
             }
+            said = true;
+            tokio::time::sleep(retry.failed(started.elapsed())).await;
         }
+    }
+
+    async fn watch_connection(conn: &zbus::Connection, on_change: &OnChange) -> zbus::Result<()> {
+        let dbus = zbus::fdo::DBusProxy::new(conn).await?;
+        let mut owners = dbus.receive_name_owner_changed_with_args(&[(0, NM)]).await?;
+        while !dbus.name_has_owner(zbus::names::BusName::try_from(NM)?).await? {
+            if owners.next().await.is_none() { return Ok(()); }
+        }
+        watch(conn, on_change).await
     }
 
     async fn watch(conn: &zbus::Connection, on_change: &OnChange) -> zbus::Result<()> {
@@ -278,6 +285,65 @@ mod nm {
             }
         }
         Ok(out)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn reconnect_backoff_is_bounded_and_resets_after_stability() {
+            let mut retry = Retry::default();
+            for seconds in [1, 2, 4, 8, 16, 32, 60, 60] {
+                assert_eq!(retry.failed(Duration::ZERO), Duration::from_secs(seconds));
+            }
+            assert_eq!(retry.failed(Duration::from_secs(60)), RETRY_MIN);
+            assert_eq!(retry.failed(Duration::ZERO), Duration::from_secs(2));
+        }
+
+        #[tokio::test]
+        async fn reconnects_when_a_private_bus_restarts() {
+            use std::process::Stdio;
+            use tokio::io::{AsyncBufReadExt, BufReader};
+
+            let path = std::env::temp_dir().join(format!("one-mk-nm-bus-{}", std::process::id()));
+            let address = format!("unix:path={}", path.display());
+            let start = || tokio::process::Command::new("dbus-daemon")
+                .args(["--session", "--nofork", "--print-address=1", &format!("--address={address}")])
+                .stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn();
+            let Ok(mut bus) = start() else { return };
+            let mut ready = String::new();
+            BufReader::new(bus.stdout.take().unwrap()).read_line(&mut ready).await.unwrap();
+            assert!(!ready.is_empty());
+            let (sent, mut attempts) = tokio::sync::mpsc::unbounded_channel();
+            let watch_address = address.clone();
+            let task = tokio::spawn(async move {
+                let callback: OnChange = Box::new(|_| {});
+                watch_forever_using(&callback, move || {
+                    let address = watch_address.clone();
+                    let sent = sent.clone();
+                    async move {
+                        let result = zbus::connection::Builder::address(address.as_str())?.build().await;
+                        let _ = sent.send(result.is_ok());
+                        result
+                    }
+                }).await;
+            });
+            assert_eq!(attempts.recv().await, Some(true));
+            bus.kill().await.unwrap();
+            bus.wait().await.unwrap();
+            assert_eq!(tokio::time::timeout(Duration::from_secs(5), attempts.recv()).await.unwrap(), Some(false));
+            bus = start().unwrap();
+            ready.clear();
+            BufReader::new(bus.stdout.take().unwrap()).read_line(&mut ready).await.unwrap();
+            assert!(!ready.is_empty());
+            assert_eq!(tokio::time::timeout(Duration::from_secs(5), attempts.recv()).await.unwrap(), Some(true));
+            task.abort();
+            let _ = task.await;
+            bus.kill().await.unwrap();
+            bus.wait().await.unwrap();
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
