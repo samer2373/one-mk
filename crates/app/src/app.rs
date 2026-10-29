@@ -440,7 +440,7 @@ impl App {
             }
             Job::Start => self.toast_error("one·mk didn't start.", e, now),
             Job::Forget(name) => self.toast_error(format!("Couldn't remove {name}. Try again."), e, now),
-            Job::Stop => self.toast_error("Couldn't stop one·mk. Try again, or quit it from Activity Monitor or Task Manager.", e, now),
+            Job::Stop => self.toast_error("Couldn't stop one·mk. If it was started before an update, quit it once from Activity Monitor or Task Manager; after that Stop works.", e, now),
             Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
         }
     }
@@ -1113,6 +1113,20 @@ impl App {
         let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
         child.set_opacity(shown);
         let a11y_label = (label == "Take back").then_some("Take back control of this computer");
+        if self.running().is_some() {
+            let busy = self.busy.contains(&Job::Stop);
+            // The short word when the long one would run into the tabs.
+            let label = [if busy { "Stopping…" } else { "Stop one·mk" }, "Stop"]
+                .into_iter()
+                .find(|l| r.left() - 8.0 - button_width(ui, l) > track.right() + 12.0)
+                .unwrap_or("Stop");
+            let w = button_width(ui, label);
+            let stop = Rect::from_min_size(pos2(r.left() - 8.0 - w, r.top()), vec2(w, 34.0));
+            if button(&mut child, stop, Id::unique("stop"), label, Look::Quiet, !busy && shown > 0.99, Some("Stop one·mk on this computer")).clicked() {
+                self.busy.push(Job::Stop);
+                self.link.stop();
+            }
+        }
         if button(&mut child, r, Id::unique("action"), label, look, enabled && shown > 0.99, a11y_label).clicked() {
             match job {
                 Some(Job::Start) => {
@@ -1333,7 +1347,10 @@ impl App {
 
         let (y0, y1) = (c.top() + 72.0, c.top() + 96.0);
         if !peer.online {
-            info_row(ui, c, y0, "System", os_name(peer.os), false, 1.0);
+            // Say why it is greyed out, and what to do about it.
+            info_row(ui, c, y0, "Status", "Not found on the network", false, 1.0);
+            let hint = fit(ui.painter(), "Start one·mk on it, on the same Wi-Fi.", &regular(T_META), c.width());
+            ui.painter().text(pos2(c.left(), y1), Align2::LEFT_CENTER, hint, regular(T_META), INK2);
             return;
         }
         match self.latency.get(&peer.id) {
@@ -1389,17 +1406,6 @@ impl App {
         if button(ui, b, Id::unique("open-dl"), label, Look::Quiet, !busy, Some("Open received files folder")).clicked() {
             self.busy.push(Job::Open);
             self.link.open_downloads();
-        }
-        ui.painter().hline(c.x_range(), top + 2.0 * row_h, Stroke::new(1.0, LINE));
-        let r2 = Rect::from_min_size(pos2(c.left(), top + 2.0 * row_h), vec2(c.width(), row_h));
-        ui.painter().text(r2.left_center(), Align2::LEFT_CENTER, "Sharing", regular(T_BODY), INK);
-        let label = "Stop";
-        let bw = button_width(ui, label) - 4.0;
-        let b = Rect::from_min_size(pos2(r2.right() - bw, r2.center().y - 14.0), vec2(bw, 28.0));
-        let busy = self.busy.contains(&Job::Stop);
-        if button(ui, b, Id::unique("stop"), label, Look::Quiet, self.running().is_some() && !busy, Some("Stop one·mk on this computer")).clicked() {
-            self.busy.push(Job::Stop);
-            self.link.stop();
         }
     }
 

@@ -206,7 +206,11 @@ impl Link {
     }
 
     pub fn stop(&self) {
-        self.job(Job::Stop, |l| client::request(&l.dir, Request::Stop, Duration::from_secs(5)).map(drop));
+        self.job(Job::Stop, |l| match client::request(&l.dir, Request::Stop, Duration::from_secs(5))? {
+            // One started before an update answers "unknown request".
+            Some(r) if !r.starts_with("ok") => anyhow::bail!("this one·mk is older than the app"),
+            _ => Ok(()),
+        });
     }
 
     pub fn take_back(&self) {
