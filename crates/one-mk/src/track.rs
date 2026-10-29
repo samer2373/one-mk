@@ -49,6 +49,9 @@ pub struct Transfers {
 struct State {
     rx: HashMap<(Fingerprint, u64), Rx>,
     tx: HashMap<u64, (TransferStatus, Instant)>,
+    /// Sends that said they are finished, and when: a report that was
+    /// still on its way then must not bring them back.
+    ended: HashMap<u64, Instant>,
 }
 
 /// A smoothed bytes-per-second figure.
@@ -64,12 +67,13 @@ impl Rate {
         Self { per_s: 0.0, since: now, bytes_then: 0, last_bytes_at: now }
     }
 
-    /// `total` bytes have now moved.
+    /// `total` bytes have now moved. A total that went backwards (two
+    /// counters read a moment apart can do that) counts as no progress.
     pub fn update(&mut self, now: Instant, total: u64) {
         self.last_bytes_at = now;
-        let dt = now.duration_since(self.since);
+        let dt = now.saturating_duration_since(self.since);
         if dt >= RATE_WINDOW {
-            let instant = (total - self.bytes_then) as f64 / dt.as_secs_f64();
+            let instant = total.saturating_sub(self.bytes_then) as f64 / dt.as_secs_f64();
             self.per_s = if self.per_s == 0.0 { instant } else { 0.6 * self.per_s + 0.4 * instant };
             self.since = now;
             self.bytes_then = total;
@@ -228,11 +232,14 @@ impl Transfers {
 
     /// Progress of a send by a `one-mk send` process on this computer.
     pub fn report(&self, t: TransferStatus, finished: bool) {
+        let now = Instant::now();
         let mut s = self.state();
+        s.ended.retain(|_, at| now.duration_since(*at) < 2 * REPORT_TTL);
         if finished {
             s.tx.remove(&t.id);
-        } else {
-            s.tx.insert(t.id, (TransferStatus { sending: true, ..t }, Instant::now()));
+            s.ended.insert(t.id, now);
+        } else if !s.ended.contains_key(&t.id) {
+            s.tx.insert(t.id, (TransferStatus { sending: true, ..t }, now));
         }
     }
 
@@ -317,6 +324,23 @@ pub(crate) mod tests {
         pub fn all(&self) -> Vec<FilesReceived> {
             self.0.lock().unwrap().clone()
         }
+    }
+
+    #[test]
+    fn the_rate_survives_a_count_that_goes_backwards() {
+        let t0 = Instant::now();
+        let mut r = Rate::new(t0);
+        let sec = Duration::from_secs(1);
+        r.update(t0 + sec, 1000);
+        assert_eq!(r.get(t0 + sec), 1000);
+        // Fewer bytes than before: no progress, not an underflow or a huge rate.
+        r.update(t0 + 2 * sec, 400);
+        assert!(r.get(t0 + 2 * sec) <= 1000);
+        // And counting resumes from the new figure.
+        r.update(t0 + 3 * sec, 1400);
+        assert!(r.get(t0 + 3 * sec) <= 1000, "{}", r.get(t0 + 3 * sec));
+        // A time that goes backwards is ignored too.
+        r.update(t0, 5);
     }
 
     const FP: Fingerprint = Fingerprint([1; 32]);
@@ -496,8 +520,10 @@ pub(crate) mod tests {
         assert!(s[0].sending, "reports are always for sends");
         t.report(TransferStatus { done: 5, ..r.clone() }, false);
         assert_eq!(t.snapshot()[0].done, 5, "updates replace");
-        t.report(r, true);
+        t.report(r.clone(), true);
         assert!(t.snapshot().is_empty(), "the sender said it is finished");
+        t.report(TransferStatus { done: 8, ..r }, false);
+        assert!(t.snapshot().is_empty(), "a late report does not bring a finished send back");
 
         // A sender that vanishes without saying so is dropped after a while.
         let gone = TransferStatus { id: 12, peer: "mac".into(), ..Default::default() };
