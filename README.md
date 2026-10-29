@@ -539,28 +539,29 @@ Open it from the tray ("Open one·mk…", or a left click on Linux) or run
 - see how fast the connection is (measured, not estimated: click a computer
   to measure again);
 - move the mouse and keyboard to a computer (**Switch to it**), send it this
-  clipboard or get its clipboard, keep the pointer here, choose gaming mode
-  and lock every screen;
+  clipboard or get its clipboard, keep the pointer here and lock every
+  screen;
 - **Layout:** see every computer's real monitors on a flat plan; drag one
   along the edge it shares with this one to line them up (it snaps to the
   ends and the middle), or type an offset in pixels, or stretch the edges
   end to end. The part of the edge the pointer crosses is drawn in amber,
-  the rest is a wall. Save, use and delete layout profiles, and let one
+  dashed where the pointer stops. Save, use and delete layout profiles, and let one
   switch in by itself on a Wi-Fi network;
-- **Clipboard & files:** what the clipboard shares and its size limit,
-  notifications, whether others may get this clipboard, and each transfer
-  with a progress bar;
-- **Keyboard:** Ctrl/Cmd swapping per computer;
+- **Clipboard & files:** what the clipboard shares and whether others may
+  get it, notifications, the received files folder, the clipboard's size
+  limit, and each transfer with a progress bar;
 - **Health:** the results of `one-mk doctor` (run when the page opens and on
-  **Recheck**), each with its fix and a button to copy the command, plus
-  what one-mk says right now (for example a permission still to approve);
-- **Advanced:** edge rules (dead corners, waiting at the edge, a key to
-  hold, staying in fullscreen windows), keeping controlled computers awake,
-  sleep and lock sync, keyboard shortcuts on or off, and the hooks (edit
-  them in `settings.toml`).
+  **Recheck**), each with its fix and a button to copy the command (or, for
+  starting and pairing, the window's own button), plus what one-mk says
+  right now (for example a permission still to approve);
+- **Advanced:** settings most people never change: edge rules (not crossing
+  near corners, waiting at the edge, a key to hold, staying in fullscreen
+  windows), keeping controlled computers awake, sleep and lock sync, gaming
+  mode, keyboard shortcuts on or off, Ctrl/Cmd swapping per computer, and
+  commands to run on events (edit them in `settings.toml`).
 
 Every change goes through the same `one-mk` commands you would type, so
-the command line and the window always agree. Ctrl+1 to Ctrl+6 switch
+the command line and the window always agree. Ctrl+1 to Ctrl+5 switch
 tabs.
 
 When the mouse and keyboard move to another computer, the pointer is drawn
@@ -585,8 +586,9 @@ The menu shows:
 - **Switch to <computer>** and **Send clipboard to <computer>** for each
   connected computer (**Switch back here** while another one has control);
 - **Open one·mk…**, which opens the window;
-- **Lock pointer here** (a checkmark), **Lock all computers**, **Take back
-  control**, **Start one-mk** (when it is not running) and **Start at
+- **Keep the pointer here** (a checkmark), **Lock every screen**, **Take
+  back control**, **Start one·mk** (when it is not running), **Pair a
+  computer…** (when none is paired; it opens the window) and **Start at
   login**;
 - **Quit tray**, which closes only the tray, not one-mk.
 

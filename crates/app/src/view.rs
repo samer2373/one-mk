@@ -366,6 +366,8 @@ pub enum Verdict {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Check {
+    /// doctor's own name for it (`daemon`, `pairing`, …).
+    pub id: String,
     pub title: String,
     pub verdict: Verdict,
     pub detail: String,
@@ -390,7 +392,7 @@ pub fn parse_doctor(text: &str) -> Option<Vec<Check>> {
                 "warn" => Verdict::Warn,
                 _ => Verdict::Fail,
             };
-            Some(Check { title: s("title")?, verdict, detail: s("detail").unwrap_or_default(), fix: s("fix").filter(|f| !f.is_empty()) })
+            Some(Check { id: s("id").unwrap_or_default(), title: s("title")?, verdict, detail: s("detail").unwrap_or_default(), fix: s("fix").filter(|f| !f.is_empty()) })
         })
         .collect();
     checks.sort_by_key(|c| std::cmp::Reverse(c.verdict as u8));

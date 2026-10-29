@@ -7,13 +7,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/omk-shots}
-W=/tmp/omk-shots-work
-cargo build -q -p one-mk -p one-mk-app -j 4
+# Shots for docs/screens are stored small (see shot()); elsewhere exact.
+case "$(realpath -m "$OUT")" in */docs/screens) SMALL=1 ;; *) SMALL= ;; esac
+W=/tmp/omk-shots-work-$$
+cargo build -q -p one-mk -p one-mk-app -j 3
 B=$PWD/target/debug/one-mk
 APP=$PWD/target/debug/one-mk-app
 rm -rf "$W" && mkdir -p "$OUT" && mkdir -m 700 -p "$W/a" "$W/b" "$W/c" "$W/e" "$W/off" "$W/fx"
 PIDS=()
-cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; }
+cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; rm -rf "$W"; }
 trap cleanup EXIT
 
 shot() { # name after-seconds home [extra env...]
@@ -25,7 +27,9 @@ shot() { # name after-seconds home [extra env...]
         env "$@" ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 20 "$APP" --home "$home" || true
         [ -s "$W/$name.ppm" ] && break
     done
-    python3 -c "from PIL import Image; Image.open('$W/$name.ppm').save('$OUT/$name.png')"
+    # For the committed set, 256 colours by libimagequant (dithered, so the
+    # desk's gradients don't band): under half the size. Exact without it.
+    python3 -c "from PIL import Image, features; i = Image.open('$W/$name.ppm'); i = i.quantize(256, method=Image.Quantize.LIBIMAGEQUANT) if '$SMALL' and features.check_feature('libimagequant') else i; i.save('$OUT/$name.png', optimize=True)"
     echo "$OUT/$name.png"
 }
 
@@ -41,18 +45,15 @@ sleep 1
 sed -i '0,/^name = .*/s//name = "Studio PC"/' "$W/a/devices.toml"
 "$B" --home "$W/a" layout "Studio PC" left >/dev/null
 
-"$B" --home "$W/a" --backend null --no-discovery --port 24821 --connect 127.0.0.1:24822 >"$W/da.log" 2>&1 & PIDS+=($!)
-"$B" --home "$W/b" --backend null --no-discovery --port 24822 --connect 127.0.0.1:24821 >"$W/db.log" 2>&1 & B_PID=$!; PIDS+=($B_PID)
-"$B" --home "$W/e" --backend null --no-discovery --port 24823 >"$W/de.log" 2>&1 & PIDS+=($!)
+"$B" --home "$W/a" run --backend null --no-discovery --port 24821 --connect 127.0.0.1:24822 >"$W/da.log" 2>&1 & PIDS+=($!)
+"$B" --home "$W/b" run --backend null --no-discovery --port 24822 --connect 127.0.0.1:24821 >"$W/db.log" 2>&1 & B_PID=$!; PIDS+=($B_PID)
+"$B" --home "$W/e" run --backend null --no-discovery --port 24823 >"$W/de.log" 2>&1 & PIDS+=($!)
 sleep 4
 
 shot 01-intro 0.4 "$W/a"
-shot 02-probe-crossing 2.1 "$W/a"
 shot 03-desk-connected 4 "$W/a"
 shot 04-files-tab 3 "$W/a" ONE_MK_APP_TAB=files
-shot 05-keyboard-tab 3 "$W/a" ONE_MK_APP_TAB=keyboard
 shot 06-small-window 4 "$W/a" ONE_MK_APP_SIZE=760x540
-shot 07-large-window 4 "$W/a" ONE_MK_APP_SIZE=1300x800
 shot 08-nothing-paired 3 "$W/e"
 shot 09-not-running 3 "$W/off"
 # Pairing: a third computer waits with `one-mk pair` (it never answers).
@@ -87,9 +88,8 @@ printf 'peer\t5555-6666\ttop\t2\t0\toff\tGaming PC\n' >>"$F"
 printf 'peer\t7777-8888\tbottom\t1\t1\tauto\tМастерская\n' >>"$F"
 printf 'peer\t9999-0000\tright\t2\t1\tauto\t工作站\n' >>"$F"
 shot 17-many-long-names 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_SELECT="$LONG"
-shot 18-many-keyboard 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_TAB=keyboard
+shot 18-many-advanced 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_TAB=advanced
 shot 19-drop-chooser 2.2 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_DROP=3
-shot 20-many-small 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SELECT="$LONG"
 C=$W/controlled.status
 printf 'ok\nname\tsamer-Victus\nid\tabcd-ef01\nport\t24800\ncontrolled_by\tStudio PC\n' >"$C"
 printf 'peer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\n' >>"$C"
@@ -178,10 +178,8 @@ shot 33-files-transfers-clipboard 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TA
 shot 34-health-failing 3 "$W/fx" ONE_MK_APP_STATUS="$XI" ONE_MK_APP_TAB=health ONE_MK_APP_DOCTOR="$D"
 shot 35-advanced-settings 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced
 shot 36-small-layout 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_SIZE=760x540
-shot 37-small-files 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
-shot 38-small-health 3 "$W/fx" ONE_MK_APP_STATUS="$XI" ONE_MK_APP_TAB=health ONE_MK_APP_DOCTOR="$D" ONE_MK_APP_SIZE=760x540
+
 shot 39-small-advanced 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced ONE_MK_APP_SIZE=760x540
 # A high-density screen: everything drawn 1.5x on top of the desktop's scale.
 shot 40-hidpi-desk 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_ZOOM=1.5 ONE_MK_APP_SIZE=1140x810
-shot 41-hidpi-layout 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_ZOOM=1.5 ONE_MK_APP_SIZE=1140x810
 shot 42-layout-nothing-paired 3 "$W/e" ONE_MK_APP_TAB=layout
