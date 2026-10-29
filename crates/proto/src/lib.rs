@@ -7,6 +7,7 @@ mod codec;
 mod edge;
 mod geometry;
 mod keys;
+mod layout;
 mod lock;
 mod motion;
 mod transfer;
@@ -18,8 +19,9 @@ pub use edge::{
 };
 pub use geometry::{Desktop, Pos, Rect, Side};
 pub use keys::{HeldKeys, swap_ctrl_meta};
+pub use layout::{Align, Seam, overlaps};
 pub use lock::{CAUSE_WINDOW, LockSync, OnRemote};
-pub use motion::{MotionReceiver, Received, RelReceived, RemoteCursor, Step};
+pub use motion::{HOME_INSET, MotionReceiver, Received, RelReceived, RemoteCursor, Step};
 pub use transfer::{Batch, ClipAck, ClipFormat, ClipHeader, FileMsg};
 
 /// Bumped on any incompatible wire change; peers refuse mismatched versions.

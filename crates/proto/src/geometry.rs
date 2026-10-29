@@ -72,6 +72,11 @@ impl Side {
             Side::Bottom => Side::Top,
         }
     }
+    /// Whether positions along this edge run along x (top and bottom
+    /// edges) rather than y (left and right).
+    pub fn along_x(self) -> bool {
+        matches!(self, Side::Top | Side::Bottom)
+    }
     pub fn as_str(self) -> &'static str {
         match self {
             Side::Left => "left",
@@ -167,6 +172,50 @@ impl Desktop {
         self.clamp(p)
     }
 
+    /// Where `p` is along the `side` edge: y for left and right, x for top
+    /// and bottom.
+    pub fn along(side: Side, p: Pos) -> f64 {
+        if side.along_x() { p.x } else { p.y }
+    }
+
+    /// The point `along` the `side` edge of the desktop's bounds, `inset`
+    /// pixels inwards (the same line [`Desktop::point_on_edge`] uses),
+    /// moved onto the nearest monitor if it is not on one.
+    pub fn edge_point(&self, side: Side, along: f64, inset: f64) -> Pos {
+        let b = self.bounds();
+        let p = match side {
+            Side::Left => Pos::new(f64::from(b.x) + inset, along),
+            Side::Right => Pos::new(f64::from(b.right()) - 1.0 - inset, along),
+            Side::Top => Pos::new(along, f64::from(b.y) + inset),
+            Side::Bottom => Pos::new(along, f64::from(b.bottom()) - 1.0 - inset),
+        };
+        self.clamp(p)
+    }
+
+    /// The stretches of the `side` edge that lie on the desktop's outer
+    /// boundary (the line through its outermost monitors), as sorted,
+    /// merged `[start, end)` ranges along the edge (see [`Desktop::along`]).
+    /// Only these can touch a neighbour on that side: a monitor set back
+    /// from the line (one arm of an L-shaped desktop, a shorter monitor
+    /// beside a taller one) faces a gap, exactly as it would beside a real
+    /// monitor there.
+    pub fn edge_spans(&self, side: Side) -> Vec<(i32, i32)> {
+        let mut spans: Vec<(i32, i32)> = self
+            .outer_edges(side)
+            .map(|r| if side.along_x() { (r.x, r.right()) } else { (r.y, r.bottom()) })
+            .filter(|(a, b)| a < b)
+            .collect();
+        spans.sort_unstable();
+        let mut merged: Vec<(i32, i32)> = Vec::with_capacity(spans.len());
+        for (a, b) in spans {
+            match merged.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => merged.push((a, b)),
+            }
+        }
+        merged
+    }
+
     /// Screens whose `side` edge is on the outer boundary of the desktop;
     /// these are where pointer barriers go.
     pub fn outer_edges(&self, side: Side) -> impl Iterator<Item = &Rect> {
@@ -226,6 +275,26 @@ mod tests {
         // Nothing at the origin: the first one.
         let d = Desktop::new(vec![Rect::new(100, 100, 800, 600), Rect::new(900, 100, 800, 600)]);
         assert_eq!(d.primary().center(), Pos::new(500.0, 400.0));
+    }
+
+    #[test]
+    fn edge_spans_of_an_l_shaped_desktop() {
+        // A wide monitor on top, a narrower one below it, flush left, and a
+        // third to the right of the narrow one, set back from the right.
+        let d = Desktop::new(vec![
+            Rect::new(0, 0, 2560, 1440),
+            Rect::new(0, 1440, 1280, 1024),
+            Rect::new(1280, 1440, 800, 600),
+        ]);
+        assert_eq!(d.edge_spans(Side::Left), vec![(0, 2464)]);
+        assert_eq!(d.edge_spans(Side::Right), vec![(0, 1440)], "the lower monitors don't reach the right");
+        assert_eq!(d.edge_spans(Side::Top), vec![(0, 2560)]);
+        assert_eq!(d.edge_spans(Side::Bottom), vec![(0, 1280)], "the short monitor stops above the bottom");
+        // Two monitors side by side with a gap along the shared bottom line.
+        let d = Desktop::new(vec![Rect::new(0, 0, 1000, 800), Rect::new(1200, 0, 1000, 800)]);
+        assert_eq!(d.edge_spans(Side::Bottom), vec![(0, 1000), (1200, 2200)]);
+        let p = d.edge_point(Side::Bottom, 1100.0, 2.0);
+        assert!(d.screen_at(p).is_some(), "a point in the gap moves onto a monitor: {p:?}");
     }
 
     #[test]

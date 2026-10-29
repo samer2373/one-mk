@@ -1,6 +1,6 @@
 use crate::identity::Fingerprint;
 use anyhow::{Context, Result};
-use one_mk_proto::Side;
+use one_mk_proto::{Align, Side};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -51,8 +51,14 @@ pub struct Device {
     /// Last addresses it was reached at, for networks that block discovery.
     #[serde(default)]
     pub addrs: Vec<String>,
-    /// When `side` was last chosen (milliseconds since 1970, but always
-    /// above the previous value). Both computers keep the newer layout.
+    /// How its facing edge lines up with ours along that side
+    /// ([`Align`] as text: `stretch`, `center` or pixels); empty is
+    /// stretch, the default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub align: String,
+    /// When `side` (or `align`) was last chosen (milliseconds since 1970,
+    /// but always above the previous value). Both computers keep the newer
+    /// layout.
     #[serde(default)]
     pub layout_version: u64,
     /// Ctrl/Cmd swapping for keys sent to this device.
@@ -70,6 +76,13 @@ fn default_side() -> String {
 impl Device {
     pub fn side(&self) -> Side {
         self.side.parse().unwrap_or(Side::Right)
+    }
+    /// A value that doesn't parse (a bad hand edit) is the default.
+    pub fn align(&self) -> Align {
+        self.align.parse().unwrap_or_default()
+    }
+    pub fn set_align(&mut self, align: Align) {
+        self.align = if align == Align::Stretch { String::new() } else { align.to_string() };
     }
     pub fn fingerprint(&self) -> Option<Fingerprint> {
         self.fingerprint.parse().ok()
@@ -134,6 +147,7 @@ impl TrustStore {
     pub fn upsert(&mut self, mut device: Device) {
         if let Some(existing) = self.file.devices.iter_mut().find(|d| d.fingerprint == device.fingerprint) {
             device.side = std::mem::take(&mut existing.side);
+            device.align = std::mem::take(&mut existing.align);
             device.layout_version = existing.layout_version;
             device.swap_ctrl_cmd = existing.swap_ctrl_cmd;
             *existing = device;
@@ -173,9 +187,17 @@ mod tests {
         let mut t = TrustStore::load(&dir).unwrap();
         let d = &t.devices()[0];
         assert_eq!((d.side(), d.layout_version, d.swap_ctrl_cmd, d.os), (Side::Left, 0, Swap::Auto, 0));
+        assert_eq!(d.align(), Align::Stretch);
         t.get_mut(&fp.parse().unwrap()).unwrap().swap_ctrl_cmd = Swap::Off;
         t.save().unwrap();
+        assert!(!std::fs::read_to_string(dir.join("devices.toml")).unwrap().contains("align"), "the default isn't written");
         assert_eq!(TrustStore::load(&dir).unwrap().devices()[0].swap_ctrl_cmd, Swap::Off);
+        t.get_mut(&fp.parse().unwrap()).unwrap().set_align(Align::Offset(-300));
+        t.save().unwrap();
+        // Pairing again keeps the layout.
+        let mut t = TrustStore::load(&dir).unwrap();
+        t.upsert(Device { name: "old".into(), fingerprint: fp.clone(), ..Device::default() });
+        assert_eq!(t.devices()[0].align(), Align::Offset(-300));
         assert_eq!("ON".parse::<Swap>(), Ok(Swap::On));
         assert!("maybe".parse::<Swap>().is_err());
         let _ = std::fs::remove_dir_all(dir);
