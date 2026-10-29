@@ -4,6 +4,7 @@
 //! every platform backend.
 
 mod codec;
+pub mod drag;
 mod edge;
 mod geometry;
 mod keys;

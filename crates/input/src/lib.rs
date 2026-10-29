@@ -6,6 +6,7 @@
 //! Key and button codes are Linux evdev codes on all platforms.
 
 mod common_logic;
+pub mod dropzone;
 pub mod hotkeys;
 #[cfg(any(target_os = "linux", test))]
 mod linux_logic;
