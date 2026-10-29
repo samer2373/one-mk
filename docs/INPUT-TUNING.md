@@ -51,11 +51,93 @@ buttons) or per field (pointer and scroll):
 | global | (nothing), `scope = "global"` | every computer |
 | OS | `scope = { os = "mac" }` (`mac`, `windows`, `linux`) | targets running that OS (from its `Hello`) |
 | one computer | `scope = { peer = "laptop" }` | a paired computer, by name or id (prefix) |
+| local keyboard (inactive groundwork) | `scope = { local = true }` | separate rule set, never a remote target; native integration is not implemented yet |
 
 `peer` beats `os` beats `global`. Rules are resolved when a visit starts
 and again when `settings.toml` is reloaded. A rule may also carry `app =
 "..."`: reserved for per-app rules (plan 4D); such a rule is not used yet,
 and `one-mk keymap check` says so.
+
+### Local keyboard scope: groundwork only (4C incomplete)
+
+`one-mk keymap add capslock esc --local` stores a local rule; `one-mk
+keymap remove capslock --local` removes it, and `one-mk keymap` labels it
+`this computer (local)` and warns that it is inactive. `--local` cannot be
+combined with `--peer` or `--os`, and is not offered for pointer, scroll or
+button commands. In the file it is written as:
+
+```toml
+[[input.keymap.rule]]
+from = "capslock"
+to = "esc"
+scope = { local = true }
+```
+
+The existing remote-only Keys & mouse editor omits local-scoped rules
+rather than mislabeling or modifying them as global rules; manage these
+inactive rules through the CLI or file for now.
+
+**This does not remap local typing yet, including on Windows and macOS.**
+`one-mk keymap check` reports the limitation. With local rules configured,
+Linux `status` adds exactly one availability line:
+`local key rules are not available on Linux`. Windows/macOS instead report
+the missing native hook integration. Remote rules keep their existing
+meaning: global/OS/peer rules do not become local rules, and local rules
+never enter a peer's mapper. Local compilation targets this computer's OS
+without the remote Ctrl/Cmd swap. Invalid and duplicate local rules are
+rejected by the local compiler; compiler warnings remain visible in check.
+
+The pure adapter in `crates/input/src/localmap.rs` owns a separate instance
+of the same `proto::remap::Mapper`, not a second mapper implementation.
+It checks physical emergency/user shortcuts before mapping (including when
+Esc or the modifiers are remapped), ignores synthetic keys, preserves press
+ownership through repeats and health changes, and releases mapped outputs
+on disable, session reset and snapshot replacement. Snapshots are prepared
+off the callback; replacement returns the retired allocation for disposal
+outside it. Its only mapping deadline exists while a tap/hold decision is
+pending. A pure event-driven health lease is provided, but **is not wired
+to daemon health**. No worker, idle polling, hook or event tap is added.
+
+Before native interception can be enabled, the bridge must satisfy all of
+these safety gates:
+
+* Serialize hook/tap decisions, snapshot changes, timers, injection and
+  release-all. A remote capture transition must acknowledge completion of
+  every local injection and release before forwarding begins. An unchecked
+  background injection queue can replay local keys after handoff and is
+  unsafe; it is deliberately not implemented here.
+* Hook decisions must not lock or allocate, and must complete within a few
+  milliseconds. Wire daemon health acknowledgements and fail-open handling;
+  a Windows hook timeout can cause the OS to remove the hook. Never start
+  mapping a repeat or release whose down passed through unchanged.
+* Windows must reuse the injection tag and ignore `LLKHF_INJECTED`, inject
+  scancodes with the right extended flags, preserve AltGr's synthetic
+  LCtrl/RAlt handling, and reset/release on session lock or secure-desktop
+  transitions. Ctrl+Alt+Del and OS-reserved Windows shortcuts cannot be
+  promised as remappable; a normal user-session hook cannot control the
+  secure desktop.
+* macOS must reuse its injection tag, choose a consistent swallow/repost or
+  in-place rewrite strategy, and release all mapped outputs on event-tap
+  timeout/user-input disable before re-enabling the tap. Resolve delayed
+  tap/hold output without races against capture or configuration changes.
+* Keep Ctrl+Alt+Shift+Esc and configured user hotkeys physical, ahead of
+  mapping, and route their actions to the daemon. The pure tests include
+  remapped Esc/Shift/Ctrl/Alt, but there is no native shortcut wiring yet.
+
+Pure Linux tests cover these adapter decisions, snapshot retirement,
+disable/reset, repeat ownership and delayed tap/hold cleanup. The local
+random-stream test uses the existing mapper's shared deterministic generator
+and down/up oracle (10,000 streams). These do not verify native interception,
+injection ordering, timing, AltGr or lock-screen behavior. Windows/macOS
+cross-target clippy is compile-only; runtime testing requires those systems.
+
+Groundwork validation (2026-10-29): `cargo test -j 2 --workspace` passed
+(648 passed, 6 ignored). `cargo clippy -j 2 --workspace --all-targets --
+-D warnings` passed, as did clippy with `--all-targets -- -D warnings` for
+`one-mk-input`, `one-mk-proto` and `one-mk-ctl` on
+`x86_64-pc-windows-msvc` and `aarch64-apple-darwin` (each with `-j 2`).
+No Windows/macOS-specific code was run, no live input backend was started,
+and no release build or `cargo fmt` was used.
 
 ## The key mapper (`crates/proto/src/remap.rs`)
 
@@ -330,7 +412,8 @@ in scopes, and acceleration modes this computer can't do).
   peer (the InputCapture portal), so the rules can't change local typing,
   and nothing short of a root-level evdev remapper (keyd, kanata) could.
   Windows (low-level hooks) and macOS (event taps) could remap local input
-  too; that is plan 4C.
+  too; plan 4C currently has only the inactive config/CLI and pure adapter
+  groundwork described above, not a working native integration.
 * Pointer acceleration `off`/`curve`: see the table above.
 * Natural scrolling assumes this computer uses its OS default direction.
 

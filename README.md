@@ -573,9 +573,13 @@ Good to know:
   computer once you scroll with it, so it never sees Shift+scroll.
 - `natural auto` assumes this computer scrolls its OS's default way
   (natural on a Mac); otherwise use `--reverse-vertical on`.
-- Only input sent to other computers is changed: on Linux one-mk sees your
-  keyboard only while it forwards it (local remapping is planned for
-  Windows and macOS).
+- Only input sent to other computers is changed. Local keyboard rules
+  (`scope = { local = true }`, or `one-mk keymap add capslock esc --local`)
+  can be stored and checked, but are **inactive on every platform**: the
+  Windows/macOS hook integration is not implemented yet (plan 4C).
+  Linux status says `local key rules are not available on Linux`; its
+  Wayland portal only supplies keys while forwarding. Local rules never
+  change keys sent to a peer. See `docs/INPUT-TUNING.md` for the safety gates.
 - Pointer acceleration: one-mk sends positions computed on this computer,
   so this computer's acceleration applies once. Turning it off or a custom
   curve needs raw mouse motion, which no backend reads yet; turn

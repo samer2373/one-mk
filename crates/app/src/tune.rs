@@ -327,7 +327,9 @@ fn repeats<'a>(e: &'a [Entry], array: &str) -> Vec<Vec<(String, &'a Val)>> {
         }
         out[x.index].push((key, &x.val));
     }
-    out
+    out.into_iter().filter(|entries| !entries.iter().any(|(key, value)| {
+        key == "scope.local" || (key == "scope" && matches!(value, Val::Table(fields) if fields.iter().any(|(name, _)| name == "local")))
+    })).collect()
 }
 
 impl Input {
@@ -1691,6 +1693,17 @@ os = "mac"
         assert_eq!(i.buttons[0], ButtonRule { from: "4".into(), to: To::One("back".into()), scope: Scope::All, app: None });
         assert_eq!(i.buttons[1].scope, Scope::Os(os::MACOS));
         assert_eq!(Input::read(&read_toml("")), Input::default());
+    }
+
+    #[test]
+    fn inactive_local_rules_do_not_appear_as_global_in_the_remote_editor() {
+        for scope in ["scope = { local = true }", "[input.keymap.rule.scope]\nlocal = true"] {
+            let text = format!("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\n{scope}\n");
+            assert!(Input::read(&read_toml(&text)).keys.is_empty());
+        }
+        let text = "[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nscope = { local = true }\n[[input.keymap.rule]]\nfrom = \"a\"\nto = \"c\"\n";
+        let input = Input::read(&read_toml(text));
+        assert_eq!(input.keys, [KeyRule::to("a", "c")]);
     }
 
     #[test]
