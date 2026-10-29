@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Screenshots of every state of the one·mk window, for design review.
 # Runs local test daemons (no real input) in throwaway settings folders.
-# Usage: scripts/ui-shots.sh [OUT_DIR]   (default /tmp/omk-shots)
+# Usage: scripts/ui-shots.sh [OUT_DIR]   (default /tmp/omk-shots; the
+# reviewed set is committed in docs/screens)
 # The debug-only ONE_MK_APP_* hooks it uses are listed in crates/app/src/app.rs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -10,7 +11,7 @@ W=/tmp/omk-shots-work
 cargo build -q -p one-mk -p one-mk-app -j 4
 B=$PWD/target/debug/one-mk
 APP=$PWD/target/debug/one-mk-app
-rm -rf "$W" && mkdir -p "$OUT" && mkdir -m 700 -p "$W/a" "$W/b" "$W/c" "$W/e" "$W/off"
+rm -rf "$W" && mkdir -p "$OUT" && mkdir -m 700 -p "$W/a" "$W/b" "$W/c" "$W/e" "$W/off" "$W/fx"
 PIDS=()
 cleanup() { for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
@@ -59,6 +60,10 @@ shot 09-not-running 3 "$W/off"
 shot 10-pairing-code 6 "$W/a" ONE_MK_APP_PAIR=1
 shot 11-pairing-searching 1.2 "$W/e" ONE_MK_APP_PAIR=1
 shot 13-this-computer-selected 3 "$W/a" ONE_MK_APP_SELECT=me ONE_MK_APP_AUTOSTART=1
+# The newer pages against the real test daemons (a real `one-mk doctor`).
+shot 24-layout-two-daemons 3 "$W/a" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="Studio PC"
+shot 25-health-two-daemons 8 "$W/a" ONE_MK_APP_TAB=health
+shot 26-advanced-defaults 3 "$W/a" ONE_MK_APP_TAB=advanced
 shot 14-mid-drag 2.4 "$W/a" ONE_MK_APP_DRAG=1
 shot 15-keyboard-focus 2 "$W/a" ONE_MK_APP_FOCUS=1
 shot 16-error-toast 1.6 "$W/a" ONE_MK_APP_TOAST=1
@@ -69,6 +74,7 @@ shot 12-peer-offline 3 "$W/a"
 (yes yes | timeout 40 "$B" --home "$W/c" pair --machine >/dev/null 2>&1 &)
 shot 22-paired 9 "$W/a" ONE_MK_APP_PAIR=1 ONE_MK_APP_CONFIRM=1
 shot 23-reduced-motion-intro 0.3 "$W/a" ONE_MK_REDUCE_MOTION=1
+shot 27-health-not-running 6 "$W/off" ONE_MK_APP_TAB=health
 
 # States that need more computers than two test daemons: a status file
 # stands in for the daemon (debug builds only).
@@ -88,3 +94,94 @@ C=$W/controlled.status
 printf 'ok\nname\tsamer-Victus\nid\tabcd-ef01\nport\t24800\ncontrolled_by\tStudio PC\n' >"$C"
 printf 'peer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\n' >>"$C"
 shot 21-controlled-small 3 "$W/off" ONE_MK_APP_STATUS="$C" ONE_MK_APP_SIZE=760x540
+
+# Layout, transfers, health and settings in detail: a status with several
+# monitors, offsets, profiles and transfers, settings files to match, and
+# a doctor report with failures.
+X=$W/x.status
+printf 'ok\nname\tsamer-Victus\nid\tabcd-ef01\nport\t24800\n' >"$X"
+printf 'peer\t1111-2222\tleft\t3\t1\tauto\tMacBook Air\n' >>"$X"
+printf 'peer\t3333-4444\tbottom\t1\t1\tauto\tStudio PC\n' >>"$X"
+printf 'peer\t5555-6666\tright\t2\t0\toff\tGaming PC\n' >>"$X"
+printf 'place\t1111-2222\t120\t0,0,1470,956\n' >>"$X"
+printf 'place\t3333-4444\tcenter\t0,0,1920,1080;1920,-300,1080,1920\n' >>"$X"
+printf 'place\t5555-6666\tstretch\t\n' >>"$X"
+printf 'screens\t0,0,2560,1440;2560,180,1920,1080\n' >>"$X"
+printf 'profile\thome office\nprofiles\thome office\tcafé, 2nd floor\tStudio\n' >>"$X"
+printf 'gaming\tauto\nlock_sync\t1\npointer_locked\t1\n' >>"$X"
+printf 'edges\tdead corners 20 px, dwell 300 ms, hold shift, fullscreen guard; left edge: no dwell\n' >>"$X"
+printf 'hotkeys\ton\tthrough the GlobalShortcuts portal\n' >>"$X"
+printf 'transfer\t7\tr\t3\t12300000\t27100000\t8100000\tMacBook Air\n' >>"$X"
+printf 'transfer\t8\ts\t1\t500000\t9000000\t0\tStudio PC\n' >>"$X"
+XI=$W/x-input.status
+{ cat "$X"; printf "input\tWaiting for your approval: allow one-mk in the desktop's dialog.\n"; } >"$XI"
+cat >"$W/fx/settings.toml" <<'TOML'
+notify_files = false
+gaming = "auto"
+lock_sync = true
+
+[clipboard]
+html = false
+max_mb = 10
+
+[edge]
+corner = 20
+dwell_ms = 300
+modifier = "shift"
+fullscreen_guard = true
+
+[edge.left]
+dwell_ms = 0
+
+[hooks]
+on_enter = ["notify-send", "one-mk", "Pointer is here"]
+on_peer_connect = "/home/me/bin/dim-the-other-monitor-and-switch-audio-to-the-desk-speakers --quiet"
+
+[power]
+sleep_sync = true
+
+[hotkeys]
+cycle = "ctrl+alt+n"
+TOML
+cat >"$W/fx/profiles.toml" <<'TOML'
+active = "home office"
+
+[[profile]]
+name = "home office"
+ssid = ["Home Wi-Fi"]
+
+[[profile]]
+name = "café, 2nd floor"
+
+[[profile]]
+name = "Studio"
+TOML
+D=$W/doctor.json
+cat >"$D" <<'JSON'
+{"ok":false,"summary":{"pass":5,"skip":1,"warn":1,"fail":2},"checks":[
+{"id":"daemon","title":"Program","status":"pass","detail":"one-mk is running (pid 4242).","fix":null},
+{"id":"config","title":"Settings","status":"pass","detail":"Found at /home/me/.config/one-mk.","fix":null},
+{"id":"pairing","title":"Paired computers","status":"pass","detail":"Paired with 3 computers.","fix":null},
+{"id":"port","title":"Port","status":"fail","detail":"UDP port 24900 is already used by \"barrier\".","fix":"Close that program, or use another port on both computers: `one-mk run --port 24910`."},
+{"id":"mdns","title":"Discovery","status":"pass","detail":"This computer can use mDNS; 2 one-mk computers announced themselves.","fix":null},
+{"id":"firewall","title":"Firewall","status":"fail","detail":"ufw is on and blocks UDP 24900.","fix":"Allow it: `sudo ufw allow 24900/udp comment one-mk`."},
+{"id":"input","title":"Permissions","status":"warn","detail":"The desktop offers the needed portals, but you have not allowed one-mk yet.","fix":"Run `one-mk run` and choose Allow in the dialog your desktop shows. (If you dismissed it, run it again.)"},
+{"id":"hotkeys","title":"Keyboard shortcuts","status":"skip","detail":"Not checked: one-mk isn't installed for this desktop yet.","fix":null},
+{"id":"network","title":"Network","status":"pass","detail":"Connected to a private network (192.168.1.18 on wlo1).","fix":null}]}
+JSON
+shot 28-desk-quick-actions-transfer 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air"
+shot 29-layout-offset-multi-monitor 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air"
+shot 30-layout-edges-dont-meet 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="Studio PC" ONE_MK_APP_PROFILE="home office"
+shot 31-layout-mid-drag 2.4 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="Studio PC" ONE_MK_APP_PLAN_DRAG=-1500
+shot 32-layout-keyboard-focus 2 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_FOCUS=1
+shot 33-files-transfers-clipboard 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files
+shot 34-health-failing 3 "$W/fx" ONE_MK_APP_STATUS="$XI" ONE_MK_APP_TAB=health ONE_MK_APP_DOCTOR="$D"
+shot 35-advanced-settings 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced
+shot 36-small-layout 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_SIZE=760x540
+shot 37-small-files 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
+shot 38-small-health 3 "$W/fx" ONE_MK_APP_STATUS="$XI" ONE_MK_APP_TAB=health ONE_MK_APP_DOCTOR="$D" ONE_MK_APP_SIZE=760x540
+shot 39-small-advanced 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced ONE_MK_APP_SIZE=760x540
+# A high-density screen: everything drawn 1.5x on top of the desktop's scale.
+shot 40-hidpi-desk 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_ZOOM=1.5 ONE_MK_APP_SIZE=1140x810
+shot 41-hidpi-layout 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_ZOOM=1.5 ONE_MK_APP_SIZE=1140x810
+shot 42-layout-nothing-paired 3 "$W/e" ONE_MK_APP_TAB=layout
