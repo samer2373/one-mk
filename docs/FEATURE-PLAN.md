@@ -227,9 +227,48 @@ the PC, with one mouse), plus a keyboard mapper for any key.
 
 | ID | Task | Status |
 |---|---|---|
-| UI1 | Window panels for the new features: doctor results, clipboard settings, transfer progress, edge settings, lock state, switch buttons | todo |
-| UI2 | Tray menu entries: switch to, lock pointer, lock all | todo |
-| UI3 | Design validation: run `scripts/ui-shots.sh`, review every window state against `docs/brand/README.md`, fix findings | todo |
+| UI1 | Window panels for the new features: doctor results, clipboard settings, transfer progress, edge settings, lock state, switch buttons | done (branch `t3/98be7bed`) |
+| UI2 | Tray menu entries: switch to, lock pointer, lock all | done (branch `t3/98be7bed`) |
+| UI3 | Design validation: run `scripts/ui-shots.sh`, review every window state against `docs/brand/README.md`, fix findings | done (42 states in `docs/screens`) |
+
+### UI notes (2026-10-29)
+
+- **Window.** Six tabs: Desk (quick actions: switch to it / switch here,
+  send or get its clipboard, keep the pointer here, gaming mode, lock every
+  screen), Layout (flat plan of real monitors from `Status.layout`, drag
+  along the edge with snapping to the ends and the middle, arrow keys move
+  the focused computer, offset field, stretch switch, shared edge in amber
+  and walls dashed, a warning when edges don't meet or two computers claim
+  one stretch; profiles: use, save, delete, automatic on a Wi-Fi name),
+  Clipboard & files (formats, size limit, notifications, allow fetch,
+  transfers with bars), Keyboard, Health (`one-mk doctor --json` off the
+  window's thread on open and Recheck, copy-the-command buttons,
+  `Status.input` and the shortcuts line), Advanced (edge rules form, power
+  and lock sync, shortcuts on/off with their chords, hooks read-only plus
+  Edit settings.toml). Every change runs the `one-mk` command or control
+  request the CLI uses. Settings are read from `settings.toml` /
+  `profiles.toml` (a small reader, no new dependency) when their mtime
+  changes, only while the window is open.
+- **Tray.** Switch to / Switch back here, Send clipboard to, Lock pointer
+  here (checkmark), Lock all computers, one line per running transfer; more
+  than three computers go into submenus. No new polling.
+- **Verified here:** unit tests (view model: TOML reader, doctor JSON,
+  offset snapping, placement, seam/walls, transfer text, chord labels; tray
+  menu), clippy clean for Linux, `x86_64-pc-windows-msvc` and
+  `aarch64-apple-darwin` (app and tray), every command and request the
+  window and tray send run against two null-backend daemons, and 42
+  reviewed screenshots (`scripts/ui-shots.sh docs/screens`), including
+  760x540, a 1.5x zoom (high density) and keyboard focus.
+- **Not verified:** clicks in the real window (screenshots drive it through
+  debug hooks; no input automation on Wayland), Lock all (it would lock
+  this screen), the tray menus on a real tray host, anything on Windows or
+  macOS.
+- **Backend requests** (not done here): a status field or `profile list
+  --json` with each profile's automatic rules, plus `profile auto <name>
+  --here` (or the current Wi-Fi name in the status), so the window can
+  offer "automatic on this network" without asking for the Wi-Fi name;
+  `clipboard`/`power`/`notify` state in the status would let the window
+  stop reading `settings.toml` itself.
 
 ## Validation passes (between waves)
 

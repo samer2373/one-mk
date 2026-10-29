@@ -530,7 +530,30 @@ Open it from the tray ("Open one·mk…", or a left click on Linux) or run
 - drop files or folders onto a computer to send them;
 - see how fast the connection is (measured, not estimated: click a computer
   to measure again);
-- choose Ctrl/Cmd swapping per computer, and turn on start at login.
+- move the mouse and keyboard to a computer (**Switch to it**), send it this
+  clipboard or get its clipboard, keep the pointer here, choose gaming mode
+  and lock every screen;
+- **Layout:** see every computer's real monitors on a flat plan; drag one
+  along the edge it shares with this one to line them up (it snaps to the
+  ends and the middle), or type an offset in pixels, or stretch the edges
+  end to end. The part of the edge the pointer crosses is drawn in amber,
+  the rest is a wall. Save, use and delete layout profiles, and let one
+  switch in by itself on a Wi-Fi network;
+- **Clipboard & files:** what the clipboard shares and its size limit,
+  notifications, whether others may get this clipboard, and each transfer
+  with a progress bar;
+- **Keyboard:** Ctrl/Cmd swapping per computer;
+- **Health:** the results of `one-mk doctor` (run when the page opens and on
+  **Recheck**), each with its fix and a button to copy the command, plus
+  what one-mk says right now (for example a permission still to approve);
+- **Advanced:** edge rules (dead corners, waiting at the edge, a key to
+  hold, staying in fullscreen windows), keeping controlled computers awake,
+  sleep and lock sync, keyboard shortcuts on or off, and the hooks (edit
+  them in `settings.toml`).
+
+Every change goes through the same `one-mk` commands you would type, so
+the command line and the window always agree. Ctrl+1 to Ctrl+6 switch
+tabs.
 
 When the mouse and keyboard move to another computer, the pointer is drawn
 crossing to it. The window only talks to the running `one-mk`, so closing
@@ -549,9 +572,14 @@ The menu shows:
   (on your right)");
 - each paired computer, with a submenu to move it left, right, above or
   below (applied at once, like `one-mk layout`);
+- a line for each file transfer that is running ("Receiving 3 files from
+  desk: 45%");
+- **Switch to <computer>** and **Send clipboard to <computer>** for each
+  connected computer (**Switch back here** while another one has control);
 - **Open one·mk…**, which opens the window;
-- **Take back control**, **Start one-mk** (when it is not running) and
-  **Start at login**;
+- **Lock pointer here** (a checkmark), **Lock all computers**, **Take back
+  control**, **Start one-mk** (when it is not running) and **Start at
+  login**;
 - **Quit tray**, which closes only the tray, not one-mk.
 
 On Windows `one-mk install` then starts the tray at login and the tray

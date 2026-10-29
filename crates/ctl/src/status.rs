@@ -205,7 +205,8 @@ pub fn human_bytes(n: u64) -> String {
     if u == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[u]) }
 }
 
-fn human_duration(secs: u64) -> String {
+/// 125 -> "2 min 5 s".
+pub fn human_duration(secs: u64) -> String {
     match secs {
         0..=59 => format!("{secs} s"),
         60..=3599 => format!("{} min {} s", secs / 60, secs % 60),
