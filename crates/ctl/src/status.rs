@@ -57,6 +57,9 @@ pub struct Status {
     pub edges: String,
     /// File transfers in flight, to and from this computer.
     pub transfers: Vec<TransferStatus>,
+    /// What the input backend needs the user to know or do, one line each
+    /// (e.g. approve the desktop's permission dialog); empty when it works.
+    pub input: Vec<String>,
 }
 
 /// One file transfer in flight (a whole `one-mk send`, not a single file).
@@ -165,6 +168,9 @@ impl Status {
                 out += &format!("{key}\t{v}\n");
             }
         }
+        for line in &self.input {
+            out += &format!("input\t{}\n", line.replace(['\t', '\n', '\r'], " "));
+        }
         for t in &self.transfers {
             out += &format!(
                 "transfer\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -200,6 +206,7 @@ impl Status {
                 ["lock_sync", v] => s.lock_sync = v == "1",
                 ["gaming", v] => s.gaming = v.into(),
                 ["edges", v] => s.edges = v.into(),
+                ["input", v] => s.input.push(v.into()),
                 // Cosmetic: a line that doesn't parse is skipped, not fatal.
                 ["transfer", id, dir, files, done, total, rate, peer] => s.transfers.extend(|| -> Option<_> {
                     Some(TransferStatus {
@@ -233,6 +240,9 @@ impl Status {
             (_, Some(p)) => format!("{p} is controlling this computer right now. {}\n", takeback_hint()),
             _ => "The mouse and keyboard are on this computer.\n".to_owned(),
         };
+        for line in &self.input {
+            out += &format!("{line}\n");
+        }
         if self.pointer_locked {
             out += "The pointer is locked to this computer: edges lead nowhere (`one-mk lock-pointer off`).\n";
         }
@@ -289,14 +299,18 @@ mod tests {
             relative: true,
             lock_sync: true,
             edges: "dead corners 20 px, dwell 300 ms".into(),
+            input: vec!["Waiting for your approval: allow one-mk in the desktop's dialog.".into()],
             ..s
         };
         assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
         let text = s.render();
-        for want in ["locked to this computer", "screen is locked", "Edges: dead corners 20 px", "Gaming mode: auto (relative", "Lock sync is on"] {
+        for want in ["locked to this computer", "screen is locked", "Edges: dead corners 20 px", "Gaming mode: auto (relative", "Lock sync is on", "Waiting for your approval"] {
             assert!(text.contains(want), "{want}: {text}");
         }
         assert_eq!(Status::decode("error unknown request\n"), None);
+        // A line can't break the format.
+        let odd = Status { input: vec!["a\tb\nc".into()], ..Status::default() };
+        assert_eq!(Status::decode(&odd.encode()).unwrap().input, ["a b c"]);
     }
 
     #[test]

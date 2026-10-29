@@ -390,6 +390,8 @@ struct App {
     lock_sync: LockSync,
     /// Modifier keys to release once more when the screen unlocks.
     unlock_release: Mods,
+    /// What the input backend says needs the user, by part (`Event::Status`).
+    input_problems: std::collections::BTreeMap<&'static str, String>,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -482,6 +484,7 @@ pub async fn serve(
         switching: None,
         lock_sync: LockSync::default(),
         unlock_release: Mods::default(),
+        input_problems: Default::default(),
     };
     if app.locked {
         println!("The pointer is locked to this computer (`one-mk lock-pointer off` frees it).");
@@ -835,6 +838,15 @@ impl App {
                 }
             }
             Event::Error(msg) => tracing::error!("{msg}"),
+            Event::Status { part, problem: Some(p) } => {
+                if self.input_problems.get(part) != Some(&p) {
+                    println!("{p}");
+                    self.input_problems.insert(part, p);
+                }
+            }
+            Event::Status { part, problem: None } => {
+                self.input_problems.remove(part);
+            }
         }
     }
 
@@ -1543,6 +1555,7 @@ impl App {
             lock_sync: self.settings.lock_sync,
             edges: self.settings.edge.describe(),
             transfers: self.services.inbox.transfers().snapshot(),
+            input: self.input_problems.values().cloned().collect(),
         }
     }
 
@@ -3080,6 +3093,34 @@ mod tests {
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 125, down: false }, "the modifier again");
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(injected(&mut duo.hb), vec![]);
+        duo.stop().await;
+    }
+
+    /// What the input backend says needs the user (a permission dialog
+    /// to approve) shows in `one-mk status` until it says all is well.
+    #[tokio::test]
+    async fn input_problems_show_in_status() {
+        let duo = Duo::start("input-status", None).await;
+        let waiting = "Waiting for your approval: allow one-mk in the desktop's dialog.";
+        duo.ha.events.send(Event::Status { part: "control", problem: Some(waiting.into()) }).unwrap();
+        let mut seen = Vec::new();
+        for _ in 0..100 {
+            seen = status(&duo.da).await.input;
+            if !seen.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(seen, [waiting]);
+        duo.ha.events.send(Event::Status { part: "control", problem: None }).unwrap();
+        for _ in 0..100 {
+            seen = status(&duo.da).await.input;
+            if seen.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(seen.is_empty(), "{seen:?}");
         duo.stop().await;
     }
 
