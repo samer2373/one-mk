@@ -24,8 +24,10 @@ clippy clean on Linux, Windows and macOS targets. The fixes made after that
 last review were small and each has tests, but they have not had a third review.
 Nothing has been merged into `main`: the work is on `worktree-features-wave1`.
 
-Not started: 3A pointer drawn on a computer with no mouse, 3B drag files across
-the edge, 4C local-only remap on Windows/macOS, 4D per-app rules.
+Done on branch `t3/dfdd7778` (not merged yet): 3A pointer drawn on a
+computer with no mouse (Windows/macOS compiled only).
+Not started: 3B drag files across the edge, 4C local-only remap on
+Windows/macOS, 4D per-app rules.
 Needs a decision from the user: 3C auto-update (where releases are published,
 how they are signed) and 2C Windows login/UAC service (paused: the child run was
 stopped by a safety check, see the 2C row).
@@ -185,7 +187,7 @@ Known gaps:
 
 | ID | Task | Depends on | Notes | Status |
 |---|---|---|---|---|
-| 3A | Pointer drawn on a computer with no mouse attached | none | Known gap in Lan Mouse and Mouse Without Borders. | todo |
+| 3A | Pointer drawn on a computer with no mouse attached | none | Known gap in Lan Mouse and Mouse Without Borders. Findings per OS in [NO-MOUSE-POINTER.md](NO-MOUSE-POINTER.md). Decision with hysteresis in `proto/overlay.rs`; lifecycle (`InjectTx`, created on control, gone after, nothing idle) and renderers in `input/cursoroverlay*.rs`; `[pointer] draw_when_no_mouse = auto\|always\|never`, `one-mk pointer-overlay`, a `status` line and a `doctor` check. **Verified here:** decision and lifecycle tests with a fake renderer (failing first), X11 `always` overlay on Xvfb (arrow shape, empty input shape, follows moves, removed, 20 cycles), real CLI/daemon run with a throwaway home. **Compiled only:** Windows layered window and probe, macOS helper window and IOKit probe. Wayland: not available (compositor draws the pointer). | done (Win/mac compiled only) |
 | 3B | Drag files across the screen edge | transfer code (1B) | Hardest of the list. Deskflow and Synergy both removed theirs as broken. Linux GNOME and Windows first. | todo |
 | 3C | Auto-update with signed releases | none | | todo |
 | 3D | Packaging: `.deb`, AppImage or Flatpak, MSI, `.dmg` or Homebrew | none | Probably matters most for adoption. See `docs/PACKAGING.md`. **Verified here (Linux):** reproducible `.deb` built with `scripts/package-deb.sh`; contents, control, unpacked `one-mk --version`, `desktop-file-validate`, `appstreamcli validate`, `systemd-analyze --user verify` of the unit (`scripts/check-packaging.sh`); AppDir layout runs `AppRun --version`. **Written, untested:** AppImage file (needs appimagetool; pinned in CI), Flatpak manifest, Inno Setup installer, macOS `.app`/`.dmg` and Homebrew cask/formula; lintian not run (not installed); release CI jobs not run. Versions now come from `[workspace.package]` only. | done (Linux verified) |
