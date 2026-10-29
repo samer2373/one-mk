@@ -779,7 +779,7 @@ impl App {
                 self.mods.update(code, down);
                 let (Some((_, a)), Some(local)) = (self.approach.as_mut(), self.local.as_ref()) else { return };
                 let next = a.key(local, code, down, std::time::Instant::now());
-                self.on_approach(next, Some(Inject::Key { code, down }));
+                self.on_approach(next, None); // `next` says what to type here
             }
             Event::Scroll { dx, dy } if self.approach.is_some() => self.approach_input(Inject::Scroll { dx, dy }),
             Event::ScrollDiscrete { dx, dy } if self.approach.is_some() => {
@@ -901,14 +901,17 @@ impl App {
                 let Some((id, a)) = self.approach.take() else { return };
                 self.enter_peer(id, a.side(), pos);
             }
-            Next::Release { pos, press } => {
+            Next::Release { pos, around, keys } => {
                 let Some((id, _)) = self.approach.take() else { return };
                 self.release_capture(id, Some(pos));
-                // Captured while held, but meant for this computer.
-                for code in press {
-                    let _ = self.inject.send(Inject::Key { code, down: true });
-                }
-                if let Some(i) = input {
+                // Captured while held, but meant for this computer. Every
+                // key pressed here is released here too: the user's own
+                // key-ups bypass the injector, which would hold (and on
+                // Windows and macOS repeat) anything left down.
+                let press = around.iter().map(|&code| Inject::Key { code, down: true });
+                let typed = keys.into_iter().map(|(code, down)| Inject::Key { code, down });
+                let release = around.iter().rev().map(|&code| Inject::Key { code, down: false });
+                for i in press.chain(typed).chain(input).chain(release) {
                     let _ = self.inject.send(i);
                 }
             }
@@ -2776,7 +2779,8 @@ mod tests {
 
     /// Modifier-to-cross: held at activation (Windows/macOS report it) it
     /// crosses at once; pressed while held at the edge it crosses then and
-    /// is not sent on; another key hands the pointer back and is typed here.
+    /// is not sent on; another key hands the pointer back and is typed here
+    /// as a tap, so nothing stays held by the injector.
     #[tokio::test]
     async fn modifier_to_cross() {
         let mut duo = Duo::start("modifier", None).await;
@@ -2800,6 +2804,45 @@ mod tests {
         duo.ha.events.send(Event::Key { code: 30, down: true }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 3, pos: Some(Pos::new(1919.0, 540.0)) });
         assert_eq!(next_inject(&mut duo.ha).await, Inject::Key { code: 30, down: true }, "typed here, not lost");
+        assert_eq!(next_inject(&mut duo.ha).await, Inject::Key { code: 30, down: false }, "and released here");
+        // Its real key-up comes once capture has ended; nothing more.
+        duo.ha.events.send(Event::Key { code: 30, down: false }).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(injected(&mut duo.ha), vec![]);
+        duo.stop().await;
+    }
+
+    /// Held at the edge by a dwell, with Shift (the modifier to cross)
+    /// pressed meanwhile: a click hands the pointer back as a Shift-click
+    /// here, and Shift goes up again right after it, since its real key-up
+    /// will bypass the injector (the stuck key the injector used to repeat).
+    #[tokio::test]
+    async fn handing_back_at_the_edge_leaves_no_key_held() {
+        let mut duo = Duo::start("handback", None).await;
+        set(&duo.da, |s| {
+            s.edge.all.dwell_ms = Some(5000);
+            s.edge.all.modifier = Some("shift".into());
+        })
+        .await;
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        duo.ha.events.send(Event::Key { code: 42, down: true }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(1919.0, 540.0)) });
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            got.push(next_inject(&mut duo.ha).await);
+        }
+        assert_eq!(
+            got,
+            vec![
+                Inject::Key { code: 42, down: true },
+                Inject::Button { button: 0x110, down: true },
+                Inject::Key { code: 42, down: false },
+            ]
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(injected(&mut duo.ha), vec![]);
+        assert_eq!(injected(&mut duo.hb), vec![], "never crossed");
         duo.stop().await;
     }
 
