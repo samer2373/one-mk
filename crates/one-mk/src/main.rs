@@ -299,8 +299,13 @@ enum Cmd {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum Backend {
-    /// This system's real mouse and keyboard.
+    /// This system's real mouse and keyboard, through the best backend it
+    /// has (on Linux: the portals, else wlroots, else X11).
     Native,
+    /// Linux: X11 (XInput2, XFixes barriers, XTest).
+    X11,
+    /// Linux: the wlroots Wayland protocols (Sway, Hyprland, labwc ...).
+    Wlroots,
     /// No real input; for testing the network side.
     Null,
 }
@@ -309,6 +314,8 @@ impl From<Backend> for one_mk_input::Kind {
     fn from(b: Backend) -> Self {
         match b {
             Backend::Native => Self::Native,
+            Backend::X11 => Self::X11,
+            Backend::Wlroots => Self::Wlroots,
             Backend::Null => Self::Null,
         }
     }

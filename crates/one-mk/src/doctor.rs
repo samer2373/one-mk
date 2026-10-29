@@ -194,6 +194,9 @@ pub struct Portals {
     pub remote_desktop: Option<Result<(), String>>,
     pub input_capture: Option<Result<(), String>>,
     pub token: bool,
+    /// The input backend `native` picks here (`portal`, `wlroots` or
+    /// `x11`), and why.
+    pub backend: Option<(String, String)>,
 }
 
 /// An address on an up network interface.
@@ -495,8 +498,28 @@ pub fn portal_check(os: Os, p: Option<&Portals>, running: &[String]) -> Check {
 }
 
 fn linux_portals(p: &Portals) -> Outcome {
+    match p.backend.as_ref().map(|(name, why)| (name.as_str(), why)) {
+        Some(("x11", why)) => {
+            return Outcome::pass(format!("one-mk uses its X11 backend: {why}. X11 asks for no permission."));
+        }
+        Some(("wlroots", why)) => {
+            return Outcome::pass(format!(
+                "one-mk uses its wlroots backend: {why}. The compositor asks for no permission."
+            ));
+        }
+        _ => {}
+    }
+    let mut out = linux_portal_permissions(p);
+    if let Some((_, why)) = &p.backend {
+        out.detail = format!("one-mk uses the desktop portals ({why}). {}", out.detail);
+    }
+    out
+}
+
+fn linux_portal_permissions(p: &Portals) -> Outcome {
     const INSTALL: &str = "Use GNOME 45+ or KDE Plasma 6.1+ on Wayland, with xdg-desktop-portal and your desktop's portal \
-                           (xdg-desktop-portal-gnome or -kde) installed, then log in again.";
+                           (xdg-desktop-portal-gnome or -kde) installed, then log in again. A wlroots compositor (Sway, \
+                           Hyprland, labwc) or an X11 session works too: one-mk drives those directly.";
     match &p.remote_desktop {
         None => {
             return Outcome::warn(
@@ -990,7 +1013,13 @@ async fn probe_portals(os: Os, dir: std::path::PathBuf) -> Option<Portals> {
         Ok(p) => (Some(p.remote_desktop), Some(p.input_capture)),
         Err(_) => (None, None),
     };
-    Some(Portals { wayland, remote_desktop, input_capture, token: dir.join("remote-desktop.token").is_file() })
+    let portals_ok = match (&remote_desktop, &input_capture) {
+        (Some(rd), Some(ic)) => Some(rd.is_ok() && ic.is_ok()),
+        _ => None,
+    };
+    let (backend, why) = one_mk_input::choose_linux_backend(&one_mk_input::session_facts(portals_ok).await);
+    let token = dir.join("remote-desktop.token").is_file();
+    Some(Portals { wayland, remote_desktop, input_capture, token, backend: Some((backend.name().to_owned(), why)) })
 }
 
 #[cfg(target_os = "linux")]
@@ -1295,6 +1324,7 @@ mod tests {
             remote_desktop: rd.map(|r| r.map_err(str::to_owned)),
             input_capture: ic.map(|r| r.map_err(str::to_owned)),
             token,
+            backend: None,
         }
     }
 
@@ -1344,6 +1374,22 @@ mod tests {
         assert!(c.outcome.detail.contains("Waiting for your approval"), "{}", c.outcome.detail);
         let c = portal_check(Os::Linux, Some(&portals(Some(Err("not found")), ok, true, true)), &waiting);
         assert_eq!(st(&c), Status::Fail);
+        // Which backend one-mk picks, and why.
+        let with = |name: &str, rd: Option<Result<(), &str>>| {
+            let mut p = portals(rd, rd, false, false);
+            p.backend = Some((name.into(), "the reason".into()));
+            portal_check(Os::Linux, Some(&p), &[])
+        };
+        let c = with("x11", Some(Err("not found")));
+        assert_eq!(st(&c), Status::Pass, "X11 needs no portal");
+        assert!(c.outcome.detail.contains("X11 backend: the reason"), "{}", c.outcome.detail);
+        let c = with("wlroots", None);
+        assert_eq!(st(&c), Status::Pass);
+        assert!(c.outcome.detail.contains("wlroots backend: the reason"), "{}", c.outcome.detail);
+        let c = with("portal", Some(Err("not found")));
+        assert_eq!(st(&c), Status::Fail);
+        assert!(c.outcome.detail.starts_with("one-mk uses the desktop portals (the reason)."), "{}", c.outcome.detail);
+        assert!(c.outcome.fix.unwrap().contains("Sway"));
     }
 
     #[test]
