@@ -100,7 +100,11 @@ Design choices:
   of the build machine's.
 - **Reproducible.** File times and modes are normalised and
   `SOURCE_DATE_EPOCH` is the commit's time; two builds give the same bytes
-  (`check-packaging.sh` compares the checksums).
+  (`check-packaging.sh` compares the checksums). The builder's time zone does
+  not matter: `touch -t` reads its stamp in local time, so it runs with
+  `TZ=UTC0` (`SOURCE_DATE_EPOCH=1700000000` gave mtime 1699989200 under
+  `Asia/Amman` before), and `check-packaging.sh` builds the `.deb` under two
+  other zones and compares checksums.
 
 Verified here (Debian-family host, release build with LTO off): contents with
 `dpkg-deb -c`, fields with `dpkg-deb -I`, extraction with `dpkg-deb -x` into a
@@ -140,11 +144,24 @@ if it can find one (`APPIMAGETOOL=/path`, or on `PATH`).
 
 `packaging/flatpak/io.github.onemk.OneMk.yml.in` is a manifest that repackages
 the release tarball (a `simple` module), so the Rust build does not have to
-work offline inside the sandbox. `scripts/package-flatpak.sh [URL]` fills it
-in; with `flatpak-builder` installed it also builds a bundle. Nothing in it
-has been run: `flatpak-builder` is not available here. Runtime
+work offline inside the sandbox. `scripts/package-flatpak.sh [URL_OR_FILE]`
+fills it in; with `flatpak-builder` installed it also builds a bundle. Nothing
+in it has been run: `flatpak-builder` is not available here. Runtime
 `org.freedesktop.Platform//25.08` is the newest at the time of writing;
 adjust it to what exists.
+
+**What is published is a source bundle, not the bare manifest.** The script
+copies the desktop file, the metainfo and the two icons the manifest installs
+into `sources/` next to it (each with its `sha256:`), writes relative `path:`s
+only, and packs the folder as `one-mk-<version>-flatpak-sources.tar.gz`
+(sorted, clamped times, so the same bytes every time). Given a URL, the
+tarball source is that URL with its checksum (from a download made by the
+script); given a file, the tarball is copied into the bundle too. The release
+workflow uploads the bundle; extract it anywhere and run `flatpak-builder` in
+the folder (`README.txt` has the command). `check-packaging.sh` builds a
+bundle, extracts it in another folder after deleting the original and checks
+that every `path:` resolves there and matches its checksum, with no checkout
+path or placeholder left. Only that check ran; `flatpak-builder` did not.
 
 Permissions requested, and why:
 
@@ -199,11 +216,38 @@ and the whole thing is one readable file. `scripts/package-windows.sh`
 - optionally (a checkbox, on by default) runs `one-mk.exe install` as the
   original user, which writes the per-user `Run` entry (the tray starts the
   daemon hidden) and the *Send to* entries;
-- optionally adds the folder to the machine's `PATH`;
+- optionally adds the folder to the machine's `PATH`, as one whole entry and
+  only if it is not there already; when it adds it, it records that in
+  `HKLM\SOFTWARE\one-mk` (`PathEntry`);
 - on uninstall runs `one-mk.exe uninstall` (removes the `Run` entry and the
-  SendTo entries), stops any running one-mk, deletes both firewall rules and
-  takes the folder out of `PATH`. The identity and paired computers in
-  `%LOCALAPPDATA%\one-mk` are left, deliberately.
+  SendTo entries of the account running the uninstaller), stops any running
+  one-mk, deletes both firewall rules and takes the folder out of `PATH`, **only
+  if the install recorded that it put it there, and only the entry equal to the
+  install folder (ignoring case)**. A neighbour such as
+  `C:\Program Files\one-mk-tools` is never cut (the old code searched for the
+  folder as a prefix and turned that entry into `C:\Windows-tools`-style
+  garbage). The identity and paired computers in `%LOCALAPPDATA%\one-mk` are
+  left, deliberately;
+- on uninstall also removes the start-at-sign-in value `one-mk` from every
+  *loaded* user registry (`HKEY_USERS\<SID>\Software\Microsoft\Windows\CurrentVersion\Run`)
+  whose data starts a program inside the install folder. This matters when a
+  standard user installs with another administrator's credentials: Setup writes
+  the entry as the original user, but the elevated uninstaller's own
+  `HKEY_CURRENT_USER` is the administrator's. The SIDs come from the machine's
+  `ProfileList`; for a profile whose registry is not loaded (that user is signed
+  out) the uninstall log (`/LOG`) names the SID and says to delete the value by
+  hand or run `one-mk uninstall` as them. (Instead of recording the user's SID
+  at install, which would need code run as the original user and a way to hand
+  the answer to the elevated Setup, the uninstaller matches the value's data
+  against its own folder: no value that points somewhere else is touched.)
+
+The PATH and startup-value logic is `packaging/windows/path-entries.pas`,
+included by the `.iss`; `scripts/check-windows-path.sh` (run by
+`check-packaging.sh`) runs the same steps in awk on 26 cases, among them the
+corrupting PATH above. **That is all that was run:** the Pascal itself, the
+registry access and the whole installer are written on Linux and have never
+run on Windows (the Pascal is a statement-for-statement twin of the awk, not
+the thing tested).
 
 Things to check on a real machine: that `runasoriginaluser` really lands the
 `Run` entry in the signed-in user's registry when Setup is started by
@@ -256,8 +300,8 @@ On a `v*` tag, `release.yml`:
    the two macOS runners, the installer on Windows. They are uploaded as
    `packages-<target>` artifacts;
 3. `publish` collects everything into one release with a `SHA256SUMS`, then
-   adds the Homebrew cask and formula and the Flatpak manifest (they need the
-   release's own URLs and checksums).
+   adds the Homebrew cask and formula and the Flatpak source bundle (they need
+   the release's own URLs and checksums).
 
 None of the new steps has run in CI yet (the workflow was edited without being
 able to run it); the first tag is the test. Packages are unsigned throughout.
@@ -293,6 +337,20 @@ take them away (the code is `crates/ctl/src/integrate.rs`).
 - Only files carrying the marker `one-mk: generated by` (or `OneMkGenerated` in
   a bundle) are replaced or removed, and only inside the entry folders and
   with a name starting `Send `; a user's own scripts there are left alone (tested).
+  Symlinks are never ours, whatever they point at.
+- Writing never overwrites: our own old entries are cleared first and each new
+  one is created exclusively (no symlink is followed, nothing is truncated). If
+  something that is not ours is at an entry's path (say your own Nautilus script
+  called `Send to laptop`), that entry is **skipped**, the rest are written, the
+  skipped paths are listed, `one-mk integrate` exits non-zero, and `install` and
+  `pair`/`forget` only print a warning. Rename or move your file and run
+  `one-mk integrate` again. The same goes for every target (Nautilus, Nemo,
+  Dolphin, SendTo, Quick Action).
+- A line break or NUL in the program's path or in `--home` is refused (with a
+  message) before anything is written, by both `install` and `integrate`: it
+  would end a line of the service file or of Dolphin's `Exec=` and start a new
+  directive. Menu text values escape backslash, newline, carriage return and tab
+  as the Desktop Entry specification says.
 - Linux writes for a file manager only if its program is on `PATH` or its folder
   already exists.
 - Failures: `--notify-errors` shows a desktop notification (D-Bus, falling
