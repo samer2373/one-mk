@@ -350,6 +350,9 @@ impl Control {
                 let apps = &apps[..apps.len().min(crate::appmatch::MAX_APP_NAMES)];
                 w.u8(apps.len() as u8);
                 for a in apps {
+                    // Cut by the sender's `clean_names` already: cutting
+                    // here would change which rules match over there.
+                    debug_assert!(a.len() <= crate::appmatch::MAX_APP_BYTES, "app name not cleaned before sending: {a:?}");
                     w.str(a);
                 }
             }
@@ -723,12 +726,45 @@ mod tests {
         assert_eq!(apps, ["co[2Kde", "Code", "xy", "a"]);
         assert_eq!(Control::decode(&[17, 1, 0, 0, 3, 1, b'a']), Err(DecodeError::Truncated));
         assert_eq!(Control::decode(&[17, 1, 0, 0, 1, 2, 0xff, 0xfe]), Err(DecodeError::BadString));
-        let long = Control::Focus { epoch: 1, fullscreen: false, apps: vec!["é".repeat(1000); 9] };
+        let long = crate::appmatch::clean_name(&"é".repeat(1000)).unwrap();
+        let long = Control::Focus { epoch: 1, fullscreen: false, apps: vec![long; 9] };
         let mut b = Vec::new();
         long.encode_frame(&mut b);
         let Ok(Control::Focus { apps, .. }) = Control::decode(&b[2..]) else { panic!() };
         assert_eq!(apps.len(), 1, "the same name, nine times");
-        assert!(apps[0].chars().count() <= crate::appmatch::MAX_APP_LEN);
+        assert!(apps[0].len() <= crate::appmatch::MAX_APP_BYTES);
+    }
+
+    /// App names as the controlled computer sends them (cleaned) come
+    /// back byte for byte at every length up to the limit, multibyte and
+    /// emoji included; nothing is cut on the wire.
+    #[test]
+    fn focus_app_names_round_trip_at_the_byte_limit() {
+        let names = [
+            "a".repeat(254),
+            "é".repeat(127) + "a",
+            "é".repeat(128),
+            "😀".repeat(64),
+            "界".repeat(100),
+        ];
+        let sent = crate::appmatch::clean_names(&names);
+        assert_eq!(sent.iter().map(String::len).collect::<Vec<_>>(), [254, 255, 254, 252]);
+        for apps in [sent.clone(), vec![crate::appmatch::clean_name(&"界".repeat(100)).unwrap()]] {
+            let m = Control::Focus { epoch: 7, fullscreen: false, apps: apps.clone() };
+            let mut b = Vec::new();
+            m.encode_frame(&mut b);
+            assert_eq!(Control::decode(&b[2..]).unwrap(), m);
+        }
+        // A positive rule and its negation agree on both sides.
+        let full = "界".repeat(100);
+        let m = Control::Focus { epoch: 7, fullscreen: false, apps: crate::appmatch::clean_names(&[full.as_str()]) };
+        let mut b = Vec::new();
+        m.encode_frame(&mut b);
+        let Ok(Control::Focus { apps: there, .. }) = Control::decode(&b[2..]) else { panic!() };
+        for pat in ["界".repeat(85), format!("!{}", "界".repeat(85))] {
+            let pat: crate::appmatch::AppPattern = pat.parse().unwrap();
+            assert_eq!(pat.matches(&[full.as_str()]), pat.matches(&there), "{pat}");
+        }
     }
 
     #[test]

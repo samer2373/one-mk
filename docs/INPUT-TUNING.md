@@ -93,9 +93,15 @@ Mapper::set_keymap (as a reload)
   (`com.jetbrains.*`); a leading `!` means every app but that one. A
   pattern matches if it names any of the names reported. Patterns with
   control or invisible characters, a folder (`C:\...`, `/usr/bin/...`),
-  more than 128 characters, or `!*` are refused (the rule is skipped and
-  `keymap check` says why); names from a peer are cleaned (control and
-  invisible characters removed, at most 4 names of 128 characters).
+  more than 255 bytes of UTF-8 after any `!` (85 CJK characters, 63
+  emoji), or `!*` are refused (the rule is skipped and `keymap check`
+  says why); names are cleaned (control and invisible characters
+  removed, at most 4 names, each cut to at most 255 bytes at a character
+  boundary) by the computer reporting them before they are sent, and
+  again on arrival. 255 bytes is what a name may take on the wire, and the
+  matcher compares names cut the same way on both sides, so a long
+  multibyte name matches (or, for `!`, doesn't) identically here and
+  there; the encoder never cuts a name itself.
 * **Precedence**: a rule for the focused app beats every rule without an
   app; among rules for the app, `peer` beats `os` beats `global` as usual.
   Pointer and scroll rules for an app override field by field on top.

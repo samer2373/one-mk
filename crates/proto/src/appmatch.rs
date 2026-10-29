@@ -21,15 +21,22 @@
 //! Names come from another computer, so they are cleaned before use
 //! ([`clean_names`]); patterns come from the settings file and are refused
 //! when they could not be meant ([`AppPattern::from_str`]).
+//!
+//! Lengths are in bytes of UTF-8, [`MAX_APP_BYTES`], which is what a name
+//! may take on the wire: the controlled computer cuts a longer name there
+//! (at a character boundary) before sending it, the matcher compares names
+//! cut the same way whoever cut them, and a longer pattern is refused. So
+//! a rule matches the same on both computers, whatever the script.
 
 use crate::os;
 use std::fmt;
 use std::str::FromStr;
 
-/// The longest app name or pattern, in characters.
-pub const MAX_APP_LEN: usize = 128;
 /// The most names one focused window is reported by.
 pub const MAX_APP_NAMES: usize = 4;
+/// The longest app name or pattern, in bytes of UTF-8: what one name may
+/// take in [`Control::Focus`](crate::Control::Focus).
+pub const MAX_APP_BYTES: usize = 255;
 
 /// Characters that never belong in an app name: control characters and the
 /// invisible ones that could disguise one (zero-width, bidi overrides).
@@ -44,14 +51,16 @@ fn invisible(c: char) -> bool {
         )
 }
 
-/// One name a peer reported, made safe to use and show: invisible and
-/// control characters removed, trimmed, at most [`MAX_APP_LEN`] characters.
-/// `None` when nothing is left.
+/// One name a peer reported (or this computer is about to report), made
+/// safe to use and show: invisible and control characters removed,
+/// trimmed, cut to at most [`MAX_APP_BYTES`] bytes at a character
+/// boundary. `None` when nothing is left. The one place names are cut:
+/// what is sent and what is matched are both this.
 pub fn clean_name(name: &str) -> Option<String> {
-    let kept: String = name.chars().filter(|c| !invisible(*c)).take(MAX_APP_LEN * 2).collect();
-    let trimmed: String = kept.trim().chars().take(MAX_APP_LEN).collect();
-    let trimmed = trimmed.trim_end();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    let kept: String = name.chars().filter(|c| !invisible(*c)).take(MAX_APP_BYTES * 2).collect();
+    let trimmed = kept.trim_start();
+    let cut = trimmed[..trimmed.floor_char_boundary(MAX_APP_BYTES)].trim_end();
+    (!cut.is_empty()).then(|| cut.to_owned())
 }
 
 /// The names of the focused window, cleaned: no empty ones, no
@@ -86,20 +95,25 @@ impl FromStr for AppPattern {
     type Err = String;
 
     /// Refuses what could not be meant: nothing, control or invisible
-    /// characters, more than [`MAX_APP_LEN`] characters, a folder (only
-    /// names are reported), and `!*` (no app at all).
+    /// characters, more than [`MAX_APP_BYTES`] bytes (after any `!`: no
+    /// name reported is longer), a folder (only names are reported), and
+    /// `!*` (no app at all).
     fn from_str(s: &str) -> Result<Self, String> {
         let text = s.trim();
         if s.chars().any(invisible) {
             return Err("app: control or invisible characters aren't allowed".into());
         }
-        if text.chars().count() > MAX_APP_LEN {
-            return Err(format!("app: at most {MAX_APP_LEN} characters"));
-        }
         let (negate, rest) = match text.strip_prefix('!') {
             Some(r) => (true, r.trim_start()),
             None => (false, text),
         };
+        if rest.len() > MAX_APP_BYTES {
+            return Err(format!(
+                "app: at most {MAX_APP_BYTES} bytes of UTF-8 (this one is {} bytes); longer app names are cut there \
+                 when reported, so use a shorter prefix with `*`",
+                rest.len()
+            ));
+        }
         if rest.is_empty() {
             return Err("app: give a program name, like chrome.exe or com.apple.Terminal".into());
         }
@@ -132,18 +146,21 @@ impl AppPattern {
     }
 
     /// Whether a rule with this pattern applies while the focused window
-    /// goes by `names` (empty: unknown, and then never).
+    /// goes by `names` (empty: unknown, and then never). Each name is
+    /// compared as [`clean_name`] leaves it, as the other computer sent it.
     pub fn matches<S: AsRef<str>>(&self, names: &[S]) -> bool {
+        let names: Vec<String> = names.iter().filter_map(|n| clean_name(n.as_ref())).collect();
         if names.is_empty() {
             return false;
         }
-        let any = names.iter().any(|n| self.names(n.as_ref()));
+        let any = names.iter().any(|n| self.names(n));
         any != self.negate
     }
 
-    /// Whether the glob names `name`, also with `.exe`/`.app` left off.
+    /// Whether the glob names `name` (cleaned, so bounded), also with
+    /// `.exe`/`.app` left off.
     fn names(&self, name: &str) -> bool {
-        let lower: Vec<char> = name.chars().flat_map(char::to_lowercase).take(MAX_APP_LEN * 2).collect();
+        let lower: Vec<char> = name.chars().flat_map(char::to_lowercase).collect();
         if glob_match(&self.glob, &lower) {
             return true;
         }
@@ -280,9 +297,9 @@ mod tests {
             let e = bad.parse::<AppPattern>().unwrap_err();
             assert!(e.contains(says), "{bad:?}: {e}");
         }
-        let long = "x".repeat(MAX_APP_LEN + 1);
+        let long = "x".repeat(MAX_APP_BYTES + 1);
         assert!(long.parse::<AppPattern>().unwrap_err().contains("at most"));
-        assert!("x".repeat(MAX_APP_LEN).parse::<AppPattern>().is_ok());
+        assert!("x".repeat(MAX_APP_BYTES).parse::<AppPattern>().is_ok());
         // Many stars are one star: no blow-up.
         assert_eq!(p("a***b").glob, ['a', '*', 'b']);
     }
@@ -296,19 +313,51 @@ mod tests {
         assert_eq!(clean_name("evil\u{202E}exe.txt"), Some("evilexe.txt".into()));
         assert_eq!(clean_name("\u{200B}\u{FEFF}\t"), None);
         assert_eq!(clean_name(""), None);
-        assert_eq!(clean_name(&"é".repeat(10_000)).unwrap().chars().count(), MAX_APP_LEN);
+        assert_eq!(clean_name(&"é".repeat(10_000)).unwrap().len(), MAX_APP_BYTES - 1);
         assert_eq!(clean_name("日本語のアプリ"), Some("日本語のアプリ".into()));
         let names = clean_names(&["a", "A", "", "b", "\u{7}", "c", "d", "e"]);
         assert_eq!(names, ["a", "b", "c", "d"]);
         // A worst case for the glob walk: many stars, a long near-miss.
-        let star = p(&"a*".repeat(MAX_APP_LEN / 2 - 1));
-        let long = "a".repeat(MAX_APP_LEN * 4) + "b";
+        let star = p(&"a*".repeat(MAX_APP_BYTES / 2 - 1));
+        let long = "a".repeat(MAX_APP_BYTES * 4) + "b";
         let start = std::time::Instant::now();
         assert!(!p("a*a*a*a*a*a*a*c").matches(&[long.as_str()]));
         assert!(star.matches(&[long.as_str()]));
         assert!(start.elapsed() < std::time::Duration::from_millis(500));
         // Case-folding that changes length (İ lowercases to two chars).
         assert!(p("i̇stanbul*").matches(&["İSTANBUL.exe"]));
+    }
+
+    /// The limit is 255 bytes of UTF-8, what a name takes on the wire: a
+    /// name is cut there (at a character boundary) before it is sent and
+    /// before it is matched, and a pattern longer than that is refused, so
+    /// a long multibyte name matches the same here and on the other side.
+    #[test]
+    fn the_limit_is_bytes_on_both_sides() {
+        assert_eq!(MAX_APP_BYTES, 255);
+        let cut = |n: &str| clean_name(n).unwrap();
+        assert_eq!(cut(&"a".repeat(254)).len(), 254);
+        assert_eq!(cut(&"a".repeat(255)).len(), 255);
+        assert_eq!(cut(&"a".repeat(256)).len(), 255);
+        assert_eq!(cut(&("é".repeat(127) + "a")).len(), 255, "254 + 1 bytes");
+        assert_eq!(cut(&"é".repeat(128)), "é".repeat(127), "256 bytes: cut before the last é");
+        assert_eq!(cut(&"😀".repeat(64)), "😀".repeat(63), "never inside a character");
+        assert_eq!(cut(&"界".repeat(100)), "界".repeat(85));
+        // Patterns: bytes, not characters; `!` doesn't count.
+        assert!("界".repeat(85).parse::<AppPattern>().is_ok());
+        let e = "界".repeat(86).parse::<AppPattern>().unwrap_err();
+        assert!(e.contains("255 bytes") && e.contains("258"), "{e}");
+        assert!(format!("!{}", "界".repeat(85)).parse::<AppPattern>().is_ok());
+        assert!("a".repeat(255).parse::<AppPattern>().is_ok());
+        assert!("a".repeat(256).parse::<AppPattern>().is_err());
+        // The matcher compares the cut form, whoever cut it.
+        let full = "界".repeat(100);
+        let sent = clean_names(&[full.as_str()]);
+        for (pat, want) in [("界".repeat(85), true), (format!("!{}", "界".repeat(85)), false), ("界*".into(), true)] {
+            let pat = p(&pat);
+            assert_eq!(pat.matches(&[full.as_str()]), want, "{pat} here");
+            assert_eq!(pat.matches(&sent), want, "{pat} there");
+        }
     }
 
     #[test]
