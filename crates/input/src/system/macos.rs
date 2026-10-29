@@ -25,7 +25,11 @@ impl ScreenLocker for Suspend {
             c.arg("displaysleepnow");
             c
         };
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+        let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+        // Reaped when it exits (at once), or it would stay a zombie.
+        std::thread::Builder::new().name("one-mk-lock".into()).spawn(move || {
+            let _ = child.wait();
+        })?;
         Ok(())
     }
 }
