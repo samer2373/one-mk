@@ -38,23 +38,42 @@ footprint, setup as easy as possible, no stuck keys.
 `todo` · `running` · `done` (committed on its branch) · `merged` (in the
 integration branch) · `validated` (tested together and checked)
 
-## Wave 1 (running or finished)
+## Wave 1 (merged and validated on Linux, 2026-10-29)
 
 | ID | Task | Model | Branch | Status |
 |---|---|---|---|---|
-| 1A | `one-mk doctor` and `--json`: daemon, config, pairing, UDP 24900, mDNS, firewall, portals, peers, network | Sonnet | `t3/add-connection-doctor` (c5ad300) | done |
-| 1B | Clipboard toggles and size cap, `clip-send`/`clip-get`, file-received notification, transfer progress in `status` | Sonnet | `t3/clipboard-transfer-ux` (9cf5ae2) | done |
-| 1C | `switch <pc\|here\|next>`, `lock-pointer`, edge guards (corners, dwell, modifier, fullscreen), lock sync and `lock-all`, gaming mode (relative motion) | Opus | not reported yet | running |
+| 1A | `one-mk doctor` and `--json`: daemon, config, pairing, UDP 24900, mDNS, firewall, portals, peers, network | Sonnet | `t3/add-connection-doctor` | validated |
+| 1B | Clipboard toggles and size cap, `clip-send`/`clip-get`, file-received notification, transfer progress in `status` | Sonnet | `t3/clipboard-transfer-ux` | validated |
+| 1C | `switch <pc\|here\|next>`, `lock-pointer`, edge guards (corners, dwell, modifier, fullscreen), lock sync and `lock-all`, gaming mode (relative motion) | Opus | `t3/pointer-switch-edge-controls` | validated |
+| Fix-A | Review fixes: stuck key at a held edge, gaming auto stuck relative, Windows fullscreen detection, Linux X11 probe off the main loop, macOS zombies and stale position, lock-all vs lock sync | Opus | `t3/fix-input-focus-and-key-state` | validated |
+| Fix-B | Review and smoke-test fixes: flags before `run` ignored, second `send` refused, settings.toml write races, doctor settings check, progress arithmetic | Sonnet | `t3/fix-run-flags-transfer-settings` | validated |
+| Fix-C | status decode of transfers, Reload and Settings apply the whole settings.toml | me | on the integration branch | validated |
 
-Known gaps from finished tasks:
+Validation done: full `cargo test` (127 tests in the `one-mk` crate), clippy
+clean, clippy clean for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin`
+(input, proto and ctl crates only; the `one-mk` crate can't cross-check
+because `ring` needs MSVC), a real two-daemon loopback smoke test, and an
+independent code review of the combined diff.
+
+Known gaps:
 
 - 1A: Windows and macOS only return skip hints for firewall and permissions;
   the ufw and firewalld paths were not run against a real firewall.
 - 1B: the password-manager skip does not trigger on a real clipboard (arboard
   can't read the markers); the "Show in folder" click was only tested on a
   fake bus; macOS and Windows notifications are not tested.
+- **Open decision:** `allow_pull` defaults to on, so any paired computer can
+  `clip-get` this clipboard, including password-manager copies. Proposed:
+  default off until sensitive-copy detection works.
+- Linux `switch` warps the real pointer to the edge before knowing if capture
+  activates (review finding, low confidence, not changed).
+- A modifier pressed alone at a held edge is dropped (Fix-A trade-off).
+- Everything for Windows and macOS (SendInput relative motion, lock detection,
+  fullscreen detection, notifications) is compiled and unit-tested only.
+- Not yet exercised on the real GNOME session: `switch` capture start,
+  GlobalShortcuts, the real `Session.Lock`.
 
-## Wave 2 (starts after wave 1 is merged and validated)
+## Wave 2 (wave 1 is validated; ready to start)
 
 | ID | Task | Depends on | Notes | Status |
 |---|---|---|---|---|
