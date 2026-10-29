@@ -64,5 +64,8 @@ clamp_times() {
     find "$1" -type d -exec chmod 755 {} +
     find "$1" -type f ! -perm -u+x -exec chmod 644 {} +
     # touch -t takes the same stamp on GNU and BSD (macOS) systems; -d @N does not.
-    find "$1" -exec touch -h -t "$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S 2>/dev/null || date -u -r "$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)" {} +
+    # The stamp is formatted in UTC but touch reads it in the local time zone,
+    # so touch is told it is UTC too: the same mtime wherever it is built.
+    stamp=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S 2>/dev/null || date -u -r "$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)
+    find "$1" -exec env TZ=UTC0 touch -h -t "$stamp" {} +
 }

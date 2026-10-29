@@ -2,7 +2,7 @@
 # Builds the Linux packages from an existing release build into a scratch
 # folder under /tmp and checks them without installing anything:
 #   - the .deb: contents, control, runs `one-mk --version` from an unpacked copy,
-#     builds twice and compares checksums, validates the desktop files, the
+#     builds twice, and under two other time zones, and compares checksums, validates the desktop files, the
 #     AppStream file and the systemd user unit;
 #   - the AppDir: `AppRun --version`.
 # Optional tools (lintian, desktop-file-validate, appstreamcli, systemd-analyze)
@@ -23,6 +23,13 @@ OUT_DIR=$scratch/a sh "$ROOT/scripts/package-deb.sh" >/dev/null
 OUT_DIR=$scratch/b sh "$ROOT/scripts/package-deb.sh" >/dev/null
 deb=$(ls "$scratch"/a/*.deb)
 [ "$(sha256sum < "$deb")" = "$(sha256sum < "$(ls "$scratch"/b/*.deb)")" ] && ok "the .deb is byte for byte reproducible" || bad "the .deb differs between two builds"
+
+# The builder's time zone must not matter (touch -t reads its stamp in local time).
+for zone in Asia/Amman Pacific/Honolulu; do
+    TZ=$zone OUT_DIR=$scratch/tz sh "$ROOT/scripts/package-deb.sh" >/dev/null
+    [ "$(sha256sum < "$deb")" = "$(sha256sum < "$(ls "$scratch"/tz/*.deb)")" ] && ok "the .deb is the same built under TZ=$zone" || bad "the .deb built under TZ=$zone differs from the one built under the default time zone"
+    rm -rf "$scratch/tz"
+done
 
 root=$scratch/root
 mkdir -p "$root/DEBIAN"
