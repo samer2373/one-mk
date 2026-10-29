@@ -57,7 +57,11 @@ const IDLE: Duration = Duration::from_secs(60);
 const ENTER_TIMEOUT: Duration = Duration::from_millis(750);
 /// `one-mk switch` gives up if the backend doesn't start capturing in this.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
+/// Paired computers that are not connected are dialed again after this,
+/// doubling up to [`DIAL_MAX`] while they stay away. Only while one has an
+/// address to try: with every one connected no timer runs.
 const DIAL_INTERVAL: Duration = Duration::from_secs(2);
+const DIAL_MAX: Duration = Duration::from_secs(30);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long a peer that connected to us may take to open its first stream.
 const FIRST_STREAM_TIMEOUT: Duration = Duration::from_secs(10);
@@ -422,6 +426,9 @@ struct App {
     network_seen: bool,
     /// What the input backend says needs the user, by part (`Event::Status`).
     input_problems: std::collections::BTreeMap<&'static str, String>,
+    /// When to dial missing peers again, and the wait after that.
+    dial_at: Option<Instant>,
+    dial_backoff: Duration,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -528,6 +535,8 @@ pub async fn serve(
         auto_profile: None,
         network_seen: false,
         input_problems: Default::default(),
+        dial_at: None,
+        dial_backoff: DIAL_INTERVAL,
     };
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
     if app.locked {
@@ -536,8 +545,6 @@ pub async fn serve(
     app.dial_missing(&screens_rx);
     app.watch_network_if_wanted();
 
-    let mut dial_tick = tokio::time::interval(DIAL_INTERVAL);
-    dial_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut input_open = true;
     tokio::pin!(shutdown);
 
@@ -569,7 +576,9 @@ pub async fn serve(
             Some(ev) = rx.recv() => app.on_app(ev, &screens_rx),
             Some((req, reply)) = ipc.recv() => app.on_request(req, reply),
             Some(ev) = shortcut_events.recv() => app.on_shortcut_event(ev),
-            _ = dial_tick.tick() => app.dial_missing(&screens_rx),
+            _ = tokio::time::sleep_until(app.dial_at.unwrap_or_else(Instant::now)), if app.dial_at.is_some() => {
+                app.dial_missing(&screens_rx);
+            }
             _ = &mut shutdown => break,
         }
         app.sync_hooks();
@@ -1313,6 +1322,7 @@ impl App {
                 }
                 tracing::debug!(name = %sanitize_name(&f.name), addrs = ?f.addrs, "discovered");
                 self.discovered.insert(f.fingerprint, f.addrs);
+                self.dial_backoff = DIAL_INTERVAL;
                 self.dial_missing(screens);
             }
             AppEvent::DialDone(addr) => {
@@ -1375,6 +1385,9 @@ impl App {
         }
         self.send_layout(fp);
         self.update_sides();
+        if !self.any_missing() {
+            self.dial_at = None; // nothing left to dial
+        }
     }
 
     fn on_link(&mut self, fp: Fingerprint, id: usize, ev: LinkEvent) {
@@ -1399,6 +1412,7 @@ impl App {
                     self.end_owner(false);
                 }
                 println!("{} disconnected; reconnecting automatically.", peer.name);
+                self.redial_soon();
                 if let Some(clip) = &self.services.clip {
                     clip.forget(fp);
                 }
@@ -1714,6 +1728,7 @@ impl App {
                 let fps: Vec<_> = self.peers.keys().copied().collect();
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
                 self.watch_network_if_wanted();
+                self.redial_soon(); // a computer may have been paired
                 "ok\n".to_owned()
             }
             Request::Settings => match self.reload_settings() {
@@ -2062,16 +2077,35 @@ impl App {
         }
     }
 
-    /// Dials paired devices that are not connected, at every address we know.
-    fn dial_missing(&mut self, screens: &watch::Receiver<Vec<Rect>>) {
+    /// Paired devices that are not connected.
+    fn missing(&self) -> impl Iterator<Item = (Fingerprint, &one_mk_net::Device)> {
         let me = self.node.identity().fingerprint;
+        self.trust
+            .devices()
+            .iter()
+            .filter_map(|d| Some((d.fingerprint()?, d)))
+            .filter(move |(fp, _)| *fp != me && !self.peers.contains_key(fp))
+    }
+
+    fn any_missing(&self) -> bool {
+        self.missing().next().is_some()
+    }
+
+    /// Dials missing peers at the next turn of the loop, the wait after
+    /// that starting short again (a peer just went away, or was paired).
+    fn redial_soon(&mut self) {
+        self.dial_backoff = DIAL_INTERVAL;
+        self.dial_at = Some(Instant::now());
+    }
+
+    /// Dials paired devices that are not connected, at every address we
+    /// know, and schedules the next try while any is left to try (with
+    /// back-off); otherwise no timer runs: discovery, a disconnection or
+    /// a reload start dialing again.
+    fn dial_missing(&mut self, screens: &watch::Receiver<Vec<Rect>>) {
         let mut addrs: Vec<SocketAddr> = Vec::new();
         let mut any_missing = false;
-        for dev in self.trust.devices() {
-            let Some(fp) = dev.fingerprint() else { continue };
-            if fp == me || self.peers.contains_key(&fp) {
-                continue;
-            }
+        for (fp, dev) in self.missing() {
             any_missing = true;
             addrs.extend(self.discovered.get(&fp).into_iter().flatten());
             addrs.extend(dev.addrs.iter().filter_map(|a| a.parse::<SocketAddr>().ok()));
@@ -2082,6 +2116,8 @@ impl App {
             let connected: HashSet<SocketAddr> = self.peers.values().map(|p| canonical(p.conn.remote_address())).collect();
             addrs.extend(self.extra_addrs.iter().filter(|a| !connected.contains(&canonical(**a))));
         }
+        self.dial_at = (!addrs.is_empty()).then(|| Instant::now() + self.dial_backoff);
+        self.dial_backoff = (self.dial_backoff * 2).min(DIAL_MAX);
         for addr in addrs {
             if !self.dialing.insert(addr) {
                 continue;
@@ -2263,6 +2299,48 @@ mod tests {
         assert_eq!(released, vec![42, 0x110]);
 
         stop_tx.send(true).unwrap();
+        a.await.unwrap().unwrap();
+        b.await.unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(da);
+        let _ = std::fs::remove_dir_all(db);
+    }
+
+    /// A paired computer that isn't there yet is dialed again (with
+    /// back-off) until it is: A knows B's address, B doesn't know A's.
+    #[tokio::test]
+    async fn a_missing_peer_is_dialed_until_it_is_there() {
+        let (da, db) = (temp_dir("redial-a"), temp_dir("redial-b"));
+        let (ia, ib) = (Identity::load_or_create(&da).unwrap(), Identity::load_or_create(&db).unwrap());
+        trust(&da, &ib, Side::Right);
+        trust(&db, &ia, Side::Left);
+        let (pa, pb) = (free_port(), free_port());
+        let mut t = TrustStore::load(&da).unwrap();
+        t.get_mut(&ib.fingerprint).unwrap().addrs = vec![format!("127.0.0.1:{pb}")];
+        t.save().unwrap();
+        let desk = Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]);
+        let (ba, mut ha) = one_mk_input::null(desk.clone());
+        let (bb, _hb) = one_mk_input::null(desk);
+        let (stop, stop_rx) = watch::channel(false);
+        let wait = |mut rx: watch::Receiver<bool>| async move {
+            let _ = rx.wait_for(|s| *s).await;
+        };
+        let opts = |port, dir: &std::path::Path| Options {
+            backend: one_mk_input::Kind::Null,
+            port,
+            connect: vec![],
+            discovery: false,
+            clipboard: None,
+            downloads: dir.join("downloads"),
+            start_locked: false,
+            power: Some(one_mk_input::fake_power().0),
+        };
+        let a = tokio::spawn(serve(da.clone(), opts(pa, &da), ba, wait(stop_rx.clone())));
+        // A's first dial finds nobody (and gives up); B starts after it.
+        tokio::time::sleep(DIAL_TIMEOUT + Duration::from_millis(500)).await;
+        let b = tokio::spawn(serve(db.clone(), opts(pb, &db), bb, wait(stop_rx)));
+        let armed = tokio::time::timeout(Duration::from_secs(10), ha.capture.recv()).await.expect("A dialed B again");
+        assert_eq!(armed, Some(CaptureCmd::SetSides(vec![Side::Right])));
+        stop.send(true).unwrap();
         a.await.unwrap().unwrap();
         b.await.unwrap().unwrap();
         let _ = std::fs::remove_dir_all(da);
