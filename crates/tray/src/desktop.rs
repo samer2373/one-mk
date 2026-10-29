@@ -160,6 +160,7 @@ pub fn run(ctx: Arc<Ctx>, start_daemon: bool) -> anyhow::Result<()> {
             }
             Event::UserEvent(Ev::Menu(e)) => match actions.get(e.id()) {
                 Some(Action::Quit) => {
+                    ctx.perform(&Action::Quit);
                     tray = None;
                     *flow = ControlFlow::Exit;
                     return;

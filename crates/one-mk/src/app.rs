@@ -1105,6 +1105,10 @@ impl App {
         let text = match req {
             Request::Status => self.status().encode(),
             Request::Reload => {
+                // A computer that was forgotten is let go at once.
+                for p in self.peers.iter().filter(|(fp, _)| !self.trust.is_trusted(fp)).map(|(_, p)| p) {
+                    p.conn.close(3u32.into(), b"forgotten");
+                }
                 self.sync_sides();
                 let fps: Vec<_> = self.peers.keys().copied().collect();
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
@@ -1725,6 +1729,25 @@ mod tests {
         let status = Status::decode(&control::request(&duo.db, Request::Status).await.unwrap().unwrap()).unwrap();
         assert_eq!(status.controlled_by, None);
         duo.stop().await;
+    }
+
+    /// Forgetting a computer ends its connection when the daemon reloads.
+    #[tokio::test]
+    async fn forgetting_a_computer_disconnects_it() {
+        let duo = Duo::start("forget", None).await;
+        assert!(Duo::peer_status(&duo.da).await.online);
+        let mut trust = TrustStore::load(&duo.db).unwrap();
+        trust.remove(&duo.fa[..8]).unwrap();
+        trust.save().unwrap();
+        assert!(control::request(&duo.db, Request::Reload).await.unwrap().is_some());
+        for _ in 0..250 {
+            if !Duo::peer_status(&duo.da).await.online {
+                duo.stop().await;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("A still sees B online after B forgot A");
     }
 
     fn owner_for_test() -> (Owner, mpsc::UnboundedReceiver<Inject>, mpsc::UnboundedSender<Inject>) {

@@ -77,11 +77,29 @@ impl Ctx {
             Action::TakeBack => client::request(&self.dir, Request::TakeBack, Duration::from_secs(5)).map(drop),
             Action::SetSide { peer, side } => self.set_side(peer, &side.to_string()),
             Action::ToggleAutostart => self.toggle_autostart(),
-            Action::Quit => Ok(()),
+            Action::Forget { peer } => self.forget(peer),
+            Action::Quit => self.quit(),
         };
         if let Err(e) = result {
             eprintln!("one-mk-tray: {e:#}");
         }
+    }
+
+    /// Stops one-mk and tells an open window to close (it looks for this
+    /// file); the tray itself leaves right after.
+    fn quit(&self) -> anyhow::Result<()> {
+        let _ = std::fs::write(self.dir.join(client::QUIT_FILE), "");
+        client::request(&self.dir, Request::Stop, Duration::from_secs(5)).map(drop)
+    }
+
+    fn forget(&self, peer: &str) -> anyhow::Result<()> {
+        let mut cmd = Command::new(&self.daemon);
+        cmd.args(["forget", peer]).args(self.home_args());
+        let out = proc::hide_window(&mut cmd).output()?;
+        if !out.status.success() {
+            anyhow::bail!("one-mk forget failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        }
+        client::request(&self.dir, Request::Reload, Duration::from_secs(5)).map(drop)
     }
 
     fn set_side(&self, peer: &str, side: &str) -> anyhow::Result<()> {

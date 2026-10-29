@@ -19,6 +19,7 @@ pub enum Action {
     TakeBack,
     Stop,
     SetSide { peer: String, side: Side },
+    Forget { peer: String },
     ToggleAutostart,
     Quit,
 }
@@ -96,6 +97,10 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
                             action: Action::SetSide { peer: p.id.clone(), side },
                             checked: Some(p.side == side),
                         })
+                        .chain([
+                            Entry::Separator,
+                            Entry::Item { label: format!("Remove {}", p.name), action: Action::Forget { peer: p.id.clone() }, checked: None },
+                        ])
                         .collect(),
                 });
             }
@@ -110,7 +115,7 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
     }
     m.push(Entry::Separator);
     m.push(Entry::Item { label: "Start at login".into(), action: Action::ToggleAutostart, checked: Some(snap.autostart) });
-    m.push(Entry::Item { label: "Quit tray".into(), action: Action::Quit, checked: None });
+    m.push(Entry::Item { label: "Quit one·mk".into(), action: Action::Quit, checked: None });
     m
 }
 
@@ -172,7 +177,8 @@ mod tests {
         let m = menu(&snap(vec![peer("desk", Side::Right, true)]));
         let Some(Entry::Sub { label, items }) = m.iter().find(|e| matches!(e, Entry::Sub { .. })) else { panic!("{m:?}") };
         assert_eq!(label, "desk: on your right");
-        assert_eq!(items.len(), 4);
+        assert_eq!(items.len(), 6, "four sides, a line, and Remove");
+        assert!(matches!(items.last(), Some(Entry::Item { action: Action::Forget { peer }, .. }) if peer == "desk-id"));
         let checked: Vec<_> = items
             .iter()
             .filter_map(|e| match e {

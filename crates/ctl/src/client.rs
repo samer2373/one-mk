@@ -11,6 +11,10 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Written in the settings folder when the tray quits one·mk: an open
+/// window closes when it finds one newer than itself.
+pub const QUIT_FILE: &str = "quit";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     /// Who we are, who is paired and online, and who controls whom.

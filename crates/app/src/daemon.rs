@@ -33,6 +33,7 @@ pub enum Job {
     Swap { id: String, name: String, swap: String },
     TakeBack,
     Stop,
+    Forget(String),
     /// Turning start at login on (true) or off.
     Autostart(bool),
     Send { to: String, count: usize },
@@ -107,7 +108,13 @@ impl Link {
             link.show_tray();
             let mut last: Option<Option<Status>> = None;
             let mut gone = 0;
+            let opened = std::time::SystemTime::now();
             loop {
+                // The tray's "Quit one·mk" writes this file: the window goes too.
+                let quit = std::fs::metadata(link.dir.join(client::QUIT_FILE)).and_then(|m| m.modified());
+                if quit.is_ok_and(|t| t > opened) {
+                    link.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
                 let Ok(now) = link.status() else {
                     std::thread::sleep(POLL);
                     continue;
@@ -187,6 +194,15 @@ impl Link {
         if let Some(tray) = &self.tray {
             let _ = proc::spawn_detached(tray, &self.home_args(), None);
         }
+    }
+
+    /// Forgets a paired computer; a running daemon lets go of it at once.
+    pub fn forget(&self, id: &str, name: &str) {
+        let id = id.to_owned();
+        self.job(Job::Forget(name.to_owned()), move |l| {
+            l.one_mk(&["forget", &id])?;
+            client::request(&l.dir, Request::Reload, Duration::from_secs(5)).map(drop)
+        });
     }
 
     pub fn stop(&self) {

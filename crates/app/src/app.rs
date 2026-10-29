@@ -61,6 +61,7 @@ enum Act {
     Confirm,
     Retry,
     Send(String),
+    Forget(String, String),
 }
 
 /// Everything the sheet shows, so it can be drawn again while it leaves.
@@ -128,6 +129,8 @@ pub struct App {
     pairing: Option<PairUi>,
     /// Files dropped where it wasn't clear which computer they were for, and when.
     pending_drop: Option<(Vec<PathBuf>, f64)>,
+    /// A computer (id, name) the sheet is asking whether to remove, and since when.
+    removing: Option<(String, String, f64)>,
     /// The sheet as last drawn, and when it started to leave.
     sheet_was: Option<(SheetView, f64)>,
     sheet_top: Option<f32>,
@@ -314,6 +317,7 @@ impl App {
             menu_for: None,
             pairing: None,
             pending_drop: None,
+            removing: None,
             sheet_was: None,
             sheet_top: None,
             sheet_key: String::new(),
@@ -435,6 +439,7 @@ impl App {
                 self.toast_error(format!("Couldn't turn {word} start at login."), e, now);
             }
             Job::Start => self.toast_error("one·mk didn't start.", e, now),
+            Job::Forget(name) => self.toast_error(format!("Couldn't remove {name}. Try again."), e, now),
             Job::Stop => self.toast_error("Couldn't stop one·mk. Try again, or quit it from Activity Monitor or Task Manager.", e, now),
             Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
         }
@@ -688,7 +693,7 @@ impl App {
     }
 
     fn sheet_open(&self) -> bool {
-        self.pairing.is_some() || self.pending_drop.is_some()
+        self.pairing.is_some() || self.pending_drop.is_some() || self.removing.is_some()
     }
 }
 
@@ -1298,6 +1303,12 @@ impl App {
             }
             room += 32.0;
         }
+        // Remove this computer: asks first.
+        let r = Rect::from_min_size(pos2(c.right() - room - 26.0, c.top() - 2.0), vec2(24.0, 24.0));
+        if widgets::icon_button(ui, r, Id::unique(("remove", &peer.id)), "Remove computer", !self.sheet_open(), widgets::draw_cross).clicked() {
+            self.removing = Some((peer.id.clone(), peer.name.clone(), now));
+        }
+        room += 32.0;
         title_row(ui, c, &peer.name, room);
 
         // Where it is: a control, so it can be set without a mouse.
@@ -1466,6 +1477,18 @@ impl App {
                 focus: 1,
                 appear: *at,
                 key: "drop".into(),
+            });
+        }
+        if let Some((id, name, at)) = &self.removing {
+            return Some(SheetView {
+                title: format!("Remove {name}?"),
+                sub: "It stops sharing with this computer. To use it again, pair the two computers again.".into(),
+                code: None,
+                check: None,
+                buttons: vec![("Cancel".into(), Look::Quiet, Act::Close), ("Remove".into(), Look::Primary, Act::Forget(id.clone(), name.clone()))],
+                focus: 0,
+                appear: *at,
+                key: "remove".into(),
             });
         }
         let pair = self.pairing.as_ref()?;
@@ -1677,6 +1700,12 @@ impl App {
             Act::Close => {
                 self.pairing = None;
                 self.pending_drop = None;
+                self.removing = None;
+            }
+            Act::Forget(id, name) => {
+                self.removing = None;
+                self.busy.push(Job::Forget(name.clone()));
+                self.link.forget(&id, &name);
             }
             Act::Decline => {
                 if let Some(pr) = &mut self.pairing
