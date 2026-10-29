@@ -519,8 +519,11 @@ impl App {
             self.just_paired = Some((id.clone(), now));
             // Selecting it measures it: the first crossing, labelled, is the payoff.
             self.selected = Some(id);
-            if self.running().is_none() {
-                self.toast(format!("Paired with {name}. Start one·mk to connect."), now);
+            // Pairing is for connecting: bring one·mk up if it isn't.
+            if matches!(self.status, Some(None)) && !self.busy.contains(&Job::Start) {
+                self.busy.push(Job::Start);
+                self.link.start();
+                self.toast(format!("Paired with {name}. Starting one·mk…"), now);
             }
             let dir = self.link.dir.clone();
             std::thread::spawn(move || {
