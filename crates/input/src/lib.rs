@@ -21,7 +21,7 @@ mod win_logic;
 pub use null::NullHandles;
 
 use anyhow::Result;
-use one_mk_proto::{Desktop, Pos, Side};
+use one_mk_proto::{Desktop, Edge, Pos, Side};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
@@ -57,8 +57,9 @@ pub enum Event {
 /// From the daemon to the capture side.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CaptureCmd {
-    /// Edges that lead to a connected peer.
-    SetSides(Vec<Side>),
+    /// Edge segments that lead to a connected peer, in the coordinates of
+    /// the last `Event::Desktop`.
+    SetEdges(Vec<Edge>),
     /// End activation `id` and give the pointer back to this machine,
     /// placing it at `pos`. Ignored if `id` is not the current activation.
     Release { id: u32, pos: Option<Pos> },

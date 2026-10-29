@@ -38,7 +38,7 @@ use crate::win_logic::{
 };
 use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::{Result, bail};
-use one_mk_proto::{Rect, Side};
+use one_mk_proto::{Edge, Rect, Side};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
@@ -197,7 +197,7 @@ struct State {
     hwnd: HWND,
     shared: Arc<Mutex<Space>>,
     space: Space,
-    sides: Vec<Side>,
+    edges: Vec<Edge>,
     cmds: std_mpsc::Receiver<CaptureCmd>,
     captured: Option<Captured>,
     /// The last activation id handed out.
@@ -428,7 +428,7 @@ fn capture_thread(
             hwnd,
             shared,
             space,
-            sides: Vec::new(),
+            edges: Vec::new(),
             cmds: cmd_rx,
             captured: None,
             next_id: 0,
@@ -654,7 +654,7 @@ impl State {
                 return (false, Effect::None);
             }
             let (dx, dy) = self.heading.update(x, y);
-            let hit = self.space.edge_hit(&self.sides, x, y, dx, dy);
+            let hit = self.space.edge_hit(&self.edges, x, y, dx, dy);
             // Only asked at an edge: a drag must not cross machines.
             let dragging = hit.is_some() && async_any_button();
             return match self.gate.check(hit, dragging) {
@@ -737,8 +737,8 @@ impl State {
 
     fn command(&mut self, cmd: CaptureCmd) -> Effect {
         match cmd {
-            CaptureCmd::SetSides(sides) => {
-                self.sides = sides;
+            CaptureCmd::SetEdges(edges) => {
+                self.edges = edges;
                 Effect::None
             }
             CaptureCmd::Release { id, pos } => {

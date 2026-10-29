@@ -174,7 +174,7 @@ fn newer(seq: u32, last: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Edge, Rect};
+    use crate::Rect;
 
     fn desk() -> Desktop {
         Desktop::new(vec![Rect::new(0, 0, 1920, 1080)])

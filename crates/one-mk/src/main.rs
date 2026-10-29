@@ -106,6 +106,11 @@ enum Cmd {
         device: String,
         /// Where it is: left, right, top or bottom.
         side: Option<Side>,
+        /// Where its (0,0) sits in this computer's screen coordinates, so the
+        /// pointer crosses only where the screens touch; `none` crosses
+        /// anywhere along the side.
+        #[arg(long, value_name = "DX,DY|none", allow_hyphen_values = true)]
+        offset: Option<String>,
         /// Swap Ctrl and Cmd for keys sent to it, so copy and paste feel the same
         /// between a Mac and a PC (default: auto, which swaps only between a Mac and another computer).
         #[arg(long, value_name = "on|off|auto")]
@@ -222,7 +227,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Takeback => manage::takeback(&dir).await,
             Cmd::Install => install::install(&dir, custom_home).await,
             Cmd::Uninstall => install::uninstall(),
-            Cmd::Layout { device, side, swap_ctrl_cmd } => manage::layout(&dir, &device, side, swap_ctrl_cmd).await,
+            Cmd::Layout { device, side, offset, swap_ctrl_cmd } => manage::layout(&dir, &device, side, offset.as_deref(), swap_ctrl_cmd).await,
             Cmd::Forget { device } => forget(&dir, &device),
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;
@@ -296,10 +301,11 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
     }
     for d in trust.devices() {
         let name = one_mk_proto::sanitize_name(&d.name);
+        let side = d.offset.map_or_else(|| d.side.clone(), |(x, y)| format!("{} at {x},{y}", d.side));
         if verbose {
-            println!("{name:<24} {:<9}  {:<6}  {}", d.short_id(), d.side, d.addrs.join(", "));
+            println!("{name:<24} {:<9}  {:<6}  {}", d.short_id(), side, d.addrs.join(", "));
         } else {
-            println!("{name:<24} {:<9}  {}", d.short_id(), d.side);
+            println!("{name:<24} {:<9}  {}", d.short_id(), side);
         }
     }
     Ok(())

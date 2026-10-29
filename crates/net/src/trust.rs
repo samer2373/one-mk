@@ -61,6 +61,11 @@ pub struct Device {
     /// The device's OS when last connected (see `one_mk_proto::os`).
     #[serde(default)]
     pub os: u8,
+    /// Where the device's desktop origin sits in this machine's logical
+    /// pixels; the pointer crosses only where the screens then touch.
+    /// None: anywhere along `side`, scaled to fit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<(i32, i32)>,
 }
 
 fn default_side() -> String {
@@ -136,6 +141,7 @@ impl TrustStore {
             device.side = std::mem::take(&mut existing.side);
             device.layout_version = existing.layout_version;
             device.swap_ctrl_cmd = existing.swap_ctrl_cmd;
+            device.offset = existing.offset;
             *existing = device;
         } else {
             self.file.devices.push(device);
@@ -191,6 +197,10 @@ mod tests {
         t.get_mut(&fp.parse().unwrap()).unwrap().swap_ctrl_cmd = Swap::Off;
         t.save().unwrap();
         assert_eq!(TrustStore::load(&dir).unwrap().devices()[0].swap_ctrl_cmd, Swap::Off);
+        assert_eq!(t.devices()[0].offset, None);
+        t.get_mut(&fp.parse().unwrap()).unwrap().offset = Some((-3000, -900));
+        t.save().unwrap();
+        assert_eq!(TrustStore::load(&dir).unwrap().devices()[0].offset, Some((-3000, -900)));
         assert_eq!("ON".parse::<Swap>(), Ok(Swap::On));
         assert!("maybe".parse::<Swap>().is_err());
         let _ = std::fs::remove_dir_all(dir);

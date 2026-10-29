@@ -42,7 +42,7 @@ use objc2_core_graphics::{
     CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGSessionCopyCurrentDictionary,
     CGWarpMouseCursorPosition, kCGNullDirectDisplay,
 };
-use one_mk_proto::{Desktop, Pos, Rect, Side};
+use one_mk_proto::{Desktop, Edge, Pos, Rect};
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void};
 use std::panic::AssertUnwindSafe;
@@ -235,7 +235,7 @@ struct Ctx {
 
 struct State {
     desktop: Option<Desktop>,
-    sides: Vec<Side>,
+    edges: Vec<Edge>,
     /// Input goes to a peer: events are swallowed and the cursor is frozen.
     active: bool,
     /// The current (or last) activation id.
@@ -265,7 +265,7 @@ impl State {
     fn new() -> Self {
         Self {
             desktop: None,
-            sides: Vec::new(),
+            edges: Vec::new(),
             active: false,
             id: 0,
             timer: None,
@@ -567,7 +567,7 @@ impl Ctx {
             return;
         };
         match msg {
-            Msg::Cmd(CaptureCmd::SetSides(sides)) => st.sides = sides,
+            Msg::Cmd(CaptureCmd::SetEdges(edges)) => st.edges = edges,
             Msg::Cmd(CaptureCmd::Release { id, pos }) => {
                 // A release for an earlier activation is stale.
                 if st.active && st.id == id {
@@ -635,7 +635,7 @@ impl Ctx {
                 let loc = CGEvent::location(e);
                 let p = Pos::new(loc.x, loc.y);
                 let (dx, dy) = mouse_delta(ev);
-                match logic::edge_hit(desktop, &st.sides, p, dx, dy) {
+                match logic::edge_hit(&st.edges, p, dx, dy) {
                     Some(_) if st.armed && secure_input() => {
                         // Keys wouldn't reach the peer; don't cross.
                         st.armed = false;

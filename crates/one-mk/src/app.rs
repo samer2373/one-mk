@@ -19,8 +19,8 @@ use one_mk_net::{
     ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, Swap, TrustStore, read_stream_kind,
 };
 use one_mk_proto::{
-    Control, Datagram, Desktop, HeldKeys, MotionReceiver, Pos, Received, Rect, RemoteCursor, Side, Step, StreamKind,
-    os, sanitize_name, swap_ctrl_meta,
+    Control, Datagram, Desktop, Edge, HeldKeys, MotionReceiver, Pos, Received, Rect, RemoteCursor, Side, Step,
+    StreamKind, os, sanitize_name, swap_ctrl_meta, touching,
 };
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -186,6 +186,8 @@ struct Connected {
     os: u8,
     rank: Rank,
     side: Side,
+    /// Where its desktop sits in ours (see `Device::offset`).
+    offset: Option<(i32, i32)>,
     conn: quinn::Connection,
     ctl: ControlWriter,
     desktop: Option<Desktop>,
@@ -198,6 +200,9 @@ struct Remote {
     peer: Fingerprint,
     /// Our edge the pointer left through.
     side: Side,
+    /// The peer's offset for this visit: positions translate by it instead
+    /// of mapping by fraction along the edge.
+    offset: Option<(i32, i32)>,
     cursor: RemoteCursor,
     /// What we hold, by the codes we read locally.
     held: HeldKeys,
@@ -223,6 +228,18 @@ impl Remote {
         self.last_send = now;
         self.resends = 0;
         self.resend_at = Some(now + RESEND_AFTER[0]);
+    }
+
+    /// Where the pointer lands back on `local`: where it is on the peer,
+    /// translated, or at fraction `t` along our edge.
+    fn home_pos(&self, local: &Desktop, t: f64) -> Pos {
+        match self.offset {
+            Some((dx, dy)) => {
+                let p = self.cursor.pos();
+                local.place(Pos::new(p.x + f64::from(dx), p.y + f64::from(dy)), self.side, 2.0)
+            }
+            None => local.point_on_edge(self.side, t, 2.0),
+        }
     }
 }
 
@@ -331,7 +348,8 @@ struct App {
     inject: mpsc::UnboundedSender<Inject>,
     tx: mpsc::UnboundedSender<AppEvent>,
     link_tx: link::LinkTx,
-    sides: Vec<Side>,
+    /// Armed edges, and the peer each leads to.
+    edges: Vec<(Edge, Fingerprint)>,
     /// Layout conflicts last warned about.
     conflicts: Vec<String>,
     discovered: HashMap<Fingerprint, Vec<SocketAddr>>,
@@ -414,7 +432,7 @@ pub async fn serve(
         inject,
         tx,
         link_tx,
-        sides: Vec::new(),
+        edges: Vec::new(),
         conflicts: Vec::new(),
         discovered: HashMap::new(),
         extra_addrs: opts.connect,
@@ -760,15 +778,21 @@ impl App {
     /// The pointer hit the `side` edge of our desktop.
     fn enter_peer(&mut self, activation: u32, side: Side, pos: Pos) {
         self.end_visit(); // a new activation supersedes any visit in progress
-        let target = self.peer_at(side).and_then(|fp| Some((fp, self.peers.get(&fp)?.desktop.clone()?)));
+        let target = self.peer_at(side, pos).and_then(|fp| Some((fp, self.peers.get(&fp)?.desktop.clone()?)));
         let (Some(local), Some((fp, desktop))) = (self.local.as_ref(), target) else {
             let _ = self.capture.send(CaptureCmd::Release { id: activation, pos: None });
             return;
         };
         self.epoch = self.epoch.wrapping_add(1);
-        let t = local.edge_fraction(side, pos);
-        let cursor = RemoteCursor::enter(desktop, side.opposite(), t, self.epoch);
         let peer = &self.peers[&fp];
+        let cursor = match peer.offset {
+            Some((dx, dy)) => {
+                let exits = touching(&desktop, local, side.opposite(), (-dx, -dy));
+                let at = Pos::new(pos.x - f64::from(dx), pos.y - f64::from(dy));
+                RemoteCursor::enter_at(desktop, side.opposite(), at, exits, self.epoch)
+            }
+            None => RemoteCursor::enter(desktop, side.opposite(), local.edge_fraction(side, pos), self.epoch),
+        };
         let setting = self.trust.get(&fp).map_or(Swap::Auto, |d| d.swap_ctrl_cmd);
         let swap = swap_applies(setting, os::local(), peer.os);
         peer.ctl.send(Control::Enter { epoch: self.epoch, pos: cursor.pos() });
@@ -778,6 +802,7 @@ impl App {
             activation,
             peer: fp,
             side,
+            offset: peer.offset,
             cursor,
             held: HeldKeys::new(),
             swap,
@@ -803,7 +828,7 @@ impl App {
     /// Returns the pointer to this machine at fraction `t` along the edge.
     fn go_home(&mut self, t: f64) {
         let Some(r) = self.end_visit() else { return };
-        let pos = self.local.as_ref().map(|d| d.point_on_edge(r.side, t, 2.0));
+        let pos = self.local.as_ref().map(|d| r.home_pos(d, t));
         let _ = self.capture.send(CaptureCmd::Release { id: r.activation, pos });
         tracing::debug!("pointer is home");
     }
@@ -968,6 +993,7 @@ impl App {
         }
         self.reload_trust();
         let side = self.trust.get(&fp).map_or(Side::Right, |d| d.side());
+        let offset = self.trust.get(&fp).and_then(|d| d.offset);
         let addr = canonical(link.conn.remote_address());
         if let Some(dev) = self.trust.get_mut(&fp) {
             let a = addr.to_string();
@@ -996,7 +1022,7 @@ impl App {
         {
             ctl.send(Control::Screens(local.screens.clone()));
         }
-        if let Some(old) = self.peers.insert(fp, Connected { id, name, os, rank, side, conn, ctl, desktop }) {
+        if let Some(old) = self.peers.insert(fp, Connected { id, name, os, rank, side, offset, conn, ctl, desktop }) {
             old.conn.close(2u32.into(), b"duplicate");
         }
         self.send_layout(fp);
@@ -1024,7 +1050,7 @@ impl App {
                     clip.forget(fp);
                 }
                 if let Some(r) = self.remote.take_if(|r| r.peer == fp) {
-                    let pos = self.local.as_ref().map(|d| d.point_on_edge(r.side, r.cursor.home_fraction(), 2.0));
+                    let pos = self.local.as_ref().map(|d| r.home_pos(d, r.cursor.home_fraction()));
                     let _ = self.capture.send(CaptureCmd::Release { id: r.activation, pos });
                 }
                 self.update_sides();
@@ -1107,6 +1133,9 @@ impl App {
     fn on_peer_layout(&mut self, fp: Fingerprint, side_of_you: Side, version: u64) {
         self.reload_trust();
         let Some(dev) = self.trust.get_mut(&fp).filter(|d| version > d.layout_version) else { return };
+        if dev.side() != side_of_you {
+            dev.offset = None; // it was for the old side
+        }
         dev.side = side_of_you.to_string();
         dev.layout_version = version;
         if let Err(e) = self.trust.save() {
@@ -1115,14 +1144,19 @@ impl App {
         self.sync_sides();
     }
 
-    /// Applies the sides in the trust store to connected peers.
+    /// Applies the sides and offsets in the trust store to connected peers.
     fn sync_sides(&mut self) {
         let mut moved = Vec::new();
         for (fp, p) in &mut self.peers {
-            let Some(side) = self.trust.get(fp).map(|d| d.side()).filter(|s| *s != p.side) else { continue };
-            p.side = side;
+            let Some((side, offset)) = self.trust.get(fp).map(|d| (d.side(), d.offset)) else { continue };
+            if (side, offset) == (p.side, p.offset) {
+                continue;
+            }
+            if side != p.side {
+                println!("{} is now {}.", p.name, on_your(side));
+            }
+            (p.side, p.offset) = (side, offset);
             moved.push(*fp);
-            println!("{} is now {}.", p.name, on_your(side));
         }
         if let Some(r) = self.remote.as_ref().filter(|r| moved.contains(&r.peer)) {
             let t = r.cursor.home_fraction();
@@ -1187,13 +1221,15 @@ impl App {
         let desktop = (!screens.is_empty()).then(|| Desktop::new(screens));
         if let Some(r) = self.remote.as_mut().filter(|r| r.peer == fp) {
             match &desktop {
-                Some(d) => {
+                Some(d) if r.offset.is_none() => {
                     let moved = r.cursor.set_desktop(d.clone());
                     if r.acked {
                         r.send_motion(&self.peers, moved);
                     }
                 }
-                None => {
+                // ponytail: a visit by offset just ends, as its exits are
+                // stale; recompute them in the cursor if that annoys.
+                _ => {
                     let t = r.cursor.home_fraction();
                     self.go_home(t);
                 }
@@ -1205,28 +1241,48 @@ impl App {
         self.update_sides();
     }
 
-    /// The peer the pointer goes to through `side`. If several sit there (a
-    /// layout mistake), the one with the lowest fingerprint, so the choice
-    /// doesn't depend on connection order.
-    fn peer_at(&self, side: Side) -> Option<Fingerprint> {
-        self.peers.iter().filter(|(_, p)| p.side == side && p.desktop.is_some()).map(|(fp, _)| *fp).min()
+    /// The peer the pointer goes to through `side` at `pos`: the one whose
+    /// armed edge is nearest (normally `pos` is on it, as that edge is what
+    /// the backend caught).
+    fn peer_at(&self, side: Side, pos: Pos) -> Option<Fingerprint> {
+        let near = self.edges.iter().filter(|(e, _)| e.side == side);
+        near.min_by(|(a, _), (b, _)| a.dist(pos).total_cmp(&b.dist(pos))).map(|(_, fp)| *fp)
     }
 
+    /// Arms the edges that lead to peers: with an offset, only where the
+    /// screens touch; without, the whole outer edge on its side. Where two
+    /// peers' edges overlap, the one with the lowest fingerprint wins, so
+    /// the choice doesn't depend on connection order.
     fn update_sides(&mut self) {
-        let mut sides = Vec::new();
+        let mut edges: Vec<(Edge, Fingerprint)> = Vec::new();
         let mut conflicts = Vec::new();
-        for side in Side::ALL {
-            let mut here: Vec<_> =
-                self.peers.iter().filter(|(_, p)| p.side == side && p.desktop.is_some()).collect();
-            here.sort_by_key(|(fp, _)| **fp);
-            let Some((_, used)) = here.first() else { continue };
-            sides.push(side);
-            for (_, other) in &here[1..] {
-                conflicts.push(format!(
-                    "{} and {} are both set to the {side} of this computer, so only {} is used; \
-                     move the other with `one-mk layout \"{}\" <left|right|top|bottom>`",
-                    used.name, other.name, used.name, other.name
-                ));
+        if let Some(local) = &self.local {
+            let mut here: Vec<_> = self.peers.iter().filter_map(|(fp, p)| Some((*fp, p, p.desktop.as_ref()?))).collect();
+            here.sort_by_key(|(fp, ..)| *fp);
+            for (fp, p, desktop) in here {
+                let side = p.side;
+                let mine: Vec<Edge> = match p.offset {
+                    Some(offset) => touching(local, desktop, side, offset),
+                    None => local.outer_edges(side).map(|r| Edge::of(side, r)).collect(),
+                };
+                if mine.is_empty() {
+                    conflicts.push(format!(
+                        "{}'s screens don't touch this computer's on its {side}, so the pointer can't go there; \
+                         fix it with `one-mk layout \"{}\" {side} --offset DX,DY|none`",
+                        p.name, p.name
+                    ));
+                }
+                let overlaps = |a: &Edge| mine.iter().any(|m| m.side == a.side && m.at == a.at && m.lo < a.hi && a.lo < m.hi);
+                if let Some((_, first)) = edges.iter().find(|(e, _)| overlaps(e)) {
+                    let used = &self.peers[first].name;
+                    conflicts.push(format!(
+                        "{} and {} are both set to the {side} of this computer, so only {} is used; \
+                         move the other with `one-mk layout \"{}\" <left|right|top|bottom>`",
+                        used, p.name, used, p.name
+                    ));
+                    continue;
+                }
+                edges.extend(mine.into_iter().map(|e| (e, fp)));
             }
         }
         if conflicts != self.conflicts {
@@ -1235,9 +1291,9 @@ impl App {
             }
             self.conflicts = conflicts;
         }
-        if sides != self.sides {
-            self.sides = sides.clone();
-            let _ = self.capture.send(CaptureCmd::SetSides(sides));
+        if edges != self.edges {
+            let _ = self.capture.send(CaptureCmd::SetEdges(edges.iter().map(|(e, _)| *e).collect()));
+            self.edges = edges;
         }
     }
 
@@ -1344,6 +1400,11 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(5), h.inject.recv()).await.expect("timed out").unwrap()
     }
 
+    /// What a peer without an offset arms on the test desktop.
+    fn armed(side: Side) -> CaptureCmd {
+        CaptureCmd::SetEdges(vec![Edge::of(side, &Rect::new(0, 0, 1920, 1080))])
+    }
+
     async fn next_capture(h: &mut NullHandles) -> CaptureCmd {
         tokio::time::timeout(Duration::from_secs(5), h.capture.recv()).await.expect("timed out").unwrap()
     }
@@ -1377,8 +1438,8 @@ mod tests {
         let b = tokio::spawn(serve(db.clone(), opts(pb, vec![SocketAddr::from(([127, 0, 0, 1], pa))]), bb, stop(stop_rx)));
 
         // A arms its right edge once B is connected.
-        assert_eq!(next_capture(&mut ha).await, CaptureCmd::SetSides(vec![Side::Right]));
-        assert_eq!(next_capture(&mut hb).await, CaptureCmd::SetSides(vec![Side::Left]));
+        assert_eq!(next_capture(&mut ha).await, armed(Side::Right));
+        assert_eq!(next_capture(&mut hb).await, armed(Side::Left));
 
         // Pointer hits A's right edge halfway down: it appears on B's left edge.
         ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
@@ -1484,8 +1545,8 @@ mod tests {
 
         /// Waits until each side has armed the edge facing the other.
         async fn settle(&mut self) {
-            assert_eq!(next_capture(&mut self.ha).await, CaptureCmd::SetSides(vec![Side::Right]));
-            assert_eq!(next_capture(&mut self.hb).await, CaptureCmd::SetSides(vec![Side::Left]));
+            assert_eq!(next_capture(&mut self.ha).await, armed(Side::Right));
+            assert_eq!(next_capture(&mut self.hb).await, armed(Side::Left));
         }
 
         /// What `daemon_dir`'s daemon says about its single paired peer.
@@ -1496,7 +1557,7 @@ mod tests {
 
         /// `one-mk layout` run on the computer with settings in `dir`.
         async fn layout(dir: &std::path::Path, peer: &str, side: Option<Side>, swap: Option<Swap>) {
-            crate::manage::set_layout(dir, &peer[..8], side, swap).unwrap();
+            crate::manage::set_layout(dir, &peer[..8], side, None, swap).unwrap();
             assert!(control::request(dir, Request::Reload).await.unwrap().is_some());
         }
 
@@ -2022,6 +2083,26 @@ mod tests {
         duo.stop().await;
     }
 
+    /// With an offset, A arms only where B's screen touches its own, and
+    /// the pointer moves across by translation, both ways.
+    #[tokio::test]
+    async fn offset_translates_the_pointer() {
+        // B's top-left is at (1920, 500) of A: they touch along A's y 500..1080.
+        let mut duo = Duo::start_with("offset", None, |a_sees_b, _| a_sees_b.offset = Some((1920, 500))).await;
+        let touch = Edge { side: Side::Right, at: 1920, lo: 500, hi: 1080 };
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetEdges(vec![touch]));
+        assert_eq!(next_capture(&mut duo.hb).await, armed(Side::Left));
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 700.0) }).unwrap();
+        // Not (0, 700) as by fraction: 700 - 500.
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 200.0)));
+        duo.ha.events.send(Event::Motion { dx: -100.0, dy: 0.0 }).unwrap();
+        match next_capture(&mut duo.ha).await {
+            CaptureCmd::Release { pos: Some(p), .. } => assert_eq!((p.x.round(), p.y), (1918.0, 700.0)),
+            other => panic!("expected release, got {other:?}"),
+        }
+        duo.stop().await;
+    }
+
     /// Changing the layout on one computer applies at once, with no
     /// restart, and the other computer records the mirror image.
     #[tokio::test]
@@ -2031,8 +2112,8 @@ mod tests {
 
         // On A: B is now on the left.
         Duo::layout(&duo.da, &fb, Some(Side::Left), None).await;
-        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Left]));
-        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Right]));
+        assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Left));
+        assert_eq!(next_capture(&mut duo.hb).await, armed(Side::Right));
         let (sa, sb) = (Duo::peer_status(&duo.da).await, Duo::peer_status(&duo.db).await);
         assert_eq!((sa.side, sa.online), (Side::Left, true));
         assert_eq!((sb.side, sb.online), (Side::Right, true));
@@ -2048,8 +2129,8 @@ mod tests {
 
         // Then on B: A is above. The newer change wins over the old one.
         Duo::layout(&duo.db, &fa, Some(Side::Top), None).await;
-        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Top]));
-        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Bottom]));
+        assert_eq!(next_capture(&mut duo.hb).await, armed(Side::Top));
+        assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Bottom));
         assert_eq!(Duo::peer_status(&duo.da).await.side, Side::Bottom);
         assert!(version(&duo.da, &fb).1 > v);
         duo.stop().await;
@@ -2066,9 +2147,9 @@ mod tests {
             a_sees_b.layout_version = 5;
         })
         .await;
-        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetSides(vec![Side::Left]));
-        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Left]));
-        assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::SetSides(vec![Side::Right]));
+        assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Left));
+        assert_eq!(next_capture(&mut duo.hb).await, armed(Side::Left));
+        assert_eq!(next_capture(&mut duo.hb).await, armed(Side::Right));
         let t = TrustStore::load(&duo.db).unwrap();
         let d = t.get(&duo.fa.parse().unwrap()).unwrap();
         assert_eq!((d.side(), d.layout_version), (Side::Right, 5));

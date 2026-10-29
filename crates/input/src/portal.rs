@@ -28,7 +28,7 @@ use ashpd::desktop::input_capture::{
 use ashpd::desktop::remote_desktop::{self, DeviceType, RemoteDesktop, SelectDevicesOptions};
 use ashpd::desktop::{PersistMode, ResponseError, Session};
 use futures::StreamExt;
-use one_mk_proto::{Desktop, Pos, Rect, Side};
+use one_mk_proto::{Desktop, Edge, Pos, Rect, Side};
 use reis::ei;
 use reis::event::{DeviceCapability, EiEvent};
 use std::collections::HashMap;
@@ -141,7 +141,7 @@ async fn close<T: ashpd::desktop::SessionPortal>(session: &Session<T>) {
 /// Capture state that outlives a portal session.
 struct CaptureState {
     tx: mpsc::UnboundedSender<Event>,
-    sides: Vec<Side>,
+    edges: Vec<Edge>,
     /// The desktop last reported to the daemon.
     reported: Option<Desktop>,
     next_id: u32,
@@ -194,24 +194,19 @@ impl Capture<'_> {
         Ok(())
     }
 
-    async fn apply_barriers(&mut self, sides: &[Side]) -> Result<()> {
+    async fn apply_barriers(&mut self, edges: &[Edge]) -> Result<()> {
         let mut barriers = Vec::new();
         self.barriers.clear();
-        for &side in sides {
-            for r in self.desktop.outer_edges(side) {
-                let id = side as u32 * 64 + barriers.len() as u32 + 1;
-                let (x, y, right, bottom) = (r.x, r.y, r.right(), r.bottom());
-                // Barriers lie on the zone edge; right/bottom edges are one
-                // past the last pixel, as the portal spec requires.
-                let pos = match side {
-                    Side::Left => (x, y, x, bottom - 1),
-                    Side::Right => (right, y, right, bottom - 1),
-                    Side::Top => (x, y, right - 1, y),
-                    Side::Bottom => (x, bottom, right - 1, bottom),
-                };
-                barriers.push(Barrier::new(NonZeroU32::new(id).expect("nonzero"), pos));
-                self.barriers.insert(id, side);
-            }
+        for e in edges {
+            let id = e.side as u32 * 64 + barriers.len() as u32 + 1;
+            // Barriers lie on the zone edge; right/bottom edges are one
+            // past the last pixel, as the portal spec requires.
+            let pos = match e.side {
+                Side::Left | Side::Right => (e.at, e.lo, e.at, e.hi - 1),
+                Side::Top | Side::Bottom => (e.lo, e.at, e.hi - 1, e.at),
+            };
+            barriers.push(Barrier::new(NonZeroU32::new(id).expect("nonzero"), pos));
+            self.barriers.insert(id, e.side);
         }
         let resp = self
             .portal
@@ -236,11 +231,11 @@ impl Capture<'_> {
     /// Re-reads the zones and re-applies the barriers. Failures are logged
     /// and otherwise ignored: the old layout stays in use, and a session
     /// that is really gone shows up as a closed libei connection.
-    async fn refresh(&mut self, sides: &[Side]) {
+    async fn refresh(&mut self, edges: &[Edge]) {
         if let Err(e) = self.refresh_zones().await {
             tracing::warn!("reading the screen layout: {e:#}");
         }
-        if let Err(e) = self.apply_barriers(sides).await {
+        if let Err(e) = self.apply_barriers(edges).await {
             tracing::warn!("setting pointer barriers: {e:#}");
         }
     }
@@ -248,7 +243,7 @@ impl Capture<'_> {
     /// Hands the pointer back. If the portal refuses, disabling capture
     /// also ends it; only if that fails too is the session given up (which
     /// closes it, and closing always releases).
-    async fn release(&mut self, portal_id: Option<u32>, pos: Option<Pos>, sides: &[Side]) -> Result<()> {
+    async fn release(&mut self, portal_id: Option<u32>, pos: Option<Pos>, edges: &[Edge]) -> Result<()> {
         let opts = ReleaseOptions::default()
             .set_activation_id(portal_id)
             .set_cursor_position(pos.map(|p| (p.x, p.y)));
@@ -259,7 +254,7 @@ impl Capture<'_> {
             .await
             .context("couldn't release the pointer")?;
         self.enabled = false;
-        if let Err(e) = self.apply_barriers(sides).await {
+        if let Err(e) = self.apply_barriers(edges).await {
             tracing::warn!("setting pointer barriers: {e:#}");
         }
         Ok(())
@@ -267,7 +262,7 @@ impl Capture<'_> {
 }
 
 async fn capture(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedReceiver<CaptureCmd>) {
-    let mut st = CaptureState { tx, sides: Vec::new(), reported: None, next_id: 0, activation: None };
+    let mut st = CaptureState { tx, edges: Vec::new(), reported: None, next_id: 0, activation: None };
     let mut retry = Retry::new("Can't share this computer's mouse with others");
     loop {
         let started = Instant::now();
@@ -284,7 +279,7 @@ async fn capture(tx: mpsc::UnboundedSender<Event>, mut cmds: mpsc::UnboundedRece
                     tokio::select! {
                         _ = &mut sleep => break,
                         cmd = cmds.recv() => match cmd {
-                            Some(CaptureCmd::SetSides(sides)) => st.sides = sides,
+                            Some(CaptureCmd::SetEdges(edges)) => st.edges = edges,
                             Some(CaptureCmd::Release { .. }) => {}
                             None => return,
                         },
@@ -347,7 +342,7 @@ async fn run_capture(
     cap.refresh_zones().await?;
     st.report_desktop(&cap.desktop);
     // A re-created session starts with no barriers.
-    if let Err(e) = cap.apply_barriers(&st.sides).await {
+    if let Err(e) = cap.apply_barriers(&st.edges).await {
         tracing::warn!("setting pointer barriers: {e:#}");
     }
     retry.ready();
@@ -356,9 +351,9 @@ async fn run_capture(
     loop {
         tokio::select! {
             cmd = cmds.recv() => match cmd {
-                Some(CaptureCmd::SetSides(sides)) => {
-                    st.sides = sides;
-                    if let Err(e) = cap.apply_barriers(&st.sides).await {
+                Some(CaptureCmd::SetEdges(edges)) => {
+                    st.edges = edges;
+                    if let Err(e) = cap.apply_barriers(&st.edges).await {
                         tracing::warn!("setting pointer barriers: {e:#}");
                     }
                 }
@@ -367,7 +362,7 @@ async fn run_capture(
                         && ours == id
                     {
                         st.activation = None;
-                        cap.release(portal_id, pos, &st.sides).await?;
+                        cap.release(portal_id, pos, &st.edges).await?;
                     }
                 }
                 None => return Ok(()),
@@ -387,7 +382,7 @@ async fn run_capture(
                         let _ = st.tx.send(Event::Activated { id: st.next_id, side, pos });
                     }
                     // Not one of our barriers; hand the pointer straight back.
-                    _ => cap.release(a.activation_id(), None, &st.sides).await?,
+                    _ => cap.release(a.activation_id(), None, &st.edges).await?,
                 }
             },
             Some(d) = deactivated.next() => {
@@ -400,14 +395,14 @@ async fn run_capture(
                 }
             },
             Some(_) = zones_changed.next() => {
-                cap.refresh(&st.sides).await;
+                cap.refresh(&st.edges).await;
                 st.report_desktop(&cap.desktop);
             },
             Some(_) = disabled.next() => {
                 // The compositor dropped our barriers (e.g. monitors changed); set them up again.
                 st.deactivated();
                 cap.enabled = false;
-                cap.refresh(&st.sides).await;
+                cap.refresh(&st.edges).await;
                 st.report_desktop(&cap.desktop);
             },
             _ = closed.next() => bail!("the input capture session was closed"),

@@ -41,18 +41,40 @@ pub async fn takeback(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Changes a paired device's side and/or Ctrl/Cmd setting in `devices.toml`.
-/// A new side gets a version newer than any seen, so it wins when the two
-/// computers compare layouts.
-pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, swap: Option<Swap>) -> Result<Device> {
+/// `DX,DY` or `none`, for `one-mk layout --offset`.
+pub fn parse_offset(s: &str) -> Result<Option<(i32, i32)>> {
+    if s.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    let parsed = s.split_once(',').and_then(|(x, y)| Some((x.trim().parse().ok()?, y.trim().parse().ok()?)));
+    parsed.map(Some).ok_or_else(|| anyhow::anyhow!("expected --offset DX,DY (e.g. -1920,0) or none, not {s:?}"))
+}
+
+/// Changes a paired device's side, offset and/or Ctrl/Cmd setting in
+/// `devices.toml`. A new side gets a version newer than any seen, so it
+/// wins when the two computers compare layouts; it also drops an offset
+/// that was meant for the old side, unless a new one is given.
+pub fn set_layout(
+    dir: &Path,
+    device: &str,
+    side: Option<Side>,
+    offset: Option<Option<(i32, i32)>>,
+    swap: Option<Swap>,
+) -> Result<Device> {
     let mut trust = TrustStore::load(dir)?;
     let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
     let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
     let dev = trust.get_mut(&fp).expect("found above");
     if let Some(side) = side {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        if dev.side() != side {
+            dev.offset = None;
+        }
         dev.side = side.to_string();
         dev.layout_version = now.max(dev.layout_version + 1);
+    }
+    if let Some(offset) = offset {
+        dev.offset = offset;
     }
     if let Some(swap) = swap {
         dev.swap_ctrl_cmd = swap;
@@ -62,14 +84,20 @@ pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, swap: Option<Swa
     Ok(dev)
 }
 
-pub async fn layout(dir: &Path, device: &str, side: Option<Side>, swap: Option<Swap>) -> Result<()> {
-    if side.is_none() && swap.is_none() {
-        bail!("say where {device:?} is (left, right, top or bottom) and/or use --swap-ctrl-cmd on|off|auto");
+pub async fn layout(dir: &Path, device: &str, side: Option<Side>, offset: Option<&str>, swap: Option<Swap>) -> Result<()> {
+    if side.is_none() && offset.is_none() && swap.is_none() {
+        bail!("say where {device:?} is (left, right, top or bottom), and/or use --offset DX,DY|none or --swap-ctrl-cmd on|off|auto");
     }
-    let dev = set_layout(dir, device, side, swap)?;
+    let offset = offset.map(parse_offset).transpose()?;
+    let dev = set_layout(dir, device, side, offset, swap)?;
     let name = one_mk_proto::sanitize_name(&dev.name);
     if let Some(side) = side {
         println!("{name} is now {}.", on_your(side));
+    }
+    match offset {
+        Some(Some((x, y))) => println!("{name}'s (0,0) sits at {x},{y} of yours; the pointer crosses where the screens touch."),
+        Some(None) => println!("{name} has no offset; the pointer crosses anywhere along its side."),
+        None => {}
     }
     match swap {
         Some(Swap::On) => println!("Ctrl and Cmd are swapped for keys sent to {name}."),
@@ -83,4 +111,14 @@ pub async fn layout(dir: &Path, device: &str, side: Option<Side>, swap: Option<S
         println!("one-mk is not running; this takes effect the next time it starts.");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_offset() {
+        assert_eq!(super::parse_offset("-2592, 98").unwrap(), Some((-2592, 98)));
+        assert_eq!(super::parse_offset("None").unwrap(), None);
+        assert!(super::parse_offset("10").is_err());
+    }
 }
