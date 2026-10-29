@@ -110,6 +110,15 @@ mouse being plugged in or out apply at once; a change only the pointer
 probe sees must hold for 750 ms, so a flickering probe never makes the
 arrow blink.
 
+A mouse arriving (Windows tells the arrow's window) counts at once, even
+before the probe catches up, so `auto` hands over to the OS pointer
+without delay. It is only a guard against that race: once probes taken
+after the arrival have said "no pointing device" for 750 ms (it was
+unplugged again, the visit still going on), the arrival no longer counts
+and the arrow comes back. A probe saying "a device" starts that wait over,
+so a loose plug flapping in and out doesn't make the arrow blink. In
+`always` an arrival changes nothing.
+
 The arrow (`crates/input/src/cursoroverlay*.rs`): a plain 12 x 19 pointer
 shape, white with a black outline, tip at the hot spot, drawn at 1x, 2x or
 3x for the display scale.
@@ -117,8 +126,13 @@ shape, white with a black outline, tip at the hot spot, drawn at 1x, 2x or
 - **Windows:** a layered window (`WS_EX_LAYERED | WS_EX_TRANSPARENT |
   WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`) on a thread of its
   own with its own message loop, moved with `SetWindowPos` (asynchronous)
-  on each injected move. It registers for mouse device arrivals and hides
-  itself the moment one arrives; the OS pointer is used from then on.
+  on each injected move. It registers for mouse device arrivals and tells
+  the controller, which decides: in `auto` it has told the window
+  beforehand to hide the moment one arrives (no stale arrow until the next
+  injected event, when the controller removes it); in `always` it stays.
+  Otherwise the controller shows and hides it (`ShowWindowAsync`), and
+  before every move while it draws the arrow makes sure it shows, so "one-mk
+  draws the pointer" never means a hidden window.
   The probe is `SM_MOUSEPRESENT` plus `GetCursorInfo`. **Compiled only.**
 - **macOS:** the same program started as a helper, running `NSApplication`
   as an accessory (no Dock icon) with one borderless window at the
@@ -136,10 +150,14 @@ Zero idle cost: nothing exists until a peer takes control and the decision
 says draw: no window, no thread, no helper process, no timer. Everything is
 driven by the daemon's injected events; the OS is asked at most every
 500 ms, and only while a peer moves the pointer. When control ends, the
-setting changes to `never`, or a mouse appears, the window (and its thread
-or helper) goes. The lifecycle is tested with a fake renderer: created on
-control, destroyed after, nothing left after 200 cycles, no retry storm
-when creating fails.
+setting changes to `never`, or (in `auto`) a mouse appears, the window
+(and its thread or helper) goes; unplugged again within the visit, it
+comes back. The lifecycle is tested with a fake renderer that models the
+Windows window's arrival callback: created on control, destroyed after,
+nothing left after 200 cycles, no retry storm when creating fails, an
+arrival ending `auto` at once but not `always` (and a move showing an
+arrow hidden behind the controller's back), plug then unplug in one visit
+bringing it back after the hysteresis, flapping not blinking.
 
 `one-mk status` says "one-mk draws the pointer here" while the arrow is up;
 `one-mk doctor` has a "Pointer without a mouse" line: available (Windows,

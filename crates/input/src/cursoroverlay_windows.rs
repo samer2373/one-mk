@@ -12,8 +12,12 @@
 //! thread of its own that sleeps in `GetMessageW`. The daemon moves it with
 //! `SetWindowPos(SWP_ASYNCWINDOWPOS)`, which only posts to that thread, on
 //! each injected move: no timer. The window registers for mouse device
-//! arrivals and hides itself at once when one comes. Dropping it closes the
-//! window and joins the thread.
+//! arrivals and reports them to the controller, which decides: in `auto`
+//! it has told the window to hide at once (so no stale arrow lingers
+//! until the next injected event, when the controller removes it), in
+//! `always` the arrow stays. Showing and hiding otherwise come from the
+//! controller (`ShowWindowAsync`). Dropping it closes the window and joins
+//! the thread.
 
 use crate::cursoroverlay::{Overlay, Platform, Probe, Px, arrow, arrow_scale};
 use one_mk_proto::Pos;
@@ -35,9 +39,9 @@ use windows_sys::Win32::UI::HiDpi::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CURSOR_SHOWING, CURSOR_SUPPRESSED, CURSORINFO, CreateWindowExW, DBT_DEVICEARRIVAL, DBT_DEVTYP_DEVICEINTERFACE,
     DEV_BROADCAST_DEVICEINTERFACE_W, DEV_BROADCAST_HDR, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetCursorInfo, GetMessageW, GetSystemMetrics, HTTRANSPARENT, HWND_TOPMOST, MSG, PostMessageW, PostQuitMessage,
-    RegisterClassW, RegisterDeviceNotificationW, SM_MOUSEPRESENT, SW_HIDE, SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOSIZE, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA, UnregisterDeviceNotification,
+    GetCursorInfo, GetMessageW, GetSystemMetrics, HTTRANSPARENT, HWND_TOPMOST, IsWindowVisible, MSG, PostMessageW,
+    PostQuitMessage, RegisterClassW, RegisterDeviceNotificationW, SM_MOUSEPRESENT, SW_HIDE, SW_SHOWNOACTIVATE,
+    SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SetWindowPos, ShowWindow, ShowWindowAsync, TranslateMessage, ULW_ALPHA, UnregisterDeviceNotification,
     UpdateLayeredWindow, WM_CLOSE, WM_DESTROY, WM_DEVICECHANGE, WM_NCHITTEST, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
@@ -71,14 +75,14 @@ impl Platform for Windows {
     }
 
     fn create(&mut self, at: Pos) -> anyhow::Result<Box<dyn Overlay>> {
-        let appeared = Arc::new(AtomicBool::new(false));
+        let arrival = Arc::new(Arrival::default());
         let (tx, rx) = std::sync::mpsc::channel();
-        let flag = appeared.clone();
+        let shared = arrival.clone();
         let thread = std::thread::Builder::new()
             .name("one-mk-pointer".into())
-            .spawn(move || window_thread(at, flag, tx))?;
+            .spawn(move || window_thread(at, shared, tx))?;
         match rx.recv() {
-            Ok(Ok((hwnd, scale, hot))) => Ok(Box::new(Window { hwnd, scale, hot, appeared, thread: Some(thread) })),
+            Ok(Ok((hwnd, scale, hot))) => Ok(Box::new(Window { hwnd, scale, hot, arrival, thread: Some(thread) })),
             Ok(Err(e)) => {
                 let _ = thread.join();
                 Err(e)
@@ -100,8 +104,17 @@ struct Window {
     /// Nothing: the tip is the window's top-left pixel. Kept for clarity
     /// should the shape ever change.
     hot: (i32, i32),
-    appeared: Arc<AtomicBool>,
+    arrival: Arc<Arrival>,
     thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// A mouse arriving, between the window's thread and the controller.
+#[derive(Default)]
+struct Arrival {
+    /// One arrived since the controller last asked.
+    seen: AtomicBool,
+    /// The controller's decision for that moment: hide at once (`auto`).
+    hide: AtomicBool,
 }
 
 impl Overlay for Window {
@@ -123,8 +136,22 @@ impl Overlay for Window {
         };
     }
 
-    fn device_appeared(&self) -> bool {
-        self.appeared.load(Ordering::Relaxed)
+    fn set_visible(&mut self, on: bool) {
+        // SAFETY: the window lives until `drop`; IsWindowVisible only reads
+        // its style, and ShowWindowAsync posts to its thread.
+        unsafe {
+            if (IsWindowVisible(self.hwnd as HWND) != 0) != on {
+                ShowWindowAsync(self.hwnd as HWND, if on { SW_SHOWNOACTIVATE } else { SW_HIDE });
+            }
+        }
+    }
+
+    fn take_arrival(&mut self) -> bool {
+        self.arrival.seen.swap(false, Ordering::AcqRel)
+    }
+
+    fn hide_on_arrival(&mut self, on: bool) {
+        self.arrival.hide.store(on, Ordering::Release);
     }
 }
 
@@ -139,14 +166,14 @@ impl Drop for Window {
 }
 
 thread_local! {
-    /// The window thread's "a mouse appeared" flag, for `proc`.
-    static APPEARED: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+    /// The window thread's side of [`Arrival`], for `proc`.
+    static ARRIVAL: RefCell<Option<Arc<Arrival>>> = const { RefCell::new(None) };
 }
 
 type Created = anyhow::Result<(usize, f64, (i32, i32))>;
 
-fn window_thread(at: Pos, appeared: Arc<AtomicBool>, tx: std::sync::mpsc::Sender<Created>) {
-    APPEARED.with(|a| *a.borrow_mut() = Some(appeared));
+fn window_thread(at: Pos, arrival: Arc<Arrival>, tx: std::sync::mpsc::Sender<Created>) {
+    ARRIVAL.with(|a| *a.borrow_mut() = Some(arrival));
     let made = match unsafe { make_window(at) } {
         Ok(made) => made,
         Err(e) => {
@@ -299,12 +326,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wparam: usize, lparam: isiz
         // Volumes and ports arrive here too (broadcast to every top-level
         // window): only a mouse interface counts.
         WM_DEVICECHANGE if wparam as u32 == DBT_DEVICEARRIVAL && is_mouse_interface(lparam) => {
-            // A mouse was plugged in: Windows draws its own pointer now.
-            // SAFETY: our window, on its own thread.
-            unsafe { ShowWindow(hwnd, SW_HIDE) };
-            APPEARED.with(|a| {
+            // A mouse was plugged in: tell the controller, which decides
+            // (and said beforehand whether to hide at once).
+            ARRIVAL.with(|a| {
                 if let Some(a) = a.borrow().as_ref() {
-                    a.store(true, Ordering::Relaxed);
+                    a.seen.store(true, Ordering::Release);
+                    if a.hide.load(Ordering::Acquire) {
+                        // SAFETY: our window, on its own thread.
+                        unsafe { ShowWindow(hwnd, SW_HIDE) };
+                    }
                 }
             });
             return 1;

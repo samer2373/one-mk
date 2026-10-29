@@ -8,7 +8,9 @@
 //! Nothing exists while it isn't drawn: no window, no thread, no timer.
 //! The overlay is created when a peer takes control (or later, once the
 //! decision says draw) and destroyed when control ends, when the setting
-//! says never, or when a real mouse appears (the OS pointer is used then).
+//! says never, or (in `auto`) when a real mouse appears (the OS pointer is
+//! used then); it comes back in the same visit once the probe has said
+//! "no mouse" again for [`SETTLE`](one_mk_proto::overlay::SETTLE).
 //! Everything is driven by the daemon's injected events: [`InjectTx`]
 //! forwards them to the backend and shows the controller the few that
 //! matter (`Controlled`, `MoveTo`, `MoveBy`). The probe of the OS pointer
@@ -17,7 +19,7 @@
 
 use crate::Inject;
 use one_mk_proto::Pos;
-use one_mk_proto::overlay::{Decider, Facts, wants};
+use one_mk_proto::overlay::{Decider, Facts, SETTLE, wants};
 pub use one_mk_proto::overlay::{DrawMode, OsCursor};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -53,15 +55,24 @@ pub struct Probe {
 }
 
 /// A drawn pointer. Dropping it removes the window (and ends its thread,
-/// where there is one).
+/// where there is one). Whether it shows is the [`Controller`]'s decision.
 pub trait Overlay: Send {
     /// Put the arrow's tip at `pos` (the daemon's logical pixels).
     fn move_to(&mut self, pos: Pos);
-    /// A real pointing device appeared since it was created; the overlay
-    /// has hidden itself already, and is dropped at the next event.
-    fn device_appeared(&self) -> bool {
+    /// Show it (if anything hid it) or hide it. Called before every move
+    /// while the controller draws it, so it must be cheap when nothing
+    /// changes.
+    fn set_visible(&mut self, _on: bool) {}
+    /// Whether a real pointing device arrived since last asked (where the
+    /// OS says so: Windows). Only news for the controller, which decides.
+    fn take_arrival(&mut self) -> bool {
         false
     }
+    /// What to do the moment a device arrives, before the controller
+    /// hears of it at the next event: hide (`auto`, where the OS pointer
+    /// takes over and a stale arrow must not linger), or nothing
+    /// (`always`). Set by the controller.
+    fn hide_on_arrival(&mut self, _on: bool) {}
 }
 
 /// One OS's way of drawing a pointer.
@@ -131,9 +142,12 @@ pub struct Controller {
     /// Creating failed during this control session: don't retry on every
     /// move (and say so once).
     failed: bool,
-    /// The overlay saw a mouse arrive during this control session: the OS
-    /// pointer is used until it ends, whatever later probes say.
-    device_seen: bool,
+    /// The overlay saw a mouse arrive: count one as attached, even if the
+    /// probe hasn't caught up yet, until fresh probes have said "no
+    /// device" for [`SETTLE`] (it was unplugged again).
+    arrived: bool,
+    /// Since when probes taken after the arrival have said "no device".
+    absent_since: Option<Instant>,
     overlay: Option<Box<dyn Overlay>>,
     active: Arc<AtomicBool>,
 }
@@ -151,7 +165,8 @@ impl Controller {
             probe: Probe::default(),
             probed_at: None,
             failed: false,
-            device_seen: false,
+            arrived: false,
+            absent_since: None,
             overlay: None,
             active: Arc::default(),
         }
@@ -159,6 +174,9 @@ impl Controller {
 
     pub fn set_mode(&mut self, mode: DrawMode, now: Instant) {
         self.mode = mode;
+        if let Some(o) = self.overlay.as_mut() {
+            o.hide_on_arrival(mode == DrawMode::Auto);
+        }
         self.sync(now);
     }
 
@@ -176,7 +194,8 @@ impl Controller {
                 self.relative = false;
                 self.pos = None;
                 self.failed = false;
-                self.device_seen = false;
+                self.arrived = false;
+                self.absent_since = None;
                 if c {
                     self.start(now);
                 }
@@ -190,17 +209,45 @@ impl Controller {
             _ => return,
         }
         if self.controlled {
-            if self.probed_at.is_none_or(|t| now.saturating_duration_since(t) >= PROBE_EVERY) {
+            let fresh = self.probed_at.is_none_or(|t| now.saturating_duration_since(t) >= PROBE_EVERY);
+            if fresh {
                 self.probe_now(now);
             }
-            if self.overlay.as_ref().is_some_and(|o| o.device_appeared()) {
-                self.device_seen = true;
-            }
+            self.follow_arrival(fresh, now);
         }
         let existed = self.overlay.is_some();
         self.sync(now);
         if let (true, true, Some(o), Some(p)) = (moved, existed, self.overlay.as_mut(), self.pos) {
+            // Drawn: shown, whatever hid it meanwhile.
+            o.set_visible(true);
             o.move_to(p);
+        }
+    }
+
+    /// A mouse arriving counts at once (the probe may lag behind the
+    /// arrival); it stops counting once probes taken since have said "no
+    /// device" for [`SETTLE`]: unplugged again, within the same visit. A
+    /// probe saying "a device" (or "can't tell") starts that wait over, so
+    /// a flapping plug never makes the arrow blink.
+    fn follow_arrival(&mut self, fresh: bool, now: Instant) {
+        if self.overlay.as_mut().is_some_and(|o| o.take_arrival()) {
+            self.arrived = true;
+            self.absent_since = None;
+            return;
+        }
+        if !self.arrived {
+            return;
+        }
+        if fresh {
+            self.absent_since = match self.probe.pointing_device {
+                Some(false) => Some(self.absent_since.unwrap_or(now)),
+                _ => None,
+            };
+        }
+        if self.absent_since.is_some_and(|t| now.saturating_duration_since(t) >= SETTLE) {
+            tracing::debug!("the mouse that arrived is gone again");
+            self.arrived = false;
+            self.absent_since = None;
         }
     }
 
@@ -228,7 +275,7 @@ impl Controller {
         Facts {
             controlled: self.controlled,
             relative: self.relative,
-            pointing_device: if self.device_seen { Some(true) } else { self.probe.pointing_device },
+            pointing_device: if self.arrived { Some(true) } else { self.probe.pointing_device },
             os_cursor: self.probe.os_cursor,
             can_draw: self.platform.is_some() && !self.failed,
         }
@@ -240,8 +287,9 @@ impl Controller {
             (true, false, Some(at)) => {
                 let Some(platform) = self.platform.as_mut() else { return };
                 match platform.create(at) {
-                    Ok(o) => {
+                    Ok(mut o) => {
                         tracing::info!("drawing the pointer (no mouse here, or `pointer-overlay always`)");
+                        o.hide_on_arrival(self.mode == DrawMode::Auto);
                         self.overlay = Some(o);
                     }
                     Err(e) => {
@@ -393,6 +441,8 @@ mod tests {
         reveal_works: AtomicBool,
         fail_create: AtomicBool,
         device_appeared: AtomicBool,
+        visible: AtomicBool,
+        hide_on_arrival: AtomicBool,
     }
 
     impl Log {
@@ -401,6 +451,14 @@ mod tests {
         }
         fn set(&self, device: Option<bool>, os_cursor: OsCursor) {
             *self.probe.lock().unwrap() = Probe { pointing_device: device, os_cursor };
+        }
+        /// What the Windows window does when a mouse arrives: says so,
+        /// and hides at once only if the controller asked it to.
+        fn mouse_arrives(&self) {
+            self.device_appeared.store(true, Ordering::SeqCst);
+            if self.hide_on_arrival.load(Ordering::SeqCst) {
+                self.visible.store(false, Ordering::SeqCst);
+            }
         }
     }
 
@@ -425,6 +483,9 @@ mod tests {
                 anyhow::bail!("no display");
             }
             self.0.created.fetch_add(1, Ordering::SeqCst);
+            self.0.visible.store(true, Ordering::SeqCst);
+            // A new window hears only of later arrivals.
+            self.0.device_appeared.store(false, Ordering::SeqCst);
             self.0.moves.lock().unwrap().push(at);
             Ok(Box::new(FakeOverlay(self.0.clone())))
         }
@@ -434,8 +495,14 @@ mod tests {
         fn move_to(&mut self, pos: Pos) {
             self.0.moves.lock().unwrap().push(pos);
         }
-        fn device_appeared(&self) -> bool {
-            self.0.device_appeared.load(Ordering::SeqCst)
+        fn set_visible(&mut self, on: bool) {
+            self.0.visible.store(on, Ordering::SeqCst);
+        }
+        fn take_arrival(&mut self) -> bool {
+            self.0.device_appeared.swap(false, Ordering::SeqCst)
+        }
+        fn hide_on_arrival(&mut self, on: bool) {
+            self.0.hide_on_arrival.store(on, Ordering::SeqCst);
         }
     }
 
@@ -531,18 +598,99 @@ mod tests {
         tx.send(Inject::Controlled(true)).unwrap();
         tx.send(Inject::MoveTo(p(1.0, 1.0))).unwrap();
         assert_eq!(log.live(), 1);
-        log.device_appeared.store(true, Ordering::SeqCst);
+        assert!(log.hide_on_arrival.load(Ordering::SeqCst), "auto: told to hide the moment one arrives");
+        log.mouse_arrives();
+        assert!(!log.visible.load(Ordering::SeqCst), "hidden before the next event");
         tx.send(Inject::MoveTo(p(2.0, 1.0))).unwrap();
         assert_eq!(log.live(), 0);
         // Even if the probe hasn't caught up yet, it stays gone.
         std::thread::sleep(PROBE_EVERY);
         tx.send(Inject::MoveTo(p(3.0, 1.0))).unwrap();
         assert_eq!(log.live(), 0);
-        log.device_appeared.store(false, Ordering::SeqCst);
         tx.send(Inject::Controlled(false)).unwrap();
         tx.send(Inject::Controlled(true)).unwrap();
         tx.send(Inject::MoveTo(p(3.0, 1.0))).unwrap();
         assert_eq!(log.live(), 1, "the next session asks again");
+    }
+
+    /// The Windows window hears of a mouse arriving on its own thread. In
+    /// `always` the arrow stays: drawn, and shown again by the next move
+    /// if anything hid it, so "active" never means an invisible arrow.
+    #[test]
+    fn a_mouse_arriving_keeps_always_visible() {
+        let (tx, _rx, log) = setup(DrawMode::Always);
+        tx.send(Inject::Controlled(true)).unwrap();
+        tx.send(Inject::MoveTo(p(1.0, 1.0))).unwrap();
+        assert!(log.visible.load(Ordering::SeqCst));
+        assert!(!log.hide_on_arrival.load(Ordering::SeqCst), "always: the arrow stays when a mouse arrives");
+        log.mouse_arrives();
+        assert!(log.visible.load(Ordering::SeqCst));
+        log.set(Some(true), OsCursor::Shown);
+        tx.send(Inject::MoveTo(p(2.0, 1.0))).unwrap();
+        assert!(tx.overlay_active());
+        assert!(log.visible.load(Ordering::SeqCst), "active but hidden");
+        assert_eq!(log.live(), 1);
+        // Hidden behind its back (any cause): the next move shows it.
+        log.visible.store(false, Ordering::SeqCst);
+        tx.send(Inject::MoveTo(p(3.0, 1.0))).unwrap();
+        assert!(log.visible.load(Ordering::SeqCst), "a move while drawn shows it");
+    }
+
+    /// `auto`: a mouse plugged in ends the arrow at once (before the probe
+    /// sees it), unplugged within the same visit brings it back once the
+    /// probe has said "no mouse" for `SETTLE`; flapping doesn't blink.
+    #[test]
+    fn auto_follows_a_mouse_plugged_in_and_out_within_a_visit() {
+        let log = Arc::new(Log::default());
+        log.set(Some(false), OsCursor::Hidden);
+        let mut c = Controller::new(Some(Box::new(Fake(log.clone()))), DrawMode::Auto);
+        let t0 = Instant::now();
+        let mut ms = 0;
+        // Moves every 20 ms until `until` ms into the visit.
+        let step = |c: &mut Controller, ms: &mut u64, until: u64| {
+            while *ms < until {
+                *ms += 20;
+                c.on_inject(&Inject::MoveTo(p(*ms as f64, 0.0)), t0 + Duration::from_millis(*ms));
+            }
+        };
+        c.on_inject(&Inject::Controlled(true), t0);
+        step(&mut c, &mut ms, 100);
+        assert!(c.is_active());
+        // Plugged in: gone at the next move, though the probe lags.
+        log.mouse_arrives();
+        step(&mut c, &mut ms, 120);
+        assert!(!c.is_active(), "the arrival ends it at once");
+        step(&mut c, &mut ms, 600);
+        assert!(!c.is_active(), "a stale probe doesn't bring it back early");
+        log.set(Some(true), OsCursor::Hidden);
+        step(&mut c, &mut ms, 2000);
+        assert!(!c.is_active());
+        // Unplugged, still controlled: back after the hysteresis.
+        log.set(Some(false), OsCursor::Hidden);
+        step(&mut c, &mut ms, 2400);
+        assert!(!c.is_active(), "not before SETTLE");
+        step(&mut c, &mut ms, 3500);
+        assert!(c.is_active(), "the arrow comes back in the same visit");
+        assert_eq!(log.created.load(Ordering::SeqCst), 2);
+        // Flapping: plugged and pulled every 100 ms for 2 s (a loose
+        // plug). The first arrival ends it; the probe sees it come and go,
+        // never gone for `SETTLE`, so it doesn't blink back meanwhile.
+        let created = log.created.load(Ordering::SeqCst);
+        for i in 0..20 {
+            if i % 2 == 0 {
+                log.mouse_arrives();
+            }
+            log.set(Some(i % 2 == 0), OsCursor::Hidden);
+            let until = ms + 100;
+            step(&mut c, &mut ms, until);
+            assert!(!c.is_active(), "blinked back during flapping ({i})");
+        }
+        assert_eq!(log.created.load(Ordering::SeqCst), created);
+        log.set(Some(false), OsCursor::Hidden);
+        let until = ms + 2000;
+        step(&mut c, &mut ms, until);
+        assert!(c.is_active(), "settled: back once");
+        assert_eq!(log.created.load(Ordering::SeqCst), created + 1);
     }
 
     /// When the OS can be made to show its own pointer, ours isn't drawn.
