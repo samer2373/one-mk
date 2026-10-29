@@ -143,12 +143,13 @@ impl TrustStore {
     }
 
     /// Finds a device by name (case-insensitive) or fingerprint prefix.
+    /// A query that fits two devices finds neither: a computer's name is its
+    /// own to choose, and must not stand in for another's ID.
     pub fn find(&self, query: &str) -> Option<&Device> {
         let q = query.replace('-', "").to_ascii_lowercase();
-        self.file
-            .devices
-            .iter()
-            .find(|d| d.name.eq_ignore_ascii_case(query) || (q.len() >= 4 && d.fingerprint.starts_with(&q)))
+        let mut hits = self.file.devices.iter().filter(|d| d.name.eq_ignore_ascii_case(query) || (q.len() >= 4 && d.fingerprint.starts_with(&q)));
+        let first = hits.next()?;
+        hits.next().is_none().then_some(first)
     }
 
     pub fn remove(&mut self, query: &str) -> Option<Device> {
@@ -161,6 +162,20 @@ impl TrustStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A name that is also another computer's ID never picks either.
+    #[test]
+    fn an_ambiguous_query_finds_nothing() {
+        let dev = |name: &str, fp: &str| Device { name: name.into(), fingerprint: fp.into(), ..Default::default() };
+        let dir = std::env::temp_dir().join(format!("one-mk-trust-find-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut t = TrustStore::load(&dir).unwrap();
+        t.upsert(dev("abcd1234", &"ee".repeat(32)));
+        t.upsert(dev("victim", &format!("abcd1234{}", "00".repeat(28))));
+        assert!(t.find("abcd1234").is_none());
+        assert_eq!(t.find("victim").unwrap().name, "victim");
+        assert_eq!(t.find("eeeeeeee").unwrap().name, "abcd1234");
+    }
 
     /// A `devices.toml` from before layout versions and Ctrl/Cmd settings
     /// still loads, with defaults.

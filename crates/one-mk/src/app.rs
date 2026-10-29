@@ -87,6 +87,8 @@ pub struct Options {
 pub struct Services {
     pub clip: Option<Arc<ClipSync>>,
     pub inbox: Arc<Inbox>,
+    /// A computer that was forgotten: its bulk connections end.
+    pub revoked: tokio::sync::broadcast::Sender<Fingerprint>,
 }
 
 /// Serves the streams a peer opens on a bulk connection (clipboard and
@@ -113,7 +115,21 @@ pub async fn serve_streams(
         let (kind, send, recv) = first;
         tokio::spawn(async move { serve_stream(kind, &permit, &name, &services, send, recv).await });
     }
-    while let Ok((send, mut recv)) = conn.accept_bi().await {
+    let mut revoked = services.revoked.subscribe();
+    loop {
+        let (send, mut recv) = tokio::select! {
+            r = conn.accept_bi() => match r {
+                Ok(s) => s,
+                Err(_) => break,
+            },
+            Ok(gone) = revoked.recv() => {
+                if gone == fp {
+                    conn.close(3u32.into(), b"forgotten");
+                    break;
+                }
+                continue;
+            }
+        };
         let (services, name, permit) = (services.clone(), name.clone(), permit.clone());
         tokio::spawn(async move {
             let kind = match tokio::time::timeout(FIRST_STREAM_TIMEOUT, read_stream_kind(&mut recv)).await {
@@ -343,6 +359,7 @@ pub async fn serve(
     let services = Services {
         clip: opts.clipboard.map(|cb| ClipSync::new(cb, node.clone())),
         inbox: Inbox::new(opts.downloads.clone()),
+        revoked: tokio::sync::broadcast::channel(8).0,
     };
     tracing::debug!(
         clipboard = services.clip.is_some(),
@@ -1057,9 +1074,17 @@ impl App {
         }
     }
 
+    /// Re-reads the paired computers. One that was forgotten is let go at
+    /// once: its input link, and any clipboard or file connection it holds.
     fn reload_trust(&mut self) {
-        if let Ok(t) = TrustStore::load(&self.dir) {
-            self.trust = t;
+        let Ok(new) = TrustStore::load(&self.dir) else { return };
+        let gone: Vec<_> = self.trust.devices().iter().filter_map(|d| d.fingerprint()).filter(|fp| !new.is_trusted(fp)).collect();
+        self.trust = new;
+        for fp in gone {
+            if let Some(p) = self.peers.get(&fp) {
+                p.conn.close(3u32.into(), b"forgotten");
+            }
+            let _ = self.services.revoked.send(fp);
         }
     }
 
@@ -1105,10 +1130,6 @@ impl App {
         let text = match req {
             Request::Status => self.status().encode(),
             Request::Reload => {
-                // A computer that was forgotten is let go at once.
-                for p in self.peers.iter().filter(|(fp, _)| !self.trust.is_trusted(fp)).map(|(_, p)| p) {
-                    p.conn.close(3u32.into(), b"forgotten");
-                }
                 self.sync_sides();
                 let fps: Vec<_> = self.peers.keys().copied().collect();
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
