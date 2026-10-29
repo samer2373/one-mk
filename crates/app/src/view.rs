@@ -319,7 +319,9 @@ impl Prefs {
             clip_html: flag("clipboard", "html", true),
             clip_image: flag("clipboard", "image", true),
             clip_max_mb: num("clipboard", "max_mb", 25).clamp(1, 4096) as u32,
-            clip_allow_fetch: flag("clipboard", "allow_pull", true),
+            // Off unless the file says so: one·mk writes `allow_pull` only when it is on, and
+            // a file from before `settings_version = 2` has its old `true` switched off.
+            clip_allow_fetch: num("", "settings_version", 1) >= 2 && flag("clipboard", "allow_pull", false),
             notify_files: flag("", "notify_files", true),
             gaming: text("", "gaming", "off"),
             lock_sync: flag("", "lock_sync", false),
@@ -862,7 +864,12 @@ name = "Café, 2nd floor"
         assert!(!p.auto.contains_key("Café, 2nd floor"));
         // Nothing written yet: one-mk's defaults.
         let d = Prefs::default();
-        assert!(d.notify_files && d.clip_html && d.hotkeys_on && d.clip_allow_fetch);
+        assert!(d.notify_files && d.clip_html && d.hotkeys_on && !d.clip_allow_fetch);
+        // Fetching is on only with the current settings version and an explicit true.
+        let on = |s: &str| Prefs::read(s, "").clip_allow_fetch;
+        assert!(on("settings_version = 2\n[clipboard]\nallow_pull = true\n"));
+        assert!(!on("settings_version = 2\n[clipboard]\ntext = true\n"), "absent means off");
+        assert!(!on("[clipboard]\nallow_pull = true\n"), "an old file's true is switched off");
         assert_eq!((d.clip_max_mb, d.edge_modifier.as_str(), d.hooks.len(), d.gaming.as_str()), (25, "none", 0, "off"));
     }
 
