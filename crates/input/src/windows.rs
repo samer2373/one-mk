@@ -645,7 +645,6 @@ impl State {
         let Some(cap) = self.captured else {
             if let Some(b) = button {
                 self.local.set(b, down);
-                if !down && !injected { let _ = self.tx.send(Event::LocalKeyUp { code: b }); }
             }
             if !injected {
                 self.local_input();

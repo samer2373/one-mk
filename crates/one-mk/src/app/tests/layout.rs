@@ -308,12 +308,14 @@ async fn input_caught_at_a_wall_is_typed_here() {
         Event::Button { button: 0x110, down: true },
         Event::ScrollDiscrete { dx: 0, dy: 1 },
         Event::Button { button: 0x110, down: false },
+        // Went down here before the capture: its release is due here.
+        Event::Key { code: 31, down: false },
     ] {
         duo.ha.events.send(ev).unwrap();
     }
     assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: None });
     let mut got = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..6 {
         got.push(next_inject(&mut duo.ha).await);
     }
     assert_eq!(
@@ -322,10 +324,13 @@ async fn input_caught_at_a_wall_is_typed_here() {
             Inject::Key { code: 30, down: true },
             Inject::Key { code: 30, down: false },
             Inject::Button { button: 0x110, down: true },
-            Inject::ScrollDiscrete { dx: 0, dy: 1 },
             Inject::Button { button: 0x110, down: false },
+            Inject::ScrollDiscrete { dx: 0, dy: 1 },
+            Inject::Key { code: 31, down: false },
         ]
     );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(injected(&mut duo.ha).is_empty(), "the captured releases of taps add nothing");
     assert!(injected(&mut duo.hb).is_empty(), "nothing went to B");
     duo.stop().await;
 }

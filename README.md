@@ -387,12 +387,10 @@ one-mk edge                      # show the rules; --reset turns them off
 ```
 
 While the pointer waits at an edge (dwell or modifier), moving away hands it
-back at once, and typing or clicking there goes to this computer. Press-and-hold
-can begin a local drag: the replayed button stays down until physical release,
-with a three-second safety deadline. A new peer visit, capture loss, screen lock,
-or shutdown also releases it. X11, Windows and macOS report local button releases;
-Wayland portal/wlroots cannot observe those after handing control back, so an
-unobserved release uses the safety deadline. The
+back at once, and typing or clicking there goes to this computer. A click
+there is replayed as a whole click (press and release at once), so no button
+can stay held whatever the system reports afterwards; the catch is that a drag
+cannot start at such an edge: start it away from the edge. The
 fullscreen guard keeps the pointer here while the focused window fills its
 screen, except for programs in the allow list (`--fullscreen-block` never
 leaves a program, fullscreen or not). Windows can always tell; on Linux only

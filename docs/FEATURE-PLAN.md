@@ -95,6 +95,12 @@ Known gaps:
 - Linux `switch` warps the real pointer to the edge before knowing if capture
   activates (review finding, low confidence, not changed).
 - A modifier pressed alone at a held edge is dropped (Fix-A trade-off).
+- At an edge guarded by a dwell time or a modifier (and at a corner, wall or
+  fullscreen guard), a click is replayed as a whole click, so a drag cannot
+  start there; start the drag away from the edge. Holding the replayed press
+  until the real release needs that release reported, which the portal and
+  wlroots backends can't do, and per-OS release semantics can't be tested
+  here, so this stays the robust choice.
 - Everything for Windows and macOS (SendInput relative motion, lock detection,
   fullscreen detection, notifications) is compiled and unit-tested only.
 - Not yet exercised on the real GNOME session: `switch` capture start,

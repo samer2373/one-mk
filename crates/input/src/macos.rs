@@ -651,16 +651,6 @@ impl Ctx {
     fn on_idle(&self, st: &mut State, ty: CGEventType, ev: &CGEvent) -> bool {
         let e = Some(ev);
         match ty {
-            CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp => {
-                let number = match ty {
-                    CGEventType::LeftMouseUp => 0,
-                    CGEventType::RightMouseUp => 1,
-                    _ => CGEvent::integer_value_field(e, CGEventField::MouseEventButtonNumber) as u32,
-                };
-                if let Some(code) = logic::mac_to_evdev_button(number) {
-                    let _ = self.tx.send(Event::LocalKeyUp { code });
-                }
-            }
             CGEventType::KeyDown | CGEventType::KeyUp => st.set_local_key(keycode(ev), ty == CGEventType::KeyDown),
             CGEventType::FlagsChanged => {
                 let kc = keycode(ev);

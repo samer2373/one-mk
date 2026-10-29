@@ -641,11 +641,6 @@ impl X {
     }
 
     fn raw_button(&mut self, st: &mut Shared, source: u16, button: u32, down: bool, emulated: bool) -> Result<()> {
-        if self.grab.is_none() && !down && !emulated && !self.xtest_devices.contains(&source)
-            && let Some(XButton::Button(code)) = x_button(button)
-        {
-            st.send(Event::LocalKeyUp { code });
-        }
         if self.local(st, source) || emulated {
             return Ok(());
         }

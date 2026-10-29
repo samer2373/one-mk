@@ -58,7 +58,6 @@ const IDLE: Duration = Duration::from_secs(60);
 const ENTER_TIMEOUT: Duration = Duration::from_millis(750);
 /// `one-mk switch` gives up if the backend doesn't start capturing in this.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
-const LOCAL_DRAG_TIMEOUT: Duration = Duration::from_secs(3);
 /// Paired computers that are not connected are dialed again after this,
 /// doubling up to [`DIAL_MAX`] while they stay away. Only while one has an
 /// address to try: with every one connected no timer runs.
@@ -426,7 +425,10 @@ struct App {
     /// fullscreen guard): input it caught before the release took effect
     /// was meant for this computer, and is typed here.
     handed_back: Option<u32>,
-    local_buttons: HashMap<u32, Instant>,
+    /// Keys and buttons pressed and released here since capture was
+    /// handed back (`handed_back` or a release at the edge): their real
+    /// releases, if that capture catches them too, add nothing.
+    tapped: Vec<u32>,
     /// `one-mk switch` asked the backend to capture: the pointer goes to
     /// this peer, unless capture hasn't started by then.
     switching: Option<(Fingerprint, Instant)>,
@@ -550,7 +552,7 @@ pub async fn serve(
         mods: Mods::default(),
         approach: None,
         handed_back: None,
-        local_buttons: HashMap::new(),
+        tapped: Vec::new(),
         switching: None,
         lock_sync: LockSync::default(),
         unlock_release: Mods::default(),
@@ -594,7 +596,6 @@ pub async fn serve(
                 Some(ev) => app.on_input(ev, &mut events),
                 None => {
                     tracing::error!("input backend stopped");
-                    app.release_local_buttons();
                     input_open = false;
                 }
             },
@@ -618,7 +619,6 @@ pub async fn serve(
         app.sync_focus_watch();
     }
 
-    app.release_local_buttons();
     app.go_home();
     if let Some((id, a)) = app.approach.take() {
         app.release_capture(id, Some(a.pos()));
@@ -854,7 +854,6 @@ impl App {
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
         match ev {
-            Event::Button { button, down: false } if self.local_buttons.contains_key(&button) => self.release_local_button(button),
             Event::Key { code, down } if self.captured_shortcut(code, down) => {}
             ev @ (Event::Hotkey(_) | Event::Hotkeys(_)) => self.on_shortcut_event(ev),
             Event::Desktop(d) => {
@@ -900,7 +899,6 @@ impl App {
                 }
             }
             Event::LocalKeyUp { code } => {
-                self.release_local_button(code);
                 // Stays here, but shortcuts and modifier-to-cross must no
                 // longer count it.
                 if self.mods.update(code, false)
@@ -949,9 +947,9 @@ impl App {
                 }
             }
             Event::Deactivated { id } => {
-                self.release_local_buttons();
                 if self.handed_back == Some(id) {
                     self.handed_back = None;
+                    self.tapped.clear();
                 }
                 if self.approach.as_ref().is_some_and(|(a, _)| *a == id) {
                     self.approach = None;
@@ -999,6 +997,7 @@ impl App {
         self.end_visit(); // a new activation supersedes any visit in progress
         self.approach = None;
         self.handed_back = None;
+        self.tapped.clear();
         if let Some((fp, _)) = self.switching.take() {
             self.enter_peer_at_center(id, fp);
             return;
@@ -1054,13 +1053,23 @@ impl App {
                 // Captured while held, but meant for this computer. Every
                 // key pressed here is released here too: the user's own
                 // key-ups bypass the injector, which would hold (and on
-                // Windows and macOS repeat) anything left down. Buttons
-                // remain down for dragging, with a bounded release lease.
+                // Windows and macOS repeat) anything left down. A click
+                // likewise (see `type_here`), so a drag cannot start at a
+                // guarded edge.
                 let press = around.iter().map(|&code| Inject::Key { code, down: true });
-                let typed = keys.into_iter().map(|(code, down)| Inject::Key { code, down });
-                let release = around.iter().rev().map(|&code| Inject::Key { code, down: false });
-                for i in press.chain(typed).chain(input).chain(release) {
-                    self.inject_here(i);
+                let typed = keys.iter().map(|&(code, down)| Inject::Key { code, down });
+                for i in press.chain(typed) {
+                    let _ = self.inject.send(i);
+                }
+                if let Some(i) = input {
+                    self.type_here(i);
+                }
+                for &code in around.iter().rev() {
+                    let _ = self.inject.send(Inject::Key { code, down: false });
+                }
+                let pressed = keys.into_iter().filter_map(|(code, down)| down.then_some(code));
+                for code in around.into_iter().chain(pressed) {
+                    self.note_tapped(code);
                 }
             }
         }
@@ -1080,49 +1089,49 @@ impl App {
     }
 
     /// Input caught by a capture handed straight back (`handed_back`):
-    /// typed here. Keys are whole taps; buttons await release or timeout.
+    /// typed here.
     fn replay_here(&mut self, ev: Event) {
-        let replay: &[Inject] = match ev {
-            Event::Key { code, down: true } => &[Inject::Key { code, down: true }, Inject::Key { code, down: false }],
-            Event::Key { down: false, .. } => &[],
-            Event::Button { button, down: true } => {
-                &[Inject::Button { button, down: true }]
-            }
-            Event::Button { button, down: false } => &[Inject::Button { button, down: false }],
-            Event::Scroll { dx, dy } => &[Inject::Scroll { dx, dy }],
-            Event::ScrollDiscrete { dx, dy } => &[Inject::ScrollDiscrete { dx, dy }],
-            Event::ScrollStop => &[Inject::ScrollStop],
-            _ => &[],
+        let input = match ev {
+            Event::Key { code, down } => Inject::Key { code, down },
+            Event::Button { button, down } => Inject::Button { button, down },
+            Event::Scroll { dx, dy } => Inject::Scroll { dx, dy },
+            Event::ScrollDiscrete { dx, dy } => Inject::ScrollDiscrete { dx, dy },
+            Event::ScrollStop => Inject::ScrollStop,
+            _ => return,
         };
-        for &i in replay {
-            self.inject_here(i);
-        }
+        self.type_here(input);
     }
 
-    fn inject_here(&mut self, input: Inject) {
-        match input {
-            Inject::Button { button, down: true } => {
-                if self.local_buttons.contains_key(&button) { return; }
-                self.local_buttons.insert(button, Instant::now() + LOCAL_DRAG_TIMEOUT);
-            }
-            Inject::Button { button, down: false } => {
-                self.release_local_button(button);
+    /// Types `input`, caught by a capture handed back, on this computer. A
+    /// press as a whole tap or click: its real release may be caught too,
+    /// go past the injector (whose press would then stay down), or never be
+    /// seen (the portal and wlroots don't report it), and no backend can be
+    /// trusted to end a press held for it. A release whose press was typed
+    /// so adds nothing; any other is typed (its press went to this computer
+    /// before the capture began).
+    fn type_here(&mut self, input: Inject) {
+        let (code, down, up) = match input {
+            Inject::Key { code, down } => (code, down, Inject::Key { code, down: false }),
+            Inject::Button { button, down } => (button, down, Inject::Button { button, down: false }),
+            other => {
+                let _ = self.inject.send(other);
                 return;
             }
-            _ => {}
+        };
+        if down {
+            let _ = self.inject.send(input);
+            let _ = self.inject.send(up);
+            self.note_tapped(code);
+        } else if let Some(i) = self.tapped.iter().position(|&c| c == code) {
+            self.tapped.swap_remove(i);
+        } else {
+            let _ = self.inject.send(up);
         }
-        let _ = self.inject.send(input);
     }
 
-    fn release_local_button(&mut self, button: u32) {
-        if self.local_buttons.remove(&button).is_some() {
-            let _ = self.inject.send(Inject::Button { button, down: false });
-        }
-    }
-
-    fn release_local_buttons(&mut self) {
-        for (button, _) in self.local_buttons.drain() {
-            let _ = self.inject.send(Inject::Button { button, down: false });
+    fn note_tapped(&mut self, code: u32) {
+        if !self.tapped.contains(&code) {
+            self.tapped.push(code);
         }
     }
 
@@ -1231,7 +1240,6 @@ impl App {
     /// Ends the visit to a peer (which releases anything still held there),
     /// without touching capture.
     fn end_visit(&mut self) -> Option<Remote> {
-        self.release_local_buttons();
         self.release_tuned();
         let r = self.remote.take()?;
         if let Some(p) = self.peers.get(&r.peer) {
@@ -1299,13 +1307,11 @@ impl App {
                 r.entered_at + ENTER_TIMEOUT
             }
         });
-        lease.into_iter().chain(visit).chain(self.local_buttons.values().copied()).min()
+        lease.into_iter().chain(visit).min()
     }
 
     fn on_timer(&mut self) {
         let now = Instant::now();
-        let expired: Vec<u32> = self.local_buttons.iter().filter_map(|(&button, &deadline)| (now >= deadline).then_some(button)).collect();
-        for button in expired { self.release_local_button(button); }
         if let Some((fp, until)) = self.switching
             && now >= until
         {
@@ -1372,7 +1378,6 @@ impl App {
 
     /// Peer `fp` (link `id`) moves its pointer onto this machine.
     fn on_enter(&mut self, fp: Fingerprint, id: usize, epoch: u16, pos: Pos) {
-        self.release_local_buttons();
         let peer = &self.peers[&fp];
         if self.owner.is_some() && !self.is_owner(fp, id) {
             tracing::info!(peer = %peer.name, "refused control: another computer controls this one");
@@ -2148,7 +2153,6 @@ impl App {
 
     /// The OS says this screen locked or unlocked.
     fn on_screen_locked(&mut self, locked: bool) {
-        if locked { self.release_local_buttons(); }
         if !locked {
             tracing::debug!("screen unlocked");
             self.lock_sync.on_local_unlocked();
@@ -3852,7 +3856,7 @@ mod tests {
         duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(1919.0, 540.0)) });
         let mut got = Vec::new();
-        for _ in 0..3 {
+        for _ in 0..4 {
             got.push(next_inject(&mut duo.ha).await);
         }
         assert_eq!(
@@ -3860,18 +3864,25 @@ mod tests {
             vec![
                 Inject::Key { code: 42, down: true },
                 Inject::Button { button: 0x110, down: true },
+                Inject::Button { button: 0x110, down: false },
                 Inject::Key { code: 42, down: false },
             ]
         );
+        // Their real releases, still captured: already done here.
+        duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
+        duo.ha.events.send(Event::Key { code: 42, down: false }).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(injected(&mut duo.ha), vec![]);
         assert_eq!(injected(&mut duo.hb), vec![], "never crossed");
-        duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
-        assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: false });
         duo.stop().await;
     }
 
-    /// Both halves of a captured click are replayed once, in order.
+    /// A click while held at the edge is replayed here as a whole click:
+    /// its real button-up may have been captured too (and then adds
+    /// nothing), reach the system past the injector (which on Wayland and
+    /// macOS would keep a replayed press down), or never be seen at all
+    /// (the portal and wlroots don't report it). Either way no button
+    /// stays held. A drag cannot start at such an edge.
     #[tokio::test]
     async fn click_at_the_edge_leaves_no_button_held() {
         let mut duo = Duo::start("handback-click", None).await;
@@ -3889,47 +3900,48 @@ mod tests {
         duo.stop().await;
     }
 
+    /// Whatever comes after a click at a guarded edge (its release
+    /// reported or never seen, a new activation that holds or crosses,
+    /// the capture ending, a lock, shutdown), the click is already whole
+    /// and nothing more is injected here: no button was left down.
     #[tokio::test]
-    async fn guarded_edge_drag_waits_for_physical_release() {
-        let mut duo = Duo::start("handback-drag", None).await;
-        set(&duo.da, |settings| settings.edge.all.dwell_ms = Some(5000)).await;
-        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
-        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
-        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, .. }));
-        assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: true });
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(injected(&mut duo.ha).is_empty(), "a held button must not become a click");
-        duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
-        assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: false });
-        duo.stop().await;
-    }
-
-    #[tokio::test]
-    async fn guarded_edge_drag_cleanup_is_bounded() {
-        for cleanup in ["deadline", "visit", "incoming", "deactivated", "local-up", "shutdown"] {
-            let mut duo = Duo::start(&format!("drag-{cleanup}"), None).await;
-            set(&duo.da, |settings| settings.edge.all.dwell_ms = Some(5000)).await;
+    async fn click_at_the_edge_is_whole_whatever_follows() {
+        for after in ["nothing", "local-up", "hold-again", "cross", "incoming", "deactivated", "locked", "shutdown"] {
+            let mut duo = Duo::start(&format!("click-{after}"), None).await;
+            set(&duo.da, |s| s.edge.all.dwell_ms = Some(5000)).await;
             duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
             duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
-            assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, .. }));
-            assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: true });
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            assert!(injected(&mut duo.ha).is_empty(), "{cleanup}: prematurely released");
-            match cleanup {
-                "deadline" => tokio::time::sleep(LOCAL_DRAG_TIMEOUT).await,
-                "visit" => {
-                    set(&duo.da, |settings| settings.edge.all.dwell_ms = Some(0)).await;
+            assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, .. }), "{after}");
+            assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: true }, "{after}");
+            // At once, not when a release that may never be seen arrives.
+            let up = tokio::time::timeout(Duration::from_millis(500), next_inject(&mut duo.ha)).await;
+            assert_eq!(up.ok(), Some(Inject::Button { button: 0x110, down: false }), "{after}: a whole click");
+            match after {
+                "nothing" => {}
+                "local-up" => duo.ha.events.send(Event::LocalKeyUp { code: 0x110 }).unwrap(),
+                "hold-again" => {
+                    duo.ha.events.send(Event::Deactivated { id: 1 }).unwrap();
                     duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
                 }
-                "incoming" => { duo.hb.events.send(Event::Activated { id: 2, side: Side::Left, pos: Pos::new(0.0, 540.0) }).unwrap(); }
-                "deactivated" => { duo.ha.events.send(Event::Deactivated { id: 1 }).unwrap(); }
-                "local-up" => { duo.ha.events.send(Event::LocalKeyUp { code: 0x110 }).unwrap(); }
-                "shutdown" => { duo.stop.send(true).unwrap(); }
+                "cross" => {
+                    duo.ha.events.send(Event::Deactivated { id: 1 }).unwrap();
+                    set(&duo.da, |s| s.edge.all.dwell_ms = Some(0)).await;
+                    duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+                    assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
+                }
+                "incoming" => duo.hb.events.send(Event::Activated { id: 2, side: Side::Left, pos: Pos::new(0.0, 540.0) }).unwrap(),
+                "deactivated" => duo.ha.events.send(Event::Deactivated { id: 1 }).unwrap(),
+                "locked" => duo.ha.events.send(Event::ScreenLocked(true)).unwrap(),
+                "shutdown" => duo.stop.send(true).unwrap(),
                 _ => unreachable!(),
             }
-            assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: false }, "{cleanup}");
-            if cleanup == "shutdown" {
-                for task in duo.tasks { task.await.unwrap().unwrap(); }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let buttons: Vec<_> = injected(&mut duo.ha).into_iter().filter(|i| matches!(i, Inject::Button { .. })).collect();
+            assert_eq!(buttons, vec![], "{after}: nothing left to release");
+            if after == "shutdown" {
+                for task in duo.tasks {
+                    task.await.unwrap().unwrap();
+                }
                 let _ = std::fs::remove_dir_all(&duo.da);
                 let _ = std::fs::remove_dir_all(&duo.db);
             } else {

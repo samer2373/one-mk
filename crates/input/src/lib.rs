@@ -76,9 +76,7 @@ pub enum Event {
     /// up. Its release goes to this machine (it went down here), so it is
     /// not input for a peer, but the modifiers held have changed: a
     /// shortcut or a modifier-to-cross must no longer count it. Windows
-    /// and macOS (libei reports such changes as `Modifiers`). Also reports
-    /// local physical button releases after a guarded hand-back, where
-    /// the backend can observe them without capture (X11, Windows, macOS).
+    /// and macOS (libei reports such changes as `Modifiers`).
     LocalKeyUp { code: u32 },
     /// This machine's screen was locked (`true`) or unlocked, where the OS
     /// tells us: logind's `LockedHint` on Linux, session notifications on
