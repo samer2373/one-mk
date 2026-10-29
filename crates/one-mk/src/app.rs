@@ -12,7 +12,7 @@ use crate::clip::ClipSync;
 use crate::control::{self, Request};
 use crate::link::{self, Link, LinkEvent, Rank};
 use crate::profiles::{NetworkId, Profiles};
-use crate::manage::{LayoutStatus, PeerStatus, Place, Status, on_your, placement, takeback_hint};
+use crate::manage::{LayoutStatus, LayoutVerdict, PeerStatus, Place, Status, on_your, placement, resolve_layout, takeback_hint};
 use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
@@ -1675,19 +1675,36 @@ impl App {
     }
 
     /// The peer says it sits on `side_of_you` of us, lined up as `align`
-    /// says (`None` from a peer that predates alignment).
+    /// says (`None` from a peer that predates alignment). A newer version
+    /// wins; equal versions with different layouts are a tie, broken by
+    /// [`resolve_layout`].
     fn on_peer_layout(&mut self, fp: Fingerprint, side_of_you: Side, version: u64, align: Option<Align>) {
         self.reload_trust();
-        let Some(dev) = self.trust.get_mut(&fp).filter(|d| version > d.layout_version) else { return };
+        let our_fp = self.node.identity().fingerprint;
+        let Some(dev) = self.trust.get_mut(&fp) else { return };
         // An older peer only knows sides. An alignment chosen for another
         // side means nothing on the new one, so that starts stretched; on
         // the same side ours stands.
         let align = align.unwrap_or(if dev.side() == side_of_you { dev.align() } else { Align::Stretch });
-        dev.side = side_of_you.to_string();
-        dev.set_align(align);
-        dev.layout_version = version;
+        let same = (dev.side(), dev.align()) == (side_of_you, align);
+        let verdict = resolve_layout(dev.layout_version, version, same, &our_fp, &fp);
+        match verdict {
+            LayoutVerdict::Keep => return,
+            LayoutVerdict::Adopt => {
+                dev.side = side_of_you.to_string();
+                dev.set_align(align);
+                dev.layout_version = version;
+            }
+            // A newer version than the tie, which the peer (new or old)
+            // takes over. It stays quiet about it, so that is the one
+            // message the tie costs.
+            LayoutVerdict::Win => dev.layout_version = version.saturating_add(1),
+        }
         if let Err(e) = self.trust.save() {
             tracing::warn!("could not save the new layout: {e:#}");
+        }
+        if verdict == LayoutVerdict::Win {
+            self.send_layout(fp);
         }
         self.sync_sides();
     }
@@ -3127,7 +3144,11 @@ mod tests {
         /// Like `connect`, after `setup` has edited B's record of it (on
         /// top of B, unless `setup` says otherwise).
         async fn connect_as(tag: &str, to_dir: &std::path::Path, to_port: u16, setup: impl FnOnce(&mut Device)) -> RawPeer {
-            let dir = temp_dir(tag);
+            Self::connect_in(temp_dir(tag), to_dir, to_port, setup).await
+        }
+
+        /// Like `connect_as`, from `dir`, which may hold an identity already.
+        async fn connect_in(dir: PathBuf, to_dir: &std::path::Path, to_port: u16, setup: impl FnOnce(&mut Device)) -> RawPeer {
             let id = Identity::load_or_create(&dir).unwrap();
             trust(to_dir, &id, Side::Top);
             let mut t = TrustStore::load(to_dir).unwrap();

@@ -5,13 +5,14 @@
 //! `side` ([`Side`]), `align` ([`Align`], how its edge lines up with ours
 //! along that side) and `layout_version` (when either was last chosen).
 //! [`set_layout`] is the one way to change them here: it bumps the version,
-//! so the change wins when the two computers compare layouts, and a running
+//! so the change wins when the two computers compare layouts (a tie is
+//! broken by [`resolve_layout`]), and a running
 //! daemon applies it on `Request::Reload` and sends the peer the mirror
 //! image. Profiles (`profiles.rs`) go through it too.
 
 use crate::control::{self, Request};
 use anyhow::{Result, bail};
-use one_mk_net::{Device, Swap, TrustStore};
+use one_mk_net::{Device, Fingerprint, Swap, TrustStore};
 use one_mk_proto::{Align, Side};
 pub use one_mk_ctl::status::{LayoutStatus, PeerStatus, Place, Status, on_your, placement, takeback_hint};
 use std::path::Path;
@@ -103,6 +104,40 @@ pub fn set_layout_at(dir: &Path, device: &str, side: Option<Side>, align: Option
     Ok(dev)
 }
 
+/// What to do with a layout the peer sent, given its version against ours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutVerdict {
+    /// Ours stands (the peer's is older, or says what we already hold).
+    Keep,
+    /// The peer's replaces ours.
+    Adopt,
+    /// A tie, and ours wins: bump our version and send it again, so the
+    /// peer, whatever it runs, ends up with ours.
+    Win,
+}
+
+/// Compares the peer's layout (`theirs`, a version) with ours (`ours`), as
+/// both computers do on receipt. `same` says whether the two describe the
+/// same arrangement (the peer's, already mirrored, equals ours).
+///
+/// A higher version wins. Equal versions (two changes made in the same
+/// millisecond on both computers) are broken the same way on both ends: the
+/// numerically larger certificate fingerprint, compared as bytes, wins.
+/// Equal versions with the same arrangement settle nothing, so nothing is
+/// sent: that is what stops a tie from bouncing between the computers.
+///
+/// An older peer doesn't know the rule and ignores equal versions, so a
+/// winner re-sends under a higher version, which every build adopts.
+pub fn resolve_layout(ours: u64, theirs: u64, same: bool, our_fp: &Fingerprint, peer_fp: &Fingerprint) -> LayoutVerdict {
+    match theirs.cmp(&ours) {
+        std::cmp::Ordering::Less => LayoutVerdict::Keep,
+        std::cmp::Ordering::Greater => LayoutVerdict::Adopt,
+        std::cmp::Ordering::Equal if same => LayoutVerdict::Keep,
+        std::cmp::Ordering::Equal if peer_fp.0 > our_fp.0 => LayoutVerdict::Adopt,
+        std::cmp::Ordering::Equal => LayoutVerdict::Win,
+    }
+}
+
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
@@ -150,4 +185,64 @@ pub async fn layout(dir: &Path, device: &str, side: Option<Side>, align: Option<
         println!("one-mk is not running; this takes effect the next time it starts.");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use LayoutVerdict::{Adopt, Keep, Win};
+
+    fn fp(first: u8) -> Fingerprint {
+        let mut b = [0u8; 32];
+        b[0] = first;
+        Fingerprint(b)
+    }
+
+    #[test]
+    fn newer_version_wins_whatever_the_fingerprints() {
+        for (small, big) in [(fp(1), fp(2)), (fp(2), fp(1))] {
+            for same in [false, true] {
+                assert_eq!(resolve_layout(5, 6, same, &small, &big), Adopt);
+                assert_eq!(resolve_layout(5, 6, same, &big, &small), Adopt);
+                assert_eq!(resolve_layout(6, 5, same, &small, &big), Keep);
+                assert_eq!(resolve_layout(6, 5, same, &big, &small), Keep);
+            }
+        }
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_larger_fingerprint_on_both_ends() {
+        let (small, big) = (fp(1), fp(2));
+        // On the small one's computer the peer (big) wins; on the big one's, we do.
+        assert_eq!(resolve_layout(7, 7, false, &small, &big), Adopt);
+        assert_eq!(resolve_layout(7, 7, false, &big, &small), Win);
+        // Compared as bytes, from the first byte: later bytes only break equal prefixes.
+        let (mut lo, mut hi) = (fp(9), fp(9));
+        (lo.0[31], hi.0[31]) = (0xff, 0);
+        assert_eq!(resolve_layout(0, 0, false, &hi, &lo), Adopt);
+        assert_eq!(resolve_layout(0, 0, false, &lo, &hi), Win);
+        let (mut lo, mut hi) = (fp(0x7f), fp(0x80));
+        (lo.0[1], hi.0[1]) = (0xff, 0);
+        assert_eq!(resolve_layout(3, 3, false, &hi, &lo), Win);
+        assert_eq!(resolve_layout(3, 3, false, &lo, &hi), Adopt);
+    }
+
+    #[test]
+    fn a_tie_with_the_same_layout_settles_nothing() {
+        let (small, big) = (fp(1), fp(2));
+        assert_eq!(resolve_layout(7, 7, true, &small, &big), Keep);
+        assert_eq!(resolve_layout(7, 7, true, &big, &small), Keep);
+        assert_eq!(resolve_layout(0, 0, true, &big, &small), Keep);
+    }
+
+    #[test]
+    fn a_change_after_receiving_is_above_the_peers_version() {
+        let mut dev = Device { layout_version: 1_000, ..Device::default() };
+        place_at(&mut dev, Side::Left, Align::Stretch, 10); // the clock is behind
+        assert_eq!(dev.layout_version, 1_001);
+        place_at(&mut dev, Side::Left, Align::Center, 5_000);
+        assert_eq!(dev.layout_version, 5_000);
+        place_at(&mut dev, Side::Top, Align::Stretch, 5_000); // same millisecond
+        assert_eq!(dev.layout_version, 5_001);
+    }
 }

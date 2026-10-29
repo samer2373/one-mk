@@ -57,8 +57,9 @@ pub struct Device {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub align: String,
     /// When `side` (or `align`) was last chosen (milliseconds since 1970,
-    /// but always above the previous value). Both computers keep the newer
-    /// layout.
+    /// but always above the previous value, and above any version received
+    /// from the device). Both computers keep the newer layout; a tie is
+    /// broken by the larger fingerprint (`one_mk::manage::resolve_layout`).
     #[serde(default)]
     pub layout_version: u64,
     /// Ctrl/Cmd swapping for keys sent to this device.

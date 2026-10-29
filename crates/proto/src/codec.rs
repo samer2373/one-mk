@@ -185,7 +185,13 @@ pub enum Control {
     /// Layout sync: the sender sits on `side_of_you` of the receiver,
     /// lined up with it as `align` says (from the receiver's point of view:
     /// the sender mirrors its own setting). The receiver adopts it if
-    /// `version` is newer than the one it has stored.
+    /// `version` is newer than the one it has stored. Equal versions with
+    /// different layouts (two changes in the same millisecond) are a tie that
+    /// each side breaks locally the same way: the larger certificate
+    /// fingerprint, as bytes, wins. A winning receiver sends its layout again
+    /// under `version + 1`, which a peer that doesn't know the rule adopts
+    /// like any newer one. A layout equal to what the receiver holds is never
+    /// answered, so a tie cannot bounce.
     ///
     /// `align` is trailing (a kind byte and an `i32`): `None` when the
     /// sender predates alignment, or sent a kind this build doesn't know.

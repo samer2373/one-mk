@@ -49,7 +49,10 @@ one-mk layout "other-pc" left      # applies at once, no restart
 The other computer is told, so it records the mirror image (you put it on
 your left, so you are on its right). If the two ever disagree, for example
 because one was switched off when you changed it, the newer change wins as
-soon as they connect.
+soon as they connect. If you change it on both computers in the very same
+millisecond, the one with the larger certificate fingerprint wins and the
+other adopts its layout, so they always end up as mirror images (a computer
+that predates this rule converges too, as long as one side is up to date).
 
 Screens of different sizes, or not lined up? Say where the other edge
 starts, in pixels (see [Arranging the computers](#arranging-the-computers)):

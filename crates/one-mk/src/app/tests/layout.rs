@@ -329,3 +329,96 @@ async fn input_caught_at_a_wall_is_typed_here() {
     assert!(injected(&mut duo.hb).is_empty(), "nothing went to B");
     duo.stop().await;
 }
+
+/// Both computers change the layout at the same moment (the same
+/// millisecond, so the same version) to different, conflicting offsets.
+/// The computer with the larger fingerprint wins: both end up holding its
+/// layout, as mirror images, and at most one more `Layout` goes out after
+/// the two that announced the changes (none if the loser adopted first).
+#[tokio::test]
+async fn simultaneous_changes_converge() {
+    let duo = Duo::start("tie", None).await;
+    let (fa, fb) = (duo.fa.clone(), duo.fb.clone());
+    let sent = |dir: &std::path::Path| layouts_sent_by(dir).load(std::sync::atomic::Ordering::SeqCst);
+    let before = sent(&duo.da) + sent(&duo.db);
+    const NOW: u64 = 4_102_444_800_000;
+    crate::manage::set_layout_at(&duo.da, &fb[..8], Some(Side::Bottom), Some(Align::Offset(50)), None, NOW).unwrap();
+    crate::manage::set_layout_at(&duo.db, &fa[..8], Some(Side::Top), Some(Align::Offset(35)), None, NOW).unwrap();
+    assert!(control::request(&duo.da, Request::Reload).await.unwrap().is_some());
+    assert!(control::request(&duo.db, Request::Reload).await.unwrap().is_some());
+
+    // A's offset for B is 50; B's for A is 35, so -35 in A's terms.
+    let a_wins = fa > fb;
+    let want = if a_wins { Align::Offset(50) } else { Align::Offset(-35) };
+    let (da, db, fa2, fb2) = (duo.da.clone(), duo.db.clone(), fa.clone(), fb.clone());
+    eventually("both to hold the winner's layout", move || {
+        let (x, y) = (record(&da, &fb2), record(&db, &fa2));
+        x.align() == want && y.align() == want.mirror() && x.layout_version == y.layout_version
+    })
+    .await;
+    // Quiet again: no ping-pong, however long we look.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let (a_sees_b, b_sees_a) = (record(&duo.da, &fb), record(&duo.db, &fa));
+    assert_eq!((a_sees_b.side(), b_sees_a.side()), (Side::Bottom, Side::Top));
+    assert_eq!(b_sees_a.align(), a_sees_b.align().mirror());
+    assert_eq!(a_sees_b.layout_version, b_sees_a.layout_version);
+    // Either the loser adopted before announcing anything (nothing to
+    // settle, so nothing more is sent), or both announced and the winner sent
+    // its layout once more under a newer version, so that peers that don't
+    // know the rule adopt it too. Never more.
+    let resent = match a_sees_b.layout_version {
+        NOW => 0,
+        v if v == NOW + 1 => 1,
+        v => panic!("unexpected version {v}"),
+    };
+    assert_eq!(sent(&duo.da) + sent(&duo.db), before + 2 + resent);
+    duo.stop().await;
+}
+
+/// A peer from before the tie rule sends a different layout under the
+/// version B holds. Whoever has the larger fingerprint wins: if it is the
+/// old peer, B adopts its layout (and says nothing); if it is B, B sends the
+/// old peer its own under a newer version, which the old peer adopts.
+#[tokio::test]
+async fn tie_with_an_old_peer_converges_either_way() {
+    for peer_wins in [true, false] {
+        let tag = format!("old-tie-{peer_wins}");
+        let duo = Duo::start(&tag, None).await;
+        let b_fp = Identity::load_or_create(&duo.db).unwrap().fingerprint;
+        let dir = (0..)
+            .map(|i| temp_dir(&format!("{tag}-c{i}")))
+            .find(|d| (Identity::load_or_create(d).unwrap().fingerprint > b_fp) == peer_wins)
+            .unwrap();
+        let sent = layouts_sent_by(&duo.db);
+        let before = sent.load(std::sync::atomic::Ordering::SeqCst);
+        let mut old = RawPeer::connect_in(dir, &duo.db, duo.pb, |d| {
+            d.side = Side::Top.to_string();
+            d.set_align(Align::Offset(50));
+            d.layout_version = 5;
+        })
+        .await;
+        let fc = Identity::load_or_create(&old.dir).unwrap().fingerprint.to_string();
+        // B holds Top, offset 50, version 5. The peer says it is on B's left instead.
+        let mut body = vec![13, 0];
+        body.extend_from_slice(&5u64.to_le_bytes());
+        old.send_body(&body).await;
+        let (db, f) = (duo.db.clone(), fc.clone());
+        if peer_wins {
+            eventually("B to adopt the old peer's layout", move || record(&db, &f).side() == Side::Left).await;
+            assert_eq!(record(&duo.db, &fc).layout_version, 5);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            assert_eq!(sent.load(std::sync::atomic::Ordering::SeqCst), before + 1, "only the layout sent on connecting");
+        } else {
+            // B keeps its layout and sends it again, newer.
+            let again = old.next().await;
+            assert_eq!(again, Control::Layout { side_of_you: Side::Bottom, version: 6, align: Some(Align::Offset(-50)) });
+            assert_eq!(record(&duo.db, &fc).layout_version, 6);
+            assert_eq!(record(&duo.db, &fc).side(), Side::Top);
+            // The old peer adopts it; that settles it, and B stays quiet.
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            assert_eq!(sent.load(std::sync::atomic::Ordering::SeqCst), before + 2);
+        }
+        drop(old);
+        duo.stop().await;
+    }
+}
