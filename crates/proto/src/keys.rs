@@ -40,6 +40,20 @@ impl HeldKeys {
         self.bits.iter().all(|&w| w == 0)
     }
 
+    /// Every code held, lowest first, without allocating.
+    pub fn iter(&self) -> impl Iterator<Item = u32> + '_ {
+        self.bits.iter().enumerate().flat_map(|(w, &word)| {
+            let mut b = word;
+            std::iter::from_fn(move || {
+                (b != 0).then(|| {
+                    let i = b.trailing_zeros();
+                    b &= b - 1;
+                    w as u32 * 64 + i
+                })
+            })
+        })
+    }
+
     /// Clears the set, returning every code that was held.
     pub fn take_all(&mut self) -> Vec<u32> {
         let mut out = Vec::new();
@@ -92,6 +106,7 @@ mod tests {
         assert!(k.update(0x110, true)); // BTN_LEFT
         assert!(!k.update(30, false)); // release of a key never pressed
         assert!(k.is_held(29));
+        assert_eq!(k.iter().collect::<Vec<_>>(), vec![29, 0x110]);
         assert_eq!(k.take_all(), vec![29, 0x110]);
         assert!(k.is_empty());
         assert!(!k.update(10_000, true));

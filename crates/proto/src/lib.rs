@@ -7,10 +7,14 @@ mod codec;
 mod edge;
 mod geometry;
 mod keys;
+pub mod keynames;
 mod layout;
 mod lock;
 pub mod mediakeys;
 mod motion;
+pub mod pointer;
+pub mod remap;
+pub mod scroll;
 mod sleep;
 mod transfer;
 
