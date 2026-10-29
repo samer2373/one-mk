@@ -28,6 +28,9 @@ pub enum Event {
     Prefs(Prefs),
     /// `one-mk doctor --json`: the checks, or why they couldn't be run.
     Doctor(Result<Vec<Check>, String>),
+    /// `one-mk keymap check`: the problems with the input tuning (none:
+    /// fine), or why it couldn't be run.
+    KeymapCheck(Result<Vec<String>, String>),
 }
 
 /// A command the window started, with what it needs to report on it.
@@ -59,6 +62,18 @@ pub enum Job {
     Set { what: String, args: Vec<String> },
     Doctor,
     EditSettings,
+    /// Input tuning changed with `one-mk keymap|pointer|scroll|buttons`;
+    /// `what` names it, `area` is where its error shows, `n` tells two
+    /// changes apart.
+    Tune { what: String, area: &'static str, n: u64 },
+}
+
+/// Work for the input tuning worker, which runs one command at a time.
+enum Tuning {
+    /// Commands run in order, stopping at the first that fails. A later
+    /// one with the same `key` (a slider moving) replaces it while queued.
+    Run { job: Job, cmds: Vec<Vec<String>>, key: Option<String> },
+    Check,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -78,6 +93,8 @@ pub struct Link {
     tray: Option<PathBuf>,
     tx: Sender<Event>,
     ctx: egui::Context,
+    /// The input tuning worker, started on first use.
+    tuning: std::sync::Arc<std::sync::Mutex<Option<Sender<Tuning>>>>,
 }
 
 impl Link {
@@ -90,7 +107,7 @@ impl Link {
         let me = std::env::current_exe()?;
         let daemon = install::sibling(&me, "one-mk").unwrap_or_else(|| PathBuf::from("one-mk"));
         let tray = install::sibling(&me, "one-mk-tray");
-        Ok(Self { dir, custom_home, daemon, tray, tx, ctx })
+        Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default() })
     }
 
     pub fn home_args(&self) -> Vec<String> {
@@ -181,8 +198,14 @@ impl Link {
 
     /// `one-mk <args>`, with the settings folder; its error output on failure.
     fn one_mk(&self, args: &[&str]) -> anyhow::Result<String> {
+        let home = self.home_args();
+        self.run_one_mk(&args.iter().copied().chain(home.iter().map(String::as_str)).collect::<Vec<_>>())
+    }
+
+    /// `one-mk <args>` exactly as given.
+    fn run_one_mk(&self, args: &[&str]) -> anyhow::Result<String> {
         let mut cmd = Command::new(&self.daemon);
-        cmd.args(args).args(self.home_args()).stdin(Stdio::null());
+        cmd.args(args).stdin(Stdio::null());
         let out = proc::hide_window(&mut cmd).output()?;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
@@ -268,6 +291,79 @@ impl Link {
         let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
         let job = Job::Set { what: what.into(), args: args.clone() };
         self.job(job, move |l| l.one_mk(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(drop));
+    }
+
+    /// Changes input tuning: `cmds` are `one-mk` commands, run in order
+    /// after everything asked before (one command at a time, so two
+    /// changes to `settings.toml` never race). A change with the same
+    /// `key` that is still waiting is dropped for this one.
+    pub fn tune(&self, job: Job, cmds: Vec<Vec<String>>, key: Option<String>) {
+        self.tuning_send(Tuning::Run { job, cmds, key });
+    }
+
+    /// Runs `one-mk keymap check` after whatever tuning is queued.
+    pub fn keymap_check(&self) {
+        self.tuning_send(Tuning::Check);
+    }
+
+    fn tuning_send(&self, t: Tuning) {
+        let mut slot = self.tuning.lock().unwrap_or_else(|e| e.into_inner());
+        let t = match slot.as_ref() {
+            Some(tx) => match tx.send(t) {
+                Ok(()) => return,
+                Err(e) => e.0,
+            },
+            None => t,
+        };
+        let (tx, rx) = std::sync::mpsc::channel::<Tuning>();
+        let _ = tx.send(t);
+        *slot = Some(tx);
+        let link = self.clone();
+        // Blocked on the channel while idle; it ends with the window.
+        std::thread::spawn(move || {
+            while let Ok(first) = rx.recv() {
+                let mut queue = vec![first];
+                queue.extend(rx.try_iter());
+                // A newer change to the same thing wins.
+                let mut keep = vec![true; queue.len()];
+                for (i, t) in queue.iter().enumerate() {
+                    if let Tuning::Run { key: Some(k), .. } = t {
+                        keep[i] = !queue[i + 1..].iter().any(|u| matches!(u, Tuning::Run { key: Some(l), .. } if l == k));
+                    }
+                }
+                for (t, keep) in queue.into_iter().zip(keep) {
+                    match t {
+                        Tuning::Run { job, .. } if !keep => link.send(Event::Done { what: job, error: None }),
+                        Tuning::Run { job, cmds, .. } => {
+                            // The settings folder goes first: these end their options with `--`.
+                            let error = cmds
+                                .iter()
+                                .find_map(|c| link.run_one_mk(&link.home_args().iter().chain(c).map(String::as_str).collect::<Vec<_>>()).err())
+                                .map(|e| format!("{e:#}"));
+                            link.send(Event::Done { what: job, error });
+                        }
+                        Tuning::Check => link.send(Event::KeymapCheck(link.run_keymap_check())),
+                    }
+                }
+            }
+        });
+    }
+
+    fn run_keymap_check(&self) -> Result<Vec<String>, String> {
+        let mut cmd = Command::new(&self.daemon);
+        cmd.args(["keymap", "check"]).args(self.home_args()).stdin(Stdio::null());
+        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("one-mk didn't start: {e}"))?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        if out.status.success() {
+            return Ok(vec![]);
+        }
+        // Problems are on stdout, one a line; stderr says how many.
+        let problems: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("No input tuning")).map(str::to_owned).collect();
+        if problems.is_empty() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            return Err(err.trim().trim_start_matches("one-mk: ").to_owned());
+        }
+        Ok(problems)
     }
 
     /// Runs `one-mk doctor --json` and reports the checks.

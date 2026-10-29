@@ -25,6 +25,8 @@ pub const PILL: Color32 = Color32::from_rgb(0x26, 0x2C, 0x36);
 /// A switch that is off: a visible track with a 3:1 edge.
 pub const TRACK_OFF: Color32 = Color32::from_rgb(0x3A, 0x42, 0x4E);
 pub const TRACK_EDGE: Color32 = Color32::from_rgb(0x70, 0x7A, 0x86);
+/// The outline of a drawn key or mouse button: 3:1 on the panel.
+pub const KEY_EDGE: Color32 = Color32::from_rgb(0x5F, 0x68, 0x73);
 /// Things that are off or offline, still 3:1 on the panel.
 pub const OFF: Color32 = Color32::from_rgb(0x70, 0x7A, 0x86);
 
