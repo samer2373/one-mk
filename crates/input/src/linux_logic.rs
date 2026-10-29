@@ -456,9 +456,11 @@ impl OutputGeometry {
 }
 
 /// The XKB modifier state of a virtual keyboard, which wlroots does not
-/// work out from its keys: the client sends it. Bits as in every standard
-/// keymap: Shift 0, Lock 1, Control 2, Mod1 (Alt) 3, Mod2 (Num Lock) 4,
-/// Mod4 (Super) 6, Mod5 (AltGr) 7.
+/// work out from its keys: the client sends it. What the keys mean in a
+/// standard keymap, for when libxkbcommon can't say what they mean in the
+/// actual one (see `crate::xkb`). Bits as in every standard keymap: Shift
+/// 0, Lock 1, Control 2, Mod1 (Alt) 3, Mod2 (Num Lock) 4, Mod4 (Super) 6,
+/// Mod5 (AltGr) 7.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct XkbMods {
     held: Vec<u32>,
@@ -508,11 +510,6 @@ impl XkbMods {
 
     pub(crate) fn depressed(&self) -> u32 {
         self.held.iter().filter_map(|&c| Self::bit(c)).fold(0, |a, b| a | b)
-    }
-
-    /// Forgets the keys held (they were let go of), keeping the locks.
-    pub(crate) fn clear_held(&mut self) {
-        self.held.clear();
     }
 }
 
@@ -754,8 +751,6 @@ mod tests {
         assert_eq!(m.locked, 0, "Caps Lock toggles");
         assert!(m.key(100, true));
         assert_eq!(m.depressed(), 4 | 128);
-        m.clear_held();
-        assert_eq!(m.depressed(), 0);
     }
 
     #[test]

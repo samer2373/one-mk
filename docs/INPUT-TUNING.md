@@ -122,14 +122,23 @@ changes, and keeps the wire state in a bitset. So:
 * **auto-repeat**: a repeated down of a key whose record holds an output
   repeats that output's key (if it is down on the wire); a pending,
   swallowed or layer key ignores repeats; sequences and actions never
-  repeat.
+  repeat;
+* **typed once** (a tap, a sequence step) is a pulse, not a holder: the
+  key goes down and up even if something already holds it (it is let go
+  of first and pressed again after, so `["a", "a"]` with A held types two
+  a's), and the chord's modifiers are down for it even while a combo
+  hides them, then back as they were;
+* **actions** are emitted as the action itself (shared with the keymap,
+  no copy), not an index into the keymap, so one emitted just before a
+  reload still runs as the old keymap had it.
 
 **Dual-role** (`tap`/`hold`): pressing the key makes it pending and arms a
 deadline. It resolves to *hold* when the deadline passes, when another key
 is pressed while it is down ("permissive hold": the other key then sees the
 hold, so Caps-as-Ctrl + C is Ctrl+C), or when a mouse button is pressed or
 the wheel turned; to *tap* when it is released first (tap down and up are
-sent at once). The deadline is the mapper's only timer: the daemon's event
+sent at once). Every event first checks the deadline, so a release that
+arrives after it, before the timer ran (a busy loop), is a hold, not a tap. The deadline is the mapper's only timer: the daemon's event
 loop includes it only while a key is pending, and it fires or is cancelled
 exactly once, so an idle keyboard costs nothing.
 

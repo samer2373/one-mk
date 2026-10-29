@@ -35,9 +35,10 @@
 
 use crate::common_logic::{Backoff, drain_coalesced};
 use crate::linux_logic::{
-    AxisFrame, EdgePush, Held, Notches, OutputGeometry, Pressed, XkbMods, absolute_motion, pushes_out, wlr_missing,
+    AxisFrame, EdgePush, Held, Notches, OutputGeometry, Pressed, absolute_motion, pushes_out, wlr_missing,
 };
 use crate::linux_rt::{Socket, forward_lock, lock_changed, spawn_thread};
+use crate::xkb::{KeyboardMods, Modifiers};
 use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::{Context, Result, anyhow, bail};
 use one_mk_proto::{Desktop, Mods, Pos, Rect, Side};
@@ -295,7 +296,10 @@ struct State {
     vpointer: Option<zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1>,
     vkeyboard: Option<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1>,
     held: Held,
-    mods: XkbMods,
+    /// The virtual keyboard's modifiers, from the keymap it was given.
+    mods: Option<KeyboardMods>,
+    /// The modifiers last sent to it.
+    mods_sent: Option<Modifiers>,
     notches: Notches,
     /// A peer controls this machine: its motion (relative events come
     /// with injected motion too) must not push through our edges.
@@ -329,7 +333,8 @@ impl State {
             vpointer: None,
             vkeyboard: None,
             held: Held::default(),
-            mods: XkbMods::default(),
+            mods: None,
+            mods_sent: None,
             notches: Notches::default(),
             controlled: false,
             started: Instant::now(),
@@ -657,6 +662,11 @@ impl State {
                 Ok((fd, size)) => {
                     self.vkeyboard.as_ref()?.keymap(XKB_V1, fd.as_fd(), size);
                     self.keymap_sent = true;
+                    // The compositor keeps the keys held across a new
+                    // keymap: so does the state the modifiers come from.
+                    let held = self.mods.as_ref().map_or(&[][..], |m| m.held());
+                    self.mods = Some(KeyboardMods::new(&keymap, held, self.group));
+                    self.mods_sent = None;
                 }
                 Err(e) => {
                     tracing::warn!("passing the keymap on: {e:#}");
@@ -733,12 +743,16 @@ impl State {
                 v.frame();
             }
             Inject::Key { code, down } => {
-                let changed = self.mods.key(code, down);
-                let (depressed, locked, group) = (self.mods.depressed(), self.mods.locked, self.group);
-                let Some(k) = self.vkeyboard() else { return };
+                if self.vkeyboard().is_none() {
+                    return;
+                }
+                let (Some(k), Some(mods)) = (self.vkeyboard.as_ref(), self.mods.as_mut()) else { return };
+                mods.key(code, down);
+                let m = mods.get();
                 k.key(t, code, u32::from(down));
-                if changed {
-                    k.modifiers(depressed, 0, locked, group);
+                if self.mods_sent != Some(m) {
+                    k.modifiers(m.depressed, m.latched, m.locked, m.group);
+                    self.mods_sent = Some(m);
                 }
             }
             // No local input to watch for, but edges to keep shut.
@@ -756,7 +770,6 @@ impl State {
         for m in up {
             self.inject(m);
         }
-        self.mods.clear_held();
         // Wait for the compositor to have done it: requests still in
         // flight when the connection closes (we may be on the way out)
         // can be lost.
@@ -904,6 +917,9 @@ impl State {
             }
             K::Modifiers { mods_depressed, mods_latched, group, .. } => {
                 self.group = group;
+                if let Some(m) = &mut self.mods {
+                    m.set_group(group);
+                }
                 if self.capture.is_some() {
                     self.send(Event::Modifiers(Mods::from_xkb(mods_depressed | mods_latched)));
                 }
