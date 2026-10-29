@@ -1,7 +1,7 @@
 //! Compact little-endian binary encoding. Positions are fixed-point with
 //! 1/256 px precision.
 
-use crate::{PROTOCOL_VERSION, Pos, Rect, Side};
+use crate::{Align, PROTOCOL_VERSION, Pos, Rect, Side};
 use std::fmt;
 
 /// First byte of every QUIC stream, saying what the stream carries.
@@ -172,9 +172,15 @@ pub enum Control {
     /// The receiver ended visit `epoch` (someone used its own mouse or
     /// keyboard, or the sender went silent); the sender takes its pointer back.
     Revoked { epoch: u16 },
-    /// Layout sync: the sender sits on `side_of_you` of the receiver. The
-    /// receiver adopts it if `version` is newer than the one it has stored.
-    Layout { side_of_you: Side, version: u64 },
+    /// Layout sync: the sender sits on `side_of_you` of the receiver,
+    /// lined up with it as `align` says (from the receiver's point of view:
+    /// the sender mirrors its own setting). The receiver adopts it if
+    /// `version` is newer than the one it has stored.
+    ///
+    /// `align` is trailing (a kind byte and an `i32`): `None` when the
+    /// sender predates alignment, or sent a kind this build doesn't know.
+    /// Builds that predate it read the side and version and skip the rest.
+    Layout { side_of_you: Side, version: u64, align: Option<Align> },
     // Additive messages. Peers that predate them skip unknown tags (see
     // `link.rs`), so they need no new protocol version.
     /// The optional features the sender supports (bits of [`caps`]), sent
@@ -274,10 +280,19 @@ impl Control {
                 w.u8(12);
                 w.u16(*epoch);
             }
-            Control::Layout { side_of_you, version } => {
+            Control::Layout { side_of_you, version, align } => {
                 w.u8(13);
                 w.u8(Side::ALL.iter().position(|s| s == side_of_you).unwrap_or(0) as u8);
                 w.u64(*version);
+                if let Some(a) = align {
+                    let (kind, px) = match a {
+                        Align::Stretch => (0, 0),
+                        Align::Offset(o) => (1, *o),
+                        Align::Center => (2, 0),
+                    };
+                    w.u8(kind);
+                    w.i32(px);
+                }
             }
             Control::Caps(bits) => {
                 w.u8(14);
@@ -351,6 +366,7 @@ impl Control {
             13 => Control::Layout {
                 side_of_you: *Side::ALL.get(usize::from(r.u8()?)).ok_or(DecodeError::Invalid("side"))?,
                 version: r.u64()?,
+                align: r.align()?,
             },
             14 => Control::Caps(r.u32()?),
             15 => Control::PointerMode { epoch: r.u16()?, relative: r.u8()? != 0 },
@@ -482,6 +498,19 @@ impl Reader<'_> {
     fn flag_or(&mut self, default: bool) -> Result<bool, DecodeError> {
         if self.0.is_empty() { Ok(default) } else { Ok(self.u8()? != 0) }
     }
+    /// [`Control::Layout`]'s trailing alignment.
+    fn align(&mut self) -> Result<Option<Align>, DecodeError> {
+        if self.0.is_empty() {
+            return Ok(None);
+        }
+        let (kind, px) = (self.u8()?, self.i32()?);
+        Ok(match kind {
+            0 => Some(Align::Stretch),
+            1 => Some(Align::Offset(px)),
+            2 => Some(Align::Center),
+            _ => None,
+        })
+    }
     /// Fixed-point, so always finite.
     fn pos(&mut self) -> Result<Pos, DecodeError> {
         Ok(Pos::new(from_fixed(self.i32()?), from_fixed(self.i32()?)))
@@ -587,7 +616,10 @@ mod tests {
             Control::EnterAck { epoch: 1 },
             Control::Busy { epoch: 2 },
             Control::Revoked { epoch: u16::MAX },
-            Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123 },
+            Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123, align: None },
+            Control::Layout { side_of_you: Side::Left, version: 1, align: Some(Align::Offset(-300)) },
+            Control::Layout { side_of_you: Side::Top, version: 2, align: Some(Align::Center) },
+            Control::Layout { side_of_you: Side::Right, version: 3, align: Some(Align::Stretch) },
             Control::Caps(caps::LOCAL),
             Control::PointerMode { epoch: 3, relative: true },
             Control::PointerMode { epoch: 3, relative: false },
@@ -673,6 +705,27 @@ mod tests {
         let mut body = vec![13, 9];
         body.extend_from_slice(&1u64.to_le_bytes());
         assert_eq!(Control::decode(&body), Err(DecodeError::Invalid("side")));
+    }
+
+    /// Alignment is additive: a frame from a build before it has none, a
+    /// build before it reads ours as the same side and version, and a kind
+    /// from a newer build is ignored rather than refusing the layout.
+    #[test]
+    fn layout_alignment_is_compatible() {
+        let mut old = vec![13, 3];
+        old.extend_from_slice(&7u64.to_le_bytes());
+        assert_eq!(Control::decode(&old), Ok(Control::Layout { side_of_you: Side::Bottom, version: 7, align: None }));
+        let mut new = Vec::new();
+        Control::Layout { side_of_you: Side::Bottom, version: 7, align: Some(Align::Offset(300)) }.encode_frame(&mut new);
+        assert_eq!(&new[2..2 + old.len()], &old[..], "an older build reads the same side and version first");
+        assert_eq!(new.len(), 2 + old.len() + 5);
+        let mut future = old.clone();
+        future.push(9);
+        future.extend_from_slice(&5i32.to_le_bytes());
+        assert_eq!(Control::decode(&future), Ok(Control::Layout { side_of_you: Side::Bottom, version: 7, align: None }));
+        let mut cut = old.clone();
+        cut.push(1);
+        assert_eq!(Control::decode(&cut), Err(DecodeError::Truncated));
     }
 
     #[test]

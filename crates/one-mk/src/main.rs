@@ -11,9 +11,11 @@ mod hotkeys;
 mod install;
 mod link;
 mod manage;
+mod netwatch;
 mod notify;
 mod pair;
 mod power;
+mod profiles;
 mod send;
 mod settings;
 mod steer;
@@ -24,7 +26,7 @@ use anyhow::{Context, Result};
 use clipctl::OnOff;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use one_mk_net::{Identity, Swap, TrustStore};
-use one_mk_proto::{DEFAULT_PORT, Side};
+use one_mk_proto::{Align, DEFAULT_PORT, Side};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -198,17 +200,32 @@ enum Cmd {
     Install,
     /// Stop starting one-mk automatically.
     Uninstall,
-    /// Say which side of this computer a paired computer is on (applies at
-    /// once if one-mk is running) and how Ctrl/Cmd are treated.
+    /// Say which side of this computer a paired computer is on and how its
+    /// edge lines up with this one's (applies at once if one-mk is
+    /// running), and how Ctrl/Cmd are treated.
     Layout {
         /// Name or id of the paired computer (see `one-mk devices`).
         device: String,
         /// Where it is: left, right, top or bottom.
         side: Option<Side>,
+        /// How its edge lines up with this computer's, in logical pixels:
+        /// how far its top (for left and right) or left (for top and
+        /// bottom) edge starts after this one's, negative for before;
+        /// `center` to centre the two; `stretch` (the default) to map the
+        /// whole edges onto each other. With a number or `center` the
+        /// pointer only crosses where the edges overlap.
+        #[arg(long, value_name = "PX|center|stretch", allow_hyphen_values = true)]
+        offset: Option<Align>,
         /// Swap Ctrl and Cmd for keys sent to it, so copy and paste feel the same
         /// between a Mac and a PC (default: auto, which swaps only between a Mac and another computer).
         #[arg(long, value_name = "on|off|auto")]
         swap_ctrl_cmd: Option<Swap>,
+    },
+    /// Named layouts: save where every computer is, switch between them,
+    /// and switch by Wi-Fi network automatically.
+    Profile {
+        #[command(subcommand)]
+        cmd: profiles::ProfileCmd,
     },
     /// Unpair a computer.
     Forget {
@@ -387,7 +404,10 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Takeback => manage::takeback(&dir).await,
             Cmd::Install => install::install(&dir, custom_home).await,
             Cmd::Uninstall => install::uninstall(),
-            Cmd::Layout { device, side, swap_ctrl_cmd } => manage::layout(&dir, &device, side, swap_ctrl_cmd).await,
+            Cmd::Layout { device, side, offset, swap_ctrl_cmd } => {
+                manage::layout(&dir, &device, side, offset, swap_ctrl_cmd).await
+            }
+            Cmd::Profile { cmd } => profiles::run(&dir, cmd).await,
             Cmd::Forget { device } => forget(&dir, &device),
             Cmd::Switch { to } => steer::switch(&dir, &to).await,
             Cmd::LockPointer { state } => {

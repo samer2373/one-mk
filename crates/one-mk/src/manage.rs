@@ -1,11 +1,19 @@
 //! The commands that talk to a running daemon or change its settings:
 //! `status`, `takeback` and `layout`.
+//!
+//! Layout data lives in `devices.toml`, one record per paired computer:
+//! `side` ([`Side`]), `align` ([`Align`], how its edge lines up with ours
+//! along that side) and `layout_version` (when either was last chosen).
+//! [`set_layout`] is the one way to change them here: it bumps the version,
+//! so the change wins when the two computers compare layouts, and a running
+//! daemon applies it on `Request::Reload` and sends the peer the mirror
+//! image. Profiles (`profiles.rs`) go through it too.
 
 use crate::control::{self, Request};
 use anyhow::{Result, bail};
 use one_mk_net::{Device, Swap, TrustStore};
-use one_mk_proto::Side;
-pub use one_mk_ctl::status::{PeerStatus, Status, on_your, takeback_hint};
+use one_mk_proto::{Align, Side};
+pub use one_mk_ctl::status::{LayoutStatus, PeerStatus, Place, Status, on_your, placement, takeback_hint};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -41,18 +49,21 @@ pub async fn takeback(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Changes a paired device's side and/or Ctrl/Cmd setting in `devices.toml`.
-/// A new side gets a version newer than any seen, so it wins when the two
-/// computers compare layouts.
-pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, swap: Option<Swap>) -> Result<Device> {
+/// Changes a paired device's side, alignment and/or Ctrl/Cmd setting in
+/// `devices.toml`. A new side or alignment gets a version newer than any
+/// seen, so it wins when the two computers compare layouts. A new side
+/// without an alignment is stretched; the same side keeps its alignment.
+pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>) -> Result<Device> {
     let mut trust = TrustStore::load(dir)?;
     let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
     let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
     let dev = trust.get_mut(&fp).expect("found above");
-    if let Some(side) = side {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-        dev.side = side.to_string();
-        dev.layout_version = now.max(dev.layout_version + 1);
+    if side.is_some() || align.is_some() {
+        // An offset chosen for one side means something else on another,
+        // so a new side without one starts stretched.
+        let new_side = side.unwrap_or_else(|| dev.side());
+        let keep = if new_side == dev.side() { dev.align() } else { Align::Stretch };
+        place(dev, new_side, align.unwrap_or(keep));
     }
     if let Some(swap) = swap {
         dev.swap_ctrl_cmd = swap;
@@ -62,14 +73,29 @@ pub fn set_layout(dir: &Path, device: &str, side: Option<Side>, swap: Option<Swa
     Ok(dev)
 }
 
-pub async fn layout(dir: &Path, device: &str, side: Option<Side>, swap: Option<Swap>) -> Result<()> {
-    if side.is_none() && swap.is_none() {
-        bail!("say where {device:?} is (left, right, top or bottom) and/or use --swap-ctrl-cmd on|off|auto");
+/// Puts `dev` on `side`, lined up as `align`, under a new layout version.
+pub fn place(dev: &mut Device, side: Side, align: Align) {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    dev.side = side.to_string();
+    dev.set_align(align);
+    dev.layout_version = now.max(dev.layout_version + 1);
+}
+
+pub async fn layout(dir: &Path, device: &str, side: Option<Side>, align: Option<Align>, swap: Option<Swap>) -> Result<()> {
+    if side.is_none() && align.is_none() && swap.is_none() {
+        bail!(
+            "say where {device:?} is (left, right, top or bottom), how it lines up (--offset PX, center or stretch) \
+             and/or use --swap-ctrl-cmd on|off|auto"
+        );
     }
-    let dev = set_layout(dir, device, side, swap)?;
+    let dev = set_layout(dir, device, side, align, swap)?;
     let name = one_mk_proto::sanitize_name(&dev.name);
-    if let Some(side) = side {
-        println!("{name} is now {}.", on_your(side));
+    let moved = side.is_some() || align.is_some();
+    if moved {
+        println!("{name} is now {}.", placement(dev.side(), dev.align()));
+        if dev.align().is_exact() {
+            println!("The pointer crosses only where your edges overlap, like between two monitors.");
+        }
     }
     match swap {
         Some(Swap::On) => println!("Ctrl and Cmd are swapped for keys sent to {name}."),
@@ -78,7 +104,7 @@ pub async fn layout(dir: &Path, device: &str, side: Option<Side>, swap: Option<S
         None => {}
     }
     if control::request(dir, Request::Reload).await?.is_some() {
-        println!("Applied right away.{}", if side.is_some() { " Its computer picks up the change too." } else { "" });
+        println!("Applied right away.{}", if moved { " Its computer picks up the change too." } else { "" });
     } else {
         println!("one-mk is not running; this takes effect the next time it starts.");
     }

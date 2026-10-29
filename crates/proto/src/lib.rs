@@ -7,6 +7,7 @@ mod codec;
 mod edge;
 mod geometry;
 mod keys;
+mod layout;
 mod lock;
 pub mod mediakeys;
 mod motion;
@@ -20,8 +21,9 @@ pub use edge::{
 };
 pub use geometry::{Desktop, Pos, Rect, Side};
 pub use keys::{HeldKeys, swap_ctrl_meta};
+pub use layout::{Align, Seam, overlaps};
 pub use lock::{CAUSE_WINDOW, LockSync, OnRemote};
-pub use motion::{MotionReceiver, Received, RelReceived, RemoteCursor, Step};
+pub use motion::{HOME_INSET, MotionReceiver, Received, RelReceived, RemoteCursor, Step};
 pub use sleep::{OnRemoteSleep, SleepSync};
 pub use transfer::{Batch, ClipAck, ClipFormat, ClipHeader, FileMsg};
 

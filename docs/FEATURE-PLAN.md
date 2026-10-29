@@ -80,8 +80,8 @@ Known gaps:
 | 2A | Global hotkeys: jump to computer N, cycle, toggle lock-to-here | 1C `switch` | Branch `t3/global-keyboard-hotkeys`. `one-mk hotkeys`, `[hotkeys]` in settings.toml, status and doctor lines. Linux: GlobalShortcuts portal (needs `one-mk install` for an app id); Windows `RegisterHotKey`; macOS session event tap; captured keys matched in the daemon while away. See 2A notes. | done |
 | 2B | Wayland hardening: persist the portal and RemoteDesktop token, release capture on every failure path | none | Top competitor pain point. Touches `crates/input/src/portal.rs`; coordinate with 1C's gaming-mode edits. | todo |
 | 2C | Windows service for the login screen and UAC | none | Service in SYSTEM plus a helper in the user session. Untestable here. | todo |
-| 2D | Layout editor: several monitors per computer, unaligned edges, push-toward-it learning | 1C edge work | Extends `crates/proto/src/geometry.rs` and the window. | todo |
-| 2E | Location profiles: layout switches by Wi-Fi network | 2D | | todo |
+| 2D | Layout editor: several monitors per computer, unaligned edges, push-toward-it learning | 1C edge work | Logic and CLI done on `t3/400c47de`: `layout --offset PX\|center\|stretch`, 1:1 crossing only where edges overlap, per-monitor crossing on L-shaped and mixed-size desktops, several computers per side, mirror sync as an additive `Layout` field. Still to do: the window's editor (UI task, reads `Status.layout`) and push-toward-it learning. | done (logic) |
+| 2E | Location profiles: layout switches by Wi-Fi network | 2D | `profile save\|use\|list\|delete\|auto`, `profiles.toml`. Linux auto-switch through NetworkManager signals; Windows and macOS are logged stubs. | done |
 | 2F | Screensaver and sleep sync; block screensaver on peers | 1C lock sync | `[power]`, `one-mk power`; `Control::Inhibit`/`Sleep` + `caps::POWER`; `proto/sleep.rs`, `one-mk/power.rs`, `input/system` (`Inhibitor`, `DisplaySleeper`). Linux verified against the real session bus (read-only); Windows/macOS compile-only. macOS can't notice its own display sleep. | done (Linux verified) |
 | 2G | Multimedia keys across computers | none | `crates/proto/src/mediakeys.rs` is the table (evdev / Windows VK / macOS NX_KEYTYPE); Windows types by VK, macOS captures and posts `NX_SYSDEFINED`; only volume/brightness repeat. Windows/macOS compile-only, not tested on real hardware. | done (Linux/null verified) |
 | 2H | Run a command on screen enter and exit | 1C | `[hooks]`, `one-mk hooks`, `crates/one-mk/src/hooks.rs`: no shell by default, timeout, rate limit, env vars, permission warning. Two-daemon test proves enter and leave. | done |
@@ -113,6 +113,36 @@ Known gaps:
   layouts (documented). Windows and macOS listeners are compiled and
   clippy-clean only, not tested on real hardware. After `one-mk install`
   the running daemon must be restarted to register.
+
+### 2D/2E notes (branch `t3/400c47de`)
+
+- **Model.** `proto::Align` per paired computer (`Stretch`, the default and
+  the old behaviour; `Offset(px)`; `Center`), stored as `align` in
+  `devices.toml`. `proto::Seam` maps a point both ways between our edge and
+  the neighbour's; only the parts of an edge on the desktop's outer
+  boundary count (`Desktop::edge_spans`). Stretch maps the covered parts of
+  the edges onto each other (skipping gaps between monitors); with a single
+  monitor that is exactly the old fraction mapping.
+- **Wire.** `Control::Layout` gained a trailing `align` (kind byte + i32);
+  old peers skip it. A layout from an old peer keeps our alignment on the
+  same side and resets to stretch on a new side.
+- **Walls.** Edge barriers still cover whole outer edges (the barrier code
+  in `crates/input` was not touched): a crossing where nothing faces the
+  edge is captured and handed straight back, like a dead corner. Arming
+  only the shared part is a possible follow-up in the backends.
+- **Profiles** hold side + alignment per device only; edge rules and other
+  settings stay global (they are preferences, not geometry).
+- **Verified here:** proto property tests (3000 random desktop pairs:
+  crossings land on a monitor at the facing edge and return to the same
+  point; random walks never jump further than the mouse moved), five
+  two-daemon loopback tests (offset crossing and walls, multi-monitor,
+  mirror sync, a peer without alignment, two computers on one side), an
+  automatic-switch daemon test with a fake watcher, concurrent
+  `profiles.toml` writes, and a real run of two null-backend daemons
+  (`layout --offset`, status, profile save/use/auto) including the real
+  NetworkManager watcher switching a profile at start; 0 CPU ticks over
+  10 s idle with it running. **Only compiled:** nothing new is
+  platform-specific outside Linux (the Windows/macOS watcher is a stub).
 
 ## Wave 3
 

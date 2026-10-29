@@ -46,6 +46,14 @@ your left, so you are on its right). If the two ever disagree, for example
 because one was switched off when you changed it, the newer change wins as
 soon as they connect.
 
+Screens of different sizes, or not lined up? Say where the other edge
+starts, in pixels (see [Arranging the computers](#arranging-the-computers)):
+
+```bash
+one-mk layout "laptop" bottom --offset 300   # its left edge 300 px right of yours
+one-mk layout "laptop" bottom --offset center
+```
+
 ## Everyday use
 
 | Command | What it does |
@@ -63,7 +71,9 @@ soon as they connect.
 | `one-mk power [--block-screensaver on\|off] [--sleep-sync on\|off]` | Keep other computers awake while you control them; sleep displays together (see below) |
 | `one-mk install` / `uninstall` | Start automatically at login / stop doing that |
 | `one-mk pair` | Pair with another computer (run on both) |
-| `one-mk layout <pc> <left\|right\|top\|bottom>` | Say where a paired computer sits |
+| `one-mk layout <pc> <left\|right\|top\|bottom> [--offset PX\|center\|stretch]` | Say where a paired computer sits, and how its edge lines up with yours |
+| `one-mk profile save\|use\|list\|delete <name>` | Named layouts, e.g. "home" and "office" |
+| `one-mk profile auto <name> --ssid <wifi> --network <router-mac\|subnet>` | Switch layout by itself when this computer joins that network |
 | `one-mk layout <pc> --swap-ctrl-cmd on\|off\|auto` | Ctrl/Cmd swapping (see below) |
 | `one-mk send <files or folders> [--to <pc>]` | Send files; they arrive in `Downloads/one-mk` |
 | `one-mk clip-send [--to <pc>]` | Send this computer's clipboard to one computer now |
@@ -132,6 +142,85 @@ for each device on the computer where you set it.
 
 **Emergency:** `Ctrl+Alt+Shift+Esc` always brings the pointer back to the
 computer you are sitting at.
+
+### Arranging the computers
+
+Each paired computer sits on one side of this one. By default its whole
+facing edge is stretched over yours: wherever you leave your screen, you
+arrive at the same fraction of the way along its edge, whatever the two
+sizes.
+
+With `--offset` the two edges sit against each other pixel for pixel, like
+two monitors of one computer, and the pointer only crosses where they
+really overlap. Next to the overlap the edge is a wall, as beside a real
+monitor:
+
+```bash
+one-mk layout laptop bottom --offset 300    # laptop below, its left edge 300 px right of yours
+one-mk layout laptop right --offset -200    # laptop on the right, its top edge 200 px above yours
+one-mk layout laptop right --offset center  # the two edges centred on each other
+one-mk layout laptop --offset stretch       # back to stretching (the side stays)
+```
+
+Moving a computer to another side without `--offset` starts it stretched
+again (an offset means something else on another side).
+
+The offset is in logical pixels (what your display settings call the
+resolution after scaling), measured from the start of your edge to the start
+of the other: the top for left and right, the left end for top and bottom;
+negative means before yours. The other computer gets the mirror image
+(`--offset 300` here is `-300` there), and as with sides the newer change
+wins. Both computers need this version of one-mk for the offset to work
+both ways: an older one keeps stretching the edges for the pointer it sends.
+
+Several computers can share one side if their edges don't overlap, for
+example two laptops below a wide monitor:
+
+```bash
+one-mk layout laptop-a bottom --offset 0
+one-mk layout laptop-b bottom --offset 1920
+```
+
+**Several monitors.** Only the outer edge of the whole desktop leads to
+another computer, and only where a monitor actually reaches it: with an
+L-shaped arrangement, or a smaller monitor beside a taller one, the part of
+the edge with no monitor on it leads nowhere. The pointer arrives on the
+monitor of the other computer that faces the point you left from, whichever
+monitor that is, and comes back to the same point.
+
+**Profiles.** Save the arrangement under a name and switch between them:
+
+```bash
+one-mk profile save home        # where every paired computer is now
+one-mk layout laptop left       # rearrange at the office...
+one-mk profile save office
+one-mk profile use home         # back home: everything moves at once
+one-mk profile list
+one-mk profile delete office
+```
+
+A profile holds each computer's side and offset, nothing else: edge rules,
+gaming mode and the other settings stay the same everywhere, because they are
+about how you like to work, not where the computers stand. Using a profile
+counts as a new change, so the other computers pick it up.
+
+To switch by itself when this computer joins a network:
+
+```bash
+one-mk profile auto office --ssid "Office WiFi"
+one-mk profile auto home --network 192.168.1.0/24          # a subnet this computer is on
+one-mk profile auto home --network aa:bb:cc:dd:ee:ff       # the router's MAC address
+one-mk profile auto home --off
+```
+
+The first profile that matches is used, once each time the network changes,
+so a `one-mk layout` change afterwards stays until you move on. Set this up
+on one of the two computers. On Linux it listens to NetworkManager, which
+tells one-mk about every network change (it never checks on its own, so it
+costs nothing while nothing changes); without NetworkManager (systemd-networkd
+or iwd on their own), profiles only change with `profile use`. On Windows and
+macOS automatic switching is not done yet. Profiles are kept in
+`profiles.toml` next to `devices.toml`.
 
 **Switching without an edge.** `one-mk switch desk` puts the pointer in the
 middle of desk's main screen; `one-mk switch next` goes round every online
@@ -434,6 +523,9 @@ and exits with status 1 if something failed.
   Accessibility and Input Monitoring, then start it again. (Not yet tested on
   real hardware.)
 - **A paired computer is on the wrong side.** `one-mk layout "<name>" <side>`.
+- **The pointer won't cross part of an edge.** With an `--offset`, only the
+  part facing the other computer's screen leads there (`one-mk status` shows
+  the offset). `--offset stretch` makes all of the edge lead there again.
 - **Another computer already controls this one.** Only one computer can
   control another at a time. Take it back with `one-mk takeback` on the
   controlled computer (on Windows and macOS, using its mouse or keyboard
@@ -474,7 +566,9 @@ background apps, so there it goes through XWayland.
 4. Done: clipboard (text, HTML, images), file transfer, live layout sync,
    Ctrl/Cmd swapping, start at login
 5. Done: a small tray icon (status, sides, take back, start at login).
-   **Next:** a drag-and-drop layout editor and "push toward it" layout learning
+   Done: offsets and per-monitor crossing, layout profiles that switch by
+   Wi-Fi network. **Next:** a drag-and-drop layout editor and "push toward
+   it" layout learning
 6. Done: gaming mode (relative motion), switching without an edge, edge
    rules, lock sync, connection doctor (`one-mk doctor`), keyboard shortcuts
    (on Linux through the GlobalShortcuts portal). **Next:** auto-update

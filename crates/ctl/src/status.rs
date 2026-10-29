@@ -1,6 +1,6 @@
 //! What `one-mk status` shows, as the daemon reports it, and its wire format.
 
-use one_mk_proto::{Side, os};
+use one_mk_proto::{Align, Rect, Side, os};
 
 /// Where a computer sits, for sentences like "Connected to B (on your right)."
 pub fn on_your(side: Side) -> &'static str {
@@ -10,6 +10,44 @@ pub fn on_your(side: Side) -> &'static str {
         Side::Top => "above",
         Side::Bottom => "below",
     }
+}
+
+/// Where a computer sits and how its edge lines up with ours, for
+/// sentences like "B is now below, its left edge 300 px right of yours."
+pub fn placement(side: Side, align: Align) -> String {
+    let (edge, after, before) = match side {
+        Side::Left | Side::Right => ("top", "below", "above"),
+        Side::Top | Side::Bottom => ("left", "right of", "left of"),
+    };
+    let lined = match align {
+        Align::Stretch => return on_your(side).to_owned(),
+        Align::Center => "centred on yours".to_owned(),
+        Align::Offset(0) => format!("its {edge} edge level with yours"),
+        Align::Offset(o) if o > 0 => format!("its {edge} edge {o} px {after} yours"),
+        Align::Offset(o) => format!("its {edge} edge {} px {before} yours", o.unsigned_abs()),
+    };
+    format!("{}, {lined}", on_your(side))
+}
+
+/// Monitors as `x,y,w,h;x,y,w,h` (empty for none).
+pub fn encode_rects(rects: &[Rect]) -> String {
+    rects.iter().map(|r| format!("{},{},{},{}", r.x, r.y, r.w, r.h)).collect::<Vec<_>>().join(";")
+}
+
+/// The inverse of [`encode_rects`]; `None` if anything doesn't parse.
+pub fn decode_rects(text: &str) -> Option<Vec<Rect>> {
+    if text.is_empty() {
+        return Some(Vec::new());
+    }
+    text.split(';')
+        .map(|r| {
+            let v: Vec<i32> = r.split(',').map(|n| n.parse().ok()).collect::<Option<_>>()?;
+            match v[..] {
+                [x, y, w, h] if w > 0 && h > 0 => Some(Rect::new(x, y, w, h)),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// How the person at this computer takes control back from a peer. On
@@ -61,6 +99,49 @@ pub struct Status {
     /// from older daemons), and the details in words.
     pub hotkeys: String,
     pub hotkeys_detail: String,
+    /// Where the computers are, in detail (boxed: most readers never look,
+    /// and it would double the size of every `Status`).
+    pub layout: Box<LayoutStatus>,
+}
+
+/// Everything a layout editor needs to draw where the computers are,
+/// beyond each peer's side ([`PeerStatus::side`]). Empty from daemons that
+/// predate it.
+///
+/// To change it: `one-mk layout <id> <side> --offset <PX|center|stretch>`
+/// (which applies at once and syncs the mirror image to the peer), and
+/// `one-mk profile save|use|list|delete|auto`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayoutStatus {
+    /// This computer's monitors, in logical pixels (empty until the input
+    /// backend has said).
+    pub screens: Vec<Rect>,
+    /// One per paired computer, in the order of [`Status::peers`].
+    pub places: Vec<Place>,
+    /// The layout profile last put in place (`one-mk profile use`, or
+    /// switched to automatically), if any.
+    pub profile: Option<String>,
+    /// Every saved layout profile, by name.
+    pub profiles: Vec<String>,
+}
+
+impl LayoutStatus {
+    /// The place of the peer with id `id` ([`PeerStatus::id`]).
+    pub fn place(&self, id: &str) -> Option<&Place> {
+        self.places.iter().find(|p| p.id == id)
+    }
+}
+
+/// How a paired computer's edge lines up with ours, and its monitors.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Place {
+    /// [`PeerStatus::id`].
+    pub id: String,
+    /// How its edge lines up with ours along its side.
+    pub align: Align,
+    /// Its monitors, in its own logical pixels, while it is online (empty
+    /// otherwise).
+    pub screens: Vec<Rect>,
 }
 
 /// One file transfer in flight (a whole `one-mk send`, not a single file).
@@ -171,6 +252,20 @@ impl Status {
         for p in &self.peers {
             out += &format!("peer\t{}\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.swap, p.name);
         }
+        // Lines of their own, which readers from before them skip.
+        let l = &self.layout;
+        for p in &l.places {
+            out += &format!("place\t{}\t{}\t{}\n", p.id, p.align, encode_rects(&p.screens));
+        }
+        if !l.screens.is_empty() {
+            out += &format!("screens\t{}\n", encode_rects(&l.screens));
+        }
+        if let Some(p) = &l.profile {
+            out += &format!("profile\t{p}\n");
+        }
+        if !l.profiles.is_empty() {
+            out += &format!("profiles\t{}\n", l.profiles.join("\t"));
+        }
         for (key, on) in [
             ("pointer_locked", self.pointer_locked),
             ("screen_locked", self.screen_locked),
@@ -211,6 +306,10 @@ impl Status {
         }
         let mut s = Status::default();
         for line in lines {
+            if let Some(names) = line.strip_prefix("profiles\t") {
+                s.layout.profiles = names.split('\t').map(str::to_owned).collect();
+                continue;
+            }
             let f: Vec<&str> = line.splitn(8, '\t').collect();
             match f[..] {
                 ["name", v] => s.name = v.into(),
@@ -225,6 +324,13 @@ impl Status {
                 ["gaming", v] => s.gaming = v.into(),
                 ["edges", v] => s.edges = v.into(),
                 ["hotkeys", state, detail] => (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into()),
+                ["profile", v] => s.layout.profile = Some(v.into()),
+                ["screens", v] => s.layout.screens = decode_rects(v).unwrap_or_default(),
+                ["place", id, align, screens] => s.layout.places.push(Place {
+                    id: id.into(),
+                    align: align.parse().unwrap_or_default(),
+                    screens: decode_rects(screens).unwrap_or_default(),
+                }),
                 // Cosmetic: a line that doesn't parse is skipped, not fatal.
                 ["transfer", id, dir, files, done, total, rate, peer] => s.transfers.extend(|| -> Option<_> {
                     Some(TransferStatus {
@@ -277,12 +383,18 @@ impl Status {
         if let Some(line) = self.hotkeys_line() {
             out += &format!("{line}\n");
         }
+        if let Some(p) = &self.layout.profile {
+            out += &format!("Layout profile: {p}.\n");
+        }
         if self.peers.is_empty() {
             out += "No computers are paired yet. Run `one-mk pair` on this and the other computer.\n";
         }
         for p in &self.peers {
             let state = if p.online { "online" } else { "offline" };
             out += &format!("  {:<24} {:<10} {:<14} {state}\n", p.name, os_name(p.os), on_your(p.side));
+            if let Some(place) = self.layout.place(&p.id).filter(|l| l.align != Align::Stretch) {
+                out += &format!("  {:<24} {}\n", "", placement(p.side, place.align));
+            }
         }
         for t in &self.transfers {
             out += &format!("{}\n", t.render());
@@ -325,6 +437,44 @@ mod tests {
             assert!(text.contains(want), "{want}: {text}");
         }
         assert_eq!(Status::decode("error unknown request\n"), None);
+    }
+
+    /// The layout a layout editor reads: our monitors, each peer's
+    /// monitors and alignment, and the profiles.
+    #[test]
+    fn layout_survives_the_wire_and_old_readers_skip_it() {
+        let laptop = PeerStatus { id: "1234-5678".into(), name: "laptop".into(), side: Side::Bottom, os: os::LINUX, online: true, swap: "auto".into() };
+        let old = PeerStatus { id: "9999-0000".into(), name: "old pc".into(), online: false, ..laptop.clone() };
+        let s = Status {
+            name: "desk".into(),
+            peers: vec![laptop, old],
+            layout: Box::new(LayoutStatus {
+                screens: vec![Rect::new(0, 0, 2560, 1440), Rect::new(-1920, 200, 1920, 1080)],
+                places: vec![
+                    Place { id: "1234-5678".into(), align: Align::Offset(-300), screens: vec![Rect::new(0, 0, 1280, 800)] },
+                    Place { id: "9999-0000".into(), align: Align::Center, screens: vec![] },
+                ],
+                profile: Some("home office".into()),
+                profiles: vec!["home office".into(), "café".into()],
+            }),
+            ..Status::default()
+        };
+        let encoded = s.encode();
+        assert_eq!(Status::decode(&encoded), Some(s.clone()));
+        let text = s.render();
+        assert!(text.contains("below, its left edge 300 px left of yours"), "{text}");
+        assert!(text.contains("Layout profile: home office."), "{text}");
+        // What a reader from before these lines makes of it: the rest.
+        let before: Vec<&str> = encoded.lines().filter(|l| l.starts_with("ok") || l.starts_with("name") || l.starts_with("peer\t")).collect();
+        let older = Status::decode(&(before.join("\n") + "\n")).unwrap();
+        assert_eq!((older.peers.len(), older.layout.places.len()), (2, 0));
+        assert_eq!(s.layout.place("9999-0000").unwrap().align, Align::Center);
+        assert_eq!(decode_rects("1,2,3"), None);
+        assert_eq!(decode_rects("0,0,0,5"), None, "empty monitors are refused");
+        assert_eq!(placement(Side::Right, Align::Offset(0)), "on your right, its top edge level with yours");
+        assert_eq!(placement(Side::Left, Align::Offset(40)), "on your left, its top edge 40 px below yours");
+        assert_eq!(placement(Side::Top, Align::Center), "above, centred on yours");
+        assert_eq!(placement(Side::Top, Align::Stretch), "above");
     }
 
     #[test]
