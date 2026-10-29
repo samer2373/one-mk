@@ -3206,6 +3206,7 @@ dependencies = [
  "tracing",
  "windows-sys 0.61.2",
  "x11rb",
+ "zbus",
 ]
 
 [[package]]
