@@ -17,7 +17,7 @@
 //! |---|---|---|---|
 //! | Linux | X11/XWayland windows only; Wayland-native ones are unknown | logind `Session.Lock` | logind `LockedHint` |
 //! | Windows | foreground window: borderless, covering its monitor | `LockWorkStation` | session notifications |
-//! | macOS | not yet (unknown) | `CGSession -suspend`, else display sleep | screen lock notifications |
+//! | macOS | not yet (unknown) | `CGSession -suspend`, else `SACLockScreenImmediate`, else an error | screen lock notifications |
 //!
 //! Power (see [`Power`]): keeping the screensaver and idle sleep off while a
 //! peer controls this computer, putting the display to sleep when a peer's
@@ -198,10 +198,15 @@ impl FocusProbe for FakeFocus {
 pub struct FakeLocker {
     pub events: mpsc::UnboundedSender<Event>,
     pub count: Arc<AtomicUsize>,
+    /// If set, locking fails with this (an OS that can't lock).
+    pub error: Arc<Mutex<Option<String>>>,
 }
 
 impl ScreenLocker for FakeLocker {
     fn lock(&mut self) -> anyhow::Result<()> {
+        if let Some(e) = self.error.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            anyhow::bail!("{e}");
+        }
         self.count.fetch_add(1, Ordering::SeqCst);
         tracing::info!("screen lock requested (null backend: nothing is locked)");
         let _ = self.events.send(Event::ScreenLocked(true));

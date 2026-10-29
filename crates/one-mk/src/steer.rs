@@ -50,10 +50,19 @@ pub async fn lock_all(dir: &Path) -> Result<()> {
     if word != "ok" {
         bail!("unexpected answer from one-mk: {word:?}");
     }
-    match detail.parse::<usize>().unwrap_or(0) {
-        0 => println!("Locking this computer (no other computer is connected)."),
-        1 => println!("Locking this computer and asking the connected one to lock too."),
-        n => println!("Locking this computer and asking the {n} connected ones to lock too."),
+    // The number of computers asked, then why this one didn't lock, if so.
+    let (n, failed) = detail.split_once('\n').map_or((detail.as_str(), None), |(n, e)| (n, Some(e.trim())));
+    let n = n.trim().parse::<usize>().unwrap_or(0);
+    let others = match n {
+        0 => String::new(),
+        1 => "the connected computer".to_owned(),
+        n => format!("the {n} connected computers"),
+    };
+    match (failed, n) {
+        (None, 0) => println!("Locking this computer (no other computer is connected)."),
+        (None, _) => println!("Locking this computer and asking {others} to lock too."),
+        (Some(e), 0) => bail!("could not lock this computer: {e}"),
+        (Some(e), _) => bail!("asked {others} to lock, but could not lock this computer: {e}"),
     }
     Ok(())
 }

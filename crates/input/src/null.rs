@@ -20,6 +20,8 @@ pub struct NullHandles {
     /// How many times the screen was asked to lock. Each request is also
     /// reported back as `Event::ScreenLocked(true)`, as an OS would.
     pub locks: Arc<AtomicUsize>,
+    /// If set, locking fails with this message.
+    pub lock_error: Arc<Mutex<Option<String>>>,
 }
 
 pub(crate) fn open(desktop: Desktop) -> (Backend, NullHandles) {
@@ -31,12 +33,13 @@ pub(crate) fn open(desktop: Desktop) -> (Backend, NullHandles) {
     let focus_probes = Arc::new(AtomicUsize::new(0));
     let focus_notify: FocusNotify = Arc::new(Mutex::new(None));
     let locks = Arc::new(AtomicUsize::new(0));
+    let lock_error = Arc::new(Mutex::new(None));
     let backend = Backend {
         events: ev_rx,
         capture: cap_tx,
         inject: inj_tx,
         focus: Box::new(FakeFocus { focus: focus.clone(), probes: focus_probes.clone(), notify: focus_notify.clone() }),
-        locker: Box::new(FakeLocker { events: ev_tx.clone(), count: locks.clone() }),
+        locker: Box::new(FakeLocker { events: ev_tx.clone(), count: locks.clone(), error: lock_error.clone() }),
     };
-    (backend, NullHandles { events: ev_tx, capture: cap_rx, inject: inj_rx, focus, focus_probes, focus_notify, locks })
+    (backend, NullHandles { events: ev_tx, capture: cap_rx, inject: inj_rx, focus, focus_probes, focus_notify, locks, lock_error })
 }

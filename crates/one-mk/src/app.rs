@@ -1883,8 +1883,12 @@ impl App {
                 }
                 let n = self.peers.len();
                 println!("Locking this computer{}.", if n > 0 { " and the connected ones" } else { "" });
-                self.lock_screen();
-                format!("ok\n{n}\n")
+                // The others are asked all the same; the reply says why
+                // this one didn't lock.
+                match self.lock_screen() {
+                    Ok(()) => format!("ok\n{n}\n"),
+                    Err(e) => format!("ok\n{n}\n{}\n", format!("{e:#}").replace('\n', " ")),
+                }
             }
             req @ (Request::ClipSend(_) | Request::ClipGet(_) | Request::Transfer { .. }) => {
                 let online = self.peers.iter().map(|(fp, p)| crate::clipctl::Online { fp: *fp, name: p.name.clone(), addr: canonical(p.conn.remote_address()) });
@@ -2043,11 +2047,13 @@ impl App {
     // ------------------------------------------------------------ screen lock
 
     /// Locks this computer's screen, letting go of everything first.
-    fn lock_screen(&mut self) {
+    fn lock_screen(&mut self) -> Result<()> {
         self.let_go_for_lock();
-        if let Err(e) = self.locker.lock() {
+        let locked = self.locker.lock();
+        if let Err(e) = &locked {
             tracing::warn!("could not lock the screen: {e:#}");
         }
+        locked
     }
 
     /// Nothing may stay held across a lock: the lock screen would swallow
@@ -2111,7 +2117,7 @@ impl App {
                         true => println!("{name} asked to lock every computer (lock-all); locking this one."),
                         false => println!("{name} locked its screen; locking this one too (lock sync)."),
                     }
-                    self.lock_screen();
+                    let _ = self.lock_screen(); // said in the log
                 }
             }
         }
@@ -4098,6 +4104,21 @@ mod tests {
         duo.ha.events.send(Event::ScreenLocked(false)).unwrap();
         assert_eq!(ask(&duo.da, Request::LockAll).await, "ok\n1\n");
         eventually("B to lock", || duo.hb.locks.load(SeqCst) == 1).await;
+        duo.stop().await;
+    }
+
+    /// Where this OS can't lock (a Mac without CGSession or the login
+    /// framework), `lock-all` still asks the others and says why this one
+    /// didn't lock, instead of claiming it did.
+    #[tokio::test]
+    async fn lock_all_says_when_this_computer_can_t_lock() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let duo = Duo::start("lock-unsupported", None).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        *duo.ha.lock_error.lock().unwrap() = Some("locking the screen is not supported".into());
+        assert_eq!(ask(&duo.da, Request::LockAll).await, "ok\n1\nlocking the screen is not supported\n");
+        eventually("B to lock", || duo.hb.locks.load(SeqCst) == 1).await;
+        assert_eq!(duo.ha.locks.load(SeqCst), 0);
         duo.stop().await;
     }
 

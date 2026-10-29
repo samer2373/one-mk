@@ -321,8 +321,10 @@ in any way locks the others that have lock sync on too (each lock is passed
 on once, so it never comes back); a computer with lock sync off follows only
 `lock-all`. Anything held down is let go before a screen locks, and modifier keys
 are released once more after it unlocks, so no key stays stuck. Locking uses
-logind on Linux, `LockWorkStation` on Windows and the login window (or
-display sleep) on macOS; noticing a lock uses logind's lock hint on Linux
+logind on Linux, `LockWorkStation` on Windows and the login window on macOS
+(where neither the old `CGSession` tool nor the login framework's lock call
+exists, `lock-all` says this Mac couldn't be locked instead of pretending);
+noticing a lock uses logind's lock hint on Linux
 and the system's lock notifications on Windows and macOS.
 
 **Media keys.** Play/pause, stop, next and previous track, volume and mute,
