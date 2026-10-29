@@ -195,3 +195,38 @@ daemons with `run --backend null`, and builds with `-j 3`.
 - A screen reader actually speaking the tree (Orca, NVDA, VoiceOver). The roles and names were read from
   the code, not heard.
 - Keyboard-only use beyond the focus screenshots and reading the code.
+
+## Keys & mouse (plan 4B)
+
+The sixth tab, reviewed the same way from `scripts/ui-shots.sh` (shots 43 to 51, plus 03 and 06 for the
+six-tab bar at full and narrow width). Its one job: change what keys and buttons do on the other computers,
+and try it before it is used. One amber action per area: "Press the new key" in the key editor, "Press a key
+or shortcut" for a mouse button.
+
+| # | screenshot | problem | fix |
+|---|---|---|---|
+| k1 | 43 (first draft) | Punctuation keys showed their names cut off ("Mi…", "Back…" for `\`). | Keys show their character (`-`, `[`, `\`); long legends ("Backspace", "Super") step down a size before they are cut. |
+| k2 | 43 (first draft) | At the default size the rule list and the Test it box were below the fold. | In a wide window the quick setups stand in a column beside the keyboard; the cards below start on screen. |
+| k3 | 45 (first draft) | At 760 × 540 a clicked key's editor opened below the fold, unseen. | Opening the editor (or a mouse button's choices) scrolls it into view; no animation with reduced motion. |
+| k4 | 45 (first draft) | The "Press the key…" box had a fixed height; its note ran out of it. | The box is as tall as its text; the full list of keys that can't be pressed is in the hover text and the accessible name. |
+| k5 | 49 | Problems used the daemon's table names ("input.keymap.rule #6"). | "Key rule 6", "Button rule 1". A long computer name in **For:** is cut with an ellipsis. |
+| k6 | 48 | At 760 wide, "As this computer", "Mouse wheel" and "Forward (browser)" were cut. | "Like here", "Wheel", "Go forward"; the accessible names keep the full words. |
+| k7 | 46 | The search list stayed seven rows tall for two results. | It is as tall as the results (three rows at least). |
+| k8 | first save | Saving a rule from the window wrote the settings folder as the rule's target (`--home` came after `--`). | The folder goes before the command; caught by looking at the saved result, now checked on every shot run. |
+| k9 | 50 | The desk's focus hook moved the keyboard off the key in the screenshot. | The hook leaves this tab alone. |
+
+Contrast, sampled from the committed PNGs (most contrasting pixel against the region's most common colour):
+
+| what | ratio |
+|---|---|
+| Key outline against the panel / against the key's fill | 3.74:1 / 3.08:1 (was 3.18 / 2.62 before `KEY_EDGE` was lightened) |
+| Key legend (INK2 on the key) | 6.02:1 |
+| A changed key's target (INK on the lit key) | 11.39:1 |
+| Focus ring and selected key (amber on the panel) | 10.24:1 |
+| Quick setup chip outline | 3.74:1 |
+| Test box placeholder | 7.62:1 (was 4.31:1 in OFF; now INK2) |
+| Acceleration Off/Curve, disabled | 4.09:1 (as m6: inactive, still readable) |
+| Error text and dot | 15.62:1 / 6.44:1 |
+
+Not verified: real key presses into the window on Windows and macOS (only Linux/Wayland screenshots, and
+key events were simulated through the debug hooks); a screen reader speaking the keyboard.

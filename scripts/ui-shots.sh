@@ -183,3 +183,34 @@ shot 39-small-advanced 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced 
 # A high-density screen: everything drawn 1.5x on top of the desktop's scale.
 shot 40-hidpi-desk 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_ZOOM=1.5 ONE_MK_APP_SIZE=1140x810
 shot 42-layout-nothing-paired 3 "$W/e" ONE_MK_APP_TAB=layout
+
+# Keys & mouse: rules written by the real `one-mk keymap|buttons|scroll`,
+# so the window reads what the command line writes.
+mkdir -m 700 -p "$W/k" "$W/kx"
+for args in "keymap add --tap=esc --hold=lctrl -- capslock" "keymap add -- ralt layer:nav" "keymap add --layer=nav -- h left" \
+    "keymap add --os=mac -- lalt lmeta" "buttons preset side-back-forward" "scroll --natural=auto --modifier=shift=horizontal"; do
+    # shellcheck disable=SC2086
+    "$B" --home "$W/k" $args >/dev/null
+done
+"$B" --home "$W/k" keymap add -- f13 "switch next" >/dev/null
+cp "$W/k/settings.toml" "$W/kx/"
+cat >>"$W/kx/settings.toml" <<TOML
+
+[[input.keymap.rule]]
+from = "capslok"
+to = "esc"
+
+[[input.keymap.rule]]
+from = "f5"
+to = "f6"
+scope = { peer = "$LONG" }
+TOML
+shot 43-keys-keyboard 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys
+shot 44-keys-edit-and-test 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_KEY_MORE=1 ONE_MK_APP_KEY_TEST=58d0,58u85,58d300,46d350,46u400,58u450
+shot 45-keys-press-a-key-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=f5 ONE_MK_APP_KEY_CAPTURE=1 ONE_MK_APP_SIZE=760x540
+shot 46-keys-list-search 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_KEY_PICK=vol
+shot 47-keys-mouse 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEYS=mouse ONE_MK_APP_BUTTON=4
+shot 48-keys-mouse-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEYS=mouse ONE_MK_APP_SIZE=760x540
+shot 49-keys-problems-long-name 3 "$W/kx" ONE_MK_APP_STATUS="$F" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY_SCOPE="$LONG"
+shot 50-keys-focus 2 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_FOCUS=1
+shot 51-keys-nothing-set 3 "$W/e" ONE_MK_APP_TAB=keys
