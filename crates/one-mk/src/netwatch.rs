@@ -189,12 +189,28 @@ mod nm {
     {
         let mut retry = Retry::default();
         let mut said = false;
+        let mut connected_before = false;
+        let mut connection_error = String::new();
+        let mut identical_failures = 0;
         loop {
             let started = std::time::Instant::now();
-            let result = async {
-                let conn = connect().await?;
-                watch_connection(&conn, on_change).await
-            }.await;
+            let result = match connect().await {
+                Ok(conn) => {
+                    connected_before = true;
+                    identical_failures = 0;
+                    watch_connection(&conn, on_change).await
+                }
+                Err(error) => {
+                    let text = error.to_string();
+                    identical_failures = if text == connection_error { identical_failures + 1 } else { 1 };
+                    connection_error = text;
+                    if !connected_before && identical_failures >= 5 {
+                        tracing::info!("no system bus: network profiles will not switch automatically");
+                        return std::future::pending().await;
+                    }
+                    Err(error)
+                }
+            };
             match result {
                 Ok(()) => tracing::debug!("NetworkManager's change notifications ended; reconnecting"),
                 Err(error) if !said => tracing::info!("NetworkManager or the system bus is not available ({error}); retrying; `one-mk profile use <name>` works"),
@@ -291,6 +307,26 @@ mod nm {
     mod tests {
         use super::*;
 
+        #[tokio::test(start_paused = true)]
+        async fn absent_system_bus_stops_retrying() {
+            let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let count = attempts.clone();
+            let task = tokio::spawn(async move {
+                let callback: OnChange = Box::new(|_| {});
+                watch_forever_using(&callback, move || {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async { Err(zbus::Error::Failure("no bus".into())) }
+                }).await;
+            });
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+                tokio::time::advance(Duration::from_secs(60)).await;
+            }
+            assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 5);
+            task.abort();
+            let _ = task.await;
+        }
+
         #[test]
         fn reconnect_backoff_is_bounded_and_resets_after_stability() {
             let mut retry = Retry::default();
@@ -311,7 +347,14 @@ mod nm {
             let start = || tokio::process::Command::new("dbus-daemon")
                 .args(["--session", "--nofork", "--print-address=1", &format!("--address={address}")])
                 .stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn();
-            let Ok(mut bus) = start() else { return };
+            let mut bus = match start() {
+                Ok(bus) => bus,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("skipped: dbus-daemon missing (private-bus restart integration requires dbus-daemon on PATH)");
+                    return;
+                }
+                Err(error) => panic!("starting private dbus-daemon: {error}"),
+            };
             let mut ready = String::new();
             BufReader::new(bus.stdout.take().unwrap()).read_line(&mut ready).await.unwrap();
             assert!(!ready.is_empty());
