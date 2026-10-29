@@ -929,8 +929,14 @@ async fn inject_loop(
                 // Everything already queued, without the moves that later
                 // ones make stale: a burst costs one move, not latency.
                 drain_coalesced(first, &mut rx, &mut batch);
+                let was = controlled.get();
                 if controlled.apply(&mut batch) {
                     repeat.clear();
+                }
+                // A Mac with no mouse of its own can leave the pointer
+                // undrawn: ask for it at the start of each visit.
+                if !was && controlled.get() {
+                    let _ = CGDisplayShowCursor(kCGNullDirectDisplay);
                 }
                 if !trusted.load(Ordering::Relaxed) {
                     if !warned {
