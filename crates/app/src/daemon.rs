@@ -104,6 +104,7 @@ impl Link {
         let link = self.clone();
         std::thread::spawn(move || {
             link.send(Event::Autostart(install::is_installed()));
+            link.show_tray();
             let mut last: Option<Option<Status>> = None;
             let mut gone = 0;
             loop {
@@ -178,6 +179,14 @@ impl Link {
         let (id, value) = (peer.to_owned(), swap.to_owned());
         let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into() };
         self.job(what, move |l| l.one_mk(&["layout", &id, "--swap-ctrl-cmd", &value]).map(drop));
+    }
+
+    /// Puts the menu-bar / tray icon up if it isn't, so the window is never
+    /// the only way in. The tray exits by itself when one is already there.
+    fn show_tray(&self) {
+        if let Some(tray) = &self.tray {
+            let _ = proc::spawn_detached(tray, &self.home_args(), None);
+        }
     }
 
     pub fn stop(&self) {
