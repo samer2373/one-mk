@@ -27,6 +27,261 @@ type Results = HashMap<&'static str, Value<'static>>;
 
 // ------------------------------------------------------------ unit tests
 
+#[tokio::test]
+async fn keysym_text_uses_a_separate_notify_only_session() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    assert_eq!(harness.count("rd.CreateSession"), 1);
+    for text in ["ı", "ł", "@", "é", "e\u{301}"] {
+        harness.inject(Inject::Text { text: text.into() });
+    }
+    harness.until("all symbol pairs", |world| world.keysym_calls.len() == 12).await;
+    let world = harness.world();
+    let actual: Vec<_> = world.keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect();
+    assert_eq!(actual, [0x0100_0131, 0x0100_0142, 0x40, 0xe9, 0x65, 0x0100_0301]
+        .into_iter().flat_map(|symbol| [(symbol, 1), (symbol, 0)]).collect::<Vec<_>>());
+    assert!(world.symbols.is_empty());
+    assert_eq!(world.count("rd.CreateSession"), 2);
+    assert_eq!(world.count("rd.ConnectToEIS"), 1);
+    assert!(world.keysym_calls.iter().all(|(session, _, _)| !world.eis_sessions.contains(session)));
+}
+
+#[tokio::test]
+async fn keysym_pairing_repeats_aliases_and_visit_cleanup() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    harness.inject(Inject::Text { text: ":".into() });
+    harness.until("keyboard permission granted", |world| world.keysym_calls.len() == 2).await;
+    harness.world().keysym_calls.clear();
+    for message in [
+        Inject::CharacterKey { code: 44, down: false, character: 'z' },
+        Inject::CharacterKey { code: 44, down: true, character: 'z' },
+        Inject::CharacterKey { code: 44, down: true, character: 'z' },
+        Inject::CharacterKey { code: 44, down: true, character: 'y' },
+        Inject::CharacterKey { code: 44, down: false, character: 'y' },
+        Inject::CharacterKey { code: 21, down: true, character: 'z' },
+        Inject::Text { text: "z".into() },
+        Inject::Key { code: 44, down: false },
+        Inject::Key { code: 21, down: false },
+        Inject::CharacterKey { code: 30, down: true, character: 'ą' },
+        Inject::Controlled(false),
+        Inject::CharacterKey { code: 30, down: false, character: 'ą' },
+        Inject::Text { text: "!".into() },
+    ] { harness.inject(message); }
+    harness.until("visit cleanup and sentinel", |world| world.keysym_calls.len() >= 7).await;
+    let world = harness.world();
+    let actual: Vec<_> = world.keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect();
+    assert_eq!(actual, [(0x7a, 1), (0x7a, 1), (0x7a, 0), (0x0100_0105, 1), (0x0100_0105, 0), (0x21, 1), (0x21, 0)]);
+    assert!(world.symbols.is_empty());
+    assert!(world.pressed.is_empty());
+}
+
+#[tokio::test]
+async fn keysym_hostile_characters_and_physical_ctrl_text_are_refused() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    for character in ['\n', '\0', '\u{202e}', '\u{e000}', '\u{2028}', '\u{a0}'] {
+        assert!(crate::typing::Text::new(&character.to_string()).is_none());
+        harness.inject(Inject::CharacterKey { code: 30, down: true, character });
+    }
+    harness.inject(Inject::CharacterKey { code: 29, down: true, character: 'z' });
+    harness.inject(Inject::Key { code: 29, down: true });
+    harness.inject(Inject::Text { text: "z".into() });
+    harness.inject(Inject::Key { code: 29, down: false });
+    harness.inject(Inject::Text { text: "!".into() });
+    harness.until("valid sentinel", |world| world.keysym_calls.len() == 2).await;
+    assert_eq!(harness.count("rd.CreateSession"), 2);
+    assert_eq!(harness.world().keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect::<Vec<_>>(), [(0x21, 1), (0x21, 0)]);
+}
+
+#[tokio::test]
+async fn keysym_session_close_releases_physical_and_symbolic_holds() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    harness.inject(Inject::Key { code: 29, down: true });
+    harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'z' });
+    harness.until("symbol held", |world| world.symbols.len() == 1).await;
+    harness.close_session("rd").await;
+    harness.until("both sessions released", |world| world.symbols.is_empty() && world.pressed.is_empty() && world.count("rd.Close") >= 2).await;
+    assert!(harness.world().keysym_calls.iter().any(|(_, symbol, state)| (*symbol, *state) == (0x7a, 0)));
+}
+
+#[tokio::test]
+async fn keysym_shutdown_and_power_changes_release_holds() {
+    for paused in [None, Some(Power { locked: true, asleep: false }), Some(Power { locked: false, asleep: true })] {
+        let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+        harness.ready().await;
+        harness.inject(Inject::CharacterKey { code: 30, down: true, character: 'ą' });
+        harness.until("symbol held", |world| world.symbols.len() == 1).await;
+        match paused {
+            Some(power) => { harness.power.send(power).unwrap(); }
+            None => { harness.inject.take(); harness.capture.take(); }
+        }
+        harness.until("symbol released", |world| world.symbols.is_empty()).await;
+        assert!(harness.world().keysym_calls.iter().any(|(_, symbol, state)| (*symbol, *state) == (0x0100_0105, 0)));
+    }
+}
+
+#[tokio::test]
+async fn keysym_failed_press_is_compensated_and_sessions_close() {
+    let Some(mut harness) = Harness::start(&[], |world| world.fail_symbol = Some((0x0100_0142, 1))).await else { return };
+    harness.ready().await;
+    harness.inject(Inject::CharacterKey { code: 30, down: true, character: 'ą' });
+    harness.inject(Inject::Text { text: "ł".into() });
+    harness.until("failed session closed", |world| world.count("rd.Close") >= 2).await;
+    let actual: Vec<_> = harness.world().keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect();
+    assert_eq!(actual, [(0x0100_0105, 1), (0x0100_0142, 1), (0x0100_0142, 0), (0x0100_0105, 0)]);
+    assert!(harness.world().symbols.is_empty());
+}
+
+#[tokio::test]
+async fn keysym_requires_version_and_granted_keyboard() {
+    for (version, devices) in [(0, 3), (2, 2)] {
+        let Some(mut harness) = Harness::start(&[], |world| { world.rd_version = version; world.rd_devices = devices; }).await else { return };
+        if version == 0 {
+            harness.until("old portal rejected", |world| world.count("rd.Close") >= 1).await;
+        } else {
+            harness.ready().await;
+            harness.inject(Inject::Text { text: "z".into() });
+            harness.until("missing keyboard rejected", |world| world.count("rd.Close") >= 1).await;
+        }
+        assert!(harness.world().keysym_calls.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn keysym_requires_keyboard_in_the_symbolic_start_result() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    harness.world().rd_granted_devices = Some(2);
+    harness.inject(Inject::Text { text: "z".into() });
+    harness.until("symbolic keyboard grant refused", |world| world.count("rd.Close") >= 2).await;
+    assert!(harness.world().keysym_calls.is_empty());
+}
+
+#[tokio::test]
+async fn keysym_already_ended_visit_does_not_ask_permission() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'z' });
+    harness.inject(Inject::Controlled(false));
+    harness.inject(Inject::Key { code: 57, down: true });
+    harness.until("physical sentinel after visit", |world| world.pressed.contains(&('k', 57))).await;
+    assert_eq!(harness.count("rd.CreateSession"), 1);
+    assert!(harness.world().keysym_calls.is_empty());
+    harness.inject(Inject::Key { code: 57, down: false });
+}
+
+#[tokio::test]
+async fn keysym_permission_dialog_is_cancelled_by_session_loss() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    harness.world().dialog = Duration::from_secs(30);
+    harness.inject(Inject::Key { code: 29, down: true });
+    harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'z' });
+    harness.until("keyboard permission pending", |world| world.count("rd.Start") == 2).await;
+    let session = harness.world().sessions.iter().find(|(kind, _)| *kind == "rd").unwrap().1.clone();
+    harness.fake.as_ref().unwrap().emit_signal(None::<&str>, session.as_str(), "org.freedesktop.portal.Session", "Closed", &Results::new()).await.unwrap();
+    harness.until("physical key released without waiting for permission", |world| world.pressed.is_empty() && world.count("rd.Close") > 0).await;
+    assert!(harness.world().keysym_calls.is_empty());
+}
+
+#[tokio::test]
+async fn keysym_permission_dialog_is_cancelled_by_input_cleanup() {
+    for cleanup in [0, 1, 2] {
+        let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+        harness.ready().await;
+        harness.world().dialog = Duration::from_secs(30);
+        harness.inject(Inject::Key { code: 29, down: true });
+        harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'z' });
+        harness.until("keyboard permission pending", |world| world.count("rd.Start") == 2).await;
+        match cleanup {
+            0 => harness.inject(Inject::Controlled(false)),
+            1 => harness.inject(Inject::Key { code: 29, down: false }),
+            _ => { harness.inject.take(); harness.capture.take(); }
+        }
+        harness.until("input cleanup cancels permission", |world| world.pressed.is_empty() && world.count("rd.Close") > 0).await;
+        assert!(harness.world().keysym_calls.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn keysym_two_hundred_characters_are_ordered_and_acknowledged() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    let conn = zbus::connection::Builder::address(harness.bus.as_ref().unwrap().addr.as_str()).unwrap().build().await.unwrap();
+    let portal = RemoteDesktop::with_connection(conn).await.unwrap();
+    let mut keyboard = KeysymKeyboard::open(&portal).await.unwrap();
+    let mut latency = Vec::new();
+    let mut expected = Vec::new();
+    for character in ['z', 'y', '@', '€', 'é', 'ł', 'ą', 'ı'].into_iter().cycle().take(200) {
+        let text = crate::typing::Text::new(&character.to_string()).unwrap();
+        let started = Instant::now();
+        keyboard.send(&portal, Inject::Text { text }).await.unwrap();
+        latency.push(started.elapsed().as_micros());
+        let scalar = u32::from(character);
+        let symbol = if scalar <= 0xff { scalar as i32 } else { (0x0100_0000 | scalar) as i32 };
+        expected.extend([(symbol, 1), (symbol, 0)]);
+    }
+    keyboard.stop(&portal).await;
+    latency.sort_unstable();
+    eprintln!("fake-portal-only Text press/release acknowledgement: P50={}us P95={}us; NOT application delivery latency", latency[99], latency[189]);
+    assert_eq!(harness.world().keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect::<Vec<_>>(), expected);
+    assert!(harness.world().symbols.is_empty());
+}
+
+#[tokio::test]
+async fn keysym_release_failure_still_closes_the_session() {
+    let Some(mut harness) = Harness::start(&[], |world| world.fail_symbol = Some((0x7a, 0))).await else { return };
+    harness.ready().await;
+    harness.inject(Inject::Text { text: "z".into() });
+    harness.until("failed release closed", |world| world.count("rd.Close") >= 2).await;
+    assert!(harness.world().symbols.is_empty());
+    assert_eq!(harness.world().keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect::<Vec<_>>(), [(0x7a, 1), (0x7a, 0), (0x7a, 0)]);
+}
+
+#[tokio::test]
+async fn keysym_visit_release_failure_closes_both_sessions() {
+    let Some(mut harness) = Harness::start(&[], |world| world.fail_symbol = Some((0x7a, 0))).await else { return };
+    harness.ready().await;
+    harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'z' });
+    harness.until("symbol held", |world| !world.symbols.is_empty()).await;
+    harness.inject(Inject::Controlled(false));
+    harness.until("failed visit cleanup closed", |world| world.count("rd.Close") >= 2).await;
+    assert!(harness.world().symbols.is_empty());
+    assert_eq!(harness.world().keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect::<Vec<_>>(), [(0x7a, 1), (0x7a, 0), (0x7a, 0)]);
+}
+
+#[tokio::test]
+async fn keysym_hung_press_is_interrupted_by_lock_and_released() {
+    let Some(mut harness) = Harness::start(&[], |world| world.hang_symbol = Some((0x7a, 1))).await else { return };
+    harness.ready().await;
+    harness.inject(Inject::Key { code: 29, down: true });
+    harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'z' });
+    harness.until("unacknowledged symbol held", |world| !world.symbols.is_empty()).await;
+    harness.power.send_modify(|power| power.locked = true);
+    harness.until("lock cancels and releases both paths", |world| world.count("rd.Close") >= 2 && world.pressed.is_empty() && world.symbols.is_empty()).await;
+    assert_eq!(harness.world().keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect::<Vec<_>>(), [(0x7a, 1), (0x7a, 0)]);
+}
+
+#[tokio::test]
+async fn keysym_hung_press_is_interrupted_by_input_cleanup() {
+    for cleanup in [0, 1, 2] {
+        let Some(mut harness) = Harness::start(&[], |world| world.hang_symbol = Some((0x7a, 1))).await else { return };
+        harness.ready().await;
+        harness.inject(Inject::Key { code: 29, down: true });
+        harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'z' });
+        harness.until("unacknowledged symbol held", |world| !world.symbols.is_empty()).await;
+        match cleanup {
+            0 => harness.inject(Inject::Controlled(false)),
+            1 => harness.inject(Inject::Key { code: 29, down: false }),
+            _ => { harness.inject.take(); harness.capture.take(); }
+        }
+        harness.until("input cleanup releases symbol", |world| world.count("rd.Close") >= 2 && world.symbols.is_empty() && world.pressed.is_empty()).await;
+        assert_eq!(harness.world().keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect::<Vec<_>>(), [(0x7a, 1), (0x7a, 0)]);
+    }
+}
+
 #[test]
 fn held_keys_and_buttons_are_let_go_last_first() {
     let mut h = Held::default();
@@ -171,6 +426,14 @@ struct World {
     pressed: BTreeSet<(char, u32)>,
     /// Devices the injector started emulating on.
     emulating: usize,
+    rd_version: u32,
+    rd_devices: u32,
+    rd_granted_devices: Option<u32>,
+    eis_sessions: BTreeSet<String>,
+    keysym_calls: Vec<(String, i32, u32)>,
+    symbols: BTreeSet<(String, i32)>,
+    fail_symbol: Option<(i32, u32)>,
+    hang_symbol: Option<(i32, u32)>,
 }
 
 impl Default for World {
@@ -191,6 +454,14 @@ impl Default for World {
             positions: Vec::new(),
             pressed: BTreeSet::new(),
             emulating: 0,
+            rd_version: 2,
+            rd_devices: 3,
+            rd_granted_devices: None,
+            eis_sessions: BTreeSet::new(),
+            keysym_calls: Vec::new(),
+            symbols: BTreeSet::new(),
+            fail_symbol: None,
+            hang_symbol: None,
         }
     }
 }
@@ -268,8 +539,10 @@ struct FakeSession {
 
 #[zbus::interface(name = "org.freedesktop.portal.Session")]
 impl FakeSession {
-    async fn close(&self) {
-        lock(&self.world).log.push(format!("{}.Close", self.kind));
+    async fn close(&self, #[zbus(header)] hdr: zbus::message::Header<'_>) {
+        let mut world = lock(&self.world);
+        world.log.push(format!("{}.Close", self.kind));
+        if let Some(path) = hdr.path() { world.symbols.retain(|(session, _)| session != path.as_str()); }
     }
 
     #[zbus(property, name = "version")]
@@ -339,7 +612,7 @@ impl FakeRemoteDesktop {
             (false, true) => (1, w.dialog),
             (false, false) => (0, w.dialog),
         };
-        let mut results = Results::from([("devices", Value::from(3u32))]);
+        let mut results = Results::from([("devices", Value::from(w.rd_granted_devices.unwrap_or(w.rd_devices)))]);
         if code == 0 {
             results.insert("restore_token", Value::from(w.new_token()));
         }
@@ -348,19 +621,46 @@ impl FakeRemoteDesktop {
     }
 
     #[zbus(name = "ConnectToEIS")]
-    async fn connect_to_eis(&self, _session: OwnedObjectPath, _options: Opts) -> zbus::fdo::Result<zbus::zvariant::OwnedFd> {
-        lock(&self.0).log.push("rd.ConnectToEIS".into());
+    async fn connect_to_eis(&self, session: OwnedObjectPath, _options: Opts) -> zbus::fdo::Result<zbus::zvariant::OwnedFd> {
+        {
+            let mut world = lock(&self.0);
+            world.log.push("rd.ConnectToEIS".into());
+            world.eis_sessions.insert(session.to_string());
+        }
         fake_eis(self.0.clone(), true)
+    }
+
+    #[zbus(name = "NotifyKeyboardKeysym")]
+    async fn notify_keyboard_keysym(&self, session: OwnedObjectPath, _options: Opts, symbol: i32, state: u32) -> zbus::fdo::Result<()> {
+        let hang = {
+            let mut world = lock(&self.0);
+            if world.eis_sessions.contains(session.as_str()) {
+                return Err(zbus::fdo::Error::NotSupported("Notify after ConnectToEIS".into()));
+            }
+            if !world.sessions.iter().any(|(_, path)| path == session.as_str()) || world.rd_devices & 1 == 0 || state > 1 {
+                return Err(zbus::fdo::Error::InvalidArgs("keyboard session or state".into()));
+            }
+            world.log.push(format!("rd.Keysym {symbol} {state}"));
+            world.keysym_calls.push((session.to_string(), symbol, state));
+            if world.fail_symbol == Some((symbol, state)) {
+                return Err(zbus::fdo::Error::Failed("injected failure".into()));
+            }
+            if state == 1 { world.symbols.insert((session.to_string(), symbol)); }
+            else { world.symbols.remove(&(session.to_string(), symbol)); }
+            world.hang_symbol == Some((symbol, state))
+        };
+        if hang { std::future::pending::<()>().await; }
+        Ok(())
     }
 
     #[zbus(property, name = "version")]
     fn version(&self) -> u32 {
-        2
+        lock(&self.0).rd_version
     }
 
     #[zbus(property, name = "AvailableDeviceTypes")]
     fn available_device_types(&self) -> u32 {
-        3
+        lock(&self.0).rd_devices
     }
 }
 
