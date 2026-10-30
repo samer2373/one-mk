@@ -273,7 +273,12 @@ impl Retry {
             Ok(()) => return Next::Stop,
             Err(e) => e,
         };
-        if let Some(why) = permanent(&e) {
+        // A portal that worked and is now "not found" is restarting (a crash,
+        // a package upgrade), not missing: only a declined dialog, or a
+        // portal that never was there, ends the retrying.
+        let restarting = self.ever_ready
+            && e.chain().any(|c| matches!(c.downcast_ref::<ashpd::Error>(), Some(ashpd::Error::PortalNotFound(_))));
+        if let Some(why) = permanent(&e).filter(|_| !restarting) {
             tracing::debug!("{}: {e:#}", self.what);
             self.show(Some(format!("{}: {why}", self.what)));
             return Next::Stop;
