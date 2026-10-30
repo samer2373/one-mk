@@ -485,6 +485,8 @@ impl KeymapSet {
         self.maps.iter().all(|map| map.supports_local_keys(&supported))
     }
 
+    pub fn has_device_rules(&self) -> bool { !self.by_device.is_empty() }
+
     /// Which keymap input from `device` uses.
     fn index(&self, device: Option<DeviceRef>) -> usize {
         device.and_then(|d| self.by_device.iter().find(|(x, _)| *x == d)).map_or(0, |(_, i)| *i)

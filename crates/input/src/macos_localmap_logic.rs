@@ -40,6 +40,11 @@ pub struct Flags {
 }
 
 impl Flags {
+    pub fn rewrite(&self, original: u64, injected: u64, active: bool) -> u64 {
+        if !active { return original; }
+        self.apply(original, injected)
+    }
+
     pub fn key(&mut self, code: u32, down: bool, swallowed: bool) {
         if !one_mk_proto::Mods::is_modifier(code) { return; }
         self.physical.update(code, down);
@@ -49,15 +54,49 @@ impl Flags {
 
     pub fn apply(&self, original: u64, injected: u64) -> u64 {
         let mut passed = logic::Modifiers::default();
-        for code in self.physical.iter().filter(|&code| !self.suppressed.is_held(code)) { passed.update(code, true); }
+        for code in self.physical.iter().filter(|&code| !self.suppressed.is_held(code)) {
+            if logic::evdev_to_mac(code).and_then(|key| logic::modifier_down(key, original)) == Some(true) {
+                passed.update(code, true);
+            }
+        }
         let mask = flags::SHIFT | flags::CONTROL | flags::ALTERNATE | flags::COMMAND | flags::DEV_ALL;
-        (original & !mask) | (passed.flags() & !flags::NON_COALESCED) | injected
+        (original & !mask) | (original & passed.flags() & !flags::NON_COALESCED) | injected
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missed_modifier_release_cannot_add_phantom_flags() {
+        let mut state = Flags::default();
+        state.key(125, true, false);
+        state.key(42, true, false);
+        assert_eq!(state.apply(flags::NON_COALESCED, 0), flags::NON_COALESCED);
+    }
+
+    #[test]
+    fn disabled_and_paused_flags_are_bit_exact_main_passthrough() {
+        let mut state = Flags::default();
+        state.key(125, true, false);
+        state.key(42, true, true);
+        let mut random = 0x9132_abc7_u64;
+        for _ in 0..100_000 {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            assert_eq!(state.rewrite(random, u64::MAX, false), random);
+        }
+    }
+
+    #[test]
+    fn stale_opposite_side_cannot_keep_an_aggregate_modifier() {
+        let mut state = Flags::default();
+        state.key(42, true, true);
+        state.key(54, true, false);
+        assert_eq!(state.apply(flags::SHIFT | flags::DEV_LSHIFT, 0), 0);
+    }
 
     #[test]
     fn only_the_outstanding_receipt_can_acknowledge_a_post() {
@@ -112,7 +151,7 @@ mod tests {
         assert_eq!(state.apply(synthetic | toggle, synthetic), synthetic | toggle);
         assert_eq!(state.apply(synthetic | toggle, 0), toggle);
         state.key(97, true, false);
-        assert_eq!(state.apply(synthetic | toggle, 0), flags::CONTROL | flags::DEV_RCTL | toggle);
+        assert_eq!(state.apply(synthetic | toggle, 0), toggle);
         state.key(97, false, false);
         state.key(42, false, true);
         assert_eq!(state.apply(synthetic | toggle, 0), toggle);

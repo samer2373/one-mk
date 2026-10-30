@@ -59,6 +59,7 @@ impl Snapshots {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Key {
+    pub keyboard_type: u32,
     pub sequence: u64,
     pub code: u32,
     pub down: bool,
@@ -69,21 +70,47 @@ pub struct Key {
 pub struct Physical {
     down: HeldKeys,
     owned: HeldKeys,
-    mapped: HeldKeys,
+    shortcuts: HeldKeys,
+    sources: Vec<(Option<DeviceRef>, HeldKeys)>,
     passed: HeldKeys,
     remote: HeldKeys,
     matcher: Matcher,
 }
 
 impl Physical {
+    pub fn correlated(&mut self, code: u32, down: bool, device: Option<DeviceRef>) -> bool {
+        if let Some((_, held)) = self.sources.iter_mut().find(|(source, _)| *source == device) {
+            held.update(code, down);
+        } else if down {
+            if self.sources.len() >= CAPACITY { return false; }
+            let mut held = HeldKeys::new();
+            held.update(code, true);
+            self.sources.push((device, held));
+        }
+        self.sources.retain(|(_, held)| !held.is_empty());
+        true
+    }
+
     pub fn baseline(&mut self, held: impl Iterator<Item = u32>) {
         self.passed = HeldKeys::new();
         self.down = HeldKeys::new();
         self.matcher.reset();
-        for code in held {
+        for code in held.filter(|code| !(0x110..=0x11f).contains(code)) {
             if !self.owned.is_held(code) && !self.remote.is_held(code) { self.passed.update(code, true); }
             self.down.update(code, true);
         }
+        for code in self.owned.clone().iter() {
+            if !self.down.is_held(code) { self.owned.update(code, false); }
+        }
+        for code in self.shortcuts.clone().iter() {
+            if !self.down.is_held(code) { self.shortcuts.update(code, false); }
+        }
+        for (_, held) in &mut self.sources {
+            for code in held.clone().iter() {
+                if !self.down.is_held(code) { held.update(code, false); }
+            }
+        }
+        self.sources.retain(|(_, held)| !held.is_empty());
     }
 
     pub fn key(
@@ -101,13 +128,19 @@ impl Physical {
     ) -> Option<bool> {
         let mods = Mods::from_keys(self.down.iter());
         self.down.update(code, down);
+        if self.shortcuts.is_held(code) {
+            if !down { self.shortcuts.update(code, false); }
+            return Some(true);
+        }
         let emergency = down && code == EMERGENCY.key && ChordMods::from_held(mods).contains(EMERGENCY.mods);
         let verdict = self.matcher.key(&rules.hotkeys, mods, code, down);
         if emergency || matches!(verdict, Verdict::Fire(_)) {
-            admission.fail();
-            let shortcut = if emergency { Action::Home } else if let Verdict::Fire(shortcut) = verdict { shortcut } else { unreachable!() };
+            let shortcut = if emergency {
+                admission.fail();
+                Action::Home
+            } else if let Verdict::Fire(shortcut) = verdict { shortcut } else { return None };
             let queued = action(shortcut);
-            if !emergency && queued { self.owned.update(code, true); }
+            if !emergency && queued { self.shortcuts.update(code, true); }
             if emergency { self.passed.update(code, true); }
             return Some(!emergency && queued);
         }
@@ -116,20 +149,22 @@ impl Physical {
 
     fn route(&mut self, key: PhysicalKey, code: u32, now: Instant, admission: &mut Admission) -> bool {
         let owner = if self.passed.is_held(code) { Owner::Os }
-            else if self.owned.is_held(code) || !key.down && self.mapped.is_held(code) { Owner::Local }
+            else if self.owned.is_held(code) || !key.down && self.sources.iter().any(|(_, held)| held.is_held(code)) { Owner::Local }
             else if self.remote.is_held(code) { Owner::Remote } else { Owner::Unknown };
         let route = admission.gate.decide(PhysicalKey {
             owner, eligible: key.eligible && self.passed.is_empty(), healthy: key.healthy && admission.healthy(now), ..key
         });
         let swallow = match route {
             Route::Local => admission.admit(code, key.down, now) || owner == Owner::Local,
-            Route::Suppress => true,
+            Route::Suppress => {
+                if !key.down && owner == Owner::Local { admission.submit(code, false, now); }
+                true
+            }
             _ => false,
         };
         if key.down && owner == Owner::Unknown {
             if swallow {
                 self.owned.update(code, true);
-                self.mapped.update(code, true);
             } else { self.passed.update(code, true); }
         } else if !key.down {
             self.owned.update(code, false);
@@ -151,9 +186,12 @@ impl Physical {
         self.down.update(code, false);
     }
 
-    pub fn suppress_owned(&mut self, code: u32, down: bool) -> bool {
-        if self.owned.is_held(code) {
-            if !down { self.owned.update(code, false); }
+    pub fn suppress_owned(&mut self, code: u32, down: bool, admission: &mut Admission) -> bool {
+        if self.owned.is_held(code) || !down && self.sources.iter().any(|(_, held)| held.is_held(code)) {
+            if !down {
+                self.owned.update(code, false);
+                admission.submit(code, false, Instant::now());
+            }
             return true;
         }
         false
@@ -168,6 +206,7 @@ pub struct Admission {
     submitted: u64,
     oldest: Option<Instant>,
     gate: Arc<HookGate>,
+    pub keyboard_type: u32,
 }
 
 pub struct Feedback {
@@ -212,8 +251,7 @@ impl WatchLease {
 
     pub fn expired(&mut self, feedback: &Feedback, now: Instant) -> bool {
         if self.pending.is_some_and(|(_, deadline)| now >= deadline) {
-            let (sequence, _) = self.pending.take().expect("checked deadline");
-            return !feedback.acknowledged(sequence);
+            return self.pending.take().is_some_and(|(sequence, _)| !feedback.acknowledged(sequence));
         }
         false
     }
@@ -224,7 +262,7 @@ impl Admission {
         Self {
             keys: ArrayQueue::new(CAPACITY),
             feedback: Arc::new(Feedback { health: AtomicU64::new(0), acknowledged: AtomicU64::new(0), submitted: AtomicU64::new(0) }),
-            submitted: 0, oldest: None, gate,
+            submitted: 0, oldest: None, gate, keyboard_type: 0,
         }
     }
 
@@ -250,6 +288,10 @@ impl Admission {
             self.fail();
             return false;
         }
+        self.submit(code, down, at)
+    }
+
+    fn submit(&mut self, code: u32, down: bool, at: Instant) -> bool {
         let acknowledged = self.feedback.acknowledged.load(Ordering::Acquire);
         if self.submitted.saturating_sub(acknowledged) >= CAPACITY as u64 {
             self.fail();
@@ -259,7 +301,7 @@ impl Admission {
             self.fail();
             return false;
         };
-        if self.keys.push(Key { sequence, code, down, at }).is_err() {
+        if self.keys.push(Key { keyboard_type: self.keyboard_type, sequence, code, down, at }).is_err() {
             self.fail();
             return false;
         }
@@ -293,6 +335,7 @@ impl Admission {
 pub trait Injector {
     fn inject(&mut self, keys: &[(u32, bool)]) -> usize;
     fn settled(&self) -> bool { true }
+    fn keyboard_type(&mut self, _keyboard_type: u32) {}
 }
 
 pub struct Engine<I: Injector> {
@@ -350,7 +393,11 @@ impl<I: Injector> Engine<I> {
             return false;
         }
         self.sequence = key.sequence;
-        if self.handoff.state() != State::Local || self.failed { return true; }
+        self.injector.keyboard_type(key.keyboard_type);
+        if self.handoff.state() != State::Local || self.failed {
+            if !key.down { self.mapper.key_from(key.code, false, device, key.at, &mut |_| {}); }
+            return true;
+        }
         let mut events = Vec::new();
         self.mapper.key_from(key.code, key.down, device, key.at, &mut |event| events.push(event));
         if !self.emit(events) { self.fail(); return false; }
@@ -383,8 +430,9 @@ impl<I: Injector> Engine<I> {
     /// may bypass correlation and arrive after this acknowledgement.
     pub fn fence(&mut self, watermark: u64, destination: Destination, rules: Option<&Rules>) -> bool {
         self.handoff.hook_gate().close();
-        if watermark != self.sequence || !self.fail() { return false; }
-        if let Some(rules) = rules { self.mapper = Mapper::with_set(rules.maps.clone()); }
+        if watermark < self.sequence || watermark != self.sequence && !self.failed || !self.fail() { return false; }
+        self.sequence = watermark;
+        if let Some(rules) = rules { self.mapper.set_keymaps(rules.maps.clone(), &mut |_| {}); }
         let Some(ticket) = self.handoff.begin(destination, || {}) else { return false };
         self.failed = false;
         self.handoff.acknowledge(ticket)
@@ -439,6 +487,156 @@ mod tests {
     }
 
     #[test]
+    fn unobserved_up_after_mapped_release_is_os_owned() {
+        let mut handoff = Handoff::default();
+        let ticket = handoff.begin(Destination::Local, || {}).unwrap();
+        assert!(handoff.acknowledge(ticket));
+        let mut admission = Admission::new(handoff.hook_gate());
+        let mut physical = Physical::default();
+        let now = Instant::now();
+        assert!(physical.key(physical_key(true), 56, now, &rules(), &mut admission, |_| true));
+        assert!(physical.key(physical_key(false), 56, now, &rules(), &mut admission, |_| true));
+        assert!(!physical.key(physical_key(false), 56, now, &rules(), &mut admission, |_| true));
+    }
+
+    #[test]
+    fn source_tracking_exhaustion_is_explicit_and_recovers_after_release() {
+        let mut physical = Physical::default();
+        for device in 0..CAPACITY {
+            assert!(physical.correlated(58, true, Some(DeviceRef(device as u32))));
+        }
+        assert!(!physical.correlated(58, true, Some(DeviceRef(CAPACITY as u32))));
+        assert!(physical.correlated(58, true, Some(DeviceRef(0))));
+        assert!(physical.correlated(58, false, Some(DeviceRef(0))));
+        assert!(physical.correlated(58, true, Some(DeviceRef(CAPACITY as u32))));
+        assert_eq!(physical.sources.len(), CAPACITY);
+    }
+
+    fn physical_key(down: bool) -> PhysicalKey {
+        PhysicalKey { down, injected: false, shortcut: false, owner: Owner::Unknown, eligible: true, healthy: true }
+    }
+
+    #[test]
+    fn ordinary_hotkey_preserves_worker_health() {
+        let engine = Engine::new(Fake(Arc::new(Mutex::new(Record::default()))));
+        let mut admission = Admission::new(engine.gate());
+        let mut physical = Physical::default();
+        let mut rules = rules();
+        rules.hotkeys = Bindings::new(vec![(Action::Cycle, "ctrl+alt+right".parse().unwrap())]).unwrap();
+        for code in [29, 56, 106] {
+            physical.key(physical_key(true), code, Instant::now(), &rules, &mut admission, |_| true);
+        }
+        assert!(admission.feedback().healthy());
+    }
+
+    #[test]
+    fn owned_up_during_failure_retires_the_source_tombstone() {
+        let record = Arc::new(Mutex::new(Record::default()));
+        let mut engine = Engine::new(Fake(record));
+        let rules = rules();
+        assert!(engine.fence(0, Destination::Local, Some(&rules)));
+        let mut admission = Admission::new(engine.gate());
+        let mut physical = Physical::default();
+        let now = Instant::now();
+        assert!(physical.key(physical_key(true), 58, now, &rules, &mut admission, |_| true));
+        let key = admission.pop().unwrap();
+        physical.correlated(key.code, key.down, None);
+        assert!(engine.admitted_key(key, None, &admission.feedback()));
+        admission.fail();
+        assert!(engine.fail());
+        assert!(physical.key(physical_key(false), 58, now, &rules, &mut admission, |_| true));
+        let release = admission.pop().expect("owned up must retire its source even when failed");
+        physical.correlated(release.code, release.down, None);
+        assert!(engine.admitted_key(release, None, &admission.feedback()));
+        assert!(!physical.key(physical_key(false), 58, now, &rules, &mut admission, |_| true));
+    }
+
+    #[test]
+    fn shortcut_release_never_enters_the_mapper() {
+        for action in [Action::Cycle, Action::Jump(1), Action::LockPointer, Action::Home, Action::Broadcast, Action::FetchClipboard] {
+            let engine = Engine::new(Fake(Arc::new(Mutex::new(Record::default()))));
+            let mut admission = Admission::new(engine.gate());
+            let mut physical = Physical::default();
+            let rules = Rules { hotkeys: Bindings::new(vec![(action, "ctrl+alt+right".parse().unwrap())]).unwrap(), ..Rules::default() };
+            for code in [29, 56, 106] {
+                physical.key(physical_key(true), code, Instant::now(), &rules, &mut admission, |_| true);
+            }
+            assert!(physical.key(physical_key(false), 106, Instant::now(), &rules, &mut admission, |_| true));
+            assert!(admission.pop().is_none());
+            assert!(admission.feedback().healthy());
+        }
+    }
+
+    #[test]
+    fn held_enter_is_os_owned_and_mouse_baseline_cannot_disable_mapping() {
+        let record = Arc::new(Mutex::new(Record::default()));
+        let mut engine = Engine::new(Fake(record));
+        let rules = rules();
+        assert!(engine.fence(0, Destination::Local, Some(&rules)));
+        let mut admission = Admission::new(engine.gate());
+        let mut physical = Physical::default();
+        physical.baseline([28, 0x110].into_iter());
+        let now = Instant::now();
+        for down in [true, true, false] {
+            assert!(!physical.key(physical_key(down), 28, now, &rules, &mut admission, |_| true));
+        }
+        assert!(physical.key(physical_key(true), 58, now, &rules, &mut admission, |_| true));
+    }
+
+    #[test]
+    fn failed_release_remains_owned_until_a_later_successful_retry() {
+        let record = Arc::new(Mutex::new(Record::default()));
+        let mut engine = Engine::new(Fake(record.clone()));
+        let rules = rules();
+        assert!(engine.fence(0, Destination::Local, Some(&rules)));
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+        record.lock().unwrap().limit = Some(0);
+        for _ in 0..3 {
+            assert!(!engine.fail());
+            assert!(!record.lock().unwrap().held.is_empty());
+        }
+        record.lock().unwrap().limit = None;
+        assert!(engine.fail());
+        assert!(record.lock().unwrap().held.is_empty());
+        assert!(engine.fence(1, Destination::Local, Some(&rules)));
+    }
+
+    #[test]
+    fn closed_home_gate_matches_main_for_random_repeats_and_unowned_ups() {
+        let mut random = 0x7249_6291_u64;
+        let handoff = Handoff::default();
+        let mut admission = Admission::new(handoff.hook_gate());
+        let mut physical = Physical::default();
+        let rules = Rules::default();
+        for _ in 0..100_000 {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            let code = [14, 28, 30, 42, 125][(random as usize >> 4) % 5];
+            let key = physical_key(random & 1 != 0);
+            assert!(!physical.key(key, code, Instant::now(), &rules, &mut admission, |_| true));
+            assert!(admission.pop().is_none());
+        }
+    }
+
+    #[test]
+    fn fence_recovers_sequence_gaps_without_repressing_held_keys() {
+        let record = Arc::new(Mutex::new(Record::default()));
+        let mut engine = Engine::new(Fake(record.clone()));
+        let rules = rules();
+        assert!(engine.fence(0, Destination::Local, Some(&rules)));
+        let now = Instant::now();
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: now }, None));
+        assert!(engine.fence(1, Destination::Local, Some(&rules)));
+        let downs = record.lock().unwrap().downs;
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 2, code: 58, down: true, at: now }, None));
+        assert_eq!(record.lock().unwrap().downs, downs);
+        assert!(!engine.key(Key { keyboard_type: 0, sequence: 4, code: 58, down: false, at: now }, None));
+        assert!(engine.fence(4, Destination::Local, Some(&rules)));
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 5, code: 58, down: false, at: now }, None));
+    }
+
+    #[test]
     fn independent_watchdog_is_idle_until_work_and_later_admissions_do_not_postpone_it() {
         let engine = Engine::new(Fake(Arc::new(Mutex::new(Record::default()))));
         let mut admission = Admission::new(engine.gate());
@@ -479,7 +677,7 @@ mod tests {
         let mut engine = Engine::new(Posted { settled: true });
         assert!(engine.fence(0, Destination::Local, Some(&rules())));
         engine.injector.settled = false;
-        assert!(!engine.key(Key { sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+        assert!(!engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
         assert!(!engine.fence(1, Destination::Remote, None));
         assert_eq!(engine.handoff.state(), State::Disabled);
         engine.injector.settled = true;
@@ -487,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn macos_modifier_streams_tap_disable_and_secure_input_use_the_production_gate() {
+    fn macos_modifier_streams_health_failure_and_fences_use_the_production_gate() {
         let map = Keymap::compile(&[RuleSpec { from: "lshift".parse().unwrap(), layer: None,
             what: What::To("lctrl".parse().unwrap()),
         }], Target { os: one_mk_proto::os::MACOS, swap: false }, Duration::from_millis(200)).unwrap().map;
@@ -532,7 +730,7 @@ mod tests {
         }
         assert!(engine.fail());
         flags.key(42, false, true);
-        assert_eq!(flags.apply(0, 0), 0);
+        assert_eq!(flags.apply(crate::macos_logic::flags::SHIFT | crate::macos_logic::flags::DEV_LSHIFT, 0), 0);
         let record = record.lock().unwrap();
         assert_eq!(record.downs, record.ups);
     }
@@ -577,7 +775,7 @@ mod tests {
         let feedback = admission.feedback();
         let mut engine = Engine::new(FailOnRelease { feedback: feedback.clone(), fail: false });
         assert!(engine.recover_fence(0, Destination::Local, Some(&rules()), &feedback, feedback.token()));
-        assert!(engine.key(Key { sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
         engine.injector.fail = true;
         let health = feedback.token();
         assert!(!engine.recover_fence(1, Destination::Local, None, &feedback, health));
@@ -597,7 +795,7 @@ mod tests {
         assert!(!engine.fence(1, Destination::Remote, None));
         assert!(record.lock().unwrap().held.is_empty());
         assert!(engine.fence(0, Destination::Local, None));
-        assert!(engine.key(Key { sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
         record.lock().unwrap().limit = Some(1);
         assert!(!engine.fence(1, Destination::Remote, None));
         assert_eq!(engine.handoff.state(), State::Disabled);
@@ -643,7 +841,7 @@ mod tests {
                     _ => {
                         sequence += 1;
                         engine.key(Key {
-                            sequence, code: [58, 30, 42, 100][((random >> 8) % 4) as usize],
+                            keyboard_type: 0, sequence, code: [58, 30, 42, 100][((random >> 8) % 4) as usize],
                             down: random & 64 != 0, at: Instant::now(),
                         }, Some(DeviceRef(1 + ((random >> 16) % 3) as u32)));
                     }
@@ -718,6 +916,7 @@ mod tests {
         for (device, down) in [(1, true), (2, true), (1, false), (2, false)] {
             assert!(hook.key(physical(down, true), 58, now, &rules, &mut admission, |_| true));
             let key = admission.pop().unwrap();
+            hook.correlated(key.code, key.down, Some(DeviceRef(device)));
             assert!(engine.key(key, Some(DeviceRef(device))));
             admission.acknowledge(key.sequence);
         }
@@ -764,13 +963,12 @@ mod tests {
                         let code = [58, 30, 42, 100][((random >> 8) % 4) as usize];
                         let down = random & 64 != 0;
                         let before = admission.watermark();
-                        let had_owner = hook.owned.is_held(code) || hook.remote.is_held(code) || hook.passed.is_held(code)
-                            || !down && hook.mapped.is_held(code);
+                        let had_owner = hook.owned.is_held(code) || hook.remote.is_held(code) || hook.passed.is_held(code);
                         if engine.handoff.state() == State::Remote {
-                            if !hook.suppress_owned(code, down) && !hook.passed.is_held(code) {
+                            if !hook.suppress_owned(code, down, &mut admission) && !hook.passed.is_held(code) {
                                 hook.remote_key(code, down);
                             } else if !down { hook.passed.update(code, false); }
-                            assert_eq!(before, admission.watermark());
+                            assert!(admission.watermark() == before || !down && admission.watermark() == before + 1);
                             continue;
                         }
                         let swallowed = hook.key(physical(down, true), code, now, &rules, &mut admission, |_| true);
@@ -799,17 +997,22 @@ mod tests {
         assert!(engine.fence(0, Destination::Local, Some(&rules)));
         assert!(engine.deadline().is_none());
         let now = Instant::now();
-        assert!(engine.key(Key { sequence: 1, code: 58, down: true, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: now }, None));
         assert_eq!(engine.deadline(), Some(now + Duration::from_millis(200)));
         assert!(engine.fence(1, Destination::Remote, None));
         assert!(engine.deadline().is_none());
         assert_eq!(record.lock().unwrap().downs, 0);
         assert!(engine.fence(1, Destination::Local, Some(&rules)));
-        assert!(engine.key(Key { sequence: 2, code: 58, down: true, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 2, code: 58, down: true, at: now }, None));
         assert!(engine.timer(now + Duration::from_millis(200)));
         assert!(engine.deadline().is_none());
-        assert!(record.lock().unwrap().held.contains(&29));
+        assert!(record.lock().unwrap().held.is_empty());
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 3, code: 58, down: false, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 4, code: 58, down: true, at: now }, None));
+        assert!(engine.timer(now + Duration::from_millis(200)));
+        let held = record.lock().unwrap().held.contains(&29);
         assert!(engine.fail());
+        assert!(held);
     }
 
     #[test]
@@ -819,7 +1022,7 @@ mod tests {
         let unwind = std::panic::catch_unwind(move || {
             let mut engine = Engine::new(Fake(record));
             assert!(engine.fence(0, Destination::Local, Some(&rules())));
-            assert!(engine.key(Key { sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+            assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
             panic!("worker panic after injection");
         });
         assert!(unwind.is_err());

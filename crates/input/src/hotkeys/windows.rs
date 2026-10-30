@@ -71,7 +71,7 @@ pub(super) fn start(bindings: Bindings, events: mpsc::UnboundedSender<Event>) ->
         // SAFETY: as above; `msg` is valid for every call.
         while unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) } > 0 {
             match msg.message {
-                WM_HOTKEY if !paused => {
+                WM_HOTKEY if !paused && !crate::windows_localmap::PHYSICAL_HOTKEYS.load(std::sync::atomic::Ordering::Acquire) => {
                     let action = registered.get(msg.wParam).copied().flatten();
                     if let Some(a) = action
                         && events.send(Event::Hotkey(a)).is_err()

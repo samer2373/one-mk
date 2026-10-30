@@ -681,9 +681,10 @@ pub fn local_rules_check(runtime: Option<&DaemonStatus>) -> Check {
     let outcome = if cfg!(target_os = "linux") {
         Outcome::skip("Local key rules are not available on Linux; stored rules remain inactive.")
     } else if cfg!(any(windows, target_os = "macos")) {
-        let detail = runtime.and_then(|status| status.input.iter().find(|line| line.starts_with("Local key rules ")))
-            .map(String::as_str).unwrap_or("Local key rules inactive: no native backend acknowledgement; EXPERIMENTAL, native Windows/macOS UNTESTED (compile-checked only).");
-        Outcome::warn(detail, "Default OFF. Native execution has not been accepted. Run `one-mk keymap local off` to disable; session/desktop/power changes require explicit reload. See docs/LOCAL-REMAP.md.")
+        match runtime.and_then(|status| status.input.iter().find(|line| line.starts_with("Local key rules "))) {
+            Some(detail) => Outcome::warn(detail, "Default OFF. Native execution has not been accepted. Run `one-mk keymap local off` to disable. See docs/LOCAL-REMAP.md."),
+            None => Outcome::skip("Local key rules inactive; no native local-rules problem reported."),
+        }
     } else {
         Outcome::warn(
             "Experimental; untested on real Windows/macOS hardware. Native local hook integration is incomplete; rules remain inactive even with the preference on.",
@@ -1975,6 +1976,8 @@ mod tests {
         if cfg!(target_os = "linux") {
             assert_eq!(st(&result), Status::Skip);
             assert!(result.outcome.detail.contains("not available on Linux"));
+        } else if cfg!(any(windows, target_os = "macos")) {
+            assert_eq!(st(&result), Status::Skip);
         } else {
             assert_eq!(st(&result), Status::Warn);
             assert!(result.outcome.detail.contains("untested on real Windows/macOS hardware") || result.outcome.detail.contains("UNTESTED (compile-checked only)"));

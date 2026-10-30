@@ -253,6 +253,7 @@ struct State {
     /// Raw Input: the devices, and the matching of events to them.
     raw: crate::windows_devices::RawDevices,
     local_rules: Option<Local>,
+    local_recovery: Option<crate::windows_localmap::Recovery>,
     session_active: bool,
     awake: bool,
     session_notifications: bool,
@@ -480,6 +481,7 @@ fn capture_thread(
             elevated_cache: None,
             raw: Default::default(),
             local_rules: None,
+            local_recovery: None,
             session_active: true,
             awake: true,
             session_notifications,
@@ -574,7 +576,8 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     if code == HC_ACTION as i32 {
         // SAFETY: for HC_ACTION, lparam points to a KBDLLHOOKSTRUCT.
         let info = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-        if info.dwExtraInfo == OUR_INPUT || info.flags & LLKHF_INJECTED != 0 || info.vkCode == 0xE5 {
+        let local_rules = with_state(|state| state.local_rules.is_some()).unwrap_or(false);
+        if info.dwExtraInfo == OUR_INPUT || local_rules && (info.flags & LLKHF_INJECTED != 0 || info.vkCode == 0xE5) {
             // SAFETY: unmodified synthetic input and VK_PROCESSKEY bypass all routing.
             return unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
         }
@@ -616,7 +619,10 @@ impl State {
         if let Some(local) = self.local_rules.as_mut() {
             while let Some(key) = local.admission.pop() {
                 local.waiting.push_back(key);
-                self.raw.corr.hook(Event::Key { code: key.code, down: key.down, device: None }, now_ms(), &mut out);
+                let event = Event::Key { code: key.code, down: key.down, device: None };
+                if local.snapshots.load().maps.has_device_rules() {
+                    self.raw.corr.hook(event, now_ms(), &mut out);
+                } else { local.forward(&event); }
             }
         }
         self.send_all(out);
@@ -625,6 +631,7 @@ impl State {
     fn local_fence(&mut self, destination: Destination) {
         let Some(local) = self.local_rules.as_ref() else { return };
         local.gate.close();
+        if destination == Destination::Remote { local.admission.fail(); }
         self.local_drain();
         let mut out = Vec::new();
         self.raw.corr.finish(&mut out);
@@ -649,6 +656,7 @@ impl State {
     }
 
     fn local_pump(&mut self) -> Effect {
+        if self.local_recovery.as_ref().is_some_and(|recovery| recovery.finished()) { self.local_recovery = None; }
         self.local_drain();
         let mut action = None;
         let mut done = None;
@@ -657,7 +665,7 @@ impl State {
         if let Some(local) = self.local_rules.as_mut() {
             input = std::mem::take(&mut local.input);
             while let Some(next) = local.action() { action = Some(next); }
-            if self.tx.is_closed() || action.is_some() || local.pending.is_some_and(|(_, started)| started.elapsed() >= crate::localmap_runtime::LEASE)
+            if self.tx.is_closed() || local.pending.is_some_and(|(_, started)| started.elapsed() >= crate::localmap_runtime::LEASE)
                 || !local.admission.healthy(Instant::now())
                     && (local.pending.is_none() || local.admission.feedback().token() != local.recovery)
             {
@@ -768,6 +776,7 @@ impl State {
                 // SAFETY: our own window and timer.
                 unsafe { KillTimer(self.hwnd, TIMER_DEVICES) };
                 self.fwd.clear();
+                if let Some(local) = self.local_rules.as_mut() { local.gate.close(); }
                 if self.local_rules.as_ref().is_some_and(|local| local.enabled && !local.paused) {
                     self.local_fence(Destination::Local);
                 }
@@ -797,14 +806,7 @@ impl State {
     }
 
     fn activate(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
-        if let Some(local) = self.local_rules.as_mut() {
-            if local.paused || !local.admission.healthy(Instant::now()) { return (false, Effect::None); }
-            if local.pending.is_none() {
-                local.activation = Some((side, x, y));
-                self.local_fence(Destination::Remote);
-            }
-            return (false, Effect::None);
-        }
+        self.local_fence(Destination::Remote);
         self.activate_now(side, x, y)
     }
 
@@ -982,6 +984,27 @@ impl State {
     fn command(&mut self, cmd: CaptureCmd) -> Effect {
         match cmd {
             CaptureCmd::LocalRules { rules, inactive } => {
+                if rules.as_ref().is_none_or(|rules| rules.count == 0 || !Local::supported(rules)) {
+                    self.local_pause();
+                    if let Some(local) = self.local_rules.take() { self.local_recovery = Some(local.retire()); }
+                    unsafe { KillTimer(self.hwnd, TIMER_LOCAL) };
+                    if self.captured.is_none() {
+                        let mut out = Vec::new();
+                        self.raw.unregister(&mut out);
+                        self.send_all(out);
+                    }
+                    let problem = rules.as_ref().filter(|rules| rules.count > 0).map(|_| {
+                        "Local key rules inactive: unsupported native output; EXPERIMENTAL, Windows UNTESTED".into()
+                    });
+                    let _ = self.tx.send(Event::Status { part: "local-key-rules", problem });
+                    return Effect::None;
+                }
+                if self.local_recovery.as_ref().is_some_and(|recovery| !recovery.finished()) {
+                    if let Some(recovery) = &self.local_recovery { recovery.retry(); }
+                    self.local_status("inactive: pending releases from previous local rules; retry after returning to the normal desktop");
+                    return Effect::None;
+                }
+                self.local_recovery = None;
                 if rules.is_some() && !self.session_notifications {
                     // SAFETY: retry only after a failed registration on our own window.
                     self.session_notifications = unsafe { WTSRegisterSessionNotification(self.hwnd, NOTIFY_FOR_THIS_SESSION) } != 0;
@@ -991,7 +1014,6 @@ impl State {
                     self.local_status("inactive: Windows session notifications unavailable");
                     return Effect::None;
                 }
-                let starting = self.local_rules.is_none();
                 if self.local_rules.is_none() && rules.is_some() {
                     match Local::start(self.hwnd) {
                         Ok(local) => self.local_rules = Some(local),
@@ -1005,18 +1027,8 @@ impl State {
                 let supported = Local::supported(&rules);
                 let active = self.session_active && self.awake && desktop_active();
                 if let Some(local) = self.local_rules.as_mut() {
-                    if local.paused && active && rules.count > 0 {
-                        let held = async_held();
-                        if (0..one_mk_proto::keynames::CODE_LIMIT).any(|code| held.has(code)) {
-                            local.fail();
-                            self.local_status("inactive: release all physical keys/buttons before resuming local rules");
-                            return Effect::None;
-                        }
-                        local.baseline(std::iter::empty());
-                    } else if starting {
-                        let held = async_held();
-                        local.baseline((0..one_mk_proto::keynames::CODE_LIMIT).filter(|&code| held.has(code)));
-                    }
+                    let held = async_held();
+                    local.baseline((0..one_mk_proto::keynames::CODE_LIMIT).filter(|&code| held.has(code)));
                     local.gate.close();
                     local.enabled = supported && rules.count > 0;
                     local.paused = !active;
@@ -1161,11 +1173,22 @@ fn reinstall_hooks(old: Hooks) -> bool {
 }
 
 pub(crate) unsafe extern "system" fn desktop_changed(
-    _hook: windows_sys::Win32::UI::Accessibility::HWINEVENTHOOK, _event: u32, _hwnd: HWND,
+    _hook: windows_sys::Win32::UI::Accessibility::HWINEVENTHOOK, event: u32, _hwnd: HWND,
     _object: i32, _child: i32, _thread: u32, _time: u32,
 ) {
+    if !matches!(event, 3 | 0x20) { return; }
     with_state(|state| {
-        if let Some(local) = state.local_rules.as_mut() { local.fail(); local.paused = true; }
+        if let Some(recovery) = &state.local_recovery { recovery.retry(); }
+        if state.local_rules.is_none() { return; }
+        if event == 3 && !state.foreground_elevated() {
+            let held = async_held();
+            if let Some(local) = state.local_rules.as_mut() && local.paused {
+                local.retry_releases();
+                local.baseline((0..one_mk_proto::keynames::CODE_LIMIT).filter(|&code| held.has(code)));
+            }
+            return;
+        }
+        if let Some(local) = state.local_rules.as_mut() { local.retry_releases(); local.paused = true; }
         // SAFETY: our window; release and suspension run outside the notification callback.
         unsafe { PostMessageW(state.hwnd, WM_APP_LOCAL_DESKTOP, 0, 0) };
     });
@@ -1177,10 +1200,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(effect) = with_state(State::local_pump) { apply(effect, hwnd); }
             0
         }
-        WM_APP_LOCAL_DESKTOP | 0x218 => {
+        WM_APP_LOCAL_DESKTOP | 0x218 if msg == WM_APP_LOCAL_DESKTOP || matches!(wparam, 4 | 7 | 18) => {
             if let Some(effect) = with_state(|state| {
                 if msg == 0x218 && wparam == 4 { state.awake = false; }
                 if msg == 0x218 && matches!(wparam, 7 | 18) { state.awake = true; }
+                if let Some(recovery) = &state.local_recovery { recovery.retry(); }
+                if state.local_rules.is_none() { return Effect::None; }
                 state.local_pause();
                 state.end()
             }) { apply(effect, hwnd); }
@@ -1308,7 +1333,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_WTSSESSION_CHANGE => {
             with_state(|state| {
-                if wparam as u32 == WTS_SESSION_UNLOCK { state.session_active = true; }
+                if wparam as u32 == WTS_SESSION_UNLOCK {
+                    state.session_active = true;
+                    if let Some(recovery) = &state.local_recovery { recovery.retry(); }
+                    let held = async_held();
+                    if let Some(local) = state.local_rules.as_mut() {
+                        local.retry_releases();
+                        local.baseline((0..one_mk_proto::keynames::CODE_LIMIT).filter(|&code| held.has(code)));
+                    }
+                }
                 if matches!(wparam as u32, WTS_SESSION_LOCK | WTS_SESSION_LOGOFF | WTS_CONSOLE_DISCONNECT | WTS_REMOTE_CONNECT) {
                     state.session_active = false;
                 }

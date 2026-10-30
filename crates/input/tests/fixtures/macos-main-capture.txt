@@ -1,0 +1,13 @@
+    fn start(&self, st: &mut State, side: Side, pos: Pos) -> bool {
+        let held = (0..128u16).filter(|&k| st.local_keys[usize::from(k)]).filter_map(logic::mac_to_evdev);
+        let _ = self.tx.send(Event::Modifiers(Mods::from_keys(held)));
+        let id = st.id.wrapping_add(1);
+        if self.tx.send(Event::Activated { id, side, pos }).is_err() {
+            return false;
+        }
+        st.id = id;
+        st.secure_reported = false;
+        st.activate();
+        self.update_timer(st);
+        true
+    }

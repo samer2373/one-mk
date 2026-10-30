@@ -62,10 +62,9 @@ struct Inner {
 const NEVER: f64 = 3.0e9;
 
 impl Hid {
-    pub(crate) fn local(&self, dispatch: crate::macos_localmap::Dispatch) {
+    pub(crate) fn local(&self, dispatch: Option<crate::macos_localmap::Dispatch>) {
         self.finish_local();
-        self.inner.borrow_mut().local = Some(dispatch);
-        self.capture(true);
+        self.inner.borrow_mut().local = dispatch;
     }
 
     pub(crate) fn local_key(&self, key: crate::localmap_runtime::Key) {

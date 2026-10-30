@@ -44,6 +44,8 @@ struct Native {
     settled: bool,
     mods: crate::macos_logic::Modifiers,
     held: one_mk_proto::HeldKeys,
+    keyboard_type: u32,
+    held_types: [Option<u32>; 128],
 }
 
 impl Injector for Native {
@@ -60,6 +62,9 @@ impl Injector for Native {
                 return index;
             };
             self.sequence = sequence;
+            let keyboard_type = if down { self.keyboard_type }
+                else { self.held_types.get(usize::from(kc)).copied().flatten().unwrap_or(self.keyboard_type) };
+            if let Some(slot) = self.held_types.get_mut(usize::from(kc)) { *slot = down.then_some(keyboard_type); }
             self.held.update(code, down);
             self.receipts.held.store(!self.held.is_empty(), Ordering::Release);
             self.mods.update(code, down);
@@ -68,8 +73,10 @@ impl Injector for Native {
             if crate::macos_logic::is_mac_modifier(kc) { CGEvent::set_type(Some(&event), CGEventType::FlagsChanged); }
             CGEvent::set_flags(Some(&event), CGEventFlags(flags | self.receipts.physical_flags.load(Ordering::Acquire)));
             CGEvent::set_integer_value_field(Some(&event), CGEventField::EventSourceUserData, (logic::TAG | u64::from(sequence)) as i64);
+            CGEvent::set_integer_value_field(Some(&event), CGEventField::KeyboardEventKeyboardType, i64::from(keyboard_type));
             self.receipts.receipt.arm(sequence);
             CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
+            if !down { self.settled = true; continue; }
             let deadline = Instant::now() + LEASE;
             while !self.receipts.receipt.seen(sequence) {
                 let remaining = deadline.saturating_duration_since(Instant::now());
@@ -85,6 +92,7 @@ impl Injector for Native {
     }
 
     fn settled(&self) -> bool { self.settled }
+    fn keyboard_type(&mut self, keyboard_type: u32) { self.keyboard_type = keyboard_type; }
 }
 
 pub(crate) struct Dispatch {
@@ -156,7 +164,7 @@ impl Local {
 
     pub fn start(inbox: Arc<Inbox>) -> std::io::Result<(Self, Dispatch)> {
         let receipts = Arc::new(Receipts::default());
-        let mut engine = Engine::new(Native { receipts: receipts.clone(), sequence: 0, settled: true, mods: Default::default(), held: one_mk_proto::HeldKeys::new() });
+        let mut engine = Engine::new(Native { receipts: receipts.clone(), sequence: 0, settled: true, mods: Default::default(), held: one_mk_proto::HeldKeys::new(), keyboard_type: 0, held_types: [None; 128] });
         let gate = engine.gate();
         let admission = Admission::new(gate.clone());
         let feedback = admission.feedback();
@@ -168,11 +176,9 @@ impl Local {
         let worker_inbox = inbox.clone();
         let thread = std::thread::Builder::new().name("one-mk-local-keys".into()).spawn(move || {
             let _ = worker_receipts.worker.set(std::thread::current());
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run(&mut engine, &worker_feedback, receiver, |done| {
+            run(&mut engine, &worker_feedback, receiver, |done| {
                     let _ = completion.send(done);
-                }, || worker_inbox.signal());
-            }));
+            }, || worker_inbox.signal());
             worker_feedback.fail();
             engine.fail();
             worker_inbox.post(Msg::Local);
@@ -201,7 +207,7 @@ impl Local {
                     std::thread::park();
                 } else if let Some(deadline) = lease.deadline(&watchdog_feedback, Instant::now()) {
                     std::thread::park_timeout(deadline.saturating_duration_since(Instant::now()));
-                } else if watchdog_receipts.held.load(Ordering::Acquire) || watchdog_receipts.physical_held.load(Ordering::Acquire) {
+                } else if watchdog_feedback.healthy() && (watchdog_receipts.held.load(Ordering::Acquire) || watchdog_receipts.physical_held.load(Ordering::Acquire)) {
                     std::thread::park_timeout(LEASE);
                 } else { std::thread::park(); }
             }
@@ -226,7 +232,7 @@ impl Local {
         self.flags = Flags::default();
         self.down = one_mk_proto::HeldKeys::new();
         for &code in &held { self.flags.key(code, true, false); self.down.update(code, true); }
-        self.receipts.physical_held.store(!self.down.is_empty(), Ordering::Release);
+        self.receipts.physical_held.store(self.enabled && !self.paused && !self.down.is_empty(), Ordering::Release);
         self.physical.baseline(held.into_iter());
     }
 
@@ -239,11 +245,11 @@ impl Local {
     pub fn hook(&mut self, code: u32, down: bool, injected: bool, flags: u64, remote: bool) -> bool {
         if injected { return false; }
         self.down.update(code, down);
-        self.receipts.physical_held.store(!self.down.is_empty(), Ordering::Release);
+        self.receipts.physical_held.store(self.enabled && !self.paused && !self.down.is_empty(), Ordering::Release);
         let rules = self.snapshots.load();
         let swallowed = if remote {
             if let Some(swallow) = self.physical.shortcut(code, down, &rules, &self.admission, |action| self.actions.push(action).is_ok()) { swallow }
-            else if self.physical.suppress_owned(code, down) { true }
+            else if self.physical.suppress_owned(code, down, &mut self.admission) { true }
             else {
                 if self.physical.os_owned(code) {
                     if !down { self.physical.os_release(code); }
@@ -265,6 +271,8 @@ impl Local {
     }
 
     pub fn flags(&self, original: u64) -> u64 {
+        let active = self.enabled && !self.paused;
+        if !active { return self.flags.rewrite(original, 0, false); }
         let physical = self.flags.apply(original, 0);
         self.receipts.physical_flags.store(physical, Ordering::Release);
         physical | self.receipts.output_flags.load(Ordering::Acquire)
@@ -277,6 +285,8 @@ impl Local {
         self.activation = None;
         self.pending = None;
         self.paused = true;
+        self.down = one_mk_proto::HeldKeys::new();
+        self.flags = Flags::default();
         self.receipts.physical_held.store(false, Ordering::Release);
         if !self.failed { let _ = self.work.send(Work::Fail); }
         self.failed = true;
