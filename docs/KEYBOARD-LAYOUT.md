@@ -14,6 +14,89 @@ advertise TEXT. Test support requires both `null-typing-tests` and debug
 assertions; release builds cannot construct fixture keyboards, even with that
 feature. No polling or background timer is introduced by character routing.
 
+## 5E-4 release blocker: restored mapping is not delivered text
+
+The October 30, 2026 failing-first X11 experiment **did not implement 5E-4**.
+It found a correctness blocker in immediate temporary-remap/XTest/restore
+injection. Production capability advertisement and injection remain unchanged;
+X11, portal/GNOME, wlroots, Windows and macOS still use physical fallback.
+The native sender snapshot is still not wired to the daemon. Do not describe
+this experiment as working X11 character mode.
+
+The regression uses independent injector and reader clients on a private Xvfb,
+plus the real Xlib-based `xev` client. It selects an
+all-NoSymbol, unheld keycode outside the modifier map, maps every level to a
+Unicode keysym, verifies that a native XKB snapshot resolves the intended
+character, sends XTest press/release requests with server round trips, and restores the mapping.
+Only afterward does the destination client process its queued MappingNotify
+and KeyPress events and obtain its current XKB snapshot. It receives every key
+but resolves **no text**: the keycode is already unmapped again. This models a
+busy application whose event loop runs after the injector has completed.
+The test also suspends its own xev process with SIGSTOP (waiting for stopped
+status), then resumes it only after all mappings have been restored. xev reports
+NoSymbol for every injected press and release, independently confirming the
+result with Xlib, not just the small XKB reader.
+
+Observed results, for this experiment only:
+
+| Remaps | XTest presses received | Core map restored | Full `xkbcomp` dump restored | Other client's held key preserved | Characters resolved |
+| --- | --- | --- | --- | --- | --- |
+| 1 (Turkish dotless i) | 1 | yes | yes | yes | 0 |
+| 32 (dotless i, Polish ł, @, z repeated) | 32 | yes | yes | yes | 0 |
+
+Server round trips prove that X has processed requests, not that an application
+has translated the queued key event. MappingNotify is not a historical keymap
+snapshot. A recovery property, panic guard or startup repair can address leftover
+mapping state, but none provides acknowledgement from the destination
+application. Adding a fixed sleep would only hide the race for sufficiently fast
+clients; it is not a delivery guarantee. A design that keeps mappings longer
+needs a separate bounded-lifetime, ownership, concurrent-layout-change and
+crash-recovery argument before it can qualify for TEXT.
+
+Reproduce without touching the desktop:
+
+```sh
+# Passing safety regression: confirms the remap delivery counterexample.
+bash scripts/test-x11-typing-safety.sh
+# Original acceptance assertion: deliberately fails with no text vs U+0131.
+bash scripts/test-x11-typing-safety.sh --require-delivery
+# The same clean/private-display runner can wrap the normal checks.
+bash scripts/test-x11-typing-safety.sh cargo test -j 2 --workspace
+```
+
+The runner requires Xvfb, xkbcomp, xev and stdbuf, supplies throwaway HOME, XDG_RUNTIME_DIR
+(0700) and ONE_MK_HOME, clears the environment (no Wayland or session D-Bus),
+and stops its X server on exit. Cargo's existing registry/toolchain directories
+are retained explicitly; build output stays in the checkout, not the RAM disk.
+The regression is ignored in ordinary cargo runs and must be selected explicitly;
+the runner's default invokes that exact test, with `--ignored` and `--nocapture`.
+All remapping, focus changes and held-key probes occur on the regression's own
+additional Xvfb, never the display of a running desktop or daemon.
+
+Not verified by this experiment: two real character-mode daemons, capture-side
+layout event wiring, shortcut reverse lookup through native injection, compose,
+repeats through a destination application, a layout switch during injection or
+a hold, SIGKILL recovery, old-peer native fallback, character-mode P50/P95
+latency, or on/off idle CPU ticks. There is no operational character-mode path
+to benchmark. Restoring byte-identical maps in this test is explicitly **not**
+evidence of crash safety or correct delivery to GTK/Qt applications.
+
+Hostile self-review: the observer deliberately refreshes from the current map;
+it is a small x11rb/XKB reader. The independent xev/Xlib counterexample is also
+verified, but GTK/Qt applications are not. Delayed-consumption scheduling is
+deterministic, using SIGSTOP/waitpid/SIGCONT rather than a timing guess; the
+startup readiness helper alone waits in short bounded intervals. The test-only restoration guard
+is best effort on unwinding, not a production remapper and not SIGKILL-safe.
+No changes to production paths were made to turn this counterexample green.
+5E-4 remains blocked pending a delivery-safe design and the full native
+acceptance matrix below; crash recovery alone is not sufficient.
+
+Checks for this regression-only change: clean/private-display workspace tests
+passed (1,005 passed, zero failed, 13 ignored); the separately selected regression
+passed and `--require-delivery` failed as expected. Strict workspace/all-targets
+Clippy and the requested input/proto/ctl/app/tray all-targets cross-Clippy checks
+for x86_64-pc-windows-msvc and aarch64-apple-darwin passed. No cargo fmt was run.
+
 ## Problem and alternatives
 
 An evdev key identifies a position, not a letter. German Z and US Y share a
@@ -355,6 +438,10 @@ one-mk doctor
 5. Private Xvfb only, clean environment with no D-Bus/Wayland variables: change
    layouts, type into an X client, kill the injector with SIGKILL during remap,
    restart and compare the entire original keymap. Never use the live display.
+   Also suspend the destination application until after mapping restoration,
+   then resume it and verify the actual text. Map equality and receipt of raw
+   keys alone are not acceptance: the 5E-4 regression demonstrates that both can
+   succeed while all characters are lost.
 6. Exercise the Advanced preference UI and inspect screenshots. Measure idle
    CPU/RSS with typing off/on. Fuzz framing, text and visit transitions.
 7. Restore physical mode on each sender with
