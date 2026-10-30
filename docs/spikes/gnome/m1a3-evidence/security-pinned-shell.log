@@ -1,0 +1,121 @@
+/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/docs/spikes/gnome/client/fake_gdm.py:15: DeprecationWarning: Gio.DBusConnection.register_object is deprecated
+  bus.register_object("/org/gnome/DisplayManager/Manager", info, call, prop, None)
+libmutter-Message: 23:49:29.778: Running GNOME Shell (using mutter 50.1) as a Wayland display server
+
+(gnome-shell:3430622): libmutter-WARNING **: 23:49:29.778: Unknown experimental feature 'scale-monitor-framebuffer'
+
+(gnome-shell:3430622): libmutter-WARNING **: 23:49:29.778: Unknown experimental feature 'xwayland-native-scaling'
+libmutter-Message: 23:49:29.904: Added device '/dev/dri/renderD129' (nvidia-drm) using no mode setting.
+libmutter-Message: 23:49:29.913: Added device '/dev/dri/renderD128' (i915) using no mode setting.
+libmutter-Message: 23:49:29.914: Created gbm renderer for '/dev/dri/renderD129'
+libmutter-Message: 23:49:29.915: Created gbm renderer for '/dev/dri/renderD128'
+libmutter-Message: 23:49:29.915: Boot VGA GPU /dev/dri/renderD128 selected as primary
+** Message: 23:49:29.917: Obtained a high priority EGL context
+libmutter-Message: 23:49:29.931: Added virtual monitor Meta-0
+libmutter-Message: 23:49:29.931: Added virtual monitor Meta-1
+libmutter-Message: 23:49:29.936: Using Wayland display name 'spike-wl-0'
+
+(gnome-shell:3430622): libmutter-WARNING **: 23:49:29.971: There is no colord server available
+GNOME Shell-Message: 23:49:30.167: Unset XDG_SESSION_ID, getCurrentSessionProxy() called outside a user session. Asking logind directly.
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.Shell.Screencast' requested by ':1.0' (uid=1000 pid=3430622 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.freedesktop.impl.portal.PermissionStore' requested by ':1.0' (uid=1000 pid=3430622 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.Shell.CalendarServer' requested by ':1.0' (uid=1000 pid=3430622 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.PermissionStore'
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.evolution.dataserver.Sources5' requested by ':1.2' (uid=1000 pid=3430752 comm="/usr/libexec/gnome-shell-calendar-server" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.OnlineAccounts' requested by ':1.3' (uid=1000 pid=3430763 comm="/usr/libexec/evolution-source-registry" label="t3code (unconfined)")
+GNOME Shell-Message: 23:49:30.238: Registering session with GDM
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.Shell.Notifications' requested by ':1.0' (uid=1000 pid=3430622 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+GNOME Shell-Message: 23:49:30.246: Error registering session with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, “()”, does not match expected type “(a{sv})”
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.Sources5'
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.evolution.dataserver.Calendar8' requested by ':1.2' (uid=1000 pid=3430752 comm="/usr/libexec/gnome-shell-calendar-server" label="t3code (unconfined)")
+
+(gnome-shell:3430622): GNOME Shell-WARNING **: 23:49:30.254: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.Shell.CalendarServer'
+goa-daemon-Message: 23:49:30.256: goa-daemon version 3.58.0 starting
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.Identity' requested by ':1.4' (uid=1000 pid=3430770 comm="/usr/libexec/goa-daemon" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.OnlineAccounts'
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.Identity'
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.Calendar8'
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.Shell.Notifications'
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.evolution.dataserver.AddressBook10' requested by ':1.6' (uid=1000 pid=3430792 comm="/usr/libexec/evolution-calendar-factory" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.AddressBook10'
+
+(gnome-shell:3430622): GNOME Shell-CRITICAL **: 23:49:30.304: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files
+
+Stack trace:
+  asyncCallback@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:115:23
+  @resource:///org/gnome/shell/ui/init.js:20:20
+  
+GNOME Shell-Message: 23:49:30.304: Will monitor session null
+
+(gnome-shell:3430622): GNOME Shell-CRITICAL **: 23:49:30.304: Could not get proxy for session null: Error: Argument string may not be null
+
+Stack trace:
+  _packVariant@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:82:29
+  _packVariant@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:135:27
+  _init/this.Variant._new_internal@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:298:35
+  _proxyInvoker@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:103:23
+  _makeProxyMethod/<@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:148:30
+  @resource:///org/gnome/gjs/modules/core/overrides/Gio.js:202:30
+  @resource:///org/gnome/gjs/modules/core/overrides/Gio.js:193:20
+  getCurrentSessionProxy@resource:///org/gnome/shell/misc/loginManager.js:160:52
+  async*_getLoginSession@resource:///org/gnome/shell/ui/screenShield.js:164:55
+  ScreenShield@resource:///org/gnome/shell/ui/screenShield.js:114:14
+  _initializeUI@resource:///org/gnome/shell/ui/main.js:253:24
+  start@resource:///org/gnome/shell/ui/main.js:197:11
+  @resource:///org/gnome/shell/ui/init.js:12:47
+  @resource:///org/gnome/shell/ui/init.js:20:20
+  
+
+(gnome-shell:3430622): GNOME Shell-WARNING **: 23:49:30.304: Failed to start state machine: can't access property "connectObject", this._loginUser is null
+
+(gnome-shell:3430622): Gjs-WARNING **: 23:49:30.304: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:
+_getLoginSession@resource:///org/gnome/shell/ui/screenShield.js:163:27
+ScreenShield@resource:///org/gnome/shell/ui/screenShield.js:114:14
+_initializeUI@resource:///org/gnome/shell/ui/main.js:253:24
+start@resource:///org/gnome/shell/ui/main.js:197:11
+@resource:///org/gnome/shell/ui/init.js:12:47
+@resource:///org/gnome/shell/ui/init.js:20:20
+
+GNOME Shell-Message: 23:49:30.323: Error looking up permission: GDBus.Error:org.freedesktop.portal.Error.NotFound: No entry for geolocation
+GNOME Shell-Message: 23:49:30.334: Failed to register AuthenticationAgent
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.freedesktop.portal.IBus' requested by ':1.9' (uid=1000 pid=3430784 comm="ibus-daemon --panel disable" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.freedesktop.portal.IBus'
+** Message: 23:49:30.403: Failed to start camera monitor
+GNOME Shell-Message: 23:49:30.438: No permission to control network connections: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files
+GNOME Shell-Message: 23:49:30.441: Failed to get PolKit permission: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files
+GNOME Shell-Message: 23:49:30.447: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.GeoClue2 was not provided by any .service files
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.12' (uid=1000 pid=3430863 comm="/usr/libexec/ibus-extension-gtk3" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.freedesktop.portal.Documents' requested by ':1.15' (uid=1000 pid=3431130 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.freedesktop.portal.Documents'
+fusermount3: mount failed: Operation not permitted
+error: fuse init failed: Can't mount path /home/samer/.t3/worktrees/one-mk/t3-5cb4127b/target/wall-m1-lab/wall-m1-session/run/doc
+
+(/usr/libexec/xdg-desktop-portal:3431130): xdg-desktop-portal-WARNING **: 23:49:30.513: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gnome' requested by ':1.15' (uid=1000 pid=3431130 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+
+(gnome-shell:3430622): accountsservice-WARNING **: 23:49:30.543: ActUserManager: user (null) has no username (uid: -1)
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.Settings.GlobalShortcutsProvider' requested by ':1.17' (uid=1000 pid=3431145 comm="/usr/libexec/xdg-desktop-portal-gnome" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.Settings.GlobalShortcutsProvider'
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gnome'
+
+(/usr/libexec/xdg-desktop-portal:3431130): xdg-desktop-portal-WARNING **: 23:49:30.697: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:3431130): xdg-desktop-portal-WARNING **: 23:49:30.697: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:3431130): xdg-desktop-portal-WARNING **: 23:49:30.697: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.15' (uid=1000 pid=3431130 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'
+
+(/usr/libexec/xdg-desktop-portal:3431130): xdg-desktop-portal-WARNING **: 23:49:30.735: Failed to connect to PipeWire: Couldn't connect to PipeWire
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.freedesktop.secrets' requested by ':1.15' (uid=1000 pid=3431130 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+** Message: 23:49:30.740: couldn't access control socket: /home/samer/.t3/worktrees/one-mk/t3-5cb4127b/target/wall-m1-lab/wall-m1-session/run/keyring/control: No such file or directory
+discover_other_daemon: 0dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.freedesktop.secrets'
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.freedesktop.portal.Desktop'
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.Shell.Screencast'
+GNOME Shell-Message: 23:49:31.498: GNOME Shell started at Fri Oct 30 2026 23:49:30 GMT+0300 (GMT+03:00)
+GNOME Shell-Message: 23:49:31.500: Registering display with GDM
+GNOME Shell-Message: 23:49:31.501: Error registering display with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, “()”, does not match expected type “(a{ss})”
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.25' (uid=1000 pid=3431668 comm="gdbus call --session -d org.gnome.Shell.Extensions" label="t3code (unconfined)")
+dbus-daemon[3430588]: [session uid=1000 pid=3430588 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'
+** Message: 23:49:53.989: Shutting down GNOME Shell

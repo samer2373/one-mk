@@ -1,0 +1,53 @@
+    Checking weezl v0.1.12
+    Checking color_quant v1.1.0
+    Checking quick-error v2.0.1
+   Compiling getrandom v0.3.4
+    Checking gif v0.14.2
+    Checking image-webp v0.2.4
+   Compiling getrandom v0.4.3
+    Checking rand_core v0.9.5
+   Compiling blake3 v1.8.7
+    Checking image v0.25.10
+    Checking fastrand v2.5.0
+    Checking constant_time_eq v0.4.2
+    Checking tempfile v3.27.0
+    Checking ppv-lite86 v0.2.21
+    Checking rand_chacha v0.9.0
+    Checking rand v0.9.5
+    Checking rand_xorshift v0.4.0
+    Checking regex-syntax v0.8.11
+    Checking unarray v0.1.4
+    Checking one-mk-wall-import v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/crates/wall-import)
+    Checking eframe v0.37.0
+    Checking one-mk-wall-canvas v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/crates/wall-canvas)
+    Checking proptest v1.9.0
+    Checking one-mk-app v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/crates/app)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.90s
+    Checking weezl v0.1.12
+    Checking color_quant v1.1.0
+    Checking quick-error v2.0.1
+    Checking image-webp v0.2.4
+    Checking gif v0.14.2
+   Compiling getrandom v0.3.4
+   Compiling rustix v1.1.6
+   Compiling getrandom v0.4.3
+    Checking image v0.25.10
+    Checking rand_core v0.9.5
+    Checking errno v0.3.14
+   Compiling blake3 v1.8.7
+    Checking fastrand v2.5.0
+    Checking constant_time_eq v0.4.2
+    Checking tempfile v3.27.0
+    Checking ppv-lite86 v0.2.21
+    Checking rand v0.9.5
+    Checking rand_chacha v0.9.0
+    Checking rand_xorshift v0.4.0
+    Checking regex-syntax v0.8.11
+    Checking unarray v0.1.4
+    Checking one-mk-wall-import v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/crates/wall-import)
+    Checking eframe v0.37.0
+    Checking one-mk-wall-canvas v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/crates/wall-canvas)
+    Checking proptest v1.9.0
+    Checking one-mk-app v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/crates/app)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.69s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.29s

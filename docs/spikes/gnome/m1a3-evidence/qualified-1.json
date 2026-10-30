@@ -1,0 +1,4108 @@
+{
+  "date_utc": "2026-10-30T20:54:54.323774+00:00",
+  "baseline": false,
+  "idle_only": false,
+  "status": "failed",
+  "runtime": "host GStreamer: UNQUALIFIED, trusted generated fixture only",
+  "stages": [],
+  "measurements": {
+    "shell_pid": 3459900,
+    "ding_enable": "(true,)",
+    "startup": {
+      "pid": 3461707,
+      "first_damage_ms": 163.872,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ],
+          [
+            3840,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          5760,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          5760,
+          1080
+        ],
+        "damage": 1,
+        "stale": false,
+        "fresh": true,
+        "watchdog": 2345,
+        "coverage": 2344,
+        "pid": 3461707,
+        "reason": "none",
+        "restart": 0,
+        "cloneCount": 3,
+        "events": [
+          "807282922 overview-hidden",
+          "807283920 spawned renderer pid=3461707",
+          "807283931 adopted window \"null\" pid=3461707",
+          "807283989 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "cpu_on": {
+      "seconds": 3.0,
+      "wall_start": 1793393722.0108838,
+      "wall_end": 1793393725.0113342,
+      "before_ticks": [
+        10,
+        188
+      ],
+      "after_ticks": [
+        183,
+        216
+      ],
+      "renderer_percent_one_core": 57.66,
+      "shell_percent_one_core": 9.33
+    },
+    "layouts": [
+      {
+        "monitors": 1,
+        "scale": 1,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 112,
+          "stale": false,
+          "fresh": true,
+          "watchdog": 2714,
+          "coverage": 0,
+          "pid": 3461707,
+          "reason": "none",
+          "restart": 0,
+          "cloneCount": 1,
+          "events": [
+            "807282922 overview-hidden",
+            "807283920 spawned renderer pid=3461707",
+            "807283931 adopted window \"null\" pid=3461707",
+            "807283989 first frame from renderer",
+            "807287089 monitors-changed",
+            "807287102 renderer dropped: actor destroyed",
+            "807287105 adopted window \"null\" pid=3461707",
+            "807287126 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 2,
+        "scale": 1,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 131,
+          "stale": false,
+          "fresh": true,
+          "watchdog": 2825,
+          "coverage": 0,
+          "pid": 3461707,
+          "reason": "none",
+          "restart": 0,
+          "cloneCount": 2,
+          "events": [
+            "807282922 overview-hidden",
+            "807283920 spawned renderer pid=3461707",
+            "807283931 adopted window \"null\" pid=3461707",
+            "807283989 first frame from renderer",
+            "807287089 monitors-changed",
+            "807287102 renderer dropped: actor destroyed",
+            "807287105 adopted window \"null\" pid=3461707",
+            "807287126 first frame from renderer",
+            "807287746 monitors-changed",
+            "807287753 renderer dropped: actor destroyed",
+            "807287755 adopted window \"null\" pid=3461707",
+            "807287776 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 3,
+        "scale": 1,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ],
+            [
+              3840,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            5760,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            5760,
+            1080
+          ],
+          "damage": 151,
+          "stale": false,
+          "fresh": true,
+          "watchdog": 3006,
+          "coverage": 0,
+          "pid": 3461707,
+          "reason": "none",
+          "restart": 0,
+          "cloneCount": 3,
+          "events": [
+            "807283920 spawned renderer pid=3461707",
+            "807283931 adopted window \"null\" pid=3461707",
+            "807283989 first frame from renderer",
+            "807287089 monitors-changed",
+            "807287102 renderer dropped: actor destroyed",
+            "807287105 adopted window \"null\" pid=3461707",
+            "807287126 first frame from renderer",
+            "807287746 monitors-changed",
+            "807287753 renderer dropped: actor destroyed",
+            "807287755 adopted window \"null\" pid=3461707",
+            "807287776 first frame from renderer",
+            "807288412 monitors-changed",
+            "807288419 renderer dropped: actor destroyed",
+            "807288422 adopted window \"null\" pid=3461707",
+            "807288452 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 1,
+        "scale": 2,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              960,
+              540
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            960,
+            540
+          ],
+          "buffer": [
+            0,
+            0,
+            960,
+            540
+          ],
+          "damage": 172,
+          "stale": false,
+          "fresh": true,
+          "watchdog": 3277,
+          "coverage": 0,
+          "pid": 3461707,
+          "reason": "none",
+          "restart": 0,
+          "cloneCount": 1,
+          "events": [
+            "807287102 renderer dropped: actor destroyed",
+            "807287105 adopted window \"null\" pid=3461707",
+            "807287126 first frame from renderer",
+            "807287746 monitors-changed",
+            "807287753 renderer dropped: actor destroyed",
+            "807287755 adopted window \"null\" pid=3461707",
+            "807287776 first frame from renderer",
+            "807288412 monitors-changed",
+            "807288419 renderer dropped: actor destroyed",
+            "807288422 adopted window \"null\" pid=3461707",
+            "807288452 first frame from renderer",
+            "807289076 monitors-changed",
+            "807289116 renderer dropped: actor destroyed",
+            "807289120 adopted window \"null\" pid=3461707",
+            "807289136 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 2,
+        "scale": 2,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              960,
+              540
+            ],
+            [
+              960,
+              0,
+              960,
+              540
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            540
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            540
+          ],
+          "damage": 191,
+          "stale": false,
+          "fresh": true,
+          "watchdog": 3408,
+          "coverage": 0,
+          "pid": 3461707,
+          "reason": "none",
+          "restart": 0,
+          "cloneCount": 2,
+          "events": [
+            "807287753 renderer dropped: actor destroyed",
+            "807287755 adopted window \"null\" pid=3461707",
+            "807287776 first frame from renderer",
+            "807288412 monitors-changed",
+            "807288419 renderer dropped: actor destroyed",
+            "807288422 adopted window \"null\" pid=3461707",
+            "807288452 first frame from renderer",
+            "807289076 monitors-changed",
+            "807289116 renderer dropped: actor destroyed",
+            "807289120 adopted window \"null\" pid=3461707",
+            "807289136 first frame from renderer",
+            "807289734 monitors-changed",
+            "807289741 renderer dropped: actor destroyed",
+            "807289742 adopted window \"null\" pid=3461707",
+            "807289755 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 3,
+        "scale": 2,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              960,
+              540
+            ],
+            [
+              960,
+              0,
+              960,
+              540
+            ],
+            [
+              1920,
+              0,
+              960,
+              540
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            2880,
+            540
+          ],
+          "buffer": [
+            0,
+            0,
+            2880,
+            540
+          ],
+          "damage": 211,
+          "stale": false,
+          "fresh": true,
+          "watchdog": 3592,
+          "coverage": 0,
+          "pid": 3461707,
+          "reason": "none",
+          "restart": 0,
+          "cloneCount": 3,
+          "events": [
+            "807288419 renderer dropped: actor destroyed",
+            "807288422 adopted window \"null\" pid=3461707",
+            "807288452 first frame from renderer",
+            "807289076 monitors-changed",
+            "807289116 renderer dropped: actor destroyed",
+            "807289120 adopted window \"null\" pid=3461707",
+            "807289136 first frame from renderer",
+            "807289734 monitors-changed",
+            "807289741 renderer dropped: actor destroyed",
+            "807289742 adopted window \"null\" pid=3461707",
+            "807289755 first frame from renderer",
+            "807290399 monitors-changed",
+            "807290405 renderer dropped: actor destroyed",
+            "807290407 adopted window \"null\" pid=3461707",
+            "807290428 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 3,
+        "scale": 1.25,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1536,
+              864
+            ],
+            [
+              1536,
+              0,
+              1536,
+              864
+            ],
+            [
+              3072,
+              0,
+              1536,
+              864
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            4608,
+            864
+          ],
+          "buffer": [
+            0,
+            0,
+            4608,
+            864
+          ],
+          "damage": 231,
+          "stale": false,
+          "fresh": true,
+          "watchdog": 3806,
+          "coverage": 0,
+          "pid": 3461707,
+          "reason": "none",
+          "restart": 0,
+          "cloneCount": 3,
+          "events": [
+            "807289116 renderer dropped: actor destroyed",
+            "807289120 adopted window \"null\" pid=3461707",
+            "807289136 first frame from renderer",
+            "807289734 monitors-changed",
+            "807289741 renderer dropped: actor destroyed",
+            "807289742 adopted window \"null\" pid=3461707",
+            "807289755 first frame from renderer",
+            "807290399 monitors-changed",
+            "807290405 renderer dropped: actor destroyed",
+            "807290407 adopted window \"null\" pid=3461707",
+            "807290428 first frame from renderer",
+            "807291064 monitors-changed",
+            "807291070 renderer dropped: actor destroyed",
+            "807291072 adopted window \"null\" pid=3461707",
+            "807291102 first frame from renderer"
+          ],
+          "focus": "@!0,0;BDHF"
+        }
+      }
+    ],
+    "unplug_shots": {
+      "origin_us": 807292302756,
+      "shell_events": [
+        {
+          "kind": "layout",
+          "us": 807292386520,
+          "locked": false
+        }
+      ],
+      "damage": [
+        {
+          "us": 807292322637,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807292355510,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807292388636,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807292423589,
+          "first": true,
+          "pid": 3461707,
+          "frame": [
+            0,
+            0
+          ]
+        },
+        {
+          "us": 807292456725,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292490488,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292523027,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292556203,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292589395,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292634129,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292656191,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292688952,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292721521,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292753898,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292791648,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292824206,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292856437,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292889017,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292921352,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292954948,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807292987199,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293024496,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293056690,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293089327,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293121600,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293153931,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293187051,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293224187,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293256712,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293289253,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293321497,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293354403,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293386900,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293424575,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293456969,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293489499,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293521975,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293554316,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293586856,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293624572,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293656738,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293689306,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293721948,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293754405,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293787101,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293824571,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293856835,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293889310,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293922269,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293954533,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807293987383,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294024765,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294057141,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294089286,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294122108,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294154093,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294187503,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294225270,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294257622,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294290310,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294322889,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294355644,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294388477,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294421504,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294454475,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294488254,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294525176,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        }
+      ],
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        "damage": 320,
+        "stale": false,
+        "fresh": true,
+        "watchdog": 4112,
+        "coverage": 0,
+        "pid": 3461707,
+        "reason": "none",
+        "restart": 0,
+        "cloneCount": 1,
+        "events": [
+          "807290405 renderer dropped: actor destroyed",
+          "807290407 adopted window \"null\" pid=3461707",
+          "807290428 first frame from renderer",
+          "807291064 monitors-changed",
+          "807291070 renderer dropped: actor destroyed",
+          "807291072 adopted window \"null\" pid=3461707",
+          "807291102 first frame from renderer",
+          "807291726 monitors-changed",
+          "807291740 renderer dropped: actor destroyed",
+          "807291743 adopted window \"null\" pid=3461707",
+          "807291760 first frame from renderer",
+          "807292386 monitors-changed",
+          "807292396 renderer dropped: actor destroyed",
+          "807292398 adopted window \"null\" pid=3461707",
+          "807292423 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      },
+      "interpretation": "compositor damage, not physical scanout"
+    },
+    "replug_shots": {
+      "origin_us": 807294682418,
+      "shell_events": [
+        {
+          "kind": "layout",
+          "us": 807294766662,
+          "locked": false
+        }
+      ],
+      "damage": [
+        {
+          "us": 807294687549,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294724740,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294756543,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            1920,
+            1080
+          ]
+        },
+        {
+          "us": 807294797250,
+          "first": true,
+          "pid": 3461707,
+          "frame": [
+            0,
+            0
+          ]
+        },
+        {
+          "us": 807294821947,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807294854653,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807294887792,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807294924955,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807294957079,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807294989262,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295021713,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295054577,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295087628,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295121176,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295154458,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295187457,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295224450,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295257350,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295289050,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295321514,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295354514,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295387149,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295425036,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295457042,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295489035,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295521599,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295554646,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295587732,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295625270,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295657439,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295689473,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295722031,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295754612,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295787981,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295826376,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295854081,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295886988,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295924636,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295956981,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807295989105,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296021942,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296054545,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296087479,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296124854,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296156554,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296189143,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296221987,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296254696,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296287603,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296320998,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296353786,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296391386,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296423533,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296456376,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296489119,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296521943,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296554789,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296587677,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296621172,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296654440,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296687616,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296725078,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296757364,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296789583,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296822510,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296855609,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296888509,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807296921726,
+          "first": false,
+          "pid": 3461707,
+          "frame": [
+            3840,
+            1080
+          ]
+        }
+      ],
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 392,
+        "stale": false,
+        "fresh": true,
+        "watchdog": 4308,
+        "coverage": 0,
+        "pid": 3461707,
+        "reason": "none",
+        "restart": 0,
+        "cloneCount": 2,
+        "events": [
+          "807291070 renderer dropped: actor destroyed",
+          "807291072 adopted window \"null\" pid=3461707",
+          "807291102 first frame from renderer",
+          "807291726 monitors-changed",
+          "807291740 renderer dropped: actor destroyed",
+          "807291743 adopted window \"null\" pid=3461707",
+          "807291760 first frame from renderer",
+          "807292386 monitors-changed",
+          "807292396 renderer dropped: actor destroyed",
+          "807292398 adopted window \"null\" pid=3461707",
+          "807292423 first frame from renderer",
+          "807294766 monitors-changed",
+          "807294773 renderer dropped: actor destroyed",
+          "807294775 adopted window \"null\" pid=3461707",
+          "807294797 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      },
+      "interpretation": "compositor damage, not physical scanout"
+    },
+    "paused_before": {
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080
+        ]
+      ],
+      "frame": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "buffer": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "damage": 394,
+      "stale": false,
+      "fresh": true,
+      "watchdog": 4308,
+      "coverage": 0,
+      "pid": 3461707,
+      "reason": "none",
+      "restart": 0,
+      "cloneCount": 2,
+      "events": [
+        "807291070 renderer dropped: actor destroyed",
+        "807291072 adopted window \"null\" pid=3461707",
+        "807291102 first frame from renderer",
+        "807291726 monitors-changed",
+        "807291740 renderer dropped: actor destroyed",
+        "807291743 adopted window \"null\" pid=3461707",
+        "807291760 first frame from renderer",
+        "807292386 monitors-changed",
+        "807292396 renderer dropped: actor destroyed",
+        "807292398 adopted window \"null\" pid=3461707",
+        "807292423 first frame from renderer",
+        "807294766 monitors-changed",
+        "807294773 renderer dropped: actor destroyed",
+        "807294775 adopted window \"null\" pid=3461707",
+        "807294797 first frame from renderer"
+      ],
+      "focus": "Desktop Icons 1"
+    },
+    "cpu_paused": {
+      "seconds": 3.0,
+      "wall_start": 1793393736.167495,
+      "wall_end": 1793393739.1680086,
+      "before_ticks": [
+        550,
+        361
+      ],
+      "after_ticks": [
+        550,
+        361
+      ],
+      "renderer_percent_one_core": 0.0,
+      "shell_percent_one_core": 0.0
+    },
+    "paused_after": {
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080
+        ]
+      ],
+      "frame": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "buffer": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "damage": 397,
+      "stale": false,
+      "fresh": true,
+      "watchdog": 0,
+      "coverage": 0,
+      "pid": 3461707,
+      "reason": "overview",
+      "restart": 0,
+      "cloneCount": 2,
+      "events": [
+        "807291072 adopted window \"null\" pid=3461707",
+        "807291102 first frame from renderer",
+        "807291726 monitors-changed",
+        "807291740 renderer dropped: actor destroyed",
+        "807291743 adopted window \"null\" pid=3461707",
+        "807291760 first frame from renderer",
+        "807292386 monitors-changed",
+        "807292396 renderer dropped: actor destroyed",
+        "807292398 adopted window \"null\" pid=3461707",
+        "807292423 first frame from renderer",
+        "807294766 monitors-changed",
+        "807294773 renderer dropped: actor destroyed",
+        "807294775 adopted window \"null\" pid=3461707",
+        "807294797 first frame from renderer",
+        "807297157 overview-showing"
+      ],
+      "focus": "Desktop Icons 1"
+    },
+    "cpu_covered": {
+      "seconds": 3.0,
+      "wall_start": 1793393742.4915426,
+      "wall_end": 1793393745.491904,
+      "before_ticks": [
+        623,
+        389
+      ],
+      "after_ticks": [
+        623,
+        389
+      ],
+      "renderer_percent_one_core": 0.0,
+      "shell_percent_one_core": 0.0
+    },
+    "covered": {
+      "paused": true,
+      "reason": "covered"
+    },
+    "watchdog": {
+      "observed_ms": 2574.0,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": null,
+        "buffer": null,
+        "damage": 469,
+        "stale": true,
+        "fresh": false,
+        "watchdog": 0,
+        "coverage": 0,
+        "pid": null,
+        "reason": "none",
+        "restart": 5026,
+        "cloneCount": 0,
+        "events": [
+          "807291760 first frame from renderer",
+          "807292386 monitors-changed",
+          "807292396 renderer dropped: actor destroyed",
+          "807292398 adopted window \"null\" pid=3461707",
+          "807292423 first frame from renderer",
+          "807294766 monitors-changed",
+          "807294773 renderer dropped: actor destroyed",
+          "807294775 adopted window \"null\" pid=3461707",
+          "807294797 first frame from renderer",
+          "807297157 overview-showing",
+          "807301559 overview-hidden",
+          "807310686 renderer stale for 2550 ms: static fallback",
+          "807310686 renderer dropped: stopped",
+          "807310697 renderer exited pid=3461707",
+          "807310697 restart scheduled 1000 ms"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "post_hang_restart": {
+      "pid": 3462866,
+      "observed_ms": 1045.32,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 470,
+        "stale": false,
+        "fresh": true,
+        "watchdog": 5073,
+        "coverage": 5072,
+        "pid": 3462866,
+        "reason": "none",
+        "restart": 0,
+        "cloneCount": 2,
+        "events": [
+          "807292398 adopted window \"null\" pid=3461707",
+          "807292423 first frame from renderer",
+          "807294766 monitors-changed",
+          "807294773 renderer dropped: actor destroyed",
+          "807294775 adopted window \"null\" pid=3461707",
+          "807294797 first frame from renderer",
+          "807297157 overview-showing",
+          "807301559 overview-hidden",
+          "807310686 renderer stale for 2550 ms: static fallback",
+          "807310686 renderer dropped: stopped",
+          "807310697 renderer exited pid=3461707",
+          "807310697 restart scheduled 1000 ms",
+          "807311707 spawned renderer pid=3462866",
+          "807311717 adopted window \"null\" pid=3462866",
+          "807311757 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "kill9_before": {
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080
+        ]
+      ],
+      "frame": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "buffer": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "damage": 470,
+      "stale": false,
+      "fresh": true,
+      "watchdog": 5073,
+      "coverage": 5072,
+      "pid": 3462866,
+      "reason": "none",
+      "restart": 0,
+      "cloneCount": 2,
+      "events": [
+        "807292398 adopted window \"null\" pid=3461707",
+        "807292423 first frame from renderer",
+        "807294766 monitors-changed",
+        "807294773 renderer dropped: actor destroyed",
+        "807294775 adopted window \"null\" pid=3461707",
+        "807294797 first frame from renderer",
+        "807297157 overview-showing",
+        "807301559 overview-hidden",
+        "807310686 renderer stale for 2550 ms: static fallback",
+        "807310686 renderer dropped: stopped",
+        "807310697 renderer exited pid=3461707",
+        "807310697 restart scheduled 1000 ms",
+        "807311707 spawned renderer pid=3462866",
+        "807311717 adopted window \"null\" pid=3462866",
+        "807311757 first frame from renderer"
+      ],
+      "focus": "Desktop Icons 1"
+    },
+    "kill9_shots": {
+      "origin_us": 807311931196,
+      "shell_events": [],
+      "damage": [
+        {
+          "us": 807311943182,
+          "first": false,
+          "pid": 3462866,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807314019217,
+          "first": true,
+          "pid": 3463064,
+          "frame": [
+            0,
+            0
+          ]
+        },
+        {
+          "us": 807314041647,
+          "first": false,
+          "pid": 3463064,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807314069866,
+          "first": false,
+          "pid": 3463064,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807314102617,
+          "first": false,
+          "pid": 3463064,
+          "frame": [
+            3840,
+            1080
+          ]
+        }
+      ],
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 482,
+        "stale": false,
+        "fresh": true,
+        "watchdog": 5124,
+        "coverage": 0,
+        "pid": 3463064,
+        "reason": "none",
+        "restart": 0,
+        "cloneCount": 2,
+        "events": [
+          "807297157 overview-showing",
+          "807301559 overview-hidden",
+          "807310686 renderer stale for 2550 ms: static fallback",
+          "807310686 renderer dropped: stopped",
+          "807310697 renderer exited pid=3461707",
+          "807310697 restart scheduled 1000 ms",
+          "807311707 spawned renderer pid=3462866",
+          "807311717 adopted window \"null\" pid=3462866",
+          "807311757 first frame from renderer",
+          "807311952 renderer dropped: actor destroyed",
+          "807311953 renderer exited pid=3462866",
+          "807311953 restart scheduled 2000 ms",
+          "807313964 spawned renderer pid=3463064",
+          "807313977 adopted window \"null\" pid=3463064",
+          "807314019 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      },
+      "interpretation": "compositor damage, not physical scanout"
+    },
+    "post_kill_restart": {
+      "pid": 3463064,
+      "observed_ms": 169.52,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 485,
+        "stale": false,
+        "fresh": true,
+        "watchdog": 5124,
+        "coverage": 0,
+        "pid": 3463064,
+        "reason": "none",
+        "restart": 0,
+        "cloneCount": 2,
+        "events": [
+          "807297157 overview-showing",
+          "807301559 overview-hidden",
+          "807310686 renderer stale for 2550 ms: static fallback",
+          "807310686 renderer dropped: stopped",
+          "807310697 renderer exited pid=3461707",
+          "807310697 restart scheduled 1000 ms",
+          "807311707 spawned renderer pid=3462866",
+          "807311717 adopted window \"null\" pid=3462866",
+          "807311757 first frame from renderer",
+          "807311952 renderer dropped: actor destroyed",
+          "807311953 renderer exited pid=3462866",
+          "807311953 restart scheduled 2000 ms",
+          "807313964 spawned renderer pid=3463064",
+          "807313977 adopted window \"null\" pid=3463064",
+          "807314019 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "lock_shots": {
+      "origin_us": 807314521259,
+      "shell_events": [
+        {
+          "kind": "lock",
+          "us": 807314626388,
+          "locked": true
+        }
+      ],
+      "damage": [
+        {
+          "us": 807314536247,
+          "first": false,
+          "pid": 3463064,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807314569409,
+          "first": false,
+          "pid": 3463064,
+          "frame": [
+            3840,
+            1080
+          ]
+        }
+      ],
+      "snapshot": {
+        "monitors": [],
+        "frame": null,
+        "buffer": null,
+        "damage": 0,
+        "stale": false,
+        "fresh": false,
+        "watchdog": 0,
+        "coverage": 0,
+        "pid": null,
+        "reason": null,
+        "restart": 0,
+        "cloneCount": 0,
+        "events": [],
+        "focus": null
+      },
+      "interpretation": "compositor damage, not physical scanout"
+    },
+    "locked_state": {
+      "locked": true,
+      "mode": "unlock-dialog"
+    },
+    "unlock_shots": {
+      "origin_us": 807316997913,
+      "shell_events": [
+        {
+          "kind": "lock",
+          "us": 807317347448,
+          "locked": false
+        }
+      ],
+      "damage": [],
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": null,
+        "buffer": null,
+        "damage": 0,
+        "stale": false,
+        "fresh": false,
+        "watchdog": 0,
+        "coverage": 0,
+        "pid": null,
+        "reason": "none",
+        "restart": 5702,
+        "cloneCount": 0,
+        "events": [
+          "807317347 locked-changed false",
+          "807317379 restart scheduled 4000 ms"
+        ],
+        "focus": "Desktop Icons 1"
+      },
+      "interpretation": "compositor damage, not physical scanout"
+    },
+    "unlock_restart": {
+      "pid": 3463823,
+      "observed_ms": 2113.77,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 2,
+        "stale": false,
+        "fresh": true,
+        "watchdog": 5869,
+        "coverage": 5868,
+        "pid": 3463823,
+        "reason": "none",
+        "restart": 0,
+        "cloneCount": 2,
+        "events": [
+          "807317347 locked-changed false",
+          "807317379 restart scheduled 4000 ms",
+          "807321388 spawned renderer pid=3463823",
+          "807321397 adopted window \"null\" pid=3463823",
+          "807321439 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "unlock_compositor": {
+      "origin_us": 807316997913,
+      "shell_events": [
+        {
+          "kind": "lock",
+          "us": 807317347448,
+          "locked": false
+        }
+      ],
+      "damage": [
+        {
+          "us": 807321439641,
+          "first": true,
+          "pid": 3463823,
+          "frame": [
+            0,
+            0
+          ]
+        },
+        {
+          "us": 807321460775,
+          "first": false,
+          "pid": 3463823,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807321489142,
+          "first": false,
+          "pid": 3463823,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807321521845,
+          "first": false,
+          "pid": 3463823,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807321554685,
+          "first": false,
+          "pid": 3463823,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807321587825,
+          "first": false,
+          "pid": 3463823,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807321620445,
+          "first": false,
+          "pid": 3463823,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807321653472,
+          "first": false,
+          "pid": 3463823,
+          "frame": [
+            3840,
+            1080
+          ]
+        },
+        {
+          "us": 807321690285,
+          "first": false,
+          "pid": 3463823,
+          "frame": [
+            3840,
+            1080
+          ]
+        }
+      ],
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 11,
+        "stale": false,
+        "fresh": true,
+        "watchdog": 5869,
+        "coverage": 0,
+        "pid": 3463823,
+        "reason": "none",
+        "restart": 0,
+        "cloneCount": 2,
+        "events": [
+          "807317347 locked-changed false",
+          "807317379 restart scheduled 4000 ms",
+          "807321388 spawned renderer pid=3463823",
+          "807321397 adopted window \"null\" pid=3463823",
+          "807321439 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      },
+      "interpretation": "compositor damage, not physical scanout"
+    },
+    "cycles": [
+      {
+        "cycle": 1,
+        "old_pid": 3463823,
+        "old_exited": true,
+        "first_damage_ms": 163.965,
+        "pid": 3464016,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 41,
+            "pid": 3464016,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 2,
+        "old_pid": 3464016,
+        "old_exited": true,
+        "first_damage_ms": 158.226,
+        "pid": 3464096,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 42,
+            "pid": 3464096,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 3,
+        "old_pid": 3464096,
+        "old_exited": true,
+        "first_damage_ms": 156.623,
+        "pid": 3464175,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 43,
+            "pid": 3464175,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 4,
+        "old_pid": 3464175,
+        "old_exited": true,
+        "first_damage_ms": 156.709,
+        "pid": 3464262,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 44,
+            "pid": 3464262,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 5,
+        "old_pid": 3464262,
+        "old_exited": true,
+        "first_damage_ms": 156.25,
+        "pid": 3464341,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 45,
+            "pid": 3464341,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 6,
+        "old_pid": 3464341,
+        "old_exited": true,
+        "first_damage_ms": 158.236,
+        "pid": 3464495,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 46,
+            "pid": 3464495,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 7,
+        "old_pid": 3464495,
+        "old_exited": true,
+        "first_damage_ms": 159.901,
+        "pid": 3464575,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 47,
+            "pid": 3464575,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 8,
+        "old_pid": 3464575,
+        "old_exited": true,
+        "first_damage_ms": 156.782,
+        "pid": 3464663,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 48,
+            "pid": 3464663,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 9,
+        "old_pid": 3464663,
+        "old_exited": true,
+        "first_damage_ms": 157.503,
+        "pid": 3464742,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 49,
+            "pid": 3464742,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 10,
+        "old_pid": 3464742,
+        "old_exited": true,
+        "first_damage_ms": 166.604,
+        "pid": 3464834,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 50,
+            "pid": 3464834,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 11,
+        "old_pid": 3464834,
+        "old_exited": true,
+        "first_damage_ms": 156.979,
+        "pid": 3464917,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 51,
+            "pid": 3464917,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 12,
+        "old_pid": 3464917,
+        "old_exited": true,
+        "first_damage_ms": 155.07,
+        "pid": 3465003,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 52,
+            "pid": 3465003,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 13,
+        "old_pid": 3465003,
+        "old_exited": true,
+        "first_damage_ms": 155.193,
+        "pid": 3465083,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 53,
+            "pid": 3465083,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 14,
+        "old_pid": 3465083,
+        "old_exited": true,
+        "first_damage_ms": 154.194,
+        "pid": 3465162,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 54,
+            "pid": 3465162,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 15,
+        "old_pid": 3465162,
+        "old_exited": true,
+        "first_damage_ms": 155.499,
+        "pid": 3465242,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 55,
+            "pid": 3465242,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 16,
+        "old_pid": 3465242,
+        "old_exited": true,
+        "first_damage_ms": 155.661,
+        "pid": 3465329,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 56,
+            "pid": 3465329,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 17,
+        "old_pid": 3465329,
+        "old_exited": true,
+        "first_damage_ms": 154.388,
+        "pid": 3465408,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 57,
+            "pid": 3465408,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 18,
+        "old_pid": 3465408,
+        "old_exited": true,
+        "first_damage_ms": 155.265,
+        "pid": 3465488,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 58,
+            "pid": 3465488,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 19,
+        "old_pid": 3465488,
+        "old_exited": true,
+        "first_damage_ms": 162.15,
+        "pid": 3465567,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 59,
+            "pid": 3465567,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 20,
+        "old_pid": 3465567,
+        "old_exited": true,
+        "first_damage_ms": 155.112,
+        "pid": 3465648,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 60,
+            "pid": 3465648,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 21,
+        "old_pid": 3465648,
+        "old_exited": true,
+        "first_damage_ms": 154.69,
+        "pid": 3465727,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 61,
+            "pid": 3465727,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 22,
+        "old_pid": 3465727,
+        "old_exited": true,
+        "first_damage_ms": 156.189,
+        "pid": 3465814,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 62,
+            "pid": 3465814,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 23,
+        "old_pid": 3465814,
+        "old_exited": true,
+        "first_damage_ms": 157.782,
+        "pid": 3465893,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 63,
+            "pid": 3465893,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 24,
+        "old_pid": 3465893,
+        "old_exited": true,
+        "first_damage_ms": 155.762,
+        "pid": 3465973,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 64,
+            "pid": 3465973,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 25,
+        "old_pid": 3465973,
+        "old_exited": true,
+        "first_damage_ms": 168.421,
+        "pid": 3466052,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 65,
+            "pid": 3466052,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 26,
+        "old_pid": 3466052,
+        "old_exited": true,
+        "first_damage_ms": 155.741,
+        "pid": 3466131,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 66,
+            "pid": 3466131,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 27,
+        "old_pid": 3466131,
+        "old_exited": true,
+        "first_damage_ms": 156.033,
+        "pid": 3466210,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 67,
+            "pid": 3466210,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 28,
+        "old_pid": 3466210,
+        "old_exited": true,
+        "first_damage_ms": 156.216,
+        "pid": 3466289,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 68,
+            "pid": 3466289,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 29,
+        "old_pid": 3466289,
+        "old_exited": true,
+        "first_damage_ms": 155.062,
+        "pid": 3466369,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 69,
+            "pid": 3466369,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 30,
+        "old_pid": 3466369,
+        "old_exited": true,
+        "first_damage_ms": 157.31,
+        "pid": 3466448,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 70,
+            "pid": 3466448,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 31,
+        "old_pid": 3466448,
+        "old_exited": true,
+        "first_damage_ms": 157.363,
+        "pid": 3466527,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 71,
+            "pid": 3466527,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 32,
+        "old_pid": 3466527,
+        "old_exited": true,
+        "first_damage_ms": 154.62,
+        "pid": 3466606,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 72,
+            "pid": 3466606,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 33,
+        "old_pid": 3466606,
+        "old_exited": true,
+        "first_damage_ms": 154.647,
+        "pid": 3466685,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 73,
+            "pid": 3466685,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 34,
+        "old_pid": 3466685,
+        "old_exited": true,
+        "first_damage_ms": 155.964,
+        "pid": 3466764,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 74,
+            "pid": 3466764,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 35,
+        "old_pid": 3466764,
+        "old_exited": true,
+        "first_damage_ms": 155.477,
+        "pid": 3466857,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 75,
+            "pid": 3466857,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 36,
+        "old_pid": 3466857,
+        "old_exited": true,
+        "first_damage_ms": 156.213,
+        "pid": 3466936,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 76,
+            "pid": 3466936,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 37,
+        "old_pid": 3466936,
+        "old_exited": true,
+        "first_damage_ms": 158.594,
+        "pid": 3467015,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 77,
+            "pid": 3467015,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 38,
+        "old_pid": 3467015,
+        "old_exited": true,
+        "first_damage_ms": 154.447,
+        "pid": 3467094,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 78,
+            "pid": 3467094,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 39,
+        "old_pid": 3467094,
+        "old_exited": true,
+        "first_damage_ms": 185.266,
+        "pid": 3467181,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 79,
+            "pid": 3467181,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 40,
+        "old_pid": 3467181,
+        "old_exited": true,
+        "first_damage_ms": 159.33,
+        "pid": 3467261,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 80,
+            "pid": 3467261,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 41,
+        "old_pid": 3467261,
+        "old_exited": true,
+        "first_damage_ms": 155.439,
+        "pid": 3467340,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 81,
+            "pid": 3467340,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 42,
+        "old_pid": 3467340,
+        "old_exited": true,
+        "first_damage_ms": 163.511,
+        "pid": 3467427,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 82,
+            "pid": 3467427,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 43,
+        "old_pid": 3467427,
+        "old_exited": true,
+        "first_damage_ms": 155.477,
+        "pid": 3467506,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 83,
+            "pid": 3467506,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 44,
+        "old_pid": 3467506,
+        "old_exited": true,
+        "first_damage_ms": 157.566,
+        "pid": 3467585,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 84,
+            "pid": 3467585,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 45,
+        "old_pid": 3467585,
+        "old_exited": true,
+        "first_damage_ms": 161.598,
+        "pid": 3467676,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 85,
+            "pid": 3467676,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 46,
+        "old_pid": 3467676,
+        "old_exited": true,
+        "first_damage_ms": 154.414,
+        "pid": 3467763,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 86,
+            "pid": 3467763,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 47,
+        "old_pid": 3467763,
+        "old_exited": true,
+        "first_damage_ms": 157.021,
+        "pid": 3467842,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 87,
+            "pid": 3467842,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 48,
+        "old_pid": 3467842,
+        "old_exited": true,
+        "first_damage_ms": 175.54,
+        "pid": 3467921,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 88,
+            "pid": 3467921,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 49,
+        "old_pid": 3467921,
+        "old_exited": true,
+        "first_damage_ms": 155.505,
+        "pid": 3468000,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 89,
+            "pid": 3468000,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 50,
+        "old_pid": 3468000,
+        "old_exited": true,
+        "first_damage_ms": 156.528,
+        "pid": 3468079,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 90,
+            "pid": 3468079,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 51,
+        "old_pid": 3468079,
+        "old_exited": true,
+        "first_damage_ms": 155.409,
+        "pid": 3468159,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 91,
+            "pid": 3468159,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 52,
+        "old_pid": 3468159,
+        "old_exited": true,
+        "first_damage_ms": 153.67,
+        "pid": 3468238,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 92,
+            "pid": 3468238,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 53,
+        "old_pid": 3468238,
+        "old_exited": true,
+        "first_damage_ms": 155.496,
+        "pid": 3468317,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 93,
+            "pid": 3468317,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 54,
+        "old_pid": 3468317,
+        "old_exited": true,
+        "first_damage_ms": 159.937,
+        "pid": 3468396,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 94,
+            "pid": 3468396,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 55,
+        "old_pid": 3468396,
+        "old_exited": true,
+        "first_damage_ms": 155.916,
+        "pid": 3468483,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 95,
+            "pid": 3468483,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 56,
+        "old_pid": 3468483,
+        "old_exited": true,
+        "first_damage_ms": 155.335,
+        "pid": 3468571,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 96,
+            "pid": 3468571,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 57,
+        "old_pid": 3468571,
+        "old_exited": true,
+        "first_damage_ms": 176.529,
+        "pid": 3468650,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 97,
+            "pid": 3468650,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 58,
+        "old_pid": 3468650,
+        "old_exited": true,
+        "first_damage_ms": 153.543,
+        "pid": 3468729,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 98,
+            "pid": 3468729,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 59,
+        "old_pid": 3468729,
+        "old_exited": true,
+        "first_damage_ms": 158.261,
+        "pid": 3468808,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 99,
+            "pid": 3468808,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 60,
+        "old_pid": 3468808,
+        "old_exited": true,
+        "first_damage_ms": 155.071,
+        "pid": 3468887,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 100,
+            "pid": 3468887,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 61,
+        "old_pid": 3468887,
+        "old_exited": true,
+        "first_damage_ms": 159.841,
+        "pid": 3468975,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 101,
+            "pid": 3468975,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 62,
+        "old_pid": 3468975,
+        "old_exited": true,
+        "first_damage_ms": 156.22,
+        "pid": 3469055,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 102,
+            "pid": 3469055,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 63,
+        "old_pid": 3469055,
+        "old_exited": true,
+        "first_damage_ms": 154.163,
+        "pid": 3469134,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 103,
+            "pid": 3469134,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 64,
+        "old_pid": 3469134,
+        "old_exited": true,
+        "first_damage_ms": 155.611,
+        "pid": 3469213,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 104,
+            "pid": 3469213,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 65,
+        "old_pid": 3469213,
+        "old_exited": true,
+        "first_damage_ms": 160.432,
+        "pid": 3469299,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 105,
+            "pid": 3469299,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 66,
+        "old_pid": 3469299,
+        "old_exited": true,
+        "first_damage_ms": 156.753,
+        "pid": 3469378,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 106,
+            "pid": 3469378,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 67,
+        "old_pid": 3469378,
+        "old_exited": true,
+        "first_damage_ms": 157.076,
+        "pid": 3469458,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 107,
+            "pid": 3469458,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 68,
+        "old_pid": 3469458,
+        "old_exited": true,
+        "first_damage_ms": 155.53,
+        "pid": 3469537,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 108,
+            "pid": 3469537,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 69,
+        "old_pid": 3469537,
+        "old_exited": true,
+        "first_damage_ms": 159.557,
+        "pid": 3469616,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 109,
+            "pid": 3469616,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 70,
+        "old_pid": 3469616,
+        "old_exited": true,
+        "first_damage_ms": 156.168,
+        "pid": 3469703,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 110,
+            "pid": 3469703,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 71,
+        "old_pid": 3469703,
+        "old_exited": true,
+        "first_damage_ms": 154.832,
+        "pid": 3469790,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 111,
+            "pid": 3469790,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 72,
+        "old_pid": 3469790,
+        "old_exited": true,
+        "first_damage_ms": 156.643,
+        "pid": 3469878,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 112,
+            "pid": 3469878,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 73,
+        "old_pid": 3469878,
+        "old_exited": true,
+        "first_damage_ms": 156.276,
+        "pid": 3469957,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 113,
+            "pid": 3469957,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      },
+      {
+        "cycle": 74,
+        "old_pid": 3469957,
+        "old_exited": true,
+        "first_damage_ms": 155.063,
+        "pid": 3470036,
+        "disabled_window_count": 0,
+        "window_count": 1,
+        "windows": [
+          {
+            "id": 114,
+            "pid": 3470036,
+            "actor": true,
+            "hidden": false,
+            "type": 1
+          }
+        ]
+      }
+    ]
+  },
+  "binary_sha256": "14409d9abaf92dd2c6ea4eb1cdaddaf7058f7a15d0349873099255f39c8f50c9",
+  "supervisor_before": {
+    "shell_processes": [],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "baseline_log": {
+    "file": "docs/spikes/gnome/m1a2-evidence/baseline-shell.log",
+    "sha256": "b0b3c293e1d88e8bc6dc1614b022f4302dae678831709d47221552527ddc9c52"
+  },
+  "shell_version": "GNOME Shell 50.1",
+  "harness_start": "isolated Shell up: leader 3459872 bus unix:path=/tmp/dbus-PGzg6nCoiC,guid=22505532deb15db56471a2cb6ae5041e",
+  "runtime_version": "gst-inspect-1.0 version 1.28.2\nGStreamer 1.28.2\nhttps://launchpad.net/ubuntu/+source/gstreamer1.0",
+  "native_dependencies": {
+    "coreelements": "linux-vdso.so.1 (0x000074e8b3300000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000074e8b3106000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000074e8b3082000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000074e8b2f2a000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000074e8b2ec6000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000074e8b2c00000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000074e8b2ebd000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000074e8b2ada000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000074e8b2eb2000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000074e8b2a2e000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000074e8b2ea1000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000074e8b3302000)",
+    "matroska": "linux-vdso.so.1 (0x0000720a47df4000)\n\tlibgstpbutils-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstpbutils-1.0.so.0 (0x0000720a47d33000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x0000720a47c4d000)\n\tlibgstaudio-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstaudio-1.0.so.0 (0x0000720a47bc2000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000720a47b3e000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000720a479d1000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000720a4796b000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000720a47813000)\n\tlibgstriff-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstriff-1.0.so.0 (0x0000720a47802000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x0000720a477c0000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x0000720a477a2000)\n\tlibbz2.so.1.0 => /usr/lib/x86_64-linux-gnu/libbz2.so.1.0 (0x0000720a4778d000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000720a47665000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000720a47400000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x0000720a4765b000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x0000720a472fd000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000720a47654000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000720a47641000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000720a47636000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000720a47251000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000720a47df6000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x0000720a4723a000)",
+    "vpx": "linux-vdso.so.1 (0x00007235a627a000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007235a60d6000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007235a6072000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007235a5f1a000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x00007235a5ed8000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007235a5df2000)\n\tlibvpx.so.12 => /usr/lib/x86_64-linux-gnu/libvpx.so.12 (0x00007235a5a00000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007235a5600000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007235a5de9000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007235a58da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007235a5dd8000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007235a5dcb000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007235a582e000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007235a557c000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x00007235a555e000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007235a5dc1000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007235a545b000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007235a627c000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007235a5444000)",
+    "videoconvertscale": "linux-vdso.so.1 (0x000075be69db6000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000075be69ca3000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000075be69b36000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000075be69ad2000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000075be6997a000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000075be698f4000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000075be69600000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000075be698ea000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000075be694fd000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000075be693d7000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000075be698e1000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000075be698d0000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000075be698c5000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000075be6932b000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000075be69db8000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000075be698ae000)",
+    "waylandsink": "linux-vdso.so.1 (0x0000743c780b0000)\n\tlibgstwayland-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstwayland-1.0.so.0 (0x0000743c7806d000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000743c77f00000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000743c77e9c000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000743c77d44000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x0000743c77c5e000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x0000743c77c52000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000743c77a00000)\n\tlibwayland-client.so.0 => /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 (0x0000743c77c3f000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000743c77c38000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000743c778da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000743c77c25000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000743c778cf000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000743c77823000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000743c7779f000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x0000743c7769c000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x0000743c77685000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000743c780b2000)",
+    "videotestsrc": "linux-vdso.so.1 (0x00007479ae481000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007479ae36c000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007479ae1ff000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007479ae19b000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007479ae043000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007479adfbf000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007479adeba000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007479add94000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007479ada00000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007479add8a000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007479add83000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007479add70000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007479add65000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007479adcb9000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007479ae483000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007479adca2000)",
+    "app": "linux-vdso.so.1 (0x00007324c1b61000)\n\tlibgstapp-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstapp-1.0.so.0 (0x00007324c1b25000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007324c19b8000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007324c1934000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007324c18d0000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007324c1778000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007324c1400000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007324c176f000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007324c1649000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007324c1638000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007324c162d000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007324c1354000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007324c1b63000)"
+  },
+  "fixture": {
+    "blake3": "826e294d334029e87f1f05ea19259cd6a62330849638d51d4a752972a32465bd",
+    "bytes": 312344,
+    "dimensions": [
+      3840,
+      1080
+    ],
+    "frames": 1200,
+    "fps": 30
+  },
+  "failure": "no real renderer damage within deadline",
+  "failure_traceback": "Traceback (most recent call last):\n  File \"/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/docs/spikes/gnome/m1-risk-probe.py\", line 320, in main\n    report['measurements'] = runpy.run_path(str(HERE / 'm1a-matrix.py'))['run_matrix'](\n                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        evaluate, private, snapshot, arguments, ROOT, LAB, report)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/docs/spikes/gnome/m1a-matrix.py\", line 213, in run_matrix\n    fresh = start()\n  File \"/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/docs/spikes/gnome/m1a-matrix.py\", line 41, in start\n    current = wait_frame()\n  File \"/home/samer/.t3/worktrees/one-mk/t3-5cb4127b/docs/spikes/gnome/m1a-matrix.py\", line 32, in wait_frame\n    raise RuntimeError('no real renderer damage within deadline')\nRuntimeError: no real renderer damage within deadline\n",
+  "failure_bridge": {
+    "monitors": [
+      [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      [
+        1920,
+        0,
+        1920,
+        1080
+      ]
+    ],
+    "frame": null,
+    "buffer": null,
+    "damage": 0,
+    "stale": false,
+    "fresh": false,
+    "watchdog": 0,
+    "coverage": 0,
+    "pid": null,
+    "reason": "none",
+    "restart": 14608,
+    "cloneCount": 0,
+    "events": [
+      "807364112 restart scheduled 1000 ms",
+      "807364251 spawned renderer pid=3470115",
+      "807364518 renderer exited pid=3470115",
+      "807364518 restart scheduled 1000 ms",
+      "807365528 spawned renderer pid=3470232",
+      "807365797 renderer exited pid=3470232",
+      "807365797 restart scheduled 2000 ms",
+      "807367806 spawned renderer pid=3470441",
+      "807368076 renderer exited pid=3470441",
+      "807368076 restart scheduled 4000 ms"
+    ],
+    "focus": "Desktop Icons 1"
+  },
+  "failure_bus_owner": "(':1.0',)",
+  "supervisor_before_cleanup": {
+    "shell_processes": [
+      {
+        "pid": 3459900,
+        "stat": "3459900 (gnome-shell) S 3459890 3459900 3459872 0 -1 0 332508 2999020 22 82 682 194 1444 722 20 0 23 0 80725694 8482816000 72551 18446744073709551615 93824992243712 93824992251769 140737488349024 0 0 0 0 16781316 16458 0 0 0 17 1 0 0 0 0 0 93824992258576 93824992260464 93824992264192 140737488349763 140737488349927 140737488349927 140737488351203 0"
+      }
+    ],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "shell_exit_before_cleanup": null,
+  "host_core_pattern": "|/usr/share/apport/apport -p%p -s%s -c%c -d%d -P%P -u%u -g%g -F%F -- %E",
+  "cleanup": "all owned children reaped; session directory and generated media removed",
+  "shell_log_tail": [
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3468887]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3468975]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469055]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469134]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469213]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469299]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469378]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469458]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469537]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469616]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469703]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469790]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469878]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3469957]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3470036]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3470115]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "wallpaper risk probe refused/failed: private laboratory Hello failed: domain=592 code=19 GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such method \u201cHello\u201d",
+    "[Detaching after fork from child process 3470232]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "wallpaper risk probe refused/failed: private laboratory Hello failed: domain=592 code=19 GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such method \u201cHello\u201d",
+    "[Detaching after fork from child process 3470441]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "wallpaper risk probe refused/failed: private laboratory Hello failed: domain=592 code=19 GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such method \u201cHello\u201d",
+    "Exception ignored on threading shutdown:",
+    "Traceback (most recent call last):",
+    "  File \"/usr/lib/python3.14/threading.py\", line 1559, in _shutdown",
+    "    def _shutdown():",
+    "KeyboardInterrupt: "
+  ],
+  "shell_warnings": [
+    "(gnome-shell:3459900): libmutter-WARNING **: 23:54:55.178: Unknown experimental feature 'scale-monitor-framebuffer'",
+    "(gnome-shell:3459900): libmutter-WARNING **: 23:54:55.178: Unknown experimental feature 'xwayland-native-scaling'",
+    "(gnome-shell:3459900): libmutter-WARNING **: 23:54:55.488: There is no colord server available",
+    "(gnome-shell:3459900): GNOME Shell-WARNING **: 23:54:55.786: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3459900): GNOME Shell-CRITICAL **: 23:54:55.841: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3459900): GNOME Shell-CRITICAL **: 23:54:55.841: Could not get proxy for session null: Error: Argument string may not be null",
+    "(gnome-shell:3459900): GNOME Shell-WARNING **: 23:54:55.841: Failed to start state machine: can't access property \"connectObject\", this._loginUser is null",
+    "(gnome-shell:3459900): Gjs-WARNING **: 23:54:55.841: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:",
+    "(/usr/libexec/xdg-desktop-portal:3460351): xdg-desktop-portal-WARNING **: 23:54:56.308: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files",
+    "(gnome-shell:3459900): accountsservice-WARNING **: 23:54:56.547: ActUserManager: user (null) has no username (uid: -1)",
+    "(/usr/libexec/xdg-desktop-portal:3460351): xdg-desktop-portal-WARNING **: 23:54:57.434: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3460351): xdg-desktop-portal-WARNING **: 23:54:57.435: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3460351): xdg-desktop-portal-WARNING **: 23:54:57.435: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3460351): xdg-desktop-portal-WARNING **: 23:54:57.630: Failed to connect to PipeWire: Couldn't connect to PipeWire",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:25.090: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:25.090: Monitor 'MetaVendor' has no configuration which is-current!",
+    "(gnome-shell:3459900): libmutter-CRITICAL **: 23:55:25.099: meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:25.745: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:27.075: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:27.075: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:27.737: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:29.726: Monitor 'MetaVendor' has no configuration which is-current!",
+    "(gnome-shell:3459900): Clutter-WARNING **: 23:55:29.727: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.",
+    "(gnome-shell:3459900): Clutter-WARNING **: 23:55:29.727: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.",
+    "(gnome-shell:3459900): Clutter-WARNING **: 23:55:29.727: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.",
+    "(gnome-shell:3459900): Clutter-WARNING **: 23:55:29.727: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:30.386: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:30.386: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:3460366): WARNING **: 23:55:32.765: Monitor 'MetaVendor' has no configuration which is-current!",
+    "(gnome-shell:3459900): Gjs-WARNING **: 23:55:52.623: Type GITypeInfo of property AccountsService.User::password-mode does not match return type GITypeInfo of getter get_password_mode. Falling back to slow path"
+  ],
+  "new_warnings": []
+}

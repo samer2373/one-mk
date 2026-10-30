@@ -1,0 +1,159 @@
+{
+  "files": {
+    "clippy-security.log": {
+      "bytes": 174,
+      "sha256": "13f92f376c293f48f70ee3e74a14c210d02f6922725cba9b5ede4b0e631d54ea"
+    },
+    "diagnostic-1-shell.log": {
+      "bytes": 104212,
+      "sha256": "a8f584f5abb7ec61601b4c15e9182d5865211222717b8dfd76852e33a4cd6074"
+    },
+    "diagnostic-1.json": {
+      "bytes": 402263,
+      "sha256": "b74a5dd807d98329d980f34229a5271d4b1129fb0e385438617f30c0c0ee6c59"
+    },
+    "diagnostic-2-shell.log": {
+      "bytes": 104257,
+      "sha256": "d14f0fd4fb1e3ee714c05c391ffdb2d2b3f95128c3487f1aa5c38cfe3e3a679b"
+    },
+    "diagnostic-2.json": {
+      "bytes": 402246,
+      "sha256": "a53cf9a264bc0e47708829154404034c80eb497a06e31d53540be5b681aadccc"
+    },
+    "diagnostic-3-shell.log": {
+      "bytes": 104579,
+      "sha256": "6fc4448b064dbb36465d67deb398e1c32a6c67fbfb6c3a8cb502164229e77375"
+    },
+    "diagnostic-3.json": {
+      "bytes": 402328,
+      "sha256": "3b284bcc06e87cde95d8505a10a8059b43c23a76d0784435a2170bbaedeb9aad"
+    },
+    "diagnostic-4-shell.log": {
+      "bytes": 104936,
+      "sha256": "680ee7037338b7c2b16370adfc06f7548a7e3d4576d03518c12243555747bbef"
+    },
+    "diagnostic-4.json": {
+      "bytes": 402129,
+      "sha256": "ad03f4efb089c281b7f2bcce51544c1710c88ba1e6f062b9efa2072487bb9597"
+    },
+    "diagnostic-5-shell.log": {
+      "bytes": 103874,
+      "sha256": "4adfd3e98565ad8330577259ca2f55f42a8c78d5246f8aa299c50f72d5f74e2c"
+    },
+    "diagnostic-5.json": {
+      "bytes": 401550,
+      "sha256": "8839e6858bcb2348ee6875ae04f2f156e56d5e696e9db997b3d896342cf776bc"
+    },
+    "final-1-shell.log": {
+      "bytes": 84406,
+      "sha256": "3876249b2efbd12e19065abf7b08d7db622b1a674ae30583ada0b02adc34b94b"
+    },
+    "final-1.json": {
+      "bytes": 74389,
+      "sha256": "a41c34dbfa7dc1ab5f04efd516258265fd7976c355522f8864aa5fa7784af2c8"
+    },
+    "idle-event-shell.log": {
+      "bytes": 16905,
+      "sha256": "5042c0be9ddf27e5ede95b2baf0b617cc4e61dd8344784cc23f3ea965c3da9c9"
+    },
+    "idle-event.json": {
+      "bytes": 24935,
+      "sha256": "dc999171b4fb2c9cc239eb5f53b33a90d90d56281cfd2de7eb42fba9403408da"
+    },
+    "idle-final-renderer.strace.gz": {
+      "bytes": 203234,
+      "sha256": "256c80b1a03f88780cea85ceabbd02d587d1e848924b406f65194ec18278ea67"
+    },
+    "idle-final-shell.log": {
+      "bytes": 17722,
+      "sha256": "5c02ee5ab66ad277c3b858383b7c90e55eb5a854faed78098c45f61d1d509ca4"
+    },
+    "idle-final.json": {
+      "bytes": 26952,
+      "sha256": "367703eca02dd2047bb2283ed7e39943401d0f9d6e068d84dca3b459679332e3"
+    },
+    "idle-persistent-shell.log": {
+      "bytes": 16905,
+      "sha256": "e61b341244d0dc153f6e93b7febbe808184c7e08122f861f29022d439544a432"
+    },
+    "idle-persistent.json": {
+      "bytes": 24928,
+      "sha256": "89abe72475d3969b542f6180b947c15b9d6e5314dd6a8c1acf47f83bc503d63d"
+    },
+    "qualified-1-shell.log": {
+      "bytes": 100201,
+      "sha256": "dea9e8068f063080aaced1376519c97c230db2ba7054423c68835812399084e6"
+    },
+    "qualified-1.json": {
+      "bytes": 108900,
+      "sha256": "463a654e6d85765746ec487c823798f192739e605a7ffbfb2d33def44a0087ff"
+    },
+    "security-final-shell.log": {
+      "bytes": 14340,
+      "sha256": "931d142243d197bb98e52a7fce51ca8dc7cda73ff1dfdd841e9139a1f4f0eed9"
+    },
+    "security-final.json": {
+      "bytes": 21945,
+      "sha256": "6800f817474f9897a34d98ff84d12f42e99523aa37944ff7218d56ab4a9e095f"
+    },
+    "security-negative-shell.log": {
+      "bytes": 14045,
+      "sha256": "01c3c7f1de117198862b98c4869f7e13da7134327136e47b89b0819d03f6bbbd"
+    },
+    "security-negative.json": {
+      "bytes": 21837,
+      "sha256": "a3e73f1fb118c166219276c6fcaa699c64729a6d646e972f00fda1cd3a8934ff"
+    },
+    "security-pinned-shell.log": {
+      "bytes": 13575,
+      "sha256": "3786e842d7c6f7a2179a951be68b646f0efe44ec6d1fd8db9cd405534f21daf6"
+    },
+    "security-pinned.json": {
+      "bytes": 22524,
+      "sha256": "48aaa042d2396dd0643e7ec660117ab1750502301b9c74ebfcfd2fdcaa3cd485"
+    },
+    "security-unit.log": {
+      "bytes": 981,
+      "sha256": "cbb46380613b3254decf9f5adad2c9aec4344494902e922c0b05353849f3489f"
+    },
+    "security-verified-shell.log": {
+      "bytes": 14255,
+      "sha256": "9581013f7270eb5fd67810607439c25cc88b1d7dbbca572bd0f50dc05a53311e"
+    },
+    "security-verified.json": {
+      "bytes": 21764,
+      "sha256": "322251a2aac4a2106f422828e76447c35e490de6ff88a2ba17e49c781760074d"
+    },
+    "stability-debug-3-shell.log": {
+      "bytes": 103482,
+      "sha256": "785893d0bc00fb2ad6b20c49c713df95d22f55cc6a0115a2c67161c2494db5c2"
+    },
+    "stability-debug-3.json": {
+      "bytes": 382605,
+      "sha256": "bd1b1800faa1c9fdcce83ef7f46e6f3ac1373173af7f55a3f608f71daf897e64"
+    },
+    "test-m1a3.log": {
+      "bytes": 183647,
+      "sha256": "82e68c71f217c181f82dcac3def65086d88bc12c03ca1f356372f0addce85fde"
+    },
+    "validation-m1a3-corrected.log": {
+      "bytes": 2134,
+      "sha256": "39da559ee23eac7d8e39b5c335c05ca3489522755c73fd69bd043d3939f483a2"
+    },
+    "validation-m1a3.log": {
+      "bytes": 3617,
+      "sha256": "2237673ed74cce59805f9277de52c302995415ec8a8fd32912a78bbe8ee0166a"
+    }
+  },
+  "uncompressed_idle_trace_sha256": "1d0c4ed922e87f2ff73e35804a541b447de71e34fe774a0ebc4f663d03683f63",
+  "binary_sha256": "14409d9abaf92dd2c6ea4eb1cdaddaf7058f7a15d0349873099255f39c8f50c9",
+  "source_sha256": {
+    "crates/wall-presenter/src/bridge.rs": "48bc786bbcabd84c607aaa7785405d44d819335e4c925d48c540d35fc64aa80b",
+    "crates/wall-presenter/src/surface.rs": "9b101745e824258a9148518cbecae7cc18d7069dafb2c5232547ff3149381545",
+    "docs/spikes/gnome/ext/wallpaper-spike@one-mk.test/extension.js": "db41525bdb1deb167261d5274fcf90a13b950b84b2b23beb8cd11262ffad1da5",
+    "docs/spikes/gnome/ext/spike-harness@one-mk.test/extension.js": "ec58c458a041ec625382ffba67c2868fe329658096f9991db76d88b2d97103f0",
+    "docs/spikes/gnome/m1-risk-probe.py": "09d3698f8c42eb5973d60aabd6384ba59cad118df2b75014fcf0303ee91d891e",
+    "docs/spikes/gnome/m1a-matrix.py": "cf7901692124fc708a5f1e08821b66135f4338355e3adb099d0a7e487c13e3d5",
+    "docs/spikes/gnome/m1a-security.py": "0c28201fa51f334447e786df1d1544ba676f3a9eb59c20d82ea481ac34dd14a2"
+  }
+}
