@@ -64,6 +64,11 @@ origin's design won; what origin lacked was re-applied on top of it.
   hands the pointer back. Dead corners are the ends of the exposed part of
   the monitor's edge (where the outline turns, or where two monitors meet
   in a line), never a monitor corner covered by a neighbour.
+- **A computer forgotten during its handshake stays out.** Trust is
+  checked again when the finished handshake reaches the daemon
+  (`on_connected` reloads the store first): a device forgotten while it
+  held back its Hello is closed as "not paired" and never becomes a peer,
+  so it can't send input even without ever sending `Layout`.
 
 ## Where things stand (updated 2026-10-29, end of the second batch)
 

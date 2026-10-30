@@ -1667,6 +1667,18 @@ impl App {
 
     fn on_connected(&mut self, link: Link) {
         let fp = link.fp;
+        // Trust was checked before the handshake, which the peer may drag
+        // out: it may have been forgotten since (window, tray or `one-mk
+        // forget`, which tells us only afterwards). Checked again here,
+        // before it can become a peer, so it can't send input; nothing
+        // later would catch it (a peer that never sends `Layout` causes no
+        // other reload).
+        self.reload_trust();
+        if !self.trust.is_trusted(&fp) {
+            tracing::info!(peer = %fp.short(), "rejecting a device forgotten during its handshake");
+            link.conn.close(1u32.into(), b"not paired");
+            return;
+        }
         // Both sides may dial, at several addresses. Both keep the same
         // connection: the one with the lowest rank.
         if let Some(existing) = self.peers.get(&fp) {
@@ -1682,7 +1694,6 @@ impl App {
                 self.end_owner(false);
             }
         }
-        self.reload_trust();
         let (side, offset) = self.trust.get(&fp).map_or((Side::Right, None), |d| (d.side(), d.offset));
         let addr = canonical(link.conn.remote_address());
         if let Some(dev) = self.trust.get_mut(&fp) {
@@ -3568,6 +3579,55 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("A still sees B online after B forgot A");
+    }
+
+    /// A computer forgotten while its handshake is under way (trust was
+    /// checked, then it held back its Hello) is not let in when it finally
+    /// says Hello: B closes the connection as not paired, and the input it
+    /// sends goes nowhere. Sending no `Layout` must not help it either.
+    #[tokio::test]
+    async fn a_computer_forgotten_during_its_handshake_is_not_let_in() {
+        let mut duo = Duo::start("forget-handshake", None).await;
+        let dir = temp_dir("forget-handshake-c");
+        let id = Identity::load_or_create(&dir).unwrap();
+        let fp = id.fingerprint;
+        trust(&duo.db, &id, Side::Top);
+        let node = Node::bind(Arc::new(id), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer = node.connect(SocketAddr::from(([127, 0, 0, 1], duo.pb))).await.unwrap();
+        let (mut send, mut recv) = peer.open_stream(StreamKind::Control).await.unwrap();
+        // B has found it paired and waits for its Hello: forget it now.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let mut t = TrustStore::load(&duo.db).unwrap();
+        assert!(t.remove(&fp.to_string()).is_some());
+        t.save().unwrap();
+        assert!(control::request(&duo.db, Request::Reload).await.unwrap().is_some());
+
+        let mut frames = Vec::new();
+        for msg in [
+            Control::Hello { version: PROTOCOL_VERSION, name: "raw".into(), screens: vec![], nonce: 0, os: 0 },
+            Control::Enter { epoch: 1, pos: Pos::new(5.0, 5.0) },
+            Control::Key { code: 30, down: true },
+        ] {
+            msg.encode_frame(&mut frames);
+        }
+        let _ = send.write_all(&frames).await;
+        let closed = tokio::time::timeout(Duration::from_secs(5), peer.conn.closed()).await.expect("B never closed it");
+        match closed {
+            quinn::ConnectionError::ApplicationClosed(c) => assert_eq!(&c.reason[..], b"not paired"),
+            other => panic!("{other:?}"),
+        }
+        // Whatever B said before closing, it never took it as a peer.
+        let mut buf = Vec::new();
+        while let Ok(Some(msg)) = read_frame(&mut recv, &mut buf).await {
+            assert!(matches!(msg, Control::Hello { .. }), "{msg:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(injected(&mut duo.hb), vec![]);
+        let peers = status(&duo.db).await.peers;
+        assert!(peers.len() == 1 && peers[0].online, "only A, still connected: {peers:?}");
+        drop(node);
+        let _ = std::fs::remove_dir_all(dir);
+        duo.stop().await;
     }
 
     /// Changing the layout on one computer applies at once, with no
