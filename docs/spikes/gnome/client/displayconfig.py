@@ -3,6 +3,7 @@
 org.gnome.Mutter.DisplayConfig. Usage: displayconfig.py state | apply N
 (apply N: enable the first N connectors side by side, temporary method)."""
 import sys
+import math
 from gi.repository import Gio, GLib
 bus = Gio.bus_get_sync(Gio.BusType.SESSION)
 def call(m, args=None):
@@ -16,10 +17,15 @@ if sys.argv[1] == "state":
     print("logical", [(l[0], l[1], [m[0] for m in l[5]]) for l in logical])
     sys.exit(0)
 n = int(sys.argv[2])
+scale = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
+if not math.isfinite(scale) or scale <= 0 or n < 1 or n > len(monitors):
+    raise ValueError('invalid monitor count or scale')
 lms, x = [], 0
 for (conn, *_), modes, mprops in monitors[:n]:
     mode = next(m for m in modes if m[6].get("is-current") or m[6].get("is-preferred"))
-    lms.append((x, 0, 1.0, 0, x == 0, [(conn, mode[0], {})]))
-    x += mode[1]
+    if scale not in mode[5]:
+        raise ValueError(f'scale {scale} not supported; available: {mode[5]}')
+    lms.append((x, 0, scale, 0, x == 0, [(conn, mode[0], {})]))
+    x += round(mode[1] / scale)
 call("ApplyMonitorsConfig", GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, lms, {})))
 print("applied", n, "monitor(s)")
