@@ -1,8 +1,11 @@
 # Local keyboard remapping: safety design (5H)
 
 Status: **5H-3 Windows integration implemented, COMPILE-CHECKED ONLY;
-native Windows UNTESTED, EXPERIMENTAL, default OFF**. macOS native integration
-is still missing (next slice), also **UNTESTED**. Linux local remapping is not
+native Windows UNTESTED, EXPERIMENTAL, default OFF**. **5H-4 macOS integration
+is partial and COMPILE-CHECKED ONLY, native macOS UNTESTED**: the event-tap
+adapter is implemented, but Caps Lock rules are deliberately refused rather
+than treating its delayed toggle as a physical press/release. Native receipt
+delivery, no-stuck-keys and CPU acceptance have NOT passed. Linux local remapping is not
 available. `[input] local_rules = false` remains the default.
 Do not connect the existing asynchronous injection channel to a hook and
 describe it as safe: enqueueing a release is not acknowledging its delivery.
@@ -95,6 +98,111 @@ for worker routing, but multi-keyboard identity/ordering needs native acceptance
 doctor use backend acknowledgement (`active (N)` or an inactive reason), never
 infer activity from the preference. During asynchronous reload, ask status again
 after the fence. Doctor always warns that native Windows is UNTESTED.
+
+### Implemented macOS path (COMPILE-CHECKED ONLY, native UNTESTED)
+
+`macos_localmap.rs` uses the same immutable `Snapshots`, bounded `Admission`,
+physical shortcut matcher, atomic `HookGate`, numbered queue watermark and
+serialized `Engine` as Windows. The existing HID-level capture tap performs
+the decision; a run-loop source drains admissions outside the tap. IOHID's 5I
+correlator resolves each admitted key's device before worker delivery through
+`Mapper::key_from`. Correlation is finished before enqueuing either direction's
+fence. Device changes invalidate health before publishing the new device list.
+No rule tables are reclaimed on the callback. The pure shared decision and
+admission allocation test is not a measurement of CoreGraphics/CoreFoundation.
+
+The worker posts physical keycodes with a distinct event-source user-data tag.
+Its output bypasses physical matching in both the capture and shortcut taps.
+**CGEventPost returns no delivery result.** Posting is therefore not treated as
+successful release: each post waits up to 100 ms for the same tagged event to
+be observed at the capture tap. An uncertain down remains conservatively owned;
+an uncertain up stays in the release ledger for retry. `Injector::settled` also
+prevents an empty fence from acknowledging outstanding uncertain posts. Only a
+matching, healthy, receipted fence permits capture activation and `Activated`.
+Only the exact outstanding post sequence can acknowledge a receipt; unrelated,
+future and duplicate receipts cannot advance a watermark. Completion health is
+checked again on the capture thread before activation. The tag is a routing
+marker, not an authentication boundary against another local injector.
+Receipts prove observation at our tap, NOT consumption by applications. Whether
+HID-level posts traverse this tap at all is **UNTESTED**; a missing receipt
+must fail inactive, never be replaced with an assumed acknowledgement.
+Retrying an uncertain release can produce a duplicate key-up if the first post
+was delivered but its receipt was lost. Exactly-once native delivery is not
+established by the balanced fake-injector tests.
+
+Modifier keycodes use `flagsChanged`. Physical flags of swallowed modifiers are
+removed from subsequent keyboard/pointer events; replacement modifier flags
+are composed separately, preserving a passed opposite-side modifier. Supported
+modifier bits are rebuilt from tracked physical ownership, not copied back from
+raw flags that could include our synthetic modifiers. Caps Lock/Fn toggle bits
+are preserved; non-key events refresh the worker's physical-flag baseline. Fn,
+function keys, media keys and NX system-defined events bypass the local mapper;
+snapshots trying to remap these are refused. Remote capture retains its existing
+media handling. **Caps Lock is not supported by this slice**: macOS reports a
+delayed alpha-shift toggle, not a reliable down/up pair. Both Caps Lock sources
+and outputs reject the entire snapshot, so Caps Lock remains untouched locally.
+Do not use it for tap/hold or claim its LED/delay behavior was tested. Completing
+Caps Lock support requires a separately validated physical IOHID/tap policy.
+
+Tap timeout/user-disable, screen lock, workspace session changes and sleep/wake
+close admission, request release-all and pause mapping. Re-enabling a disabled
+tap only makes cleanup receipts possible; it does not reopen interception.
+Return/unlock/wake requires release of all physical keys and explicit reload.
+Workspace notifications close health before capture-thread message handling.
+Accessibility and Input Monitoring denial are separately reported by capture;
+local-rule status also reports inactivity, never an inferred preference state.
+`doctor` reads both permission grants without prompting or installing a tap,
+and labels them as this process's permissions, not proof of the daemon's grant.
+Permission revocation can prevent release delivery: restore permission and retry
+`one-mk keymap local on`, then disable. Do not call that a guaranteed recovery.
+
+Secure Input hides keyboard events, including releases in password fields.
+Before new replacement downs, and while physical or replacement keys are held,
+the worker/watchdog checks Secure Input/session state and requests cleanup and
+pause. The watchdog parks indefinitely with no obligations; while keys are held
+it checks at 100 ms intervals. The existing capture timer monitors permissions
+and active remote capture. Idle CPU and notification delivery are **UNTESTED**.
+No native tests, tap installations or GUI/session experiments were run here.
+
+### Manual macOS acceptance script — NOT RUN, native UNTESTED
+
+Use only a disposable Mac login, with recovery access from another computer and
+a copy of the original settings. This is an acceptance checklist, not approval
+to run it in an owner's real session.
+
+1. Confirm `[input] local_rules = false`; grant Accessibility and Input Monitoring
+   separately. Verify denied states in `one-mk status` and `one-mk doctor` before
+   granting each. `doctor`, list/check and runtime status must retain UNTESTED.
+2. Add `one-mk keymap add a b --local`, then `one-mk keymap local on`. Require
+   `active (1)` only after its fence; verify one B down/up per physical A, repeat,
+   sequence/none/layers and supported tap/hold. Remove the rule afterward.
+3. Test left Shift -> left Ctrl and both sides of each modifier: type, click,
+   release in either order, reload mid-hold, and compare application flags.
+   Add a device-local override and test unknown devices and unplug/reconnect.
+4. Hold rewritten keys while every capture entry point activates: edge,
+   explicit switch, physical shortcut and broadcast. No output may be newly
+   injected in Remote; releases must be receipted before activation. Repeat on
+   return. Simulate delayed/missing receipts and newer failures during release.
+5. Exercise tap timeout/user-disable, screen lock/unlock, fast-user-switch,
+   sleep/wake and Secure Keyboard Entry while a modifier or dual role is held.
+   Require cleanup, fail-open new presses, inactive status and explicit reload.
+6. Verify Caps Lock toggle/LED/delay, Fn, F-keys and NX media input remain
+   unchanged. A Caps Lock local rule MUST refuse the complete snapshot; this is
+   a known 5H-4 blocker, not completed Caps Lock remapping.
+7. Record callback latency, parked-thread idle wakeups/CPU and RSS with rules
+   on/off; verify clean shutdown waits for release receipts. Repeat with IMEs,
+   reserved shortcuts, another injector and the supported macOS versions.
+
+Recovery: first use the physical **Ctrl+Alt+Shift+Esc** emergency chord. It is
+matched before remapping, but earlier rewritten modifiers are not retroactively
+delivered to macOS. From another computer's SSH session into this Mac/account,
+run `one-mk keymap local off` (running it on the other computer itself changes
+the wrong settings). If needed, revoke one-mk/the launching terminal under
+System Settings > Privacy & Security > Input Monitoring and Accessibility.
+macOS may require quit/reopen to revoke effectively. Revocation/force-quit is
+not proof held replacements were released; it may prevent cleanup entirely.
+Restore permissions only in the disposable session, release physical keys,
+reload to retry the ledger, disable, and verify flags before further use.
 
 `localmap_handoff::Handoff` models Local -> Handoff -> Remote and the reverse.
 Starting a transition closes the local gate immediately and returns a unique
@@ -263,8 +371,8 @@ Raw Input delivery of swallowed originals, UIPI/secure-desktop release denial,
 OS-hook removal/latency, process termination and worker blocked in SendInput.
 An idle daemon stall is not detected by an idle heartbeat (there is none).
 Native CPU/RSS/latency and Windows session/power behavior remain unmeasured.
-These are not an enterprise no-stuck-keys acceptance claim. macOS needs its own
-tap/injector/session implementation and separate native acceptance.
+These are not an enterprise no-stuck-keys acceptance claim. The partial macOS
+tap/injector/session implementation above still needs separate native acceptance.
 
 ### 5H-3 validation and hostile review (2026-10-30)
 
@@ -293,6 +401,46 @@ loop. Four manual mutations were rejected by regression tests: bypassing the
 queue watermark, forgetting unsuccessful releases, swallowing emergency Esc,
 and removing the post-release failure-generation comparison. All were reverted.
 Remaining native acceptance blockers are listed above; do not mark 5H complete.
+
+### 5H-4 validation and hostile review (2026-10-30)
+
+Final clean-environment `cargo test -j 2 --offline --workspace`: **1,045 passed,
+12 ignored, zero failed**. Workspace all-targets clippy with `-D warnings` and
+the same five-package Windows/macOS cross-clippy commands listed for 5H-3 pass.
+All Cargo commands use `-j 2`; no formatter was run. Test processes inherit no
+DISPLAY, WAYLAND_DISPLAY or session D-Bus address; desktop tests use their own
+private Xvfb/D-Bus resources. One intermediate run timed out in the existing
+portal lock/sleep test (`locking_and_sleeping_let_go_and_waking_reads_the_screens_again`);
+subsequent complete workspace runs passed. No portal code was changed.
+
+Pure Linux coverage adds 100,000 modifier-flag transitions, a 30,000-event
+production-gate mapper/failure/fence stream, exact outstanding receipt checks,
+synthetic-versus-physical modifier ownership, unsupported-key refusal and
+unreceipted-post fencing. The shared counting-allocator decision test passes
+with zero allocations/deallocations. Four mutation classes were rejected:
+accepting an unsettled empty fence, inverting the modifier suppression mask,
+admitting Caps Lock and accepting non-outstanding receipts. The modifier mutant
+was repeated against the final synthetic-flag regression. All mutants were reverted.
+
+Hostile review tightened post-fence health checks, initial OS-owned key
+baselines, shutdown timeout exit, worker-to-capture failure notification,
+synthetic flag sanitization and permission failures before posting. A failed
+pre-post attempt does not invent an outstanding post; an actually uncertain
+post still requires receipts and retained release ownership to recover.
+
+The extra macOS **daemon** (`one-mk`) cross-check fails before Rust checking in
+`ring`'s C build: the available Linux `cc` rejects Apple's `-arch`,
+`-mmacosx-version-min` and `-gfull` options. Thus its macOS-only settings/doctor
+call sites are **not cross-checked** here; the input adapter and read-only
+permission probe are cross-checked, and the snapshot builder/report formatting
+are compiled and tested on Linux. This limitation is additional to the missing
+native runtime acceptance, not a successful daemon build.
+
+**5H-4 remains partial**: Caps Lock remapping is not implemented. Native receipt
+traversal, exactly-once delivery, modifier/LED behavior, lifecycle notification
+delivery, IOHID attribution, permission revocation recovery, idle CPU, RSS and
+callback latency remain UNTESTED. No native event tap was installed. Do not
+mark this enterprise-ready or enable it by default.
 
 ### Review regression coverage (5H-2 prerequisites, not native activation)
 

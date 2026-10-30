@@ -55,12 +55,42 @@ struct Inner {
     corr: Correlator,
     capturing: bool,
     timer: Option<CFRetained<CFRunLoopTimer>>,
+    local: Option<crate::macos_localmap::Dispatch>,
 }
 
 /// "Never", for a timer: a century away.
 const NEVER: f64 = 3.0e9;
 
 impl Hid {
+    pub(crate) fn local(&self, dispatch: crate::macos_localmap::Dispatch) {
+        self.finish_local();
+        self.inner.borrow_mut().local = Some(dispatch);
+        self.capture(true);
+    }
+
+    pub(crate) fn local_key(&self, key: crate::localmap_runtime::Key) {
+        let mut inner = self.inner.borrow_mut();
+        let Some(local) = inner.local.as_mut() else { return };
+        local.queue(key);
+        let mut out = Vec::new();
+        inner.corr.hook(Event::Key { code: key.code, down: key.down, device: None }, now_ms(), &mut out);
+        inner.arm();
+        for event in out { self.deliver(&mut inner, event); }
+    }
+
+    pub(crate) fn finish_local(&self) {
+        let mut inner = self.inner.borrow_mut();
+        let mut out = Vec::new();
+        inner.corr.finish(&mut out);
+        for event in out { self.deliver(&mut inner, event); }
+        inner.arm();
+    }
+
+    fn deliver(&self, inner: &mut Inner, event: Event) {
+        if inner.local.as_mut().is_some_and(|local| local.forward(&event)) { return; }
+        let _ = self.tx.send(event);
+    }
+
     /// Starts watching the keyboards and mice on `run_loop` (the capture
     /// thread's). Lives for the rest of the process, like the capture state.
     pub(crate) fn start(tx: mpsc::UnboundedSender<Event>, run_loop: &CFRetained<CFRunLoop>) -> &'static Hid {
@@ -103,6 +133,7 @@ impl Hid {
     /// Capture starts (true) or ends: device input is read only meanwhile.
     pub(crate) fn capture(&self, on: bool) {
         let Ok(mut inner) = self.inner.try_borrow_mut() else { return };
+        let on = on || inner.local.is_some();
         if inner.capturing == on {
             return;
         }
@@ -116,7 +147,7 @@ impl Hid {
             let mut out = Vec::new();
             inner.corr.finish(&mut out);
             for ev in out {
-                let _ = self.tx.send(ev);
+                self.deliver(&mut inner, ev);
             }
             inner.arm();
         }
@@ -131,7 +162,7 @@ impl Hid {
                 inner.corr.hook(ev, now_ms(), &mut out);
                 inner.arm();
                 for ev in out {
-                    let _ = self.tx.send(ev);
+                    self.deliver(&mut inner, ev);
                 }
             }
             _ => {
@@ -141,6 +172,7 @@ impl Hid {
     }
 
     fn devices(&self, inner: &Inner) {
+        if let Some(local) = &inner.local { local.fail(); }
         let _ = self.tx.send(Event::Devices(inner.table.iter().map(|(_, d)| d.clone()).collect()));
     }
 }
@@ -231,7 +263,7 @@ unsafe extern "C-unwind" fn on_removed(context: *mut c_void, _result: i32, _send
         inner.corr.forget(gone.id, &mut out);
         // What waited for the device goes before the news that it is gone.
         for ev in out {
-            let _ = hid.tx.send(ev);
+            hid.deliver(&mut inner, ev);
         }
         inner.arm();
         hid.devices(&inner);
@@ -272,7 +304,7 @@ unsafe extern "C-unwind" fn on_value(context: *mut c_void, _result: i32, sender:
         }
         inner.arm();
         for ev in out {
-            let _ = hid.tx.send(ev);
+            hid.deliver(&mut inner, ev);
         }
     }));
 }
@@ -286,7 +318,7 @@ unsafe extern "C-unwind" fn on_timer(_timer: *mut CFRunLoopTimer, info: *mut c_v
         inner.corr.tick(now_ms(), &mut out);
         inner.arm();
         for ev in out {
-            let _ = hid.tx.send(ev);
+            hid.deliver(&mut inner, ev);
         }
     }));
 }

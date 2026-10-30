@@ -1478,12 +1478,12 @@ fn local_rules_note() -> &'static str {
     } else if cfg!(target_os = "linux") {
         "Local key rules are not available on Linux; stored rules remain inactive."
     } else {
-        "Local key rules inactive: macOS integration incomplete; EXPERIMENTAL, native macOS UNTESTED (compile-checked only)."
+        "EXPERIMENTAL, native macOS UNTESTED (compile-checked only); default OFF. Activation requires event-tap receipts. Caps Lock/Fn/media/function-key rules are refused; session/power/Secure Input failures require release and reload."
     }
 }
 
 async fn local_runtime_status(dir: &Path) {
-    if !cfg!(windows) { return; }
+    if !cfg!(any(windows, target_os = "macos")) { return; }
     let reply = tokio::time::timeout(Duration::from_millis(1500), crate::control::request(dir, crate::control::Request::Status)).await;
     let status = match reply {
         Ok(Ok(Some(text))) => crate::manage::Status::decode(&text),
@@ -1491,7 +1491,7 @@ async fn local_runtime_status(dir: &Path) {
     };
     match status.as_ref().and_then(|status| status.input.iter().find(|line| line.starts_with("Local key rules "))) {
         Some(line) => println!("{line}"),
-        None => println!("Local key rules inactive: no native backend acknowledgement; native Windows UNTESTED (compile-checked only)."),
+        None => println!("Local key rules inactive: no native backend acknowledgement; native Windows/macOS UNTESTED (compile-checked only)."),
     }
 }
 
@@ -1504,7 +1504,7 @@ fn list_keymap(s: &TuningSettings) {
     for r in &s.keymap.rule {
         let state = if *r.scope.target() == Scope::Local {
             if cfg!(target_os = "linux") { " [inactive: local key rules are not available on Linux]" }
-            else if cfg!(windows) { " [experimental; activation requires backend acknowledgement; native Windows UNTESTED]" }
+            else if cfg!(any(windows, target_os = "macos")) { " [experimental; activation requires backend acknowledgement; native Windows/macOS UNTESTED]" }
             else { " [inactive: native integration incomplete; experimental, untested on real hardware]" }
         } else { "" };
         println!("  {}{}{state}", r.describe(), where_suffix(&r.scope, &r.app));

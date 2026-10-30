@@ -33,6 +33,10 @@ pub mod system;
 mod macos;
 #[cfg(target_os = "macos")]
 mod macos_devices;
+#[cfg(target_os = "macos")]
+mod macos_localmap;
+#[cfg(any(target_os = "macos", test))]
+mod macos_localmap_logic;
 #[cfg(any(target_os = "macos", test))]
 mod macos_logic;
 #[cfg(target_os = "linux")]
@@ -165,7 +169,7 @@ pub enum Event {
 /// From the daemon to the capture side.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CaptureCmd {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     LocalRules { rules: Option<std::sync::Arc<localmap_runtime::Rules>>, inactive: Option<String> },
     /// Edge segments that lead to a connected peer, in the coordinates of
     /// the last `Event::Desktop`; replaces the previous ones. Only these
@@ -229,6 +233,11 @@ pub enum Kind {
     Wlroots,
     /// Captures nothing and only logs injected input.
     Null,
+}
+
+#[cfg(target_os = "macos")]
+pub fn macos_permissions() -> (bool, bool) {
+    (macos::ax_trusted(false), objc2_core_graphics::CGPreflightListenEventAccess())
 }
 
 /// Opens a backend. `state_dir` holds things like permission tokens so the

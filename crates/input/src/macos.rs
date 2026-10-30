@@ -27,6 +27,8 @@
 
 use crate::common_logic::{Controlled, KeyRepeat, LocalInputGate, drain_coalesced, is_repeatable, now_ms};
 use crate::macos_logic::{self as logic, MacScroll};
+use crate::localmap_handoff::Destination;
+use crate::macos_localmap::Local;
 use crate::{Backend, CaptureCmd, Event, Inject};
 use anyhow::Result;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
@@ -101,7 +103,7 @@ unsafe extern "C" {
 
 /// Accessibility permission (needed to post events and to swallow them in
 /// an event tap). With `prompt`, macOS shows its own "allow" dialog.
-fn ax_trusted(prompt: bool) -> bool {
+pub(crate) fn ax_trusted(prompt: bool) -> bool {
     // The value of kAXTrustedCheckOptionPrompt; using the literal avoids
     // linking a data symbol.
     let key = CFString::from_static_str("AXTrustedCheckOptionPrompt");
@@ -118,7 +120,7 @@ unsafe extern "C" {
 /// A password field or an app like Terminal with "Secure Keyboard Entry"
 /// has Secure Input on: our event tap then gets no key events, so typing
 /// on a peer would silently go nowhere.
-fn secure_input() -> bool {
+pub(crate) fn secure_input() -> bool {
     // SAFETY: no arguments; only reads state.
     unsafe { IsSecureEventInputEnabled() != 0 }
 }
@@ -128,7 +130,7 @@ const SECURE_INPUT_MESSAGE: &str = "A password field or an app using Secure Keyb
      (or turn off Secure Keyboard Entry in that app) to control your other computers.";
 
 /// The screen is locked, or another user's session is on the console.
-fn session_inactive() -> bool {
+pub(crate) fn session_inactive() -> bool {
     let Some(dict) = CGSessionCopyCurrentDictionary() else { return false };
     let get = |key: &'static str| -> Option<bool> {
         let key = CFString::from_static_str(key);
@@ -186,13 +188,15 @@ impl Problem {
 
 // ---------------------------------------------------------------- capture
 
-enum Msg {
+pub(crate) enum Msg {
     Cmd(CaptureCmd),
     Displays,
     /// The screen was locked.
     Locked,
     /// The screen was unlocked.
     Unlocked,
+    Local,
+    Session(bool),
     Quit,
 }
 
@@ -210,14 +214,22 @@ unsafe impl Sync for Waker {}
 /// Messages for the capture thread, posted from the command thread and
 /// from the display reconfiguration callback.
 #[derive(Default)]
-struct Inbox {
+pub(crate) struct Inbox {
     queue: Mutex<Vec<Msg>>,
     waker: OnceLock<Waker>,
+    interlock: OnceLock<crate::macos_localmap::Interlock>,
 }
 
 impl Inbox {
-    fn post(&self, msg: Msg) {
+    pub(crate) fn post(&self, msg: Msg) {
+        if matches!(msg, Msg::Locked | Msg::Unlocked | Msg::Session(_)) && let Some(interlock) = self.interlock.get() {
+            interlock.fail();
+        }
         self.queue.lock().unwrap_or_else(|e| e.into_inner()).push(msg);
+        self.signal();
+    }
+
+    pub(crate) fn signal(&self) {
         if let Some(w) = self.waker.get() {
             w.source.signal();
             w.run_loop.wake_up();
@@ -269,6 +281,9 @@ struct State {
     problem: Option<Problem>,
     asked_accessibility: bool,
     asked_input_monitoring: bool,
+    local_rules: Option<Local>,
+    session_paused: bool,
+    quitting: bool,
 }
 
 impl State {
@@ -290,6 +305,9 @@ impl State {
             problem: None,
             asked_accessibility: false,
             asked_input_monitoring: false,
+            local_rules: None,
+            session_paused: false,
+            quitting: false,
         }
     }
 
@@ -378,6 +396,22 @@ fn capture_thread(
     };
     run_loop.add_source(Some(&source), modes);
     let _ = inbox.waker.set(Waker { source, run_loop: run_loop.clone() });
+    let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+    let notifications = workspace.notificationCenter();
+    for (name, active) in [
+        ("NSWorkspaceSessionDidResignActiveNotification", false),
+        ("NSWorkspaceSessionDidBecomeActiveNotification", true),
+        ("NSWorkspaceWillSleepNotification", false),
+        ("NSWorkspaceDidWakeNotification", true),
+    ] {
+        let lifecycle = inbox.clone();
+        let callback = block2::RcBlock::new(move |_: NonNull<objc2_foundation::NSNotification>| {
+            lifecycle.post(Msg::Session(active));
+        });
+        let name = objc2_foundation::NSString::from_str(name);
+        let observer = unsafe { notifications.addObserverForName_object_queue_usingBlock(Some(&name), None, None, &callback) };
+        std::mem::forget(observer);
+    }
 
     // Display changes. The callback may run on another thread, so it only
     // posts to the inbox.
@@ -435,10 +469,82 @@ fn capture_thread(
 
     ctx.tick();
     CFRunLoop::run();
+    drop(ctx.st.borrow_mut().local_rules.take());
     tracing::debug!("input capture stopped");
 }
 
 impl Ctx {
+    fn local_status(&self, status: &str) {
+        let _ = self.tx.send(Event::Status {
+            part: "local-key-rules",
+            problem: Some(format!("Local key rules {status}; EXPERIMENTAL, native macOS UNTESTED (compile-checked only)")),
+        });
+    }
+
+    fn local_drain(&self, st: &mut State) {
+        if let Some(local) = st.local_rules.as_mut() {
+            while let Some(key) = local.admission.pop() { self.hid.local_key(key); }
+        }
+    }
+
+    fn local_fence(&self, st: &mut State, destination: Destination) {
+        let Some(local) = st.local_rules.as_ref() else { return };
+        local.gate.close();
+        self.local_drain(st);
+        self.hid.finish_local();
+        if let Some(local) = st.local_rules.as_mut() { local.fence(destination); }
+    }
+
+    fn local_pause(&self, st: &mut State, reason: &str) {
+        if let Some(local) = st.local_rules.as_mut() { local.admission.fail(); }
+        self.local_drain(st);
+        self.hid.finish_local();
+        if let Some(local) = st.local_rules.as_mut() {
+            local.fail();
+            local.inactive = reason.strip_prefix("inactive: ").unwrap_or(reason).into();
+            self.local_status(reason);
+        }
+    }
+
+    fn local_pump(&self, st: &mut State) {
+        self.local_drain(st);
+        if self.tx.is_closed() && st.local_rules.as_ref().is_some_and(|local| !local.paused) {
+            self.local_pause(st, "inactive: daemon disconnected");
+        }
+        let Some(local) = st.local_rules.as_mut() else { return };
+        let mut action = None;
+        while let Some(next) = local.action() { action = Some(next); }
+        let feedback = local.admission.feedback();
+        if action.is_some() || local.pending.is_some_and(|(_, start, _)| start.elapsed() >= crate::localmap_runtime::LEASE * 4)
+            || !feedback.healthy() && local.pending.is_none_or(|(_, _, health)| health != feedback.token()) && !local.paused
+        {
+            self.local_pause(st, "inactive: worker/receipt failure or physical shortcut; release all keys and reload to recover");
+            if st.quitting {
+                self.local_status("inactive: shutdown fence failed or expired; native recovery required");
+                if let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
+            }
+        } else if let Some(done) = local.completion() {
+            if st.quitting {
+                if !done.success { self.local_status("inactive: shutdown release receipts failed; native recovery required"); }
+                if let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
+                return;
+            }
+            if !done.success {
+                self.local_pause(st, "inactive: injection receipt/fence failed; reload to retry releases");
+            } else if done.destination == Destination::Remote {
+                let activation = local.activation.take();
+                self.local_status("inactive: forwarding to another computer");
+                if let Some((side, pos)) = activation { self.start_now(st, side, pos); }
+            } else if local.enabled && !local.paused {
+                self.local_status(&format!("active ({})", local.snapshots.load().count));
+            } else {
+                self.local_status(&format!("inactive: {}", local.inactive));
+            }
+        }
+        if let Some(action) = action { let _ = self.tx.send(Event::Hotkey(action)); }
+        self.update_timer(st);
+    }
+
     /// Runs once a second: keeps the screen list current, and waits for
     /// permission before installing the event tap.
     fn tick(&'static self) {
@@ -448,6 +554,10 @@ impl Ctx {
         st.last_tick = now;
         st.refresh_desktop(&self.tx);
         self.check_permissions(&mut st);
+        if st.local_rules.is_some() && (slept || secure_input() || session_inactive() || st.problem.is_some()) {
+            self.local_pause(&mut st, "inactive: secure input, sleep, session or permission change; release keys and reload");
+        }
+        self.local_pump(&mut st);
         if st.active {
             if slept {
                 tracing::info!("the Mac slept while captured; giving the pointer back");
@@ -465,7 +575,8 @@ impl Ctx {
 
     /// Schedules the 1 s check only while it has something to watch.
     fn update_timer(&self, st: &mut State) {
-        let want = st.problem.is_some() || st.tap.is_none() || st.active;
+        let want = st.problem.is_some() || st.tap.is_none() || st.active
+            || st.local_rules.as_ref().is_some_and(|local| local.pending.is_some() || local.held());
         if want == st.timer_on {
             return;
         }
@@ -495,10 +606,10 @@ impl Ctx {
 
         let problem = if !ax {
             Some(Problem::Accessibility)
-        } else if st.tap.is_some() {
-            None
         } else if !CGPreflightListenEventAccess() {
             Some(Problem::InputMonitoring)
+        } else if st.tap.is_some() {
+            None
         } else if let Err(e) = self.install_tap(st) {
             tracing::warn!("event tap: {e}");
             Some(Problem::TapFailed)
@@ -514,6 +625,7 @@ impl Ctx {
                 tracing::warn!(?p, "input permission missing");
                 // Permission revoked mid-capture: give the pointer back.
                 self.end(st);
+                self.local_pause(st, "inactive: Accessibility or Input Monitoring permission missing");
                 let _ = self.tx.send(Event::Error(p.message().into()));
                 match p {
                     Problem::Accessibility if !st.asked_accessibility => {
@@ -586,21 +698,66 @@ impl Ctx {
             return;
         };
         match msg {
+            Msg::Cmd(CaptureCmd::LocalRules { rules, inactive }) => {
+                if st.local_rules.is_none() && rules.is_some() {
+                    match Local::start(self.inbox.clone()) {
+                        Ok((mut local, dispatch)) => {
+                            let _ = self.inbox.interlock.set(local.interlock());
+                            for code in 0..128u16 { st.set_local_key(code, CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, code)); }
+                            local.baseline((0..128u16).filter(|&code| st.local_keys[usize::from(code)]).filter_map(logic::mac_to_evdev));
+                            self.hid.local(dispatch);
+                            st.local_rules = Some(local);
+                        }
+                        Err(error) => { self.local_status(&format!("inactive: worker startup failed: {error}")); return; }
+                    }
+                }
+                let rules = rules.unwrap_or_default();
+                let supported = Local::supported(&rules);
+                let active = st.tap.is_some() && st.problem.is_none() && !st.session_paused && !session_inactive() && !secure_input();
+                if st.local_rules.as_ref().is_some_and(|local| local.paused)
+                    && (0..128).any(|code| CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, code)) {
+                    self.local_pause(&mut st, "inactive: release all physical keys before reloading");
+                    return;
+                }
+                if let Some(local) = st.local_rules.as_mut() {
+                    local.gate.close();
+                    if local.paused { local.baseline(std::iter::empty()); }
+                    local.enabled = supported && rules.count > 0;
+                    local.paused = !active;
+                    local.inactive = if !supported { "Caps Lock, Fn, media/function keys and actions are not supported by the experimental local adapter".into() }
+                        else { inactive.unwrap_or_else(|| "preference off or no local rules".into()) };
+                    local.snapshots.replace(if supported { rules } else { Arc::default() });
+                    if active {
+                        let destination = if st.active { Destination::Remote } else { Destination::Local };
+                        self.local_fence(&mut st, destination);
+                    } else { self.local_pause(&mut st, "inactive: permissions, secure input or session state prevents activation"); }
+                } else { self.local_status("inactive: preference off"); }
+            }
+            Msg::Local => self.local_pump(&mut st),
+            Msg::Session(active) => {
+                st.session_paused = !active;
+                self.local_pause(&mut st, "inactive: session/power transition; release all keys and reload");
+                self.end(&mut st);
+            }
             Msg::Cmd(CaptureCmd::SetEdges(edges)) => st.edges = edges,
             Msg::Cmd(CaptureCmd::Release { id, pos }) => {
                 // A release for an earlier activation is stale.
                 if st.active && st.id == id {
                     st.deactivate(pos);
                     self.hid.capture(false);
+                    self.local_fence(&mut st, Destination::Local);
                     self.update_timer(&mut st);
                 }
             }
             Msg::Displays => st.refresh_desktop(&self.tx),
             Msg::Locked => {
+                st.session_paused = true;
+                self.local_pause(&mut st, "inactive: screen locked; unlock, release all keys and reload");
                 let _ = self.tx.send(Event::ScreenLocked(true));
                 self.end(&mut st);
             }
             Msg::Unlocked => {
+                st.session_paused = false;
                 let _ = self.tx.send(Event::ScreenLocked(false));
             }
             Msg::Cmd(CaptureCmd::Activate { side }) => {
@@ -613,11 +770,15 @@ impl Ctx {
                 }
             }
             Msg::Quit => {
+                self.local_pause(&mut st, "inactive: shutting down");
                 if st.active || st.cursor_hidden {
                     st.deactivate(None);
                     self.hid.capture(false);
                 }
-                if let Some(rl) = CFRunLoop::current() {
+                st.quitting = true;
+                if st.local_rules.is_some() {
+                    self.local_fence(&mut st, Destination::Local);
+                } else if let Some(rl) = CFRunLoop::current() {
                     rl.stop();
                 }
             }
@@ -628,18 +789,45 @@ impl Ctx {
     fn on_event(&self, ty: CGEventType, ev: &CGEvent) -> bool {
         if ty == CGEventType::TapDisabledByTimeout || ty == CGEventType::TapDisabledByUserInput {
             tracing::debug!(?ty, "event tap disabled by macOS; re-enabling");
-            if let Ok(st) = self.st.try_borrow()
-                && let Some(tap) = &st.tap
-            {
-                CGEvent::tap_enable(tap, true);
+            if let Ok(mut st) = self.st.try_borrow_mut() {
+                self.local_pause(&mut st, "inactive: macOS disabled the event tap; release all keys and reload");
+                self.end(&mut st);
+                if let Some(tap) = &st.tap { CGEvent::tap_enable(tap, true); }
             }
             return true;
         }
         let e = Some(ev);
+        if let Some(sequence) = crate::macos_localmap_logic::receipt(CGEvent::integer_value_field(e, CGEventField::EventSourceUserData)) {
+            if let Ok(st) = self.st.try_borrow() && let Some(local) = &st.local_rules { local.receipt(sequence); }
+            return true;
+        }
         if CGEvent::integer_value_field(e, CGEventField::EventSourceUserData) == OUR_EVENTS {
             return true;
         }
         let Ok(mut st) = self.st.try_borrow_mut() else { return true };
+        let key = match ty {
+            CGEventType::KeyDown | CGEventType::KeyUp => logic::mac_to_evdev(keycode(ev)).map(|code| (code, ty == CGEventType::KeyDown)),
+            CGEventType::FlagsChanged => logic::modifier_down(keycode(ev), CGEvent::flags(e).0)
+                .and_then(|down| logic::mac_to_evdev(keycode(ev)).map(|code| (code, down))),
+            _ => None,
+        };
+        if let Some((code, down)) = key {
+            let injected = CGEvent::integer_value_field(e, CGEventField::EventSourceStateID) != i64::from(CGEventSourceStateID::HIDSystemState.0);
+            if !injected && st.local_rules.is_some() && (secure_input() || st.session_paused) {
+                self.local_pause(&mut st, "inactive: Secure Input or inactive session; release all keys and reload");
+            }
+            let remote = st.active;
+            if let Some(local) = st.local_rules.as_mut() {
+                let swallowed = local.hook(code, down, injected, CGEvent::flags(e).0, remote);
+                self.inbox.signal();
+                if swallowed { return false; }
+                CGEvent::set_flags(e, CGEventFlags(local.flags(CGEvent::flags(e).0)));
+            }
+            if injected { return true; }
+        }
+        if key.is_none() && ty.0 != NX_SYSDEFINED && let Some(local) = st.local_rules.as_ref() {
+            CGEvent::set_flags(e, CGEventFlags(local.flags(CGEvent::flags(e).0)));
+        }
         if st.active {
             return self.on_active(&mut st, ty, ev);
         }
@@ -698,6 +886,21 @@ impl Ctx {
     /// Starts capturing for `side`, telling the daemon which modifiers are
     /// held (for modifier-to-cross). False if the daemon is gone.
     fn start(&self, st: &mut State, side: Side, pos: Pos) -> bool {
+        if let Some(local) = st.local_rules.as_mut() {
+            if local.pending.is_some() || local.activation.is_some() { return false; }
+            local.activation = Some((side, pos));
+            self.local_fence(st, Destination::Remote);
+            return false;
+        }
+        self.start_now(st, side, pos)
+    }
+
+    fn start_now(&self, st: &mut State, side: Side, pos: Pos) -> bool {
+        if secure_input() || session_inactive() || st.session_paused || st.problem.is_some()
+            || st.local_rules.as_ref().is_some_and(|local| !local.admission.feedback().healthy()) {
+            self.local_pause(st, "inactive: capture blocked by session, Secure Input or permission state");
+            return false;
+        }
         let held = (0..128u16).filter(|&k| st.local_keys[usize::from(k)]).filter_map(logic::mac_to_evdev);
         let _ = self.tx.send(Event::Modifiers(Mods::from_keys(held)));
         let id = st.id.wrapping_add(1);
@@ -841,7 +1044,10 @@ unsafe extern "C-unwind" fn on_tap(
 ) -> *mut CGEvent {
     // SAFETY: `info` is the leaked `Ctx`; the event is valid for this call.
     let (ctx, ev) = unsafe { (&*(info as *const Ctx), event.as_ref()) };
-    let keep = std::panic::catch_unwind(AssertUnwindSafe(|| ctx.on_event(ty, ev))).unwrap_or(true);
+    let keep = std::panic::catch_unwind(AssertUnwindSafe(|| ctx.on_event(ty, ev))).unwrap_or_else(|_| {
+        if let Ok(mut st) = ctx.st.try_borrow_mut() { ctx.local_pause(&mut st, "inactive: event tap callback panicked; reload to recover"); }
+        true
+    });
     if keep { event.as_ptr() } else { null_mut() }
 }
 
@@ -852,6 +1058,7 @@ unsafe extern "C-unwind" fn on_inbox(info: *mut c_void) {
         for msg in ctx.inbox.take() {
             ctx.handle(msg);
         }
+        if let Ok(mut st) = ctx.st.try_borrow_mut() { ctx.local_pump(&mut st); }
     }));
 }
 
