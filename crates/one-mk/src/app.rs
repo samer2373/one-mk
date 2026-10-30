@@ -1087,6 +1087,7 @@ impl App {
     /// Moves the remote pointer, coalescing motion that queued up meanwhile.
     /// Returns the event that ended the run, to be handled next.
     fn on_motion(&mut self, dx: f64, dy: f64, events: &mut mpsc::UnboundedReceiver<Event>) -> Option<Event> {
+        if self.mouse_mode_motion(dx, dy) { return None; }
         let r = self.remote.as_mut()?;
         let tune = &r.tune;
         let c = coalesce(&mut r.cursor, (dx, dy), events, |dx, dy| tune.motion(dx, dy));
@@ -1977,6 +1978,7 @@ impl App {
     /// The OS says this display went to sleep (or the computer is
     /// suspending), or woke.
     fn on_power(&mut self, ev: PowerEvent) {
+        if ev == PowerEvent::DisplayAsleep(true) { self.cancel_mouse_modes(); }
         match ev {
             PowerEvent::DisplayAsleep(true) if self.visiting() => {
                 tracing::debug!("display asleep during a visit; not asking the others to sleep (sleep sync)");

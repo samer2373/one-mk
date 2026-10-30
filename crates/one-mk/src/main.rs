@@ -327,6 +327,13 @@ enum Cmd {
     /// Scrolling on the computers this one controls: direction, natural,
     /// speed, smooth or by notches, modifier keys.
     Scroll(tuning::ScrollArgs),
+    /// Click a button, then move away to scroll the other computer continuously.
+    Autoscroll(tuning::AutoscrollArgs),
+    /// Hold a mouse button and swipe to type a shortcut on the other computer.
+    Gestures {
+        #[command(subcommand)]
+        cmd: Option<tuning::GesturesCmd>,
+    },
     /// Remap mouse buttons on the computers this one controls.
     Buttons {
         #[command(subcommand)]
@@ -529,6 +536,8 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Pointer(args) => tuning::pointer_command(&dir, args).await,
             Cmd::PointerOverlay { mode } => pointeroverlay::command(&dir, mode.as_deref()).await,
             Cmd::Scroll(args) => tuning::scroll_command(&dir, args).await,
+            Cmd::Autoscroll(args) => tuning::autoscroll_command(&dir, args).await,
+            Cmd::Gestures { cmd } => tuning::gestures_command(&dir, cmd).await,
             Cmd::Buttons { cmd } => tuning::buttons(&dir, cmd).await,
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;

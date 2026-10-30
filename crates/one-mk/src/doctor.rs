@@ -624,11 +624,11 @@ pub fn tuning_check(t: Option<&Tuning>) -> Check {
         None => Outcome::skip("settings.toml can't be read (see the settings check)."),
         Some(Tuning { summary: None, .. }) => Outcome::skip("No key, button, pointer or scroll rules are set."),
         Some(Tuning { summary: Some(s), problems, notes }) if problems.is_empty() => {
-            Outcome::pass(notes.iter().fold(s.clone(), |all, n| format!("{all} {n}.")))
+            Outcome::pass(notes.iter().fold(s.clone(), |all, n| format!("{all} {}.", n.trim_end_matches('.'))))
         }
         Some(Tuning { problems, notes, .. }) => Outcome::warn(
             format!("{}.", problems.iter().chain(notes).cloned().collect::<Vec<_>>().join("; ")),
-            "See `one-mk keymap check`, and fix or remove those rules (`one-mk keymap`, `buttons`, `pointer`, `scroll`, or [input] in settings.toml).",
+            "See `one-mk keymap check`, and fix or remove those rules (`one-mk keymap`, `buttons`, `pointer`, `scroll`, `autoscroll`, `gestures`, or [input] in settings.toml).",
         ),
     };
     check("input-tuning", "Input tuning", out)
@@ -654,7 +654,8 @@ fn probe_tuning(dir: &Path) -> Option<Tuning> {
         .map(|t| t.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone(), d.os)).collect::<Vec<_>>())
         .unwrap_or_default();
     let linux = paired.iter().any(|(.., o)| *o == one_mk_proto::os::LINUX);
-    let notes = if input.uses_apps() && linux { vec![WAYLAND_APPS.to_owned()] } else { Vec::new() };
+    let mut notes = if input.uses_apps() && linux { vec![WAYLAND_APPS.to_owned()] } else { Vec::new() };
+    notes.extend(input.mouse_mode_note());
     Some(Tuning { summary: input.summary(), problems: input.check(&paired), notes })
 }
 
