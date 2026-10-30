@@ -4,6 +4,7 @@
 //! through it.
 
 mod cells;
+mod clipboard_history;
 mod keys;
 mod pages;
 mod place;
@@ -60,7 +61,7 @@ impl Tab {
     }
     /// Tabs that mean something while one·mk is off.
     fn when_off(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Keys | Tab::Health | Tab::Advanced)
+        matches!(self, Tab::Desk | Tab::Files | Tab::Keys | Tab::Health | Tab::Advanced)
     }
 }
 const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"), (Side::Top, "Above"), (Side::Bottom, "Below")];
@@ -155,6 +156,7 @@ enum Cell {
     Head(String, String),
     Inspector(Option<String>),
     Clipboard,
+    ClipboardHistory,
     /// This computer's switches.
     Controls,
     FilesHead(String, String),
@@ -175,6 +177,7 @@ pub struct App {
     rx: Receiver<Event>,
     /// `None` until the first look at the daemon.
     status: Option<Option<Status>>,
+    clipboard_history: Option<Result<Vec<crate::daemon::HistoryItem>, String>>,
     autostart: Option<bool>,
     scene: Scene,
     tab: Tab,
@@ -210,7 +213,7 @@ pub struct App {
     busy: Vec<Job>,
     /// The computer the panel describes (an id, or "me").
     selected: Option<String>,
-    slots: [Slot; 3],
+    slots: [Slot; 4],
     /// Whether the files were moving over the window (so the pointer
     /// position is real, not left over from before the drag).
     drop_pos_fresh: bool,
@@ -393,6 +396,7 @@ impl App {
             link,
             rx,
             status: None,
+            clipboard_history: None,
             autostart: None,
             scene,
             tab,
@@ -417,7 +421,7 @@ impl App {
             active: "me".into(),
             busy: vec![],
             selected: None,
-            slots: [slot(), slot(), slot()],
+            slots: [slot(), slot(), slot(), slot()],
             drop_pos_fresh: false,
             arrowed: false,
             arrow_down: false,
@@ -460,8 +464,14 @@ impl App {
     fn handle_events(&mut self, now: f64) {
         while let Ok(e) = self.rx.try_recv() {
             match e {
+                Event::ClipboardHistory(history) => {
+                    if let Ok(items) = &history { self.fonts.cover(&self.ctx, items.iter().map(|item| item.preview.as_str())); }
+                    self.clipboard_history = Some(history);
+                }
                 Event::Status(s) => {
+                    let changed = self.running().map(|status| (status.clipboard_history, status.clipboard_history_revision)) != s.as_ref().map(|status| (status.clipboard_history, status.clipboard_history_revision));
                     self.status = Some(s);
+                    if self.tab == Tab::Files && (changed || self.clipboard_history.is_none()) { self.link.history(); }
                     let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).collect());
                     self.fonts.cover(&self.ctx, names.iter().map(String::as_str));
                     // A measurement belongs to one connection: once that
@@ -1430,6 +1440,7 @@ impl App {
     fn set_tab(&mut self, tab: Tab) {
         if tab != self.tab {
             self.tab = tab;
+            if tab == Tab::Files { self.clipboard_history = None; self.link.history(); }
             self.tab_at = self.now;
             if tab == Tab::Health {
                 self.doctor_on_open();
@@ -1504,13 +1515,19 @@ impl App {
             }
             Tab::Health | Tab::Advanced | Tab::Keys => vec![],
             Tab::Files => {
-                let any = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
+                let any = self.running().is_some_and(|status| status.peers.iter().any(|peer| peer.online));
                 let sub = if any {
                     "Drag files or folders onto a connected computer on the desk. They arrive in its Downloads/one-mk folder."
                 } else {
                     "No computer is connected right now. Files can go to one once it's on and connected."
                 };
-                vec![(Cell::FilesHead("Drop files on a computer".into(), sub.into()), cell(0, 1)), (Cell::Clipboard, cell(1, 2)), (Cell::FilesSettings, cell(2, 3))]
+                let row = |position, end| {
+                    let mut area = cell(position, end);
+                    area.max.y = rect.top() + PANEL_H - PAD;
+                    area
+                };
+                let history = Rect::from_min_max(pos2(rect.left() + PAD, rect.top() + PANEL_H + PAD), pos2(rect.right() - PAD, rect.bottom() - PAD));
+                vec![(Cell::FilesHead("Drop files on a computer".into(), sub.into()), row(0, 1)), (Cell::Clipboard, row(1, 2)), (Cell::FilesSettings, row(2, 3)), (Cell::ClipboardHistory, history)]
             }
         }
     }
@@ -1520,11 +1537,12 @@ impl App {
         p.rect_filled(rect, 0.0, PANEL);
         p.hline(rect.x_range(), rect.top(), Stroke::new(1.0, LINE));
         let cells = self.cells(rect);
-        for (_, r) in cells.iter().skip(1) {
-            p.vline(r.left() - PAD, rect.top() + 1.0..=rect.bottom(), Stroke::new(1.0, LINE));
+        for (_, r) in cells.iter().skip(1).filter(|(_, area)| area.left() > rect.left() + PAD) {
+            p.vline(r.left() - PAD, rect.top() + 1.0..=r.bottom() + PAD, Stroke::new(1.0, LINE));
         }
+        if self.tab == Tab::Files { p.hline(rect.x_range(), rect.top() + PANEL_H, Stroke::new(1.0, LINE)); }
         let opening = self.scene.opening(now);
-        for k in 0..3 {
+        for k in 0..self.slots.len() {
             let next = cells.get(k).cloned();
             let slot = &mut self.slots[k];
             if slot.cell.as_ref().map(|c| &c.0) != next.as_ref().map(|c| &c.0) {
@@ -1539,7 +1557,7 @@ impl App {
         let out = motion::fade(0.09) as f64;
         // Under a sheet the panel steps back.
         let dim = tween(ui.ctx(), Id::unique("panel-dim"), if self.sheet_open() { 0.3 } else { 1.0 }, motion::fade(0.2), motion::out_cubic);
-        for k in 0..3 {
+        for k in 0..self.slots.len() {
             let (at, was, cell) = (self.slots[k].at, self.slots[k].was.clone(), self.slots[k].cell.clone());
             let t = now - at;
             if let Some((c, r)) = was.filter(|_| t < out) {
@@ -1578,6 +1596,7 @@ impl App {
             }
             Cell::Inspector(sel) => self.inspector(ui, r, sel.clone(), now),
             Cell::Clipboard => self.clipboard_cell(ui, r),
+            Cell::ClipboardHistory => self.clipboard_history_cell(ui, r),
             Cell::Controls => self.controls(ui, r),
             Cell::FilesHead(t, s) => self.files_head(ui, r, t, s),
             Cell::FilesSettings => self.files_settings(ui, r),
@@ -2134,7 +2153,8 @@ impl eframe::App for App {
         self.shortcuts(ui);
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, GROUND);
-        let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - PANEL_H), full.max);
+        let panel_height = if self.tab == Tab::Files { 390.0 } else { PANEL_H };
+        let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - panel_height), full.max);
         let desk = Rect::from_min_max(full.min, pos2(full.right(), panel.top()));
         let top = Rect::from_min_size(full.min, vec2(full.width(), TOP_H));
         // Files let go over a page without the desk: ask where they go.

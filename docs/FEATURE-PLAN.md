@@ -410,7 +410,7 @@ tests, cross-review by the other model, full validation before merging.
 
 | ID | Task | Author | Status |
 |---|---|---|---|
-| 5A | Clipboard history and a hotkey to paste from another computer's clipboard (must skip sensitive copies) | Codex | todo |
+| 5A | Clipboard history and a hotkey to paste from another computer's clipboard (must skip sensitive copies) | Codex | Partial: bounded memory-first history, opt-in private unencrypted saves, CLI/window and fetch shortcut implemented and Linux Xvfb/null validated. Native Windows/macOS local-copy monitoring and Windows fetch toasts remain missing; real hotkey/notification and native Wayland runtime remain untested. arboard cannot detect native password markers; X11 focused-app exclusion is best effort. Full workspace tests blocked by the unmodified portal reconnect test. See CLIPBOARD-HISTORY-QA.md. |
 | 5B | Live latency graph per computer in the window (event-driven; no polling when the window is closed) | Claude | todo |
 | 5C | Broadcast input to all connected computers (explicit, visible, auto-off, no stuck keys) | Claude | todo |
 | 5D | Edge pushes where no computer sits: pointer wrap to the opposite edge, and push-toward-it layout learning | Claude | todo |
