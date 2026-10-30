@@ -156,7 +156,9 @@ unsafe fn present(root: &Path) -> Result<(), String> {
             if !error.is_null() { free_error(error); }
             return Err(detail);
         }
-        let description = CString::new(format!("filesrc location=\"{}/fixture.webm\" ! matroskademux ! vp9dec threads=2 ! videoconvert ! video/x-raw,format=BGRx ! waylandsink sync=true", root.display())).map_err(|error| error.to_string())?;
+        let own_surface = std::env::var("ONE_MK_WALL_RISK_SINK").as_deref() != Ok("wayland");
+        let sink = if own_surface { "appsink name=frames sync=true max-buffers=1" } else { "waylandsink sync=true" };
+        let description = CString::new(format!("filesrc location=\"{}/fixture.webm\" ! matroskademux ! vp9dec threads=2 ! videoconvert ! video/x-raw,format=BGRx ! {sink}", root.display())).map_err(|error| error.to_string())?;
         let pipeline = parse(description.as_ptr(), &mut error);
         if !error.is_null() || pipeline.is_null() {
             let detail = error_text(error);
@@ -174,6 +176,9 @@ unsafe fn present(root: &Path) -> Result<(), String> {
             return Err("GStreamer refused PLAYING".into());
         }
         println!("risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log");
+        if own_surface {
+            return crate::surface::present(root, &gstreamer, pipeline.pipeline);
+        }
         let message = pop(pipeline.bus, 45_000_000_000, 2);
         if !message.is_null() {
             let mut debug = ptr::null_mut();

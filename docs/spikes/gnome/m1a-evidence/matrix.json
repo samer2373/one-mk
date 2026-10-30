@@ -1,0 +1,4009 @@
+{
+  "date_utc": "2026-10-30T18:47:01.029908+00:00",
+  "status": "failed",
+  "runtime": "host GStreamer: UNQUALIFIED, trusted generated fixture only",
+  "stages": [],
+  "measurements": {
+    "shell_pid": 2971994,
+    "ding_enable": "(true,)",
+    "startup": {
+      "pid": 2973529,
+      "first_damage_ms": 159.947,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ],
+          [
+            3840,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          5760,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          5760,
+          1080
+        ],
+        "damage": 1,
+        "stale": false,
+        "cloneCount": 3,
+        "events": [
+          "799608786 overview-hidden",
+          "799609764 spawned renderer pid=2973529",
+          "799609775 adopted window \"null\" pid=2973529",
+          "799609846 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "cpu_on": {
+      "seconds": 3.0,
+      "before_ticks": [
+        7,
+        129
+      ],
+      "after_ticks": [
+        190,
+        158
+      ],
+      "renderer_percent_one_core": 60.99,
+      "shell_percent_one_core": 9.67
+    },
+    "layouts": [
+      {
+        "monitors": 1,
+        "scale": 1,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 112,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799608786 overview-hidden",
+            "799609764 spawned renderer pid=2973529",
+            "799609775 adopted window \"null\" pid=2973529",
+            "799609846 first frame from renderer",
+            "799612937 monitors-changed",
+            "799612943 renderer dropped: actor destroyed",
+            "799612947 adopted window \"null\" pid=2973529",
+            "799612962 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 2,
+        "scale": 1,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 132,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799608786 overview-hidden",
+            "799609764 spawned renderer pid=2973529",
+            "799609775 adopted window \"null\" pid=2973529",
+            "799609846 first frame from renderer",
+            "799612937 monitors-changed",
+            "799612943 renderer dropped: actor destroyed",
+            "799612947 adopted window \"null\" pid=2973529",
+            "799612962 first frame from renderer",
+            "799613593 monitors-changed",
+            "799613600 renderer dropped: actor destroyed",
+            "799613602 adopted window \"null\" pid=2973529",
+            "799613625 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 3,
+        "scale": 1,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ],
+            [
+              3840,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            5760,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            5760,
+            1080
+          ],
+          "damage": 151,
+          "stale": false,
+          "cloneCount": 3,
+          "events": [
+            "799609764 spawned renderer pid=2973529",
+            "799609775 adopted window \"null\" pid=2973529",
+            "799609846 first frame from renderer",
+            "799612937 monitors-changed",
+            "799612943 renderer dropped: actor destroyed",
+            "799612947 adopted window \"null\" pid=2973529",
+            "799612962 first frame from renderer",
+            "799613593 monitors-changed",
+            "799613600 renderer dropped: actor destroyed",
+            "799613602 adopted window \"null\" pid=2973529",
+            "799613625 first frame from renderer",
+            "799614269 monitors-changed",
+            "799614276 renderer dropped: actor destroyed",
+            "799614279 adopted window \"null\" pid=2973529",
+            "799614324 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 1,
+        "scale": 2,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              960,
+              540
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            960,
+            540
+          ],
+          "buffer": [
+            0,
+            0,
+            960,
+            540
+          ],
+          "damage": 172,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799612943 renderer dropped: actor destroyed",
+            "799612947 adopted window \"null\" pid=2973529",
+            "799612962 first frame from renderer",
+            "799613593 monitors-changed",
+            "799613600 renderer dropped: actor destroyed",
+            "799613602 adopted window \"null\" pid=2973529",
+            "799613625 first frame from renderer",
+            "799614269 monitors-changed",
+            "799614276 renderer dropped: actor destroyed",
+            "799614279 adopted window \"null\" pid=2973529",
+            "799614324 first frame from renderer",
+            "799614933 monitors-changed",
+            "799614973 renderer dropped: actor destroyed",
+            "799614976 adopted window \"null\" pid=2973529",
+            "799614991 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 2,
+        "scale": 2,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              960,
+              540
+            ],
+            [
+              960,
+              0,
+              960,
+              540
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            540
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            540
+          ],
+          "damage": 191,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799613600 renderer dropped: actor destroyed",
+            "799613602 adopted window \"null\" pid=2973529",
+            "799613625 first frame from renderer",
+            "799614269 monitors-changed",
+            "799614276 renderer dropped: actor destroyed",
+            "799614279 adopted window \"null\" pid=2973529",
+            "799614324 first frame from renderer",
+            "799614933 monitors-changed",
+            "799614973 renderer dropped: actor destroyed",
+            "799614976 adopted window \"null\" pid=2973529",
+            "799614991 first frame from renderer",
+            "799615590 monitors-changed",
+            "799615597 renderer dropped: actor destroyed",
+            "799615598 adopted window \"null\" pid=2973529",
+            "799615612 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 3,
+        "scale": 2,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              960,
+              540
+            ],
+            [
+              960,
+              0,
+              960,
+              540
+            ],
+            [
+              1920,
+              0,
+              960,
+              540
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            2880,
+            540
+          ],
+          "buffer": [
+            0,
+            0,
+            2880,
+            540
+          ],
+          "damage": 211,
+          "stale": false,
+          "cloneCount": 3,
+          "events": [
+            "799614276 renderer dropped: actor destroyed",
+            "799614279 adopted window \"null\" pid=2973529",
+            "799614324 first frame from renderer",
+            "799614933 monitors-changed",
+            "799614973 renderer dropped: actor destroyed",
+            "799614976 adopted window \"null\" pid=2973529",
+            "799614991 first frame from renderer",
+            "799615590 monitors-changed",
+            "799615597 renderer dropped: actor destroyed",
+            "799615598 adopted window \"null\" pid=2973529",
+            "799615612 first frame from renderer",
+            "799616256 monitors-changed",
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        }
+      },
+      {
+        "monitors": 3,
+        "scale": 1.25,
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1536,
+              864
+            ],
+            [
+              1536,
+              0,
+              1536,
+              864
+            ],
+            [
+              3072,
+              0,
+              1536,
+              864
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            4608,
+            864
+          ],
+          "buffer": [
+            0,
+            0,
+            4608,
+            864
+          ],
+          "damage": 231,
+          "stale": false,
+          "cloneCount": 3,
+          "events": [
+            "799614973 renderer dropped: actor destroyed",
+            "799614976 adopted window \"null\" pid=2973529",
+            "799614991 first frame from renderer",
+            "799615590 monitors-changed",
+            "799615597 renderer dropped: actor destroyed",
+            "799615598 adopted window \"null\" pid=2973529",
+            "799615612 first frame from renderer",
+            "799616256 monitors-changed",
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer"
+          ],
+          "focus": "@!0,0;BDHF"
+        }
+      }
+    ],
+    "unplug_shots": [
+      {
+        "scheduled_ms": 0,
+        "requested_ms": 82.41,
+        "completed_ms": 176.8,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-00.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-00.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 257,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unplug-00.webp",
+        "original_sha256": "6b74e5fb91cd18a4343ee03fa24a847da4ab6ec0af8cc723eb74203658a4c482",
+        "original_size": [
+          1920,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 250,
+        "requested_ms": 254.93,
+        "completed_ms": 321.45,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-01.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-01.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 261,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unplug-01.webp",
+        "original_sha256": "25c4a7380b8973b90294703ed5985aba4805f90bdddad026646741433a063971",
+        "original_size": [
+          1920,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 500,
+        "requested_ms": 500.11,
+        "completed_ms": 555.79,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-02.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-02.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 268,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unplug-02.webp",
+        "original_sha256": "3b8db5330ce936fcb341e8db594a424c7a69b4f96972b157a8bfd539a6af396c",
+        "original_size": [
+          1920,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 750,
+        "requested_ms": 750.1,
+        "completed_ms": 807.83,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-03.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-03.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 276,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unplug-03.webp",
+        "original_sha256": "33747f2204ba9bbfb445f69d3b2c0026efc3906cba7f8c12fe67baa028f8381b",
+        "original_size": [
+          1920,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1000,
+        "requested_ms": 1000.12,
+        "completed_ms": 1056.76,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-04.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-04.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 283,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unplug-04.webp",
+        "original_sha256": "0168a1ef910e433f9f1b5d0c05cba2995c28221deb1d1b573c7f83f4a9d0c155",
+        "original_size": [
+          1920,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1250,
+        "requested_ms": 1250.23,
+        "completed_ms": 1308.54,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-05.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-05.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 290,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unplug-05.webp",
+        "original_sha256": "62eaa2db443b0b8f977f7838c30a4ad0cede1ca576a74a3633a8d72c125ae3f2",
+        "original_size": [
+          1920,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1500,
+        "requested_ms": 1500.1,
+        "completed_ms": 1557.78,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-06.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-06.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 298,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unplug-06.webp",
+        "original_sha256": "2ec9914beacc2333c29c084c2df1cc852fb14ce306779a801e1069bf2d9a9f82",
+        "original_size": [
+          1920,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1750,
+        "requested_ms": 1750.19,
+        "completed_ms": 1809.62,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-07.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-07.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 305,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unplug-07.webp",
+        "original_sha256": "8f0857df7399d40dd610dec5db7cbfc8f3fea02e8e8356c9b97e0bcf0a5893d4",
+        "original_size": [
+          1920,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 2000,
+        "requested_ms": 2000.09,
+        "completed_ms": 2057.64,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-08.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unplug-08.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          "damage": 313,
+          "stale": false,
+          "cloneCount": 1,
+          "events": [
+            "799616263 renderer dropped: actor destroyed",
+            "799616265 adopted window \"null\" pid=2973529",
+            "799616280 first frame from renderer",
+            "799616924 monitors-changed",
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unplug-08.webp",
+        "original_sha256": "96f5265cc85eb4e76b0ccfae317efcabb8529b39aa96b363a759fe22bdd1f18e",
+        "original_size": [
+          1920,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "replug_shots": [
+      {
+        "scheduled_ms": 0,
+        "requested_ms": 89.48,
+        "completed_ms": 347.95,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-00.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-00.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 326,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/replug-00.webp",
+        "original_sha256": "ab38bbfbcc3d3eef0f5becbb05ec1de95adac0e7792a874a6e6eb1a2fa6452e3",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 250,
+        "requested_ms": 425.32,
+        "completed_ms": 530.64,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-01.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-01.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 331,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/replug-01.webp",
+        "original_sha256": "282abadc7e0d8646bdf92357d60588f21e229325093983f2dd35fb8c5281eee4",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 500,
+        "requested_ms": 607.07,
+        "completed_ms": 708.44,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-02.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-02.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 337,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/replug-02.webp",
+        "original_sha256": "4c408ca6c0a19c66959c51a2b3d94ae7c68179841d092840fc03b896ede9f1d9",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 750,
+        "requested_ms": 784.2,
+        "completed_ms": 883.99,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-03.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-03.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 342,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/replug-03.webp",
+        "original_sha256": "f054cb3a5a6186d550d04a75cad7918dfab30b797453364095672a7e4b2e33c1",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1000,
+        "requested_ms": 1000.22,
+        "completed_ms": 1101.61,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-04.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-04.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 348,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/replug-04.webp",
+        "original_sha256": "c98337f591184cdf64a4e4a3dacbe30f65a35b91cd8e12c7a5fce8f02cd6fe8b",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1250,
+        "requested_ms": 1250.2,
+        "completed_ms": 1350.09,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-05.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-05.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 356,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/replug-05.webp",
+        "original_sha256": "6dca90d84898100a0a56f42d549d0e9fc63840f196edd5312cb4d11c5ecc5d69",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1500,
+        "requested_ms": 1500.16,
+        "completed_ms": 1600.86,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-06.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-06.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 363,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/replug-06.webp",
+        "original_sha256": "c33a8c1ffa7e9c410cee54938108c0dcd2c642abdcada3e5fd563d053535ed9a",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1750,
+        "requested_ms": 1750.23,
+        "completed_ms": 1850.32,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-07.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-07.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 371,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/replug-07.webp",
+        "original_sha256": "d5ea94deed5e06ba95feb1efe72ebb3c40c409623266786d5c1e4e2e0d31248b",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 2000,
+        "requested_ms": 2000.14,
+        "completed_ms": 2101.02,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-08.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/replug-08.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "buffer": [
+            0,
+            0,
+            3840,
+            1080
+          ],
+          "damage": 378,
+          "stale": false,
+          "cloneCount": 2,
+          "events": [
+            "799616931 renderer dropped: actor destroyed",
+            "799616933 adopted window \"null\" pid=2973529",
+            "799616959 first frame from renderer",
+            "799617589 monitors-changed",
+            "799617606 renderer dropped: actor destroyed",
+            "799617608 adopted window \"null\" pid=2973529",
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/replug-08.webp",
+        "original_sha256": "171a31f1184b7173cd56b50af044bbe44328ad0e64c266ae8551cac1e1e8d46c",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "paused_before": {
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080
+        ]
+      ],
+      "frame": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "buffer": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "damage": 381,
+      "stale": false,
+      "cloneCount": 2,
+      "events": [
+        "799616931 renderer dropped: actor destroyed",
+        "799616933 adopted window \"null\" pid=2973529",
+        "799616959 first frame from renderer",
+        "799617589 monitors-changed",
+        "799617606 renderer dropped: actor destroyed",
+        "799617608 adopted window \"null\" pid=2973529",
+        "799617626 first frame from renderer",
+        "799618172 monitors-changed",
+        "799618223 renderer dropped: actor destroyed",
+        "799618227 adopted window \"null\" pid=2973529",
+        "799618245 first frame from renderer",
+        "799620311 monitors-changed",
+        "799620319 renderer dropped: actor destroyed",
+        "799620322 adopted window \"null\" pid=2973529",
+        "799620366 first frame from renderer"
+      ],
+      "focus": "Desktop Icons 1"
+    },
+    "cpu_paused": {
+      "seconds": 3.0,
+      "before_ticks": [
+        558,
+        375
+      ],
+      "after_ticks": [
+        561,
+        379
+      ],
+      "renderer_percent_one_core": 1.0,
+      "shell_percent_one_core": 1.33
+    },
+    "paused_after": {
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080
+        ]
+      ],
+      "frame": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "buffer": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "damage": 384,
+      "stale": false,
+      "cloneCount": 2,
+      "events": [
+        "799616933 adopted window \"null\" pid=2973529",
+        "799616959 first frame from renderer",
+        "799617589 monitors-changed",
+        "799617606 renderer dropped: actor destroyed",
+        "799617608 adopted window \"null\" pid=2973529",
+        "799617626 first frame from renderer",
+        "799618172 monitors-changed",
+        "799618223 renderer dropped: actor destroyed",
+        "799618227 adopted window \"null\" pid=2973529",
+        "799618245 first frame from renderer",
+        "799620311 monitors-changed",
+        "799620319 renderer dropped: actor destroyed",
+        "799620322 adopted window \"null\" pid=2973529",
+        "799620366 first frame from renderer",
+        "799622556 overview-showing"
+      ],
+      "focus": "Desktop Icons 1"
+    },
+    "cpu_covered": {
+      "seconds": 3.0,
+      "before_ticks": [
+        636,
+        411
+      ],
+      "after_ticks": [
+        638,
+        413
+      ],
+      "renderer_percent_one_core": 0.67,
+      "shell_percent_one_core": 0.67
+    },
+    "covered": {
+      "paused": true,
+      "reason": "covered"
+    },
+    "watchdog": {
+      "observed_ms": 3732.27,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 456,
+        "stale": true,
+        "cloneCount": 0,
+        "events": [
+          "799617589 monitors-changed",
+          "799617606 renderer dropped: actor destroyed",
+          "799617608 adopted window \"null\" pid=2973529",
+          "799617626 first frame from renderer",
+          "799618172 monitors-changed",
+          "799618223 renderer dropped: actor destroyed",
+          "799618227 adopted window \"null\" pid=2973529",
+          "799618245 first frame from renderer",
+          "799620311 monitors-changed",
+          "799620319 renderer dropped: actor destroyed",
+          "799620322 adopted window \"null\" pid=2973529",
+          "799620366 first frame from renderer",
+          "799622556 overview-showing",
+          "799626963 overview-hidden",
+          "799637172 renderer stale for 3617 ms: static fallback"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "kill9_before": {
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080
+        ]
+      ],
+      "frame": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "buffer": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "damage": 459,
+      "stale": false,
+      "cloneCount": 2,
+      "events": [
+        "799617606 renderer dropped: actor destroyed",
+        "799617608 adopted window \"null\" pid=2973529",
+        "799617626 first frame from renderer",
+        "799618172 monitors-changed",
+        "799618223 renderer dropped: actor destroyed",
+        "799618227 adopted window \"null\" pid=2973529",
+        "799618245 first frame from renderer",
+        "799620311 monitors-changed",
+        "799620319 renderer dropped: actor destroyed",
+        "799620322 adopted window \"null\" pid=2973529",
+        "799620366 first frame from renderer",
+        "799622556 overview-showing",
+        "799626963 overview-hidden",
+        "799637172 renderer stale for 3617 ms: static fallback",
+        "799637482 renderer fresh again"
+      ],
+      "focus": "Desktop Icons 1"
+    },
+    "kill9_shots": [
+      {
+        "scheduled_ms": 0,
+        "requested_ms": 0.08,
+        "completed_ms": 255.55,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-00.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-00.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 460,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer",
+            "799622556 overview-showing",
+            "799626963 overview-hidden",
+            "799637172 renderer stale for 3617 ms: static fallback",
+            "799637482 renderer fresh again",
+            "799637560 renderer dropped: actor destroyed",
+            "799637562 renderer exited pid=2973529"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/kill9-00.webp",
+        "original_sha256": "dcd71321506fcca1a1d0c3906d0c79c3e8a97ad0fa5dc7b2bd9b865d26f16536",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 250,
+        "requested_ms": 331.12,
+        "completed_ms": 596.82,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-01.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-01.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 460,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer",
+            "799622556 overview-showing",
+            "799626963 overview-hidden",
+            "799637172 renderer stale for 3617 ms: static fallback",
+            "799637482 renderer fresh again",
+            "799637560 renderer dropped: actor destroyed",
+            "799637562 renderer exited pid=2973529"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/kill9-01.webp",
+        "original_sha256": "dcd71321506fcca1a1d0c3906d0c79c3e8a97ad0fa5dc7b2bd9b865d26f16536",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 500,
+        "requested_ms": 676.72,
+        "completed_ms": 938.71,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-02.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-02.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 460,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer",
+            "799622556 overview-showing",
+            "799626963 overview-hidden",
+            "799637172 renderer stale for 3617 ms: static fallback",
+            "799637482 renderer fresh again",
+            "799637560 renderer dropped: actor destroyed",
+            "799637562 renderer exited pid=2973529"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/kill9-02.webp",
+        "original_sha256": "20a5f97caa0485249f0a7308fcfb3b81e5609b95972f9e1102bb91630ae739d2",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 750,
+        "requested_ms": 1016.88,
+        "completed_ms": 1284.46,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-03.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-03.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 460,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer",
+            "799622556 overview-showing",
+            "799626963 overview-hidden",
+            "799637172 renderer stale for 3617 ms: static fallback",
+            "799637482 renderer fresh again",
+            "799637560 renderer dropped: actor destroyed",
+            "799637562 renderer exited pid=2973529"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/kill9-03.webp",
+        "original_sha256": "20a5f97caa0485249f0a7308fcfb3b81e5609b95972f9e1102bb91630ae739d2",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 1000,
+        "requested_ms": 1365.06,
+        "completed_ms": 1612.69,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-04.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-04.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 460,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer",
+            "799622556 overview-showing",
+            "799626963 overview-hidden",
+            "799637172 renderer stale for 3617 ms: static fallback",
+            "799637482 renderer fresh again",
+            "799637560 renderer dropped: actor destroyed",
+            "799637562 renderer exited pid=2973529"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/kill9-04.webp",
+        "original_sha256": "20a5f97caa0485249f0a7308fcfb3b81e5609b95972f9e1102bb91630ae739d2",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 1250,
+        "requested_ms": 1690.03,
+        "completed_ms": 1937.41,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-05.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-05.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 460,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer",
+            "799622556 overview-showing",
+            "799626963 overview-hidden",
+            "799637172 renderer stale for 3617 ms: static fallback",
+            "799637482 renderer fresh again",
+            "799637560 renderer dropped: actor destroyed",
+            "799637562 renderer exited pid=2973529"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/kill9-05.webp",
+        "original_sha256": "56967c1069c74bd098fee09acc39299a2bbf2de134d1a92ee80ebbde80548fb6",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 1500,
+        "requested_ms": 2011.35,
+        "completed_ms": 2260.67,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-06.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-06.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 460,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer",
+            "799622556 overview-showing",
+            "799626963 overview-hidden",
+            "799637172 renderer stale for 3617 ms: static fallback",
+            "799637482 renderer fresh again",
+            "799637560 renderer dropped: actor destroyed",
+            "799637562 renderer exited pid=2973529"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/kill9-06.webp",
+        "original_sha256": "56967c1069c74bd098fee09acc39299a2bbf2de134d1a92ee80ebbde80548fb6",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 1750,
+        "requested_ms": 2335.92,
+        "completed_ms": 2601.42,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-07.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-07.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 460,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer",
+            "799622556 overview-showing",
+            "799626963 overview-hidden",
+            "799637172 renderer stale for 3617 ms: static fallback",
+            "799637482 renderer fresh again",
+            "799637560 renderer dropped: actor destroyed",
+            "799637562 renderer exited pid=2973529"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/kill9-07.webp",
+        "original_sha256": "56967c1069c74bd098fee09acc39299a2bbf2de134d1a92ee80ebbde80548fb6",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 2000,
+        "requested_ms": 2678.27,
+        "completed_ms": 2925.54,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-08.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/kill9-08.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 460,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799617626 first frame from renderer",
+            "799618172 monitors-changed",
+            "799618223 renderer dropped: actor destroyed",
+            "799618227 adopted window \"null\" pid=2973529",
+            "799618245 first frame from renderer",
+            "799620311 monitors-changed",
+            "799620319 renderer dropped: actor destroyed",
+            "799620322 adopted window \"null\" pid=2973529",
+            "799620366 first frame from renderer",
+            "799622556 overview-showing",
+            "799626963 overview-hidden",
+            "799637172 renderer stale for 3617 ms: static fallback",
+            "799637482 renderer fresh again",
+            "799637560 renderer dropped: actor destroyed",
+            "799637562 renderer exited pid=2973529"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/kill9-08.webp",
+        "original_sha256": "e5b10f7d4108aad0f67ffad1d45cc61546be660d781cf0fe2857f970221f2489",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      }
+    ],
+    "post_kill_restart": {
+      "pid": 2975593,
+      "first_damage_ms": 185.579,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 2,
+        "stale": false,
+        "cloneCount": 2,
+        "events": [
+          "799618227 adopted window \"null\" pid=2973529",
+          "799618245 first frame from renderer",
+          "799620311 monitors-changed",
+          "799620319 renderer dropped: actor destroyed",
+          "799620322 adopted window \"null\" pid=2973529",
+          "799620366 first frame from renderer",
+          "799622556 overview-showing",
+          "799626963 overview-hidden",
+          "799637172 renderer stale for 3617 ms: static fallback",
+          "799637482 renderer fresh again",
+          "799637560 renderer dropped: actor destroyed",
+          "799637562 renderer exited pid=2973529",
+          "799640699 spawned renderer pid=2975593",
+          "799640710 adopted window \"null\" pid=2975593",
+          "799640748 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "lock_shots": [
+      {
+        "scheduled_ms": 0,
+        "requested_ms": 122.62,
+        "completed_ms": 242.0,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-00.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-00.png')",
+        "snapshot": {
+          "monitors": [],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [],
+          "focus": "one-mk-wall M1a isolated probe"
+        },
+        "evidence_file": "captures/lock-00.webp",
+        "original_sha256": "5076cd95ae54f6dc3537c0b565a33351ff2f0a100315506d7c42f9e36a460b7f",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 250,
+        "requested_ms": 320.13,
+        "completed_ms": 425.41,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-01.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-01.png')",
+        "snapshot": {
+          "monitors": [],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [],
+          "focus": "one-mk-wall M1a isolated probe"
+        },
+        "evidence_file": "captures/lock-01.webp",
+        "original_sha256": "67a7338374f3ffe0783b25e42fd0bf63fecb92bc0769dbd8382ff755513607c7",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 500,
+        "requested_ms": 502.47,
+        "completed_ms": 597.58,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-02.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-02.png')",
+        "snapshot": {
+          "monitors": [],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [],
+          "focus": "one-mk-wall M1a isolated probe"
+        },
+        "evidence_file": "captures/lock-02.webp",
+        "original_sha256": "67a7338374f3ffe0783b25e42fd0bf63fecb92bc0769dbd8382ff755513607c7",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 750,
+        "requested_ms": 750.11,
+        "completed_ms": 848.57,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-03.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-03.png')",
+        "snapshot": {
+          "monitors": [],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [],
+          "focus": "one-mk-wall M1a isolated probe"
+        },
+        "evidence_file": "captures/lock-03.webp",
+        "original_sha256": "67a7338374f3ffe0783b25e42fd0bf63fecb92bc0769dbd8382ff755513607c7",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1000,
+        "requested_ms": 1000.18,
+        "completed_ms": 1099.53,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-04.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-04.png')",
+        "snapshot": {
+          "monitors": [],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [],
+          "focus": "one-mk-wall M1a isolated probe"
+        },
+        "evidence_file": "captures/lock-04.webp",
+        "original_sha256": "67a7338374f3ffe0783b25e42fd0bf63fecb92bc0769dbd8382ff755513607c7",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1250,
+        "requested_ms": 1250.11,
+        "completed_ms": 1348.79,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-05.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-05.png')",
+        "snapshot": {
+          "monitors": [],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [],
+          "focus": "one-mk-wall M1a isolated probe"
+        },
+        "evidence_file": "captures/lock-05.webp",
+        "original_sha256": "1fd189e02d9cdcd8186d48bf290df995f5c433f9e5d5825ea01da347c97330f3",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1500,
+        "requested_ms": 1500.09,
+        "completed_ms": 1596.85,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-06.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-06.png')",
+        "snapshot": {
+          "monitors": [],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [],
+          "focus": "one-mk-wall M1a isolated probe"
+        },
+        "evidence_file": "captures/lock-06.webp",
+        "original_sha256": "1fd189e02d9cdcd8186d48bf290df995f5c433f9e5d5825ea01da347c97330f3",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 1750,
+        "requested_ms": 1750.22,
+        "completed_ms": 1846.55,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-07.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-07.png')",
+        "snapshot": {
+          "monitors": [],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [],
+          "focus": "one-mk-wall M1a isolated probe"
+        },
+        "evidence_file": "captures/lock-07.webp",
+        "original_sha256": "1fd189e02d9cdcd8186d48bf290df995f5c433f9e5d5825ea01da347c97330f3",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "scheduled_ms": 2000,
+        "requested_ms": 2000.17,
+        "completed_ms": 2093.18,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-08.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/lock-08.png')",
+        "snapshot": {
+          "monitors": [],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [],
+          "focus": "one-mk-wall M1a isolated probe"
+        },
+        "evidence_file": "captures/lock-08.webp",
+        "original_sha256": "1fd189e02d9cdcd8186d48bf290df995f5c433f9e5d5825ea01da347c97330f3",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "locked_state": {
+      "locked": true,
+      "mode": "unlock-dialog"
+    },
+    "unlock_shots": [
+      {
+        "scheduled_ms": 0,
+        "requested_ms": 93.79,
+        "completed_ms": 370.32,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-00.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-00.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799643395 locked-changed false"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unlock-00.webp",
+        "original_sha256": "32fcc985ec1d5b28d9e5dcde49abb31e57ce9267c7034f927d96559eb9b6d903",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 250,
+        "requested_ms": 450.74,
+        "completed_ms": 700.45,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-01.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-01.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799643395 locked-changed false"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unlock-01.webp",
+        "original_sha256": "6bbc6dd4328e43d5c11bd6a383ebf2772b005bd8cc7e7973e9dcc7e6766aeaa8",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 500,
+        "requested_ms": 776.77,
+        "completed_ms": 1022.68,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-02.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-02.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799643395 locked-changed false"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unlock-02.webp",
+        "original_sha256": "8d38a573ddb21456e27fff9a3ec0304449a2fd2574abdb48a2226195ba2695fa",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 750,
+        "requested_ms": 1093.65,
+        "completed_ms": 1332.97,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-03.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-03.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799643395 locked-changed false"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unlock-03.webp",
+        "original_sha256": "86c7cb0649cb65dd6ac27117348e2760309810376dad7aab12b4be62971aee00",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 1000,
+        "requested_ms": 1405.23,
+        "completed_ms": 1647.96,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-04.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-04.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799643395 locked-changed false"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unlock-04.webp",
+        "original_sha256": "86c7cb0649cb65dd6ac27117348e2760309810376dad7aab12b4be62971aee00",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 1250,
+        "requested_ms": 1722.75,
+        "completed_ms": 1962.86,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-05.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-05.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799643395 locked-changed false"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unlock-05.webp",
+        "original_sha256": "86c7cb0649cb65dd6ac27117348e2760309810376dad7aab12b4be62971aee00",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 1500,
+        "requested_ms": 2036.35,
+        "completed_ms": 2277.52,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-06.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-06.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799643395 locked-changed false"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unlock-06.webp",
+        "original_sha256": "79badc204102e8d1e1bd1532182dfdc6b987aa5342e17f95a157706ea7752297",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 1750,
+        "requested_ms": 2354.45,
+        "completed_ms": 2609.03,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-07.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-07.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799643395 locked-changed false"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unlock-07.webp",
+        "original_sha256": "79badc204102e8d1e1bd1532182dfdc6b987aa5342e17f95a157706ea7752297",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      },
+      {
+        "scheduled_ms": 2000,
+        "requested_ms": 2685.93,
+        "completed_ms": 2926.48,
+        "file": "m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-08.png",
+        "reply": "(true, '/home/samer/.t3/worktrees/one-mk/t3-3e8607a8/target/wall-m1-lab/m1a-shots-2026-10-30T18-47-01.029908+00-00/unlock-08.png')",
+        "snapshot": {
+          "monitors": [
+            [
+              0,
+              0,
+              1920,
+              1080
+            ],
+            [
+              1920,
+              0,
+              1920,
+              1080
+            ]
+          ],
+          "frame": null,
+          "buffer": null,
+          "damage": 0,
+          "stale": false,
+          "cloneCount": 0,
+          "events": [
+            "799643395 locked-changed false"
+          ],
+          "focus": "Desktop Icons 1"
+        },
+        "evidence_file": "captures/unlock-08.webp",
+        "original_sha256": "79badc204102e8d1e1bd1532182dfdc6b987aa5342e17f95a157706ea7752297",
+        "original_size": [
+          3840,
+          1080
+        ],
+        "pixel_500_700": [
+          38,
+          93,
+          125
+        ]
+      }
+    ],
+    "unlock_restart": {
+      "pid": 2976185,
+      "first_damage_ms": 170.501,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 2,
+        "stale": false,
+        "cloneCount": 2,
+        "events": [
+          "799643395 locked-changed false",
+          "799646203 spawned renderer pid=2976185",
+          "799646214 adopted window \"null\" pid=2976185",
+          "799646257 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "restart_limit": "NOT IMPLEMENTED by the 6B bridge; harness starts are manual, not a production cap",
+    "cycles": [
+      {
+        "cycle": 1,
+        "old_pid": 2976185,
+        "old_exited": true,
+        "first_damage_ms": 182.04,
+        "pid": 2976330,
+        "window_count": 3
+      },
+      {
+        "cycle": 2,
+        "old_pid": 2976330,
+        "old_exited": true,
+        "first_damage_ms": 173.296,
+        "pid": 2976402,
+        "window_count": 4
+      },
+      {
+        "cycle": 3,
+        "old_pid": 2976402,
+        "old_exited": true,
+        "first_damage_ms": 166.415,
+        "pid": 2976471,
+        "window_count": 5
+      },
+      {
+        "cycle": 4,
+        "old_pid": 2976471,
+        "old_exited": true,
+        "first_damage_ms": 175.375,
+        "pid": 2976534,
+        "window_count": 6
+      },
+      {
+        "cycle": 5,
+        "old_pid": 2976534,
+        "old_exited": true,
+        "first_damage_ms": 160.245,
+        "pid": 2976601,
+        "window_count": 1
+      },
+      {
+        "cycle": 6,
+        "old_pid": 2976601,
+        "old_exited": true,
+        "first_damage_ms": 156.031,
+        "pid": 2976664,
+        "window_count": 2
+      },
+      {
+        "cycle": 7,
+        "old_pid": 2976664,
+        "old_exited": true,
+        "first_damage_ms": 157.369,
+        "pid": 2976727,
+        "window_count": 3
+      },
+      {
+        "cycle": 8,
+        "old_pid": 2976727,
+        "old_exited": true,
+        "first_damage_ms": 161.793,
+        "pid": 2976791,
+        "window_count": 4
+      },
+      {
+        "cycle": 9,
+        "old_pid": 2976791,
+        "old_exited": true,
+        "first_damage_ms": 157.568,
+        "pid": 2976854,
+        "window_count": 5
+      },
+      {
+        "cycle": 10,
+        "old_pid": 2976854,
+        "old_exited": true,
+        "first_damage_ms": 156.956,
+        "pid": 2976917,
+        "window_count": 6
+      },
+      {
+        "cycle": 11,
+        "old_pid": 2976917,
+        "old_exited": true,
+        "first_damage_ms": 155.847,
+        "pid": 2976980,
+        "window_count": 7
+      },
+      {
+        "cycle": 12,
+        "old_pid": 2976980,
+        "old_exited": true,
+        "first_damage_ms": 161.845,
+        "pid": 2977043,
+        "window_count": 8
+      },
+      {
+        "cycle": 13,
+        "old_pid": 2977043,
+        "old_exited": true,
+        "first_damage_ms": 154.56,
+        "pid": 2977112,
+        "window_count": 9
+      },
+      {
+        "cycle": 14,
+        "old_pid": 2977112,
+        "old_exited": true,
+        "first_damage_ms": 155.929,
+        "pid": 2977175,
+        "window_count": 10
+      },
+      {
+        "cycle": 15,
+        "old_pid": 2977175,
+        "old_exited": true,
+        "first_damage_ms": 156.94,
+        "pid": 2977239,
+        "window_count": 11
+      },
+      {
+        "cycle": 16,
+        "old_pid": 2977239,
+        "old_exited": true,
+        "first_damage_ms": 157.076,
+        "pid": 2977302,
+        "window_count": 12
+      },
+      {
+        "cycle": 17,
+        "old_pid": 2977302,
+        "old_exited": true,
+        "first_damage_ms": 156.82,
+        "pid": 2977365,
+        "window_count": 13
+      },
+      {
+        "cycle": 18,
+        "old_pid": 2977365,
+        "old_exited": true,
+        "first_damage_ms": 159.894,
+        "pid": 2977442,
+        "window_count": 14
+      },
+      {
+        "cycle": 19,
+        "old_pid": 2977442,
+        "old_exited": true,
+        "first_damage_ms": 162.431,
+        "pid": 2977505,
+        "window_count": 15
+      },
+      {
+        "cycle": 20,
+        "old_pid": 2977505,
+        "old_exited": true,
+        "first_damage_ms": 156.89,
+        "pid": 2977568,
+        "window_count": 16
+      },
+      {
+        "cycle": 21,
+        "old_pid": 2977568,
+        "old_exited": true,
+        "first_damage_ms": 160.578,
+        "pid": 2977633,
+        "window_count": 17
+      },
+      {
+        "cycle": 22,
+        "old_pid": 2977633,
+        "old_exited": true,
+        "first_damage_ms": 157.184,
+        "pid": 2977696,
+        "window_count": 18
+      },
+      {
+        "cycle": 23,
+        "old_pid": 2977696,
+        "old_exited": true,
+        "first_damage_ms": 158.391,
+        "pid": 2977760,
+        "window_count": 19
+      },
+      {
+        "cycle": 24,
+        "old_pid": 2977760,
+        "old_exited": true,
+        "first_damage_ms": 156.923,
+        "pid": 2977823,
+        "window_count": 20
+      },
+      {
+        "cycle": 25,
+        "old_pid": 2977823,
+        "old_exited": true,
+        "first_damage_ms": 174.826,
+        "pid": 2977919,
+        "window_count": 21
+      },
+      {
+        "cycle": 26,
+        "old_pid": 2977919,
+        "old_exited": true,
+        "first_damage_ms": 183.348,
+        "pid": 2977987,
+        "window_count": 22
+      },
+      {
+        "cycle": 27,
+        "old_pid": 2977987,
+        "old_exited": true,
+        "first_damage_ms": 185.235,
+        "pid": 2978132,
+        "window_count": 23
+      },
+      {
+        "cycle": 28,
+        "old_pid": 2978132,
+        "old_exited": true,
+        "first_damage_ms": 174.021,
+        "pid": 2978402,
+        "window_count": 24
+      },
+      {
+        "cycle": 29,
+        "old_pid": 2978402,
+        "old_exited": true,
+        "first_damage_ms": 173.05,
+        "pid": 2978565,
+        "window_count": 1
+      },
+      {
+        "cycle": 30,
+        "old_pid": 2978565,
+        "old_exited": true,
+        "first_damage_ms": 194.234,
+        "pid": 2978666,
+        "window_count": 2
+      },
+      {
+        "cycle": 31,
+        "old_pid": 2978666,
+        "old_exited": true,
+        "first_damage_ms": 182.425,
+        "pid": 2978800,
+        "window_count": 3
+      },
+      {
+        "cycle": 32,
+        "old_pid": 2978800,
+        "old_exited": true,
+        "first_damage_ms": 176.912,
+        "pid": 2979000,
+        "window_count": 4
+      },
+      {
+        "cycle": 33,
+        "old_pid": 2979000,
+        "old_exited": true,
+        "first_damage_ms": 176.328,
+        "pid": 2979082,
+        "window_count": 5
+      },
+      {
+        "cycle": 34,
+        "old_pid": 2979082,
+        "old_exited": true,
+        "first_damage_ms": 188.554,
+        "pid": 2979224,
+        "window_count": 6
+      },
+      {
+        "cycle": 35,
+        "old_pid": 2979224,
+        "old_exited": true,
+        "first_damage_ms": 170.029,
+        "pid": 2979369,
+        "window_count": 7
+      },
+      {
+        "cycle": 36,
+        "old_pid": 2979369,
+        "old_exited": true,
+        "first_damage_ms": 181.389,
+        "pid": 2979438,
+        "window_count": 8
+      },
+      {
+        "cycle": 37,
+        "old_pid": 2979438,
+        "old_exited": true,
+        "first_damage_ms": 174.826,
+        "pid": 2979512,
+        "window_count": 9
+      },
+      {
+        "cycle": 38,
+        "old_pid": 2979512,
+        "old_exited": true,
+        "first_damage_ms": 177.158,
+        "pid": 2979595,
+        "window_count": 10
+      },
+      {
+        "cycle": 39,
+        "old_pid": 2979595,
+        "old_exited": true,
+        "first_damage_ms": 174.245,
+        "pid": 2979684,
+        "window_count": 11
+      },
+      {
+        "cycle": 40,
+        "old_pid": 2979684,
+        "old_exited": true,
+        "first_damage_ms": 177.378,
+        "pid": 2979781,
+        "window_count": 12
+      },
+      {
+        "cycle": 41,
+        "old_pid": 2979781,
+        "old_exited": true,
+        "first_damage_ms": 171.805,
+        "pid": 2979890,
+        "window_count": 13
+      },
+      {
+        "cycle": 42,
+        "old_pid": 2979890,
+        "old_exited": true,
+        "first_damage_ms": 179.278,
+        "pid": 2980017,
+        "window_count": 14
+      },
+      {
+        "cycle": 43,
+        "old_pid": 2980017,
+        "old_exited": true,
+        "first_damage_ms": 182.187,
+        "pid": 2980138,
+        "window_count": 15
+      },
+      {
+        "cycle": 44,
+        "old_pid": 2980138,
+        "old_exited": true,
+        "first_damage_ms": 182.583,
+        "pid": 2980265,
+        "window_count": 16
+      },
+      {
+        "cycle": 45,
+        "old_pid": 2980265,
+        "old_exited": true,
+        "first_damage_ms": 175.009,
+        "pid": 2980432,
+        "window_count": 17
+      },
+      {
+        "cycle": 46,
+        "old_pid": 2980432,
+        "old_exited": true,
+        "first_damage_ms": 161.446,
+        "pid": 2980495,
+        "window_count": 18
+      },
+      {
+        "cycle": 47,
+        "old_pid": 2980495,
+        "old_exited": true,
+        "first_damage_ms": 163.691,
+        "pid": 2980559,
+        "window_count": 19
+      },
+      {
+        "cycle": 48,
+        "old_pid": 2980559,
+        "old_exited": true,
+        "first_damage_ms": 161.239,
+        "pid": 2980622,
+        "window_count": 20
+      },
+      {
+        "cycle": 49,
+        "old_pid": 2980622,
+        "old_exited": true,
+        "first_damage_ms": 160.479,
+        "pid": 2980685,
+        "window_count": 21
+      },
+      {
+        "cycle": 50,
+        "old_pid": 2980685,
+        "old_exited": true,
+        "first_damage_ms": 272.103,
+        "pid": 2980749,
+        "window_count": 1
+      },
+      {
+        "cycle": 51,
+        "old_pid": 2980749,
+        "old_exited": true,
+        "first_damage_ms": 162.116,
+        "pid": 2980820,
+        "window_count": 1
+      },
+      {
+        "cycle": 52,
+        "old_pid": 2980820,
+        "old_exited": true,
+        "first_damage_ms": 161.668,
+        "pid": 2980883,
+        "window_count": 2
+      },
+      {
+        "cycle": 53,
+        "old_pid": 2980883,
+        "old_exited": true,
+        "first_damage_ms": 161.182,
+        "pid": 2980946,
+        "window_count": 3
+      },
+      {
+        "cycle": 54,
+        "old_pid": 2980946,
+        "old_exited": true,
+        "first_damage_ms": 167.228,
+        "pid": 2981009,
+        "window_count": 4
+      },
+      {
+        "cycle": 55,
+        "old_pid": 2981009,
+        "old_exited": true,
+        "first_damage_ms": 160.869,
+        "pid": 2981072,
+        "window_count": 5
+      },
+      {
+        "cycle": 56,
+        "old_pid": 2981072,
+        "old_exited": true,
+        "first_damage_ms": 160.31,
+        "pid": 2981135,
+        "window_count": 6
+      },
+      {
+        "cycle": 57,
+        "old_pid": 2981135,
+        "old_exited": true,
+        "first_damage_ms": 161.594,
+        "pid": 2981201,
+        "window_count": 7
+      },
+      {
+        "cycle": 58,
+        "old_pid": 2981201,
+        "old_exited": true,
+        "first_damage_ms": 161.768,
+        "pid": 2981264,
+        "window_count": 8
+      },
+      {
+        "cycle": 59,
+        "old_pid": 2981264,
+        "old_exited": true,
+        "first_damage_ms": 159.531,
+        "pid": 2981330,
+        "window_count": 9
+      },
+      {
+        "cycle": 60,
+        "old_pid": 2981330,
+        "old_exited": true,
+        "first_damage_ms": 170.255,
+        "pid": 2981397,
+        "window_count": 10
+      },
+      {
+        "cycle": 61,
+        "old_pid": 2981397,
+        "old_exited": true,
+        "first_damage_ms": 172.651,
+        "pid": 2981464,
+        "window_count": 11
+      },
+      {
+        "cycle": 62,
+        "old_pid": 2981464,
+        "old_exited": true,
+        "first_damage_ms": 168.589,
+        "pid": 2981533,
+        "window_count": 12
+      },
+      {
+        "cycle": 63,
+        "old_pid": 2981533,
+        "old_exited": true,
+        "first_damage_ms": 178.651,
+        "pid": 2981603,
+        "window_count": 13
+      },
+      {
+        "cycle": 64,
+        "old_pid": 2981603,
+        "old_exited": true,
+        "first_damage_ms": 173.894,
+        "pid": 2981682,
+        "window_count": 14
+      },
+      {
+        "cycle": 65,
+        "old_pid": 2981682,
+        "old_exited": true,
+        "first_damage_ms": 169.896,
+        "pid": 2981758,
+        "window_count": 15
+      },
+      {
+        "cycle": 66,
+        "old_pid": 2981758,
+        "old_exited": true,
+        "first_damage_ms": 178.915,
+        "pid": 2981833,
+        "window_count": 16
+      },
+      {
+        "cycle": 67,
+        "old_pid": 2981833,
+        "old_exited": true,
+        "first_damage_ms": 170.514,
+        "pid": 2981913,
+        "window_count": 17
+      },
+      {
+        "cycle": 68,
+        "old_pid": 2981913,
+        "old_exited": true,
+        "first_damage_ms": 169.745,
+        "pid": 2981994,
+        "window_count": 18
+      },
+      {
+        "cycle": 69,
+        "old_pid": 2981994,
+        "old_exited": true,
+        "first_damage_ms": 172.31,
+        "pid": 2982079,
+        "window_count": 19
+      },
+      {
+        "cycle": 70,
+        "old_pid": 2982079,
+        "old_exited": true,
+        "first_damage_ms": 178.366,
+        "pid": 2982163,
+        "window_count": 20
+      },
+      {
+        "cycle": 71,
+        "old_pid": 2982163,
+        "old_exited": true,
+        "first_damage_ms": 170.984,
+        "pid": 2982249,
+        "window_count": 21
+      },
+      {
+        "cycle": 72,
+        "old_pid": 2982249,
+        "old_exited": true,
+        "first_damage_ms": 176.75,
+        "pid": 2982361,
+        "window_count": 22
+      },
+      {
+        "cycle": 73,
+        "old_pid": 2982361,
+        "old_exited": true,
+        "first_damage_ms": 279.35,
+        "pid": 2982460,
+        "window_count": 1
+      },
+      {
+        "cycle": 74,
+        "old_pid": 2982460,
+        "old_exited": true,
+        "first_damage_ms": 178.529,
+        "pid": 2982574,
+        "window_count": 1
+      },
+      {
+        "cycle": 75,
+        "old_pid": 2982574,
+        "old_exited": true,
+        "first_damage_ms": 257.49,
+        "pid": 2982656,
+        "window_count": 2
+      },
+      {
+        "cycle": 76,
+        "old_pid": 2982656,
+        "old_exited": true,
+        "first_damage_ms": 159.536,
+        "pid": 2982734,
+        "window_count": 3
+      },
+      {
+        "cycle": 77,
+        "old_pid": 2982734,
+        "old_exited": true,
+        "first_damage_ms": 164.65,
+        "pid": 2982797,
+        "window_count": 4
+      },
+      {
+        "cycle": 78,
+        "old_pid": 2982797,
+        "old_exited": true,
+        "first_damage_ms": 157.486,
+        "pid": 2982861,
+        "window_count": 5
+      },
+      {
+        "cycle": 79,
+        "old_pid": 2982861,
+        "old_exited": true,
+        "first_damage_ms": 156.966,
+        "pid": 2982924,
+        "window_count": 6
+      },
+      {
+        "cycle": 80,
+        "old_pid": 2982924,
+        "old_exited": true,
+        "first_damage_ms": 160.265,
+        "pid": 2982987,
+        "window_count": 7
+      },
+      {
+        "cycle": 81,
+        "old_pid": 2982987,
+        "old_exited": true,
+        "first_damage_ms": 154.988,
+        "pid": 2983050,
+        "window_count": 8
+      },
+      {
+        "cycle": 82,
+        "old_pid": 2983050,
+        "old_exited": true,
+        "first_damage_ms": 157.529,
+        "pid": 2983113,
+        "window_count": 9
+      },
+      {
+        "cycle": 83,
+        "old_pid": 2983113,
+        "old_exited": true,
+        "first_damage_ms": 157.804,
+        "pid": 2983176,
+        "window_count": 10
+      },
+      {
+        "cycle": 84,
+        "old_pid": 2983176,
+        "old_exited": true,
+        "first_damage_ms": 156.929,
+        "pid": 2983239,
+        "window_count": 11
+      },
+      {
+        "cycle": 85,
+        "old_pid": 2983239,
+        "old_exited": true,
+        "first_damage_ms": 157.508,
+        "pid": 2983303,
+        "window_count": 12
+      },
+      {
+        "cycle": 86,
+        "old_pid": 2983303,
+        "old_exited": true,
+        "first_damage_ms": 159.561,
+        "pid": 2983366,
+        "window_count": 13
+      },
+      {
+        "cycle": 87,
+        "old_pid": 2983366,
+        "old_exited": true,
+        "first_damage_ms": 158.389,
+        "pid": 2983429,
+        "window_count": 14
+      },
+      {
+        "cycle": 88,
+        "old_pid": 2983429,
+        "old_exited": true,
+        "first_damage_ms": 157.876,
+        "pid": 2983492,
+        "window_count": 15
+      },
+      {
+        "cycle": 89,
+        "old_pid": 2983492,
+        "old_exited": true,
+        "first_damage_ms": 166.952,
+        "pid": 2983555,
+        "window_count": 16
+      },
+      {
+        "cycle": 90,
+        "old_pid": 2983555,
+        "old_exited": true,
+        "first_damage_ms": 168.634,
+        "pid": 2983618,
+        "window_count": 17
+      },
+      {
+        "cycle": 91,
+        "old_pid": 2983618,
+        "old_exited": true,
+        "first_damage_ms": 155.524,
+        "pid": 2983681,
+        "window_count": 18
+      },
+      {
+        "cycle": 92,
+        "old_pid": 2983681,
+        "old_exited": true,
+        "first_damage_ms": 157.25,
+        "pid": 2983745,
+        "window_count": 19
+      },
+      {
+        "cycle": 93,
+        "old_pid": 2983745,
+        "old_exited": true,
+        "first_damage_ms": 166.168,
+        "pid": 2983808,
+        "window_count": 20
+      },
+      {
+        "cycle": 94,
+        "old_pid": 2983808,
+        "old_exited": true,
+        "first_damage_ms": 166.313,
+        "pid": 2983899,
+        "window_count": 21
+      },
+      {
+        "cycle": 95,
+        "old_pid": 2983899,
+        "old_exited": true,
+        "first_damage_ms": 164.49,
+        "pid": 2983962,
+        "window_count": 22
+      },
+      {
+        "cycle": 96,
+        "old_pid": 2983962,
+        "old_exited": true,
+        "first_damage_ms": 166.137,
+        "pid": 2984046,
+        "window_count": 23
+      },
+      {
+        "cycle": 97,
+        "old_pid": 2984046,
+        "old_exited": true,
+        "first_damage_ms": 182.612,
+        "pid": 2984251,
+        "window_count": 1
+      },
+      {
+        "cycle": 98,
+        "old_pid": 2984251,
+        "old_exited": true,
+        "first_damage_ms": 157.976,
+        "pid": 2984350,
+        "window_count": 2
+      },
+      {
+        "cycle": 99,
+        "old_pid": 2984350,
+        "old_exited": true,
+        "first_damage_ms": 160.977,
+        "pid": 2984413,
+        "window_count": 3
+      },
+      {
+        "cycle": 100,
+        "old_pid": 2984413,
+        "old_exited": true,
+        "first_damage_ms": 160.277,
+        "pid": 2984477,
+        "window_count": 4
+      }
+    ],
+    "ding_state": {
+      "state": 1
+    },
+    "final_leaks": "{\"oneMkActors\":[],\"clonesOnStage\":[],\"extState\":2,\"bridge\":false,\"windows\":[\"one-mk-wall M1a isolated probe\",\"one-mk-wall M1a isolated probe\",\"one-mk-wall M1a isolated probe\",\"one-mk-wall M1a isolated probe\"]}",
+    "final_managed_windows": [
+      "Desktop Icons 1",
+      "Desktop Icons 2",
+      "one-mk-wall M1a isolated probe",
+      "one-mk-wall M1a isolated probe",
+      "one-mk-wall M1a isolated probe",
+      "one-mk-wall M1a isolated probe"
+    ],
+    "qualification_failures": [
+      "6B restart budget not implemented; cascade qualification unavailable",
+      "3-second watchdog deadline missed",
+      "managed renderer windows retained after disable",
+      "100-cycle process/window invariant failed"
+    ]
+  },
+  "harness_start": "isolated Shell up: leader 2971989 bus unix:path=/tmp/dbus-1o49ou0r8J,guid=016037fcd6e31dc758977ed96ae4e625",
+  "runtime_version": "gst-inspect-1.0 version 1.28.2\nGStreamer 1.28.2\nhttps://launchpad.net/ubuntu/+source/gstreamer1.0",
+  "native_dependencies": {
+    "coreelements": "linux-vdso.so.1 (0x00007ad2a75e7000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007ad2a73ed000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007ad2a7369000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007ad2a7211000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007ad2a71ad000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007ad2a6e00000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007ad2a71a4000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007ad2a707e000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007ad2a7073000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007ad2a6d54000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007ad2a7062000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007ad2a75e9000)",
+    "matroska": "linux-vdso.so.1 (0x000074c6e350f000)\n\tlibgstpbutils-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstpbutils-1.0.so.0 (0x000074c6e344e000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000074c6e3368000)\n\tlibgstaudio-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstaudio-1.0.so.0 (0x000074c6e32dd000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000074c6e3259000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000074c6e30ec000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000074c6e3086000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000074c6e2f2e000)\n\tlibgstriff-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstriff-1.0.so.0 (0x000074c6e2f1d000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x000074c6e2edb000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x000074c6e2ebd000)\n\tlibbz2.so.1.0 => /usr/lib/x86_64-linux-gnu/libbz2.so.1.0 (0x000074c6e2ea8000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000074c6e2d80000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000074c6e2a00000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000074c6e2d76000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000074c6e2c73000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000074c6e2c6c000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000074c6e2c59000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000074c6e2c4e000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000074c6e2954000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000074c6e3511000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000074c6e2c37000)",
+    "vpx": "linux-vdso.so.1 (0x000074c61d10a000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000074c61cf66000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000074c61cf02000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000074c61cdaa000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x000074c61cd68000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000074c61cc82000)\n\tlibvpx.so.12 => /usr/lib/x86_64-linux-gnu/libvpx.so.12 (0x000074c61c800000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000074c61c400000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000074c61cc79000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000074c61c6da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000074c61cc68000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000074c61cc5b000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000074c61c62e000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000074c61cbd7000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x000074c61c3e2000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000074c61cbcd000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000074c61c2df000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000074c61d10c000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000074c61c2c8000)",
+    "videoconvertscale": "linux-vdso.so.1 (0x00007dec718c5000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007dec717b2000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007dec71645000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007dec715e1000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007dec71489000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007dec71403000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007dec71000000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007dec713f9000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007dec712f6000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007dec70eda000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007dec712ed000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007dec712dc000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007dec712d1000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007dec71225000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007dec718c7000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007dec70ec3000)",
+    "waylandsink": "linux-vdso.so.1 (0x000079cf30db3000)\n\tlibgstwayland-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstwayland-1.0.so.0 (0x000079cf30d70000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000079cf30c03000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000079cf30b9f000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000079cf30a47000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000079cf30961000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000079cf30955000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000079cf30600000)\n\tlibwayland-client.so.0 => /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 (0x000079cf30942000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000079cf3093b000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000079cf304da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000079cf30928000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000079cf3091d000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000079cf30871000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000079cf30456000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000079cf30353000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000079cf30858000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000079cf30db5000)",
+    "videotestsrc": "linux-vdso.so.1 (0x00007e44a2b40000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007e44a2a2b000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007e44a28be000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007e44a285a000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007e44a2702000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007e44a267e000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007e44a2579000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007e44a2453000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007e44a2200000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007e44a2449000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007e44a2442000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007e44a242f000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007e44a2424000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007e44a2154000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007e44a2b42000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007e44a213d000)",
+    "app": "linux-vdso.so.1 (0x000079b753a4d000)\n\tlibgstapp-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstapp-1.0.so.0 (0x000079b753a11000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000079b7538a4000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000079b753820000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000079b7537bc000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000079b753664000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000079b753400000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000079b75365b000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000079b7532da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000079b75364a000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000079b75363f000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000079b75322e000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000079b753a4f000)"
+  },
+  "fixture": {
+    "blake3": "45f0c75e174f68282c34b4ef9c561b2de6be68f12183a90fbe48e6de548927e8",
+    "bytes": 312344,
+    "dimensions": [
+      3840,
+      1080
+    ],
+    "frames": 1200,
+    "fps": 30
+  },
+  "failure": "STOP: 6B restart budget not implemented; cascade qualification unavailable; 3-second watchdog deadline missed; managed renderer windows retained after disable; 100-cycle process/window invariant failed",
+  "cleanup": "all owned children reaped; session directory and generated media removed",
+  "shell_log_tail": [
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "** Message: 21:48:49.080: Shutting down GNOME Shell"
+  ],
+  "shell_warnings": [
+    "(gnome-shell:2971994): libmutter-WARNING **: 21:47:01.598: Unknown experimental feature 'scale-monitor-framebuffer'",
+    "(gnome-shell:2971994): libmutter-WARNING **: 21:47:01.598: Unknown experimental feature 'xwayland-native-scaling'",
+    "(gnome-shell:2971994): libmutter-WARNING **: 21:47:01.844: There is no colord server available",
+    "(gnome-shell:2971994): GNOME Shell-WARNING **: 21:47:02.132: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:2971994): GNOME Shell-CRITICAL **: 21:47:02.188: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:2971994): GNOME Shell-CRITICAL **: 21:47:02.188: Could not get proxy for session null: Error: Argument string may not be null",
+    "(gnome-shell:2971994): GNOME Shell-WARNING **: 21:47:02.188: Failed to start state machine: can't access property \"connectObject\", this._loginUser is null",
+    "(gnome-shell:2971994): Gjs-WARNING **: 21:47:02.188: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:",
+    "(/usr/libexec/xdg-desktop-portal:2972434): xdg-desktop-portal-WARNING **: 21:47:02.383: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files",
+    "(gnome-shell:2971994): accountsservice-WARNING **: 21:47:02.400: ActUserManager: user (null) has no username (uid: -1)",
+    "(/usr/libexec/xdg-desktop-portal:2972434): xdg-desktop-portal-WARNING **: 21:47:02.578: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:2972434): xdg-desktop-portal-WARNING **: 21:47:02.578: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:2972434): xdg-desktop-portal-WARNING **: 21:47:02.579: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:2972434): xdg-desktop-portal-WARNING **: 21:47:02.619: Failed to connect to PipeWire: Couldn't connect to PipeWire",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:30.937: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:30.937: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:31.592: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:32.949: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:32.949: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:33.589: Monitor 'MetaVendor' has no configuration which is-current!",
+    "(gnome-shell:2971994): Clutter-WARNING **: 21:47:35.588: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.",
+    "(gnome-shell:2971994): Clutter-WARNING **: 21:47:35.588: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.",
+    "(gnome-shell:2971994): Clutter-WARNING **: 21:47:35.588: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.",
+    "(gnome-shell:2971994): Clutter-WARNING **: 21:47:35.588: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:35.593: Monitor 'MetaVendor' has no configuration which is-current!",
+    "(gnome-shell:2971994): libmutter-CRITICAL **: 21:47:35.625: meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:36.173: Monitor 'MetaVendor' has no configuration which is-current!",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:36.173: Monitor 'MetaVendor' has no configuration which is-current!",
+    "(gnome-shell:2971994): libmutter-CRITICAL **: 21:47:36.216: meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed",
+    "** (xdg-desktop-portal-gnome:2972450): WARNING **: 21:47:38.310: Monitor 'MetaVendor' has no configuration which is-current!",
+    "(gnome-shell:2971994): Gjs-WARNING **: 21:47:58.913: Type GITypeInfo of property AccountsService.User::password-mode does not match return type GITypeInfo of getter get_password_mode. Falling back to slow path"
+  ],
+  "warning_gate": "FAILED: complete Shell log contains warnings/errors; no allowlist",
+  "evidence_note": "captures are downscaled lossless WebP; original dimensions/hash/timestamps retained, original PNGs removed with scratch. Screenshot IPC may overrun the 250ms target.",
+  "post_cleanup_private_runtime_processes": []
+}

@@ -1,0 +1,373 @@
+{
+  "desktop-trace": {
+    "date_utc": "2026-10-30T18:08:12.570406+00:00",
+    "status": "failed",
+    "presentation_gate": "FAILED: compositor required a protocol workaround for the Rust client",
+    "protocol_violations": [
+      "(gnome-shell:2805148): libmutter-WARNING **: 21:08:39.754: Buggy client (one-mk-wall) committed initial non-empty content without acknowledging configuration, working around."
+    ],
+    "failure": null,
+    "cleanup": "[Errno 13] Permission denied",
+    "measurements": {
+      "first_damage_observed_ms": 156.432,
+      "initial": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 2,
+        "stale": false,
+        "cloneCount": 2,
+        "events": [
+          "797281720 spawned renderer pid=2807249",
+          "797281748 adopted window \"null\" pid=2807249",
+          "797281757 first frame from renderer"
+        ],
+        "focus": null
+      },
+      "active": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 62,
+        "stale": false,
+        "cloneCount": 2,
+        "events": [
+          "797281720 spawned renderer pid=2807249",
+          "797281748 adopted window \"null\" pid=2807249",
+          "797281757 first frame from renderer",
+          "797281896 overview-hidden"
+        ],
+        "focus": null
+      },
+      "unplug": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 97,
+        "stale": false,
+        "cloneCount": 1,
+        "events": [
+          "797281720 spawned renderer pid=2807249",
+          "797281748 adopted window \"null\" pid=2807249",
+          "797281757 first frame from renderer",
+          "797281896 overview-hidden",
+          "797283952 monitors-changed"
+        ],
+        "focus": null
+      },
+      "replug": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 161,
+        "stale": false,
+        "cloneCount": 2,
+        "events": [
+          "797281720 spawned renderer pid=2807249",
+          "797281748 adopted window \"null\" pid=2807249",
+          "797281757 first frame from renderer",
+          "797281896 overview-hidden",
+          "797283952 monitors-changed",
+          "797285107 monitors-changed"
+        ],
+        "focus": null
+      }
+    }
+  },
+  "normal-trace": {
+    "date_utc": "2026-10-30T18:15:35.871969+00:00",
+    "status": "failed",
+    "presentation_gate": "FAILED: compositor required a protocol workaround for the Rust client",
+    "protocol_violations": [
+      "(gnome-shell:2830245): libmutter-WARNING **: 21:16:01.375: Buggy client (one-mk-wall) committed initial non-empty content without acknowledging configuration, working around."
+    ],
+    "failure": "STOP: Rust/GStreamer initial surface failed first-frame/extent presentation gate",
+    "cleanup": "all owned children reaped; session directory and generated media removed",
+    "measurements": {
+      "first_damage_observed_ms": 168.891,
+      "initial": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          1920,
+          0,
+          1920,
+          1080
+        ],
+        "buffer": [
+          1920,
+          0,
+          1920,
+          1080
+        ],
+        "damage": 2,
+        "stale": false,
+        "cloneCount": 2,
+        "events": [
+          "797723346 spawned renderer pid=2831721",
+          "797723375 adopted window \"null\" pid=2831721",
+          "797723378 first frame from renderer"
+        ],
+        "focus": null
+      }
+    }
+  },
+  "own-trace": {
+    "date_utc": "2026-10-30T18:13:45.084937+00:00",
+    "status": "failed",
+    "presentation_gate": null,
+    "protocol_violations": null,
+    "failure": null,
+    "cleanup": "all owned children reaped; session directory and generated media removed",
+    "measurements": {
+      "first_damage_observed_ms": 281.35,
+      "initial": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 1,
+        "stale": false,
+        "cloneCount": 2,
+        "events": [
+          "797611591 spawned renderer pid=2825986",
+          "797611602 adopted window \"null\" pid=2825986",
+          "797611718 first frame from renderer",
+          "797611777 overview-hidden"
+        ],
+        "focus": null
+      },
+      "active": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 27,
+        "stale": false,
+        "cloneCount": 2,
+        "events": [
+          "797611591 spawned renderer pid=2825986",
+          "797611602 adopted window \"null\" pid=2825986",
+          "797611718 first frame from renderer",
+          "797611777 overview-hidden"
+        ],
+        "focus": null
+      },
+      "unplug": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 41,
+        "stale": false,
+        "cloneCount": 1,
+        "events": [
+          "797611591 spawned renderer pid=2825986",
+          "797611602 adopted window \"null\" pid=2825986",
+          "797611718 first frame from renderer",
+          "797611777 overview-hidden",
+          "797613957 monitors-changed"
+        ],
+        "focus": null
+      },
+      "replug": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          3840,
+          1080
+        ],
+        "damage": 66,
+        "stale": false,
+        "cloneCount": 2,
+        "events": [
+          "797611591 spawned renderer pid=2825986",
+          "797611602 adopted window \"null\" pid=2825986",
+          "797611718 first frame from renderer",
+          "797611777 overview-hidden",
+          "797613957 monitors-changed",
+          "797615117 monitors-changed"
+        ],
+        "focus": null
+      }
+    }
+  }
+}

@@ -7,11 +7,14 @@ The host runtime is an explicitly UNQUALIFIED laboratory dependency.
 """
 
 import ctypes
+import argparse
 import datetime
 import json
 import os
 from pathlib import Path
 import pwd
+import re
+import runpy
 import shutil
 import signal
 import stat
@@ -27,8 +30,13 @@ ROOT = LAB / "wall-m1-session"
 BINARY = REPO / "target/debug/one-mk-wall"
 REPORT = LAB / "presentation.json"
 HARNESS = HERE / "isolated-session.sh"
-BRIDGE = 'Main.extensionManager.lookup("wallpaper-spike@one-mk.test").stateObj.bridge'
-PLUGINS = ["coreelements", "matroska", "vpx", "videoconvertscale", "waylandsink", "videotestsrc"]
+BRIDGE = 'Main.extensionManager.lookup("wallpaper-spike@one-mk.test").stateObj?.bridge'
+PLUGINS = ["coreelements", "matroska", "vpx", "videoconvertscale", "waylandsink", "videotestsrc", "app"]
+
+
+def shell_warnings(log):
+    return [line for line in log.splitlines()
+            if re.search(r'WARNING|CRITICAL|Gjs[- ](?:ERROR|error)|JS (?:ERROR|WARNING)', line)]
 
 
 def clean_environment():
@@ -40,6 +48,7 @@ def clean_environment():
         "USER": pwd.getpwuid(os.getuid()).pw_name,
         "SPIKE": str(ROOT),
         "FAKE_GDM": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
 
 
@@ -65,15 +74,15 @@ def evaluate(source):
 def snapshot():
     return evaluate(f"""(() => {{
         const bridge = {BRIDGE};
-        const renderer = bridge._renderer;
+        const renderer = bridge?._renderer;
         const frame = renderer?.win.get_frame_rect();
         const buffer = renderer?.win.get_buffer_rect();
-        return {{monitors: bridge._monitorsVariant(),
+        return {{monitors: bridge?._monitorsVariant() ?? [],
             frame: frame ? [frame.x, frame.y, frame.width, frame.height] : null,
             buffer: buffer ? [buffer.x, buffer.y, buffer.width, buffer.height] : null,
-            damage: bridge.stats.damage, stale: bridge._stale,
-            cloneCount: bridge._clones.length,
-            events: bridge.stats.events.slice(-15),
+            damage: bridge?.stats.damage ?? 0, stale: bridge?._stale ?? false,
+            cloneCount: bridge?._clones.length ?? 0,
+            events: bridge?.stats.events.slice(-15) ?? [],
             focus: global.display.focus_window?.get_title() ?? null}};
     }})()""")
 
@@ -106,7 +115,7 @@ def cleanup():
             for child in descendants(os.getpid()):
                 try:
                     os.kill(child, termination)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
             try:
                 while os.waitpid(-1, os.WNOHANG)[0]:
@@ -121,11 +130,22 @@ def cleanup():
         metadata = bus_path.lstat()
         if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.getuid():
             bus_path.unlink()
+    log = (ROOT / 'log/shell.log').read_text(errors='replace') if (ROOT / 'log/shell.log').exists() else ''
     if ROOT.exists():
         shutil.rmtree(ROOT)
+    return log
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--normal-window', action='store_true')
+    parser.add_argument('--trace', action='store_true')
+    parser.add_argument('--label', default='presentation')
+    parser.add_argument('--sink', choices=['wayland', 'own'], default='own')
+    parser.add_argument('--matrix', action='store_true')
+    parser.add_argument('--binary', type=Path, default=BINARY)
+    args = parser.parse_args()
+    args.binary = args.binary.resolve(strict=True)
     if ROOT.exists():
         raise RuntimeError("private session already exists; refusing to reuse or kill another run")
     if ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) != 0:
@@ -139,7 +159,7 @@ def main():
     started = False
     try:
         started = True
-        report["harness_start"] = command([str(HARNESS), "start", "2"], clean_environment())
+        report["harness_start"] = command([str(HARNESS), "start", "3" if args.matrix else "2"], clean_environment())
         ROOT.chmod(0o700)
         plugins = ROOT / "plugins"
         plugins.mkdir(mode=0o700)
@@ -147,11 +167,14 @@ def main():
             source = Path(f"/usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgst{plugin}.so")
             shutil.copyfile(source, plugins / source.name)
         media_environment = clean_environment() | {
+            "ONE_MK_WALL_RISK_SINK": args.sink,
             "ONE_MK_WALL_RISK_ROOT": str(ROOT),
             "GST_PLUGIN_PATH": str(plugins), "GST_PLUGIN_PATH_1_0": str(plugins),
             "GST_PLUGIN_SYSTEM_PATH": "", "GST_PLUGIN_SYSTEM_PATH_1_0": "",
             "GST_REGISTRY_1_0": str(ROOT / "cache/registry.bin"), "GST_REGISTRY_FORK": "no",
         }
+        if args.trace:
+            media_environment['WAYLAND_DEBUG'] = 'client'
         report["runtime_version"] = command(["gst-inspect-1.0", "--version"], media_environment)
         report["native_dependencies"] = {
             plugin: command(["ldd", str(plugins / f"libgst{plugin}.so")], clean_environment())
@@ -164,64 +187,79 @@ def main():
                  "video/x-raw,format=I420,width=3840,height=1080,framerate=30/1", "!", "vp9enc",
                  "deadline=1", "cpu-used=8", "threads=2", "!", "webmmux", "!", "filesink",
                  f"location={ROOT}/fixture.webm"], media_environment, timeout=120)
-        fixture_hash = command([str(BINARY), "--risk-hash-fixture"], media_environment)
+        fixture_hash = command([str(args.binary), "--risk-hash-fixture"], media_environment)
         report["fixture"] = {"blake3": fixture_hash, "bytes": (ROOT / "fixture.webm").stat().st_size,
                              "dimensions": [3840, 1080], "frames": 1200, "fps": 30}
         for extension in ["spike-harness@one-mk.test", "wallpaper-spike@one-mk.test"]:
             private(["gdbus", "call", "--session", "-d", "org.gnome.Shell.Extensions", "-o", "/org/gnome/Shell/Extensions",
                      "-m", "org.gnome.Shell.Extensions.EnableExtension", extension])
         evaluate('Main.overview.hide(); "hidden"')
+        if args.normal_window:
+            evaluate(f'{BRIDGE}._setType = false')
         arguments = ["/usr/bin/env", *[f"{name}={value}" for name, value in media_environment.items()
-                      if name.startswith(("GST_", "ONE_MK_WALL_"))], f"ONE_MK_WALL_RISK_HASH={fixture_hash}",
-                     str(BINARY), "--present=gnome", "--risk-probe"]
-        before = time.monotonic()
-        report["renderer_pid"] = evaluate(f"{BRIDGE}.startRenderer({json.dumps(arguments)})")
-        while time.monotonic() - before < 5:
-            current = snapshot()
-            if current["damage"]:
-                break
-            time.sleep(0.05)
-        report["measurements"]["first_damage_observed_ms"] = round((time.monotonic() - before) * 1000, 3)
-        report["measurements"]["initial"] = current
-        if not current["damage"] or current["buffer"] != [0, 0, 3840, 1080]:
-            raise RuntimeError("STOP: Rust/GStreamer initial surface failed first-frame/extent presentation gate")
-        report["stages"].append("initial first frame and two-monitor extent passed")
-        initial_damage = current["damage"]
-        time.sleep(2)
-        report["measurements"]["active"] = snapshot()
-        if report["measurements"]["active"]["damage"] <= initial_damage:
-            raise RuntimeError("STOP: hidden Rust/GStreamer window did not continue producing damage")
-        private(["python3", str(HERE / "client/displayconfig.py"), "apply", "1"])
-        time.sleep(1)
-        report["measurements"]["unplug"] = snapshot()
-        private(["python3", str(HERE / "client/displayconfig.py"), "apply", "2"])
-        time.sleep(2)
-        report["measurements"]["replug"] = snapshot()
-        if report["measurements"]["replug"]["buffer"] != [0, 0, 3840, 1080]:
-            raise RuntimeError("STOP: hot-plug did not restore the required two-monitor Rust/GStreamer surface within 2 seconds")
-        report["stages"].append("hot-plug extent restored; visible gap NOT measured")
-        report["status"] = "partial-risk-pass-not-M1-acceptance"
+                      if name.startswith(("GST_", "ONE_MK_WALL_")) or name == 'WAYLAND_DEBUG'], f"ONE_MK_WALL_RISK_HASH={fixture_hash}",
+                     str(args.binary), "--present=gnome", "--risk-probe"]
+        if args.matrix:
+            report['measurements'] = runpy.run_path(str(HERE / 'm1a-matrix.py'))['run_matrix'](
+                evaluate, private, snapshot, arguments, ROOT, LAB, report)
+            report['status'] = 'partial-risk-pass-not-M1-acceptance'
+            failures = report['measurements'].get('qualification_failures', [])
+            if failures:
+                raise RuntimeError('STOP: ' + '; '.join(failures))
+        else:
+            before = time.monotonic()
+            report["renderer_pid"] = evaluate(f"{BRIDGE}.startRenderer({json.dumps(arguments)})")
+            while time.monotonic() - before < 5:
+                current = snapshot()
+                if current["damage"]:
+                    break
+                time.sleep(0.05)
+            report["measurements"]["first_damage_observed_ms"] = round((time.monotonic() - before) * 1000, 3)
+            report["measurements"]["initial"] = current
+            if not current["damage"] or current["buffer"] != [0, 0, 3840, 1080]:
+                raise RuntimeError("STOP: Rust/GStreamer initial surface failed first-frame/extent presentation gate")
+            report["stages"].append("initial first frame and two-monitor extent passed")
+            initial_damage = current["damage"]
+            time.sleep(2)
+            report["measurements"]["active"] = snapshot()
+            if report["measurements"]["active"]["damage"] <= initial_damage:
+                raise RuntimeError("STOP: hidden Rust/GStreamer window did not continue producing damage")
+            private(["python3", str(HERE / "client/displayconfig.py"), "apply", "1"])
+            time.sleep(1)
+            report["measurements"]["unplug"] = snapshot()
+            private(["python3", str(HERE / "client/displayconfig.py"), "apply", "2"])
+            time.sleep(2)
+            report["measurements"]["replug"] = snapshot()
+            if report["measurements"]["replug"]["buffer"] != [0, 0, 3840, 1080]:
+                raise RuntimeError("STOP: hot-plug did not restore the required two-monitor Rust/GStreamer surface within 2 seconds")
+            report["stages"].append("hot-plug extent restored; visible gap NOT measured")
+            report["status"] = "partial-risk-pass-not-M1-acceptance"
     except Exception as error:
         report["failure"] = str(error)
+        report['status'] = 'failed'
     finally:
         if started:
-            if (ROOT / "log/shell.log").exists():
-                log = (ROOT / "log/shell.log").read_text(errors="replace")
-                (LAB / "shell.log").write_text(log)
-                report["shell_log_tail"] = log.splitlines()[-45:]
-                violations = [line for line in log.splitlines() if "Buggy client (one-mk-wall)" in line]
-                if violations:
-                    report["presentation_gate"] = "FAILED: compositor required a protocol workaround for the Rust client"
-                    report["protocol_violations"] = violations
-                    report["status"] = "failed"
+            log = (ROOT / 'log/shell.log').read_text(errors='replace') if (ROOT / 'log/shell.log').exists() else ''
             try:
-                cleanup()
+                log = cleanup()
                 report["cleanup"] = "all owned children reaped; session directory and generated media removed"
             except Exception as error:
                 report["cleanup"] = str(error)
                 report["cleanup_traceback"] = traceback.format_exc()
                 report["status"] = "failed"
-        REPORT.write_text(json.dumps(report, indent=2) + "\n")
+            if log:
+                (LAB / f"{args.label}-shell.log").write_text(log)
+                report["shell_log_tail"] = log.splitlines()[-45:]
+                violations = [line for line in log.splitlines() if "Buggy client (one-mk-wall)" in line]
+                report['shell_warnings'] = shell_warnings(log)
+                if report['shell_warnings']:
+                    report['status'] = 'failed'
+                    report['warning_gate'] = 'FAILED: complete Shell log contains warnings/errors; no allowlist'
+                if violations:
+                    report["presentation_gate"] = "FAILED: compositor required a protocol workaround for the Rust client"
+                    report["protocol_violations"] = violations
+                    report["status"] = "failed"
+        (LAB / f'{args.label}.json').write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return 1 if report["status"] == "failed" else 0
 
