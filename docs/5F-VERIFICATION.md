@@ -1,154 +1,139 @@
-# 5F verification record — 2026-10-30
+# 5F hostile-review remediation — 2026-10-30
 
-This is an implementation acceptance record, **not release or hardware
-qualification**. Baseline: `ea5df2a` (the per-device-key-rules plan). No
-native capture/injection backend was started. Tests, daemons, CLI commands,
-and windows ran with disposable homes/runtime directories and a clean
-environment, without the owner's Wayland, D-Bus or session variables.
-Window checks used only a private Xvfb display. No owner configuration was
-used. All test processes were stopped after each harness run.
+Baseline: `wave5`, `5b1cd2d` (Save the Claude reviews of the Codex wave 5
+work). Branch: `t3/fix-wave5-mouse-mode-defects`. This record supersedes the
+earlier 5F acceptance claims. It covers **Part B only** of
+`reviews/WAVE5-CLAUDE-REVIEW-5A-5F.md`; Part A is not fixed or qualified here.
+This is not a claim of bug-free software or native-platform qualification.
+
+## Findings and decisions
+
+| Finding | Status | Change / deliberate policy |
+| --- | --- | --- |
+| B1 | Fixed | Both initial broadcast visits and retunes strip autoscroll and gestures. Middle/side button down/up reach both targets through ordinary mappings. The broadcast Tune has no mouse-mode deadline. |
+| B2 | Fixed | Both engines and CLI reject primary left/right buttons, including aliases. Existing invalid settings are skipped, not installed. `keymap check`, doctor and the Mouse card show actionable warnings. The card does not portray those rules as active, including numeric `1`/`2` aliases. |
+| B3 | Fixed, policy chosen | A release replays a click only while displacement has always stayed below `min(16, smallest threshold / 2)` backend motion units on both axes. Crossing slop permanently suppresses replay for that press, even for a wrong-direction/short swipe or return to origin. |
+| B4 | Fixed | Selecting a device in For: hides the mode controls and explains that they require global/OS/computer scope. Other per-device controls remain available. |
+| B5 | Fixed | `Mapper::click` interrupts pending tap/hold before emitting the replayed button, so a pending Ctrl hold becomes Ctrl+click, not click then Esc. |
+| B6 | Fixed | Compare resolved autoscroll config and compiled gesture rules independently. Preserve unchanged engines; replace only the changed engine. Send ScrollStop only when active autoscroll actually stopped. |
+| B7 | Fixed | Hand-written device-scoped mode rules are explicitly ignored, warned about, and excluded from active UI rows. They are not silently applied to all mice. |
+| B8 | Fixed with documented distinction | The cancelling physical Esc down/repeats/up are consumed. A previously held Esc still releases remotely. Remap-generated Esc deliberately remains ordinary remote input, not a mode command; physical Esc is the cancellation control. |
+| B9 | Fixed | Overlap warnings use resolved/inherited buttons instead of defaulting each override to middle. Direction parsing/removal accepts capitalized config directions. Deadline comment describes both timers. |
+| B10 | Fixed by documentation, no coordinate conversion | CLI, README and tuning docs say backend motion units, not logical pixels. Keep the legacy `threshold_px` field for compatibility. Cross-OS/scaling equivalence is explicitly not claimed. |
+| B11 / test notes | Fixed | Replace vacuous lifecycle assertions with in-place reload/sleep motion/release checks and retained-Tune cleanup tests; mutation-check cancellation. Commit the real-binary keyboard/screenshot/CPU harness, with asserted saved values instead of the old ambiguous `False` printout. |
+
+## Regression and mutation evidence
+
+Initial red runs reproduced primary-button capture, missed-swipe replay,
+pending tap/hold click ordering, broadcast interception, unconditional retune
+cancellation, and capitalized CLI removal. Self-review added a numeric UI
+alias regression, observed failing on `1`, then fixed it. Additional config
+and UI coverage was added during implementation; no claim is made that every
+config/UI assertion had a separately recorded pristine-baseline red run.
+
+`mouse_modes_cancel_on_relevant_reload_and_display_sleep` keeps the visit
+alive, changes actual mode rules on reload, then moves/releases after gesture
+cancellation. It no longer immediately leaves the visit or merely observes a
+dropped controller. The retained-Tune test exercises both cancellation and
+release, then explicitly tries to tick, fire, and replay the cancelled mode.
+Lock/disconnect destroy the visit state; the old branches were not proof of
+the extra 5F cancellation calls and are no longer presented as such.
+
+Each deliberate mutation below was tested separately, observed failing, and
+restored before final validation:
+
+| Deliberately removed behavior | Regression that failed |
+| --- | --- |
+| Gesture cancellation inside Tune cancellation | `mouse_modes_cancel_on_relevant_reload_and_display_sleep` |
+| Display-sleep call to cancellation | `mouse_modes_cancel_on_relevant_reload_and_display_sleep` |
+| Replacement of changed gesture rules on reload | `mouse_modes_cancel_on_relevant_reload_and_display_sleep` |
+| Mouse-mode cancellation from Tune release | `retained_tune_cannot_emit_gesture_or_scroll_after_release` |
+
+Other focused coverage includes held-Esc repeat/release safety, cancelling Esc
+followed by an ordinary Esc, independently changing each mouse mode, unchanged
+retunes, unsafe existing config, device-scope warnings/resolution, inherited
+button warnings, slop/return-to-origin, and real two-target broadcast routing
+before and after reload. Existing held-output and randomized engine/mapper
+tests remain; they are not exhaustive fuzzing or hardware proof.
 
 ## Automated checks
 
-The exact clean-environment `cargo test -j 2 --workspace` is **not green**:
-the unchanged input-backend test
-`portal::tests::the_portal_going_away_lets_go_and_reconnects_when_it_is_back`
-times out waiting for reconnection. The same failure reproduces with the
-previous build's existing input-test executable; neither portal source nor
-portal tests changed in 5F. This is an acceptance blocker outside 5F, not a
-test to silently ignore. Actual output:
-
-```text
-failures:
-    portal::tests::the_portal_going_away_lets_go_and_reconnects_when_it_is_back
-test result: FAILED. 179 passed; 1 failed; 3 ignored; 0 measured; 0 filtered out; finished in 10.76s
-```
-
-The previous executable, running only that test:
-
-```text
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 143 filtered out; finished in 10.60s
-```
-
-The entire workspace with only that named test filtered passes:
+All run with a clean environment, disposable HOME / ONE_MK_HOME and a 0700
+runtime directory. DISPLAY points only to a private Xvfb; no Wayland or D-Bus
+session variables are inherited. The owner's daemon/window/config/clipboard
+are never used. Every cargo command uses `-j 2`; no `cargo fmt` was run.
 
 ```sh
-cargo test -j 2 --workspace -- --skip the_portal_going_away_lets_go_and_reconnects_when_it_is_back
-```
-
-Final results include 289 main-daemon tests, 46 window tests, 179 input
-tests, 149 protocol tests, and all remaining integration/doc tests. Existing
-ignored hardware/manual tests remain ignored. All three required clippy
-commands pass without warnings:
-
-```sh
-cargo clippy -j 2 --workspace --all-targets
-cargo clippy -j 2 --target x86_64-pc-windows-msvc -p one-mk-input -p one-mk-proto -p one-mk-ctl -p one-mk-app -p one-mk-tray --all-targets
-cargo clippy -j 2 --target aarch64-apple-darwin -p one-mk-input -p one-mk-proto -p one-mk-ctl -p one-mk-app -p one-mk-tray --all-targets
+cargo test -j 2 --workspace
+cargo clippy -j 2 --workspace --all-targets -- -D warnings
+cargo clippy -j 2 --target x86_64-pc-windows-msvc -p one-mk-input -p one-mk-proto -p one-mk-ctl -p one-mk-app -p one-mk-tray --all-targets -- -D warnings
+cargo clippy -j 2 --target aarch64-apple-darwin -p one-mk-input -p one-mk-proto -p one-mk-ctl -p one-mk-app -p one-mk-tray --all-targets -- -D warnings
 cargo build -j 2 -p one-mk -p one-mk-app
 ```
 
-These commands require a clean environment as described above. Windows and
-macOS results are **compile-only**, not execution results.
+The full workspace passes **without filtering the portal test**. The former
+portal failure in this document is not a current failure. Existing ignored
+hardware/manual tests remain ignored. All three clippy commands pass with
+warnings denied. Windows/macOS results are compile-only, not native execution.
 
-Pure tests cover thresholds, both axes, dead zone, finite/bounded hostile
-motion, duplicate transitions, click replay, once-per-press outputs and
-cancellation. Deterministic randomized streams exercise the engines,
-parser inputs, and shared mapper held-output invariants. These are bounded
-randomized property tests, not an exhaustive proof or a sustained fuzzing
-campaign. Paused Tokio time checks the active-only deadline. In-process
-two-daemon tests use real loopback transport and null backend handles to
-inject motion/buttons, observe target scroll/actions and verify release on
-visit end, reload, lock, simulated display sleep and controller abort.
+## Reproducible private-window and binary QA
 
-Mutation check: removing the pre-interception mapper release on button-up
-causes the reload/reserved-button regression to fail; restoring it passes:
+`scripts/test-mouse-modes.py --output PATH` creates its own private Xvfb,
+isolated homes/runtime directories, an X11 sender and null-backend peer,
+loopback pairing, and windows. Requires Linux /proc, Xvfb, XTest, xwininfo and
+Pillow. It starts no owner-session processes and stops its own children.
+Build the two binaries first with the command above. `--skip-idle` repeats UI
+checks without replacing the CPU measurements; `--seconds` controls each
+sampling interval (default five seconds).
 
-```text
-test app::tests::tuning::reserving_a_held_remapped_button_on_reload_still_releases_its_output ... FAILED
-timed out: Elapsed(())
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 289 filtered out; finished in 5.01s
-```
+Inspected screenshots: off, on, primary-button rejection, ignored device
+config, device selected, narrow and narrow-scrolled, high-density fixture,
+long-rule list and long-rule-list-scrolled, saving, success, error, offline,
+and keyboard off/on. Text and controls remain readable in the scrolled Mouse
+card; device selection shows an explanation instead of doomed controls.
+Saving/error are real window command-job states, using an isolated sibling
+CLI wrapper that delays writes two seconds and optionally simulates a write
+failure. That is UI fault injection, not evidence of an actual disk failure.
 
-## Real executable checks
+The harness focuses the speed text field, sends Shift+Tab twice to the toggle,
+then Space. It repeats in both directions, asserting actual `settings.toml`
+values, and captures the resulting states. It also clicks Remove on a
+capitalized `Left` gesture and asserts that the stored rule disappears.
+This replaces the old uncommitted harness / unasserted `False` claim.
 
-Two real null-backend executables connected over loopback. A previous
-0.1.12 executable first wrote settings and paired trust stores. The new
-build preserved the old pointer/key settings and the trust-store byte
-hashes through configuration updates. The previous executable's precise
-source commit was not established; this is migration evidence for those
-actual files, not all historical formats.
+## Idle CPU and broadcast
 
-The harness exercised help, listing, edits and failures for autoscroll and
-gesture subcommands; scope/app changes, preset/remove/clear; visits and live
-reload; receiver SIGKILL mid-visit; reconnect and switching; graceful sender
-restart; lock-pointer; status, doctor and keymap check. Pairing used the
-same-machine interface because invitations reject loopback by policy;
-subsequent daemon transport used loopback. Actual output excerpts:
+Linux debug executable, private Xvfb capture, one loopback peer, discovery off.
+Both modes disabled for OFF; autoscroll enabled and side-swipe preset for ON.
+Middle and side clicks are injected during broadcast. Two seconds settle,
+then approximately five seconds sampled per state. `/proc/PID/stat` measures
+user+system ticks; CLK_TCK=100. Percent is one core. RSS was 36.27 MiB.
 
-```text
-autoscroll --speed NaN: exit=1
-one-mk: autoscroll speed must be between 0.1 and 10
-gesture threshold 0: exit=1
-one-mk: gesture threshold must be between 1 and 10000 pixels
-REAL BINARY PASS: previous-build migration, CLI success/failure, pairing, visits, reload, kill-9 peer, reconnect, graceful sender restart
-All test processes stopped.
-```
+| State | OFF ticks / CPU | ON ticks / CPU |
+| --- | --- | --- |
+| Before broadcast | 0 / 0.00% | 0 / 0.00% |
+| Broadcast, after middle/side clicks | 10 / 2.00% | 11 / 2.20% |
+| After broadcast ends | 1 / 0.20% | 0 / 0.00% |
 
-Invalid direction returns clap's usage error (exit 2); missing gesture
-removal returns exit 1 with `one-mk gestures list` recovery guidance.
-External null daemons do not expose an input-injection command. Therefore
-physical-motion-to-scroll/action paths were verified by the in-process
-two-daemon tests, **not injected into these external executables**. Actual
-suspend, physical network/Bluetooth loss and native input recovery remain
-unverified.
+These are short, quantized measurements, not a promise of absolute zero CPU.
+Active X11 broadcast itself has a measurable baseline even with modes OFF;
+this change does not eliminate that separate work. The important deterministic
+assertion is **no mouse-mode deadline in broadcast**, not that the daemon's
+entire `broadcast_deadline()` is None: transport keepalives still need a
+deadline. No 16 ms mode deadline survives the broadcast middle click or exit.
 
-## Idle footprint and timer
+## Hostile self-review and remaining qualification
 
-Five-second `/proc` samples of the paired sender, final executable run:
+Checked initial broadcast construction as well as retunes, preservation of
+each mode independently, primary aliases/numeric buttons, skip-versus-warning
+behavior, mapper release ordering, consumed-Esc repeats and already-held Esc,
+case-insensitive removal, sticky click slop, and the distinction between
+mouse deadlines and transport deadlines. Numeric UI aliases were found and
+fixed during this pass. No unresolved Part B defect is knowingly retained.
 
-```text
-IDLE OFF, paired: 0 CPU ticks in 5.00s; 0.000% CPU; RSS 30.30 MiB
-IDLE ON but inactive, paired: 1 CPU ticks in 5.00s; 0.200% CPU; RSS 30.30 MiB
-```
-
-A prior clean run sampled 0 ticks in both states (28.42/28.55 MiB RSS).
-Whole-daemon samples include networking/background activity and scheduler
-granularity; they do **not establish absolute zero idle CPU**. No inactive
-timer/task is introduced by 5F. Only active autoscroll adds a 16 ms deadline,
-including when displacement is inside the dead zone. Stop/reload/visit end
-remove that deadline and discard fractional scroll remainders. Gestures
-have no timer. No release build or LTO measurement was made.
-
-## Real window review
-
-The real debug window was captured and visually inspected on private Xvfb:
-configured, empty, offline, saving, invalid speed, narrow (820×900), HiDPI
-(3600×4400), and twelve long app-scoped rules with scrolling. Reduced motion
-was enabled. Keyboard focus and Space toggled autoscroll; Tab/Return invoked
-the preset and removed one rule. An invalid speed preserved the old setting
-and displayed its error inline. Saving disabled the new mutation controls.
-Actual harness output:
-
-```text
-KEYBOARD toggle after Shift+Tab + Space: False
-PRESET + keyboard Remove result: 1 rules
-Private Xvfb keyboard test processes stopped.
-```
-
-New action controls have button roles; toggle, speed and descriptions have
-accessible names, and each Remove names its gesture. Palette calculations
-give secondary text 7.30:1 on the panel, 5.70:1 on pills and 5.32:1 on lit
-buttons (disabled controls excluded). Native screen-reader operation and
-real desktop scaling are **untested**. Xvfb keyboard checks explicitly
-focused the private window because Xvfb ran without a window manager.
-
-## Remaining qualification
-
-Native GNOME/wlroots, Windows/macOS execution, real suspend, Bluetooth and
-hardware button behavior are untested; status/doctor and the feature docs
-say so. The desktop preset uses OS-default chords that may differ from a
-user's desktop bindings. Advanced gesture editing is CLI/config-only.
-Resolve the pre-existing portal reconnect test before claiming a green
-workspace. Run the [manual hardware acceptance steps](INPUT-TUNING.md#troubleshooting-and-acceptance)
-on each supported platform before shipping this feature as stable.
+Still unqualified: native Windows/macOS capture/injection, physical multi-mouse
+devices, scaled-monitor motion feel, portal/wlroots live sessions, desktop
+switch shortcuts across real desktop environments, and long-duration CPU/RSS
+soaks. The high-density screenshot is a fixture, not a physical scaled-display
+test. Opt-in status remains. Part A and other pre-existing features are outside
+this remediation; green tests do not establish enterprise release readiness.
