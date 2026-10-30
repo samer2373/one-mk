@@ -1,0 +1,32 @@
+   Compiling one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running unittests src/lib.rs (target/debug/deps/one_mk_wall_sync-395700260dafe4e8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/core.rs (target/debug/deps/core-a47b566324893a99)
+
+running 12 tests
+test bounded_slew_and_consistent_liar_limitation ... ok
+test asymmetry_is_not_offset_identifiable ... ok
+test controller_late_join_hysteresis_boundary_sleep_and_clock_jump ... ok
+test hostile_float_values_never_enter_state ... ok
+test high_rtt_majority_cannot_bias_low_rtt_selection ... ok
+test robust_reorder_duplicate_outlier_replay_and_generation ... ok
+test timeline_loop_future_epoch_and_frame_dropping ... ok
+test stalled_presenter_does_not_cause_seek_storm ... ok
+test slow_decoder_drops_backlog_instead_of_accumulating_lag ... ok
+test offset_sign_drift_and_prediction ... ok
+test arbitrary_state_updates_are_finite_and_errors_are_atomic ... ok
+test deterministic_arbitrary_bits_property_and_wire_roundtrip ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+   Doc-tests one_mk_wall_sync
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

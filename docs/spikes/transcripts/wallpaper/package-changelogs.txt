@@ -1,0 +1,444 @@
+=== gstreamer1.0-plugins-bad local changelog excerpt ===
+gst-plugins-bad1.0 (1.28.2-1ubuntu1.2) resolute-security; urgency=medium
+
+  * SECURITY UPDATE: heap out-of-bounds write
+    - debian/patches/CVE-2026-19387_1.patch: fail negotiation if
+      block_align is not provided in gst/adpcmdec/adpcmdec.c.
+    - debian/patches/CVE-2026-19387_2.patch: fix IMA ADPCM input size
+      check to account for the number of channels in
+      gst/adpcmdec/adpcmdec.c.
+    - CVE-2026-19387
+
+ -- Nick Galanis <nick.galanis@canonical.com>  Tue, 29 Sep 2026 10:32:37 +0300
+
+gst-plugins-bad1.0 (1.28.2-1ubuntu1.1) resolute-security; urgency=medium
+
+  * SECURITY UPDATE: OOB write in H.266/VVC PPS picture partition parser
+    - debian/patches/CVE-2026-53701.patch: h266parser: Avoid out-of-bounds
+      write when parsing PPS tile slices in
+      gst-libs/gst/codecparsers/gsth266parser.c.
+    - CVE-2026-53701
+  * SECURITY UPDATE: stack overflow in H.265 codec parser
+    - debian/patches/CVE-2026-53702.patch: h265parser: use sub-layer 0 CPB
+      count in buffering_period SEI loops in
+      gst-libs/gst/codecparsers/gsth265parser.c.
+    - CVE-2026-53702
+
+ -- Marc Deslauriers <marc.deslauriers@ubuntu.com>  Tue, 16 Jun 2026 14:39:35 -0400
+
+gst-plugins-bad1.0 (1.28.2-1ubuntu1) resolute; urgency=medium
+
+  [ Charles ]
+  * Resynchronize with Debian (LP: #2148109). Remaining changes:
+    - d/rules:
+      + Depend on gobject-introspection.
+      + Enable Vulkan, SDL3 is available in Ubuntu (and Debian,
+        but they disable there for some reason.)
+    - Don't build wpewebkit plugins (gstreamer1.0-wpe).
+    - d/libgstreamer-plugins-bad1.0-0.install:
+      + Stop installing basecamerabin, codecparsers, codecs, photography
+        and play - plugins which have moved to -good.
+      + d/rules: Remove these modules from the -bad package.
+    - d/gbp.conf: Ubuntu VCS tags.
+    - Don't build the opencv binary packages on i386, avoiding a large tree
+      of numeric-related dependencies for a binary package it's not required
+      to support.
+    - d/control, d/gstreamer1.0-plugins-bad.install, d/rules: Disable unavailable features on i386
+      + Don't require these Build-Depends on i386: libfreeaptx-dev,
+        liblrdf0-dev, libltc-dev, libneon27-dev, libzxing-dev, libopenni2-dev,
+        libqrencode-dev,  libtensorflow-lite-dev, and libzxing-dev.
+      + Disable ladspa, neon, openaptx, openni2, qroverlay, vulkan,
+        tflite, and hip on i386, since they're not built there for
+        Ubuntu.
+    - plugins-extra split:
+      + Introduce a new package containing a subset of -bad plugins
+        that will be included in Ubuntu main.
+        - libgstcamerabin, libgstcodecparsers, libgstcodecs, libgstphotography, libgstplay
+      + Have gstreamer1.0-plugins-bad depend on gstreamer1.0-plugins-extra.
+      + Replace+Break gstreamer1.0-plugins-good versions where -bad
+        plugins were patched in.
+      + libgstreamer-plugins-extra1.0-0.symbols: Add symbol file for new package.
+      + d/rules: Manually move the remaining components from -bad into -extra.
+    - Disable LTO on ppc64el & s390x.
+    - d/libgstreamer-plugins-extra1.0-0.symbols: Update for new release.
+
+  [ Jeremy Bícha ]
+  * Stop having the extra -dev package depend on
+    libgstreamer-plugins-good1.0-dev (LP: #2147647)
+
+ -- Charles <charles05@canonical.com>  Sun, 22 Mar 2026 12:42:45 +0000
+
+gst-plugins-bad1.0 (1.28.2-1) unstable; urgency=medium
+
+  * New upstream version 1.28.2
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Wed, 08 Apr 2026 10:35:38 +0200
+
+gst-plugins-bad1.0 (1.28.1-3) unstable; urgency=medium
+
+  [ Marc Leeman ]
+  * d/watch: pin to 1.28.x
+
+  [ Dylan Aïssi ]
+  * Build the ONNX neural network plugin (Closes: #1132821)
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Tue, 07 Apr 2026 08:25:58 +0200
+
+gst-plugins-bad1.0 (1.28.1-2ubuntu3) resolute; urgency=medium
+
+  * Stop having the bad -dev package depend on libgstreamer-plugins-good1.0-dev
+    (LP: #2147647)
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Thu, 09 Apr 2026 10:35:47 -0400
+
+gst-plugins-bad1.0 (1.28.1-2ubuntu2) resolute; urgency=medium
+
+  * d/rules: Move newly added GstCodecParsers-1.0.{gir,typelib} to the
+    -extra package to avoid a -extra->-bad dependency.
+  * d/control: update the B/R versions accordingly
+
+ -- Charles <charles05@canonical.com>  Tue, 24 Mar 2026 08:46:08 +0100
+
+gst-plugins-bad1.0 (1.28.1-2ubuntu1) resolute; urgency=medium
+
+  * Resynchronize with Debian. Remaining changes:
+    - d/rules:
+      + Depend on gobject-introspection.
+      + Build ONNX neural network plugin.
+      + Enable Vulkan, SDL3 is available in Ubuntu (and Debian,
+        but they disable there for some reason.)
+    - Don't build wpewebkit plugins (gstreamer1.0-wpe).
+    - Stop installing camerabin2 basecamerabin jpegformat - plugins which have
+=== gstreamer1.0-plugins-good local changelog excerpt ===
+gst-plugins-good1.0 (1.28.2-2ubuntu0.4) resolute-security; urgency=medium
+
+  * SECURITY UPDATE: Out-of-bounds read in FLAC parsing
+    - debian/patches/CVE-2026-17072.patch: Make sure enough data is
+      available when parsing FLAC headers.
+      in gst/matroska/matroska-ids.c
+    - CVE-2026-17072
+  * SECURITY UPDATE: Integer underflow in FUJIFILM metadata parsing
+    - debian/patches/CVE-2026-73433.patch: Make sure enough data is available
+      when parsing FUJIFILM strd in gst/avi/gstavidemux.c
+    - debian/patches/CVE-2026-73433-post1.patch: Improve
+      const-correctness in many places in gst/avi/gstavidemux.c
+    - CVE-2026-73433
+  * SECURITY UPDATE: Out-of-bounds read in gst_avi_demux_riff_parse_vprp
+    - debian/patches/CVE-2026-73434.patch: Use correct divisor for
+      calculating available number of vprp field infos in
+      gst/avi/gstavidemux.c
+    - CVE-2026-73434
+  * SECURITY UPDATE: Integer overflow in isomp4 plugin
+    - debian/patches/CVE-2026-88914-1.patch: Ensure enough data is available
+      for reading closed caption boxes in gst/isomp4/qtdemux.c
+    - debian/patches/CVE-2026-88914-2.patch: Don't try splitting CEA608
+      samples without known framerate in gst/isomp4/qtdemux.c
+    - CVE-2026-88914
+
+ -- Kyle Kernick <kyle.kernick@canonical.com>  Tue, 29 Sep 2026 11:26:55 -0600
+
+gst-plugins-good1.0 (1.28.2-2ubuntu0.3) resolute-security; urgency=medium
+
+  * SECURITY UPDATE: Remote code execution in MRF file parsing
+    - debian/patches/CVE-2026-1829X.patch: Validate box sizes in
+      gst/isomp4/atomsrecovery.c
+    - CVE-2026-18295
+    - CVE-2026-18296
+  * SECURITY UPDATE: Remote code execution in PNG parsing
+    - debian/patches/CVE-2026-18298-1.patch: Drop rank to NONE in
+      docs/gst_plugins_cache.json and ext/gdk_pixbuf/gstgdkpixbufdec.c
+    - debian/patches/CVE-2026-18298-2.patch: Handle format and resolution
+      changes correctly in ext/gdk_pixbuf/gstgdkpixbufdec.c
+    - CVE-2026-18298
+  * SECURITY UPDATE: Remote code execution in RTP processing
+    - debian/patches/CVE-2026-18299-1.patch: Consider empty packets with the
+      last flag as bad packets in gst/rtp/gstrtpsbcdepay.c
+    - debian/patches/CVE-2026-18299-2.patch: Check that enough data is
+      available for the payload header in gst/rtp/gstrtpsbcdepay.c
+    - debian/patches/CVE-2026-18299-post1.patch: Remove wrong variable
+      shadowing in gst/rtp/gstrtpsbcdepay.c
+    - CVE-2026-18299
+
+ -- Kyle Kernick <kyle.kernick@canonical.com>  Thu, 17 Sep 2026 11:23:16 -0600
+
+gst-plugins-good1.0 (1.28.2-2ubuntu0.2) resolute-security; urgency=medium
+
+  * SECURITY UPDATE: Denial of Service via RTP Fragment Overflow
+    - debian/patches/CVE-2026-18649-1.patch: rtph264depay: rtph265depay: Limit
+      the maximum fragmentation unit size in docs/gst_plugins_cache.json,
+      gst/rtp/gstrtph264depay.c, gst/rtp/gstrtph264depay.h,
+      gst/rtp/gstrtph265depay.c, gst/rtp/gstrtph265depay.h.
+    - debian/patches/CVE-2026-18649-2.patch: rtph264depay: rtph265depay: Reset
+      missing fields when resetting during fragmentation unit handling in
+      gst/rtp/gstrtph264depay.c, gst/rtp/gstrtph265depay.c.
+    - CVE-2026-18649
+
+ -- John Breton <john.breton@canonical.com>  Wed, 16 Sep 2026 10:36:35 -0400
+
+gst-plugins-good1.0 (1.28.2-2ubuntu0.1) resolute-security; urgency=medium
+
+  * SECURITY UPDATE: Integer overflow in WavPack decoder
+    - debian/patches/CVE-2026-53705-1.patch: Avoid integer overflow when
+      calculating output buffer size in ext/wavpack/gstwavpackdec.c.
+    - debian/patches/CVE-2026-53705-2.patch: Use correctly-sized variable
+      types in ext/wavpack/gstwavpackdec.c.
+    - debian/patches/CVE-2026-53705-3.patch: Avoid integer overflow when
+      checking input buffer size in ext/wavpack/gstwavpackdec.c.
+    - debian/patches/CVE-2026-53705-4.patch: Unmap input buffer directly
+      after decoding in ext/wavpack/gstwavpackdec.c.
+    - CVE-2026-53705
+
+ -- Marc Deslauriers <marc.deslauriers@ubuntu.com>  Fri, 17 Jul 2026 14:09:17 -0400
+
+gst-plugins-good1.0 (1.28.2-2) unstable; urgency=medium
+
+  * Team upload
+  * Disable amr features for Ubuntu becuase opencore-amr is not in Ubuntu main
+    (LP: #2147649)
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Thu, 09 Apr 2026 10:53:00 -0400
+
+gst-plugins-good1.0 (1.28.2-1) unstable; urgency=medium
+
+  * d/watch: pin to 1.28.x
+  * New upstream version 1.28.2
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Wed, 08 Apr 2026 10:23:52 +0200
+
+gst-plugins-good1.0 (1.28.1-1) unstable; urgency=medium
+
+  * d/control: update to Standards-Version 4.7.3
+  * New upstream version 1.28.1
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Thu, 26 Feb 2026 10:39:44 +0100
+
+gst-plugins-good1.0 (1.28.0-1) unstable; urgency=medium
+
+  [ Marc Leeman ]
+  * d/install libgsty4menc.so -> libgsty4m.so
+  * d/copyright: remove superfluous-file-pattern gst/y4m/gsty4mencode.[ch]
+  * d/copyright: remove unused GPL-2+
+  * New upstream version 1.28.0
+  * d/control: update dependencies to 1.28.0
+=== gstreamer1.0-libav local changelog excerpt ===
+gst-libav1.0 (1.28.2-1) unstable; urgency=medium
+
+  * d/watch: pin to 1.28.x
+  * New upstream version 1.28.2
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Wed, 08 Apr 2026 12:01:33 +0200
+
+gst-libav1.0 (1.28.1-1) unstable; urgency=medium
+
+  * d/control: update to Standards-Version 4.7.3
+  * New upstream version 1.28.1
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Thu, 26 Feb 2026 14:07:13 +0100
+
+gst-libav1.0 (1.28.0-1) unstable; urgency=medium
+
+  * New upstream version 1.28.0
+  * d/control: update dependencies to 1.28.0
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Wed, 28 Jan 2026 15:11:29 +0100
+
+gst-libav1.0 (1.26.10-1) unstable; urgency=medium
+
+  * New upstream version 1.26.10
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Fri, 26 Dec 2025 20:29:01 +0100
+
+gst-libav1.0 (1.26.9-1) unstable; urgency=medium
+
+  * New upstream version 1.26.9
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Tue, 02 Dec 2025 10:30:28 +0100
+
+gst-libav1.0 (1.26.8-1) unstable; urgency=medium
+
+  * d/changelog: correct bug that was closed with this upload
+  * d/control: bump Standards-Version to 4.7.2
+  * New upstream version 1.26.8
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Wed, 12 Nov 2025 12:03:24 +0100
+
+gst-libav1.0 (1.26.7-2) unstable; urgency=medium
+
+  * d/control: bump meson version to match meson.build
+  * d/control: remove unused dependency on yasm (Closes: #1104220)
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Wed, 29 Oct 2025 10:37:46 +0100
+
+gst-libav1.0 (1.26.7-1) unstable; urgency=medium
+
+  * New upstream version 1.26.7
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Wed, 15 Oct 2025 12:39:35 +0200
+
+gst-libav1.0 (1.26.6-1) unstable; urgency=medium
+
+  * New upstream version 1.26.6
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Mon, 15 Sep 2025 11:34:37 +0200
+
+gst-libav1.0 (1.26.5-2) unstable; urgency=medium
+
+  * d/copyright: superfluous-file-pattern
+  * trixie has been release, re-upload to unstable
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Mon, 11 Aug 2025 09:33:34 +0200
+
+gst-libav1.0 (1.26.5-1) experimental; urgency=medium
+
+  * New upstream version 1.26.5
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Fri, 08 Aug 2025 09:22:14 +0200
+
+gst-libav1.0 (1.26.4-1) experimental; urgency=medium
+
+  * d/watch: pin on 1.26.x
+  * New upstream version 1.26.4
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Wed, 16 Jul 2025 20:14:02 +0200
+
+gst-libav1.0 (1.26.3-1) experimental; urgency=medium
+
+  * New upstream version 1.26.3
+  * d/copyright: add DEP-5 compatible license headers
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Fri, 27 Jun 2025 12:39:25 +0200
+
+gst-libav1.0 (1.26.2-1) unstable; urgency=medium
+
+  * New upstream version 1.26.2
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Fri, 30 May 2025 09:29:42 +0200
+
+gst-libav1.0 (1.26.1-1) unstable; urgency=medium
+
+  * d/copyright: add default
+  * New upstream version 1.26.1
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Fri, 25 Apr 2025 10:08:49 +0200
+
+gst-libav1.0 (1.26.0-1) unstable; urgency=medium
+
+  * Revert "d/watch pin on 1.24.x"
+  * New upstream version 1.26.0
+  * d/control: bump GStreamer version to 1.25.1
+  * d/control: update dependency version to 1.25.90
+  * d/control: update GStreamer dependencies to >= 1.26.0
+
+ -- Marc Leeman <marc.leeman@gmail.com>  Wed, 12 Mar 2025 11:13:23 +0100
+
+=== libavcodec62 local changelog excerpt ===
+ffmpeg (7:8.0.1-3ubuntu2) resolute; urgency=medium
+
+  * Rebuild against new libpocketsphinx5.
+
+ -- Gianfranco Costamagna <locutusofborg@debian.org>  Tue, 17 Feb 2026 22:02:24 +0100
+
+ffmpeg (7:8.0.1-3ubuntu1) resolute; urgency=low
+
+  * Merge from Debian unstable. Remaining changes:
+    - Don't use librav1e on i386 too
+
+ -- Gianfranco Costamagna <locutusofborg@debian.org>  Thu, 01 Jan 2026 11:00:47 +0100
+
+ffmpeg (7:8.0.1-3) unstable; urgency=medium
+
+  * debian/: Disable libcaca to remove it from the key package set
+  * debian/control:
+    - Bump-Standards-Version
+    - Drop RRR: no
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Mon, 29 Dec 2025 16:47:42 +0100
+
+ffmpeg (7:8.0.1-2ubuntu1) resolute; urgency=low
+
+  * Merge from Debian unstable. Remaining changes:
+    - Don't use librav1e on i386 too
+
+ -- Gianfranco Costamagna <locutusofborg@debian.org>  Wed, 17 Dec 2025 09:42:40 +0100
+
+ffmpeg (7:8.0.1-2) unstable; urgency=medium
+
+  * Upload to unstable
+  * debian/: Drop pocketsphinx until #1087917 is fixed
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Mon, 08 Dec 2025 13:29:02 +0100
+
+ffmpeg (7:8.0.1-1) experimental; urgency=medium
+
+  [ Diederik de Haas ]
+  * debian/tests/control: Replace pkg-config with pkgconf
+
+  [ Sebastian Ramacher ]
+  * New upstream version 8.0.1
+  * debian/patches: Drop patches included upstream
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Fri, 21 Nov 2025 18:57:10 +0100
+
+ffmpeg (7:8.0-2) experimental; urgency=medium
+
+  * debian/tests: Remove deprecated/removed codecs
+  * debian/control: Remove mips-specific handling
+  * debian/:
+    - libjxl-dev is now available on alpha
+    - Remove ia64 handling
+  * debian/rules: Static libraries are installed from the standard flavor
+  * debian/patches: Unbreak build with glslang 16 (Closes: #1120579)
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Wed, 12 Nov 2025 21:39:23 +0100
+
+ffmpeg (7:8.0-1) experimental; urgency=medium
+
+  [ Balint Reczey ]
+  * Remove myself from Uploaders
+
+  [ Sebastian Ramacher ]
+  * New upstream version 8.0
+  * SONAME bumps:
+    - libavcodec61 -> libavcodec62
+    - libavdevice61 -> libavdevice62
+    - libavfilter10 -> libavfilter11
+    - libavformat61 -> libavformat62
+    - libavutil59 -> libavutil60
+    - libswresample5 -> libswresample6
+    - libswscale8 -> libswscale9
+  * debian/: Remove libpostproc
+  * debian/control: Bump libplacebo-dev BD
+  * debian/copyright: Update for new upstream release
+  * debian/rules:
+    - Re-enable ASM optimizations on riscv64
+    - Remove mips* specific handling
+
+  [ Sean McGovern ]
+  * disable ASM-based optimizations on ppc64 as well (Closes: #1108731)
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Thu, 11 Sep 2025 00:18:21 +0200
+
+ffmpeg (7:7.1.3-1ubuntu1) resolute; urgency=low
+
+  * Merge from Debian unstable. Remaining changes:
+    - Don't use pocketsphinx, librav1e, jpeg-xl on i386 too
+
+ -- Gianfranco Costamagna <locutusofborg@debian.org>  Mon, 01 Dec 2025 12:07:32 +0100
+
+ffmpeg (7:7.1.3-1) unstable; urgency=medium
+
+  * New upstream version 7.1.3
+  * debian/patches: Unbreak build with glslang 16 (Closes: #1120579)
+
+ -- Sebastian Ramacher <sramacher@debian.org>  Sun, 30 Nov 2025 11:20:04 +0100
+
+ffmpeg (7:7.1.2-1ubuntu4) resolute; urgency=medium
+
+  * No-change rebuild for libplacebo351.
+
+ -- Sudip Mukherjee <sudipm.mukherjee@gmail.com>  Thu, 30 Oct 2025 18:45:47 +0000
+
+ffmpeg (7:7.1.2-1ubuntu3) resolute; urgency=medium
+
+  * Rebuild against latest libbluray
+

@@ -1,0 +1,265 @@
+   Compiling one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running unittests src/lib.rs (target/debug/deps/one_mk_wall_sync-395700260dafe4e8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/core.rs (target/debug/deps/core-a47b566324893a99)
+
+running 12 tests
+test asymmetry_is_not_offset_identifiable ... ok
+test controller_late_join_hysteresis_boundary_sleep_and_clock_jump ... ok
+test hostile_float_values_never_enter_state ... ok
+test robust_reorder_duplicate_outlier_replay_and_generation ... ok
+test high_rtt_majority_cannot_bias_low_rtt_selection ... ok
+test bounded_slew_and_consistent_liar_limitation ... ok
+test stalled_presenter_does_not_cause_seek_storm ... ok
+test timeline_loop_future_epoch_and_frame_dropping ... ok
+test slow_decoder_drops_backlog_instead_of_accumulating_lag ... ok
+test offset_sign_drift_and_prediction ... ok
+test arbitrary_state_updates_are_finite_and_errors_are_atomic ... ok
+test deterministic_arbitrary_bits_property_and_wire_roundtrip ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+   Doc-tests one_mk_wall_sync
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== offset sign: exit 101 ===
+   Compiling one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/core.rs (target/debug/deps/core-a47b566324893a99)
+
+running 12 tests
+test asymmetry_is_not_offset_identifiable ... FAILED
+test bounded_slew_and_consistent_liar_limitation ... FAILED
+test controller_late_join_hysteresis_boundary_sleep_and_clock_jump ... ok
+test high_rtt_majority_cannot_bias_low_rtt_selection ... FAILED
+test robust_reorder_duplicate_outlier_replay_and_generation ... FAILED
+test hostile_float_values_never_enter_state ... ok
+test stalled_presenter_does_not_cause_seek_storm ... ok
+test timeline_loop_future_epoch_and_frame_dropping ... ok
+test slow_decoder_drops_backlog_instead_of_accumulating_lag ... ok
+test offset_sign_drift_and_prediction ... FAILED
+test arbitrary_state_updates_are_finite_and_errors_are_atomic ... ok
+test deterministic_arbitrary_bits_property_and_wire_roundtrip ... ok
+
+failures:
+
+---- asymmetry_is_not_offset_identifiable stdout ----
+
+thread 'asymmetry_is_not_offset_identifiable' (624) panicked at crates/wall/tests/core.rs:97:5:
+assertion failed: (estimator.coordinator_time(101.0).expect("map") - 103.005).abs() < 1.0e-9
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- bounded_slew_and_consistent_liar_limitation stdout ----
+
+thread 'bounded_slew_and_consistent_liar_limitation' (625) panicked at crates/wall/tests/core.rs:85:5:
+assertion failed: (estimator.coordinator_time(111.0).expect("map") - 113.0).abs() < 0.006
+
+---- high_rtt_majority_cannot_bias_low_rtt_selection stdout ----
+
+thread 'high_rtt_majority_cannot_bias_low_rtt_selection' (628) panicked at crates/wall/tests/core.rs:63:5:
+assertion failed: (estimator.coordinator_time(101.0).expect("map") - 103.0).abs() < 1e-6
+
+---- robust_reorder_duplicate_outlier_replay_and_generation stdout ----
+
+thread 'robust_reorder_duplicate_outlier_replay_and_generation' (631) panicked at crates/wall/tests/core.rs:40:5:
+assertion failed: (estimator.coordinator_time(101.0).expect("map") - 103.0).abs() < 0.0001
+
+---- offset_sign_drift_and_prediction stdout ----
+
+thread 'offset_sign_drift_and_prediction' (630) panicked at crates/wall/tests/core.rs:25:9:
+907.182, -0.0002
+
+
+failures:
+    asymmetry_is_not_offset_identifiable
+    bounded_slew_and_consistent_liar_limitation
+    high_rtt_majority_cannot_bias_low_rtt_selection
+    offset_sign_drift_and_prediction
+    robust_reorder_duplicate_outlier_replay_and_generation
+
+test result: FAILED. 7 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p one-mk-wall-sync --test core`
+
+=== highest RTT instead of lowest: exit 101 ===
+   Compiling one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/core.rs (target/debug/deps/core-a47b566324893a99)
+
+running 12 tests
+test asymmetry_is_not_offset_identifiable ... ok
+test bounded_slew_and_consistent_liar_limitation ... ok
+test controller_late_join_hysteresis_boundary_sleep_and_clock_jump ... ok
+test hostile_float_values_never_enter_state ... ok
+test high_rtt_majority_cannot_bias_low_rtt_selection ... FAILED
+test robust_reorder_duplicate_outlier_replay_and_generation ... ok
+test stalled_presenter_does_not_cause_seek_storm ... ok
+test timeline_loop_future_epoch_and_frame_dropping ... ok
+test slow_decoder_drops_backlog_instead_of_accumulating_lag ... ok
+test offset_sign_drift_and_prediction ... ok
+test arbitrary_state_updates_are_finite_and_errors_are_atomic ... ok
+test deterministic_arbitrary_bits_property_and_wire_roundtrip ... ok
+
+failures:
+
+---- high_rtt_majority_cannot_bias_low_rtt_selection stdout ----
+
+thread 'high_rtt_majority_cannot_bias_low_rtt_selection' (800) panicked at crates/wall/tests/core.rs:63:5:
+assertion failed: (estimator.coordinator_time(101.0).expect("map") - 103.0).abs() < 1e-6
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    high_rtt_majority_cannot_bias_low_rtt_selection
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+error: test failed, to rerun pass `-p one-mk-wall-sync --test core`
+
+=== rate correction sign: exit 101 ===
+   Compiling one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/core.rs (target/debug/deps/core-a47b566324893a99)
+
+running 12 tests
+test asymmetry_is_not_offset_identifiable ... ok
+test bounded_slew_and_consistent_liar_limitation ... ok
+test controller_late_join_hysteresis_boundary_sleep_and_clock_jump ... FAILED
+test high_rtt_majority_cannot_bias_low_rtt_selection ... ok
+test robust_reorder_duplicate_outlier_replay_and_generation ... ok
+test hostile_float_values_never_enter_state ... ok
+test stalled_presenter_does_not_cause_seek_storm ... ok
+test timeline_loop_future_epoch_and_frame_dropping ... ok
+test slow_decoder_drops_backlog_instead_of_accumulating_lag ... ok
+test offset_sign_drift_and_prediction ... ok
+test arbitrary_state_updates_are_finite_and_errors_are_atomic ... ok
+test deterministic_arbitrary_bits_property_and_wire_roundtrip ... ok
+
+failures:
+
+---- controller_late_join_hysteresis_boundary_sleep_and_clock_jump stdout ----
+
+thread 'controller_late_join_hysteresis_boundary_sleep_and_clock_jump' (970) panicked at crates/wall/tests/core.rs:139:5:
+assertion failed: matches!(controller.tick(&Clock(20.2, 1), &estimator, &timeline, 20.18),
+    Ok(Action::Rate(rate)) if rate > 1.0 && rate <= 1.02)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    controller_late_join_hysteresis_boundary_sleep_and_clock_jump
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p one-mk-wall-sync --test core`
+
+=== remove hysteresis: exit 101 ===
+   Compiling one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/core.rs (target/debug/deps/core-a47b566324893a99)
+
+running 12 tests
+test asymmetry_is_not_offset_identifiable ... ok
+test bounded_slew_and_consistent_liar_limitation ... ok
+test controller_late_join_hysteresis_boundary_sleep_and_clock_jump ... FAILED
+test high_rtt_majority_cannot_bias_low_rtt_selection ... ok
+test hostile_float_values_never_enter_state ... ok
+test timeline_loop_future_epoch_and_frame_dropping ... ok
+test slow_decoder_drops_backlog_instead_of_accumulating_lag ... ok
+test stalled_presenter_does_not_cause_seek_storm ... ok
+test robust_reorder_duplicate_outlier_replay_and_generation ... ok
+test offset_sign_drift_and_prediction ... ok
+test arbitrary_state_updates_are_finite_and_errors_are_atomic ... ok
+test deterministic_arbitrary_bits_property_and_wire_roundtrip ... ok
+
+failures:
+
+---- controller_late_join_hysteresis_boundary_sleep_and_clock_jump stdout ----
+
+thread 'controller_late_join_hysteresis_boundary_sleep_and_clock_jump' (1142) panicked at crates/wall/tests/core.rs:140:5:
+assertion failed: matches!(controller.tick(&Clock(20.4, 1), &estimator, &timeline, 20.394),
+    Ok(Action::Rate(_)))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    controller_late_join_hysteresis_boundary_sleep_and_clock_jump
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p one-mk-wall-sync --test core`
+
+=== drift sign: exit 101 ===
+   Compiling one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/core.rs (target/debug/deps/core-a47b566324893a99)
+
+running 12 tests
+test asymmetry_is_not_offset_identifiable ... ok
+test bounded_slew_and_consistent_liar_limitation ... ok
+test controller_late_join_hysteresis_boundary_sleep_and_clock_jump ... ok
+test hostile_float_values_never_enter_state ... ok
+test high_rtt_majority_cannot_bias_low_rtt_selection ... ok
+test robust_reorder_duplicate_outlier_replay_and_generation ... ok
+test stalled_presenter_does_not_cause_seek_storm ... ok
+test timeline_loop_future_epoch_and_frame_dropping ... ok
+test slow_decoder_drops_backlog_instead_of_accumulating_lag ... ok
+test offset_sign_drift_and_prediction ... FAILED
+test arbitrary_state_updates_are_finite_and_errors_are_atomic ... ok
+test deterministic_arbitrary_bits_property_and_wire_roundtrip ... ok
+
+failures:
+
+---- offset_sign_drift_and_prediction stdout ----
+
+thread 'offset_sign_drift_and_prediction' (1318) panicked at crates/wall/tests/core.rs:25:9:
+912.8259935799999, -0.0002
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    offset_sign_drift_and_prediction
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p one-mk-wall-sync --test core`
+
+   Compiling one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running unittests src/lib.rs (target/debug/deps/one_mk_wall_sync-395700260dafe4e8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/core.rs (target/debug/deps/core-a47b566324893a99)
+
+running 12 tests
+test high_rtt_majority_cannot_bias_low_rtt_selection ... ok
+test asymmetry_is_not_offset_identifiable ... ok
+test hostile_float_values_never_enter_state ... ok
+test controller_late_join_hysteresis_boundary_sleep_and_clock_jump ... ok
+test bounded_slew_and_consistent_liar_limitation ... ok
+test robust_reorder_duplicate_outlier_replay_and_generation ... ok
+test timeline_loop_future_epoch_and_frame_dropping ... ok
+test stalled_presenter_does_not_cause_seek_storm ... ok
+test slow_decoder_drops_backlog_instead_of_accumulating_lag ... ok
+test offset_sign_drift_and_prediction ... ok
+test arbitrary_state_updates_are_finite_and_errors_are_atomic ... ok
+test deterministic_arbitrary_bits_property_and_wire_roundtrip ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+   Doc-tests one_mk_wall_sync
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
