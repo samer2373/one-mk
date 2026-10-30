@@ -27,6 +27,17 @@ pub struct WallpaperSettings {
     pub grants: BTreeMap<String,u64>,
 }
 
+/// Reads `[wallpaper]`; a section that cannot be read (a newer version's, a
+/// typo, a hand edit) means the feature is off with no consent, and never
+/// costs the rest of `settings.toml`.
+pub fn lenient<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<WallpaperSettings, D::Error> {
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(WallpaperSettings::deserialize(value).unwrap_or_else(|error| {
+        tracing::warn!("[wallpaper] in settings.toml is ignored (wallpaper stays off, no consent granted): {error}");
+        WallpaperSettings::default()
+    }))
+}
+
 impl Default for WallpaperSettings {
     fn default() -> Self { Self { version: 1, enabled: false, grants: BTreeMap::new() } }
 }
@@ -215,7 +226,9 @@ async fn execute(dir: &Path, command: &WallpaperCommand) -> Result<serde_json::V
         WallpaperCommand::Doctor if settings.wallpaper.enabled => return Err(Failure { code: 3,message: "Wallpaper renderer is unavailable in this scaffolding build. No content will be played. Disable wallpaper or wait for a qualified presenter.".into() }.into()),
         WallpaperCommand::Doctor => {}
         // Dispatched to the importer before this code runs.
-        WallpaperCommand::Import { .. } => unreachable!("wallpaper import is dispatched in main"),
+        // Only reached when something stands between `wallpaper` and `import`
+        // (a global option such as -v, --home or --json).
+        WallpaperCommand::Import { .. } => return Err(Failure { code: 2, message: "write `one-mk wallpaper import FILE ...` with `import` right after `wallpaper`, and options after it".into() }.into()),
         WallpaperCommand::Enable | WallpaperCommand::Disable => {
             settings = Settings::update(dir,|settings| { settings.wallpaper.enabled = matches!(command,WallpaperCommand::Enable); Ok(settings.clone()) })?;
             apply(dir).await?;
@@ -225,12 +238,12 @@ async fn execute(dir: &Path, command: &WallpaperCommand) -> Result<serde_json::V
             let trust = TrustStore::load(dir)?;
             let fingerprint = if grant {
                 let Some(device) = trust.find(query) else { return Err(Failure { code: 4,message: "Consent requires one directly paired computer; use its full fingerprint if the name is ambiguous.".into() }.into()) };
-                device.fingerprint.clone()
+                device.fingerprint.to_ascii_lowercase()
             } else if query.len() == 64 && query.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
                 query.clone()
             } else {
                 let Some(device) = trust.find(query) else { return Err(Failure { code: 4,message: "Computer not found. Revoke using its full saved fingerprint, even after forgetting it.".into() }.into()) };
-                device.fingerprint.clone()
+                device.fingerprint.to_ascii_lowercase()
             };
             settings = Settings::update(dir,|settings| {
                 if grant {
@@ -316,8 +329,17 @@ mod tests {
         let settings: crate::settings::Settings = toml::from_str("notify_files = false\n").unwrap();
         assert_eq!(settings.wallpaper,WallpaperSettings::default());
         assert!(!settings.wallpaper.enabled);
-        assert!(toml::from_str::<crate::settings::Settings>("[wallpaper]\nversion=2\n").is_err());
-        assert!(toml::from_str::<crate::settings::Settings>("[wallpaper.grants]\nevil=1\n").is_err());
+        // The policy itself stays strict; the section failing leaves the feature off.
+        assert!(toml::from_str::<WallpaperSettings>("version=2\n").is_err());
+        assert!(toml::from_str::<WallpaperSettings>("[grants]\nevil=1\n").is_err());
+        for bad in ["[wallpaper]\nversion=2\n", "[wallpaper.grants]\nevil=1\n"] {
+            let settings: crate::settings::Settings = toml::from_str(bad).unwrap();
+            assert_eq!(settings.wallpaper, WallpaperSettings::default(), "{bad}");
+        }
+        // A [wallpaper] section that cannot be read costs only itself.
+        let kept: crate::settings::Settings = toml::from_str("[clipboard]\ntext = false\n\n[wallpaper]\nversion = 9\nfuture = true\n").unwrap();
+        assert_eq!(kept.wallpaper, WallpaperSettings::default());
+        assert!(!kept.clipboard.text);
         // Any revision a grant can get must survive a trip through settings.toml.
         let mut settings = crate::settings::Settings::default();
         settings.wallpaper.grants.insert("a".repeat(64), i64::MAX as u64);
