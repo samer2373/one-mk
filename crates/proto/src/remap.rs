@@ -5,7 +5,11 @@
 //! `docs/INPUT-TUNING.md` for the design.
 //!
 //! Per event it does a table lookup and a few counter updates, and never
-//! allocates; the tables are built once per visit ([`Keymap::compile`]).
+//! allocates (except once for a device with keys down at the same time as
+//! more devices than ever before in the visit); the tables are built once
+//! per visit ([`Keymap::compile`]). Keys from several devices go through
+//! the same engine, each device with its own keys and layers
+//! ([`Mapper::key_from`], [`KeymapSet`]).
 //!
 //! The one guarantee everything else rests on: every key-down it emits
 //! gets exactly one key-up, whatever happens in between (layers ending,
@@ -14,6 +18,7 @@
 //! and no combo hides it), and only changes of that derived state are
 //! emitted.
 
+use crate::device::DeviceRef;
 use crate::keynames::{self, CODE_LIMIT, Chord, MOD_CODES, NameError, Trigger, mod_bit};
 use crate::{HeldKeys, os};
 use std::fmt;
@@ -420,6 +425,57 @@ impl Keymap {
     }
 }
 
+// ------------------------------------------------------- keymap per device
+
+/// The keymaps of one visit: the base one (rules without a device), and
+/// one per distinct set of device rules, with the devices that use it.
+/// Events from a device not listed, or of unknown origin, use the base.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct KeymapSet {
+    /// `[0]` is the base.
+    maps: Vec<Keymap>,
+    /// Which keymap each listed device uses (an index into `maps`).
+    by_device: Vec<(DeviceRef, usize)>,
+}
+
+impl KeymapSet {
+    /// Every device and unknown input use `base`.
+    pub fn new(base: Keymap) -> Self {
+        KeymapSet { maps: vec![base], by_device: Vec::new() }
+    }
+
+    /// `devices` use `map` (the base with their own rules on top). A
+    /// device listed twice keeps its first keymap.
+    pub fn add(&mut self, devices: &[DeviceRef], map: Keymap) {
+        let i = match self.maps.iter().position(|m| *m == map) {
+            Some(i) => i,
+            None => {
+                self.maps.push(map);
+                self.maps.len() - 1
+            }
+        };
+        for &d in devices {
+            if !self.by_device.iter().any(|(x, _)| *x == d) {
+                self.by_device.push((d, i));
+            }
+        }
+    }
+
+    pub fn base(&self) -> &Keymap {
+        &self.maps[0]
+    }
+
+    /// Which keymap input from `device` uses.
+    fn index(&self, device: Option<DeviceRef>) -> usize {
+        device.and_then(|d| self.by_device.iter().find(|(x, _)| *x == d)).map_or(0, |(_, i)| *i)
+    }
+
+    /// The keymap input from `device` uses (the base for unknown input).
+    pub fn for_device(&self, device: Option<DeviceRef>) -> &Keymap {
+        &self.maps[self.index(device)]
+    }
+}
+
 // --------------------------------------------------------------- mapper
 
 /// What the mapper says to do.
@@ -451,16 +507,62 @@ enum Rec {
 
 #[derive(Clone, Copy, Debug)]
 struct Pending {
+    /// The source whose key it is.
+    src: usize,
     code: u16,
     rule: u16,
     layer: u8,
     deadline: Instant,
 }
 
+/// Where physical keys come from: one connected device, or "unknown"
+/// (source 0). Each has its own keys and layers; the wire, the
+/// modifiers and the undecided tap/hold key are shared.
+#[derive(Clone)]
+struct Source {
+    /// `None` for the unknown source (always source 0).
+    device: Option<DeviceRef>,
+    /// The keymap it uses, an index into the set.
+    map: usize,
+    recs: Box<[Rec]>,
+    /// Physical keys down.
+    phys: HeldKeys,
+    /// How many keys hold each layer on (index 0 unused).
+    layer_on: [u8; MAX_LAYERS + 1],
+    /// The layers on, in the order they came on.
+    order: [u8; MAX_LAYERS],
+    n_order: usize,
+}
+
+impl Source {
+    fn new(device: Option<DeviceRef>, map: usize) -> Self {
+        Source {
+            device,
+            map,
+            recs: vec![Rec::Up; KEYS].into_boxed_slice(),
+            phys: HeldKeys::new(),
+            layer_on: [0; MAX_LAYERS + 1],
+            order: [0; MAX_LAYERS],
+            n_order: 0,
+        }
+    }
+
+    /// No key of it is down: the slot may serve another device.
+    fn is_free(&self) -> bool {
+        self.device.is_some() && self.phys.is_empty()
+    }
+
+    fn end_layers(&mut self) {
+        self.layer_on = [0; MAX_LAYERS + 1];
+        self.n_order = 0;
+    }
+}
+
 /// The key mapper for one visit.
 pub struct Mapper {
-    map: Keymap,
-    recs: Box<[Rec]>,
+    set: KeymapSet,
+    /// `[0]` is the unknown source; the others are reused once free.
+    sources: Vec<Source>,
     /// How many things hold each code down.
     holders: Box<[u16]>,
     /// How many things hide each modifier (by bit index).
@@ -471,41 +573,47 @@ pub struct Mapper {
     force: u8,
     /// What is down on the wire.
     wire: HeldKeys,
-    /// Physical keys down.
-    phys: HeldKeys,
-    /// How many keys hold each layer on (index 0 unused).
-    layer_on: [u8; MAX_LAYERS + 1],
-    /// The layers on, in the order they came on.
-    order: [u8; MAX_LAYERS],
-    n_order: usize,
     pending: Option<Pending>,
 }
 
 impl Mapper {
+    /// A mapper where every key uses `map`, whichever device it is on.
     pub fn new(map: Keymap) -> Self {
+        Self::with_set(KeymapSet::new(map))
+    }
+
+    pub fn with_set(set: KeymapSet) -> Self {
         Mapper {
-            map,
-            recs: vec![Rec::Up; KEYS].into_boxed_slice(),
+            set,
+            sources: vec![Source::new(None, 0)],
             holders: vec![0; KEYS].into_boxed_slice(),
             hide: [0; 8],
             lifted: 0,
             force: 0,
             wire: HeldKeys::new(),
-            phys: HeldKeys::new(),
-            layer_on: [0; MAX_LAYERS + 1],
-            order: [0; MAX_LAYERS],
-            n_order: 0,
             pending: None,
         }
     }
 
+    /// The base keymap (rules without a device).
     pub fn keymap(&self) -> &Keymap {
-        &self.map
+        self.set.base()
     }
 
-    /// A physical key (or button) went down or up; `down` again while down
-    /// is an auto-repeat.
+    pub fn keymaps(&self) -> &KeymapSet {
+        &self.set
+    }
+
+    /// A physical key (or button) went down or up, on a device not known;
+    /// `down` again while down is an auto-repeat.
     pub fn key(&mut self, code: u32, down: bool, now: Instant, out: &mut impl FnMut(Emit)) {
+        self.key_from(code, down, None, now, out);
+    }
+
+    /// A physical key (or button) of `device` (`None`: not known) went
+    /// down or up. See "The mapper with several devices" in
+    /// `docs/INPUT-TUNING.md` for which press a repeat or release belongs to.
+    pub fn key_from(&mut self, code: u32, down: bool, device: Option<DeviceRef>, now: Instant, out: &mut impl FnMut(Emit)) {
         if code >= CODE_LIMIT {
             return;
         }
@@ -513,25 +621,53 @@ impl Mapper {
         // before the timer does (a busy loop): its release is not a tap.
         self.timer(now, out);
         if down {
-            if self.phys.is_held(code) {
-                return self.repeat(code, out);
+            if let Some(s) = self.repeat_of(code, device) {
+                return self.repeat(s, code, out);
             }
-            self.phys.update(code, true);
+            let s = self.source_for_press(device);
+            self.sources[s].phys.update(code, true);
             // Another key while a tap/hold key is undecided: it's held.
             if self.pending.is_some() {
                 self.resolve_hold(out);
             }
-            self.press(code, now, out);
+            self.press(s, code, now, out);
         } else {
-            if !self.phys.is_held(code) {
-                return;
-            }
-            self.phys.update(code, false);
-            if self.pending.is_some_and(|p| u32::from(p.code) == code) {
+            let Some(s) = self.release_of(code, device) else { return };
+            self.sources[s].phys.update(code, false);
+            if self.pending.is_some_and(|p| p.src == s && u32::from(p.code) == code) {
                 return self.resolve_tap(out);
             }
-            self.release(code, out);
+            self.release(s, code, out);
         }
+    }
+
+    /// Whether a press of `code` from `device` now would be an auto-repeat
+    /// of a key already down (the daemon doesn't forward those).
+    pub fn holds(&self, code: u32, device: Option<DeviceRef>) -> bool {
+        self.repeat_of(code, device).is_some()
+    }
+
+    /// Whether any source has `code` physically down.
+    pub fn held_anywhere(&self, code: u32) -> bool {
+        self.sources.iter().any(|s| s.phys.is_held(code))
+    }
+
+    /// `device` was unplugged or fell asleep: whatever its keys emitted is
+    /// released, its undecided tap/hold key dropped (it sent nothing yet)
+    /// and its layers end. Other sources keep their state.
+    pub fn device_gone(&mut self, device: DeviceRef, out: &mut impl FnMut(Emit)) {
+        let Some(s) = self.find(Some(device)) else { return };
+        if self.pending.is_some_and(|p| p.src == s) {
+            let p = self.pending.take().expect("checked");
+            self.sources[s].recs[usize::from(p.code)] = Rec::Up;
+        }
+        let phys = std::mem::take(&mut self.sources[s].phys);
+        for code in phys.iter() {
+            self.release(s, code, out);
+        }
+        let src = &mut self.sources[s];
+        src.recs.fill(Rec::Up);
+        src.end_layers();
     }
 
     /// When [`Mapper::timer`] must be called: only while a tap/hold key is
@@ -555,7 +691,7 @@ impl Mapper {
     }
 
     /// The modifiers held as far as the target is concerned (sided bits),
-    /// hidden or not.
+    /// hidden or not, whichever device holds them.
     pub fn mods(&self) -> u8 {
         let mut bits = 0;
         for (i, &c) in MOD_CODES.iter().enumerate() {
@@ -590,70 +726,151 @@ impl Mapper {
         self.holders.fill(0);
         self.hide = [0; 8];
         self.lifted = 0;
-        self.layer_on = [0; MAX_LAYERS + 1];
-        self.n_order = 0;
         self.pending = None;
-        self.recs.fill(Rec::Up);
-        for code in self.phys.iter() {
-            self.recs[code as usize] = Rec::Swallow;
+        for src in &mut self.sources {
+            src.end_layers();
+            src.recs.fill(Rec::Up);
+            for code in src.phys.iter() {
+                src.recs[code as usize] = Rec::Swallow;
+            }
         }
     }
 
-    /// Uses `map` from now on. The same keymap changes nothing. Otherwise
-    /// an undecided tap/hold key is held, every layer ends (releasing what
-    /// was typed in it), and what other keys hold stays held until they
-    /// come up.
+    /// Uses `map` for every device from now on (see [`Mapper::set_keymaps`]).
     pub fn set_keymap(&mut self, map: Keymap, out: &mut impl FnMut(Emit)) {
-        if map == self.map {
+        self.set_keymaps(KeymapSet::new(map), out);
+    }
+
+    /// Uses `set` from now on. A source whose keymap stays the same keeps
+    /// everything. For one whose keymap changes, its undecided tap/hold key
+    /// is held, its layers end (releasing what was typed in them), and what
+    /// its other keys hold stays held until they come up.
+    pub fn set_keymaps(&mut self, set: KeymapSet, out: &mut impl FnMut(Emit)) {
+        if set == self.set {
             return;
         }
-        if self.pending.is_some() {
-            self.resolve_hold(out);
-        }
-        let phys = self.phys.clone();
-        for code in phys.iter() {
-            if let Rec::Layer { .. } = self.recs[code as usize] {
-                self.release(code, out);
-                self.recs[code as usize] = Rec::Swallow;
+        for s in 0..self.sources.len() {
+            let src = &self.sources[s];
+            let new = set.index(src.device);
+            if src.phys.is_empty() || set.maps[new] == self.set.maps[src.map] {
+                continue;
+            }
+            if self.pending.is_some_and(|p| p.src == s) {
+                self.resolve_hold(out);
+            }
+            let phys = self.sources[s].phys.clone();
+            for code in phys.iter() {
+                if let Rec::Layer { .. } = self.sources[s].recs[code as usize] {
+                    self.release(s, code, out);
+                    self.sources[s].recs[code as usize] = Rec::Swallow;
+                }
             }
         }
-        self.map = map;
+        for src in &mut self.sources {
+            src.map = set.index(src.device);
+        }
+        self.set = set;
+    }
+
+    // ---------------------------------------------------------- sources
+
+    fn find(&self, device: Option<DeviceRef>) -> Option<usize> {
+        match device {
+            None => Some(0),
+            Some(_) => self.sources.iter().position(|s| s.device == device && !s.phys.is_empty()),
+        }
+    }
+
+    /// The source whose key a press of `code` repeats, if any: the same
+    /// device's, an unknown press's (whatever it is said to be now), or,
+    /// for an unknown press, any device's.
+    fn repeat_of(&self, code: u32, device: Option<DeviceRef>) -> Option<usize> {
+        if let Some(s) = self.find(device).filter(|&s| self.sources[s].phys.is_held(code)) {
+            return Some(s);
+        }
+        if self.sources[0].phys.is_held(code) {
+            return Some(0);
+        }
+        if device.is_none() {
+            return self.sources.iter().position(|s| s.phys.is_held(code));
+        }
+        None
+    }
+
+    /// The source a release of `code` undoes: the device named if it holds
+    /// the key, else the unknown source, else any source holding it (a
+    /// press and release attributed differently must not leave it down).
+    fn release_of(&self, code: u32, device: Option<DeviceRef>) -> Option<usize> {
+        self.find(device)
+            .filter(|&s| self.sources[s].phys.is_held(code))
+            .or_else(|| self.sources.iter().position(|s| s.phys.is_held(code)))
+    }
+
+    /// The source a new press from `device` belongs to, made if needed
+    /// (a free one is reused, so there are never more than devices with
+    /// keys down at the same time).
+    fn source_for_press(&mut self, device: Option<DeviceRef>) -> usize {
+        if let Some(s) = self.find(device) {
+            return s;
+        }
+        let map = self.set.index(device);
+        match self.sources.iter().position(Source::is_free) {
+            Some(s) => {
+                let src = &mut self.sources[s];
+                debug_assert!(src.recs.iter().all(|r| *r == Rec::Up));
+                src.device = device;
+                src.map = map;
+                src.end_layers();
+                s
+            }
+            None => {
+                self.sources.push(Source::new(device, map));
+                self.sources.len() - 1
+            }
+        }
+    }
+
+    fn map(&self, s: usize) -> &Keymap {
+        &self.set.maps[self.sources[s].map]
     }
 
     // ---------------------------------------------------------- inside
 
-    fn press(&mut self, code: u32, now: Instant, out: &mut impl FnMut(Emit)) {
+    fn press(&mut self, s: usize, code: u32, now: Instant, out: &mut impl FnMut(Emit)) {
         let held = self.mods();
-        let Some((i, layer)) = self.lookup(code, held) else {
-            return self.apply(code, Out::Chord(Chord::key(code as u16)), 0, 0, out);
+        let Some((i, layer)) = self.lookup(s, code, held) else {
+            return self.apply(s, code, Out::Chord(Chord::key(code as u16)), 0, 0, out);
         };
-        let rule = self.map.rules[i];
+        let rule = self.map(s).rules[i];
         match rule.kind {
-            Kind::Plain(o) => self.apply(code, o, rule.trigger.used(held), layer, out),
+            Kind::Plain(o) => self.apply(s, code, o, rule.trigger.used(held), layer, out),
             Kind::Dual { timeout, .. } => {
-                self.recs[code as usize] = Rec::Pending;
-                self.pending = Some(Pending { code: code as u16, rule: i as u16, layer, deadline: now + timeout });
+                self.sources[s].recs[code as usize] = Rec::Pending;
+                self.pending = Some(Pending { src: s, code: code as u16, rule: i as u16, layer, deadline: now + timeout });
             }
         }
     }
 
-    /// The most recently switched-on layer with a rule for `code`, then
-    /// the base rules.
-    fn lookup(&self, code: u32, held: u8) -> Option<(usize, u8)> {
-        if self.map.slots.is_empty() {
+    /// The most recently switched-on layer of source `s` with a rule for
+    /// `code`, then the base rules.
+    fn lookup(&self, s: usize, code: u32, held: u8) -> Option<(usize, u8)> {
+        let map = self.map(s);
+        if map.slots.is_empty() {
             return None;
         }
-        for &l in self.order[..self.n_order].iter().rev() {
-            if let Some(i) = self.map.find(l, code, held) {
+        let src = &self.sources[s];
+        for &l in src.order[..src.n_order].iter().rev() {
+            if let Some(i) = map.find(l, code, held) {
                 return Some((i, l));
             }
         }
-        self.map.find(0, code, held).map(|i| (i, 0))
+        map.find(0, code, held).map(|i| (i, 0))
     }
 
-    /// Key `code` went down and does `o`; `used` are the modifiers its
-    /// trigger needed (hidden from the target while a chord is held).
-    fn apply(&mut self, code: u32, o: Out, used: u8, layer: u8, out: &mut impl FnMut(Emit)) {
+    /// Key `code` of source `s` went down and does `o`; `used` are the
+    /// modifiers its trigger needed (hidden from the target while a chord
+    /// is held).
+    fn apply(&mut self, s: usize, code: u32, o: Out, used: u8, layer: u8, out: &mut impl FnMut(Emit)) {
         let rec = match o {
             Out::None => Rec::Swallow,
             Out::Chord(c) => {
@@ -663,57 +880,57 @@ impl Mapper {
                 Rec::Held { key: c.key, mods: c.mods, hidden, layer }
             }
             Out::Seq { start, len } => {
-                self.sequence(start, len, used, out);
+                self.sequence(s, start, len, used, out);
                 Rec::Swallow
             }
             Out::Action(a) => {
-                out(Emit::Action(self.map.actions[usize::from(a)].clone()));
+                out(Emit::Action(self.map(s).actions[usize::from(a)].clone()));
                 Rec::Swallow
             }
             Out::Layer(l) => {
-                self.layer_up(l);
+                self.layer_up(s, l);
                 Rec::Layer { layer: l, from: layer }
             }
         };
-        self.recs[code as usize] = rec;
+        self.sources[s].recs[code as usize] = rec;
     }
 
     /// Something that happens once (a tap): a chord pressed and released.
-    fn once(&mut self, o: Out, out: &mut impl FnMut(Emit)) {
+    fn once(&mut self, s: usize, o: Out, out: &mut impl FnMut(Emit)) {
         match o {
             Out::None | Out::Layer(_) => {}
             Out::Chord(c) => self.pulse(c, true, out),
-            Out::Seq { start, len } => self.sequence(start, len, 0, out),
-            Out::Action(a) => out(Emit::Action(self.map.actions[usize::from(a)].clone())),
+            Out::Seq { start, len } => self.sequence(s, start, len, 0, out),
+            Out::Action(a) => out(Emit::Action(self.map(s).actions[usize::from(a)].clone())),
         }
     }
 
-    fn sequence(&mut self, start: u16, len: u16, used: u8, out: &mut impl FnMut(Emit)) {
-        for i in usize::from(start)..usize::from(start) + usize::from(len) {
-            let c = self.map.chords[i];
+    fn sequence(&mut self, s: usize, start: u16, len: u16, used: u8, out: &mut impl FnMut(Emit)) {
+        let end = usize::from(start) + usize::from(len);
+        for i in usize::from(start)..end {
+            let c = self.map(s).chords[i];
             let hidden = used & !c.mods;
             self.hide_mods(hidden, out);
-            let end = usize::from(start) + usize::from(len);
-            let last = !self.map.chords[i + 1..end].iter().any(|next| next.key == c.key);
+            let last = !self.map(s).chords[i + 1..end].iter().any(|next| next.key == c.key);
             self.pulse(c, last, out);
             self.unhide_mods(hidden, out);
         }
     }
 
-    fn release(&mut self, code: u32, out: &mut impl FnMut(Emit)) {
-        let rec = std::mem::replace(&mut self.recs[code as usize], Rec::Up);
+    fn release(&mut self, s: usize, code: u32, out: &mut impl FnMut(Emit)) {
+        let rec = std::mem::replace(&mut self.sources[s].recs[code as usize], Rec::Up);
         match rec {
             Rec::Up | Rec::Swallow | Rec::Pending => {}
             Rec::Held { key, mods, hidden, .. } => {
                 self.release_chord(Chord { mods, key }, out);
                 self.unhide_mods(hidden, out);
             }
-            Rec::Layer { layer, .. } => self.layer_down(layer, out),
+            Rec::Layer { layer, .. } => self.layer_down(s, layer, out),
         }
     }
 
-    fn repeat(&mut self, code: u32, out: &mut impl FnMut(Emit)) {
-        if let Rec::Held { key, .. } = self.recs[code as usize]
+    fn repeat(&mut self, s: usize, code: u32, out: &mut impl FnMut(Emit)) {
+        if let Rec::Held { key, .. } = self.sources[s].recs[code as usize]
             && self.wire.is_held(u32::from(key))
         {
             out(Emit::Key { code: u32::from(key), down: true });
@@ -722,54 +939,57 @@ impl Mapper {
 
     fn resolve_tap(&mut self, out: &mut impl FnMut(Emit)) {
         let Some(p) = self.pending.take() else { return };
-        self.recs[usize::from(p.code)] = Rec::Up;
-        if let Kind::Dual { tap, .. } = self.map.rules[usize::from(p.rule)].kind {
-            self.once(tap, out);
+        self.sources[p.src].recs[usize::from(p.code)] = Rec::Up;
+        if let Kind::Dual { tap, .. } = self.map(p.src).rules[usize::from(p.rule)].kind {
+            self.once(p.src, tap, out);
         }
     }
 
     fn resolve_hold(&mut self, out: &mut impl FnMut(Emit)) {
         let Some(p) = self.pending.take() else { return };
-        if let Kind::Dual { hold, .. } = self.map.rules[usize::from(p.rule)].kind {
-            self.apply(u32::from(p.code), hold, 0, p.layer, out);
+        if let Kind::Dual { hold, .. } = self.map(p.src).rules[usize::from(p.rule)].kind {
+            self.apply(p.src, u32::from(p.code), hold, 0, p.layer, out);
         }
     }
 
-    fn layer_up(&mut self, l: u8) {
-        let n = &mut self.layer_on[usize::from(l)];
+    fn layer_up(&mut self, s: usize, l: u8) {
+        let src = &mut self.sources[s];
+        let n = &mut src.layer_on[usize::from(l)];
         *n += 1;
-        if *n == 1 && self.n_order < MAX_LAYERS {
-            self.order[self.n_order] = l;
-            self.n_order += 1;
+        if *n == 1 && src.n_order < MAX_LAYERS {
+            src.order[src.n_order] = l;
+            src.n_order += 1;
         }
     }
 
-    /// A key holding layer `l` came up; if it was the last one, everything
-    /// resolved in the layer is released (and swallowed until it comes up).
-    fn layer_down(&mut self, l: u8, out: &mut impl FnMut(Emit)) {
-        let n = &mut self.layer_on[usize::from(l)];
+    /// A key of source `s` holding layer `l` came up; if it was the last
+    /// one, everything that source resolved in the layer is released (and
+    /// swallowed until it comes up).
+    fn layer_down(&mut self, s: usize, l: u8, out: &mut impl FnMut(Emit)) {
+        let src = &mut self.sources[s];
+        let n = &mut src.layer_on[usize::from(l)];
         *n = n.saturating_sub(1);
         if *n > 0 {
             return;
         }
-        if let Some(at) = self.order[..self.n_order].iter().position(|&x| x == l) {
-            self.order.copy_within(at + 1..self.n_order, at);
-            self.n_order -= 1;
+        if let Some(at) = src.order[..src.n_order].iter().position(|&x| x == l) {
+            src.order.copy_within(at + 1..src.n_order, at);
+            src.n_order -= 1;
         }
-        if self.pending.is_some_and(|p| p.layer == l) {
+        if self.pending.is_some_and(|p| p.src == s && p.layer == l) {
             let p = self.pending.take().expect("checked");
-            self.recs[usize::from(p.code)] = Rec::Swallow;
+            self.sources[s].recs[usize::from(p.code)] = Rec::Swallow;
         }
-        let phys = self.phys.clone();
+        let phys = self.sources[s].phys.clone();
         for code in phys.iter() {
-            let in_layer = match self.recs[code as usize] {
+            let in_layer = match self.sources[s].recs[code as usize] {
                 Rec::Held { layer, .. } => layer == l,
                 Rec::Layer { from, .. } => from == l,
                 _ => false,
             };
             if in_layer {
-                self.release(code, out);
-                self.recs[code as usize] = Rec::Swallow;
+                self.release(s, code, out);
+                self.sources[s].recs[code as usize] = Rec::Swallow;
             }
         }
     }
@@ -1434,6 +1654,188 @@ mod tests {
         assert_eq!(Output::sequence(&["a", "ctrl+v"]).unwrap().to_string(), "[a, ctrl+v]");
     }
 
+
+    // ------------------------------------------------- several devices
+
+    const DA: Option<DeviceRef> = Some(DeviceRef(11));
+    const DB: Option<DeviceRef> = Some(DeviceRef(12));
+    const DC: Option<DeviceRef> = Some(DeviceRef(13));
+
+    /// The base rules `base`, and device A's own `a` on top of them (as
+    /// the daemon resolves them: per key, the device's rule wins).
+    fn per_device(base: &[RuleSpec], a: &[RuleSpec]) -> KeymapSet {
+        let mut set = KeymapSet::new(map(base));
+        let replaced: Vec<_> = a.iter().map(|r| (r.from, r.layer.clone())).collect();
+        let mut over = a.to_vec();
+        over.extend(base.iter().filter(|r| !replaced.contains(&(r.from, r.layer.clone()))).cloned());
+        set.add(&[DeviceRef(11)], map(&over));
+        set
+    }
+
+    struct D {
+        m: Mapper,
+        now: Instant,
+    }
+
+    impl D {
+        fn new(set: KeymapSet) -> D {
+            D { m: Mapper::with_set(set), now: Instant::now() }
+        }
+        fn key(&mut self, code: u32, down: bool, dev: Option<DeviceRef>) -> Vec<Emit> {
+            let mut out = Vec::new();
+            self.m.key_from(code, down, dev, self.now, &mut |e| out.push(e));
+            out
+        }
+        fn tap(&mut self, code: u32, dev: Option<DeviceRef>) -> Vec<Emit> {
+            let mut v = self.key(code, true, dev);
+            v.extend(self.key(code, false, dev));
+            v
+        }
+        fn gone(&mut self, dev: Option<DeviceRef>) -> Vec<Emit> {
+            let mut out = Vec::new();
+            self.m.device_gone(dev.unwrap(), &mut |e| out.push(e));
+            out
+        }
+        fn set(&mut self, set: KeymapSet) -> Vec<Emit> {
+            let mut out = Vec::new();
+            self.m.set_keymaps(set, &mut |e| out.push(e));
+            out
+        }
+    }
+
+    #[test]
+    fn a_device_rule_changes_only_that_devices_keys() {
+        let mut t = D::new(per_device(&[rule("a", "b")], &[rule("capslock", "esc")]));
+        assert_eq!(t.tap(CAPS, DA), [d(ESC), u(ESC)], "device A's rule");
+        assert_eq!(t.tap(CAPS, DB), [d(CAPS), u(CAPS)], "B has no such rule");
+        assert_eq!(t.tap(CAPS, None), [d(CAPS), u(CAPS)], "unknown input gets only the rules without a device");
+        assert_eq!(t.tap(A, DA), [d(48), u(48)], "A keeps the base rules it doesn't override");
+        assert_eq!(t.tap(A, DB), [d(48), u(48)]);
+    }
+
+    #[test]
+    fn the_same_key_on_two_devices_is_two_keys_and_one_wire_press() {
+        let mut t = D::new(KeymapSet::new(map(&[])));
+        assert_eq!(t.key(LSHIFT, true, DA), [d(LSHIFT)]);
+        assert_eq!(t.key(LSHIFT, true, DB), [], "already down on the wire");
+        assert!(t.m.holds(LSHIFT, DA) && t.m.holds(LSHIFT, DB), "both are held: a press again is a repeat");
+        assert_eq!(t.key(LSHIFT, false, DA), [], "B still holds it");
+        assert_eq!(t.key(LSHIFT, false, DB), [u(LSHIFT)]);
+        assert!(t.m.is_idle());
+    }
+
+    #[test]
+    fn modifiers_are_shared_between_devices() {
+        let mut t = D::new(per_device(&[rule("ctrl+h", "backspace")], &[]));
+        assert_eq!(t.key(LCTRL, true, DA), [d(LCTRL)]);
+        assert_eq!(t.key(H, true, DB), [u(LCTRL), d(BACKSPACE)], "Ctrl on A plus H on B is the combo");
+        assert_eq!(t.key(H, false, DB), [u(BACKSPACE), d(LCTRL)]);
+        assert_eq!(t.key(LCTRL, false, DA), [u(LCTRL)]);
+        // A tap/hold key on one device is held for a key on another.
+        let mut t = D::new(per_device(&[], &[dual("capslock", "esc", "lctrl")]));
+        assert_eq!(t.key(CAPS, true, DA), []);
+        assert_eq!(t.key(C, true, DB), [d(LCTRL), d(C)], "permissive hold across devices");
+        t.key(C, false, DB);
+        assert_eq!(t.key(CAPS, false, DA), [u(LCTRL)]);
+    }
+
+    #[test]
+    fn layers_belong_to_the_device_holding_the_layer_key() {
+        let mut t = D::new(per_device(&[rule("ralt", "layer:nav"), in_layer("nav", "h", "left")], &[]));
+        assert_eq!(t.key(RALT, true, DA), []);
+        assert_eq!(t.tap(H, DA), [d(LEFT), u(LEFT)], "A's own layer");
+        assert_eq!(t.tap(H, DB), [d(H), u(H)], "B is not in A's layer");
+        assert_eq!(t.key(H, true, DA), [d(LEFT)]);
+        assert_eq!(t.key(RALT, false, DA), [u(LEFT)], "the layer ends, releasing what was typed in it");
+        assert_eq!(t.key(H, false, DA), []);
+    }
+
+    #[test]
+    fn a_device_that_goes_away_lets_go_of_everything_it_pressed() {
+        let set = per_device(&[rule("ralt", "layer:nav"), in_layer("nav", "h", "left")], &[dual("capslock", "esc", "lctrl")]);
+        let mut t = D::new(set);
+        assert_eq!(t.key(A, true, DA), [d(A)]);
+        assert_eq!(t.key(RALT, true, DA), []);
+        assert_eq!(t.key(H, true, DA), [d(LEFT)]);
+        assert_eq!(t.key(J, true, DB), [d(J)]);
+        assert_eq!(t.key(LSHIFT, true, DB), [d(LSHIFT)]);
+        assert_eq!(t.key(A, true, DB), [], "A is down from both");
+        let gone = t.gone(DA);
+        assert!(gone.contains(&u(LEFT)), "A's layer key is gone: {gone:?}");
+        assert!(!gone.contains(&u(A)) && !gone.contains(&u(J)) && !gone.contains(&u(LSHIFT)), "B's keys stay: {gone:?}");
+        assert_eq!(t.tap(H, DB), [d(H), u(H)], "B never was in the layer");
+        assert_eq!(t.key(H, false, DA), [], "a late release from the gone device does nothing");
+        assert_eq!(t.key(A, false, DB), [u(A)]);
+        assert_eq!(t.key(J, false, DB), [u(J)]);
+        assert_eq!(t.key(LSHIFT, false, DB), [u(LSHIFT)]);
+        assert!(t.m.is_idle());
+        // An undecided tap/hold key of a sleeping device sent nothing, so
+        // nothing is sent for it, and nothing is pending any more.
+        assert_eq!(t.key(CAPS, true, DA), []);
+        assert!(t.m.deadline().is_some());
+        assert_eq!(t.gone(DA), []);
+        assert_eq!(t.m.deadline(), None);
+        assert!(t.m.is_idle());
+        // A device held as a hold: its chord comes up.
+        t.key(CAPS, true, DA);
+        t.now += Duration::from_secs(1);
+        assert_eq!(t.key(C, true, DB), [d(LCTRL), d(C)]);
+        assert_eq!(t.gone(DA), [u(LCTRL)]);
+        assert_eq!(t.key(C, false, DB), [u(C)]);
+        // It comes back and works as before.
+        assert_eq!(t.tap(CAPS, DA), [d(ESC), u(ESC)]);
+        assert!(t.m.is_idle());
+    }
+
+    #[test]
+    fn presses_and_releases_attributed_differently_never_leave_a_key_down() {
+        let mut t = D::new(KeymapSet::new(map(&[rule("a", "b")])));
+        assert_eq!(t.key(A, true, DA), [d(48)]);
+        assert_eq!(t.key(A, false, None), [u(48)], "release of unknown origin");
+        assert_eq!(t.key(A, true, None), [d(48)]);
+        assert_eq!(t.key(A, true, DA), [d(48)], "a repeat, now attributed");
+        assert_eq!(t.key(A, false, DA), [u(48)], "released, though pressed as unknown");
+        assert_eq!(t.key(A, true, DA), [d(48)]);
+        assert_eq!(t.key(A, true, None), [d(48)], "an unknown repeat of A's key");
+        assert_eq!(t.key(A, false, DB), [u(48)], "a release said to be B's undoes the only press");
+        assert!(t.m.is_idle());
+    }
+
+    #[test]
+    fn new_rules_touch_only_the_devices_whose_rules_changed() {
+        let base = [rule("ralt", "layer:nav"), in_layer("nav", "h", "left")];
+        let mut t = D::new(per_device(&base, &[]));
+        t.key(RALT, true, DB);
+        t.key(RALT, true, DA);
+        assert_eq!(t.key(H, true, DB), [d(LEFT)]);
+        // A's rules change: A's layer ends; B keeps its layer and key.
+        let out = t.set(per_device(&base, &[rule("capslock", "esc")]));
+        assert_eq!(out, [], "A held nothing in its layer");
+        assert_eq!(t.tap(J, DB), [d(J), u(J)]);
+        assert_eq!(t.tap(H, DA), [d(H), u(H)], "A's layer ended");
+        assert_eq!(t.key(H, false, DB), [u(LEFT)], "B's held key is still B's");
+        assert_eq!(t.tap(H, DB), [d(LEFT), u(LEFT)], "B is still in its layer");
+        // A device appearing (C gets rules) changes no one else.
+        let mut set = per_device(&base, &[rule("capslock", "esc")]);
+        set.add(&[DeviceRef(13)], map(&[rule("j", "k")]));
+        assert_eq!(t.set(set), []);
+        assert_eq!(t.tap(H, DB), [d(LEFT), u(LEFT)], "B is still in its layer");
+        assert_eq!(t.tap(J, DC), [d(37), u(37)]);
+    }
+
+    #[test]
+    fn a_keymap_set_shares_identical_keymaps() {
+        let mut set = KeymapSet::new(map(&[]));
+        set.add(&[DeviceRef(1), DeviceRef(2)], map(&[rule("a", "b")]));
+        set.add(&[DeviceRef(3)], map(&[rule("a", "b")]));
+        set.add(&[DeviceRef(1)], map(&[rule("a", "c")]));
+        assert_eq!(set.maps.len(), 3);
+        assert_eq!(set.for_device(Some(DeviceRef(3))), set.for_device(Some(DeviceRef(1))), "one compiled keymap for both");
+        assert_eq!(set.index(Some(DeviceRef(1))), 1, "a device keeps its first keymap");
+        assert_eq!(set.index(None), 0);
+        assert_eq!(set.index(Some(DeviceRef(99))), 0);
+    }
+
     // ------------------------------------------------- the invariant
 
     use super::test_support::{Rng, Wire};
@@ -1573,4 +1975,88 @@ mod tests {
             assert!(wire.down.is_empty(), "stream {stream}: release_all left {:?}", wire.down);
         }
     }
+    /// The random streams above, with the keys coming from three devices
+    /// (or from nowhere known), devices going away and coming back mid-hold,
+    /// and per-device rules appearing, changing and going (as the daemon
+    /// does when a device with rules connects): every emitted down still
+    /// has exactly one up, a device that goes away leaves nothing of its own
+    /// down, and once every key is up nothing is.
+    #[test]
+    fn no_stuck_keys_with_several_devices() {
+        let keys = [CAPS, LALT, LMETA, LCTRL, RCTRL, LSHIFT, H, J, Q, A, C, RALT, 57, 59, 88, 0x112, 0x110];
+        let devices = [None, DA, DB, DC];
+        let maps: Vec<Keymap> = configs().iter().map(|c| map(c)).collect();
+        let app_maps: Vec<Keymap> = configs().iter().map(|c| map(&in_app(c))).collect();
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        let random_set = |rng: &mut Rng| {
+            let mut set = KeymapSet::new(maps[rng.below(maps.len())].clone());
+            for d in [DA, DB, DC] {
+                match rng.below(3) {
+                    0 => set.add(&[d.unwrap()], app_maps[rng.below(app_maps.len())].clone()),
+                    1 => set.add(&[d.unwrap()], maps[rng.below(maps.len())].clone()),
+                    _ => {}
+                }
+            }
+            set
+        };
+        for stream in 0..10_000 {
+            let mut m = Mapper::with_set(random_set(&mut rng));
+            let mut wire = Wire::default();
+            let mut now = Instant::now();
+            for _ in 0..rng.below(200) + 1 {
+                let mut emitted = Vec::new();
+                let mut repeat = false;
+                let mut gone = None;
+                match rng.below(24) {
+                    0..=11 => {
+                        let k = keys[rng.below(keys.len())];
+                        let down = rng.below(2) == 0;
+                        let dev = devices[rng.below(devices.len())];
+                        repeat = down && m.holds(k, dev);
+                        m.key_from(k, down, dev, now, &mut |e| emitted.push(e));
+                    }
+                    12 => now += Duration::from_millis(rng.below(400) as u64),
+                    13 | 14 => {
+                        now += Duration::from_millis(rng.below(400) as u64);
+                        m.timer(now, &mut |e| emitted.push(e));
+                    }
+                    15 => m.interrupt(&mut |e| emitted.push(e)),
+                    16 => m.lift(rng.next_u64() as u8, &mut |e| emitted.push(e)),
+                    17..=19 => m.set_keymaps(random_set(&mut rng), &mut |e| emitted.push(e)),
+                    20 | 21 => {
+                        let d = [DA, DB, DC][rng.below(3)].unwrap();
+                        m.device_gone(d, &mut |e| emitted.push(e));
+                        gone = Some(d);
+                    }
+                    _ => m.release_all(&mut |e| emitted.push(e)),
+                }
+                for e in emitted {
+                    wire.apply(e, repeat);
+                }
+                assert_eq!(wire.down.iter().copied().collect::<Vec<_>>(), m.wire.iter().collect::<Vec<_>>());
+                for code in 0..CODE_LIMIT {
+                    assert_eq!(m.wire.is_held(code), m.wanted(code), "stream {stream}: code {code}");
+                }
+                if let Some(d) = gone {
+                    assert!(m.find(Some(d)).is_none(), "stream {stream}: device {d:?} still has keys down");
+                    assert!(m.pending.is_none_or(|p| m.sources[p.src].device != Some(d) || m.sources[p.src].phys.is_held(u32::from(p.code))));
+                }
+            }
+            // Every key comes up, each release attributed at random: one
+            // release per source that holds it is enough.
+            let mut emitted = Vec::new();
+            for k in keys {
+                for _ in 0..devices.len() {
+                    m.key_from(k, false, devices[rng.below(devices.len())], now, &mut |e| emitted.push(e));
+                }
+                assert!(!m.held_anywhere(k), "stream {stream}: {k} still down");
+            }
+            emitted.into_iter().for_each(|e| wire.apply(e, false));
+            assert!(wire.down.is_empty(), "stream {stream}: left down {:?}", wire.down);
+            assert!(m.is_idle());
+            assert_eq!(m.mods(), 0);
+            assert!(m.sources.len() <= devices.len(), "sources are reused, not piled up");
+        }
+    }
+
 }

@@ -5,6 +5,7 @@
 
 pub mod appmatch;
 mod codec;
+pub mod device;
 pub mod drag;
 mod edge;
 mod geometry;
