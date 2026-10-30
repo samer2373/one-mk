@@ -1,0 +1,324 @@
+/home/samer/.t3/worktrees/one-mk/t3-247e5f5b/docs/spikes/gnome/client/fake_gdm.py:15: DeprecationWarning: Gio.DBusConnection.register_object is deprecated
+  bus.register_object("/org/gnome/DisplayManager/Manager", info, call, prop, None)
+libmutter-Message: 22:51:32.267: Running GNOME Shell (using mutter 50.1) as a Wayland display server
+
+(gnome-shell:3210787): libmutter-WARNING **: 22:51:32.267: Unknown experimental feature 'scale-monitor-framebuffer'
+
+(gnome-shell:3210787): libmutter-WARNING **: 22:51:32.267: Unknown experimental feature 'xwayland-native-scaling'
+libmutter-Message: 22:51:32.445: Added device '/dev/dri/renderD129' (nvidia-drm) using no mode setting.
+libmutter-Message: 22:51:32.453: Added device '/dev/dri/renderD128' (i915) using no mode setting.
+libmutter-Message: 22:51:32.454: Created gbm renderer for '/dev/dri/renderD129'
+libmutter-Message: 22:51:32.455: Created gbm renderer for '/dev/dri/renderD128'
+libmutter-Message: 22:51:32.455: Boot VGA GPU /dev/dri/renderD128 selected as primary
+** Message: 22:51:32.457: Obtained a high priority EGL context
+libmutter-Message: 22:51:32.472: Added virtual monitor Meta-0
+libmutter-Message: 22:51:32.472: Added virtual monitor Meta-1
+libmutter-Message: 22:51:32.472: Added virtual monitor Meta-2
+libmutter-Message: 22:51:32.478: Using Wayland display name 'spike-wl-0'
+
+(gnome-shell:3210787): libmutter-WARNING **: 22:51:32.514: There is no colord server available
+GNOME Shell-Message: 22:51:32.720: Unset XDG_SESSION_ID, getCurrentSessionProxy() called outside a user session. Asking logind directly.
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Shell.Screencast' requested by ':1.0' (uid=1000 pid=3210787 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.freedesktop.impl.portal.PermissionStore' requested by ':1.0' (uid=1000 pid=3210787 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Shell.CalendarServer' requested by ':1.0' (uid=1000 pid=3210787 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.PermissionStore'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.evolution.dataserver.Sources5' requested by ':1.2' (uid=1000 pid=3210846 comm="/usr/libexec/gnome-shell-calendar-server" label="t3code (unconfined)")
+GNOME Shell-Message: 22:51:32.789: Registering session with GDM
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Shell.Notifications' requested by ':1.0' (uid=1000 pid=3210787 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.OnlineAccounts' requested by ':1.3' (uid=1000 pid=3210857 comm="/usr/libexec/evolution-source-registry" label="t3code (unconfined)")
+GNOME Shell-Message: 22:51:32.798: Error registering session with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, “()”, does not match expected type “(a{sv})”
+
+(gnome-shell:3210787): GNOME Shell-WARNING **: 22:51:32.805: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.Sources5'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.evolution.dataserver.Calendar8' requested by ':1.2' (uid=1000 pid=3210846 comm="/usr/libexec/gnome-shell-calendar-server" label="t3code (unconfined)")
+goa-daemon-Message: 22:51:32.813: goa-daemon version 3.58.0 starting
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Shell.CalendarServer'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Identity' requested by ':1.4' (uid=1000 pid=3210866 comm="/usr/libexec/goa-daemon" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.OnlineAccounts'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Identity'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.Calendar8'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Shell.Notifications'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.evolution.dataserver.AddressBook10' requested by ':1.6' (uid=1000 pid=3210886 comm="/usr/libexec/evolution-calendar-factory" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.AddressBook10'
+
+(gnome-shell:3210787): GNOME Shell-CRITICAL **: 22:51:32.857: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files
+
+Stack trace:
+  asyncCallback@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:115:23
+  @resource:///org/gnome/shell/ui/init.js:20:20
+  
+GNOME Shell-Message: 22:51:32.858: Will monitor session null
+
+(gnome-shell:3210787): GNOME Shell-CRITICAL **: 22:51:32.858: Could not get proxy for session null: Error: Argument string may not be null
+
+Stack trace:
+  _packVariant@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:82:29
+  _packVariant@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:135:27
+  _init/this.Variant._new_internal@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:298:35
+  _proxyInvoker@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:103:23
+  _makeProxyMethod/<@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:148:30
+  @resource:///org/gnome/gjs/modules/core/overrides/Gio.js:202:30
+  @resource:///org/gnome/gjs/modules/core/overrides/Gio.js:193:20
+  getCurrentSessionProxy@resource:///org/gnome/shell/misc/loginManager.js:160:52
+  async*_getLoginSession@resource:///org/gnome/shell/ui/screenShield.js:164:55
+  ScreenShield@resource:///org/gnome/shell/ui/screenShield.js:114:14
+  _initializeUI@resource:///org/gnome/shell/ui/main.js:253:24
+  start@resource:///org/gnome/shell/ui/main.js:197:11
+  @resource:///org/gnome/shell/ui/init.js:12:47
+  @resource:///org/gnome/shell/ui/init.js:20:20
+  
+
+(gnome-shell:3210787): GNOME Shell-WARNING **: 22:51:32.858: Failed to start state machine: can't access property "connectObject", this._loginUser is null
+
+(gnome-shell:3210787): Gjs-WARNING **: 22:51:32.858: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:
+_getLoginSession@resource:///org/gnome/shell/ui/screenShield.js:163:27
+ScreenShield@resource:///org/gnome/shell/ui/screenShield.js:114:14
+_initializeUI@resource:///org/gnome/shell/ui/main.js:253:24
+start@resource:///org/gnome/shell/ui/main.js:197:11
+@resource:///org/gnome/shell/ui/init.js:12:47
+@resource:///org/gnome/shell/ui/init.js:20:20
+
+GNOME Shell-Message: 22:51:32.869: Error looking up permission: GDBus.Error:org.freedesktop.portal.Error.NotFound: No entry for geolocation
+GNOME Shell-Message: 22:51:32.876: Failed to register AuthenticationAgent
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.freedesktop.portal.IBus' requested by ':1.9' (uid=1000 pid=3210876 comm="ibus-daemon --panel disable" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.freedesktop.portal.IBus'
+GNOME Shell-Message: 22:51:32.939: No permission to control network connections: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files
+** Message: 22:51:32.949: Failed to start camera monitor
+GNOME Shell-Message: 22:51:32.974: Failed to get PolKit permission: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files
+GNOME Shell-Message: 22:51:32.975: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.GeoClue2 was not provided by any .service files
+
+(gnome-shell:3210787): accountsservice-WARNING **: 22:51:32.978: ActUserManager: user (null) has no username (uid: -1)
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.12' (uid=1000 pid=3210951 comm="/usr/libexec/ibus-extension-gtk3" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.freedesktop.portal.Documents' requested by ':1.15' (uid=1000 pid=3211219 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.freedesktop.portal.Documents'
+fusermount3: mount failed: Operation not permitted
+error: fuse init failed: Can't mount path /home/samer/.t3/worktrees/one-mk/t3-247e5f5b/target/wall-m1-lab/wall-m1-session/run/doc
+
+(/usr/libexec/xdg-desktop-portal:3211219): xdg-desktop-portal-WARNING **: 22:51:33.049: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gnome' requested by ':1.15' (uid=1000 pid=3211219 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Settings.GlobalShortcutsProvider' requested by ':1.17' (uid=1000 pid=3211234 comm="/usr/libexec/xdg-desktop-portal-gnome" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Settings.GlobalShortcutsProvider'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gnome'
+
+(/usr/libexec/xdg-desktop-portal:3211219): xdg-desktop-portal-WARNING **: 22:51:33.240: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:3211219): xdg-desktop-portal-WARNING **: 22:51:33.240: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:3211219): xdg-desktop-portal-WARNING **: 22:51:33.240: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.15' (uid=1000 pid=3211219 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'
+
+(/usr/libexec/xdg-desktop-portal:3211219): xdg-desktop-portal-WARNING **: 22:51:33.277: Failed to connect to PipeWire: Couldn't connect to PipeWire
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.freedesktop.secrets' requested by ':1.15' (uid=1000 pid=3211219 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.freedesktop.portal.Desktop'
+** Message: 22:51:33.291: couldn't access control socket: /home/samer/.t3/worktrees/one-mk/t3-247e5f5b/target/wall-m1-lab/wall-m1-session/run/keyring/control: No such file or directory
+discover_other_daemon: 0dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.freedesktop.secrets'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Shell.Screencast'
+GNOME Shell-Message: 22:51:34.058: GNOME Shell started at Fri Oct 30 2026 22:51:32 GMT+0300 (GMT+03:00)
+GNOME Shell-Message: 22:51:34.060: Registering display with GDM
+GNOME Shell-Message: 22:51:34.061: Error registering display with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, “()”, does not match expected type “(a{ss})”
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.25' (uid=1000 pid=3212532 comm="gdbus call --session -d org.gnome.Shell.Extensions" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'
+GNOME Shell-Message: 22:51:58.972: Launching DING process
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Nautilus' requested by ':1.31' (uid=1000 pid=3212857 comm="gjs /usr/share/gnome-shell/extensions/ding@rasters" label="desktop-icons-ng (unconfined)")
+** Message: 22:51:59.147: Connecting to org.freedesktop.Tracker3.Miner.Files
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Nautilus'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gtk.vfs.Metadata' requested by ':1.31' (uid=1000 pid=3212857 comm="gjs /usr/share/gnome-shell/extensions/ding@rasters" label="desktop-icons-ng (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gtk.vfs.Metadata'
+DING: Detected async api for thumbnails
+DING: ** Message: 22:51:59.222: Connecting to org.freedesktop.Tracker3.Miner.Files
+DING: Failed with Operation not supported while adding extra folder trash:///
+DING: _doReadAsync/</<@/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopManager.js:1498:47
+DING: @/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/ding.js:206:13
+DING: Failed to store the desktop coordinates for file:///home/samer/.t3/worktrees/one-mk/t3-247e5f5b/target/wall-m1-lab/wall-m1-session/home: Gio.IOErrorEnum: Setting attribute metadata::nautilus-icon-position not supported
+DING: Failed to store the desktop coordinates for file:///home/samer/.t3/worktrees/one-mk/t3-247e5f5b/target/wall-m1-lab/wall-m1-session/home/Desktop/spike-icon.txt: Gio.IOErrorEnum: Setting attribute metadata::nautilus-icon-position not supported
+DING: DBus interface for Gvfs daemon (org.gtk.vfs.Metadata) is now available.
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.freedesktop.Tracker3.Miner.Files' requested by ':1.32' (uid=1000 pid=3212896 comm="/usr/bin/nautilus --gapplication-service" label="t3code (unconfined)")
+DING: GNOME nautilus 50.2.2
+GNOME Shell-Message: 22:51:59.263: Received notification for window. 2 notifications remaining.
+
+(gnome-shell:3210787): libmutter-CRITICAL **: 22:51:59.265: meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed
+DING: DBus interface for Nautilus (org.gnome.Nautilus.FileOperations2) is now available.
+DING: DBus interface for Nautilus (org.freedesktop.FileManager1) is now available.
+GNOME Shell-Message: 22:51:59.282: Received notification for window. 1 notifications remaining.
+GNOME Shell-Message: 22:51:59.283: Received notification for window. 0 notifications remaining.
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.freedesktop.Tracker3.Miner.Files'
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.freedesktop.systemd1' requested by ':1.35' (uid=1000 pid=3213003 comm="/usr/libexec/localsearch-3" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activated service 'org.freedesktop.systemd1' failed: Process org.freedesktop.systemd1 exited with status 1
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:03.367: Monitor 'MetaVendor' has no configuration which is-current!
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:03.367: Monitor 'MetaVendor' has no configuration which is-current!
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:04.042: Monitor 'MetaVendor' has no configuration which is-current!
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:05.397: Monitor 'MetaVendor' has no configuration which is-current!
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:05.398: Monitor 'MetaVendor' has no configuration which is-current!
+
+(gnome-shell:3210787): libmutter-CRITICAL **: 22:52:05.457: meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:06.076: Monitor 'MetaVendor' has no configuration which is-current!
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:08.128: Monitor 'MetaVendor' has no configuration which is-current!
+
+(gnome-shell:3210787): Clutter-WARNING **: 22:52:08.131: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.
+
+(gnome-shell:3210787): Clutter-WARNING **: 22:52:08.131: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.
+
+(gnome-shell:3210787): Clutter-WARNING **: 22:52:08.131: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.
+
+(gnome-shell:3210787): Clutter-WARNING **: 22:52:08.131: Can't update stage views actor unnamed [ClutterActor] is on because it needs an allocation.
+
+(gnome-shell:3210787): libmutter-CRITICAL **: 22:52:08.181: meta_window_set_stack_position_no_sync: assertion 'window->stack_position >= 0' failed
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:08.726: Monitor 'MetaVendor' has no configuration which is-current!
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:08.726: Monitor 'MetaVendor' has no configuration which is-current!
+
+** (xdg-desktop-portal-gnome:3211234): WARNING **: 22:52:14.329: Monitor 'MetaVendor' has no configuration which is-current!
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+
+(gnome-shell:3210787): Gjs-WARNING **: 22:52:47.163: Type GITypeInfo of property AccountsService.User::password-mode does not match return type GITypeInfo of getter get_password_mode. Falling back to slow path
+GNOME Shell-Message: 22:52:54.526: Launching DING process
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Nautilus' requested by ':1.428' (uid=1000 pid=3219285 comm="gjs /usr/share/gnome-shell/extensions/ding@rasters" label="desktop-icons-ng (unconfined)")
+** Message: 22:52:54.683: Connecting to org.freedesktop.Tracker3.Miner.Files
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Nautilus'
+DING: Detected async api for thumbnails
+DING: Failed with Operation not supported while adding extra folder trash:///
+DING: _doReadAsync/</<@/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopManager.js:1498:47
+DING: @/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/ding.js:206:13
+DING: Failed to store the desktop coordinates for file:///home/samer/.t3/worktrees/one-mk/t3-247e5f5b/target/wall-m1-lab/wall-m1-session/home: Gio.IOErrorEnum: Setting attribute metadata::nautilus-icon-position not supported
+DING: Failed to store the desktop coordinates for file:///home/samer/.t3/worktrees/one-mk/t3-247e5f5b/target/wall-m1-lab/wall-m1-session/home/Desktop/spike-icon.txt: Gio.IOErrorEnum: Setting attribute metadata::nautilus-icon-position not supported
+DING: DBus interface for Gvfs daemon (org.gtk.vfs.Metadata) is now available.
+DING: DBus interface for Nautilus (org.gnome.Nautilus.FileOperations2) is now available.
+DING: DBus interface for Nautilus (org.freedesktop.FileManager1) is now available.
+DING: ** Message: 22:52:54.765: Connecting to org.freedesktop.Tracker3.Miner.Files
+DING: GNOME nautilus 50.2.2
+GNOME Shell-Message: 22:52:54.788: Received notification for window. 1 notifications remaining.
+GNOME Shell-Message: 22:52:54.788: Received notification for window. 0 notifications remaining.
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.516' (uid=1000 pid=3220373 comm="gdbus call --session -d org.gnome.Shell.Extensions" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'
+GNOME Shell-Message: 22:53:04.279: Launching DING process
+DING: Detected async api for thumbnails
+DING: Failed with Operation not supported while adding extra folder trash:///
+DING: _doReadAsync/</<@/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopManager.js:1498:47
+DING: @/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/ding.js:206:13
+DING: Failed to store the desktop coordinates for file:///home/samer/.t3/worktrees/one-mk/t3-247e5f5b/target/wall-m1-lab/wall-m1-session/home: Gio.IOErrorEnum: Setting attribute metadata::nautilus-icon-position not supported
+DING: Failed to store the desktop coordinates for file:///home/samer/.t3/worktrees/one-mk/t3-247e5f5b/target/wall-m1-lab/wall-m1-session/home/Desktop/spike-icon.txt: Gio.IOErrorEnum: Setting attribute metadata::nautilus-icon-position not supported
+DING: DBus interface for Nautilus (org.gnome.Nautilus.FileOperations2) is now available.
+DING: DBus interface for Nautilus (org.freedesktop.FileManager1) is now available.
+DING: DBus interface for Gvfs daemon (org.gtk.vfs.Metadata) is now available.
+DING: ** Message: 22:53:04.445: Connecting to org.freedesktop.Tracker3.Miner.Files
+DING: GNOME nautilus 50.2.2
+GNOME Shell-Message: 22:53:04.477: Received notification for window. 1 notifications remaining.
+GNOME Shell-Message: 22:53:04.478: Received notification for window. 0 notifications remaining.
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.1627' (uid=1000 pid=3231671 comm="gdbus call --session -d org.gnome.Shell.Extensions" label="t3code (unconfined)")
+dbus-daemon[3210786]: [session uid=1000 pid=3210786 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'
+** Message: 22:54:16.214: Shutting down GNOME Shell

@@ -1,3 +1,180 @@
+# 6D-M1a-2: lifecycle resolutions; production remains STOPPED
+
+Date: 2026-10-30. Branch: `t3/wallpaper-m1-lifecycle-gates`.
+Starting point: `04e1050` on local `wave5`, including M1a merge `a8053d5`.
+Owner authorized all milestones. **Diagnostic work, not M1 delivery.** Nothing
+is installed or enabled by default; no owner desktop or running one-mk changed.
+
+## M1a-2 decision and evidence
+
+The owned-xdg/appsink path avoids the original configure warning. A real
+extension-disabled baseline, socket-lifetime fix, faster watchdog and bounded
+automatic recovery resolve several M1a findings. **Paused renderer polling,
+an intermittent private Shell disconnect, capture resolution and the production
+protocol remain STOP gates. Task 6 is not delivered.** Do not promote the spike.
+
+Evidence: [disabled baseline](gnome/m1a2-evidence/baseline.json),
+[complete baseline log](gnome/m1a2-evidence/baseline-shell.log),
+[candidate](gnome/m1a2-evidence/candidate.json),
+[complete candidate log](gnome/m1a2-evidence/candidate-shell.log),
+[original failure reproduced](gnome/m1a2-evidence/reproduced.json),
+[timers fixed but leak persists](gnome/m1a2-evidence/fixed-attempt1.json),
+[launcher fixed](gnome/m1a2-evidence/fixed-attempt2.json), and
+[interrupted repeat](gnome/m1a2-evidence/interrupted-candidate.json).
+The earlier [concurrent-capture run](gnome/m1a2-evidence/concurrent-run/candidate.json)
+is retained separately from the corrected final candidate.
+Reports retain original PNG hashes/dimensions, sampled pixels and actual capture
+request/completion times; retained images are downscaled lossless WebP.
+Raw logs preserve original whitespace for digest comparison; the evidence-local
+Git attributes disable whitespace lint only for those captured logs.
+
+## Baseline-relative warning triage
+
+Both sessions use the same lifecycle script, private session/system buses,
+HOME/XDG and headless Wayland, without Xwayland. The disabled baseline still
+exercises DING, layouts, coverage, overview, lock/unlock and 100 extension
+requests. Renderer-death operations are inapplicable and explicitly skipped.
+All 31 warning/critical records from the earlier successful candidate match the
+recorded disabled baseline. The corrected repeat has 32 records (a repeated
+baseline signature), still zero unmatched records; occurrence counts are not
+deduplicated in the report. Comparison normalizes only logger PIDs, timestamps
+and unique D-Bus connection numbers, and includes indented stack traces.
+There is **no handwritten allowlist**. Candidate provenance records the baseline
+log SHA-256. A matching generic Gjs header cannot hide a new extension stack.
+
+| Baseline record numbers | Count | Signature / attribution | Disposition |
+|---|---:|---|---|
+| 1–2 | 2 | Unknown framebuffer/Xwayland scaling settings | Reproduced without wallpaper |
+| 3 | 1 | Missing colord | Private service absent; baseline reproduced |
+| 4–8 | 5 | Missing login1, null user/session proxies, state machine, login-manager promise rejection | Same full stack without wallpaper |
+| 9 | 1 | Document portal FUSE mount unknown | Private portal failure; baseline reproduced |
+| 10 | 1 | AccountsService user has no username | Baseline reproduced |
+| 11–13 | 3 | RealtimeKit properties unavailable | Private service absent; baseline reproduced |
+| 14 | 1 | PipeWire unavailable | Private service absent; baseline reproduced |
+| 15, 19 | 2 | `meta_window_set_stack_position_no_sync` assertion | Same lifecycle without wallpaper; not attributed to our stacking |
+| 16–18, 20–23, 28–30 | 10 | Virtual MetaVendor monitor has no current configuration | Baseline reproduced |
+| 24–27 | 4 | Clutter actor needs allocation | Baseline reproduced |
+| 31 | 1 | AccountsService password-mode getter type fallback | Baseline reproduced |
+| **Total** | **31** | **Zero unmatched records in successful candidate** | **Narrow no-new-warnings gate passes** |
+
+Reproduction establishes non-attribution for these observations, not that Mutter
+assertions are harmless on physical machines. DING's ordinary trash/metadata
+failure messages remain in complete logs; they are not warning exclusions.
+
+## Root cause and fixes
+
+**Retained windows belonged to exited renderer PIDs, not leaked extension
+actors.** Census now records stable window IDs, PID, actor presence and hidden
+state. `Gio.SubprocessLauncher` retained its copy of the Wayland socket until JS
+garbage collection. Reaping the child alone did not disconnect Mutter's client.
+Closing the launcher in `finally` immediately after
+`Meta.WaylandClient.new_subprocess` releases that descriptor. Successful runs
+have exactly one managed window after enable and **zero after every disable**,
+including replacement windows on layout changes. Final census has only DING's
+two desktop windows and no extension leaks. No ghosts are hidden/deleted to fake
+the census. Unnecessary raised/lower and deferred pre-map stacking are removed.
+
+The watchdog uses a 2.5 s stale threshold and 100 ms sampling only while an
+adopted renderer is unpaused. Pause/teardown cancels it. Hang falls back to native
+still wallpaper and terminates the child instead of unbounded repaint probes.
+
+Automatic recovery shares child ownership and budget across disable/re-enable:
+1/2/4 s backoff, at most three starts per rolling 60 s, then exhausted latched
+until explicit Retry. Children cannot overlap; waits call `wait_finish`; stale
+bridges cannot restart; pause cancels pending restart. Death and lock/unlock
+tests do not manually start a replacement. Exhaustion exposes
+`failed-retry-limit: static wallpaper; explicit Retry required` in spike events,
+with PID null and timer zero after re-enable. This is **Eval-visible laboratory
+state, not product doctor integration**.
+
+## Measured lifecycle results
+
+The concurrent-capture successful run below was recorded at
+2026-10-30T19:36:10Z. JSON contains each run's exact provenance and timings.
+The corrected final repeat at 19:51:31Z also completed 100 cycles with 1/0
+windows, zero leaked actors/clones, and no narrow gate failures: startup
+183.478 ms, hung fallback **2633.25 ms**, cycle damage min/median/max
+154.459/173.048/206.215 ms, and automatic restart waits
+1309.04/2270.99/4218.78 ms before the fourth-death exhausted latch.
+Kill-to-first-damage was about 2086 ms and unlock-to-first-damage about
+4503 ms from Shell monotonic events. Its final still sample was requested at
+4422.50 ms/completed at 4696.27 ms, followed by video at 4778.10–4879.49 ms.
+Paused child CPU was 1.00% of one core. Maximum hot-plug request intervals
+were 224.34/349.96 ms; it still does not establish fine visible-gap bounds.
+This repeat does not erase the intervening cycle-19 disconnect.
+
+| Case | Observation | Result / limitation |
+|---|---|---|
+| Baseline-relative log | 31 matching records, zero new | Narrow pass |
+| Startup first video damage | 170.514 ms | Trusted generated VP9 only |
+| SIGSTOP fallback | 2563.68 ms; earlier launcher-fixed run 2600.62 ms; interrupted repeat 2628.41 ms | Under 3 s, observed margin about 370–436 ms |
+| 100 cycles | Every successful cycle 1 enabled / 0 disabled; damage min/median/max 151.805/154.954/167.613 ms | Successful runs, not a stability guarantee |
+| Live SIGKILL | About 2073 ms kill-to-first-damage from Shell events | Automatic 2 s backoff in this cascade |
+| Unlock | About 4486 ms action-to-first-damage; still capture 4455.86–4701.14 ms, next video 4774.98–4872.40 ms | Automatic; multi-second visible still gap |
+| Restart cap | Three fresh replacements; fourth death exhausted, PID null, timer zero; persists after re-enable | All four entries in `fixed-attempt2.json` |
+| Unplug earlier run | Still sampled 108.92–360.30 ms after action; video 455.34–527.30 ms | Gap sampled; duration only coarsely bounded |
+| Replug earlier run | Still sampled 91.92–354.06 ms; video 432.13–534.43 ms | Gap sampled; duration only coarsely bounded |
+| Concurrent hot-plug | No still sampled; maximum request intervals 220.49/218.18 ms unplug/replug | **Not zero gap**; 50 ms cadence not achieved |
+| Paused overview | Child 1.33% of one core over 3 s; extension watchdog/restart IDs zero | **FAIL:** animation child remains alive, polling at 5 ms |
+| Virtual layouts | 1/2/3 monitors, scales 1/2 and 3 at 1.25 match extents/clones | Not physical GPU/HiDPI qualification |
+| Repeated qualification | Shell disconnected during cycle 19 after 18 completions; D-Bus NoReply | **Unresolved stability failure**, cause not established |
+
+Capture intervals above are request/completion windows, not exact exposure
+times or gap durations. A 50 ms schedule does not achieve 50 ms actual IPC
+sampling. Unlock's black frame may be the lock screen, not live video. Need
+compositor/frame-clock capture or bounded private screencast before claiming
+fine hot-plug bounds. Failed runs remain evidence even if a later repeat passes.
+
+## Remaining STOP gates and re-estimate
+
+Task 6 remains unimplemented: generic Eval argv hooks and the spike broadcast
+interface are not the design's bounded product protocol. The test wrapper
+refuses anything except Shell 50.1; that is **not** production version gating.
+No installer/uninstaller is added, and the owner's extension directory is untouched.
+
+1. Diagnose the private Shell disconnect using supervisor exit/core evidence;
+   repeat lifecycle tests without losing the compositor.
+2. Replace paused renderer polling with event-driven shutdown/recreation; prove
+   no animation child or periodic work while paused/off, including lock/coverage.
+3. Implement `org.onemk.WallpaperBridge1`, fixed argv/daemon authorization,
+   unique-name plus exact PID/UID binding, bounded Hello/state/layout messages,
+   deadlines/rates, unicast signals, owner-loss handling and negative tests.
+4. Add visible/doctor-reportable exhausted state, explicit Retry, qualified
+   Shell refusal and `one-mk wallpaper`-only install/uninstall; preserve
+   MIT OR Apache-2.0 and default OFF.
+5. Resolve actual capture cadence, then qualify hostile-media isolation, native
+   hosts, physical power/HiDPI, GPU copies, sync, sleep and soak gates.
+
+Allowance **retained**, not reduced by diagnostic progress: M1 16–26
+engineer-weeks; M2 10–16, M3 16–24, M4 10–16, M5 14–22, reserve 8–14;
+**74–118 remaining engineer-weeks total**, not calendar dates. No M1 completion
+or production-shaped extension delivery is claimed.
+
+## M1a-2 reproduction and validation
+
+`bash docs/spikes/gnome/qualify-m1.sh` builds offline with `-j 2`, records a real
+baseline then candidate under ignored `target/wall-m1-lab`, and refuses Shell
+versions other than 50.1. Its isolated supervisor uses private buses/HOME/XDG
+and reaps owned children, generated media and session files. Private Unix-socket
+approval may be needed. Missing lab dependencies never authorize the live desktop.
+
+Clean-environment validation: feature-enabled `one-mk-wall` 2 unit + 3 binary
+tests; default wall 3 binary tests; wall-sync 12 integration tests; four Python
+gate tests; shell syntax; Linux workspace all-target clippy default and enabled;
+Windows MSVC/Apple ARM all-target cross-clippy including wallpaper crates,
+all with `-D warnings`. [Logs](gnome/m1a2-evidence/validation.txt) and
+[default checks](gnome/m1a2-evidence/validation-default.txt). No formatter run.
+Cross checks do not qualify native runtime hosts. Matrix evidence is explicitly
+partial risk evidence, **not green M1 acceptance**.
+
+---
+
+# Historical M1a resolution (superseded by M1a-2 above)
+
+The following is retained verbatim as the prior investigation and estimate;
+its strict-warning rule and open defects describe that earlier run, not the
+current baseline-relative gate.
+
 # 6D-M1a: configure warning resolved in a diagnostic; lifecycle still STOPPED
 
 Date: 2026-10-30. Branch: `t3/wallpaper-mutter-presentation`.

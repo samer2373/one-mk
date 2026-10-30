@@ -1,0 +1,24 @@
+   Compiling one-mk-wall v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-247e5f5b/crates/wall-presenter)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running unittests src/main.rs (target/debug/deps/one_mk_wall-36f568dc3760a6a7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/disabled.rs (target/debug/deps/disabled-dd793439f6310787)
+
+running 3 tests
+test disabled_status_is_a_finite_command ... ok
+test help_and_doctor_do_not_imply_platform_qualification ... ok
+test unavailable_operations_refuse_without_loading_or_spawning ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Checking one-mk-wall v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-247e5f5b/crates/wall-presenter)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.000s
+
+OK
