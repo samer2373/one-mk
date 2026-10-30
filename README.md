@@ -409,7 +409,10 @@ one-mk edge                      # show the rules; --reset turns them off
 ```
 
 While the pointer waits at an edge (dwell or modifier), moving away hands it
-back at once, and typing or clicking there goes to this computer. A click
+back at once (so does sliding along the edge past where the other computer
+faces it), and typing or clicking there goes to this computer. Corners are
+those of the desktop's outline: where an edge meets a neighbouring monitor
+that sticks out, not where it hides behind one. A click
 there is replayed as a whole click (press and release at once), so no button
 can stay held whatever the system reports afterwards; the catch is that a drag
 cannot start at such an edge: start it away from the edge. The

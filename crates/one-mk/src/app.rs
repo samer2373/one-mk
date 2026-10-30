@@ -1118,13 +1118,13 @@ impl App {
             self.release_capture(id, None);
             return;
         };
-        if self.peer_at(side, pos).is_none() {
+        let Some((armed, _)) = self.armed_at(side, pos) else {
             // Like the wall beside a real monitor: the neighbours on this
             // side are lined up elsewhere along it.
             tracing::debug!(%side, ?pos, "not crossing: no computer faces this part of the edge");
             self.hand_back(id);
             return;
-        }
+        };
         if self.locked {
             // Normally unreachable: no barriers are armed while locked.
             tracing::debug!(%side, "not crossing: {}", Refusal::Locked.as_str());
@@ -1135,7 +1135,9 @@ impl App {
         let edge = &self.settings.edge;
         let blocked = guard.fullscreen
             && fullscreen_blocks(true, self.focus.focus().as_ref(), &edge.fullscreen_allow, &edge.fullscreen_block);
-        match Approach::start(guard, local, side, pos, self.mods, blocked, std::time::Instant::now()) {
+        // The rules are measured against the armed piece of edge, which
+        // may lie inside the desktop's bounding box.
+        match Approach::start(guard, local, armed, pos, self.mods, blocked, std::time::Instant::now()) {
             Start::Cross(p) => self.enter_peer(id, side, p),
             Start::Refuse(why) => {
                 tracing::debug!(%side, "not crossing: {}", why.as_str());
@@ -2424,8 +2426,22 @@ impl App {
     /// the backend caught). None if no armed edge is near: the pointer slid
     /// along the edge (held by an edge rule) to where nothing faces it.
     fn peer_at(&self, side: Side, pos: Pos) -> Option<Fingerprint> {
+        self.armed_at(side, pos).map(|(_, fp)| fp)
+    }
+
+    /// The armed edge [`peer_at`](Self::peer_at) finds, joined with the
+    /// edges leading to the same peer that continue it in a straight line
+    /// (the whole side of a desktop is one per monitor): what an edge rule
+    /// holding the pointer there lets it slide along.
+    fn armed_at(&self, side: Side, pos: Pos) -> Option<(Edge, Fingerprint)> {
         let near = self.edges.iter().filter(|(e, _)| e.side == side && e.dist(pos) <= EDGE_SLACK);
-        near.min_by(|(a, _), (b, _)| a.dist(pos).total_cmp(&b.dist(pos))).map(|(_, fp)| *fp)
+        let (mut edge, fp) = *near.min_by(|(a, _), (b, _)| a.dist(pos).total_cmp(&b.dist(pos)))?;
+        while let Some((e, _)) = self.edges.iter().find(|(e, f)| {
+            *f == fp && e.side == side && e.at == edge.at && e.lo < e.hi && (e.hi == edge.lo || e.lo == edge.hi)
+        }) {
+            edge = Edge { lo: edge.lo.min(e.lo), hi: edge.hi.max(e.hi), ..edge };
+        }
+        Some((edge, fp))
     }
 
     /// Arms the edges that lead to peers: with an offset, only where the

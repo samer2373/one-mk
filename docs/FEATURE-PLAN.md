@@ -53,6 +53,18 @@ origin's design won; what origin lacked was re-applied on top of it.
   forget ending connections, Stop), and `scripts/ui-shots.sh` on a private
   Xvfb.
 
+### Fixes from the review of the merge (2026-10-30, branch `t3/fix-review-findings`)
+
+- **Edge guards measure against the armed segment.** A dwell or modifier
+  wait holds the pointer on the exposed edge segment it hit (joined with
+  the same peer's segments that continue it in a line), not on the
+  desktop's bounding box: pushing outwards at an inner edge (beside a
+  shorter or taller neighbour, an L-shaped desktop) keeps waiting, moving
+  more than 4 px into the desktop or sliding past an end of the segment
+  hands the pointer back. Dead corners are the ends of the exposed part of
+  the monitor's edge (where the outline turns, or where two monitors meet
+  in a line), never a monitor corner covered by a neighbour.
+
 ## Where things stand (updated 2026-10-29, end of the second batch)
 
 Everything below is merged into `main` and was validated together (full

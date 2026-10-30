@@ -78,6 +78,36 @@ async fn offset_crossing_maps_and_walls() {
     duo.stop().await;
 }
 
+/// A dwell at an edge inside A's bounding box: B faces the part of A's
+/// main monitor's right edge below A's shorter second monitor. Pushing
+/// outwards there (towards B) keeps the pointer held until the dwell
+/// ends; moving back into the desktop hands it back.
+#[tokio::test]
+async fn dwell_at_an_inner_edge() {
+    let a = Desktop::new(vec![Rect::new(0, 0, 1920, 1080), Rect::new(1920, 0, 1280, 720)]);
+    let setup = |a_sees_b: &mut Device, b_sees_a: &mut Device| {
+        a_sees_b.offset = Some((1920, 720));
+        b_sees_a.offset = Some((-1920, -720));
+    };
+    let mut duo = Duo::start_on("inner-dwell", None, setup, a, screen(1280, 800)).await;
+    duo.settle_as(only(edge(Side::Right, 1920, 720, 1080)), only(edge(Side::Left, 0, 0, 360))).await;
+    super::set(&duo.da, |s| s.edge.all.dwell_ms = Some(300)).await;
+
+    let started = Instant::now();
+    duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 900.0) }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 1.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 40.0, dy: 10.0 }).unwrap(); // pushing, sliding down
+    assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 190.0)));
+    assert!(started.elapsed() >= Duration::from_millis(300), "{:?}", started.elapsed());
+    assert!(duo.ha.capture.try_recv().is_err(), "never handed back");
+    duo.leave_b().await;
+
+    duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 900.0) }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: -30.0, dy: 0.0 }).unwrap();
+    assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: Some(Pos::new(1889.0, 900.0)) });
+    duo.stop().await;
+}
+
 /// From A's second, portrait monitor (not its primary) to B's upper
 /// monitor (not B's primary either), and back to the same point.
 #[tokio::test]
