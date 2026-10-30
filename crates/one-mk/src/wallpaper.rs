@@ -228,7 +228,8 @@ async fn execute(dir: &Path, command: &WallpaperCommand) -> Result<serde_json::V
                     if settings.wallpaper.grants.len() >= 8 && !settings.wallpaper.grants.contains_key(&fingerprint) {
                         return Err(Failure { code: 2,message: "At most eight wallpaper coordinators can have consent. Revoke one first.".into() }.into());
                     }
-                    settings.wallpaper.grants.insert(fingerprint.clone(),rand::random::<u64>().max(1));
+                    settings.wallpaper.grants.insert(fingerprint.clone(),// TOML integers are signed 64-bit: a larger revision could not be saved.
+                    (rand::random::<u64>() >> 1).max(1));
                 } else { settings.wallpaper.grants.remove(&fingerprint); }
                 Ok(settings.clone())
             })?;
@@ -308,5 +309,10 @@ mod tests {
         assert!(!settings.wallpaper.enabled);
         assert!(toml::from_str::<crate::settings::Settings>("[wallpaper]\nversion=2\n").is_err());
         assert!(toml::from_str::<crate::settings::Settings>("[wallpaper.grants]\nevil=1\n").is_err());
+        // Any revision a grant can get must survive a trip through settings.toml.
+        let mut settings = crate::settings::Settings::default();
+        settings.wallpaper.grants.insert("a".repeat(64), i64::MAX as u64);
+        let text = toml::to_string(&settings).unwrap();
+        assert_eq!(toml::from_str::<crate::settings::Settings>(&text).unwrap().wallpaper, settings.wallpaper);
     }
 }

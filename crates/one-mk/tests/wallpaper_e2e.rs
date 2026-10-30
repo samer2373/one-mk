@@ -12,7 +12,7 @@ use std::time::Duration;
 struct Lab { root: PathBuf, children: Vec<Child> }
 impl Lab {
     fn new() -> Self {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../target/wall-{}-{:x}",std::process::id(),rand::random::<u16>()));
+        let root = std::env::temp_dir().join(format!("wall-{}-{:x}",std::process::id(),rand::random::<u16>()));
         std::fs::create_dir_all(&root).unwrap();
         Self { root,children: Vec::new() }
     }
