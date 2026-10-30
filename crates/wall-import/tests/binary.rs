@@ -20,9 +20,20 @@ fn killed_workers_at_each_checkpoint_and_cancel_leave_no_partials_or_descendants
     std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o700)).unwrap();
     let source = temporary.path().join("two.gif");
     std::fs::write(&source, fixtures::gif(2, 2, 2)).unwrap();
-    struct ChildGuard(Option<std::process::Child>);
+    struct ChildGuard(Option<std::process::Child>, Vec<u32>);
     impl Drop for ChildGuard {
-        fn drop(&mut self) { if let Some(child) = &mut self.0 { let _ = child.kill(); let _ = child.wait(); } }
+        fn drop(&mut self) {
+            if let Some(child) = &mut self.0 { let _ = child.kill(); let _ = child.wait(); }
+            for child in &self.1 {
+                let started = std::time::Instant::now();
+                while started.elapsed() < std::time::Duration::from_secs(5) {
+                    let result = unsafe { libc::waitpid(*child as i32, std::ptr::null_mut(), libc::WNOHANG) };
+                    if result == *child as i32 || !Path::new(&format!("/proc/{child}")).exists() { break; }
+                    if result == 0 { unsafe { libc::kill(*child as i32, libc::SIGKILL); } }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
     }
     fn descendants(parent: u32, result: &mut Vec<u32>) {
         let children = std::fs::read_to_string(format!("/proc/{parent}/task/{parent}/children")).unwrap_or_default();
@@ -31,28 +42,45 @@ fn killed_workers_at_each_checkpoint_and_cancel_leave_no_partials_or_descendants
             descendants(child, result);
         }
     }
-    for stage in ["start", "probe", "decode", "decoder", "poster", "respond", "cancel"] {
+    assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) }, 0);
+    for stage in ["start", "probe", "decode", "decoder", "poster", "respond", "cancel", "parent-sigkill"] {
         std::fs::write(&source, if stage == "decoder" { std::fs::read(lab.join("media/six.webm")).unwrap() } else { fixtures::gif(2, 2, 2) }).unwrap();
         let mut guard = ChildGuard(Some(Command::new(env!("CARGO_BIN_EXE_one-mk-wall-import"))
             .arg("import").arg(&source).arg("--output").arg(&output).arg("--runtime").arg(&runtime).arg("--json")
-            .env_clear().env("ONE_MK_WALL_TEST_STOP", if stage == "cancel" { "decode" } else { stage })
-            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap()));
+            .env_clear().env("ONE_MK_WALL_TEST_STOP", if stage == "cancel" || stage == "parent-sigkill" { "decode" } else { stage })
+            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap()), Vec::new());
         let parent = guard.0.as_ref().unwrap().id();
         let started = std::time::Instant::now();
         let worker = loop {
             let mut children = Vec::new();
             descendants(parent, &mut children);
+            guard.1 = children.clone();
             if let Some(worker) = children.into_iter().find(|child| std::fs::read_to_string(format!("/proc/{child}/status")).is_ok_and(|text| text.lines().any(|line| line.starts_with("State:") && line.contains('T')))) { break worker; }
             assert!(started.elapsed() < std::time::Duration::from_secs(10), "no stopped worker at {stage}");
             std::thread::sleep(std::time::Duration::from_millis(1));
         };
         let mut children = Vec::new();
         descendants(parent, &mut children);
-        assert_eq!(unsafe { libc::kill(if stage == "cancel" { parent } else { worker } as i32, if stage == "cancel" { libc::SIGTERM } else { libc::SIGKILL }) }, 0);
+        assert_eq!(unsafe { libc::kill(if stage == "cancel" || stage == "parent-sigkill" { parent } else { worker } as i32, if stage == "cancel" { libc::SIGTERM } else { libc::SIGKILL }) }, 0);
         let result = guard.0.take().unwrap().wait_with_output().unwrap();
-        assert_eq!(result.status.code(), Some(if stage == "cancel" { 130 } else { 5 }), "{}", String::from_utf8_lossy(&result.stdout));
+        if stage == "parent-sigkill" {
+            use std::os::unix::process::ExitStatusExt;
+            assert_eq!(result.status.signal(), Some(libc::SIGKILL));
+            assert_eq!(std::fs::read_dir(&output).unwrap().count(), 1, "SIGKILL must leave an unpublished partial for recovery");
+            let recovered = invoke(&["import".as_ref(), source.as_os_str(), "--output".as_ref(), output.as_os_str(), "--runtime".as_ref(), &runtime, "--json".as_ref()]);
+            assert!(recovered.status.success(), "{}", String::from_utf8_lossy(&recovered.stdout));
+            let record: one_mk_wall_import::ImportRecord = serde_json::from_slice(&recovered.stdout).unwrap();
+            std::fs::remove_dir_all(output.join(record.source_blake3)).unwrap();
+        } else { assert_eq!(result.status.code(), Some(if stage == "cancel" { 130 } else { 5 }), "{}", String::from_utf8_lossy(&result.stdout)); }
         assert_eq!(std::fs::read_dir(&output).unwrap().count(), 0, "partial files after {stage}");
-        for child in children { assert!(!Path::new(&format!("/proc/{child}")).exists(), "unreaped child {child} after {stage}"); }
+        for child in children {
+            let started = std::time::Instant::now();
+            while Path::new(&format!("/proc/{child}")).exists() {
+                unsafe { libc::waitpid(child as i32, std::ptr::null_mut(), libc::WNOHANG); }
+                assert!(started.elapsed() < std::time::Duration::from_secs(5), "unreaped child {child} after {stage}");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
     }
 }
 
@@ -67,6 +95,14 @@ fn finite_refusal_without_runtime_or_owner_environment() {
     assert_eq!(status.status.code(), Some(4));
     let status = invoke(&["import".as_ref()]);
     assert_eq!(status.status.code(), Some(2));
+}
+
+#[test]
+#[cfg(all(target_os = "linux", feature = "test-faults"))]
+fn capped_real_worker_exhausts_only_private_scratch() {
+    let Some(runtime) = std::env::var_os("ONE_MK_WALL_TEST_RUNTIME") else { eprintln!("NOT QUALIFIED: explicit audited lab runtime required"); return; };
+    let result = invoke(&["storage-check".as_ref(), "--runtime".as_ref(), &runtime]);
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stdout));
 }
 
 #[test]

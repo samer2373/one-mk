@@ -2,6 +2,8 @@ mod admission;
 mod decode;
 pub mod sandbox;
 mod transaction;
+#[cfg(target_os = "linux")]
+mod runtime_elf;
 
 pub use admission::{Format, Media, inspect};
 pub use transaction::{ImportOptions, ImportRecord, import};
