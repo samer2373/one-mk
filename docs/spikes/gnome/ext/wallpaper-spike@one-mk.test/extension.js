@@ -21,7 +21,6 @@
 // report.
 
 import Clutter from 'gi://Clutter';
-import Cogl from 'gi://Cogl';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
@@ -42,9 +41,6 @@ const IFACE = `
       <arg type="u" direction="out" name="version"/>
       <arg type="a(iiii)" direction="out" name="monitors"/>
     </method>
-    <method name="FrameReady">
-      <arg type="u" direction="in" name="seq"/>
-    </method>
     <signal name="PauseHint">
       <arg type="b" name="paused"/>
       <arg type="s" name="reason"/>
@@ -55,16 +51,17 @@ const IFACE = `
   </interface>
 </node>`;
 
-// Software fallback (spike step 2c): fixed size, fixed file, no paths from
-// the caller.
-const IMG_W = 1920, IMG_H = 1080, IMG_BYTES = IMG_W * IMG_H * 4;
-
 class Bridge {
     constructor(recovery) {
         this._recovery = recovery;
+        this._recovery.damageTimes ??= [];
         this._destroyed = false;
+        this._ownsName = false;
+        this._bridgeFailure = null;
+        this._sender = null;
+        this._retiring = new Set();
         this._restartId = 0;
-        this._mode = 'clone';      // 'color' | 'clone' | 'image'
+        this._mode = 'clone';
         this._hideMode = 'hide';   // 'hide' | 'opacity' | 'none'
         this._setType = true;
         this._signals = [];
@@ -77,7 +74,7 @@ class Bridge {
         this._stale = false;
         this._coverageId = 0;
         this._watchdogId = 0;
-        this.stats = {hints: [], damage: 0, imageFrames: 0, imageUs: 0, events: []};
+        this.stats = {hints: [], damage: 0, events: []};
 
         this._layer = new Clutter.Actor({name: 'one-mk-wallpaper-layer', reactive: false});
         // We may be (re-)enabled while already locked: the Shell bounces
@@ -117,7 +114,23 @@ class Bridge {
         this._dbus = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
         this._dbus.export(Gio.DBus.session, OBJ_PATH);
         this._nameId = Gio.bus_own_name_on_connection(Gio.DBus.session, BUS_NAME,
-            Gio.BusNameOwnerFlags.DO_NOT_QUEUE, null, () => this._event('lost bus name'));
+            Gio.BusNameOwnerFlags.DO_NOT_QUEUE, () => {
+                if (this._destroyed || this._bridgeFailure)
+                    return;
+                this._ownsName = true;
+                this._scheduleRestart();
+            }, () => {
+                if (this._destroyed)
+                    return;
+                this._ownsName = false;
+                this._bridgeFailure = 'bridge-name-unavailable';
+                this._cancelRestart();
+                this.stopRenderer();
+                this._dbus?.unexport();
+                this._dbus = null;
+                this._event(this._bridgeFailure);
+                console.log('one-mk wallpaper bridge REFUSED: bus name unavailable (bridge-name-unavailable)');
+            });
 
         this._rebuild();
         this._updateCoverage();
@@ -128,6 +141,8 @@ class Bridge {
         this._destroyed = true;
         this._cancelRestart();
         this.stopRenderer();
+        for (const retired of [...this._retiring])
+            retired.cleanup();
         if (this._coverageId)
             GLib.source_remove(this._coverageId);
         this._coverageId = 0;
@@ -136,7 +151,7 @@ class Bridge {
             obj.disconnect(id);
         this._signals = [];
         Gio.bus_unown_name(this._nameId);
-        this._dbus.unexport();
+        this._dbus?.unexport();
         this._dbus = null;
         this._layer.destroy();
         this._layer = null;
@@ -156,6 +171,8 @@ class Bridge {
 
     // ---------- test hooks (Eval only) ----------
     setMode(mode, hideMode = 'hide') {
+        if (!['clone', 'color'].includes(mode))
+            throw new Error('unsupported presentation mode');
         this._mode = mode;
         this._stale = false;
         if (this._renderer)
@@ -168,6 +185,8 @@ class Bridge {
     }
 
     startRenderer(argv) {
+        if (!this._ownsName || this._bridgeFailure || this._destroyed)
+            throw new Error(this._bridgeFailure ?? 'bridge name not acquired');
         this._recovery.argv = [...argv];
         this._recovery.attempts = [];
         this._recovery.exhausted = false;
@@ -179,6 +198,8 @@ class Bridge {
     }
 
     _spawnRenderer() {
+        if (!this._ownsName || this._bridgeFailure || this._destroyed)
+            throw new Error('bridge name not owned');
         const argv = this._recovery.argv;
         const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
         try {
@@ -189,6 +210,7 @@ class Bridge {
         const proc = this._wc.get_subprocess();
         const pid = Number(proc.get_identifier());
         this._pid = pid;
+        this._sender = null;
         this._stale = false;
         this._recovery.children.add(proc);
         this._event(`spawned renderer pid=${pid}`);
@@ -212,6 +234,7 @@ class Bridge {
         this._dropRenderer('stopped');
         this._wc = null;
         this._pid = null;
+        this._sender = null;
         proc?.force_exit();
     }
 
@@ -222,7 +245,7 @@ class Bridge {
     }
 
     _scheduleRestart() {
-        if (this._destroyed || this._paused || this._wc || this._restartId ||
+        if (!this._ownsName || this._bridgeFailure || this._destroyed || this._paused || this._wc || this._restartId ||
             !this._recovery.argv || this._recovery.children.size || this._recovery.exhausted)
             return;
         const now = GLib.get_monotonic_time();
@@ -255,8 +278,17 @@ class Bridge {
         // A DESKTOP-type window cannot be resized once mapped, so on a layout
         // change the renderer opens a new toplevel at the new canvas size;
         // the newest owned window replaces the previous one.
-        if (this._renderer)
+        if (this._retiring.size) {
+            this._event('refusing overlapping renderer replacements');
+            this.stopRenderer();
+            return;
+        }
+        if (this._renderer) {
+            const previous = this._renderer;
+            const proc = this._wc.get_subprocess();
             this._dropRenderer('replaced by new renderer window');
+            this._retireRenderer(previous, proc);
+        }
         const actor = win.get_compositor_private();
         if (!actor) {
             this._event('adopt: no actor yet');
@@ -275,6 +307,11 @@ class Bridge {
         actor.connectObject(
             'damaged', () => {
                 this.stats.damage++;
+                const damageUs = GLib.get_monotonic_time();
+                this._recovery.damageTimes.push({us: damageUs, first: !r.firstDamage,
+                    pid: this._pid, frame: [r.win.get_buffer_rect().width, r.win.get_buffer_rect().height]});
+                if (this._recovery.damageTimes.length > 240)
+                    this._recovery.damageTimes.shift();
                 if (!r.firstDamage) {
                     r.firstDamage = true;
                     this._event('first frame from renderer');
@@ -311,6 +348,34 @@ class Bridge {
         const x = Math.min(...ms.map(m => m.x)), y = Math.min(...ms.map(m => m.y));
         const x2 = Math.max(...ms.map(m => m.x + m.width)), y2 = Math.max(...ms.map(m => m.y + m.height));
         return {x, y, width: x2 - x, height: y2 - y};
+    }
+
+    _retireRenderer(renderer, proc) {
+        const retired = {timeout: 0, hiding: false};
+        retired.cleanup = () => {
+            if (!this._retiring.delete(retired))
+                return;
+            if (retired.timeout)
+                GLib.source_remove(retired.timeout);
+            renderer.actor.disconnectObject(retired);
+            renderer.win.disconnectObject(retired);
+        };
+        const hide = () => {
+            if (retired.hiding)
+                return;
+            retired.hiding = true;
+            renderer.actor.hide();
+            retired.hiding = false;
+        };
+        this._retiring.add(retired);
+        renderer.actor.connectObject('notify::visible', hide, 'destroy', retired.cleanup, retired);
+        renderer.win.connectObject('unmanaged', retired.cleanup, retired);
+        hide();
+        retired.timeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+            retired.timeout = 0;
+            proc.force_exit();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _placeRenderer() {
@@ -399,13 +464,6 @@ class Bridge {
                 box.add_child(clone);
                 this._clones.push(clone);
                 this._queueCoverage();
-            } else if (this._mode === 'image') {
-                if (!this._image) {
-                    this._image = St.ImageContent.new_with_preferred_size(IMG_W, IMG_H);
-                }
-                box.add_child(new Clutter.Actor({
-                    width: m.width, height: m.height, content: this._image,
-                }));
             }
             // Anything else: empty box, so the Shell's static wallpaper shows.
         }
@@ -467,7 +525,7 @@ class Bridge {
         if (this._renderer)
             this._renderer.lastDamage = GLib.get_monotonic_time();
         this.stats.hints.push(`${GLib.get_monotonic_time() / 1000 | 0} ${paused} ${reason}`);
-        this._dbus?.emit_signal('PauseHint', new GLib.Variant('(bs)', [paused, reason]));
+        this._emit('PauseHint', new GLib.Variant('(bs)', [paused, reason]));
     }
 
     _monitorsVariant() {
@@ -475,19 +533,35 @@ class Bridge {
     }
 
     _emitLayout() {
-        this._dbus?.emit_signal('Layout', new GLib.Variant('(a(iiii))', [this._monitorsVariant()]));
+        this._emit('Layout', new GLib.Variant('(a(iiii))', [this._monitorsVariant()]));
+    }
+
+    _emit(name, value) {
+        if (this._ownsName && this._sender)
+            Gio.DBus.session.emit_signal(this._sender, OBJ_PATH, BUS_NAME, name, value);
     }
 
     // ---------- D-Bus methods (caller must be our own renderer) ----------
     async _callerIsRenderer(invocation) {
-        if (!this._pid)
+        if (!this._ownsName || !this._pid || this._destroyed || this._bridgeFailure)
+            return false;
+        const expectedPid = this._pid;
+        const client = this._wc;
+        const sender = invocation.get_sender();
+        if (this._sender && this._sender !== sender)
             return false;
         const reply = await Gio.DBus.session.call('org.freedesktop.DBus', '/org/freedesktop/DBus',
             'org.freedesktop.DBus', 'GetConnectionUnixProcessID',
-            new GLib.Variant('(s)', [invocation.get_sender()]), new GLib.VariantType('(u)'),
+            new GLib.Variant('(s)', [sender]), new GLib.VariantType('(u)'),
             Gio.DBusCallFlags.NONE, 1000, null);
         const [pid] = reply.deepUnpack();
-        return pid === this._pid;
+        if (pid !== this._pid)
+            this._event(`Hello caller pid=${pid} expected=${this._pid}`);
+        if (!this._ownsName || this._destroyed || client !== this._wc || pid !== expectedPid || pid !== this._pid ||
+            (this._sender && this._sender !== sender))
+            return false;
+        this._sender = sender;
+        return true;
     }
 
     async HelloAsync([version], invocation) {
@@ -501,35 +575,13 @@ class Bridge {
                 return;
             }
             invocation.return_value(new GLib.Variant('(ua(iiii))', [PROTOCOL, this._monitorsVariant()]));
+            this._emit('PauseHint', new GLib.Variant('(bs)', [this._paused, this._reason]));
         } catch (e) {
+            this._event(`Hello failed: ${e.message}`);
             invocation.return_dbus_error('org.freedesktop.DBus.Error.Failed', 'internal');
         }
     }
 
-    // Step 2c measurement only: copy a fixed-size RGBA frame from a fixed
-    // file in our runtime dir into an St.ImageContent (CPU path).
-    async FrameReadyAsync([_seq], invocation) {
-        try {
-            if (!await this._callerIsRenderer(invocation)) {
-                invocation.return_dbus_error('org.freedesktop.DBus.Error.AccessDenied', 'not our renderer');
-                return;
-            }
-            invocation.return_value(null);
-            if (this._mode !== 'image' || !this._image)
-                return;
-            const t0 = GLib.get_monotonic_time();
-            const path = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'one-mk-spike-frame.rgba']);
-            const [ok, bytes] = GLib.file_get_contents(path);
-            if (!ok || bytes.length !== IMG_BYTES)
-                return;
-            const ctx = global.stage.context.get_backend().get_cogl_context();
-            this._image.set_bytes(ctx, new GLib.Bytes(bytes), Cogl.PixelFormat.RGBA_8888, IMG_W, IMG_H, IMG_W * 4);
-            this.stats.imageFrames++;
-            this.stats.imageUs += GLib.get_monotonic_time() - t0;
-        } catch (e) {
-            this._event(`FrameReady error ${e.message}`);
-        }
-    }
 }
 
 export default class WallpaperSpike extends Extension {
