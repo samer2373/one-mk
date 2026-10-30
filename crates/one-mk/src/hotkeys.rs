@@ -29,6 +29,8 @@ pub struct HotkeySettings {
     pub lock_pointer: String,
     /// Back to this computer (`one-mk switch here`).
     pub home: String,
+    /// Start or stop broadcast (`one-mk broadcast toggle`).
+    pub broadcast: String,
 }
 
 impl Default for HotkeySettings {
@@ -41,6 +43,7 @@ impl Default for HotkeySettings {
             cycle: "ctrl+alt+pagedown".into(),
             lock_pointer: "ctrl+alt+p".into(),
             home: "ctrl+alt+h".into(),
+            broadcast: default_broadcast(cfg!(windows)).into(),
         }
     }
 }
@@ -53,6 +56,13 @@ impl Default for HotkeySettings {
 /// so elsewhere AltGr is no problem.)
 fn default_jump(windows: bool) -> &'static str {
     if windows { "ctrl+alt+shift+{n}" } else { "ctrl+alt+{n}" }
+}
+
+/// The broadcast shortcut's default: Ctrl+Alt+B, but Ctrl+Alt+Shift+B on
+/// Windows, where AltGr counts as Ctrl+Alt and AltGr+B types `{` on
+/// Hungarian keyboards (see [`default_jump`]).
+fn default_broadcast(windows: bool) -> &'static str {
+    if windows { "ctrl+alt+shift+b" } else { "ctrl+alt+b" }
 }
 
 /// `""` and `none` mean no chord.
@@ -82,7 +92,12 @@ impl HotkeySettings {
         if let Some(j) = chord_or_none::<JumpChords>(&self.jump)? {
             list.extend((1..=9).map(|n| (Action::Jump(n), j.chord(n))));
         }
-        for (s, a) in [(&self.cycle, Action::Cycle), (&self.lock_pointer, Action::LockPointer), (&self.home, Action::Home)] {
+        for (s, a) in [
+            (&self.cycle, Action::Cycle),
+            (&self.lock_pointer, Action::LockPointer),
+            (&self.home, Action::Home),
+            (&self.broadcast, Action::Broadcast),
+        ] {
             if let Some(c) = chord_or_none::<Chord>(s)? {
                 list.push((a, c));
             }
@@ -131,6 +146,7 @@ pub fn request(action: Action, order: &[Numbered]) -> Result<Request, String> {
         Action::Cycle => Request::Switch(SwitchTo::Next),
         Action::LockPointer => Request::LockPointer(Toggle::Toggle),
         Action::Home => Request::Switch(SwitchTo::Here),
+        Action::Broadcast => Request::Broadcast(Toggle::Toggle),
     })
 }
 
@@ -151,6 +167,9 @@ pub struct HotkeyArgs {
     /// Back to this computer, like 'ctrl+alt+h' (none: off).
     #[arg(long, value_name = "CHORD")]
     pub home_key: Option<String>,
+    /// Start or stop broadcast to every connected computer, like 'ctrl+alt+b' (none: off).
+    #[arg(long, value_name = "CHORD")]
+    pub broadcast: Option<String>,
     /// Turn every shortcut off.
     #[arg(long, conflicts_with = "on")]
     pub off: bool,
@@ -161,7 +180,11 @@ pub struct HotkeyArgs {
 
 impl HotkeyArgs {
     fn changes_anything(&self) -> bool {
-        self.off || self.on || self.jump.is_some() || self.cycle.is_some() || self.lock_pointer.is_some() || self.home_key.is_some()
+        self.off || self.on || self.sets_a_chord()
+    }
+
+    fn sets_a_chord(&self) -> bool {
+        self.jump.is_some() || self.cycle.is_some() || self.lock_pointer.is_some() || self.home_key.is_some() || self.broadcast.is_some()
     }
 
     /// Applies these options to `s`, writing chords in their canonical form.
@@ -180,12 +203,13 @@ impl HotkeyArgs {
             (&self.cycle, &mut s.cycle, "--cycle"),
             (&self.lock_pointer, &mut s.lock_pointer, "--lock-pointer"),
             (&self.home_key, &mut s.home, "--home-key"),
+            (&self.broadcast, &mut s.broadcast, "--broadcast"),
         ] {
             if let Some(v) = v {
                 *field = canonical::<Chord>(v).map_err(|e| format!("{flag}: {e}"))?;
             }
         }
-        if self.on || self.jump.is_some() || self.cycle.is_some() || self.lock_pointer.is_some() || self.home_key.is_some() {
+        if self.on || self.sets_a_chord() {
             s.enabled = true;
         }
         if self.off {
@@ -216,6 +240,7 @@ pub fn describe(s: &HotkeySettings, order: &[Numbered]) -> String {
         let what = match a {
             Action::Cycle => "the next computer",
             Action::LockPointer => "lock the pointer to this computer (or unlock it)",
+            Action::Broadcast => "type on every connected computer at once (or stop)",
             _ => "bring the mouse and keyboard back here",
         };
         rows.push((c.label(), what.into()));
@@ -285,6 +310,8 @@ mod tests {
         assert_eq!(request(Action::Cycle, &o), Ok(Request::Switch(SwitchTo::Next)));
         assert_eq!(request(Action::LockPointer, &o), Ok(Request::LockPointer(Toggle::Toggle)));
         assert_eq!(request(Action::Home, &o), Ok(Request::Switch(SwitchTo::Here)));
+        assert_eq!(request(Action::Broadcast, &o), Ok(Request::Broadcast(Toggle::Toggle)));
+        assert_eq!(Request::parse("broadcast toggle"), request(Action::Broadcast, &o).ok());
         // The requests are the ones the command line sends.
         assert_eq!(Request::parse("switch next"), request(Action::Cycle, &o).ok());
         assert_eq!(Request::parse("lock-pointer toggle"), request(Action::LockPointer, &o).ok());
@@ -295,14 +322,16 @@ mod tests {
         assert!(HotkeyArgs { jump: Some(String::new()), ..Default::default() }.apply(&mut HotkeySettings::default()).is_err());
         assert!(HotkeyArgs { cycle: Some(" ".into()), ..Default::default() }.apply(&mut HotkeySettings::default()).is_err());
         let b = HotkeySettings::default().bindings().unwrap();
-        assert_eq!(b.iter().count(), 12);
+        assert_eq!(b.iter().count(), 13);
         let jump: JumpChords = HotkeySettings::default().jump.parse().unwrap();
         assert_eq!(b.action(jump.chord(5)), Some(Action::Jump(5)));
         assert_eq!(b.action("ctrl+alt+h".parse().unwrap()), Some(Action::Home));
+        let broadcast: Chord = HotkeySettings::default().broadcast.parse().unwrap();
+        assert_eq!(b.action(broadcast), Some(Action::Broadcast));
         let off = HotkeySettings { enabled: false, ..HotkeySettings::default() };
         assert!(off.bindings().unwrap().is_empty());
         let some = HotkeySettings { jump: "none".into(), cycle: String::new(), ..HotkeySettings::default() };
-        assert_eq!(some.bindings().unwrap().iter().count(), 2);
+        assert_eq!(some.bindings().unwrap().iter().count(), 3);
     }
 
     /// Windows can't tell AltGr from Ctrl+Alt, so its jump default adds
@@ -316,6 +345,31 @@ mod tests {
         assert_eq!(win.chord(7), "ctrl+alt+shift+7".parse().unwrap());
         assert_eq!(win.to_string(), "ctrl+alt+shift+{n}", "printed as written");
         assert_eq!(HotkeySettings::default().jump, default_jump(cfg!(windows)));
+    }
+
+    /// Broadcast is Ctrl+Alt+B, plus Shift on Windows (AltGr+B types `{`
+    /// on Hungarian keyboards there). Both are valid next to every other
+    /// default on either system.
+    #[test]
+    fn the_broadcast_default_avoids_altgr_on_windows() {
+        let (win, other): (Chord, Chord) = (default_broadcast(true).parse().unwrap(), default_broadcast(false).parse().unwrap());
+        assert_eq!(other, "ctrl+alt+b".parse().unwrap());
+        assert_eq!(win, "ctrl+alt+shift+b".parse().unwrap());
+        assert_eq!(HotkeySettings::default().broadcast, default_broadcast(cfg!(windows)));
+        for windows in [true, false] {
+            let s = HotkeySettings { jump: default_jump(windows).into(), broadcast: default_broadcast(windows).into(), ..HotkeySettings::default() };
+            assert_eq!(s.bindings_for(9).unwrap().iter().count(), 13, "windows: {windows}");
+        }
+        // Changed, turned off, and refused when it clashes.
+        let mut s = HotkeySettings::default();
+        HotkeyArgs { broadcast: Some("Super+Alt+B".into()), ..HotkeyArgs::default() }.apply(&mut s).unwrap();
+        assert_eq!(s.broadcast, "alt+super+b");
+        HotkeyArgs { broadcast: Some("none".into()), ..HotkeyArgs::default() }.apply(&mut s).unwrap();
+        assert!(s.bindings().unwrap().iter().all(|(a, _)| a != Action::Broadcast));
+        let mut t = s.clone();
+        assert!(HotkeyArgs { broadcast: Some("ctrl+alt+h".into()), ..HotkeyArgs::default() }.apply(&mut t).unwrap_err().contains("two things"));
+        assert!(HotkeyArgs { broadcast: Some("b".into()), ..HotkeyArgs::default() }.apply(&mut t).is_err(), "would take over typing");
+        assert!(describe(&HotkeySettings::default(), &order()).contains("type on every connected computer at once"));
     }
 
     /// Only jumps to computers that exist are bound: with two computers
@@ -332,7 +386,7 @@ mod tests {
         assert_eq!(two.action(jump.chord(3)), None, "no third computer");
         assert_eq!(jumps(&s.bindings_for(1).unwrap()), 1);
         assert_eq!(jumps(&s.bindings_for(30).unwrap()), 9);
-        assert_eq!(two.iter().count(), 5, "and cycle, lock, home");
+        assert_eq!(two.iter().count(), 6, "and cycle, lock, home, broadcast");
         let clash = HotkeySettings { home: jump.chord(7).to_string(), ..s };
         assert!(clash.bindings_for(2).is_err());
     }
@@ -387,6 +441,11 @@ mod tests {
         // A file from before shortcuts existed gets the defaults.
         std::fs::write(dir.join("settings.toml"), "lock_sync = true\n").unwrap();
         assert_eq!(Settings::load(&dir).unwrap().hotkeys, HotkeySettings::default());
+        // One from before broadcast keeps its shortcuts and gets broadcast's default.
+        std::fs::write(dir.join("settings.toml"), "[hotkeys]\nenabled = true\nhome = \"ctrl+alt+end\"\ncycle = \"\"\n").unwrap();
+        let old = Settings::load(&dir).unwrap().hotkeys;
+        assert_eq!((old.home.as_str(), old.cycle.as_str()), ("ctrl+alt+end", ""));
+        assert_eq!(old.broadcast, HotkeySettings::default().broadcast);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

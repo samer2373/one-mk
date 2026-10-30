@@ -200,14 +200,18 @@ impl App {
             r.tune.out = out; // keeps the capacity
         }
         for a in actions {
-            self.run_action(&a);
+            // While broadcasting, each computer's mapper may ask: done
+            // once, after all of them (see `broadcast.rs`).
+            if !self.defer_action(&a) {
+                self.run_action(&a);
+            }
         }
     }
 
     /// A key mapped to an action: the same requests `one-mk switch`,
     /// `lock-pointer` and `lock-all` send, scrolling, or a command run
     /// like a hook.
-    fn run_action(&mut self, action: &Action) {
+    pub(super) fn run_action(&mut self, action: &Action) {
         let req = match action {
             Action::Switch(to) => match SwitchTo::parse(to) {
                 Some(to) => Request::Switch(to),

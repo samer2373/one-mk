@@ -53,6 +53,12 @@ pub struct Status {
     pub controlling: Option<String>,
     /// The paired computer controlling this one right now.
     pub controlled_by: Option<String>,
+    /// Broadcast is on (`one-mk broadcast`): the computers everything typed,
+    /// clicked and scrolled here goes to. Empty while it is off.
+    pub broadcast: Vec<String>,
+    /// The keyboard shortcut that starts and stops broadcast, for people
+    /// (`Ctrl+Alt+B`); empty when there is none.
+    pub broadcast_hotkey: String,
     pub peers: Vec<PeerStatus>,
     /// `one-mk lock-pointer` is on: edges lead nowhere.
     pub pointer_locked: bool,
@@ -247,6 +253,22 @@ impl Status {
         })
     }
 
+    /// "Broadcasting to 2 computers: A and B. ...", while broadcast is on.
+    pub fn broadcast_line(&self) -> Option<String> {
+        let names = &self.broadcast;
+        let who = match &names[..] {
+            [] => return None,
+            [one] => format!("Broadcasting to 1 computer: {one}"),
+            [rest @ .., last] => format!("Broadcasting to {} computers: {} and {last}", names.len(), rest.join(", ")),
+        };
+        let all = if names.len() == 1 { "it" } else { "all of them" };
+        let stop = match self.broadcast_hotkey.as_str() {
+            "" => "`one-mk broadcast off` stops it".to_owned(),
+            key => format!("{key} or `one-mk broadcast off` stops it"),
+        };
+        Some(format!("{who}. Everything you type, click and scroll here goes to {all} ({stop})."))
+    }
+
     /// One `key<TAB>value` line per fact (names never contain tabs or
     /// newlines: they are sanitized).
     pub fn encode(&self) -> String {
@@ -255,6 +277,12 @@ impl Status {
             if let Some(w) = who {
                 out += &format!("{key}\t{w}\n");
             }
+        }
+        for name in &self.broadcast {
+            out += &format!("broadcast\t{}\n", name.replace(['\t', '\n', '\r'], " "));
+        }
+        if !self.broadcast_hotkey.is_empty() {
+            out += &format!("broadcast_hotkey\t{}\n", self.broadcast_hotkey.replace(['\t', '\n', '\r'], " "));
         }
         for p in &self.peers {
             out += &format!("peer\t{}\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.swap, p.name);
@@ -348,6 +376,8 @@ impl Status {
                 ["backend", value] => s.backend = value.into(),
                 ["controlling", v] => s.controlling = Some(v.into()),
                 ["controlled_by", v] => s.controlled_by = Some(v.into()),
+                ["broadcast", v] => s.broadcast.push(v.into()),
+                ["broadcast_hotkey", v] => s.broadcast_hotkey = v.into(),
                 ["pointer_locked", v] => s.pointer_locked = v == "1",
                 ["screen_locked", v] => s.screen_locked = v == "1",
                 ["relative", v] => s.relative = v == "1",
@@ -405,7 +435,11 @@ impl Status {
         if !self.backend.as_str().is_empty() {
             out += &format!("Input backend: {}.\n", self.backend.as_str());
         }
+        if let Some(line) = self.broadcast_line() {
+            out += &format!("{line}\n");
+        }
         out += &match (&self.controlling, &self.controlled_by) {
+            _ if !self.broadcast.is_empty() => String::new(),
             (Some(p), _) => format!("The mouse and keyboard are controlling {p} right now.\n"),
             (_, Some(p)) => format!("{p} is controlling this computer right now. {}\n", takeback_hint()),
             _ => "The mouse and keyboard are on this computer.\n".to_owned(),
@@ -518,6 +552,40 @@ mod tests {
         let warned = Status { layout: Box::new(layout), ..Status::default() };
         assert_eq!(Status::decode(&warned.encode()).unwrap(), warned);
         assert!(warned.render().contains("does not overlap"));
+    }
+
+    /// Broadcast survives the wire, comes first in `one-mk status`, and
+    /// replaces the "mouse and keyboard are on/controlling" sentence (it is
+    /// neither). Older readers skip its lines; a name can't break the format.
+    #[test]
+    fn broadcast_survives_the_wire_and_is_said_first() {
+        let s = Status {
+            name: "desk".into(),
+            broadcast: vec!["mac mini".into(), "old pc".into(), "laptop".into()],
+            broadcast_hotkey: "Ctrl+Alt+B".into(),
+            pointer_locked: true,
+            ..Status::default()
+        };
+        assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
+        let text = s.render();
+        let second = text.lines().nth(1).unwrap_or_default();
+        assert_eq!(
+            second,
+            "Broadcasting to 3 computers: mac mini, old pc and laptop. Everything you type, click and scroll here goes to all of them (Ctrl+Alt+B or `one-mk broadcast off` stops it)."
+        );
+        assert!(!text.contains("The mouse and keyboard are"), "{text}");
+        let one = Status { broadcast: vec!["b".into()], ..Status::default() };
+        assert_eq!(
+            one.broadcast_line().as_deref(),
+            Some("Broadcasting to 1 computer: b. Everything you type, click and scroll here goes to it (`one-mk broadcast off` stops it).")
+        );
+        assert_eq!(Status::default().broadcast_line(), None);
+        let odd = Status { broadcast: vec!["a\tb\nc".into()], broadcast_hotkey: "x\ty".into(), ..Status::default() };
+        let back = Status::decode(&odd.encode()).unwrap();
+        assert_eq!((back.broadcast, back.broadcast_hotkey), (vec!["a b c".to_owned()], "x y".to_owned()));
+        // A reader from before broadcast: the same text, minus nothing it knows.
+        let old: String = s.encode().lines().filter(|l| !l.starts_with("broadcast")).map(|l| format!("{l}\n")).collect();
+        assert_eq!(Status::decode(&old), Some(Status { broadcast: vec![], broadcast_hotkey: String::new(), ..s }));
     }
 
     /// What a layout editor reads: our monitors, each peer's monitors and

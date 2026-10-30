@@ -47,6 +47,8 @@ pub struct Settings {
     /// Drawing the pointer on a computer with no mouse (see
     /// `pointeroverlay.rs`).
     pub pointer: crate::pointeroverlay::PointerSettings,
+    /// Broadcast to every connected computer (see `docs/BROADCAST.md`).
+    pub broadcast: BroadcastSettings,
 }
 
 impl Default for Settings {
@@ -64,6 +66,42 @@ impl Default for Settings {
             hotkeys: Default::default(),
             input: Default::default(),
             pointer: Default::default(),
+            broadcast: Default::default(),
+        }
+    }
+}
+
+/// `[broadcast]` in `settings.toml`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BroadcastSettings {
+    /// Broadcast stops by itself after this many minutes without any key,
+    /// click, scroll or movement, so it can't be forgotten on. 0 = never.
+    pub idle_off_minutes: u32,
+}
+
+/// The longest `idle_off_minutes` honoured (a day); more counts as this.
+pub const MAX_IDLE_OFF_MINUTES: u32 = 24 * 60;
+
+impl Default for BroadcastSettings {
+    fn default() -> Self {
+        Self { idle_off_minutes: 15 }
+    }
+}
+
+impl BroadcastSettings {
+    /// How long broadcast may go without input, or `None` for no limit.
+    pub fn idle_off(&self) -> Option<std::time::Duration> {
+        let minutes = self.idle_off_minutes.min(MAX_IDLE_OFF_MINUTES);
+        (minutes > 0).then(|| std::time::Duration::from_secs(u64::from(minutes) * 60))
+    }
+
+    /// "after 15 minutes without input", for sentences.
+    pub fn describe_idle_off(&self) -> String {
+        match self.idle_off_minutes.min(MAX_IDLE_OFF_MINUTES) {
+            0 => "only when you stop it".into(),
+            1 => "by itself after 1 minute without input".into(),
+            n => format!("by itself after {n} minutes without input"),
         }
     }
 }
@@ -584,6 +622,33 @@ pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// `[broadcast]`: a file from before it gets 15 minutes; 0 means never;
+    /// absurd values are capped at a day; a negative number makes the file
+    /// unreadable like any other type error (the daemon then keeps its
+    /// settings and says why).
+    #[test]
+    fn broadcast_idle_off_defaults_and_bounds() {
+        use std::time::Duration;
+        let dir = temp_dir("broadcast-settings");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "lock_sync = true\n[hotkeys]\nhome = \"ctrl+alt+end\"\n").unwrap();
+        let old = Settings::load(&dir).unwrap();
+        assert_eq!(old.broadcast, BroadcastSettings::default());
+        assert_eq!(old.broadcast.idle_off(), Some(Duration::from_secs(15 * 60)));
+        assert!(old.lock_sync, "the rest of the file is kept");
+        for (text, want) in [("0", None), ("1", Some(60)), ("4294967295", Some(u64::from(MAX_IDLE_OFF_MINUTES) * 60))] {
+            std::fs::write(dir.join(FILE), format!("[broadcast]\nidle_off_minutes = {text}\n")).unwrap();
+            assert_eq!(Settings::load(&dir).unwrap().broadcast.idle_off(), want.map(Duration::from_secs), "{text}");
+        }
+        std::fs::write(dir.join(FILE), "[broadcast]\nidle_off_minutes = -5\n").unwrap();
+        assert!(Settings::load(&dir).is_err());
+        assert_eq!(BroadcastSettings { idle_off_minutes: 0 }.describe_idle_off(), "only when you stop it");
+        assert_eq!(BroadcastSettings::default().describe_idle_off(), "by itself after 15 minutes without input");
+        let saved = toml::to_string_pretty(&Settings::default()).unwrap();
+        assert!(saved.contains("[broadcast]\nidle_off_minutes = 15"), "{saved}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn legacy_clipboard_fetch_is_migrated_but_explicit_v2_is_kept() {
         let dir = temp_dir("clipboard-version");

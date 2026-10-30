@@ -144,6 +144,15 @@ pub async fn failure(title: &str, body: &str) {
     sys::failure(title, body).await;
 }
 
+/// Says that something changed (broadcast started or stopped), on a task of
+/// its own: returns at once. Never during tests, and not with `--no-notify`.
+pub fn info(title: String, body: String) {
+    if disabled() || cfg!(test) {
+        return;
+    }
+    tokio::spawn(async move { sys::info(&title, &body).await });
+}
+
 pub async fn sent(count: usize, peer: &str) {
     let body = format!("Sent {count} files to {}", display(peer));
     println!("{body}");
@@ -183,6 +192,17 @@ mod sys {
 
     /// A plain error notification: D-Bus, else `notify-send`, else stderr.
     pub async fn failure(title: &str, body: &str) {
+        let (icon, category) = if title == "one-mk files sent" { ("document-send", "transfer.complete") } else { ("dialog-error", "transfer.error") };
+        plain(title, body, icon, category).await;
+    }
+
+    /// Something changed that the user should know about (broadcast
+    /// started or stopped).
+    pub async fn info(title: &str, body: &str) {
+        plain(title, body, "input-keyboard", "device").await;
+    }
+
+    async fn plain(title: &str, body: &str, icon: &str, category: &str) {
         let shown = async {
             let conn = zbus::Connection::session().await?;
             let proxy = zbus::Proxy::new(
@@ -192,12 +212,11 @@ mod sys {
                 "org.freedesktop.Notifications",
             )
             .await?;
-            let success = title == "one-mk files sent";
-            let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from(if success { "transfer.complete" } else { "transfer.error" }))]);
+            let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from(category))]);
             proxy
                 .call::<_, _, u32>(
                     "Notify",
-                    &("one-mk", 0u32, if success { "document-send" } else { "dialog-error" }, title, escape_markup(body), Vec::<&str>::new(), hints, -1i32),
+                    &("one-mk", 0u32, icon, title, escape_markup(body), Vec::<&str>::new(), hints, -1i32),
                 )
                 .await?;
             anyhow::Ok(())
@@ -205,7 +224,7 @@ mod sys {
         if let Err(e) = shown.await {
             tracing::debug!("notification over D-Bus failed ({e:#}); trying notify-send");
             let status = Command::new("notify-send")
-                .args(["--app-name=one-mk", "--icon=dialog-error", "--"])
+                .args(["--app-name=one-mk", &format!("--icon={icon}"), "--"])
                 .arg(title)
                 .arg(escape_markup(body))
                 .stdin(Stdio::null())
@@ -361,6 +380,10 @@ mod sys {
         notify(body, title).await;
     }
 
+    pub async fn info(title: &str, body: &str) {
+        notify(body, title).await;
+    }
+
     /// Title and body go in as arguments, never into the script text.
     pub async fn show(n: FilesReceived) {
         notify(&n.body(), &n.title()).await;
@@ -404,6 +427,12 @@ mod sys {
     pub async fn failure(title: &str, body: &str) {
         eprintln!("one-mk: {title}: {body}");
     }
+
+    /// No toast without an app identity (see above): the status, tray and
+    /// window say it instead.
+    pub async fn info(title: &str, body: &str) {
+        tracing::info!("not notifying {title:?}: {body} (notifications are not implemented on Windows yet)");
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -413,6 +442,7 @@ mod sys {
     pub async fn failure(title: &str, body: &str) {
         eprintln!("one-mk: {title}: {body}");
     }
+    pub async fn info(_: &str, _: &str) {}
 }
 
 #[cfg(test)]
