@@ -3335,10 +3335,14 @@ name = "one-mk-wall"
 version = "0.1.13"
 dependencies = [
  "blake3",
+ "futures-util",
  "libc",
  "libloading",
+ "one-mk-wall-sync",
+ "tokio",
  "wayland-client",
  "wayland-protocols",
+ "zbus",
 ]
 
 [[package]]

@@ -1,0 +1,19 @@
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<node>
+  <interface name="org.onemk.WallpaperBridge1">
+    <method name="Hello">
+      <arg type="u" direction="in" name="protocol"/>
+      <arg type="u" direction="out" name="protocol"/>
+      <arg type="u" direction="out" name="layout_serial"/>
+      <arg type="a(iiiid)" direction="out" name="monitors"/>
+    </method>
+    <method name="SetState">
+      <arg type="u" direction="in" name="state"/>
+    </method>
+    <signal name="Layout">
+      <arg type="u" name="layout_serial"/>
+      <arg type="a(iiiid)" name="monitors"/>
+    </signal>
+    <signal name="PauseHint"><arg type="u" name="reasons"/></signal>
+  </interface>
+</node>

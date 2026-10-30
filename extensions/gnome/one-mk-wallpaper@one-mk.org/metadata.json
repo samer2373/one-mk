@@ -1,0 +1,10 @@
+{
+  "uuid": "one-mk-wallpaper@one-mk.org",
+  "name": "one-mk Wallpaper Bridge",
+  "description": "Optional, default-off one-mk wallpaper presentation bridge. No media decoding in Shell.",
+  "shell-version": ["50"],
+  "one-mk-qualified-shell-versions": ["50.1"],
+  "version": 1,
+  "license": "MIT OR Apache-2.0",
+  "url": "https://github.com/samer2373/one-mk"
+}
