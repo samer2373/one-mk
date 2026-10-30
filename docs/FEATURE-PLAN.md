@@ -411,7 +411,7 @@ tests, cross-review by the other model, full validation before merging.
 | ID | Task | Author | Status |
 |---|---|---|---|
 | 5A | Clipboard history and a hotkey to paste from another computer's clipboard (must skip sensitive copies) | Codex | todo |
-| 5B | Live latency graph per computer in the window (event-driven; no polling when the window is closed) | Claude | todo |
+| 5B | Live latency graph per computer in the window (event-driven; no polling when the window is closed) | Claude | built (see 5B notes below) |
 | 5C | Broadcast input to all connected computers (explicit, visible, auto-off, no stuck keys) | Claude | todo |
 | 5D | Edge pushes where no computer sits: pointer wrap to the opposite edge, and push-toward-it layout learning | Claude | todo |
 | 5E | Keyboard layout and AltGr fix: send the typed character when layouts differ; starts after 5I (both change the key event) | Codex | blocked on 5I |
@@ -419,6 +419,37 @@ tests, cross-review by the other model, full validation before merging.
 | 5G | Auto-update from signed GitHub Releases (build on the owner's release workflow) | Codex | todo |
 | 5H | Activate local-only key remap on Windows and macOS (acknowledged handoff, no stuck keys); builds on 5I | Codex | blocked on 5I |
 | 5I | Per-device scope: key and mouse rules for ONE specific keyboard or mouse, saved on the computer the device is plugged into (owner request 2026-10-30). X11 via XI2 source ids; Windows Raw Input and macOS IOHID compile-checked only; NOT possible on GNOME/KDE/wlroots Wayland (the compositor merges devices): say so | Claude | todo |
+
+### 5B notes (live latency graph)
+
+- Data: `quinn::Connection::stats().path` (smoothed RTT, lost and sent
+  packets). The daemon reads it inside `status()` when someone asks: no timer,
+  no probe traffic, nothing between requests. The status gets one additive
+  line per connected computer, `link<TAB>id<TAB>rtt_us<TAB>lost<TAB>sent`
+  (older readers skip it; hostile values are capped or dropped). `one-mk
+  status` prints `online, rtt 4 ms`; `one-mk doctor` has a "Connection
+  quality" check (over 40 ms, or 2 % of packets lost, warns).
+- Window: it already polled the daemon every 250 ms while open, and sent an
+  update on every change. Round trips change at every look, so they are
+  left out of that comparison and go as a separate once-a-second sample,
+  asked for only while a graph is on screen (Desk tab with an online computer
+  selected, or Health): the window stamps every frame that draws one, and the
+  link stops sampling when the stamp is 3 s old (minimised, covered, other
+  tab). Closed: the process is gone. No timer in the tray or the daemon.
+- A history is 120 readings per computer on a two-minute time axis (a stretch
+  nobody looked at is a gap, not a flat line), memory only. Offline computers
+  lose theirs. `crates/app/src/rtt.rs` is the pure view-model (tested);
+  `crates/app/src/app/links.rs` draws it.
+- States: Smooth (95th percentile at most 40 ms, no loss), Some stalls (over
+  40 ms, or any lost packet), Slow (over 100 ms, or 8 lost packets), still
+  measuring (under 3 readings), offline, and "Restart one·mk" for a daemon
+  from before this (after an upgrade). Amber only for the last two warnings
+  and always with the word.
+- The Desk panel is taller (the inspector needed 58 pt more); Layout, Files and
+  the other tabs keep their height.
+- Not seen on a real screen reader, on Windows or on macOS (compile-checked
+  only); Wi-Fi loss was not produced on real hardware: the loss states were
+  drawn from scripted histories.
 
 ## Out of scope for now
 

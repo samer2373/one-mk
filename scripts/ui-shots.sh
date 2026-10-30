@@ -70,6 +70,10 @@ shot 14-mid-drag 2.4 "$W/a" ONE_MK_APP_DRAG=1
 shot 31-layout-mid-drag 2.4 "$W/a" ONE_MK_APP_TAB=layout ONE_MK_APP_DRAG=1
 shot 15-keyboard-focus 2 "$W/a" ONE_MK_APP_FOCUS=1
 shot 16-error-toast 1.6 "$W/a" ONE_MK_APP_TOAST=1
+# The latency graph on real round trips (nothing scripted): the daemons
+# have talked for a while, and the window samples once a second while it
+# shows the graph, so it has built up a few readings by now.
+shot 70-latency-live-two-daemons 9 "$W/a" ONE_MK_APP_SELECT="Studio PC"
 kill "$B_PID"; sleep 3
 shot 12-peer-offline 3 "$W/a"
 
@@ -89,12 +93,14 @@ printf 'peer\t3333-4444\tright\t1\t1\ton\t%s\n' "$LONG" >>"$F"
 printf 'peer\t5555-6666\ttop\t2\t0\toff\tGaming PC\n' >>"$F"
 printf 'peer\t7777-8888\tbottom\t1\t1\tauto\tМастерская\n' >>"$F"
 printf 'peer\t9999-0000\tright\t2\t1\tauto\t工作站\n' >>"$F"
+# Round trips for the connected ones, as a daemon reports them (rtt in us, packets lost, sent).
+for id in 1111-2222 3333-4444 7777-8888 9999-0000; do printf 'link\t%s\t4200\t0\t900\n' "$id" >>"$F"; done
 shot 17-many-long-names 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_SELECT="$LONG"
 shot 18-many-advanced 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_TAB=advanced
 shot 19-drop-chooser 2.2 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_DROP=3
 C=$W/controlled.status
 printf 'ok\nname\tsamer-Victus\nid\tabcd-ef01\nport\t24800\ncontrolled_by\tStudio PC\n' >"$C"
-printf 'peer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\n' >>"$C"
+printf 'peer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\nlink\t1111-2222\t4200\t0\t900\n' >>"$C"
 shot 21-controlled-small 3 "$W/off" ONE_MK_APP_STATUS="$C" ONE_MK_APP_SIZE=760x540
 
 # Layout, transfers, health and settings in detail: a status with several
@@ -109,6 +115,7 @@ printf 'peer\t5555-6666\tright\t2\t0\toff\tGaming PC\n' >>"$X"
 # reports them: the MacBook beside the left monitor, 120 px lower; the
 # Studio PC below but 360 px clear of it (its screens touch nothing);
 # the Gaming PC anywhere along the right.
+printf 'link\t1111-2222\t4200\t0\t900\nlink\t3333-4444\t4200\t0\t900\n' >>"$X"
 printf 'screen\tme\t0\t0\t2560\t1440\nscreen\tme\t2560\t180\t1920\t1080\n' >>"$X"
 printf 'screen\t1111-2222\t0\t0\t1470\t956\n' >>"$X"
 printf 'screen\t3333-4444\t0\t0\t1920\t1080\nscreen\t3333-4444\t1920\t-300\t1080\t1920\n' >>"$X"
@@ -189,6 +196,38 @@ shot 39-small-advanced 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced 
 # A high-density screen: everything drawn 1.5x on top of the desktop's scale.
 shot 40-hidpi-desk 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_ZOOM=1.5 ONE_MK_APP_SIZE=1140x810
 shot 42-layout-nothing-paired 3 "$W/e" ONE_MK_APP_TAB=layout
+
+# The live latency graph (plan 5B). A history stands in for the real one
+# (ONE_MK_APP_RTT: one reading a second, in ms; +n: n packets lost) so every
+# state can be seen: smooth, stalls, loss, slow, still measuring, offline.
+rtt() { python3 -c "
+import random, sys
+random.seed(7)
+kind, out = sys.argv[1], []
+for i in range(120):
+    v = random.uniform(3.5, 6.5)
+    if kind == 'stalls' and i % 17 in (9, 10): v = random.uniform(60, 95) if i % 17 == 9 else random.uniform(30, 50)
+    if kind == 'loss' and i in (30, 31, 70, 98): v = random.uniform(45, 70)
+    if kind == 'slow': v = random.uniform(90, 160)
+    s = f'{v:.1f}'
+    if kind == 'loss': s += {31: '+2', 70: '+1', 98: '+2'}.get(i, '')
+    out.append(s)
+print(','.join(out))" "$1"; }
+SMOOTH=$(rtt smooth); STALLS=$(rtt stalls); LOSS=$(rtt loss); SLOW=$(rtt slow)
+shot 71-latency-smooth 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_RTT="1111-2222=$SMOOTH;3333-4444=$STALLS"
+shot 72-latency-stalls 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="Studio PC" ONE_MK_APP_RTT="1111-2222=$SMOOTH;3333-4444=$STALLS"
+shot 73-latency-loss 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_RTT="1111-2222=$LOSS"
+shot 74-latency-slow 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_RTT="1111-2222=$SLOW"
+shot 75-latency-offline 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="Gaming PC" ONE_MK_APP_RTT="1111-2222=$SMOOTH"
+shot 76-latency-measuring 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_RTT="1111-2222=4,5"
+shot 77-latency-narrow 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="Studio PC" ONE_MK_APP_SIZE=760x540 ONE_MK_APP_RTT="3333-4444=$STALLS"
+shot 78-latency-hidpi 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="Studio PC" ONE_MK_APP_ZOOM=1.5 ONE_MK_APP_SIZE=1140x810 ONE_MK_APP_RTT="3333-4444=$LOSS"
+# A daemon from before the graph (still running after an upgrade) reports no round trips.
+grep -v '^link' "$C" >"$W/older.status"
+shot 82-latency-older-daemon 3 "$W/off" ONE_MK_APP_STATUS="$W/older.status"
+shot 79-latency-health 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=health ONE_MK_APP_DOCTOR="$D" ONE_MK_APP_RTT="1111-2222=$SMOOTH;3333-4444=$STALLS"
+shot 80-latency-health-narrow 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=health ONE_MK_APP_DOCTOR="$D" ONE_MK_APP_SIZE=760x540 ONE_MK_APP_RTT="1111-2222=$SLOW;3333-4444=$LOSS"
+shot 81-latency-health-long-names 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_TAB=health ONE_MK_APP_DOCTOR="$D" ONE_MK_APP_RTT="1111-2222=$SMOOTH;3333-4444=$STALLS;7777-8888=$LOSS"
 
 # Keys & mouse: rules written by the real `one-mk keymap|buttons|scroll`,
 # so the window reads what the command line writes.

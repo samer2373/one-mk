@@ -142,7 +142,7 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 
 | Command | What it does |
 |---|---|
-| `one-mk status` | Is it running? Who is paired, online, where, and who controls whom |
+| `one-mk status` | Is it running? Who is paired, online (with `rtt 4 ms`: how long an answer takes), where, and who controls whom |
 | `one-mk takeback` | Take this computer back from the one controlling it |
 | `one-mk switch <pc\|here\|next>` | Move the mouse and keyboard to another computer without crossing an edge (`here`: back to this one) |
 | `one-mk lock-pointer on\|off\|toggle` | Keep the pointer on this computer: edges lead nowhere |
@@ -678,6 +678,17 @@ Open it from the tray ("Open one·mk…", or a left click on Linux) or run
 - drop files or folders onto a computer to send them;
 - see how fast the connection is (measured, not estimated: click a computer
   to measure again);
+- watch the connection to each computer live: a small graph of the last two
+  minutes under the selected computer on the Desk tab, and one line per
+  computer on Health. It shows the time an answer takes now, the lowest,
+  average and highest, and says **Smooth**, **Some stalls** (more than 1 in 20
+  readings over 40 ms, or any lost packet) or **Slow** (more than 1 in 20 over
+  100 ms, or 8 lost packets); amber means it is worth a look, and the word
+  says the same without colour. An offline computer says "offline" and has no graph. The
+  numbers come free from the connection itself: one-mk sends nothing extra
+  and runs no timer for it. The window asks once a second, only while a
+  graph is on screen (not on other tabs, minimised or closed), and keeps
+  120 readings per computer in memory, nothing on disk;
 - move the mouse and keyboard to a computer (**Switch to it**), send it this
   clipboard or get its clipboard, keep the pointer here and lock every
   screen;
@@ -707,7 +718,8 @@ Open it from the tray ("Open one·mk…", or a left click on Linux) or run
 - **Health:** the results of `one-mk doctor` (run when the page opens and on
   **Recheck**), each with its fix and a button to copy the command (or, for
   starting and pairing, the window's own button), plus what one-mk says
-  right now (for example a permission still to approve);
+  right now (for example a permission still to approve) and the live
+  connection to each computer;
 - **Advanced:** settings most people never change: edge rules (not crossing
   near corners, waiting at the edge, a key to hold, staying in fullscreen
   windows), keeping controlled computers awake, sleep and lock sync, gaming
@@ -795,8 +807,9 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
 
 Start with `one-mk doctor`. It checks that one-mk is running and paired,
 the port, discovery, the firewall, the desktop permission (Linux), the
-keyboard shortcuts, the pointer drawn on a computer with no mouse and the
-network, and prints a plain fix for each problem.
+keyboard shortcuts, the pointer drawn on a computer with no mouse, the
+network and how fast each connected computer answers, and prints a plain fix
+for each problem.
 It only reads: it never changes your firewall or settings, needs no root,
 and exits with status 1 if something failed.
 
@@ -832,6 +845,13 @@ and exits with status 1 if something failed.
 - **macOS.** Allow one-mk under System Settings > Privacy & Security >
   Accessibility and Input Monitoring, then start it again. (Not yet tested on
   real hardware.)
+- **The mouse stutters or lags on another computer.** Look at the graph on
+  the window's Desk or Health tab, or run `one-mk status` (`rtt 4 ms` per
+  connected computer) and `one-mk doctor` ("Connection quality"). Under about
+  40 ms is smooth. Higher, or **Some stalls** with lost packets, is the network
+  between the two computers, usually Wi-Fi: move closer to the router, use the
+  5 GHz band or a cable, and pause big downloads. `one-mk bench --connect`
+  measures the pointer's whole path.
 - **A paired computer is on the wrong side.** `one-mk layout "<name>" <side>`.
 - **The pointer won't cross part of an edge.** With an offset, only where
   the other computer's screens touch yours leads there (`one-mk status` and
