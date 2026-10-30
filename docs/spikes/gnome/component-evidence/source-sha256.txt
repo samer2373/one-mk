@@ -1,0 +1,7 @@
+34a4f08a3cbf9d45f50bb530a732622ffdd274bd5abbbb3fbc1b3cef69d639ca  extensions/gnome/one-mk-wallpaper@one-mk.org/bridge.xml
+425329f56aab66d1c24e76b757f2253d09d702121d542e5c3d1793baa2b863cd  extensions/gnome/one-mk-wallpaper@one-mk.org/extension.js
+4ed58c2351dadea46ca7a9a5c854fa612b5768557e34b0680551cf2b78445f55  extensions/gnome/one-mk-wallpaper@one-mk.org/metadata.json
+a5aecc0fe455b8aa604e5c85b651490871c2cc4785c2e007e7e55450b0ec2aff  crates/wall-presenter/src/gnome_bridge.rs
+a679cfabfab9f6b6369aa693b58c9693a217c8fb8a93ffca0920f2d68b5037f8  crates/wall-presenter/examples/bridge-conformance.rs
+1e9b6f4a4f0e554d28daacffe0ece2071a445d71b7dcf5b14844c3996435eb4f  crates/wall/src/bridge.rs
+2e484cbfb5b838650bc764dd1f8f1489b0940f6a918f53a32b9641e0d2438759  docs/spikes/gnome/qualify-component.py

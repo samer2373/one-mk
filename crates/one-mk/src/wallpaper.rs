@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[path = "wallpaper_extension.rs"]
+mod extension;
+
 #[derive(Default)]
 pub struct Ingress { window: Option<(std::time::Instant,u8)> }
 impl Ingress {
@@ -173,6 +176,7 @@ pub struct WallpaperArgs {
 
 #[derive(Subcommand)]
 enum WallpaperCommand {
+    Extension { #[command(subcommand)] cmd: extension::Command },
     Status,
     Enable,
     Disable,
@@ -227,11 +231,17 @@ pub async fn command(dir: &Path, args: WallpaperArgs) -> Result<()> {
 
 async fn execute(dir: &Path, command: &WallpaperCommand) -> Result<serde_json::Value> {
     use crate::settings::Settings;
+    if let WallpaperCommand::Extension { cmd } = command { return extension::command(cmd).await; }
     let mut settings = Settings::load(dir)?;
     match command {
+        WallpaperCommand::Extension { .. } => unreachable!(),
         WallpaperCommand::Status => {}
-        WallpaperCommand::Doctor if settings.wallpaper.enabled => return Err(Failure { code: 3,message: "Wallpaper renderer is unavailable in this scaffolding build. No content will be played. Disable wallpaper or wait for a qualified presenter.".into() }.into()),
-        WallpaperCommand::Doctor => {}
+        WallpaperCommand::Doctor => {
+            let state = extension::status().await?;
+            let message = format!("{}\n{}", summary(&settings.wallpaper), state["message"].as_str().unwrap_or("extension state unknown"));
+            if settings.wallpaper.enabled { return Err(Failure { code: 3, message }.into()); }
+            return Ok(serde_json::json!({"ok": true, "message": message, "extension": state}));
+        }
         // Dispatched to the importer before this code runs.
         // Only reached when something stands between `wallpaper` and `import`
         // (a global option such as -v, --home or --json).

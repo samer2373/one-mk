@@ -8,11 +8,15 @@ mod bridge;
 fn main() -> std::process::ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments == ["--help"] {
-        println!("one-mk-wall: experimental M1 stop-gate probe, default OFF\n\
+        println!("one-mk-wall: optional wallpaper component, default OFF\n\
                   Usage: one-mk-wall --help | status | doctor\n\
                   Import and playback are unavailable: sandbox/package qualification is incomplete.\n\
                   This binary is not started by the daemon and never installs a GNOME extension.");
         return std::process::ExitCode::SUCCESS;
+    }
+    if arguments == ["--present=gnome"] {
+        eprintln!("wallpaper stays static: owner-authenticated daemon presentation plan and media pipeline are not yet integrated; no surface or decoder started");
+        return std::process::ExitCode::from(3);
     }
     if arguments == ["status"] || arguments == ["doctor"] {
         println!("wallpaper: off; production importer/presenter unavailable; native hardware UNTESTED");

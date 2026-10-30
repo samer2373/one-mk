@@ -22,8 +22,9 @@ UAC opt-in carries a local-malware elevation risk. No service ships yet; see
 
 ## Quick start
 
-**Live wallpaper playback is not available.** M1 remains stopped at a compositor
-protocol-warning gate. Receiver-owned policy scaffolding is available through
+**Live wallpaper playback is not available.** The spike stability gate is resolved,
+but production daemon authorization and media integration are unfinished.
+Receiver-owned policy scaffolding is available through
 `one-mk wallpaper status|enable|disable|doctor` and
 `one-mk wallpaper consent grant|revoke PEER` (each accepts `--json`). It defaults
 off with no consent; enabling it does not start a renderer or accept media.
@@ -39,6 +40,14 @@ optional `one-mk-wall-import` package (a sandboxed worker); without it the
 command refuses. See [import limits](docs/WALLPAPER-IMPORT.md).
 See [the stop report and troubleshooting](docs/spikes/wallpaper-m1-stop.md);
 do not run the risk probe on your real desktop.
+
+The optional GNOME component has explicit `one-mk wallpaper extension
+install|uninstall|status` commands. Nothing installs or enables by default;
+installation requires the separate renderer (`install --renderer /absolute/path`)
+and prints the separate enable command. Only the lab's exact GNOME Shell 50.1 is
+listed; other versions are refused without changing GNOME's validation settings.
+The component still stays **static**, not working playback. See the [partial
+component checkpoint and remaining gates](docs/spikes/gnome/production-component.md).
 
 ### Optional wallpaper import development package
 
@@ -1045,6 +1054,15 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
 ```
 
 ## Troubleshooting
+
+- **GNOME wallpaper stays static.** Run `one-mk wallpaper extension status` and
+  `one-mk wallpaper doctor`. They distinguish installed/enabled/qualified and
+  unknown session state. **restart limit reached** means automatic retries stopped;
+  disable the extension and retain logs rather than repeatedly killing children.
+  A fresh Shell session resets the current latch; an explicit Retry operation and
+  integrated playback are still unfinished. Uninstall requires disabling first and
+  refuses user-modified/unmanaged files. Never turn off GNOME version validation,
+  enable unsafe mode, or restart the live Shell to bypass a refusal.
 
 Start with `one-mk doctor`. It checks that one-mk is running and paired,
 the port, discovery, the firewall, the desktop permission (Linux), the

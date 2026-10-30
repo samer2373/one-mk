@@ -1,0 +1,7 @@
+./LICENSE-APACHE: OK
+./LICENSE-MIT: OK
+./README.txt: OK
+./libexec/one-mk-wall: OK
+./share/gnome-shell/extensions/one-mk-wallpaper@one-mk.org/bridge.xml: OK
+./share/gnome-shell/extensions/one-mk-wallpaper@one-mk.org/extension.js: OK
+./share/gnome-shell/extensions/one-mk-wallpaper@one-mk.org/metadata.json: OK

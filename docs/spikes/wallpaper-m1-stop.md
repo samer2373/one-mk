@@ -1,4 +1,21 @@
-# 6D-M1a-4 resolution: bridge stability fixed; product M1 remains incomplete
+# Production-component checkpoint: partial implementation, M1 still incomplete
+
+October 31, 2026: repository production-shaped extension and exact §4 bridge XML/
+Rust client, version guard, explicit install/uninstall/status/doctor, isolated
+conformance harness and non-publishing release layout have been added. **This is
+not completion of the production request.** Daemon-authorized presentation-plan
+IPC and integration with a qualified renderer/media pipeline remain absent;
+production authorization stays false and `--present=gnome` refuses without a
+surface. No diagnostic renderer was relabelled as production playback.
+
+[Current implementation, evidence, exact remaining gaps and reproduction](gnome/production-component.md).
+Retain remaining M1 **16–26 engineer-weeks**, total **74–118**, low confidence;
+do not deduct spike stability or this component checkpoint from physical/native
+acceptance. All testing is private headless Mutter with private HOME/XDG/buses.
+The previous reports below are historical; their statement that *no component
+source or installer exists* is superseded, not their incomplete-M1 conclusion.
+
+# Historical 6D-M1a-4 resolution: bridge stability fixed; product M1 remains incomplete
 
 Date: October 30–31, 2026 (Asia/Amman). Branch
 `t3/stabilize-wallpaper-bridge`, reset to local `wave5` at `7684a99`
