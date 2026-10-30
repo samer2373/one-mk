@@ -165,6 +165,12 @@ jobs:
 
           For packagers: `one-mk.rb` (Homebrew cask), `one-mk-source.rb` (Homebrew formula, builds from source) and `one-mk-flatpak-sources.tar.gz` (Flatpak manifest and the files it names) are attached too.
           MD
+          # What's new, written by hand for the release: put it first when the
+          # tag has a file (docs/release-notes/v0.1.13.md); no file, no change.
+          if [ -f "docs/release-notes/$GITHUB_REF_NAME.md" ]; then
+            { cat "docs/release-notes/$GITHUB_REF_NAME.md"; echo; cat notes.md; } > notes.full
+            mv notes.full notes.md
+          fi
       # Published only once every asset is up: a draft first (a re-run
       # can replace a draft, never a published release), then every file,
       # checked against what the release lists, then made public.
