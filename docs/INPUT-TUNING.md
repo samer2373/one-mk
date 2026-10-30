@@ -171,6 +171,10 @@ The native-free tests cover the ticketed ownership fence, stale/foreign
 acknowledgements, cleanup failure, the held-key routing matrix, randomized
 device/transition/failure streams and allocation-free gate decisions. They
 do not establish native hook latency or actual injection/release delivery.
+The hook-visible gate is now an acquire/release atomic handle; the worker's
+ticket state remains private to that worker. Shortcut flags cannot divert an
+OS-owned key-up, even during handoff or failure. Native consumers and the
+serialized injection queue are still missing, so this is not activation.
 
 `one-mk keymap add capslock esc --local` stores a local rule; `one-mk
 keymap remove capslock --local` removes it, and `one-mk keymap` labels it

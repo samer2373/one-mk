@@ -15,6 +15,16 @@ through the same barrier before publishing `Activated` or forwarding input.
 The hook must never wait for that barrier. While pending, capture activation
 is deferred, not optimistically enabled.
 
+The pure `Handoff` now exposes a shared `HookGate`: one `AtomicU8` read with
+acquire ordering per decision. `begin` and `fail` publish the closed gate with
+release ordering **before** running cleanup; only a current acknowledged
+ticket publishes Local or Remote. Dropping the worker's `Handoff` closes any
+surviving hook handle. Clone handles outside callbacks and borrow them there;
+do not clone/drop the last reference in a hook. This supplies atomic routing
+visibility, not a native queue fence: in-flight decisions still need serialized
+queue admission, worker revalidation and acknowledged injection. No platform
+currently consumes this handle, and dropping it cannot release injected keys.
+
 `localmap_handoff::Handoff` models Local -> Handoff -> Remote and the reverse.
 Starting a transition closes the local gate immediately and returns a unique
 ticket. The worker cancels undecided tap/hold keys (no tap), calls release-all,
@@ -45,6 +55,13 @@ a late release with a reconnected device that reused the same id.
 | No known down | Never invent a down | Pass in Local; remote capture applies its own ownership policy |
 | Failed-open OS down | Retain OS ownership through recovery and rule reload | Pass; do not reinterpret under new rules |
 | Session reset hides up | Release emitted keys; invalidate barrier and device generation | Resume only with an explicit fresh physical baseline |
+
+Shortcut recognition may change the action on a **down**, never the ownership
+of an **up**. Even if a native matcher flags every event of a chord, OS-owned
+modifier releases always pass to the OS; local-owned releases drain locally
+(or are swallowed after release-all); remote-owned releases reach the current
+remote capture only, or are swallowed after that capture ends. Synthetic events
+bypass this physical ownership table without changing it.
 
 Queue overflow must happen **before** swallowing an original down. A swallowed
 down must have a queued replacement, an explicitly disabled (`none`) rule,
@@ -138,3 +155,26 @@ Native acceptance (Windows and macOS separately, currently **not passed**):
    recorded settings before restarting. This revision has no native hook to
    recover. The on/off command currently stores only a preference and reports
    that native activation is incomplete.
+8. If a future native build prevents normal login recovery, use Windows
+   Recovery Environment → Startup Settings → Safe Mode, or macOS Safe Mode
+   (hold the power button on Apple silicon, choose the startup volume while
+   holding Shift; hold Shift during startup on Intel). Disable one-mk's
+   autostart, set `[input] local_rules = false` in the affected account's
+   configuration, and reboot normally before restarting one-mk. Do not enable
+   the experimental feature again until the failure is understood. These
+   platform recovery steps are **UNTESTED** here; this revision still installs
+   no native local-rule interceptor.
+
+### Review regression coverage (5H-2 prerequisites, not native activation)
+
+The release oracle is an explicit ownership/state table, independent of the
+decision implementation, including chord-marked key-ups and both pending
+destinations. A two-thread test blocks cleanup to check that the hook already
+sees a closed gate, then checks visibility of injection results through the
+acknowledged gate's release/acquire publication. Worker exit closes surviving
+handles. The counting allocator covers allocation, zeroed allocation,
+reallocation and deallocation while exercising all hook decision flags. None
+of these tests installs a hook, proves native delivery or measures hook latency.
+Manual mutation checks separately restored the old shortcut-up override,
+removed closure before cleanup, and removed closure on worker exit; each was
+rejected by its corresponding regression test. All mutations were reverted.
