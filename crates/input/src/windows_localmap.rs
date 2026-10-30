@@ -11,15 +11,18 @@ use std::sync::{Arc, mpsc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_TIMEOUT};
-use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObject, INFINITE};
+use windows_sys::Win32::System::Threading::{CancelWaitableTimer, CreateEventW, CreateWaitableTimerExW, SetEvent, SetWaitableTimer, WaitForMultipleObjects, WaitForSingleObject, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS, INFINITE};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput};
 use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
+
+pub(crate) static PHYSICAL_HOTKEYS: AtomicBool = AtomicBool::new(false);
 
 enum Work {
     Key(Key, Option<DeviceRef>),
     Fence { serial: u64, watermark: u64, health: u64, destination: Destination, rules: Arc<Rules> },
     Fail,
+    Retire,
     Stop,
 }
 
@@ -33,6 +36,7 @@ struct Native;
 
 struct Wake {
     event: usize,
+    timer: usize,
     stopped: AtomicBool,
 }
 
@@ -46,7 +50,7 @@ impl Wake {
 impl Drop for Wake {
     fn drop(&mut self) {
         // SAFETY: the last owner closes the event after both threads exit.
-        unsafe { CloseHandle(self.event as HANDLE) };
+        unsafe { CloseHandle(self.event as HANDLE); CloseHandle(self.timer as HANDLE); }
     }
 }
 
@@ -92,6 +96,25 @@ pub(crate) struct Local {
     pub recovery: u64,
 }
 
+pub(crate) struct Recovery {
+    work: mpsc::Sender<Work>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    desktop_hook: HWINEVENTHOOK,
+}
+
+impl Recovery {
+    pub fn retry(&self) { let _ = self.work.send(Work::Fail); }
+    pub fn finished(&self) -> bool { self.thread.as_ref().is_none_or(|thread| thread.is_finished()) }
+}
+
+impl Drop for Recovery {
+    fn drop(&mut self) {
+        unsafe { UnhookWinEvent(self.desktop_hook) };
+        let _ = self.work.send(Work::Stop);
+        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+    }
+}
+
 impl Local {
     pub fn start(hwnd: HWND) -> std::io::Result<Self> {
         let engine = Engine::new(Native);
@@ -101,7 +124,13 @@ impl Local {
         // SAFETY: unnamed auto-reset event, no borrowed pointers retained.
         let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
         if event.is_null() { return Err(std::io::Error::last_os_error()); }
-        let wake = Arc::new(Wake { event: event as usize, stopped: AtomicBool::new(false) });
+        let timer = unsafe { CreateWaitableTimerExW(std::ptr::null(), std::ptr::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS) };
+        if timer.is_null() {
+            let error = std::io::Error::last_os_error();
+            unsafe { CloseHandle(event) };
+            return Err(error);
+        }
+        let wake = Arc::new(Wake { event: event as usize, timer: timer as usize, stopped: AtomicBool::new(false) });
         let (work, receiver) = mpsc::channel();
         let (completion, completions) = mpsc::channel();
         let hwnd = hwnd as usize;
@@ -109,22 +138,17 @@ impl Local {
         let thread = std::thread::Builder::new().name("one-mk-local-keys".into()).spawn(move || {
             let feedback = worker_feedback;
             let mut engine = engine;
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run(&mut engine, &feedback, receiver, |done| {
+            run(&mut engine, &feedback, receiver, |done| {
                     let _ = completion.send(done);
                     // SAFETY: posting to the capture window, possibly already gone.
                     unsafe { PostMessageW(hwnd as HWND, super::windows::WM_APP_LOCAL, 0, 0) };
-                });
-            }));
+            });
             feedback.fail();
             engine.fail();
-            if result.is_err() {
-                // SAFETY: as above; the capture loop reports the failed flag.
-                unsafe { PostMessageW(hwnd as HWND, super::windows::WM_APP_LOCAL, 0, 0) };
-            }
+            unsafe { PostMessageW(hwnd as HWND, super::windows::WM_APP_LOCAL, 0, 0) };
         })?;
         // SAFETY: callback is static and delivered on the installing message-loop thread.
-        let desktop_hook = unsafe { SetWinEventHook(0x20, 0x20, std::ptr::null_mut(), Some(super::windows::desktop_changed), 0, 0, 0) };
+        let desktop_hook = unsafe { SetWinEventHook(3, 0x20, std::ptr::null_mut(), Some(super::windows::desktop_changed), 0, 0, 0) };
         if desktop_hook.is_null() {
             let _ = work.send(Work::Stop);
             let _ = thread.join();
@@ -139,8 +163,24 @@ impl Local {
                 if watchdog_wake.stopped.load(Ordering::Acquire) { break; }
                 let deadline = lease.deadline(&feedback, Instant::now());
                 let timeout = deadline.map_or(INFINITE, |at| at.saturating_duration_since(Instant::now()).as_millis().min(u32::MAX as u128 - 1) as u32);
+                let timer = watchdog_wake.timer as HANDLE;
+                let armed = unsafe {
+                    if deadline.is_some() { SetWaitableTimer(timer, &-10_000, 0, None, std::ptr::null(), 0) != 0 }
+                    else { CancelWaitableTimer(timer); true }
+                };
+                if !armed {
+                    feedback.fail();
+                    watchdog_gate.close();
+                    let _ = watchdog_work.send(Work::Fail);
+                    unsafe { PostMessageW(hwnd as HWND, super::windows::WM_APP_LOCAL, 0, 0) };
+                    break;
+                }
                 // SAFETY: event is retained by this thread's Arc.
-                let result = unsafe { WaitForSingleObject(watchdog_wake.event as HANDLE, timeout) };
+                let handles = [watchdog_wake.event as HANDLE, timer];
+                let result = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, timeout) };
+                if result == 1 {
+                    unsafe { PostMessageW(hwnd as HWND, super::windows::WM_APP_LOCAL, 0, 0) };
+                }
                 if result == WAIT_TIMEOUT {
                     if lease.expired(&feedback, Instant::now()) {
                         feedback.fail();
@@ -151,7 +191,7 @@ impl Local {
                         // Disarm until new hook work or shutdown; no periodic idle polling.
                         unsafe { WaitForSingleObject(watchdog_wake.event as HANDLE, INFINITE) };
                     }
-                } else if result != 0 && result != WAIT_TIMEOUT {
+                } else if result != 0 && result != 1 && result != WAIT_TIMEOUT {
                     feedback.fail();
                     watchdog_gate.close();
                     let _ = watchdog_work.send(Work::Fail);
@@ -169,6 +209,7 @@ impl Local {
                 return Err(error);
             }
         };
+        PHYSICAL_HOTKEYS.store(true, Ordering::Release);
         Ok(Self {
             admission, gate, snapshots: Snapshots::default(), waiting: VecDeque::new(), pending: None,
             enabled: false, paused: false, activation: None, input: false, inactive: "preference off".into(), physical: Physical::default(),
@@ -179,6 +220,16 @@ impl Local {
 
     pub fn supported(rules: &Rules) -> bool {
         rules.maps.supports_local_keys(|code| matches!(evdev_to_win(code), Some(WinKey::Scan { .. })))
+    }
+
+    pub fn retire(mut self) -> Recovery {
+        self.gate.close();
+        self.admission.fail();
+        let _ = self.work.send(Work::Retire);
+        Recovery {
+            work: self.work.clone(), thread: self.thread.take(),
+            desktop_hook: std::mem::replace(&mut self.desktop_hook, std::ptr::null_mut()),
+        }
     }
 
     pub fn baseline(&mut self, held: impl Iterator<Item = u32>) {
@@ -201,6 +252,10 @@ impl Local {
     pub fn forward(&mut self, event: &Event) -> bool {
         let Event::Key { code, down, device } = *event else { return false };
         let Some(key) = self.waiting.pop_front() else { return false };
+        if key.code == code && key.down == down && !self.physical.correlated(code, down, device) {
+            self.fail();
+            return true;
+        }
         if key.code != code || key.down != down || self.work.send(Work::Key(key, device)).is_err() {
             self.fail();
         }
@@ -214,6 +269,11 @@ impl Local {
         self.pending = None;
         if !self.failed { let _ = self.work.send(Work::Fail); }
         self.failed = true;
+    }
+
+    pub fn retry_releases(&mut self) {
+        self.fail();
+        let _ = self.work.send(Work::Fail);
     }
 
     pub fn fence(&mut self, destination: Destination) {
@@ -255,20 +315,25 @@ impl Local {
     pub fn os_release(&mut self, code: u32) { self.physical.os_release(code); }
 
     pub fn suppress_owned(&mut self, code: u32, down: bool) -> bool {
-        self.physical.suppress_owned(code, down)
+        let swallowed = self.physical.suppress_owned(code, down, &mut self.admission);
+        if self.admission.pending() { self.wake.signal(); }
+        swallowed
     }
 }
 
 impl Drop for Local {
     fn drop(&mut self) {
+        PHYSICAL_HOTKEYS.store(false, Ordering::Release);
         // SAFETY: our own WinEvent registration; the capture hook has already been removed.
-        unsafe { UnhookWinEvent(self.desktop_hook) };
+        if !self.desktop_hook.is_null() { unsafe { UnhookWinEvent(self.desktop_hook) }; }
         self.wake.stopped.store(true, Ordering::Release);
         self.wake.signal();
         if let Some(watchdog) = self.watchdog.take() { let _ = watchdog.join(); }
         self.admission.fail();
-        let _ = self.work.send(Work::Stop);
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        if let Some(thread) = self.thread.take() {
+            let _ = self.work.send(Work::Stop);
+            let _ = thread.join();
+        }
     }
 }
 
@@ -276,6 +341,7 @@ fn run(
     engine: &mut Engine<Native>, feedback: &Feedback, receiver: mpsc::Receiver<Work>,
     mut complete: impl FnMut(Completion),
 ) {
+    let mut retired = false;
     loop {
         let next = match engine.deadline() {
             Some(deadline) => match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
@@ -297,7 +363,8 @@ fn run(
                 let success = engine.recover_fence(watermark, destination, Some(&rules), feedback, health);
                 complete(Completion { serial, destination, success });
             }
-            Some(Work::Fail) => { engine.fail(); }
+            Some(Work::Fail) => { if engine.fail() && retired { break; } }
+            Some(Work::Retire) => { retired = true; if engine.fail() { break; } }
             Some(Work::Stop) | None => break,
         }
     }

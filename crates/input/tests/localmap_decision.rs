@@ -54,7 +54,13 @@ fn decision_allocates_nothing_and_reports_debug_throughput() {
     let snapshots = Snapshots::default();
     let snapshot = snapshots.load();
     drop(snapshot);
-    let rules = Rules::default();
+    let rules = Rules {
+        hotkeys: one_mk_input::hotkeys::Bindings::new(vec![
+            (one_mk_input::hotkeys::Action::Cycle, "ctrl+alt+right".parse().unwrap()),
+            (one_mk_input::hotkeys::Action::FetchClipboard, "ctrl+alt+c".parse().unwrap()),
+        ]).unwrap(),
+        ..Rules::default()
+    };
     let key = PhysicalKey {
         down: true, injected: false, shortcut: false, eligible: true, healthy: true, owner: Owner::Unknown,
     };
@@ -86,8 +92,18 @@ fn decision_allocates_nothing_and_reports_debug_throughput() {
         let snapshot = snapshots.load();
         std::hint::black_box(snapshot.count);
         drop(snapshot);
-        for down in [true, false] {
-            std::hint::black_box(physical.key(PhysicalKey { down, ..key }, 30, now, &rules, &mut admission, |_| true));
+        for code in [29, 56, 106, 46, 30] {
+            for down in [true, false] {
+                std::hint::black_box(physical.key(PhysicalKey { down, ..key }, code, now, &rules, &mut admission, |_| true));
+                while let Some(key) = admission.pop() { admission.acknowledge(key.sequence); }
+            }
+        }
+        for code in [29, 56, 106, 46] {
+            std::hint::black_box(physical.key(key, code, now, &rules, &mut admission, |_| true));
+            while let Some(key) = admission.pop() { admission.acknowledge(key.sequence); }
+        }
+        for code in [106, 46, 56, 29] {
+            std::hint::black_box(physical.key(PhysicalKey { down: false, ..key }, code, now, &rules, &mut admission, |_| true));
             while let Some(key) = admission.pop() { admission.acknowledge(key.sequence); }
         }
     }

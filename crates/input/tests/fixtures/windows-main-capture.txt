@@ -1,0 +1,21 @@
+    fn activate(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
+        let pos = self.space.to_logical(x, y);
+        let id = self.next_id.wrapping_add(1);
+        // Key-ups hidden by the lock screen, Ctrl+Alt+Del or a UAC prompt
+        // would leave stale entries; start from what is really held. The
+        // modifiers among them go first, for the daemon's modifier-to-cross.
+        let held = async_held();
+        let _ = self.tx.send(Event::Modifiers(Mods::from_keys(Mods::KEYS.into_iter().filter(|&k| held.has(k)))));
+        if self.tx.send(Event::Activated { id, side, pos }).is_err() {
+            return (false, Effect::None);
+        }
+        self.next_id = id;
+        self.local = held;
+        self.fwd.clear();
+        self.watchdog.reset();
+        self.heading.reset();
+        let park = self.space.park_point(x, y);
+        let entry = self.space.to_phys(pos);
+        self.captured = Some(Captured { id, park, entry });
+        (true, Effect::Park(park))
+    }

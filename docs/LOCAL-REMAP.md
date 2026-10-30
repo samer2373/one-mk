@@ -1,457 +1,263 @@
 # Local keyboard remapping: safety design (5H)
 
-Status: **5H-3 Windows integration implemented, COMPILE-CHECKED ONLY;
-native Windows UNTESTED, EXPERIMENTAL, default OFF**. **5H-4 macOS integration
-is partial and COMPILE-CHECKED ONLY, native macOS UNTESTED**: the event-tap
-adapter is implemented, but Caps Lock rules are deliberately refused rather
-than treating its delayed toggle as a physical press/release. Native receipt
-delivery, no-stuck-keys and CPU acceptance have NOT passed. Linux local remapping is not
-available. `[input] local_rules = false` remains the default.
-Do not connect the existing asynchronous injection channel to a hook and
-describe it as safe: enqueueing a release is not acknowledging its delivery.
+**EXPERIMENTAL; OFF by default. Windows and macOS are COMPILE-CHECKED ONLY,
+UNTESTED on native hardware. 5H is incomplete, not production accepted.**
+`[input] local_rules = false` remains the default, including upgrades.
+Linux local remapping is unavailable. Native release delivery, no-stuck-keys,
+latency, idle CPU and memory acceptance have **not** passed.
 
-## Ownership and acknowledgement
+## Non-negotiable core KVM invariant
 
-One serialized worker must own the mapper, replacement snapshots, tap/hold
-deadlines, device generations, and the local injector. It must process capture
-activation from **every** entry point (edge, switch, broadcast, physical hotkey)
-through the same barrier before publishing `Activated` or forwarding input.
-The hook must never wait for that barrier. While pending, capture activation
-is deferred, not optimistically enabled.
+With local rules off, none configured, unsupported, or after
+`one-mk keymap local off`, the Windows and macOS backends must behave exactly
+like `main` for physical input. An experimental worker must **never gate
+remote capture, crossing, switching, hotkeys, power handling or key repeat**.
+Failing local remapping is not permission to break the KVM.
 
-The pure `Handoff` now exposes a shared `HookGate`: one `AtomicU8` read with
-acquire ordering per decision. `begin` and `fail` publish the closed gate with
-release ordering **before** running cleanup; only a current acknowledged
-ticket publishes Local or Remote. Dropping the worker's `Handoff` closes any
-surviving hook handle. Clone handles outside callbacks and borrow them there;
-do not clone/drop the last reference in a hook. This supplies atomic routing
-visibility, not a native queue fence: in-flight decisions still need serialized
-queue admission, worker revalidation and acknowledged injection. Windows now
-consumes this handle; dropping it alone still cannot release injected keys.
+Disabled/empty/unsupported snapshots remove the local interceptor, rather than
+leaving an unhealthy `Local` instance on the capture path. No local flag rewrite
+or admission decision runs without an interceptor. Off/empty status clears the
+local-problem line; doctor does not warn about native local rules unless a
+local status line actually exists. Unsupported configured snapshots report why
+they were refused. Existing permission diagnostics are independent.
 
-### Implemented Windows path (not native acceptance)
+Cleanup of output **already injected before disable** is the necessary exception:
+it may post replacement key-ups, never new downs, and must not intercept new
+physical input. Windows retains a release-only recovery worker if native ups
+fail, wakes it on foreground/desktop/unlock events, and refuses only a *new local
+mapping enable* until that old ledger is empty. It does not gate capture. macOS
+recognizes its previously issued local-output tags after disable so delayed
+cleanup cannot become remote input. These tags, like the normal injector tag,
+are routing markers, not authentication against another local process.
 
-`windows_localmap.rs` connects the existing WH_KEYBOARD_LL hook to the shared
-`localmap_runtime::{Physical, Admission, Engine}` production logic. The hook
-borrows an immutable `arc-swap` snapshot; retired generations are retained and
-reclaimed off-hook. `arc-swap` 1.9.3 and `crossbeam-queue` 0.3.14 are pinned by
-Cargo.lock; neither is claimed to have undergone an independent security audit.
-The bounded 64-entry admission ring reserves monotonically numbered work before
-swallowing. The local mapper admission path does no mapper work, allocation,
-channel send, file IO or mutex acquisition; its OS calls are deferred-window/event
-wakeups. Snapshot reader TLS is warmed on the capture thread before publication.
-The existing remote forwarding path is not covered by this allocation claim. A counting
-allocator tests the production snapshot/decision/admission path, not Win32 or
-native callback timing. The approximately 1 ms callback budget is **UNTESTED**.
+`tests/native_localmap_contract.rs` pins the capture activation bodies from
+`main` (`96436057bd1a303159e07953d29c2d254eb7314d`), allowing only the earlier
+per-device Raw Input/IOHID metadata additions. It checks that capture wrappers
+have no worker-health precondition and that disable/quit/timeout wiring remains
+fail-open. Random pure tests compare closed-home routing/repeats/unowned ups
+and disabled modifier flags against main's pass-through behavior. These are
+**bounded differential/source contracts, not an OS execution proof**: the full
+native event-loop behavior still needs the manual acceptance below.
 
-Before a Remote fence the capture thread closes admission, drains the ring and
-finishes the Raw Input correlator, including its delayed/unknown-device events.
-The same worker consumes these numbered keys and then checks the exact queue
-watermark, cancels pending dual roles, and releases all successfully injected
-downs. SendInput's actual successful prefix updates a separate held ledger;
-a partial release prevents acknowledgement and remains available for retry.
-Only the matching successful fence completion permits `activate_now` and remote
-forwarding. Return to Local uses another fence and an empty mapper. Settings
-reload, edge activation and explicit capture commands use this path.
+## Ownership and worker contract
 
-Only the serialized worker can restore health, after consuming the admitted
-watermark without replaying failed work. Recovery compares the exact atomic
-failure generation before the fence and after releasing outputs. A newer failure
-(including one during release) invalidates recovery; a stale completion cannot
-clear it. Capture-thread settings reload never marks the worker healthy itself.
+The capture hook performs physical shortcut recognition and bounded admission,
+not mapping or injection. The worker owns `Mapper`, deadlines, output ledger
+and ordered fences. Admission is bounded to 64 unacknowledged events with a
+100 ms oldest-work lease. Snapshot retirement and device correlation happen
+off-hook. Worker/lease threads park indefinitely without obligations; there is
+no periodic idle timer. Held keys, outstanding admissions and undecided dual
+roles are obligations, not idle. Actual native CPU/RSS has not been measured.
 
-The injector uses scancodes, E0 flags and the existing `dwExtraInfo` tag. Tagged
-or LLKHF_INJECTED input and VK_PROCESSKEY bypass physical routing. Existing
-AltGr fake-Ctrl decoding is retained; its interaction with local rules is
-**UNTESTED**. Rules requiring virtual-key injection or actions are refused as a
-whole snapshot; scancode keys, chords, sequences, `none`, layers and tap/hold
-are supported. Physical emergency/custom shortcuts precede the mapper in both
-local and remote paths. Emergency Esc passes, but earlier rewritten modifiers
-are not retroactively delivered to Windows: OS receipt of the complete chord
-is not promised. A swallowed Caps Lock does not deliberately inject its original
-toggle; actual LEDs, IME and reserved combinations are **UNTESTED**.
+Closing admission happens before a fence or failure. Ordinary shortcuts keep
+health intact and own only their swallowed trigger; their release never enters
+the mapper. Physical Ctrl+Alt+Shift+Esc is the emergency: fail admission, release
+replacements and ask to return home, while allowing emergency Esc through. A
+previously rewritten modifier is not retroactively delivered to the OS; do not
+claim that the OS receives the full physical emergency chord.
 
-Worker timers exist only for undecided dual roles. An independent event-woken
-lease thread closes health/admission and queues serialized cleanup if numbered
-work goes unacknowledged for 100 ms after observation; hook decisions also
-enforce a 100 ms oldest-admission lease. This does not depend on the capture
-message loop processing its own watchdog. The capture watchdog exists only
-while work/fences are outstanding. Parked worker/lease threads do no periodic
-work at idle; they remain allocated after first enable, even when disabled.
-Release builds now unwind panics so worker catch-unwind/ledger cleanup can run;
-this trades some binary size for recoverable worker failure. Abort, forced
-termination and a blocked OS injector are outside that protection.
+Capture submits a **best-effort** Remote fence and immediately uses main's
+capture activation path: zero worker wait, including with a dead worker or
+missing receipt. It never waits for local completion to publish `Activated`.
+This favors core KVM availability; it does **not** establish that native local
+ups have arrived before remote activation. Failed releases are reported/retried
+where possible; native ordering across the boundary is an acceptance blocker.
+Returning home closes the gate in every case, then requests Local only if
+mapping remains enabled and unpaused. Thus paused/off Backspace repeat stays
+with the OS instead of being suppressed by a stale Remote gate.
 
-WTS session notifications, desktop-switch WinEvents and power broadcasts close
-admission, release outputs and pause mapping. **Return/unlock/resume does not
-automatically re-enable mapping**: once active on the Default desktop, explicitly
-reload with `one-mk keymap local on`. Device-table replacement also pauses;
-release all physical keys/buttons before resuming a paused mapper (otherwise
-reload is refused with an inactive reason). The daemon supplies a fresh resolved
-snapshot. Raw Input's correlated DeviceRef
-is passed to `Mapper::key_from`; unknown input matches only base rules. Device
-ids stop at exhaustion rather than wrapping. Hook ownership is necessarily by
-physical code before correlation; overlapping same-code releases are retained
-for worker routing, but multi-keyboard identity/ordering needs native acceptance.
+Fences release outputs and update keymaps on the **existing mapper**, preserving
+release-all tombstones. A held key must come up before being interpreted under
+a new map: no repeat-induced re-press or spurious dual-role tap. Owned ups while
+closed/failed/remote retire source bookkeeping without injecting new downs.
+Only a failed, drained engine may resynchronize a sequence gap to its fence
+watermark; a healthy fence cannot skip undrained work. Recovery generation
+checks reject stale completions. Acknowledging local mapping readiness is
+separate from authorizing core capture.
 
-`keymap local on|off` uses settings reload on Windows. Status, list/check and
-doctor use backend acknowledgement (`active (N)` or an inactive reason), never
-infer activity from the preference. During asynchronous reload, ask status again
-after the fence. Doctor always warns that native Windows is UNTESTED.
-
-### Implemented macOS path (COMPILE-CHECKED ONLY, native UNTESTED)
-
-`macos_localmap.rs` uses the same immutable `Snapshots`, bounded `Admission`,
-physical shortcut matcher, atomic `HookGate`, numbered queue watermark and
-serialized `Engine` as Windows. The existing HID-level capture tap performs
-the decision; a run-loop source drains admissions outside the tap. IOHID's 5I
-correlator resolves each admitted key's device before worker delivery through
-`Mapper::key_from`. Correlation is finished before enqueuing either direction's
-fence. Device changes invalidate health before publishing the new device list.
-No rule tables are reclaimed on the callback. The pure shared decision and
-admission allocation test is not a measurement of CoreGraphics/CoreFoundation.
-
-The worker posts physical keycodes with a distinct event-source user-data tag.
-Its output bypasses physical matching in both the capture and shortcut taps.
-**CGEventPost returns no delivery result.** Posting is therefore not treated as
-successful release: each post waits up to 100 ms for the same tagged event to
-be observed at the capture tap. An uncertain down remains conservatively owned;
-an uncertain up stays in the release ledger for retry. `Injector::settled` also
-prevents an empty fence from acknowledging outstanding uncertain posts. Only a
-matching, healthy, receipted fence permits capture activation and `Activated`.
-Only the exact outstanding post sequence can acknowledge a receipt; unrelated,
-future and duplicate receipts cannot advance a watermark. Completion health is
-checked again on the capture thread before activation. The tag is a routing
-marker, not an authentication boundary against another local injector.
-Receipts prove observation at our tap, NOT consumption by applications. Whether
-HID-level posts traverse this tap at all is **UNTESTED**; a missing receipt
-must fail inactive, never be replaced with an assumed acknowledgement.
-Retrying an uncertain release can produce a duplicate key-up if the first post
-was delivered but its receipt was lost. Exactly-once native delivery is not
-established by the balanced fake-injector tests.
-
-Modifier keycodes use `flagsChanged`. Physical flags of swallowed modifiers are
-removed from subsequent keyboard/pointer events; replacement modifier flags
-are composed separately, preserving a passed opposite-side modifier. Supported
-modifier bits are rebuilt from tracked physical ownership, not copied back from
-raw flags that could include our synthetic modifiers. Caps Lock/Fn toggle bits
-are preserved; non-key events refresh the worker's physical-flag baseline. Fn,
-function keys, media keys and NX system-defined events bypass the local mapper;
-snapshots trying to remap these are refused. Remote capture retains its existing
-media handling. **Caps Lock is not supported by this slice**: macOS reports a
-delayed alpha-shift toggle, not a reliable down/up pair. Both Caps Lock sources
-and outputs reject the entire snapshot, so Caps Lock remains untouched locally.
-Do not use it for tap/hold or claim its LED/delay behavior was tested. Completing
-Caps Lock support requires a separately validated physical IOHID/tap policy.
-
-Tap timeout/user-disable, screen lock, workspace session changes and sleep/wake
-close admission, request release-all and pause mapping. Re-enabling a disabled
-tap only makes cleanup receipts possible; it does not reopen interception.
-Return/unlock/wake requires release of all physical keys and explicit reload.
-Workspace notifications close health before capture-thread message handling.
-Accessibility and Input Monitoring denial are separately reported by capture;
-local-rule status also reports inactivity, never an inferred preference state.
-`doctor` reads both permission grants without prompting or installing a tap,
-and labels them as this process's permissions, not proof of the daemon's grant.
-Permission revocation can prevent release delivery: restore permission and retry
-`one-mk keymap local on`, then disable. Do not call that a guaranteed recovery.
-
-Secure Input hides keyboard events, including releases in password fields.
-Before new replacement downs, and while physical or replacement keys are held,
-the worker/watchdog checks Secure Input/session state and requests cleanup and
-pause. The watchdog parks indefinitely with no obligations; while keys are held
-it checks at 100 ms intervals. The existing capture timer monitors permissions
-and active remote capture. Idle CPU and notification delivery are **UNTESTED**.
-No native tests, tap installations or GUI/session experiments were run here.
-
-### Manual macOS acceptance script — NOT RUN, native UNTESTED
-
-Use only a disposable Mac login, with recovery access from another computer and
-a copy of the original settings. This is an acceptance checklist, not approval
-to run it in an owner's real session.
-
-1. Confirm `[input] local_rules = false`; grant Accessibility and Input Monitoring
-   separately. Verify denied states in `one-mk status` and `one-mk doctor` before
-   granting each. `doctor`, list/check and runtime status must retain UNTESTED.
-2. Add `one-mk keymap add a b --local`, then `one-mk keymap local on`. Require
-   `active (1)` only after its fence; verify one B down/up per physical A, repeat,
-   sequence/none/layers and supported tap/hold. Remove the rule afterward.
-3. Test left Shift -> left Ctrl and both sides of each modifier: type, click,
-   release in either order, reload mid-hold, and compare application flags.
-   Add a device-local override and test unknown devices and unplug/reconnect.
-4. Hold rewritten keys while every capture entry point activates: edge,
-   explicit switch, physical shortcut and broadcast. No output may be newly
-   injected in Remote; releases must be receipted before activation. Repeat on
-   return. Simulate delayed/missing receipts and newer failures during release.
-5. Exercise tap timeout/user-disable, screen lock/unlock, fast-user-switch,
-   sleep/wake and Secure Keyboard Entry while a modifier or dual role is held.
-   Require cleanup, fail-open new presses, inactive status and explicit reload.
-6. Verify Caps Lock toggle/LED/delay, Fn, F-keys and NX media input remain
-   unchanged. A Caps Lock local rule MUST refuse the complete snapshot; this is
-   a known 5H-4 blocker, not completed Caps Lock remapping.
-7. Record callback latency, parked-thread idle wakeups/CPU and RSS with rules
-   on/off; verify clean shutdown waits for release receipts. Repeat with IMEs,
-   reserved shortcuts, another injector and the supported macOS versions.
-
-Recovery: first use the physical **Ctrl+Alt+Shift+Esc** emergency chord. It is
-matched before remapping, but earlier rewritten modifiers are not retroactively
-delivered to macOS. From another computer's SSH session into this Mac/account,
-run `one-mk keymap local off` (running it on the other computer itself changes
-the wrong settings). If needed, revoke one-mk/the launching terminal under
-System Settings > Privacy & Security > Input Monitoring and Accessibility.
-macOS may require quit/reopen to revoke effectively. Revocation/force-quit is
-not proof held replacements were released; it may prevent cleanup entirely.
-Restore permissions only in the disposable session, release physical keys,
-reload to retry the ledger, disable, and verify flags before further use.
-
-`localmap_handoff::Handoff` models Local -> Handoff -> Remote and the reverse.
-Starting a transition closes the local gate immediately and returns a unique
-ticket. The worker cancels undecided tap/hold keys (no tap), calls release-all,
-and submits the releases through the same ordered injector as replacements.
-Only an acknowledgement **after successful injection of the entire batch**
-may complete that ticket. Acknowledging an old ticket never opens a new gate.
-Tickets are process-wide, never reused (including across worker instances);
-exhaustion disables interception instead of wrapping. A new daemon must
-discard the old worker and injector queues rather than replaying their tickets.
-No command can cancel a pending barrier into Local or Remote without another
-release acknowledgement. Failed or partial injection, timeout, session lock,
-sleep, tap disable, device-table replacement, or daemon disconnect invalidates
-the ticket and closes the gate. Re-entry requires a new barrier. An empty
-batch still needs an acknowledgement of the ordered queue fence.
-
-Remote has no local pending timer or emitted keys. Returning to Local starts
-an empty mapper but retains physical ownership tombstones until key-up.
-Device ids must be qualified by the device-table generation: never associate
-a late release with a reconnected device that reused the same id.
-
-## Held-key transition matrix
-
-| Original down's owner | During barrier / after transition | Original key-up |
+| Original down owner | Repeats after crossing | Original key-up |
 | --- | --- | --- |
-| OS (passed locally) | Suppress repeats during Remote, never synthesize a new down | Pass to OS; never forward to peer |
-| Local mapper | Release replacement before Remote acknowledgement; discard pending tap | Swallow original up; it has no OS down |
-| Remote peer | Remote release-all before leaving Remote; do not repeat locally | Swallow original up; never inject a local down |
-| No known down | Never invent a down | Pass in Local; remote capture applies its own ownership policy |
-| Failed-open OS down | Retain OS ownership through recovery and rule reload | Pass; do not reinterpret under new rules |
-| Session reset hides up | Release emitted keys; invalidate barrier and device generation | Resume only with an explicit fresh physical baseline |
+| OS / failed-open | Suppress only during actual Remote capture | Pass locally; never forward to peer |
+| Local mapper | Release replacement; preserve swallow tombstone | Swallow and retire outstanding source |
+| Physical shortcut | Swallow trigger repeats | Swallow trigger up; no mapper up |
+| Remote peer | Receiver handles repeat | Remote capture's normal ownership rules |
+| No observed down | Do not invent ownership from historical mapping | Pass locally |
 
-Shortcut recognition may change the action on a **down**, never the ownership
-of an **up**. Even if a native matcher flags every event of a chord, OS-owned
-modifier releases always pass to the OS; local-owned releases drain locally
-(or are swallowed after release-all); remote-owned releases reach the current
-remote capture only, or are swallowed after that capture ends. Synthetic events
-bypass this physical ownership table without changing it.
+Physical source tracking is bounded and distinguishes outstanding correlated
+downs by device/code; repeats do not add ownership. Exhausting the bounded
+source table fails local mapping and releases output instead of losing ownership
+silently. A key ever having been
+mapped is **not** ownership. Baselines clear absent owners, treat held keyboard
+keys as OS-owned and exclude mouse buttons. Enabling from an Enter-down CLI
+command is not refused. Local rules never enter the peer's mapper; global/OS/
+peer rules retain their remote-only meaning. `--local --app` remains refused.
 
-Queue overflow must happen **before** swallowing an original down. A swallowed
-down must have a queued replacement, an explicitly disabled (`none`) rule,
-an undecided tap/hold obligation, or a shortcut obligation. On overload all
-new presses pass through. Already-owned ups are drained consistently. Strict
-unconditional fail-open for already-swallowed releases is unsafe: it would
-create unmatched OS ups. A lease-expiry path must distinguish these cases.
+Release builds use `panic = "abort"` for the whole application as before 5H.
+The native worker paths use explicit startup/channel/injection failures, not
+`catch_unwind`, `unwrap`, `expect` or deliberate panic as recovery. This is
+fail-stop, **not** an in-process panic-release guarantee. OOM, abort, forced
+termination, a stuck native OS call or permission loss can prevent cleanup.
+No in-process implementation can promise key-up after kill between down/up.
+A separate recovery mechanism and native fault testing are prerequisites for a
+production no-stuck-keys claim.
 
-The pure runtime supplies the gate, bounded admission, physical routing and
-worker ledger. Linux fake-hook/injector tests drive that same production logic;
-they are not a native device correlator or Win32 injection test. Previously
-mapped codes retain release-routing history for overlapping keyboards; stray
-ups have no mapper output, and new failed-open downs keep OS ownership.
+## Windows adapter — COMPILE-CHECKED ONLY / UNTESTED
 
-## Hook contract (Windows compile-only; macOS pending)
+The low-level hook precedes local/remote routing with physical shortcuts.
+While a Local interceptor exists, the RegisterHotKey notification path is
+ignored so replacement output cannot trigger a KVM shortcut. Without Local,
+the original RegisterHotKey path is unchanged. Other injected input and
+VK_PROCESSKEY bypass local mapping, retaining main behavior when local is off.
 
-The hook reads only a preallocated immutable decision snapshot, physical
-ownership bitsets, and atomics. No mapper allocation, mutex, channel allocation,
-logging, I/O, destruction of the last snapshot reference, or blocking injector
-call is allowed. Publish snapshots and reclaim them off the hook thread.
-The existing `Mapper::key_from` can allocate a source: it belongs on the worker,
-not inside the callback. Windows admits eligible physical scancodes first and
-correlates on the capture loop before the worker evaluates device rules. An
-unmatched admitted key is re-injected, rather than claiming the delayed correlator
-can decide synchronously in the hook. Unknown/ambiguous devices use only
-non-device local rules.
+Only suspend (4) and resume (7/18) power broadcasts can pause local remapping;
+charger/battery notifications never end capture. Without Local these added
+power handlers have no effect. WTS lock handling retains main's remote-release
+behavior. Foreground elevation and desktop changes pause mapping; unlock,
+desktop return and a normal foreground retry failed native releases and refresh
+physical ownership. UIPI can already be active before a foreground notification:
+release-before-elevation is **not guaranteed**. Recovery-only cleanup survives
+`local off` without retaining the interceptor. Recovery is event-driven, not a
+retry poll. It cannot recover while the process or OS injector is unavailable.
 
-Physical emergency Ctrl+Alt+Shift+Esc and user hotkeys precede rule evaluation,
-including rules for modifiers and Esc. On emergency, close the local gate,
-release held replacements and return home. A physical matcher observing a
-chord is not enough if earlier modifier downs were already rewritten: do not
-claim the OS received the chord. Local `--app` remains unsupported because the
-existing app probe describes a remote destination and cannot block a hook.
+SendInput's exact successful prefix updates the output ledger. Partial/failed
+ups stay owned for retry. Scancode outputs/layers/sequences/none/tap-hold are
+supported; actions and unsupported virtual/media outputs refuse the snapshot.
+AltGr fake Ctrl, Caps Lock toggle/LED, reserved combinations, UAC and multi-
+keyboard correlation remain native acceptance cases.
 
-New presses fail open with an empty snapshot, disabled preference, disconnected
-daemon channel, expired worker lease, unsupported scancode or inactive
-session. A worker lease alone does **not** detect a hung daemon: native glue
-also needs an event-driven daemon liveness acknowledgement. No periodic idle
-heartbeat: arm watchdogs only while interception or a barrier has obligations.
-Only undecided dual-role keys arm the tap/hold timer.
+Snapshots without device rules bypass the correlator delay. While numbered
+admissions await correlation/acknowledgement, an unnamed high-resolution
+waitable timer wakes the capture pump at approximately 1 ms. It is canceled at
+idle; no process-wide timeBeginPeriod is enabled for local mapping. Startup
+refuses local mapping if that timer cannot be created. Device correlation may
+still wait up to 8 ms. Passthrough mouse/ineligible keys can overtake queued
+mapped keys: latency/order acceptance remains incomplete; a 1 ms wake request
+is not a hard latency guarantee.
 
-Windows: ignore `LLKHF_INJECTED` and the existing `dwExtraInfo` tag; pass
-`VK_PROCESSKEY`; retain AltGr's synthetic Ctrl/RAlt semantics. Inject physical
-scancodes with the correct E0 flag (right Ctrl/Alt, arrows, numpad). Swallow a
-remapped Caps Lock original so its toggle/LED is not changed. Monitor session,
-desktop and power notifications and suspend until the session is active.
-Low-level hooks may be silently removed on timeout: no blocking work there.
+## macOS adapter — COMPILE-CHECKED ONLY / UNTESTED
 
-macOS: ignore the existing event-source user-data tag; on
-`kCGEventTapDisabledByTimeout` or `kCGEventTapDisabledByUserInput`, close the gate
-and release mapped output before enabling interception again. Re-enabling the
-tap is not proof the old mapper was drained. Session and sleep notifications
-use the same barrier. Permission loss remains fail-open and visible.
+The existing HID event tap and IOHID correlator feed the shared worker. Supported
+physical keys are posted using a private CGEventSource and tagged sequence.
+Downs wait at most 100 ms for their exact outstanding tap receipt; an uncertain
+down triggers failure/release. Ups are **best-effort posts without receipt
+wait**. The pure mapper releases its bookkeeping, so missing up receipts cannot
+wedge capture or shutdown. CGEventPost has no successful-delivery return:
+posting an up is **not proof that an application or OS consumed it**, and there
+is no guaranteed retry for an undelivered macOS up. Do not describe this as
+acknowledged native release delivery or established no-stuck-keys.
 
-## Scope and persistence
+Ordinary reposts carry KeyboardEventKeyboardType from admission; a held output's
+up retains its down's type. Mixed keyboard types interrupting an undecided
+multi-event tap/hold batch still need provenance work/native validation. ISO
+section/backtick behavior is **not accepted** by compilation alone.
 
-Local+Device > Local; remote/global/OS/peer rules never affect local typing.
-Store fingerprints in this computer's settings, not ephemeral device ids.
-Unknown devices never match device-specific rules. Mouse buttons, local pointer
-speed, and local app rules are outside 5H. Existing files keep their meaning.
-The default must stay off until real-hardware acceptance. Never label stored
-rules `active` merely because a preference is enabled: require a backend
-acknowledgement of its snapshot generation and a healthy gate.
+Modifier rewriting intersects tracked passed bits with the original event,
+including side-specific device bits; a missed up cannot add a phantom Cmd or
+Shift. Disabled/paused mapping returns original flags exactly. Re-enable takes
+a fresh HID key baseline. Tap timeout/user-disable pauses/release-all when local
+mapping exists, but ends remote capture only if local output was held. With no
+Local, it only re-enables the tap as main did. Quit stops the capture run loop
+without requiring any fence completion; cleanup detaches IOHID dispatch before
+joining the bounded worker. An arbitrarily blocked OS call is still outside
+this shutdown bound.
 
-## Failure boundaries and acceptance
+Power notifications use IORegisterForSystemPower on the **capture run loop**,
+not NSWorkspace delivery on the tokio main thread. Registration exists only
+while opted in; failure refuses local mapping. Sleep/wake pauses mapping and
+allows the power transition without waiting for application delivery. Lock
+notifications and Secure Input/session checks before injection and at 100 ms
+while keys are held supply additional interlocks. This is not a claim of
+instant idle fast-user-switch notification. Failed/paused physical state is
+cleared so a missed up does not leave a permanent 10 Hz poll.
 
-User-mode hooks do not rewrite DirectInput/Raw Input readers, secure desktops,
-Ctrl+Alt+Del, lock screens or UAC. Win+L and other reserved combinations cannot
-be promised to obey remaps. No in-process design can guarantee key-up after
-`kill -9` between successful SendInput/CGEventPost down and release; an
-independent recovery process or OS-tested recovery strategy is required before
-claiming this guarantee. Do not claim the pure tests cover native injection,
-AltGr, Caps Lock LEDs, IME, permissions or hook timeouts.
+Caps Lock, Fn, media and function-key sources/outputs refuse the whole local
+snapshot; original toggle/media handling remains untouched. Accessibility and
+Input Monitoring are independently required. Permission revocation can also
+prevent releases; restoring permissions and toggling the preference is not a
+guaranteed recovery of an up already lost by the OS.
 
-Native acceptance (Windows and macOS separately, currently **not passed**):
+## Reload and status semantics
 
-1. Use a disposable login and keep another computer connected for recovery.
-   Record the original settings; never overwrite another computer's settings.
-2. On Windows only, enable `one-mk keymap local on`, add
-   `one-mk keymap add capslock esc --local`, then add a device override with
-   `--local --device NAME`. Check list/check/status/doctor and both keyboards.
-3. Hold remapped, passed, dual-role and modifier keys across edge, switch,
-   broadcast and hotkey transitions in both directions; check every matrix row.
-4. Test physical emergency and custom shortcuts with Esc/modifier mappings;
-   repeat, AltGr, sided modifiers, arrows/numpad, IME and Caps Lock toggle/LED.
-5. Lock/unlock, secure desktop/UAC (Windows), sleep/resume, unplug/replug,
-   permission loss and tap timeout (future macOS slice); kill the worker and daemon while
-   keys are down, including `kill -9`. Check actual OS state, not only logs.
-6. Measure idle CPU and resident memory with feature off/on and no held keys.
-   Observe that no periodic timer remains armed at idle. After each resume,
-   confirm inactive status, release physical keys, then explicitly reload.
-7. Recovery: physical Ctrl+Alt+Shift+Esc; from the other computer run
-   `one-mk keymap local off` on the affected host. If the daemon is dead,
-   disable its autostart and restore the recorded settings before restarting.
-   If injection was denied by UIPI or the worker is stuck in an OS call,
-   turning the preference off cannot itself prove releases were delivered.
-   Release/tap the affected physical modifiers; sign out or reboot if needed.
-8. If this experimental build prevents normal login recovery, use Windows
-   Recovery Environment → Startup Settings → Safe Mode, or macOS Safe Mode
-   (hold the power button on Apple silicon, choose the startup volume while
-   holding Shift; hold Shift during startup on Intel). Disable one-mk's
-   autostart, set `[input] local_rules = false` in the affected account's
-   configuration, and reboot normally before restarting one-mk. Do not enable
-   the experimental feature again until the failure is understood. These
-   platform recovery steps are **UNTESTED** here. Never test in a real session
-   during automated development; use an isolated disposable Windows login.
+`one-mk keymap local on|off` changes settings; ordinary settings reloads and
+`Event::Devices` also resolve/reapply snapshots. Consequently mapping **can
+resume automatically on a settings/device reload**, including re-enumeration
+after wake. It is not an explicit-reload-only policy. Unlock/desktop return
+retry cleanup; they do not themselves promise local mapping resumed. Ask
+`one-mk status` again after asynchronous reload. `active (N)` means the local
+worker fence completed, never that native acceptance passed. Both active and
+inactive feature status retain EXPERIMENTAL/UNTESTED labels; preference off and
+zero rules are silent. Doctor never infers activation from preference alone.
 
-Windows manual command script (**UNTESTED**, disposable account only):
+## Disposable-session acceptance scripts — NOT RUN
 
-```powershell
-one-mk keymap local off
-one-mk keymap add capslock esc --local
-one-mk keymap check
-one-mk keymap local on
-one-mk keymap list
-one-mk status
-one-mk doctor
-# Execute matrix steps 3-6; after unlock/resume, verify inactive before reload.
-one-mk keymap local on
-one-mk status
-# Recovery and end of test; restore the original settings afterwards.
-one-mk keymap local off
-one-mk status
-```
+Never install a hook/tap in an owner's real login for this checklist. Use a
+disposable login, record original settings and arrange recovery from another
+computer. Run each OS separately; record actual OS key state, not just logs.
 
-Residual release blockers: native same-code multi-keyboard correlation,
-Raw Input delivery of swallowed originals, UIPI/secure-desktop release denial,
-OS-hook removal/latency, process termination and worker blocked in SendInput.
-An idle daemon stall is not detected by an idle heartbeat (there is none).
-Native CPU/RSS/latency and Windows session/power behavior remain unmeasured.
-These are not an enterprise no-stuck-keys acceptance claim. The partial macOS
-tap/injector/session implementation above still needs separate native acceptance.
+### Windows
 
-### 5H-3 validation and hostile review (2026-10-30)
+1. With local off and with no rules/unsupported rules, exercise edge/switch/
+   broadcast/all six shortcut actions, external injection, IME and Backspace
+   auto-repeat before/after remote visits. Repeat after on -> off. Unplug/plug
+   the charger and trigger battery notifications while controlling a peer.
+2. Enable a supported rule, e.g. `one-mk keymap add capslock esc --local` then
+   `one-mk keymap local on`. Hold Enter during enable and hold a mouse button;
+   release them and verify later remaps/repeats work. Verify status/check/doctor.
+3. Test sided modifiers, AltGr, Caps Lock LEDs, sequences/none/layers/tap-hold,
+   every physical shortcut, and injected replacements that resemble shortcuts.
+   Ordinary shortcuts must not pause mapping; emergency must release/home.
+4. Hold remapped/passed/dual-role keys across edge/switch/broadcast/hotkey,
+   return, reload and device-table changes. No extra down/tap is permitted.
+   Repeat with two keyboards holding the same code and unknown correlations.
+5. Hold Caps -> Ctrl while requesting UAC with Ctrl+Shift+Enter; release during
+   secure desktop, return/unlock and verify automatic release retry. Disable
+   while UAC is active, return, and verify release-only cleanup still retries.
+   Test Alt+Tab from an elevated window where the hook missed the down; the
+   unowned Alt/Enter up must pass. Repeat foreground elevation without UAC.
+6. Exercise lock/unlock, sleep/wake, worker exit, denied/partial SendInput,
+   queue/sequence failure, unplug/replug and daemon loss while keys are held.
+   Core crossing/switch must remain available; report local delivery failures.
+7. Measure on/off RSS, callback/ordering latency and truly idle wakeups/CPU.
+   Confirm no armed local/correlation timer remains with no obligations.
 
-Clean-environment Linux workspace tests and workspace all-targets clippy are the
-automated acceptance checks, alongside all-targets cross-clippy for
-`one-mk-input`, `one-mk-proto`, `one-mk-ctl`, `one-mk-app`, and `one-mk-tray` on
-`x86_64-pc-windows-msvc` and `aarch64-apple-darwin`. All cargo commands use `-j 2`.
-No native hook was installed or executed. The extra Windows **daemon** (`one-mk`)
-cross-check is blocked before Rust checking by `ring` needing unavailable
-`lib.exe`; its Windows-only settings dispatch has not been cross-checked here.
-The extracted settings/snapshot builder is compiled and tested on Linux.
+### macOS
 
-The production hook/admission/worker harness replays randomized key streams,
-local/remote fences, failure/pause cleanup and recovery; separate device-source
-tests balance overlapping keys. Regression coverage includes partial injection,
-exact fence watermarks, emergency physical chords with rewritten modifiers/Esc,
-dual-role cancellation, independent idle watchdogs, unwind cleanup, failed queued
-work and recovery-generation races. The allocator test exercises 100,000
-production snapshot/admission down/up pairs with zero allocation/deallocation
-(plus the existing exhaustive decision matrix); this is not a native timing test.
+1. With local off/none/unsupported and after on -> off, verify core KVM,
+   repeat, every hotkey, synthetic input and tap disable behave like main.
+   Verify off status has no local problem/WARN; inspect permissions separately.
+2. In this disposable login grant Accessibility/Input Monitoring separately.
+   Add `one-mk keymap add a b --local`; enable while Enter is held. Test sided
+   Shift -> Ctrl, typing/clicking, both release orders, unknown/device rules,
+   two keyboards, reload mid-hold, layer/none/sequence and supported tap/hold.
+3. Hold replacements across all capture/return paths. Delay/drop down/up
+   receipts and stop the worker: crossing still works and Quit stops. Verify
+   actual OS release; record any post that failed to reach the destination.
+4. Test tap timeout/user-disable, Secure Keyboard Entry (Cmd+Tab while a
+   modifier is held), lock/unlock, fast-user-switch, sleep/wake, permission
+   revocation and device re-enumeration. No phantom Cmd/Shift may survive.
+   Check paused idle wakeups after a deliberately missed physical up.
+5. Verify Caps/Fn/media/F-key rules refuse the snapshot without changing core
+   capture. Verify original LEDs/toggle/media behavior remains untouched.
+   Test ANSI/ISO/JIS and mixed keyboard types, especially section/backtick and
+   an interrupted dual-role key. This is a known provenance acceptance gap.
+6. Measure CPU/RSS/callback latency and shutdown time with missing receipts.
+   Repeat on supported OS versions and with another injector and IMEs.
 
-Hostile review found and fixed capture-thread premature health recovery,
-ordinary-reload baselines incorrectly sampling injected modifiers, session
-notification registration failure, and watchdog dependence on a blocked capture
-loop. Four manual mutations were rejected by regression tests: bypassing the
-queue watermark, forgetting unsuccessful releases, swallowing emergency Esc,
-and removing the post-release failure-generation comparison. All were reverted.
-Remaining native acceptance blockers are listed above; do not mark 5H complete.
+### Recovery on the affected host
 
-### 5H-4 validation and hostile review (2026-10-30)
+Use physical **Ctrl+Alt+Shift+Esc** first. From another computer's SSH/session
+**into the affected host/account**, run `one-mk keymap local off`; running it on
+the other computer changes the wrong settings. Release physical modifiers and
+return to the normal/unlocked desktop. Windows retries its retained cleanup
+ledger there. Check actual OS state before re-enabling. Disable autostart and
+restore recorded settings if the daemon is dead; sign out/reboot the disposable
+login if keys/flags remain stuck. Do not keep using a faulty native mapping.
 
-Final clean-environment `cargo test -j 2 --offline --workspace`: **1,045 passed,
-12 ignored, zero failed**. Workspace all-targets clippy with `-D warnings` and
-the same five-package Windows/macOS cross-clippy commands listed for 5H-3 pass.
-All Cargo commands use `-j 2`; no formatter was run. Test processes inherit no
-DISPLAY, WAYLAND_DISPLAY or session D-Bus address; desktop tests use their own
-private Xvfb/D-Bus resources. One intermediate run timed out in the existing
-portal lock/sleep test (`locking_and_sleeping_let_go_and_waking_reads_the_screens_again`);
-subsequent complete workspace runs passed. No portal code was changed.
+On macOS permission revocation or force-quit may stop interception but also
+prevent cleanup. Restore permissions only in the disposable session; verify OS
+flags explicitly. The emergency/SSH/revoke procedures are escape routes, **not
+proof that already injected downs received ups**. Do not claim native no-stuck-
+keys or ZERO idle CPU acceptance until these scripts actually pass.
 
-Pure Linux coverage adds 100,000 modifier-flag transitions, a 30,000-event
-production-gate mapper/failure/fence stream, exact outstanding receipt checks,
-synthetic-versus-physical modifier ownership, unsupported-key refusal and
-unreceipted-post fencing. The shared counting-allocator decision test passes
-with zero allocations/deallocations. Four mutation classes were rejected:
-accepting an unsettled empty fence, inverting the modifier suppression mask,
-admitting Caps Lock and accepting non-outstanding receipts. The modifier mutant
-was repeated against the final synthetic-flag regression. All mutants were reverted.
-
-Hostile review tightened post-fence health checks, initial OS-owned key
-baselines, shutdown timeout exit, worker-to-capture failure notification,
-synthetic flag sanitization and permission failures before posting. A failed
-pre-post attempt does not invent an outstanding post; an actually uncertain
-post still requires receipts and retained release ownership to recover.
-
-The extra macOS **daemon** (`one-mk`) cross-check fails before Rust checking in
-`ring`'s C build: the available Linux `cc` rejects Apple's `-arch`,
-`-mmacosx-version-min` and `-gfull` options. Thus its macOS-only settings/doctor
-call sites are **not cross-checked** here; the input adapter and read-only
-permission probe are cross-checked, and the snapshot builder/report formatting
-are compiled and tested on Linux. This limitation is additional to the missing
-native runtime acceptance, not a successful daemon build.
-
-**5H-4 remains partial**: Caps Lock remapping is not implemented. Native receipt
-traversal, exactly-once delivery, modifier/LED behavior, lifecycle notification
-delivery, IOHID attribution, permission revocation recovery, idle CPU, RSS and
-callback latency remain UNTESTED. No native event tap was installed. Do not
-mark this enterprise-ready or enable it by default.
-
-### Review regression coverage (5H-2 prerequisites, not native activation)
-
-The release oracle is an explicit ownership/state table, independent of the
-decision implementation, including chord-marked key-ups and both pending
-destinations. A two-thread test blocks cleanup to check that the hook already
-sees a closed gate, then checks visibility of injection results through the
-acknowledged gate's release/acquire publication. Worker exit closes surviving
-handles. The counting allocator covers allocation, zeroed allocation,
-reallocation and deallocation while exercising all hook decision flags. None
-of these tests installs a hook, proves native delivery or measures hook latency.
-Manual mutation checks separately restored the old shortcut-up override,
-removed closure before cleanup, and removed closure on worker exit; each was
-rejected by its corresponding regression test. All mutations were reverted.
+See `reviews/WAVE5-NATIVE-REMEDIATION.md` for the finding-by-finding ledger,
+mutation evidence, consciously incomplete items and verification scope.

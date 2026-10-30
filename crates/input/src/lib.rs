@@ -35,6 +35,8 @@ mod macos;
 mod macos_devices;
 #[cfg(target_os = "macos")]
 mod macos_localmap;
+#[cfg(target_os = "macos")]
+mod macos_localmap_power;
 #[cfg(any(target_os = "macos", test))]
 mod macos_localmap_logic;
 #[cfg(any(target_os = "macos", test))]
