@@ -1,0 +1,422 @@
+{
+  "date_utc": "2026-10-30T21:48:08.665825+00:00",
+  "baseline": false,
+  "idle_only": true,
+  "status": "partial-risk-pass-not-M1-acceptance",
+  "runtime": "host GStreamer: UNQUALIFIED, trusted generated fixture only",
+  "stages": [],
+  "measurements": {
+    "shell_pid": 3665035,
+    "ding_enable": "(true,)",
+    "startup": {
+      "pid": 3666126,
+      "first_damage_ms": 338.362,
+      "snapshot": {
+        "monitors": [
+          [
+            0,
+            0,
+            1920,
+            1080
+          ],
+          [
+            1920,
+            0,
+            1920,
+            1080
+          ],
+          [
+            3840,
+            0,
+            1920,
+            1080
+          ]
+        ],
+        "frame": [
+          0,
+          0,
+          5760,
+          1080
+        ],
+        "buffer": [
+          0,
+          0,
+          5760,
+          1080
+        ],
+        "damage": 4,
+        "stale": false,
+        "fresh": true,
+        "watchdog": 2386,
+        "coverage": 0,
+        "pid": 3666126,
+        "reason": "none",
+        "restart": 0,
+        "cloneCount": 3,
+        "events": [
+          "810475026 bridge ready",
+          "810475336 overview-hidden",
+          "810476323 spawned renderer pid=3666126",
+          "810476357 adopted window \"null\" pid=3666126",
+          "810476416 first frame from renderer"
+        ],
+        "focus": "Desktop Icons 1"
+      }
+    },
+    "cpu_on": {
+      "seconds": 3.0,
+      "wall_start": 1793396914.5151417,
+      "wall_end": 1793396917.5156908,
+      "before_ticks": [
+        16,
+        124
+      ],
+      "after_ticks": [
+        195,
+        151
+      ],
+      "renderer_percent_one_core": 59.66,
+      "shell_percent_one_core": 9.0
+    },
+    "layouts": [],
+    "paused_before": {
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080
+        ]
+      ],
+      "frame": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "buffer": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "damage": 114,
+      "stale": false,
+      "fresh": true,
+      "watchdog": 2767,
+      "coverage": 0,
+      "pid": 3666126,
+      "reason": "none",
+      "restart": 0,
+      "cloneCount": 2,
+      "events": [
+        "810475026 bridge ready",
+        "810475336 overview-hidden",
+        "810476323 spawned renderer pid=3666126",
+        "810476357 adopted window \"null\" pid=3666126",
+        "810476416 first frame from renderer",
+        "810479597 monitors-changed",
+        "810479608 renderer dropped: actor destroyed",
+        "810479611 adopted window \"null\" pid=3666126",
+        "810479633 first frame from renderer"
+      ],
+      "focus": "Desktop Icons 1"
+    },
+    "cpu_paused": {
+      "seconds": 3.0,
+      "wall_start": 1793396919.27537,
+      "wall_end": 1793396922.2758484,
+      "before_ticks": [
+        226,
+        170
+      ],
+      "after_ticks": [
+        226,
+        170
+      ],
+      "renderer_percent_one_core": 0.0,
+      "shell_percent_one_core": 0.0
+    },
+    "paused_after": {
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080
+        ]
+      ],
+      "frame": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "buffer": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "damage": 118,
+      "stale": false,
+      "fresh": true,
+      "watchdog": 0,
+      "coverage": 0,
+      "pid": 3666126,
+      "reason": "overview",
+      "restart": 0,
+      "cloneCount": 2,
+      "events": [
+        "810475026 bridge ready",
+        "810475336 overview-hidden",
+        "810476323 spawned renderer pid=3666126",
+        "810476357 adopted window \"null\" pid=3666126",
+        "810476416 first frame from renderer",
+        "810479597 monitors-changed",
+        "810479608 renderer dropped: actor destroyed",
+        "810479611 adopted window \"null\" pid=3666126",
+        "810479633 first frame from renderer",
+        "810480263 overview-showing"
+      ],
+      "focus": "Desktop Icons 1"
+    },
+    "cpu_covered": {
+      "seconds": 3.0,
+      "wall_start": 1793396925.587929,
+      "wall_end": 1793396928.5883625,
+      "before_ticks": [
+        296,
+        201
+      ],
+      "after_ticks": [
+        296,
+        201
+      ],
+      "renderer_percent_one_core": 0.0,
+      "shell_percent_one_core": 0.0
+    },
+    "covered": {
+      "paused": true,
+      "reason": "covered"
+    },
+    "resumed": {
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080
+        ]
+      ],
+      "frame": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "buffer": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "damage": 193,
+      "stale": false,
+      "fresh": true,
+      "watchdog": 3345,
+      "coverage": 0,
+      "pid": 3666126,
+      "reason": "none",
+      "restart": 0,
+      "cloneCount": 2,
+      "events": [
+        "810475026 bridge ready",
+        "810475336 overview-hidden",
+        "810476323 spawned renderer pid=3666126",
+        "810476357 adopted window \"null\" pid=3666126",
+        "810476416 first frame from renderer",
+        "810479597 monitors-changed",
+        "810479608 renderer dropped: actor destroyed",
+        "810479611 adopted window \"null\" pid=3666126",
+        "810479633 first frame from renderer",
+        "810480263 overview-showing",
+        "810484660 overview-hidden"
+      ],
+      "focus": "Desktop Icons 1"
+    },
+    "qualification_failures": [],
+    "off_renderer_exists": false
+  },
+  "binary_sha256": "7c5a1004d79644f0279047a3ee5708e6009784be61713d6727cbf2d8cbd025b3",
+  "supervisor_before": {
+    "shell_processes": [],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "baseline_log": {
+    "file": "docs/spikes/gnome/m1a2-evidence/baseline-shell.log",
+    "sha256": "b0b3c293e1d88e8bc6dc1614b022f4302dae678831709d47221552527ddc9c52"
+  },
+  "shell_version": "GNOME Shell 50.1",
+  "harness_start": "isolated Shell up: leader 3665020 bus unix:path=/tmp/dbus-hQTAPabtJP,guid=0d213085c1315c3f1cfaa6b56ae51098",
+  "runtime_version": "gst-inspect-1.0 version 1.28.2\nGStreamer 1.28.2\nhttps://launchpad.net/ubuntu/+source/gstreamer1.0",
+  "native_dependencies": {
+    "coreelements": "linux-vdso.so.1 (0x000073f9bf847000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000073f9bf64d000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000073f9bf5c9000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000073f9bf471000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000073f9bf40d000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000073f9bf000000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000073f9bf404000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000073f9bf2de000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000073f9bf2d3000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000073f9bf227000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000073f9befef000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000073f9bf849000)",
+    "matroska": "linux-vdso.so.1 (0x0000735521f5f000)\n\tlibgstpbutils-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstpbutils-1.0.so.0 (0x0000735521e9e000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x0000735521db8000)\n\tlibgstaudio-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstaudio-1.0.so.0 (0x0000735521d2d000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000735521ca9000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000735521b3c000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000735521ad6000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000073552197e000)\n\tlibgstriff-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstriff-1.0.so.0 (0x000073552196d000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x000073552192b000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x000073552190d000)\n\tlibbz2.so.1.0 => /usr/lib/x86_64-linux-gnu/libbz2.so.1.0 (0x00007355218f8000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007355217d0000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000735521400000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007355217c6000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007355216c3000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007355216bc000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007355216a9000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000073552169e000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000735521354000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000735521f61000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x0000735521687000)",
+    "vpx": "linux-vdso.so.1 (0x0000726fa7ca4000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000726fa7b00000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000726fa7a9c000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000726fa7944000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x0000726fa7902000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x0000726fa781c000)\n\tlibvpx.so.12 => /usr/lib/x86_64-linux-gnu/libvpx.so.12 (0x0000726fa7400000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000726fa7000000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000726fa7813000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000726fa72da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000726fa7802000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000726fa77f5000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000726fa722e000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000726fa6f7c000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x0000726fa77d7000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x0000726fa77cd000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x0000726fa6e79000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000726fa7ca6000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x0000726fa6e62000)",
+    "videoconvertscale": "linux-vdso.so.1 (0x000076a99195c000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000076a991849000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000076a9916dc000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000076a991678000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000076a991520000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000076a99149a000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000076a991200000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000076a991490000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000076a9910fd000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000076a990fd7000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000076a991487000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000076a991476000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000076a99146b000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000076a990f2b000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000076a99195e000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000076a991454000)",
+    "waylandsink": "linux-vdso.so.1 (0x000073cf5f991000)\n\tlibgstwayland-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstwayland-1.0.so.0 (0x000073cf5f94e000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000073cf5f7e1000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000073cf5f77d000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000073cf5f625000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000073cf5f53f000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000073cf5f533000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000073cf5f200000)\n\tlibwayland-client.so.0 => /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 (0x000073cf5f520000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000073cf5f519000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000073cf5f0da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000073cf5f506000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000073cf5f4fb000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000073cf5f44f000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000073cf5f056000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000073cf5ef53000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000073cf5f436000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000073cf5f993000)",
+    "videotestsrc": "linux-vdso.so.1 (0x00007c8b63d60000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007c8b63c4b000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007c8b63ade000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007c8b63a7a000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007c8b63922000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007c8b6389e000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007c8b63799000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007c8b63673000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007c8b63400000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007c8b63669000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007c8b63662000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007c8b6364f000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007c8b63644000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007c8b63354000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007c8b63d62000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007c8b6362d000)",
+    "app": "linux-vdso.so.1 (0x000072bbab847000)\n\tlibgstapp-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstapp-1.0.so.0 (0x000072bbab80b000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000072bbab69e000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000072bbab61a000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000072bbab5b6000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000072bbab45e000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000072bbab200000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000072bbab455000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000072bbab0da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000072bbab444000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000072bbab439000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000072bbab02e000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000072bbab849000)"
+  },
+  "fixture": {
+    "blake3": "ed12b78f2ea6aadc28281ab10343fc143c45d65653d9997829cae4aa34cb5a4e",
+    "bytes": 312344,
+    "dimensions": [
+      3840,
+      1080
+    ],
+    "frames": 1200,
+    "fps": 30
+  },
+  "supervisor_before_cleanup": {
+    "shell_processes": [
+      {
+        "pid": 3665035,
+        "stat": "3665035 (gnome-shell) S 3665025 3665020 3665020 0 -1 4194304 66041 66328 10 14 167 43 279 72 20 0 27 0 81045120 7288045568 68098 18446744073709551615 106237786734592 106237786742649 140727575185792 0 0 0 0 16781316 16458 0 0 0 17 2 0 0 0 0 0 106237786749456 106237786751344 106238332383232 140727575190104 140727575190259 140727575190259 140727575191523 0"
+      }
+    ],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "shell_exit_before_cleanup": null,
+  "host_core_pattern": "|/usr/share/apport/apport -p%p -s%s -c%c -d%d -P%P -u%u -g%g -F%F -- %E",
+  "idle_syscalls": {
+    "cpu_on": {
+      "syscall_returns": 5953,
+      "poll_returns": 615,
+      "blocking_poll_returns": 90,
+      "timer_returns": 377,
+      "seconds": 3.000549,
+      "blocking_poll_returns_per_second": 29.99451,
+      "timer_returns_per_second": 125.643671
+    },
+    "cpu_paused": {
+      "syscall_returns": 10,
+      "poll_returns": 3,
+      "blocking_poll_returns": 1,
+      "timer_returns": 0,
+      "seconds": 3.000479,
+      "blocking_poll_returns_per_second": 0.33328,
+      "timer_returns_per_second": 0.0
+    },
+    "cpu_covered": {
+      "syscall_returns": 10,
+      "poll_returns": 3,
+      "blocking_poll_returns": 1,
+      "timer_returns": 0,
+      "seconds": 3.000433,
+      "blocking_poll_returns_per_second": 0.333285,
+      "timer_returns_per_second": 0.0
+    }
+  },
+  "cleanup": "all owned children reaped; session directory and generated media removed",
+  "shell_log_tail": [
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'",
+    "",
+    "(/usr/libexec/xdg-desktop-portal:3665461): xdg-desktop-portal-WARNING **: 00:48:10.127: Failed to connect to PipeWire: Couldn't connect to PipeWire",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Activating service name='org.freedesktop.secrets' requested by ':1.15' (uid=1000 pid=3665461 comm=\"/usr/libexec/xdg-desktop-portal\" label=\"t3code (unconfined)\")",
+    "** Message: 00:48:10.133: couldn't access control socket: /home/samer/.t3/worktrees/one-mk/t3-c726a61d/target/wall-m1-lab/wall-m1-session/run/keyring/control: No such file or directory",
+    "discover_other_daemon: 0dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Successfully activated service 'org.freedesktop.secrets'",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Successfully activated service 'org.freedesktop.portal.Desktop'",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Successfully activated service 'org.gnome.Shell.Screencast'",
+    "GNOME Shell-Message: 00:48:10.893: GNOME Shell started at Sat Oct 31 2026 00:48:09 GMT+0300 (GMT+03:00)",
+    "GNOME Shell-Message: 00:48:10.894: Registering display with GDM",
+    "GNOME Shell-Message: 00:48:10.895: Error registering display with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, \u201c()\u201d, does not match expected type \u201c(a{ss})\u201d",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.25' (uid=1000 pid=3665607 comm=\"gdbus call --session -d org.gnome.Shell.Extensions\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'",
+    "GNOME Shell-Message: 00:48:33.132: Launching DING process",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Activating service name='org.gnome.Nautilus' requested by ':1.31' (uid=1000 pid=3665929 comm=\"gjs /usr/share/gnome-shell/extensions/ding@rasters\" label=\"desktop-icons-ng (unconfined)\")",
+    "** Message: 00:48:33.290: Connecting to org.freedesktop.Tracker3.Miner.Files",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Successfully activated service 'org.gnome.Nautilus'",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Activating service name='org.gtk.vfs.Metadata' requested by ':1.31' (uid=1000 pid=3665929 comm=\"gjs /usr/share/gnome-shell/extensions/ding@rasters\" label=\"desktop-icons-ng (unconfined)\")",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Successfully activated service 'org.gtk.vfs.Metadata'",
+    "DING: Detected async api for thumbnails",
+    "DING: Failed with Operation not supported while adding extra folder trash:///",
+    "DING: _doReadAsync/</<@/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopManager.js:1498:47",
+    "DING: @/usr/share/gnome-shell/extensions/ding@rastersoft.com/app/ding.js:206:13",
+    "DING: Failed to store the desktop coordinates for file:///home/samer/.t3/worktrees/one-mk/t3-c726a61d/target/wall-m1-lab/wall-m1-session/home: Gio.IOErrorEnum: Setting attribute metadata::nautilus-icon-position not supported",
+    "DING: Failed to store the desktop coordinates for file:///home/samer/.t3/worktrees/one-mk/t3-c726a61d/target/wall-m1-lab/wall-m1-session/home/Desktop/spike-icon.txt: Gio.IOErrorEnum: Setting attribute metadata::nautilus-icon-position not supported",
+    "DING: ** Message: 00:48:33.360: Connecting to org.freedesktop.Tracker3.Miner.Files",
+    "DING: DBus interface for Gvfs daemon (org.gtk.vfs.Metadata) is now available.",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Activating service name='org.freedesktop.Tracker3.Miner.Files' requested by ':1.32' (uid=1000 pid=3665964 comm=\"/usr/bin/nautilus --gapplication-service\" label=\"t3code (unconfined)\")",
+    "DING: DBus interface for Nautilus (org.gnome.Nautilus.FileOperations2) is now available.",
+    "DING: DBus interface for Nautilus (org.freedesktop.FileManager1) is now available.",
+    "DING: GNOME nautilus 50.2.2",
+    "GNOME Shell-Message: 00:48:33.398: Received notification for window. 2 notifications remaining.",
+    "GNOME Shell-Message: 00:48:33.399: Received notification for window. 1 notifications remaining.",
+    "GNOME Shell-Message: 00:48:33.399: Received notification for window. 0 notifications remaining.",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Successfully activated service 'org.freedesktop.Tracker3.Miner.Files'",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Activating service name='org.freedesktop.systemd1' requested by ':1.35' (uid=1000 pid=3666065 comm=\"/usr/libexec/localsearch-3\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Activated service 'org.freedesktop.systemd1' failed: Process org.freedesktop.systemd1 exited with status 1",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "",
+    "** (xdg-desktop-portal-gnome:3665477): WARNING **: 00:48:37.600: Monitor 'MetaVendor' has no configuration which is-current!",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.52' (uid=1000 pid=3666277 comm=\"gdbus call --session -d org.gnome.Shell.Extensions\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'",
+    "GNOME Shell-Message: 00:48:49.480: Launching DING process",
+    "dbus-daemon[3665024]: [session uid=1000 pid=3665024 pidfd=5] Activating service name='org.gnome.Nautilus' requested by ':1.54' (uid=1000 pid=3666302 comm=\"gjs /usr/share/gnome-shell/extensions/ding@rasters\" label=\"desktop-icons-ng (unconfined)\")",
+    "** Message: 00:48:49.597: Shutting down GNOME Shell"
+  ],
+  "shell_warnings": [
+    "(gnome-shell:3665035): libmutter-WARNING **: 00:48:09.232: Unknown experimental feature 'scale-monitor-framebuffer'",
+    "(gnome-shell:3665035): libmutter-WARNING **: 00:48:09.232: Unknown experimental feature 'xwayland-native-scaling'",
+    "(gnome-shell:3665035): libmutter-WARNING **: 00:48:09.398: There is no colord server available",
+    "(gnome-shell:3665035): GNOME Shell-WARNING **: 00:48:09.661: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3665035): GNOME Shell-CRITICAL **: 00:48:09.719: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3665035): GNOME Shell-CRITICAL **: 00:48:09.719: Could not get proxy for session null: Error: Argument string may not be null",
+    "(gnome-shell:3665035): GNOME Shell-WARNING **: 00:48:09.719: Failed to start state machine: can't access property \"connectObject\", this._loginUser is null",
+    "(gnome-shell:3665035): Gjs-WARNING **: 00:48:09.719: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:",
+    "(/usr/libexec/xdg-desktop-portal:3665461): xdg-desktop-portal-WARNING **: 00:48:09.906: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files",
+    "(gnome-shell:3665035): accountsservice-WARNING **: 00:48:09.939: ActUserManager: user (null) has no username (uid: -1)",
+    "(/usr/libexec/xdg-desktop-portal:3665461): xdg-desktop-portal-WARNING **: 00:48:10.089: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3665461): xdg-desktop-portal-WARNING **: 00:48:10.089: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3665461): xdg-desktop-portal-WARNING **: 00:48:10.089: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3665461): xdg-desktop-portal-WARNING **: 00:48:10.127: Failed to connect to PipeWire: Couldn't connect to PipeWire",
+    "** (xdg-desktop-portal-gnome:3665477): WARNING **: 00:48:37.600: Monitor 'MetaVendor' has no configuration which is-current!"
+  ],
+  "new_warnings": []
+}

@@ -1,0 +1,3135 @@
+{
+  "date_utc": "2026-10-30T21:40:18.731895+00:00",
+  "baseline": false,
+  "idle_only": false,
+  "status": "stress-pass-not-M1-acceptance",
+  "runtime": "host GStreamer: UNQUALIFIED, trusted generated fixture only",
+  "stages": [],
+  "measurements": {
+    "cycles": [
+      {
+        "cycle": 1,
+        "first_damage_ms": 234.886,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 2,
+        "first_damage_ms": 148.117,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 3,
+        "first_damage_ms": 151.232,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 4,
+        "first_damage_ms": 148.359,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 5,
+        "first_damage_ms": 148.29,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 6,
+        "first_damage_ms": 150.366,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 7,
+        "first_damage_ms": 150.192,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 8,
+        "first_damage_ms": 149.564,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 9,
+        "first_damage_ms": 148.429,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 10,
+        "first_damage_ms": 147.824,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 11,
+        "first_damage_ms": 148.612,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 12,
+        "first_damage_ms": 149.121,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 13,
+        "first_damage_ms": 146.715,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 14,
+        "first_damage_ms": 147.486,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 15,
+        "first_damage_ms": 146.694,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 16,
+        "first_damage_ms": 149.817,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 17,
+        "first_damage_ms": 148.87,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 18,
+        "first_damage_ms": 158.964,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 19,
+        "first_damage_ms": 162.874,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 20,
+        "first_damage_ms": 161.916,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 21,
+        "first_damage_ms": 159.236,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 22,
+        "first_damage_ms": 158.978,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 23,
+        "first_damage_ms": 160.825,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 24,
+        "first_damage_ms": 159.585,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 25,
+        "first_damage_ms": 154.991,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 26,
+        "first_damage_ms": 146.835,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 27,
+        "first_damage_ms": 149.185,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 28,
+        "first_damage_ms": 150.778,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 29,
+        "first_damage_ms": 150.197,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 30,
+        "first_damage_ms": 148.595,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 31,
+        "first_damage_ms": 150.925,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 32,
+        "first_damage_ms": 158.14,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 33,
+        "first_damage_ms": 149.113,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 34,
+        "first_damage_ms": 148.196,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 35,
+        "first_damage_ms": 151.121,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 36,
+        "first_damage_ms": 149.889,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 37,
+        "first_damage_ms": 151.085,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 38,
+        "first_damage_ms": 164.11,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 39,
+        "first_damage_ms": 151.834,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 40,
+        "first_damage_ms": 148.001,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 41,
+        "first_damage_ms": 148.539,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 42,
+        "first_damage_ms": 148.337,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 43,
+        "first_damage_ms": 151.375,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 44,
+        "first_damage_ms": 149.326,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 45,
+        "first_damage_ms": 151.578,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 46,
+        "first_damage_ms": 148.101,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 47,
+        "first_damage_ms": 149.767,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 48,
+        "first_damage_ms": 148.019,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 49,
+        "first_damage_ms": 152.671,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 50,
+        "first_damage_ms": 150.88,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 51,
+        "first_damage_ms": 150.272,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 52,
+        "first_damage_ms": 148.681,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 53,
+        "first_damage_ms": 151.535,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 54,
+        "first_damage_ms": 150.483,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 55,
+        "first_damage_ms": 156.911,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 56,
+        "first_damage_ms": 155.095,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 57,
+        "first_damage_ms": 154.705,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 58,
+        "first_damage_ms": 150.245,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 59,
+        "first_damage_ms": 151.076,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 60,
+        "first_damage_ms": 150.26,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 61,
+        "first_damage_ms": 223.728,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 62,
+        "first_damage_ms": 186.446,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 63,
+        "first_damage_ms": 826.88,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 64,
+        "first_damage_ms": 183.68,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 65,
+        "first_damage_ms": 166.18,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 66,
+        "first_damage_ms": 155.205,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 67,
+        "first_damage_ms": 161.597,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 68,
+        "first_damage_ms": 160.806,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 69,
+        "first_damage_ms": 159.753,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 70,
+        "first_damage_ms": 155.075,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 71,
+        "first_damage_ms": 150.063,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 72,
+        "first_damage_ms": 150.815,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 73,
+        "first_damage_ms": 147.776,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 74,
+        "first_damage_ms": 145.941,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 75,
+        "first_damage_ms": 176.829,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 76,
+        "first_damage_ms": 173.059,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 77,
+        "first_damage_ms": 177.472,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 78,
+        "first_damage_ms": 174.173,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 79,
+        "first_damage_ms": 151.154,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 80,
+        "first_damage_ms": 153.752,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 81,
+        "first_damage_ms": 151.864,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 82,
+        "first_damage_ms": 165.3,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 83,
+        "first_damage_ms": 166.141,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 84,
+        "first_damage_ms": 159.782,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 85,
+        "first_damage_ms": 157.795,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 86,
+        "first_damage_ms": 155.996,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 87,
+        "first_damage_ms": 153.872,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 88,
+        "first_damage_ms": 161.055,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 89,
+        "first_damage_ms": 159.291,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 90,
+        "first_damage_ms": 156.492,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 91,
+        "first_damage_ms": 154.201,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 92,
+        "first_damage_ms": 172.02,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 93,
+        "first_damage_ms": 170.516,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 94,
+        "first_damage_ms": 573.927,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 95,
+        "first_damage_ms": 172.753,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 96,
+        "first_damage_ms": 167.625,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 97,
+        "first_damage_ms": 164.889,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 98,
+        "first_damage_ms": 167.535,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 99,
+        "first_damage_ms": 165.494,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 100,
+        "first_damage_ms": 169.1,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 101,
+        "first_damage_ms": 167.774,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 102,
+        "first_damage_ms": 169.172,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 103,
+        "first_damage_ms": 168.285,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 104,
+        "first_damage_ms": 166.551,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 105,
+        "first_damage_ms": 168.525,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 106,
+        "first_damage_ms": 169.996,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 107,
+        "first_damage_ms": 172.167,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 108,
+        "first_damage_ms": 166.179,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 109,
+        "first_damage_ms": 171.174,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 110,
+        "first_damage_ms": 166.058,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 111,
+        "first_damage_ms": 153.364,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 112,
+        "first_damage_ms": 150.06,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 113,
+        "first_damage_ms": 151.085,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 114,
+        "first_damage_ms": 169.034,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 115,
+        "first_damage_ms": 156.734,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 116,
+        "first_damage_ms": 153.32,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 117,
+        "first_damage_ms": 162.416,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 118,
+        "first_damage_ms": 163.857,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 119,
+        "first_damage_ms": 161.694,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 120,
+        "first_damage_ms": 162.72,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 121,
+        "first_damage_ms": 166.669,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 122,
+        "first_damage_ms": 169.087,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 123,
+        "first_damage_ms": 166.917,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 124,
+        "first_damage_ms": 230.222,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 125,
+        "first_damage_ms": 173.497,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 126,
+        "first_damage_ms": 169.709,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 127,
+        "first_damage_ms": 168.166,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 128,
+        "first_damage_ms": 166.401,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 129,
+        "first_damage_ms": 176.298,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 130,
+        "first_damage_ms": 175.161,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 131,
+        "first_damage_ms": 155.267,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 132,
+        "first_damage_ms": 161.666,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 133,
+        "first_damage_ms": 160.401,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 134,
+        "first_damage_ms": 165.94,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 135,
+        "first_damage_ms": 166.134,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 136,
+        "first_damage_ms": 170.147,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 137,
+        "first_damage_ms": 152.049,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 138,
+        "first_damage_ms": 161.164,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 139,
+        "first_damage_ms": 160.915,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 140,
+        "first_damage_ms": 166.54,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 141,
+        "first_damage_ms": 166.301,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 142,
+        "first_damage_ms": 169.066,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 143,
+        "first_damage_ms": 156.305,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 144,
+        "first_damage_ms": 151.986,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 145,
+        "first_damage_ms": 148.296,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 146,
+        "first_damage_ms": 147.763,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 147,
+        "first_damage_ms": 149.883,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 148,
+        "first_damage_ms": 148.126,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 149,
+        "first_damage_ms": 152.091,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 150,
+        "first_damage_ms": 146.815,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 151,
+        "first_damage_ms": 149.095,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 152,
+        "first_damage_ms": 146.18,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 153,
+        "first_damage_ms": 147.66,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 154,
+        "first_damage_ms": 147.649,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 155,
+        "first_damage_ms": 159.16,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 156,
+        "first_damage_ms": 163.459,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 157,
+        "first_damage_ms": 151.071,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 158,
+        "first_damage_ms": 148.295,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 159,
+        "first_damage_ms": 151.014,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 160,
+        "first_damage_ms": 146.709,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 161,
+        "first_damage_ms": 149.889,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 162,
+        "first_damage_ms": 149.61,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 163,
+        "first_damage_ms": 151.957,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 164,
+        "first_damage_ms": 150.336,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 165,
+        "first_damage_ms": 148.348,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 166,
+        "first_damage_ms": 146.924,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 167,
+        "first_damage_ms": 147.315,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 168,
+        "first_damage_ms": 150.077,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 169,
+        "first_damage_ms": 146.998,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 170,
+        "first_damage_ms": 170.425,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 171,
+        "first_damage_ms": 150.071,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 172,
+        "first_damage_ms": 148.914,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 173,
+        "first_damage_ms": 148.503,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 174,
+        "first_damage_ms": 149.64,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 175,
+        "first_damage_ms": 150.396,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 176,
+        "first_damage_ms": 151.344,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 177,
+        "first_damage_ms": 148.395,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 178,
+        "first_damage_ms": 148.044,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 179,
+        "first_damage_ms": 148.043,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 180,
+        "first_damage_ms": 151.991,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 181,
+        "first_damage_ms": 148.164,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 182,
+        "first_damage_ms": 149.049,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 183,
+        "first_damage_ms": 149.796,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 184,
+        "first_damage_ms": 148.742,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 185,
+        "first_damage_ms": 150.715,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 186,
+        "first_damage_ms": 151.269,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 187,
+        "first_damage_ms": 152.314,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 188,
+        "first_damage_ms": 149.382,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 189,
+        "first_damage_ms": 148.684,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 190,
+        "first_damage_ms": 149.306,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 191,
+        "first_damage_ms": 148.283,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 192,
+        "first_damage_ms": 148.2,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 193,
+        "first_damage_ms": 151.314,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 194,
+        "first_damage_ms": 150.769,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 195,
+        "first_damage_ms": 148.538,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 196,
+        "first_damage_ms": 166.842,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 197,
+        "first_damage_ms": 179.072,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 198,
+        "first_damage_ms": 159.724,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 199,
+        "first_damage_ms": 150.972,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 200,
+        "first_damage_ms": 164.478,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 201,
+        "first_damage_ms": 149.546,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 202,
+        "first_damage_ms": 149.489,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 203,
+        "first_damage_ms": 147.628,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 204,
+        "first_damage_ms": 150.335,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 205,
+        "first_damage_ms": 148.202,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 206,
+        "first_damage_ms": 150.575,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 207,
+        "first_damage_ms": 150.213,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 208,
+        "first_damage_ms": 149.894,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 209,
+        "first_damage_ms": 151.703,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 210,
+        "first_damage_ms": 148.925,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 211,
+        "first_damage_ms": 150.916,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 212,
+        "first_damage_ms": 161.469,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 213,
+        "first_damage_ms": 150.733,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 214,
+        "first_damage_ms": 148.556,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 215,
+        "first_damage_ms": 150.681,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 216,
+        "first_damage_ms": 148.85,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 217,
+        "first_damage_ms": 153.756,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 218,
+        "first_damage_ms": 148.763,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 219,
+        "first_damage_ms": 149.083,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 220,
+        "first_damage_ms": 151.38,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 221,
+        "first_damage_ms": 151.902,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 222,
+        "first_damage_ms": 148.845,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 223,
+        "first_damage_ms": 153.254,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 224,
+        "first_damage_ms": 148.756,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 225,
+        "first_damage_ms": 150.684,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 226,
+        "first_damage_ms": 151.051,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 227,
+        "first_damage_ms": 149.592,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 228,
+        "first_damage_ms": 148.866,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 229,
+        "first_damage_ms": 148.306,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 230,
+        "first_damage_ms": 149.124,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 231,
+        "first_damage_ms": 150.201,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 232,
+        "first_damage_ms": 149.856,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 233,
+        "first_damage_ms": 148.516,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 234,
+        "first_damage_ms": 152.198,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 235,
+        "first_damage_ms": 149.111,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 236,
+        "first_damage_ms": 148.787,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 237,
+        "first_damage_ms": 149.181,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 238,
+        "first_damage_ms": 149.353,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 239,
+        "first_damage_ms": 148.534,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 240,
+        "first_damage_ms": 148.678,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 241,
+        "first_damage_ms": 148.792,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 242,
+        "first_damage_ms": 148.534,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 243,
+        "first_damage_ms": 149.039,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 244,
+        "first_damage_ms": 151.06,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 245,
+        "first_damage_ms": 149.21,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 246,
+        "first_damage_ms": 148.967,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 247,
+        "first_damage_ms": 149.284,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 248,
+        "first_damage_ms": 146.666,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 249,
+        "first_damage_ms": 148.943,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 250,
+        "first_damage_ms": 148.828,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 251,
+        "first_damage_ms": 148.998,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 252,
+        "first_damage_ms": 146.927,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 253,
+        "first_damage_ms": 149.066,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 254,
+        "first_damage_ms": 149.072,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 255,
+        "first_damage_ms": 148.235,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 256,
+        "first_damage_ms": 151.377,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 257,
+        "first_damage_ms": 150.072,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 258,
+        "first_damage_ms": 150.547,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 259,
+        "first_damage_ms": 152.298,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 260,
+        "first_damage_ms": 150.146,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 261,
+        "first_damage_ms": 151.381,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 262,
+        "first_damage_ms": 149.319,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 263,
+        "first_damage_ms": 151.067,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 264,
+        "first_damage_ms": 147.576,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 265,
+        "first_damage_ms": 154.02,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 266,
+        "first_damage_ms": 156.306,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 267,
+        "first_damage_ms": 155.802,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 268,
+        "first_damage_ms": 155.477,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 269,
+        "first_damage_ms": 156.716,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 270,
+        "first_damage_ms": 163.505,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 271,
+        "first_damage_ms": 161.267,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 272,
+        "first_damage_ms": 152.274,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 273,
+        "first_damage_ms": 153.679,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 274,
+        "first_damage_ms": 158.275,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 275,
+        "first_damage_ms": 152.774,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 276,
+        "first_damage_ms": 155.696,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 277,
+        "first_damage_ms": 153.351,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 278,
+        "first_damage_ms": 153.076,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 279,
+        "first_damage_ms": 157.17,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 280,
+        "first_damage_ms": 155.537,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 281,
+        "first_damage_ms": 162.406,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 282,
+        "first_damage_ms": 155.802,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 283,
+        "first_damage_ms": 155.003,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 284,
+        "first_damage_ms": 156.94,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 285,
+        "first_damage_ms": 153.524,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 286,
+        "first_damage_ms": 159.284,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 287,
+        "first_damage_ms": 152.303,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 288,
+        "first_damage_ms": 151.991,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 289,
+        "first_damage_ms": 147.86,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 290,
+        "first_damage_ms": 148.772,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 291,
+        "first_damage_ms": 148.529,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 292,
+        "first_damage_ms": 149.352,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 293,
+        "first_damage_ms": 148.699,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 294,
+        "first_damage_ms": 147.54,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 295,
+        "first_damage_ms": 144.988,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 296,
+        "first_damage_ms": 150.919,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 297,
+        "first_damage_ms": 150.214,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 298,
+        "first_damage_ms": 152.038,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 299,
+        "first_damage_ms": 161.96,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 300,
+        "first_damage_ms": 173.466,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 301,
+        "first_damage_ms": 147.468,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 302,
+        "first_damage_ms": 148.139,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 303,
+        "first_damage_ms": 153.569,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 304,
+        "first_damage_ms": 146.407,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 305,
+        "first_damage_ms": 149.702,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 306,
+        "first_damage_ms": 149.76,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 307,
+        "first_damage_ms": 148.992,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 308,
+        "first_damage_ms": 147.732,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 309,
+        "first_damage_ms": 151.498,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 310,
+        "first_damage_ms": 150.695,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 311,
+        "first_damage_ms": 150.884,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 312,
+        "first_damage_ms": 150.55,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 313,
+        "first_damage_ms": 147.013,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 314,
+        "first_damage_ms": 150.554,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 315,
+        "first_damage_ms": 150.546,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 316,
+        "first_damage_ms": 153.921,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 317,
+        "first_damage_ms": 151.763,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 318,
+        "first_damage_ms": 147.366,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 319,
+        "first_damage_ms": 149.534,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 320,
+        "first_damage_ms": 150.395,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 321,
+        "first_damage_ms": 150.075,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 322,
+        "first_damage_ms": 151.43,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 323,
+        "first_damage_ms": 147.139,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 324,
+        "first_damage_ms": 150.051,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 325,
+        "first_damage_ms": 150.063,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 326,
+        "first_damage_ms": 148.628,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 327,
+        "first_damage_ms": 150.437,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 328,
+        "first_damage_ms": 151.472,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 329,
+        "first_damage_ms": 147.5,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 330,
+        "first_damage_ms": 145.87,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 331,
+        "first_damage_ms": 148.095,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 332,
+        "first_damage_ms": 149.022,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 333,
+        "first_damage_ms": 148.201,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 334,
+        "first_damage_ms": 149.176,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 335,
+        "first_damage_ms": 149.463,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 336,
+        "first_damage_ms": 148.41,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 337,
+        "first_damage_ms": 148.565,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 338,
+        "first_damage_ms": 146.6,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 339,
+        "first_damage_ms": 161.695,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 340,
+        "first_damage_ms": 148.146,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 341,
+        "first_damage_ms": 148.493,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 342,
+        "first_damage_ms": 149.207,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 343,
+        "first_damage_ms": 150.652,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 344,
+        "first_damage_ms": 151.41,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 345,
+        "first_damage_ms": 148.958,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 346,
+        "first_damage_ms": 149.452,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 347,
+        "first_damage_ms": 150.197,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 348,
+        "first_damage_ms": 148.464,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 349,
+        "first_damage_ms": 148.25,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 350,
+        "first_damage_ms": 150.143,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 351,
+        "first_damage_ms": 150.867,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 352,
+        "first_damage_ms": 147.324,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 353,
+        "first_damage_ms": 146.522,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 354,
+        "first_damage_ms": 147.595,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 355,
+        "first_damage_ms": 148.655,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 356,
+        "first_damage_ms": 150.424,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 357,
+        "first_damage_ms": 149.433,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 358,
+        "first_damage_ms": 151.234,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 359,
+        "first_damage_ms": 151.3,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 360,
+        "first_damage_ms": 147.127,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 361,
+        "first_damage_ms": 147.128,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 362,
+        "first_damage_ms": 147.275,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 363,
+        "first_damage_ms": 147.902,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 364,
+        "first_damage_ms": 149.617,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 365,
+        "first_damage_ms": 150.427,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 366,
+        "first_damage_ms": 146.794,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 367,
+        "first_damage_ms": 147.997,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 368,
+        "first_damage_ms": 154.69,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 369,
+        "first_damage_ms": 157.676,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 370,
+        "first_damage_ms": 152.69,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 371,
+        "first_damage_ms": 147.931,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 372,
+        "first_damage_ms": 147.756,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 373,
+        "first_damage_ms": 150.103,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 374,
+        "first_damage_ms": 148.807,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 375,
+        "first_damage_ms": 155.526,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 376,
+        "first_damage_ms": 149.208,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 377,
+        "first_damage_ms": 147.848,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 378,
+        "first_damage_ms": 150.101,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 379,
+        "first_damage_ms": 148.987,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 380,
+        "first_damage_ms": 151.727,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 381,
+        "first_damage_ms": 147.414,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 382,
+        "first_damage_ms": 147.191,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 383,
+        "first_damage_ms": 147.038,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 384,
+        "first_damage_ms": 149.572,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 385,
+        "first_damage_ms": 150.257,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 386,
+        "first_damage_ms": 147.438,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 387,
+        "first_damage_ms": 146.953,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 388,
+        "first_damage_ms": 147.267,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 389,
+        "first_damage_ms": 148.171,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 390,
+        "first_damage_ms": 157.484,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 391,
+        "first_damage_ms": 149.273,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 392,
+        "first_damage_ms": 148.829,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 393,
+        "first_damage_ms": 150.312,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 394,
+        "first_damage_ms": 149.191,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 395,
+        "first_damage_ms": 147.922,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 396,
+        "first_damage_ms": 148.318,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 397,
+        "first_damage_ms": 150.123,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 398,
+        "first_damage_ms": 149.689,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 399,
+        "first_damage_ms": 150.285,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 400,
+        "first_damage_ms": 148.819,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 401,
+        "first_damage_ms": 145.679,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 402,
+        "first_damage_ms": 145.957,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 403,
+        "first_damage_ms": 145.85,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 404,
+        "first_damage_ms": 149.775,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 405,
+        "first_damage_ms": 149.209,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 406,
+        "first_damage_ms": 151.525,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 407,
+        "first_damage_ms": 146.81,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 408,
+        "first_damage_ms": 148.88,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 409,
+        "first_damage_ms": 151.856,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 410,
+        "first_damage_ms": 149.56,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 411,
+        "first_damage_ms": 149.576,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 412,
+        "first_damage_ms": 151.798,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 413,
+        "first_damage_ms": 146.06,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 414,
+        "first_damage_ms": 148.97,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 415,
+        "first_damage_ms": 146.559,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 416,
+        "first_damage_ms": 149.271,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 417,
+        "first_damage_ms": 149.818,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 418,
+        "first_damage_ms": 147.707,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 419,
+        "first_damage_ms": 152.919,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 420,
+        "first_damage_ms": 148.002,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 421,
+        "first_damage_ms": 149.7,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 422,
+        "first_damage_ms": 149.012,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 423,
+        "first_damage_ms": 151.517,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 424,
+        "first_damage_ms": 147.25,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 425,
+        "first_damage_ms": 147.63,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 426,
+        "first_damage_ms": 147.645,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 427,
+        "first_damage_ms": 150.8,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 428,
+        "first_damage_ms": 149.047,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 429,
+        "first_damage_ms": 148.867,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 430,
+        "first_damage_ms": 146.813,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 431,
+        "first_damage_ms": 150.822,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 432,
+        "first_damage_ms": 147.662,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 433,
+        "first_damage_ms": 154.096,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 434,
+        "first_damage_ms": 148.25,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 435,
+        "first_damage_ms": 149.108,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 436,
+        "first_damage_ms": 149.032,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 437,
+        "first_damage_ms": 152.03,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 438,
+        "first_damage_ms": 151.848,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 439,
+        "first_damage_ms": 149.534,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 440,
+        "first_damage_ms": 148.625,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 441,
+        "first_damage_ms": 150.435,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 442,
+        "first_damage_ms": 147.616,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 443,
+        "first_damage_ms": 150.794,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 444,
+        "first_damage_ms": 150.296,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 445,
+        "first_damage_ms": 158.0,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 446,
+        "first_damage_ms": 153.579,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 447,
+        "first_damage_ms": 151.978,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 448,
+        "first_damage_ms": 152.382,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 449,
+        "first_damage_ms": 148.763,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 450,
+        "first_damage_ms": 152.378,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 451,
+        "first_damage_ms": 150.182,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 452,
+        "first_damage_ms": 149.298,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 453,
+        "first_damage_ms": 147.883,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 454,
+        "first_damage_ms": 151.357,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 455,
+        "first_damage_ms": 147.573,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 456,
+        "first_damage_ms": 156.881,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 457,
+        "first_damage_ms": 149.587,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 458,
+        "first_damage_ms": 149.543,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 459,
+        "first_damage_ms": 148.403,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 460,
+        "first_damage_ms": 149.011,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 461,
+        "first_damage_ms": 150.976,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 462,
+        "first_damage_ms": 150.087,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 463,
+        "first_damage_ms": 148.534,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 464,
+        "first_damage_ms": 152.594,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 465,
+        "first_damage_ms": 148.963,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 466,
+        "first_damage_ms": 147.221,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 467,
+        "first_damage_ms": 146.735,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 468,
+        "first_damage_ms": 149.132,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 469,
+        "first_damage_ms": 150.511,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 470,
+        "first_damage_ms": 148.284,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 471,
+        "first_damage_ms": 148.033,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 472,
+        "first_damage_ms": 149.266,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 473,
+        "first_damage_ms": 148.884,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 474,
+        "first_damage_ms": 148.552,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 475,
+        "first_damage_ms": 147.984,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 476,
+        "first_damage_ms": 149.739,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 477,
+        "first_damage_ms": 149.627,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 478,
+        "first_damage_ms": 150.494,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 479,
+        "first_damage_ms": 147.684,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 480,
+        "first_damage_ms": 147.688,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 481,
+        "first_damage_ms": 146.833,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 482,
+        "first_damage_ms": 149.526,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 483,
+        "first_damage_ms": 147.27,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 484,
+        "first_damage_ms": 151.4,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 485,
+        "first_damage_ms": 148.664,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 486,
+        "first_damage_ms": 150.342,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 487,
+        "first_damage_ms": 146.051,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 488,
+        "first_damage_ms": 149.837,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 489,
+        "first_damage_ms": 152.081,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 490,
+        "first_damage_ms": 148.99,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 491,
+        "first_damage_ms": 147.839,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 492,
+        "first_damage_ms": 147.151,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 493,
+        "first_damage_ms": 150.235,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 494,
+        "first_damage_ms": 148.392,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 495,
+        "first_damage_ms": 152.718,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 496,
+        "first_damage_ms": 146.097,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 497,
+        "first_damage_ms": 151.848,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 498,
+        "first_damage_ms": 149.496,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 499,
+        "first_damage_ms": 146.614,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 500,
+        "first_damage_ms": 151.355,
+        "old_exited": true,
+        "disabled_window_count": 0
+      }
+    ]
+  },
+  "binary_sha256": "7c5a1004d79644f0279047a3ee5708e6009784be61713d6727cbf2d8cbd025b3",
+  "supervisor_before": {
+    "shell_processes": [],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "baseline_log": {
+    "file": "docs/spikes/gnome/m1a2-evidence/baseline-shell.log",
+    "sha256": "b0b3c293e1d88e8bc6dc1614b022f4302dae678831709d47221552527ddc9c52"
+  },
+  "shell_version": "GNOME Shell 50.1",
+  "harness_start": "isolated Shell up: leader 3611232 bus unix:path=/tmp/dbus-vZDycjG412,guid=bd84ac149a7cfef0ff1bc7b86ae50ec2",
+  "runtime_version": "gst-inspect-1.0 version 1.28.2\nGStreamer 1.28.2\nhttps://launchpad.net/ubuntu/+source/gstreamer1.0",
+  "native_dependencies": {
+    "coreelements": "linux-vdso.so.1 (0x00007d486bde4000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007d486bbea000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007d486bb66000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007d486ba0e000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007d486b9aa000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007d486b600000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007d486b9a1000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007d486b87b000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007d486b870000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007d486b554000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007d486b85f000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007d486bde6000)",
+    "matroska": "linux-vdso.so.1 (0x00007888d563a000)\n\tlibgstpbutils-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstpbutils-1.0.so.0 (0x00007888d5579000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007888d5493000)\n\tlibgstaudio-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstaudio-1.0.so.0 (0x00007888d5408000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007888d5384000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007888d5217000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007888d51b1000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007888d5059000)\n\tlibgstriff-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstriff-1.0.so.0 (0x00007888d5048000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x00007888d5006000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x00007888d4fe8000)\n\tlibbz2.so.1.0 => /usr/lib/x86_64-linux-gnu/libbz2.so.1.0 (0x00007888d4fd3000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007888d4eab000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007888d4c00000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007888d4ea1000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007888d4afd000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007888d4e9a000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007888d4e87000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007888d4e7c000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007888d4a51000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007888d563c000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007888d4e65000)",
+    "vpx": "linux-vdso.so.1 (0x00007264dab25000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007264da981000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007264da91d000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007264da7c5000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x00007264da783000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007264da69d000)\n\tlibvpx.so.12 => /usr/lib/x86_64-linux-gnu/libvpx.so.12 (0x00007264da200000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007264d9e00000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007264da694000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007264da0da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007264da683000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007264da676000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007264da5ca000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007264da056000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x00007264da038000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007264da5c0000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007264d9cfd000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007264dab27000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007264d9ce6000)",
+    "videoconvertscale": "linux-vdso.so.1 (0x00007b31bb945000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007b31bb832000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007b31bb6c5000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007b31bb661000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007b31bb509000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007b31bb483000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007b31bb200000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007b31bb479000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007b31bb0fd000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007b31bafd7000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007b31bb470000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007b31bb45f000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007b31bb454000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007b31baf2b000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007b31bb947000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007b31bb43d000)",
+    "waylandsink": "linux-vdso.so.1 (0x00007b7deef35000)\n\tlibgstwayland-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstwayland-1.0.so.0 (0x00007b7deeef2000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007b7deed85000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007b7deed21000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007b7deebc9000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007b7deeae3000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007b7deead7000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007b7dee800000)\n\tlibwayland-client.so.0 => /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 (0x00007b7deeac4000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007b7deeabd000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007b7dee6da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007b7deeaaa000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007b7deea9f000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007b7dee62e000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007b7dee5aa000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007b7dee4a7000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007b7deea86000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007b7deef37000)",
+    "videotestsrc": "linux-vdso.so.1 (0x00007e6d45e85000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007e6d45d70000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007e6d45c03000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007e6d45b9f000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007e6d45a47000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007e6d459c3000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007e6d458be000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007e6d45798000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007e6d45400000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007e6d4578e000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007e6d45787000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007e6d45774000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007e6d45769000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007e6d456bd000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007e6d45e87000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007e6d456a6000)",
+    "app": "linux-vdso.so.1 (0x000071b804a72000)\n\tlibgstapp-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstapp-1.0.so.0 (0x000071b804a36000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000071b8048c9000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000071b804845000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000071b8047e1000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000071b804689000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000071b804400000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000071b804680000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000071b8042da000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000071b80466f000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000071b804664000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000071b80422e000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000071b804a74000)"
+  },
+  "fixture": {
+    "blake3": "06c37dc10f384c49e64a3d40b1dface547ffc29043c2f6b64d22352c2e5aba91",
+    "bytes": 312344,
+    "dimensions": [
+      3840,
+      1080
+    ],
+    "frames": 1200,
+    "fps": 30
+  },
+  "supervisor_before_cleanup": {
+    "shell_processes": [
+      {
+        "pid": 3611311,
+        "stat": "3611311 (gnome-shell) R 3611301 3611311 3611232 0 -1 0 2632060 18312998 39 500 2571 739 5772 3760 20 0 23 0 80998134 7719092224 65121 18446744073709551615 93824992243712 93824992251769 140737488349056 0 0 0 0 16781316 16458 0 0 0 17 10 0 0 0 0 0 93824992258576 93824992260464 93824992264192 140737488349791 140737488349927 140737488349927 140737488351203 0"
+      }
+    ],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "shell_exit_before_cleanup": null,
+  "host_core_pattern": "|/usr/share/apport/apport -p%p -s%s -c%c -d%d -P%P -u%u -g%g -F%F -- %E",
+  "cleanup": "all owned children reaped; session directory and generated media removed",
+  "shell_log_tail": [
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3649592]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3649663]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3649734]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3649805]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3649876]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3649947]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650018]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650089]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650161]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650232]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650303]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650380]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650451]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650522]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650593]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650665]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650737]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650808]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650879]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3650950]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3651022]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3651093]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log"
+  ],
+  "shell_warnings": [
+    "(gnome-shell:3611311): libmutter-WARNING **: 00:40:19.578: Unknown experimental feature 'scale-monitor-framebuffer'",
+    "(gnome-shell:3611311): libmutter-WARNING **: 00:40:19.578: Unknown experimental feature 'xwayland-native-scaling'",
+    "(gnome-shell:3611311): libmutter-WARNING **: 00:40:19.881: There is no colord server available",
+    "(gnome-shell:3611311): GNOME Shell-WARNING **: 00:40:20.182: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3611311): GNOME Shell-CRITICAL **: 00:40:20.232: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3611311): GNOME Shell-CRITICAL **: 00:40:20.232: Could not get proxy for session null: Error: Argument string may not be null",
+    "(gnome-shell:3611311): GNOME Shell-WARNING **: 00:40:20.232: Failed to start state machine: can't access property \"connectObject\", this._loginUser is null",
+    "(gnome-shell:3611311): Gjs-WARNING **: 00:40:20.233: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:",
+    "(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.442: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files",
+    "(gnome-shell:3611311): accountsservice-WARNING **: 00:40:20.468: ActUserManager: user (null) has no username (uid: -1)",
+    "(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.617: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.617: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.617: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.654: Failed to connect to PipeWire: Couldn't connect to PipeWire"
+  ],
+  "new_warnings": []
+}

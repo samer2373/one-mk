@@ -1,3 +1,147 @@
+# 6D-M1a-4 resolution: bridge stability fixed; product M1 remains incomplete
+
+Date: October 30–31, 2026 (Asia/Amman). Branch
+`t3/stabilize-wallpaper-bridge`, reset to local `wave5` at `7684a99`
+(`Merge wallpaper lifecycle gate work (M1a-3) into wave5`). Only the isolated
+headless Mutter harness ran; the owner's desktop, running daemon and user
+extension directory were not used or changed. No install/enable is automatic.
+
+## Current decision and requested-item status
+
+**The intermittent dispatch and slow healthy-unlock recovery are resolved in
+the spike. M1 is still incomplete, not a shipping acceptance.**
+[M1a-4 evidence and reproduction](gnome/m1a4-evidence/README.md) contains original
+failures, all six final stress runs, full Shell/GDB logs, lifecycle/security/idle
+reports, validation and hashes. Earlier STOP findings below are retained as
+history, not current claims that cycle 75 is still failing.
+
+| Requested item | Current status |
+|---|---|
+| 1: UnknownMethod cause, lifecycle, readiness, bounded renderer retry | Implemented in spike; GC reproduction catches stale introspection-cache lookup; five consecutive 100-cycle sessions plus 500 cycles pass, zero new warnings |
+| 1: historical cycle-19 Shell loss | Investigated, **not root-caused**; old signal/core absent, PID-filtered journal empty; no recurrence in final sessions |
+| 2: healthy unlock versus crash retry | Implemented; 93.138 ms notification-to-damage / 451.024 ms request-to-damage in initial final matrix, versus previous 4092.193 ms notification-to-damage; crash 1/2/4 s cap retained |
+| 3: production extension, §4 bridge, doctor, qualification guard, extension CLI | **Undelivered**, not made safe by spike stability. No production source/metadata or installer added; no change to `main.rs` importer dispatch |
+| 4: final lifecycle and power matrix | Passed for the final **spike**, including the nine-layout repeat; product/native/physical matrix still unqualified |
+| 5: resolution / feature plan / estimate | Updated; remaining M1 16–26 engineer-weeks, total 74–118, retained with low confidence rather than reduced on spike results |
+
+## Cause and explicit lifecycle
+
+Per-enable `wrapJSObject` builds an additional interface lookup cache in the
+installed GJS 1.88.0 override, but that extra cache build is not balanced when
+the interface dies. GLib's global cache borrows the native interface pointer and
+method storage. GC can leave stale entries; subsequent allocation reuse explains
+why the real `Hello` remains in introspection while cached method lookup is
+null. The latter disagreement is directly captured at cycle 79; the actual
+renderer `UnknownMethod` reproduces at cycle 22. Pointer reuse is source-level
+diagnosis, not an independently captured allocator trace. Shell stays alive in
+both reproductions. This distinguishes the bug from a name-handoff delay.
+
+The fix retains module-level interface info, constructs the exported object
+directly instead of `wrapJSObject`, keeps the object strongly referenced and
+exports once per enable. Disable invalidates callbacks, stops/reaps the child,
+unexports, then relinquishes the bus name. A bounded 500 ms self-dispatch
+handshake after name acquisition gates all starts. Name loss and readiness
+failure fail closed. The renderer retries only transient named dispatch errors,
+at most ten 100 ms attempts with 25 ms between attempts, never an endless loop.
+
+A deliberate teardown of a healthy renderer grants one immediate resume after
+fresh enable/readiness. It cannot clear crash history or an exhausted latch.
+Crashes still use 1/2/4 seconds and at most three automatic starts in 60 seconds.
+The four-crash test verifies static/no-child/no-restart-source after exhaustion,
+including disable/re-enable. This spike latch is **not** product doctor support.
+
+## Measured lifecycle and remaining limitations
+
+Latest final nine-layout matrix (`final-matrix-nine-layouts.json`),
+compositor-side timestamps; initial final matrix retained for comparison:
+
+| Scenario | Measured final-code spike result |
+|---|---|
+| Startup, three outputs | 230.784 ms collector-to-first damage (initial matrix 224.309 ms) |
+| Monitor unplug / replug | 39.562 / 30.660 ms Shell layout-notification-to-first new-window damage (initial 26.543 / 30.495 ms) |
+| Renderer SIGKILL | 2083.002 ms request-to-fresh replacement damage (second crash backoff) |
+| Hung renderer | Static fallback observed at 2560.59 ms; child reaped, fresh replacement follows |
+| Lock / unlock | Child removed while locked; notification-to-fresh damage 109.128 ms; request-to-damage 452.663 ms (initial 93.138 / 451.024 ms) |
+| Crash cap | Recovery observations 1291.13 / 2157.59 / 4225.01 ms; fourth death exhausts, pid null and restart source 0, latch survives re-enable |
+| Outputs/scales | Initial seven-layout matrix passes; final repeat covers every 1/2/3-output × 1/2/1.25-scale pair with correct clone count and extents |
+| Desktop icons | DING enabled, desktop focus retained; no managed renderer window after disable |
+| Repeat teardown | Five consecutive 100-cycle runs + 500-cycle run, forced GC throughout; further 100 cycles in each full matrix; zero extension actor/clone/managed-window leaks |
+| New warnings | 0 versus unchanged committed M1a-2 disabled baseline, full stack-aware comparison |
+
+These are damage/readiness timings, **not physical scanout**, whole-visible-gap
+proof or real-GDM hardware testing. The virtual layout checks do not qualify
+mixed-DPI hardware, rotation or the native GPU buffer limits. The nine-layout
+repeat is separately retained, not used to replace a failed run.
+
+Final matched strace/CPU windows (`final-idle.json`, three seconds each):
+
+| State | Renderer CPU, one core | Shell CPU, one core | Blocking-poll completions/s | Timer returns/s |
+|---|---:|---:|---:|---:|
+| Playing, three outputs | 59.66% | 9.00% | 29.994510 | 125.643671 |
+| Paused by overview, two outputs | 0.00% | 0.00% | 0.333280 | 0 |
+| Fully covered, two outputs | 0.00% | 0.00% | 0.333285 | 0 |
+
+No renderer exists after disable; settled paused extension sources are zero.
+Blocking-poll/syscall completions are wakeup **proxies**, not total scheduler
+wakeups or energy. Software decoding/SHM CPU remains high; no production power
+or hardware decode budget passes on this evidence.
+
+The historical loss at cycle 19 remains unexplained. The old interrupted report
+has no captured Shell signal/core. Private PID 3194779 and coredump-PID journal
+queries for October 30, 19:47–19:51 UTC have no entries. No attribution to the
+cache defect is justified; if it recurs, a private GDB backtrace/core and
+supervisor exit record are required. All new owned children were reaped and
+private session/media removed; no unexpected Shell loss was observed.
+
+## Product gate and honest remaining work
+
+Stability and unlock pass **for the spike**, so they no longer justify a blanket
+lifecycle STOP. This implementation nevertheless does **not complete requested
+item 3**. The fixture protocol/argv are not design §4. Shipping or installing it
+would bypass missing product owner-authenticated desired-state IPC, fixed spawn
+policy and sandbox/native qualification. This is an implementation gap, not a
+claim that a production extension cannot be written or a newly passed gate.
+
+Still required: independently maintained MIT OR Apache-2.0 GNOME-50 product
+source and metadata; exact bounded §4 protocol and negative tests (serials,
+scales/enums, no properties, authorization/rate/coalescing/window bounds);
+daemon cold-read/events and fixed argv; doctor-visible restart limit plus
+explicit Retry; refusing unqualified Shell versions without changing GNOME's
+validation; opt-in install/uninstall/status with private-HOME tests and
+zero leftovers. Nothing is installed/enabled by default. Re-run the same
+stress/security/idle/nine-layout matrix against that product component, not a
+renamed Eval-powered spike. Existing importer dispatch must remain intact.
+
+Host GStreamer remains explicitly unqualified; the packaged native sandbox,
+decoder allowlist/capability/power gates, physical scanout/sync and native
+Windows/macOS execution remain open. Cross-compilation is not native acceptance.
+No production CLI or doctor result is represented by an Eval-only spike hook.
+
+## Validation and estimate
+
+Feature-enabled clean-environment Linux workspace: **1080 passed, 0 failed,
+14 ignored**. Default and feature-enabled Linux workspace/all-target clippy
+and Windows MSVC / Apple ARM all-target checks including all wallpaper crates
+pass `-D warnings` with the documented package selection and `blake3/pure`.
+Six Python warning/trace gate tests and shell syntax pass. Every cargo command
+uses `-j 2`; no cargo fmt ran. Logs and exact commands are in the evidence index.
+
+Run `bash docs/spikes/gnome/qualify-m1a4.sh` only with isolated lab prerequisites.
+Large generated files live under ignored worktree `target`, never `/tmp`.
+Each supervisor reaps children and removes its private session/media; final
+evidence is archived before cleaning generated build/trace files.
+
+Retain **16–26 engineer-weeks remaining for M1**, **74–118 overall**, including
+the existing 8–14 integration/security reserve. Do not mechanically subtract
+weeks for the cache workaround: production/sandbox/native work is undelivered,
+the old Shell loss is still unattributed, and software playback CPU is high.
+Confidence improves on the narrow export/re-enable risk, not the full release.
+Re-estimate after the product bridge and packaged sandbox qualify.
+
+---
+
+# Historical M1a-3 STOP note (superseded by M1a-4 above)
+
 # 6D-M1a-3: bridge security/idle resolutions; lifecycle still STOPPED
 
 Date: October 30–31, 2026 (Asia/Amman). Branch:

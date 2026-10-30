@@ -1,0 +1,301 @@
+{
+  "date_utc": "2026-10-30T21:23:23.808132+00:00",
+  "baseline": false,
+  "idle_only": false,
+  "status": "failed",
+  "runtime": "host GStreamer: UNQUALIFIED, trusted generated fixture only",
+  "stages": [],
+  "measurements": {
+    "cycles": [
+      {
+        "cycle": 1,
+        "first_damage_ms": 237.704,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 2,
+        "first_damage_ms": 155.664,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 3,
+        "first_damage_ms": 154.63,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 4,
+        "first_damage_ms": 154.734,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 5,
+        "first_damage_ms": 154.391,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 6,
+        "first_damage_ms": 153.751,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 7,
+        "first_damage_ms": 153.269,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 8,
+        "first_damage_ms": 154.427,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 9,
+        "first_damage_ms": 152.865,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 10,
+        "first_damage_ms": 153.784,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 11,
+        "first_damage_ms": 153.691,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 12,
+        "first_damage_ms": 152.542,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 13,
+        "first_damage_ms": 152.713,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 14,
+        "first_damage_ms": 153.754,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 15,
+        "first_damage_ms": 152.009,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 16,
+        "first_damage_ms": 154.658,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 17,
+        "first_damage_ms": 154.632,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 18,
+        "first_damage_ms": 152.882,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 19,
+        "first_damage_ms": 153.113,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 20,
+        "first_damage_ms": 154.742,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 21,
+        "first_damage_ms": 152.93,
+        "old_exited": true,
+        "disabled_window_count": 0
+      }
+    ]
+  },
+  "binary_sha256": "14409d9abaf92dd2c6ea4eb1cdaddaf7058f7a15d0349873099255f39c8f50c9",
+  "supervisor_before": {
+    "shell_processes": [],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "baseline_log": {
+    "file": "docs/spikes/gnome/m1a2-evidence/baseline-shell.log",
+    "sha256": "b0b3c293e1d88e8bc6dc1614b022f4302dae678831709d47221552527ddc9c52"
+  },
+  "shell_version": "GNOME Shell 50.1",
+  "harness_start": "isolated Shell up: leader 3503383 bus unix:path=/tmp/dbus-TUZDuDdIKg,guid=7376f129ba82f494cb5409f76ae50acb",
+  "runtime_version": "gst-inspect-1.0 version 1.28.2\nGStreamer 1.28.2\nhttps://launchpad.net/ubuntu/+source/gstreamer1.0",
+  "native_dependencies": {
+    "coreelements": "linux-vdso.so.1 (0x0000751965314000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000075196511a000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000751965096000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000751964f3e000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000751964eda000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000751964c00000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000751964ed1000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000751964ada000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000751964ec6000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000751964a2e000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000751964eb5000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000751965316000)",
+    "matroska": "linux-vdso.so.1 (0x000074bc0990b000)\n\tlibgstpbutils-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstpbutils-1.0.so.0 (0x000074bc0984a000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000074bc09764000)\n\tlibgstaudio-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstaudio-1.0.so.0 (0x000074bc096d9000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000074bc09655000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000074bc094e8000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000074bc09482000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000074bc0932a000)\n\tlibgstriff-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstriff-1.0.so.0 (0x000074bc09319000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x000074bc092d7000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x000074bc092b9000)\n\tlibbz2.so.1.0 => /usr/lib/x86_64-linux-gnu/libbz2.so.1.0 (0x000074bc092a4000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000074bc0917c000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000074bc08e00000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000074bc09172000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000074bc0906f000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000074bc09068000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000074bc09055000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000074bc0904a000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000074bc08d54000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000074bc0990d000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000074bc09033000)",
+    "vpx": "linux-vdso.so.1 (0x0000740cb5e22000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000740cb5c7e000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000740cb5c1a000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000740cb5ac2000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x0000740cb5a80000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x0000740cb599a000)\n\tlibvpx.so.12 => /usr/lib/x86_64-linux-gnu/libvpx.so.12 (0x0000740cb5400000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000740cb5000000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000740cb5991000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000740cb586b000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000740cb585a000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000740cb584d000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000740cb5354000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000740cb57c9000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x0000740cb5336000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x0000740cb57bf000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x0000740cb5231000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000740cb5e24000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x0000740cb4fe9000)",
+    "videoconvertscale": "linux-vdso.so.1 (0x0000711553b9e000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x0000711553a8b000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000071155391e000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007115538ba000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000711553762000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007115536dc000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000711553400000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007115536d2000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007115532fd000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007115531d7000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007115536c9000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007115536b8000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007115536ad000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000071155312b000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000711553ba0000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x0000711553696000)",
+    "waylandsink": "linux-vdso.so.1 (0x000073c7e84b5000)\n\tlibgstwayland-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstwayland-1.0.so.0 (0x000073c7e8472000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000073c7e8305000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000073c7e82a1000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000073c7e8149000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000073c7e8063000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000073c7e8057000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000073c7e7e00000)\n\tlibwayland-client.so.0 => /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 (0x000073c7e8044000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000073c7e803d000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000073c7e7cda000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000073c7e802a000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000073c7e7ccf000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000073c7e7c23000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000073c7e7b9f000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000073c7e7a9c000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000073c7e7a85000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000073c7e84b7000)",
+    "videotestsrc": "linux-vdso.so.1 (0x000074dce59de000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000074dce58c9000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000074dce575c000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000074dce56f8000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000074dce55a0000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000074dce551c000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000074dce5417000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000074dce52f1000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000074dce5000000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000074dce52e7000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000074dce52e0000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000074dce52cd000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000074dce52c2000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000074dce4f54000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000074dce59e0000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000074dce52ab000)",
+    "app": "linux-vdso.so.1 (0x0000715e57636000)\n\tlibgstapp-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstapp-1.0.so.0 (0x0000715e575fa000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000715e5748d000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000715e57409000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000715e573a5000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000715e5724d000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000715e57000000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000715e57244000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000715e56eda000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000715e57233000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000715e57228000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000715e56e2e000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000715e57638000)"
+  },
+  "fixture": {
+    "blake3": "ff68e84e68b34e2272067fe5f85bbcf73038163c1c39787302eb31217f08d440",
+    "bytes": 312344,
+    "dimensions": [
+      3840,
+      1080
+    ],
+    "frames": 1200,
+    "fps": 30
+  },
+  "failure": "cycle 22: no first frame: {'monitors': [[0, 0, 1920, 1080], [1920, 0, 1920, 1080]], 'frame': None, 'buffer': None, 'damage': 0, 'stale': False, 'fresh': False, 'watchdog': 0, 'coverage': 0, 'pid': None, 'reason': 'none', 'restart': 3488, 'cloneCount': 0, 'events': ['808997659 restart scheduled 1000 ms', '808997815 spawned renderer pid=3505751', '808998082 renderer exited pid=3505751', '808998082 restart scheduled 1000 ms', '808999091 spawned renderer pid=3505890', '808999358 renderer exited pid=3505890', '808999358 restart scheduled 2000 ms'], 'focus': None}",
+  "failure_traceback": "Traceback (most recent call last):\n  File \"/home/samer/.t3/worktrees/one-mk/t3-c726a61d/docs/spikes/gnome/m1-risk-probe.py\", line 325, in main\n    runpy.run_path(str(HERE / 'm1a-stress.py'))['run_stress'](\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        evaluate, private, snapshot, arguments, report, args.cycles, args.gc_stress)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/samer/.t3/worktrees/one-mk/t3-c726a61d/docs/spikes/gnome/m1a-stress.py\", line 30, in run_stress\n    raise RuntimeError(f'cycle {index + 1}: no first frame: {current}')\nRuntimeError: cycle 22: no first frame: {'monitors': [[0, 0, 1920, 1080], [1920, 0, 1920, 1080]], 'frame': None, 'buffer': None, 'damage': 0, 'stale': False, 'fresh': False, 'watchdog': 0, 'coverage': 0, 'pid': None, 'reason': 'none', 'restart': 3488, 'cloneCount': 0, 'events': ['808997659 restart scheduled 1000 ms', '808997815 spawned renderer pid=3505751', '808998082 renderer exited pid=3505751', '808998082 restart scheduled 1000 ms', '808999091 spawned renderer pid=3505890', '808999358 renderer exited pid=3505890', '808999358 restart scheduled 2000 ms'], 'focus': None}\n",
+  "failure_bridge": {
+    "monitors": [
+      [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      [
+        1920,
+        0,
+        1920,
+        1080
+      ]
+    ],
+    "frame": null,
+    "buffer": null,
+    "damage": 0,
+    "stale": false,
+    "fresh": false,
+    "watchdog": 0,
+    "coverage": 0,
+    "pid": null,
+    "reason": "none",
+    "restart": 3488,
+    "cloneCount": 0,
+    "events": [
+      "808997659 restart scheduled 1000 ms",
+      "808997815 spawned renderer pid=3505751",
+      "808998082 renderer exited pid=3505751",
+      "808998082 restart scheduled 1000 ms",
+      "808999091 spawned renderer pid=3505890",
+      "808999358 renderer exited pid=3505890",
+      "808999358 restart scheduled 2000 ms"
+    ],
+    "focus": null
+  },
+  "failure_bus_owner": "(':1.0',)",
+  "supervisor_before_cleanup": {
+    "shell_processes": [
+      {
+        "pid": 3503408,
+        "stat": "3503408 (gnome-shell) S 3503398 3503408 3503383 0 -1 0 160782 783147 10 23 155 53 92 121 20 0 29 0 80896642 7446298624 64833 18446744073709551615 93824992243712 93824992251769 140737488349056 0 0 0 0 16781316 16458 0 0 0 17 7 0 0 0 0 0 93824992258576 93824992260464 93824992264192 140737488349791 140737488349927 140737488349927 140737488351203 0"
+      }
+    ],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "shell_exit_before_cleanup": null,
+  "host_core_pattern": "|/usr/share/apport/apport -p%p -s%s -c%c -d%d -P%P -u%u -g%g -F%F -- %E",
+  "cleanup": "all owned children reaped; session directory and generated media removed",
+  "shell_log_tail": [
+    "[Detaching after fork from child process 3504678]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3504741]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3504805]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3504868]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3504931]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3504994]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505057]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505120]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505183]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505246]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505309]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505373]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505436]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505499]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505562]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505625]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505688]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3505751]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "wallpaper risk probe refused/failed: private laboratory Hello failed: domain=592 code=19 GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such method \u201cHello\u201d",
+    "[Detaching after fork from child process 3505890]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "wallpaper risk probe refused/failed: private laboratory Hello failed: domain=592 code=19 GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such method \u201cHello\u201d",
+    "Exception ignored on threading shutdown:",
+    "Traceback (most recent call last):",
+    "  File \"/usr/lib/python3.14/threading.py\", line 1559, in _shutdown",
+    "    def _shutdown():",
+    "KeyboardInterrupt: "
+  ],
+  "shell_warnings": [
+    "(gnome-shell:3503408): libmutter-WARNING **: 00:23:24.648: Unknown experimental feature 'scale-monitor-framebuffer'",
+    "(gnome-shell:3503408): libmutter-WARNING **: 00:23:24.648: Unknown experimental feature 'xwayland-native-scaling'",
+    "(gnome-shell:3503408): libmutter-WARNING **: 00:23:24.948: There is no colord server available",
+    "(gnome-shell:3503408): GNOME Shell-WARNING **: 00:23:25.231: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3503408): GNOME Shell-CRITICAL **: 00:23:25.283: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3503408): GNOME Shell-CRITICAL **: 00:23:25.283: Could not get proxy for session null: Error: Argument string may not be null",
+    "(gnome-shell:3503408): GNOME Shell-WARNING **: 00:23:25.283: Failed to start state machine: can't access property \"connectObject\", this._loginUser is null",
+    "(gnome-shell:3503408): Gjs-WARNING **: 00:23:25.283: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:",
+    "(/usr/libexec/xdg-desktop-portal:3503833): xdg-desktop-portal-WARNING **: 00:23:25.501: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files",
+    "(gnome-shell:3503408): accountsservice-WARNING **: 00:23:25.530: ActUserManager: user (null) has no username (uid: -1)",
+    "(/usr/libexec/xdg-desktop-portal:3503833): xdg-desktop-portal-WARNING **: 00:23:25.684: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3503833): xdg-desktop-portal-WARNING **: 00:23:25.684: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3503833): xdg-desktop-portal-WARNING **: 00:23:25.684: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3503833): xdg-desktop-portal-WARNING **: 00:23:25.721: Failed to connect to PipeWire: Couldn't connect to PipeWire"
+  ],
+  "new_warnings": []
+}
