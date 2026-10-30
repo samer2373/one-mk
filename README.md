@@ -34,8 +34,30 @@ The separate developer-only `one-mk-wall` probe is not linked into or launched
 by the daemon. Wallpaper doctor exits 3 when enabled because no qualified
 renderer is available, and exits 0 when off. See the
 [canvas, wire and consent contract](docs/WALLPAPER-CANVAS.md).
+Importing media with `one-mk wallpaper-import` needs the separately installed
+optional `one-mk-wall-import` package (a sandboxed worker); without it the
+command refuses. See [import limits](docs/WALLPAPER-IMPORT.md).
 See [the stop report and troubleshooting](docs/spikes/wallpaper-m1-stop.md);
 do not run the risk probe on your real desktop.
+
+### Optional wallpaper import development package
+
+`cargo build -j 2 -p one-mk -p one-mk-wall-import` builds the finite optional
+import helper beside the CLI. It is **not linked into the daemon**, starts only
+on an explicit wallpaper command, and is not included in release packages.
+`one-mk wallpaper doctor --json` explains why import is unavailable without an
+explicit audited runtime. The Linux developer import surface is:
+
+```sh
+one-mk wallpaper import animation.webm --runtime /absolute/audited-runtime \
+  --output /absolute/existing-private-directory --json
+```
+
+Only VP9/AV1 WebM and animated GIF/APNG/WebP are admitted; other formats need
+conversion first. No libav/FFmpeg or GPL encoder is permitted. This saves a
+validated source, poster and content-addressed record, **not a normalized or
+playable scene**. Windows/macOS import refuses until native isolation exists.
+See [import threat model, limits, testing and remaining gates](docs/WALLPAPER-IMPORT.md).
 
 Get it first. Every release has a file for each system (the
 [latest release](https://github.com/samer2373/one-mk/releases/latest)):

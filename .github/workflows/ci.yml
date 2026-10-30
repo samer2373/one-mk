@@ -8,6 +8,25 @@ permissions:
   contents: read
 
 jobs:
+  wallpaper-import-gates:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with: { toolchain: stable }
+      - run: cargo test --locked -j 2 -p one-mk-wall-import
+      - run: cargo clippy --locked -j 2 -p one-mk-wall-import --all-targets -- -D warnings
+      - run: python3 scripts/check-wallpaper-artifact.py --self-test
+      - run: |
+          cargo build --locked -j 2 -p one-mk-wall-import
+          cargo metadata --locked --format-version 1 > target/wallpaper-metadata.json
+          python3 scripts/check-wallpaper-artifact.py --metadata target/wallpaper-metadata.json --helper target/debug/one-mk-wall-import --sbom target/wallpaper-import.cdx.json
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: crates/wall-import/Cargo.toml
+          arguments: --all-features --config crates/wall-import/deny.toml
+
   test:
     strategy:
       fail-fast: false

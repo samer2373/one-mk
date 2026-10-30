@@ -22,6 +22,7 @@ mod clipctl;
 mod history;
 mod control;
 mod doctor;
+mod wallpaper;
 mod hooks;
 mod hotkeys;
 mod inputdevices;
@@ -47,7 +48,7 @@ mod tuning;
 mod update;
 mod update_key;
 mod typing;
-mod wallpaper;
+mod wallpaper_import;
 
 use anyhow::{Context, Result};
 use clipctl::OnOff;
@@ -441,6 +442,15 @@ fn main() -> ExitCode {
     // the daemon with this argument (see one_mk_input::cursoroverlay).
     if std::env::args_os().nth(1).is_some_and(|a| a == one_mk_input::cursoroverlay::HELPER_ARG) {
         one_mk_input::cursoroverlay::run_helper();
+    }
+    // `wallpaper import` and `wallpaper doctor --runtime` belong to the
+    // separately installed, sandboxed import package: dispatched before any
+    // configuration or identity is touched.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if raw.first().is_some_and(|a| a == "wallpaper")
+        && (raw.get(1).is_some_and(|a| a == "import") || (raw.get(1).is_some_and(|a| a == "doctor") && raw.iter().any(|a| a == "--runtime")))
+    {
+        return wallpaper_import::run(&raw[1..]);
     }
     let cli = Cli::parse();
     let verbose = cli.verbose;

@@ -1065,6 +1065,13 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         Ok(settings) => Outcome::pass(crate::wallpaper::summary(&settings.wallpaper)),
         Err(_) => Outcome::warn("Wallpaper settings could not be read.", "Repair settings.toml before enabling wallpaper."),
     }));
+    checks.push(check("wallpaper-import-sandbox", "Wallpaper import sandbox", Outcome::skip(
+        if crate::wallpaper_import::installed().is_some() {
+            "unavailable until explicitly qualified: optional helper installed; run one-mk wallpaper doctor --runtime DIR; no media process started by general doctor"
+        } else {
+            "unavailable: optional import package not installed; no decoder linked or process started"
+        }
+    )));
     let (configured, managed, detail) = crate::update::doctor();
     checks.push(check("updates", "Updates", if !configured {
         Outcome::warn(detail, "Use manual installation until signing and real-OS validation are complete; see docs/UPDATES.md.")

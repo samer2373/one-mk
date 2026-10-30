@@ -160,6 +160,13 @@ enum WallpaperCommand {
     Disable,
     Doctor,
     Consent { #[command(subcommand)] cmd: ConsentCommand },
+    /// Import a video or animated image through the separately installed,
+    /// sandboxed importer (VP9/AV1 WebM, GIF, APNG, animated WebP). Run
+    /// `one-mk wallpaper import --help` for its options.
+    Import {
+        #[arg(num_args = 0.., allow_hyphen_values = true)]
+        arguments: Vec<std::ffi::OsString>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -207,6 +214,8 @@ async fn execute(dir: &Path, command: &WallpaperCommand) -> Result<serde_json::V
         WallpaperCommand::Status => {}
         WallpaperCommand::Doctor if settings.wallpaper.enabled => return Err(Failure { code: 3,message: "Wallpaper renderer is unavailable in this scaffolding build. No content will be played. Disable wallpaper or wait for a qualified presenter.".into() }.into()),
         WallpaperCommand::Doctor => {}
+        // Dispatched to the importer before this code runs.
+        WallpaperCommand::Import { .. } => unreachable!("wallpaper import is dispatched in main"),
         WallpaperCommand::Enable | WallpaperCommand::Disable => {
             settings = Settings::update(dir,|settings| { settings.wallpaper.enabled = matches!(command,WallpaperCommand::Enable); Ok(settings.clone()) })?;
             apply(dir).await?;
