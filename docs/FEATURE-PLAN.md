@@ -499,6 +499,8 @@ unless it is turned on.
 | 6E | Revise `docs/WALLPAPER-DESIGN.md` with the fixes in `docs/WALLPAPER-DESIGN-REVIEW.md` (codec and encoder path, source resolution versus canvas, GNOME bridge licence, sync rewritten around presentation latency, hybrid GPU, honest estimate, sandbox as a phase-1 gate) and with the spike results | Codex | blocked on 6B and 6C |
 | 6D | Implementation in phases, with the quality bar | tbd | blocked on 6E and the owner's go/no-go |
 
+More owner decisions (2026-10-30, after the design review): the GNOME extension ships ONLY with one-mk (not listed on extensions.gnome.org), so it can stay MIT OR Apache-2.0 and is not bound by that site's GPL/no-binaries/review rules; gallery and imported videos are normalised to ROYALTY-FREE codecs (VP9 or AV1 via permissively licensed encoders), never a GPL encoder (x264/x265) in shipped artifacts; hybrid-GPU machines decode on the integrated GPU by default; Plasma is not in release one.
+
 Owner's decisions (2026-10-30): start by PROVING THE RISKY PARTS (6B and 6C), then decide the full scope with real results; GNOME is the one Linux desktop that must work in the first release (others are not promised); sync is best effort, about 50 ms on Wi-Fi, with a quality indicator; the gallery starts with Wikimedia Commons CC0 / public-domain items only (no videos bundled, author and licence shown, a takedown contact).
 
 ## Out of scope for now
