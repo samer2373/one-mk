@@ -46,7 +46,7 @@ mod x11;
 #[cfg(target_os = "linux")]
 mod xkb;
 #[cfg(target_os = "linux")]
-pub use xkb::{LayoutResolver, LayoutState};
+pub use xkb::{Composition, LayoutComposer, LayoutResolver, LayoutState, X11Keyboard, X11LayoutSnapshot};
 #[cfg(any(windows, test))]
 mod win_logic;
 #[cfg(any(windows, test))]

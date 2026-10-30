@@ -376,6 +376,7 @@ struct Owner {
     /// click must leave the pointer.
     pos: Pos,
     held: HeldKeys,
+    keys: one_mk_proto::typing::Receiver,
     /// Last valid traffic from the owner for this visit.
     last_rx: Instant,
     /// Last real input: a key, button, scroll or a new position (not a
@@ -413,6 +414,7 @@ impl Owner {
             motion,
             pos,
             held: HeldKeys::new(),
+            keys: one_mk_proto::typing::Receiver::default(),
             last_rx: now,
             last_input: now,
             relative: false,
@@ -457,21 +459,28 @@ impl Owner {
         }
     }
 
-    fn input(&mut self, msg: Control, inject: &InjectTx) {
+    fn key_events(&mut self, events: Vec<(u32, bool)>, inject: &InjectTx) {
+        for (code, down) in events {
+            if down && Mods::is_modifier(code) {
+                self.mods_pressed.update(code, true);
+            }
+            if self.held.update(code, down) {
+                let _ = inject.send(Inject::Key { code, down });
+            }
+        }
+    }
+
+    fn input(&mut self, msg: Control, inject_tx: &InjectTx) {
         let now = Instant::now();
         self.last_rx = now;
         self.last_input = now;
         let inject = |i| {
-            let _ = inject.send(i);
+            let _ = inject_tx.send(i);
         };
         match msg {
             Control::Key { code, down } => {
-                if down && Mods::is_modifier(code) {
-                    self.mods_pressed.update(code, true);
-                }
-                if self.held.update(code, down) {
-                    inject(Inject::Key { code, down });
-                }
+                let events = self.keys.physical_key(code, down);
+                self.key_events(events, inject_tx);
             }
             // Relative motion: the click happens wherever the pointer is.
             Control::Button { button, down, .. } if self.relative => {
@@ -505,6 +514,7 @@ impl Owner {
     }
 
     fn release_all(&mut self, inject: &InjectTx) {
+        self.keys = one_mk_proto::typing::Receiver::default();
         for code in self.held.take_all() {
             let release = if link::is_button(code) {
                 Inject::Button { button: code, down: false }
@@ -3437,6 +3447,46 @@ mod tests {
         assert!(o.last_input > moved, "a key is input");
     }
 
+    #[test]
+    fn normal_and_resolved_key_paths_never_release_each_others_shift() {
+        use one_mk_proto::typing::Chord;
+        let (mut owner, mut received, inject) = owner_for_test();
+        let shift = |down| Control::Key { code: 42, down };
+        let resolved = || Chord { code: 44, modifiers: vec![42] };
+        owner.input(shift(true), &inject);
+        let events = owner.keys.key(21, true, resolved);
+        owner.key_events(events, &inject);
+        owner.input(Control::Text { text: "Z".into() }, &inject);
+        let events = owner.keys.key(21, false, || unreachable!());
+        owner.key_events(events, &inject);
+        assert!(owner.held.is_held(42));
+        assert_eq!(drain(&mut received), vec![
+            Inject::Key { code: 42, down: true },
+            Inject::Key { code: 44, down: true },
+            Inject::Key { code: 44, down: false },
+        ]);
+        owner.input(shift(false), &inject);
+        assert_eq!(drain(&mut received), vec![Inject::Key { code: 42, down: false }]);
+
+        let events = owner.keys.key(21, true, resolved);
+        owner.key_events(events, &inject);
+        owner.input(shift(true), &inject);
+        let events = owner.keys.key(21, false, || unreachable!());
+        owner.key_events(events, &inject);
+        assert!(owner.held.is_held(42));
+        assert_eq!(drain(&mut received), vec![
+            Inject::Key { code: 42, down: true },
+            Inject::Key { code: 44, down: true },
+            Inject::Key { code: 44, down: false },
+        ]);
+        owner.release_all(&inject);
+        owner.release_all(&inject);
+        assert_eq!(drain(&mut received), vec![Inject::Key { code: 42, down: false }]);
+        owner.input(shift(true), &inject);
+        owner.input(shift(false), &inject);
+        assert_eq!(drain(&mut received), vec![Inject::Key { code: 42, down: true }, Inject::Key { code: 42, down: false }]);
+    }
+
     /// A non-owner flooding B with control messages must not starve B's
     /// timers: the silent owner still loses its lease on time, and the key
     /// it held is released.
@@ -3590,6 +3640,40 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
+    }
+
+    #[tokio::test]
+    async fn unnegotiated_character_messages_never_inject_or_release_physical_keys() {
+        let mut duo = Duo::start("hostile-text-fallback", None).await;
+        let mut hostile = RawPeer::connect("hostile-text-peer", &duo.db, duo.pb).await;
+        assert_eq!(caps::LOCAL & caps::TEXT, 0);
+        hostile.send(Control::Caps(caps::TEXT)).await;
+        hostile.send(Control::Text { text: "z".into() }).await;
+        hostile.send(Control::Enter { epoch: 91, pos: Pos::new(5.0, 5.0) }).await;
+        assert_eq!(hostile.next().await, Control::EnterAck { epoch: 91 });
+        while next_inject(&mut duo.hb).await != Inject::MoveTo(Pos::new(5.0, 5.0)) {}
+        hostile.send(Control::Key { code: 30, down: true }).await;
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 30, down: true });
+        for _ in 0..=one_mk_proto::typing::TEXT_PER_SECOND {
+            hostile.send(Control::Text { text: "z".into() }).await;
+        }
+        for text in ["\n", "\t", "\x1b", "\u{202e}", "\u{2066}", "\u{200d}"] {
+            let mut body = vec![21];
+            body.extend_from_slice(&(text.len() as u16).to_le_bytes());
+            body.extend_from_slice(text.as_bytes());
+            hostile.send_body(&body).await;
+        }
+        hostile.send(Control::CharacterKey { code: 30, down: false, character: 'z' }).await;
+        hostile.send(Control::CharacterKey { code: 21, down: true, character: 'z' }).await;
+        hostile.send(Control::CharacterKey { code: 21, down: false, character: 'z' }).await;
+        hostile.send(Control::Key { code: 30, down: false }).await;
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 30, down: false });
+        hostile.send(Control::Key { code: 44, down: true }).await;
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 44, down: true });
+        hostile.send(Control::Leave).await;
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 44, down: false });
+        drop(hostile);
+        duo.stop().await;
     }
 
     /// Only one machine controls B at a time; malformed messages don't

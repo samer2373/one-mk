@@ -131,6 +131,9 @@ preference in `[typing]`; the default is `physical`. **Characters and auto are
 not operational yet**: they currently fall back to physical, explicitly reported
 by the command, status and doctor. The Advanced tab shows the saved preference
 and this limitation. No clipboard paste or live keyboard-map rewriting is used.
+The Linux follow-up adds tested X11 keymap snapshots and compose primitives,
+but does not yet connect them to typing visits. It does not fix cross-layout
+AltGr typing in the daemon; do not enable characters expecting that fix.
 See [keyboard layout design and remaining work](docs/KEYBOARD-LAYOUT.md).
 
 ## Pair without sitting at both computers

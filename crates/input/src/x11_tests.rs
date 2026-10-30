@@ -12,6 +12,76 @@ use x11rb::protocol::xproto::GrabStatus;
 const W: i16 = 1280;
 const H: i16 = 800;
 
+#[test]
+fn native_typing_snapshots_follow_server_maps_and_modifiers() {
+    let Some(server) = Xvfb::start() else { return };
+    let observer = server.observer();
+    let mut keyboard = crate::X11Keyboard::connect(&server.display).expect("native XKB connection");
+    for (layout, code, modifier, expected) in [
+        ("de", 21, None, "z"),
+        ("de", 44, None, "y"),
+        ("de", 16, Some(100), "@"),
+        ("fr", 16, None, "a"),
+        ("fr", 11, Some(100), "@"),
+        ("pl", 38, Some(100), "ł"),
+        ("tr", 23, None, "ı"),
+        ("us", 21, Some(42), "Y"),
+    ] {
+        assert!(Command::new("setxkbmap").args(["-display", &server.display, layout]).status().unwrap().success());
+        if let Some(modifier) = modifier {
+            observer.fake(xproto::KEY_PRESS_EVENT, modifier + 8, observer.root, 0, 0);
+        }
+        let snapshot = keyboard.snapshot().expect("current native keymap and state");
+        assert_eq!(snapshot.resolver.resolve(code, snapshot.masks).as_deref(), Some(expected), "{layout}");
+        assert_eq!(snapshot.resolver.reverse('z', snapshot.masks.group).unwrap().code, match layout { "de" => 21, "fr" => 17, _ => 44 });
+        if let Some(modifier) = modifier {
+            observer.fake(xproto::KEY_RELEASE_EVENT, modifier + 8, observer.root, 0, 0);
+        }
+    }
+}
+
+#[test]
+fn native_typing_snapshot_preserves_the_old_map_during_a_hold() {
+    let Some(server) = Xvfb::start() else { return };
+    let observer = server.observer();
+    assert!(Command::new("setxkbmap").args(["-display", &server.display, "de"]).status().unwrap().success());
+    let mut keyboard = crate::X11Keyboard::connect(&server.display).unwrap();
+    let before = keyboard.snapshot().unwrap();
+    observer.fake(xproto::KEY_PRESS_EVENT, 29 + 8, observer.root, 0, 0);
+    assert!(Command::new("setxkbmap").args(["-display", &server.display, "us"]).status().unwrap().success());
+    let after = keyboard.snapshot().unwrap();
+    assert_ne!(after.masks.depressed, 0, "native Ctrl state survives the map change");
+    assert_eq!(before.resolver.resolve(21, before.masks).as_deref(), Some("z"));
+    assert_eq!(after.resolver.resolve(21, crate::LayoutState::default()).as_deref(), Some("y"));
+    observer.fake(xproto::KEY_RELEASE_EVENT, 29 + 8, observer.root, 0, 0);
+    assert_eq!(keyboard.snapshot().unwrap().masks.depressed, 0);
+}
+
+#[test]
+fn native_typing_snapshots_read_group_and_caps_lock() {
+    let Some(server) = Xvfb::start() else { return };
+    let observer = server.observer();
+    assert!(Command::new("setxkbmap").args([
+        "-display", &server.display, "-layout", "us,de", "-option", "", "-option", "grp:alt_shift_toggle",
+    ]).status().unwrap().success());
+    let mut keyboard = crate::X11Keyboard::connect(&server.display).unwrap();
+    let initial = keyboard.snapshot().unwrap();
+    assert_eq!(initial.masks.group, 0);
+    assert_eq!(initial.resolver.resolve(21, initial.masks).as_deref(), Some("y"));
+    for (code, down) in [(56, true), (42, true), (42, false), (56, false)] {
+        observer.fake(if down { xproto::KEY_PRESS_EVENT } else { xproto::KEY_RELEASE_EVENT }, code + 8, observer.root, 0, 0);
+    }
+    let german = keyboard.snapshot().unwrap();
+    assert_eq!(german.masks.group, 1);
+    assert_eq!(german.resolver.resolve(21, german.masks).as_deref(), Some("z"));
+    observer.fake(xproto::KEY_PRESS_EVENT, 58 + 8, observer.root, 0, 0);
+    observer.fake(xproto::KEY_RELEASE_EVENT, 58 + 8, observer.root, 0, 0);
+    let caps = keyboard.snapshot().unwrap();
+    assert_ne!(caps.masks.locked, 0);
+    assert_eq!(caps.resolver.resolve(21, caps.masks).as_deref(), Some("Z"));
+    assert_eq!(initial.resolver.resolve(21, initial.masks).as_deref(), Some("y"));
+}
+
 /// All of the right edge of the default `Xvfb` screen.
 fn right_edge() -> Edge {
     Edge::of(Side::Right, &Rect::new(0, 0, i32::from(W), i32::from(H)))
