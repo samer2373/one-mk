@@ -648,6 +648,65 @@ pub fn pointer_overlay_check(support: Support, mode: DrawMode) -> Check {
     check("pointer-overlay", "Pointer without a mouse", out)
 }
 
+/// Pointer wrap and layout learning (`[edge] wrap`, `learn`): what is on,
+/// whether it was tried with this input backend (`backend` as `one-mk
+/// status` names it; empty when one-mk isn't running), and the question
+/// learning is asking, if any.
+pub fn edge_push_check(edge: &crate::settings::EdgeSettings, backend: &str, question: Option<String>) -> Check {
+    use crate::settings::{Learn, Wrap};
+    let id = "edge-push";
+    let title = "Edges with no computer";
+    if edge.wrap == Wrap::Off && edge.learn == Learn::Off {
+        return check(id, title, Outcome::skip("Pointer wrap and layout learning are off."));
+    }
+    let wrap = match edge.wrap {
+        Wrap::Off => "Pointer wrap is off",
+        Wrap::On => "The pointer wraps round at left and right edges with no computer",
+        Wrap::All => "The pointer wraps round at every edge with no computer",
+    };
+    let learn = match edge.learn {
+        Learn::Off => "layout learning is off",
+        Learn::Suggest => "pushing toward a computer that isn't placed yet suggests where it is",
+        Learn::Auto => "pushing toward a computer that isn't placed yet places it",
+    };
+    let mut detail = format!("{wrap}; {learn}.");
+    if let Some(q) = question {
+        detail += &format!(" Asking now: {q}");
+    }
+    let acts = edge.wrap != Wrap::Off || edge.learn == Learn::Auto;
+    let out = match edge_push_tested(backend) {
+        Some(true) | None => Outcome::pass(detail),
+        Some(false) if acts => Outcome::warn(
+            format!("{detail} Not yet tested on {}.", backend_words(backend)),
+            "If the pointer misbehaves at an edge with no computer, turn it off with `one-mk edge --wrap off --learn suggest`, and report it.",
+        ),
+        Some(false) => Outcome::pass(format!("{detail} Not yet tested on {}.", backend_words(backend))),
+    };
+    check(id, title, out)
+}
+
+/// Where `backend` (as `one-mk status` names it) runs, in words.
+pub fn backend_words(backend: &str) -> &str {
+    match backend {
+        "portal" => "the Wayland desktop portals (GNOME, KDE)",
+        "wlroots" => "wlroots desktops (Sway, Hyprland)",
+        "native" if cfg!(windows) => "Windows",
+        "native" if cfg!(target_os = "macos") => "macOS",
+        other => other,
+    }
+}
+
+/// Whether wrap and learning were tried with `backend` (`None`: unknown,
+/// one-mk isn't running). Only X11 was, on a private X server; the null
+/// backend captures nothing.
+pub fn edge_push_tested(backend: &str) -> Option<bool> {
+    match backend {
+        "" => None,
+        "x11" | "null" => Some(true),
+        _ => Some(false),
+    }
+}
+
 fn probe_tuning(dir: &Path) -> Option<Tuning> {
     let input = Settings::load(dir).ok()?.input;
     let paired = TrustStore::load(dir)
@@ -934,6 +993,11 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         crate::pointeroverlay::support_here(daemon.status().map(|s| s.backend.as_str())),
         crate::settings::Settings::load(dir).map(|s| s.pointer.draw_when_no_mouse).unwrap_or_default(),
     ));
+    if let Ok(settings) = crate::settings::Settings::load(dir) {
+        let status = daemon.status();
+        let question = status.and_then(|s| s.suggestion.as_ref()).map(|g| one_mk_ctl::status::is_it_there(&g.name, g.side));
+        checks.push(edge_push_check(&settings.edge, status.map_or("", |s| s.backend.as_str()), question));
+    }
     checks.push(network_check(&addrs));
     checks.push(connection_check(&daemon));
     let seen = mdns.seen.as_deref().unwrap_or_default();
@@ -1248,6 +1312,23 @@ mod tests {
 
     fn st(c: &Check) -> Status {
         c.outcome.status
+    }
+
+    #[test]
+    fn edge_push_states() {
+        use crate::settings::{EdgeSettings, Learn, Wrap};
+        let edge = |wrap, learn| EdgeSettings { wrap, learn, ..EdgeSettings::default() };
+        assert_eq!(st(&edge_push_check(&edge(Wrap::Off, Learn::Off), "x11", None)), Status::Skip);
+        let default = edge_push_check(&EdgeSettings::default(), "portal", Some("Is B on your left?".into()));
+        assert_eq!(st(&default), Status::Pass, "suggesting only hands the pointer back");
+        assert!(default.outcome.detail.contains("Not yet tested on the Wayland desktop portals"), "{}", default.outcome.detail);
+        assert!(default.outcome.detail.contains("Asking now: Is B on your left?"));
+        let wrap = edge_push_check(&edge(Wrap::On, Learn::Suggest), "wlroots", None);
+        assert_eq!(st(&wrap), Status::Warn);
+        assert!(wrap.outcome.fix.as_deref().is_some_and(|f| f.contains("one-mk edge --wrap off")));
+        assert_eq!(st(&edge_push_check(&edge(Wrap::All, Learn::Auto), "x11", None)), Status::Pass);
+        assert_eq!(st(&edge_push_check(&edge(Wrap::Off, Learn::Auto), "native", None)), Status::Warn);
+        assert_eq!(st(&edge_push_check(&edge(Wrap::On, Learn::Auto), "", None)), Status::Pass, "not running: nothing to say");
     }
 
     #[test]

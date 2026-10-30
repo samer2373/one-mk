@@ -68,6 +68,46 @@ pub struct Device {
     /// None: anywhere along `side`, scaled to fit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<(i32, i32)>,
+    /// Who chose `side` and `offset` (see [`PlacedBy`]); only a guess may
+    /// be moved by layout learning.
+    #[serde(default, skip_serializing_if = "PlacedBy::is_default")]
+    pub placed_by: PlacedBy,
+}
+
+/// Who chose where a device sits. Pushing the pointer toward a computer
+/// (`[edge] learn`) may move it only while its place is a guess.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlacedBy {
+    /// Not said: pairing's guess while `layout_version` is 0, the user's
+    /// choice otherwise (files from before this field have only that).
+    #[default]
+    Default,
+    /// `one-mk layout`, the window, a layout profile, or the other
+    /// computer (whose user may have chosen it).
+    User,
+    /// Layout learning, from the pointer pushed toward it.
+    Learned,
+    /// The guessed or learned place has been used: the pointer crossed to
+    /// the device through that edge.
+    Confirmed,
+}
+
+impl PlacedBy {
+    fn is_default(&self) -> bool {
+        *self == PlacedBy::Default
+    }
+}
+
+impl<'de> Deserialize<'de> for PlacedBy {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(match String::deserialize(d)?.as_str() {
+            "user" => PlacedBy::User,
+            "learned" => PlacedBy::Learned,
+            "confirmed" => PlacedBy::Confirmed,
+            _ => PlacedBy::Default,
+        })
+    }
 }
 
 fn default_side() -> String {
@@ -83,6 +123,16 @@ impl Device {
     }
     pub fn short_id(&self) -> String {
         self.fingerprint().map(|f| f.short()).unwrap_or_default()
+    }
+    /// Its place is only a guess that layout learning may change: pairing's
+    /// default, or learned and not used since, and not at an exact offset.
+    pub fn learnable(&self) -> bool {
+        self.offset.is_none()
+            && match self.placed_by {
+                PlacedBy::Default => self.layout_version == 0,
+                PlacedBy::Learned => true,
+                PlacedBy::User | PlacedBy::Confirmed => false,
+            }
     }
 }
 
@@ -156,6 +206,7 @@ impl TrustStore {
             device.layout_version = existing.layout_version;
             device.swap_ctrl_cmd = existing.swap_ctrl_cmd;
             device.offset = existing.offset;
+            device.placed_by = existing.placed_by;
             *existing = device;
         } else {
             self.file.devices.push(device);
@@ -199,6 +250,41 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// Who placed a device: a file from before `placed_by` reads as the
+    /// user's choice once a layout was chosen, pairing's guess before;
+    /// the field is written only when it says more than that.
+    #[test]
+    fn placement_origin_and_what_learning_may_move() {
+        let dir = std::env::temp_dir().join(format!("one-mk-trust-placed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b, c) = ("ab".repeat(32), "cd".repeat(32), "ef".repeat(32));
+        let text = format!(
+            "[[device]]\nname = 'guess'\nfingerprint = '{a}'\nside = 'right'\n\
+             [[device]]\nname = 'chosen'\nfingerprint = '{b}'\nside = 'left'\nlayout_version = 1700000000000\n\
+             [[device]]\nname = 'learned'\nfingerprint = '{c}'\nside = 'top'\nlayout_version = 5\nplaced_by = 'learned'\n"
+        );
+        std::fs::write(dir.join("devices.toml"), text).unwrap();
+        let mut t = TrustStore::load(&dir).unwrap();
+        let learnable: Vec<bool> = t.devices().iter().map(Device::learnable).collect();
+        assert_eq!(learnable, [true, false, true]);
+        let guess = t.get_mut(&a.parse().unwrap()).unwrap();
+        guess.offset = Some((1920, 0));
+        assert!(!guess.learnable(), "an exact place is never a guess");
+        guess.offset = None;
+        guess.placed_by = PlacedBy::Confirmed;
+        assert!(!guess.learnable());
+        t.save().unwrap();
+        let saved = std::fs::read_to_string(dir.join("devices.toml")).unwrap();
+        assert_eq!(saved.matches("placed_by").count(), 2, "{saved}");
+        assert!(saved.contains("placed_by = \"confirmed\"") && saved.contains("placed_by = \"learned\""));
+        assert!(TrustStore::load(&dir).is_ok());
+        // A value this build doesn't know (a newer build's, a typo) is no
+        // reason to lose the paired computers: it reads as not said.
+        std::fs::write(dir.join("devices.toml"), format!("[[device]]\nname = 'x'\nfingerprint = '{a}'\nplaced_by = 'robot'\n")).unwrap();
+        assert_eq!(TrustStore::load(&dir).unwrap().devices()[0].placed_by, PlacedBy::Default);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// A name that is also another computer's ID never picks either.
     #[test]
     fn an_ambiguous_query_finds_nothing() {
@@ -235,8 +321,10 @@ mod tests {
         assert_eq!(TrustStore::load(&dir).unwrap().devices()[0].offset, Some((-3000, -900)));
         // Pairing again keeps the layout.
         let mut t = TrustStore::load(&dir).unwrap();
+        t.get_mut(&fp.parse().unwrap()).unwrap().placed_by = PlacedBy::Learned;
         t.upsert(Device { name: "old".into(), fingerprint: fp.clone(), ..Device::default() });
         assert_eq!(t.devices()[0].offset, Some((-3000, -900)));
+        assert_eq!(t.devices()[0].placed_by, PlacedBy::Learned);
         assert_eq!("ON".parse::<Swap>(), Ok(Swap::On));
         assert!("maybe".parse::<Swap>().is_err());
         let _ = std::fs::remove_dir_all(dir);

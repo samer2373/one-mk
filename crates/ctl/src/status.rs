@@ -22,6 +22,48 @@ pub fn placement(side: Side, offset: Option<(i32, i32)>) -> String {
     }
 }
 
+/// "Is B on your left?" / "Is B above this computer?": the question layout
+/// learning asks.
+pub fn is_it_there(name: &str, side: Side) -> String {
+    let at = match side {
+        Side::Left | Side::Right => on_your(side),
+        Side::Top => "above this computer",
+        Side::Bottom => "below this computer",
+    };
+    format!("Is {name} {at}?")
+}
+
+/// How to name a computer on the command line: its name where that is
+/// safe to type as it is (quoted if it has spaces), else its id.
+pub fn device_arg(name: &str, id: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_');
+    if !name.is_empty() && name.chars().all(plain) {
+        name.to_owned()
+    } else if !name.trim().is_empty() && name.chars().all(|c| plain(c) || c == ' ') && name.trim() == name {
+        format!("\"{name}\"")
+    } else {
+        id.to_owned()
+    }
+}
+
+/// A computer layout learning thinks is on `side` (see `docs/EDGE-PUSH.md`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Suggestion {
+    pub id: String,
+    pub name: String,
+    pub side: Side,
+    /// How to name it in `one-mk layout` (see [`device_arg`]); the name is
+    /// not always unique.
+    pub arg: String,
+}
+
+impl Suggestion {
+    /// The command that places it there.
+    pub fn command(&self) -> String {
+        format!("one-mk layout {} {}", self.arg, self.side)
+    }
+}
+
 /// How the person at this computer takes control back from a peer. On
 /// Linux the portals can't tell their own mouse and keyboard from injected
 /// input, so only the command (or the idle rule) works there.
@@ -94,6 +136,10 @@ pub struct Status {
     /// right now. Offline peers have none. Kept here, like `offsets`, so
     /// [`PeerStatus`] literals elsewhere stay valid.
     pub links: Vec<(String, LinkStats)>,
+    /// A computer that seems to be somewhere else than where it is placed:
+    /// the pointer was pushed twice against an edge where no computer sits.
+    /// Shown for a few minutes.
+    pub suggestion: Option<Suggestion>,
 }
 
 /// What QUIC already knows about a connection, read on a status request
@@ -348,6 +394,10 @@ impl Status {
         for line in &self.tuning {
             out += &format!("tuning\t{}\n", line.replace(['\t', '\n', '\r'], " "));
         }
+        if let Some(g) = &self.suggestion {
+            let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+            out += &format!("suggest\t{}\t{}\t{}\t{}\n", clean(&g.id), g.side, clean(&g.arg), clean(&g.name));
+        }
         for t in &self.transfers {
             out += &format!(
                 "transfer\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -411,6 +461,11 @@ impl Status {
                 ["input", v] => s.input.push(v.into()),
                 ["warning", v] => s.layout.warnings.push(v.into()),
                 ["tuning", v] => s.tuning.push(v.into()),
+                ["suggest", id, side, arg, name] => {
+                    if let Ok(side) = side.parse() {
+                        s.suggestion = Some(Suggestion { id: id.into(), name: name.into(), side, arg: arg.into() });
+                    }
+                }
                 // Cosmetic: a line that doesn't parse is skipped, not fatal.
                 ["transfer", id, dir, files, done, total, rate, peer] => s.transfers.extend(|| -> Option<_> {
                     Some(TransferStatus {
@@ -473,6 +528,13 @@ impl Status {
         for line in self.input.iter().chain(&self.layout.warnings).chain(&self.tuning) {
             out += &format!("{line}\n");
         }
+        if let Some(g) = &self.suggestion {
+            out += &format!(
+                "{} You pushed the pointer against that edge twice. To place it there, run `{}` (`one-mk edge --dismiss` hides this).\n",
+                is_it_there(&g.name, g.side),
+                g.command()
+            );
+        }
         if self.pointer_overlay {
             out += "one-mk draws the pointer here: this computer shows none of its own (`one-mk pointer-overlay` to change).\n";
         }
@@ -522,6 +584,20 @@ impl Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggestions_name_the_computer_safely() {
+        assert_eq!(device_arg("laptop", "ab12-cd34"), "laptop");
+        assert_eq!(device_arg("Sam's Mac", "ab12-cd34"), "ab12-cd34", "a quote would need escaping");
+        assert_eq!(device_arg("studio pc", "ab12-cd34"), "\"studio pc\"");
+        assert_eq!(device_arg(" pc", "ab12-cd34"), "ab12-cd34");
+        assert_eq!(device_arg("", "ab12-cd34"), "ab12-cd34");
+        for hostile in ["$(rm -rf ~)", "a`b`", "a;b", "x\ny", "名前", "a|b", "%PATH%"] {
+            assert_eq!(device_arg(hostile, "ab12-cd34"), "ab12-cd34", "{hostile}");
+        }
+        assert_eq!(is_it_there("B", Side::Top), "Is B above this computer?");
+        assert_eq!(is_it_there("B", Side::Right), "Is B on your right?");
+    }
 
     #[test]
     fn every_backend_roundtrips() {
@@ -578,6 +654,14 @@ mod tests {
         // A line can't break the format.
         let odd = Status { input: vec!["a\tb\nc".into()], ..Status::default() };
         assert_eq!(Status::decode(&odd.encode()).unwrap().input, ["a b c"]);
+        let suggestion = Suggestion { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Left, arg: "\"mac mini\"".into() };
+        let suggested = Status { suggestion: Some(suggestion), ..Status::default() };
+        assert_eq!(Status::decode(&suggested.encode()), Some(suggested.clone()));
+        let text = suggested.render();
+        assert!(text.contains("Is mac mini on your left? You pushed the pointer against that edge twice. To place it there, run `one-mk layout \"mac mini\" left`"), "{text}");
+        // A side this reader doesn't know only costs the suggestion.
+        let odd = suggested.encode().replace("suggest\t1234-5678\tleft", "suggest\t1234-5678\tnorth");
+        assert_eq!(Status::decode(&odd).unwrap().suggestion, None);
         let layout = LayoutStatus { warnings: vec!["layout of B does not overlap yours".into()], ..LayoutStatus::default() };
         let warned = Status { layout: Box::new(layout), ..Status::default() };
         assert_eq!(Status::decode(&warned.encode()).unwrap(), warned);

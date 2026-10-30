@@ -17,6 +17,6 @@ pub use pairing::{Pairing, Sas};
 pub use stream::{
     ControlWriter, open_stream, read_clip_header, read_file_msg, read_frame, read_stream_kind, write_file_msg,
 };
-pub use trust::{Device, MAX_OFFSET, Swap, TrustStore};
+pub use trust::{Device, MAX_OFFSET, PlacedBy, Swap, TrustStore};
 
 pub use quinn;

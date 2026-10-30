@@ -13,7 +13,7 @@
 
 use crate::control::{self, Request};
 use anyhow::{Result, bail};
-use one_mk_net::{Device, Fingerprint, Swap, TrustStore};
+use one_mk_net::{Device, Fingerprint, PlacedBy, Swap, TrustStore};
 use one_mk_proto::Side;
 pub use one_mk_ctl::status::{LayoutStatus, LinkStats, PeerStatus, Status, on_your, placement, takeback_hint};
 use std::path::Path;
@@ -178,11 +178,28 @@ pub fn place(dev: &mut Device, side: Side, offset: Option<(i32, i32)>) {
     place_at(dev, side, offset, now_ms());
 }
 
-/// [`place`] with the clock given.
+/// [`place`] with the clock given. The place is the user's choice from
+/// now on (see [`PlacedBy`]).
 pub fn place_at(dev: &mut Device, side: Side, offset: Option<(i32, i32)>, now: u64) {
     dev.side = side.to_string();
     dev.offset = offset;
     dev.layout_version = now.max(dev.layout_version.saturating_add(1));
+    dev.placed_by = PlacedBy::User;
+}
+
+/// Layout learning (`[edge] learn = auto`) puts `fp` on `side`, anywhere
+/// along it, as [`set_layout`] would, but marked as learned, so learning
+/// may move it again until it is used. Refuses (returns `None`) if its
+/// place is no longer a guess: `devices.toml` may have changed since the
+/// daemon read it. Returns the device as it was before.
+pub fn learn_layout(dir: &Path, fp: &Fingerprint, side: Side) -> Result<Option<Device>> {
+    let mut trust = TrustStore::load(dir)?;
+    let Some(dev) = trust.get_mut(fp).filter(|d| d.learnable() && d.side() != side) else { return Ok(None) };
+    let before = dev.clone();
+    place_at(dev, side, None, now_ms());
+    dev.placed_by = PlacedBy::Learned;
+    trust.save()?;
+    Ok(Some(before))
 }
 
 pub async fn layout(dir: &Path, device: &str, side: Option<Side>, offset: Option<&str>, swap: Option<Swap>) -> Result<()> {
@@ -280,5 +297,31 @@ mod tests {
         assert_eq!((dev.layout_version, dev.offset), (5_000, Some((-1920, 0))));
         place_at(&mut dev, Side::Top, None, 5_000); // same millisecond
         assert_eq!(dev.layout_version, 5_001);
+        assert_eq!(dev.placed_by, PlacedBy::User);
+    }
+
+    /// Learning places only a guessed computer, marks it learned (so it
+    /// may be learned again), and never touches one the user placed.
+    #[test]
+    fn learning_moves_only_a_guess() {
+        let dir = std::env::temp_dir().join(format!("one-mk-manage-learn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let id = fp(7);
+        let mut t = TrustStore::load(&dir).unwrap();
+        t.upsert(Device { name: "laptop".into(), fingerprint: id.to_string(), side: "right".into(), ..Device::default() });
+        t.save().unwrap();
+        let before = learn_layout(&dir, &id, Side::Left).unwrap().expect("a guess is learned");
+        assert_eq!(before.side(), Side::Right);
+        let d = TrustStore::load(&dir).unwrap().get(&id).unwrap().clone();
+        assert_eq!((d.side(), d.offset, d.placed_by), (Side::Left, None, PlacedBy::Learned));
+        assert!(d.layout_version > 0, "a newer version, so the other computer adopts the mirror");
+        assert!(learn_layout(&dir, &id, Side::Left).unwrap().is_none(), "already there");
+        assert!(learn_layout(&dir, &id, Side::Top).unwrap().is_some(), "learned again");
+        set_layout(&dir, "laptop", Some(Side::Right), None, None).unwrap();
+        assert!(learn_layout(&dir, &id, Side::Left).unwrap().is_none(), "the user's choice stands");
+        assert_eq!(TrustStore::load(&dir).unwrap().get(&id).unwrap().side(), Side::Right);
+        assert!(learn_layout(&dir, &fp(8), Side::Left).unwrap().is_none(), "not paired");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

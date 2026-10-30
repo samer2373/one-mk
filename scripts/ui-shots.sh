@@ -191,6 +191,11 @@ shot 33-files-transfers-clipboard 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TA
 shot 34-health-failing 3 "$W/fx" ONE_MK_APP_STATUS="$XI" ONE_MK_APP_TAB=health ONE_MK_APP_DOCTOR="$D"
 shot 35-advanced-settings 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced
 shot 36-small-layout 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_SIZE=760x540
+# Layout learning's question (docs/EDGE-PUSH.md), wide and small.
+XS=$W/x-suggest.status
+{ cat "$X"; printf 'suggest\t5555-6666\ttop\t"Gaming PC"\tGaming PC\n'; } >"$XS"
+shot 52-layout-suggestion 3 "$W/fx" ONE_MK_APP_STATUS="$XS" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="Gaming PC"
+shot 53-layout-suggestion-small 3 "$W/fx" ONE_MK_APP_STATUS="$XS" ONE_MK_APP_TAB=layout ONE_MK_APP_SIZE=760x540 ONE_MK_REDUCE_MOTION=1
 
 shot 39-small-advanced 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced ONE_MK_APP_SIZE=760x540
 # A high-density screen: everything drawn 1.5x on top of the desktop's scale.

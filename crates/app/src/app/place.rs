@@ -2,11 +2,81 @@
 //! computer beside one of this computer's monitors: it then crosses only
 //! where their screens touch, see `App::placing`); here are the chosen
 //! computer's side, its exact place, and the saved layout profiles.
-//! Changes go through `one-mk layout` and `one-mk profile`.
+//! Changes go through `one-mk layout` and `one-mk profile`. Over the
+//! desk, layout learning's question, when the daemon has one
+//! (`docs/EDGE-PUSH.md`): "Is it on your left? Yes, place it / No".
 
 use super::*;
+use one_mk_ctl::status::Suggestion;
+use std::sync::Arc;
+
+const SUGGEST_YES: &str = "Yes, place it";
+const SUGGEST_NO: &str = "No";
+const SUGGEST_WHY: &str = "You pushed the pointer against that edge twice.";
+
+/// Layout learning's question, laid out (see `App::suggestion_card`).
+pub(super) struct SuggestionCard {
+    g: Suggestion,
+    question: String,
+    pub(super) rect: Rect,
+    buttons_w: f32,
+    q: Arc<egui::Galley>,
+    d: Arc<egui::Galley>,
+}
 
 impl App {
+    /// Layout learning's question, when the daemon asks one and it wasn't
+    /// answered here: the card for it at the foot of `desk`. The desk is
+    /// drawn above the card, so no computer hides behind it.
+    pub(super) fn suggestion_card(&mut self, ui: &Ui, desk: Rect) -> Option<SuggestionCard> {
+        let Some(g) = self.running().and_then(|s| s.suggestion.clone()) else {
+            self.answered = None; // asked again later, it shows again
+            return None;
+        };
+        if self.tab != Tab::Layout || self.answered.as_ref() == Some(&(g.id.clone(), g.side)) {
+            return None;
+        }
+        let question = one_mk_ctl::status::is_it_there(&g.name, g.side);
+        let buttons_w = button_width(ui, SUGGEST_YES) + 8.0 + button_width(ui, SUGGEST_NO);
+        // The window is at least 820 px wide, so the words always have
+        // room beside the buttons (a long name wraps there).
+        let w = (desk.width() - 48.0).min(720.0);
+        let text_w = w - buttons_w - 48.0;
+        let q = ui.painter().layout(question.clone(), semibold(T_BODY), INK, text_w);
+        let d = ui.painter().layout(SUGGEST_WHY.to_owned(), regular(T_META), INK2, text_w);
+        let h = (q.size().y + 2.0 + d.size().y).max(32.0) + 24.0;
+        let rect = Rect::from_min_size(pos2(desk.center().x - w / 2.0, desk.bottom() - 14.0 - h), vec2(w, h));
+        Some(SuggestionCard { g, question, rect, buttons_w, q, d })
+    }
+
+    /// Draws the card: "Yes, place it" places the computer there (`one-mk
+    /// layout`), "No" hides the question (`one-mk edge --dismiss`); either
+    /// way it goes at once.
+    pub(super) fn suggestion_banner(&mut self, ui: &mut Ui, card: SuggestionCard) {
+        let SuggestionCard { g, question, rect, buttons_w, q, d } = card;
+        let p = ui.painter();
+        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(10)));
+        p.rect(rect, CornerRadius::same(10), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        let qh = q.size().y;
+        let text_top = rect.center().y - (qh + 2.0 + d.size().y) / 2.0;
+        p.galley(pos2(rect.left() + 16.0, text_top), q, INK);
+        p.galley(pos2(rect.left() + 16.0, text_top + qh + 2.0), d, INK2);
+        a11y_text(ui, Id::unique(("suggestion", &g.id)), rect, Role::Status, &format!("{question} {SUGGEST_WHY}"), Some(Live::Polite));
+        let row_y = rect.center().y - 16.0;
+        let yes_r = Rect::from_min_size(pos2(rect.right() - 16.0 - buttons_w, row_y), vec2(button_width(ui, SUGGEST_YES), 32.0));
+        let no_r = Rect::from_min_size(pos2(yes_r.right() + 8.0, row_y), vec2(button_width(ui, SUGGEST_NO), 32.0));
+        let place = format!("Yes: place {} {}", g.name, on_your(g.side));
+        let keep = format!("No: {} stays where it is", g.name);
+        if button(ui, yes_r, Id::unique(("suggestion-yes", &g.id)), SUGGEST_YES, Look::Primary, true, Some(&place)).clicked() {
+            self.answered = Some((g.id.clone(), g.side));
+            self.choose_side(&g.id, g.side, false);
+        }
+        if button(ui, no_r, Id::unique(("suggestion-no", &g.id)), SUGGEST_NO, Look::Quiet, true, Some(&keep)).clicked() {
+            self.answered = Some((g.id.clone(), g.side));
+            self.link.set("the layout suggestion", &["edge", "--dismiss"]);
+        }
+    }
+
     /// The layout warnings the daemon has about `name`.
     fn layout_warnings(status: &Status, name: &str) -> Vec<String> {
         status.layout.warnings.iter().filter(|w| w.contains(name)).cloned().collect()

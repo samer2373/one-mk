@@ -147,7 +147,7 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 | `one-mk switch <pc\|here\|next>` | Move the mouse and keyboard to another computer without crossing an edge (`here`: back to this one) |
 | `one-mk lock-pointer on\|off\|toggle` | Keep the pointer on this computer: edges lead nowhere |
 | `one-mk hotkeys [options]` | Show or change the keyboard shortcuts (see below) |
-| `one-mk edge [options]` | Rules for crossing edges (see below) |
+| `one-mk edge [options]` | Rules for crossing edges, pointer wrap and layout learning (see below) |
 | `one-mk gaming on\|off\|auto` | Raw mouse movement for games on another computer |
 | `one-mk lock-all` | Lock this computer's screen and every connected one's |
 | `one-mk lock-sync on\|off` | Locking any computer locks the others (those with lock sync on) |
@@ -423,6 +423,32 @@ X11 windows can be seen, which on Wayland means programs running through
 XWayland (most games); macOS can't tell yet. Where it can't tell, the
 pointer crosses as usual. Settings are kept in `settings.toml` and apply at
 once.
+
+**Edges where no computer sits.** Pointer wrap brings the pointer in at
+the opposite edge when you push it out through an edge with no computer
+(like "wrap mouse" in Mouse Without Borders); layout learning notices when
+you push twice toward a computer that isn't placed yet:
+
+```bash
+one-mk edge --wrap on            # left and right edges wrap round (all: top and bottom too; off: the default)
+one-mk edge --learn suggest      # the default: "Is laptop on your left? Run: one-mk layout laptop left"
+one-mk edge --learn auto         # place it there (left or right only; above and below are suggested) and say how to undo
+one-mk edge --dismiss            # hide the question shown now
+```
+
+Wrap keeps the height (on several monitors, the same row: out at the right
+of the rightmost monitor, in at the left of the leftmost one on that row),
+follows the edge rules above (dead corners, dwell, modifier, fullscreen
+guard), never happens on a side where a paired computer sits (even an
+offline one), while the pointer is locked, or while another computer
+controls this one. Learning only ever looks at a computer whose place is
+still pairing's guess: once you place it (`one-mk layout`, the window, a
+profile) or cross to it, it is left alone, and no edge is watched for it any
+more. It asks at most once per computer every 10 minutes; the question
+shows in `one-mk status`, as a notification and on the window's Layout
+tab ("Yes, place it" / "No"). Tested on X11; untested on the Wayland
+portals, wlroots, Windows and macOS (`one-mk doctor` says so). Details:
+[docs/EDGE-PUSH.md](docs/EDGE-PUSH.md).
 
 **Gaming mode.** Games capture the pointer and want raw movement, not
 positions. With `one-mk gaming on`, while the pointer is on another computer
@@ -853,6 +879,15 @@ and exits with status 1 if something failed.
   5 GHz band or a cable, and pause big downloads. `one-mk bench --connect`
   measures the pointer's whole path.
 - **A paired computer is on the wrong side.** `one-mk layout "<name>" <side>`.
+- **The pointer jumps to the other side of the screen.** Pointer wrap is
+  on: `one-mk edge --wrap off`, or `--wrap on` to wrap only the left and
+  right edges, or add a dwell (`one-mk edge --dwell 300`) so a quick flick
+  to an edge doesn't wrap.
+- **"Is laptop on your left?" but it isn't.** Choose No in the window, or
+  `one-mk edge --dismiss`; place it where it really is (`one-mk layout`) and
+  it is never asked about again. `one-mk edge --learn off` stops the
+  questions. If `learn = auto` moved it, the notification and the daemon's
+  output give the command that puts it back.
 - **The pointer won't cross part of an edge.** With an offset, only where
   the other computer's screens touch yours leads there (`one-mk status` and
   `one-mk devices` show the offset). `--offset none` makes all of the edge
