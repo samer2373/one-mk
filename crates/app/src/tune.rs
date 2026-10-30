@@ -1749,22 +1749,22 @@ os = "mac"
     fn rules_read_as_sentences() {
         let i = input();
         let s = |k: usize| sentence(&i, &i.keys[k]).unwrap();
-        assert_eq!(s(0), "Caps Lock → Esc when tapped, Ctrl when held");
-        assert_eq!(s(1), format!("Left Alt → {}", meta_word()));
-        assert_eq!(s(2), "Right Alt → hold it for the “nav” keys");
-        assert_eq!(s(3), "Right Alt + H → Left");
-        assert_eq!(s(4), "F2 → types Ctrl+A, then Ctrl+C");
+        assert_eq!(s(0), format!("Caps Lock → Esc when tapped, {} when held", ctrl_word()));
+        assert_eq!(s(1), format!("Left {} → {}", alt_word(), meta_word()));
+        assert_eq!(s(2), format!("Right {} → hold it for the “nav” keys", alt_word()));
+        assert_eq!(s(3), format!("Right {} + H → Left", alt_word()));
+        assert_eq!(s(4), format!("F2 → types {}+A, then {}+C", ctrl_word(), ctrl_word()));
         assert_eq!(s(5), "F13 → switches to the next computer");
-        assert_eq!(sentence(&i, &KeyRule::to("ctrl+h", "backspace")).unwrap(), "Ctrl+H → Backspace");
-        assert_eq!(sentence(&i, &KeyRule::to("rctrl", "none")).unwrap(), "Right Ctrl → does nothing");
-        assert_eq!(sentence(&i, &KeyRule::to("a", "ctrl+shift+esc")).unwrap(), "A → Ctrl+Shift+Esc");
+        assert_eq!(sentence(&i, &KeyRule::to("ctrl+h", "backspace")).unwrap(), format!("{}+H → Backspace", ctrl_word()));
+        assert_eq!(sentence(&i, &KeyRule::to("rctrl", "none")).unwrap(), format!("Right {} → does nothing", ctrl_word()));
+        assert_eq!(sentence(&i, &KeyRule::to("a", "ctrl+shift+esc")).unwrap(), format!("A → {}+Shift+Esc", ctrl_word()));
         let timed = KeyRule { timeout_ms: Some(300), ..KeyRule::tap_hold("space", "space", "layer:nav") };
         assert_eq!(sentence(&i, &timed).unwrap(), "Space → Space when tapped, the “nav” keys when held (after 300 ms)");
         let orphan = KeyRule { layer: Some("fn".into()), ..KeyRule::to("j", "down") };
         assert_eq!(sentence(&i, &orphan).unwrap(), "In “fn”: J → Down");
         assert!(sentence(&i, &KeyRule::to("capslok", "esc")).unwrap_err().contains("\"capslok\" is not a key name"));
         let in_app = KeyRule { app: Some("Code".into()), ..KeyRule::to("ctrl+space", "f13") };
-        assert_eq!(sentence(&i, &in_app).unwrap(), "Ctrl+Space → F13, only in Code");
+        assert_eq!(sentence(&i, &in_app).unwrap(), format!("{}+Space → F13, only in Code", ctrl_word()));
         let but = KeyRule { app: Some("!code".into()), ..KeyRule::to("a", "b") };
         assert_eq!(sentence(&i, &but).unwrap(), "A → B, in every app except code");
         assert_eq!(add_args(&in_app), ["keymap", "add", "--app=Code", "--", "ctrl+space", "f13"]);
@@ -1908,7 +1908,7 @@ os = "mac"
         assert_eq!(b[2], (3, "Middle click".to_owned(), false));
         assert_eq!(buttons_shown(&i, &Facts::of(&Scope::Os(os::MACOS), &[]))[2].1, "Locks every screen");
         assert_eq!(button_text(&"button2".parse().unwrap()), "Right click");
-        assert_eq!(button_text(&"ctrl+c".parse().unwrap()), "Ctrl+C");
+        assert_eq!(button_text(&"ctrl+c".parse().unwrap()), format!("{}+C", ctrl_word()));
         for (_, to) in BUTTON_CHOICES {
             assert_eq!(check_button(5, to), Ok(()), "{to}");
         }
@@ -1992,7 +1992,7 @@ os = "mac"
         assert_eq!(c.key(97, false), Some(Chord::key(97)), "Right Ctrl alone");
         let mut c = Capture::default();
         c.key(29, true);
-        assert_eq!(c.key(58, true).map(|c| chord_text(&c)), Some("Ctrl+Caps Lock".into()));
+        assert_eq!(c.key(58, true).map(|c| chord_text(&c)), Some(format!("{}+Caps Lock", ctrl_word()).into()));
     }
 
     #[test]
@@ -2016,7 +2016,7 @@ os = "mac"
         assert_eq!(t.note.as_deref(), Some("Caps Lock was held: another key went down after 50 ms."));
         t.key(46, false, ms(1100));
         t.key(58, false, ms(1150));
-        assert_eq!(t.sent.chips.back().unwrap().text, "Ctrl+C");
+        assert_eq!(t.sent.chips.back().unwrap().text, format!("{}+C", ctrl_word()));
         assert_eq!(t.pressed.chips.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), ["Caps Lock", "Caps Lock", "C"]);
         // Held past its time: Ctrl, alone.
         t.key(58, true, ms(2000));
@@ -2024,7 +2024,7 @@ os = "mac"
         assert_eq!(t.note.as_deref(), Some("Caps Lock was held: 180 ms passed."));
         assert_eq!(t.deadline(), None);
         t.key(58, false, ms(2300));
-        assert_eq!(t.sent.chips.back().unwrap().text, "Ctrl");
+        assert_eq!(t.sent.chips.back().unwrap().text, ctrl_word());
         // Actions are shown, never run.
         let mut j = i.clone();
         j.keys[5].scope = Scope::All;
