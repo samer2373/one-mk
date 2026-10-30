@@ -142,6 +142,11 @@ impl App {
         a11y_text(ui, Id::unique("health-live"), boxr, Role::Label, &lines.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>().join(" "), None);
         y += h + 14.0;
 
+        let links = self.latency_rows(ui, x, y, w);
+        if links > 0.0 {
+            y += links + 14.0;
+        }
+
         let list = Rect::from_min_max(pos2(x - 8.0, y), pos2(x + w + 8.0, rect.bottom() - 8.0));
         let checks = match &self.doctor {
             Some((Ok(c), _)) => c.clone(),

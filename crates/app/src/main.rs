@@ -14,6 +14,7 @@ mod app;
 mod daemon;
 mod motion;
 mod pairing;
+mod rtt;
 mod scene;
 mod style;
 mod tune;
