@@ -22,6 +22,7 @@ mod clipctl;
 mod history;
 mod control;
 mod doctor;
+mod wallpaper;
 mod hooks;
 mod hotkeys;
 mod inputdevices;
@@ -151,6 +152,11 @@ impl Action {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Explicit finite command in the separately installed wallpaper import package.
+    Wallpaper {
+        #[arg(num_args = 0.., allow_hyphen_values = true)]
+        arguments: Vec<std::ffi::OsString>,
+    },
     /// Check for or explicitly install a signed release; never updates in the background.
     Update(update::Options),
     /// Stop the sharing service for this settings folder before restarting it.
@@ -440,6 +446,9 @@ fn main() -> ExitCode {
         one_mk_input::cursoroverlay::run_helper();
     }
     let cli = Cli::parse();
+    if let Some(Cmd::Wallpaper { arguments }) = &cli.cmd {
+        return wallpaper::run(arguments);
+    }
     let verbose = cli.verbose;
     let level = match verbose {
         0 => "warn,mdns_sd=error,zbus=error",
@@ -527,6 +536,7 @@ fn run(cli: Cli) -> Result<()> {
             Action::Other(cmd) => cmd,
         };
         match cmd {
+            Cmd::Wallpaper { .. } => unreachable!("forwarded before daemon/config initialization"),
             Cmd::Update(options) => update::run(&dir, options),
             Cmd::Stop => update::stop(&dir).await,
             Cmd::Drag { on, off, zone } => drag::configure(&dir, on, off, zone).await,
