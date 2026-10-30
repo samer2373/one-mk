@@ -10,6 +10,10 @@ use crate::linux_logic::XkbMods;
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::OnceLock;
 
+#[path = "xkb_x11.rs"]
+mod native_x11;
+pub use native_x11::{X11Keyboard, X11LayoutSnapshot};
+
 /// `xkb_state_component` bits.
 const MODS_DEPRESSED: c_int = 1 << 0;
 const MODS_LATCHED: c_int = 1 << 1;
@@ -23,21 +27,22 @@ const EVDEV_OFFSET: u32 = 8;
 /// The libxkbcommon functions used: a struct of function pointers and
 /// `load`, which opens the library (never closed) and looks them up.
 macro_rules! library {
-    ($($field:ident = $sym:literal: fn($($arg:ty),*) $(-> $ret:ty)?;)*) => {
-        struct Lib {
+    ($name:ident, $loader:ident, {$($field:ident = $sym:literal: fn($($arg:ty),*) $(-> $ret:ty)?;)*}) => {
+        struct $name {
             $($field: unsafe extern "C" fn($($arg),*) $(-> $ret)?,)*
         }
 
-        unsafe fn load() -> Option<Lib> {
+        unsafe fn $loader() -> Option<$name> {
             unsafe {
                 let handle = libc::dlopen(c"libxkbcommon.so.0".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
                 if handle.is_null() {
                     return None;
                 }
-                Some(Lib {
+                Some($name {
                     $($field: {
                         let p = libc::dlsym(handle, $sym.as_ptr());
                         if p.is_null() {
+                            libc::dlclose(handle);
                             return None;
                         }
                         std::mem::transmute::<*mut c_void, unsafe extern "C" fn($($arg),*) $(-> $ret)?>(p)
@@ -48,7 +53,7 @@ macro_rules! library {
     };
 }
 
-library! {
+library! { Lib, load, {
     context_new = c"xkb_context_new": fn(c_int) -> *mut c_void;
     context_unref = c"xkb_context_unref": fn(*mut c_void);
     keymap_new_from_buffer = c"xkb_keymap_new_from_buffer": fn(*mut c_void, *const c_char, usize, c_int, c_int) -> *mut c_void;
@@ -61,7 +66,12 @@ library! {
     state_serialize_layout = c"xkb_state_serialize_layout": fn(*mut c_void, c_int) -> u32;
     state_get_keymap = c"xkb_state_get_keymap": fn(*mut c_void) -> *mut c_void;
     state_key_get_utf8 = c"xkb_state_key_get_utf8": fn(*mut c_void, u32, *mut c_char, usize) -> c_int;
-}
+    state_key_get_one_sym = c"xkb_state_key_get_one_sym": fn(*mut c_void, u32) -> u32;
+}}
+
+#[path = "xkb_compose.rs"]
+mod compose;
+pub use compose::{Composition, LayoutComposer};
 
 fn lib() -> Option<&'static Lib> {
     static LIB: OnceLock<Option<Lib>> = OnceLock::new();
@@ -189,14 +199,18 @@ impl LayoutResolver {
             return None;
         }
         let wanted = character.to_string();
-        for modifiers in [vec![], vec![42], vec![100], vec![42, 100]] {
-            let mut state = self.query(LayoutState { group, ..LayoutState::default() })?;
-            for modifier in &modifiers {
-                state.key(*modifier, true);
-            }
-            for code in 1..=255 {
-                if Self::text(&state, code).as_deref() == Some(wanted.as_str()) {
-                    return Some(one_mk_proto::typing::Chord { code, modifiers });
+        for keypad in [false, true] {
+            for modifiers in [vec![], vec![42], vec![100], vec![42, 100]] {
+                let mut state = self.query(LayoutState { group, ..LayoutState::default() })?;
+                for modifier in &modifiers {
+                    state.key(*modifier, true);
+                }
+                for code in 1..=255 {
+                    if matches!(code, 55 | 71..=83 | 95 | 96 | 98 | 117 | 118 | 121 | 179 | 180) == keypad
+                        && Self::text(&state, code).as_deref() == Some(wanted.as_str())
+                    {
+                        return Some(one_mk_proto::typing::Chord { code, modifiers });
+                    }
                 }
             }
         }
@@ -345,6 +359,20 @@ mod tests {
     }
 
     #[test]
+    fn typing_shortcuts_prefer_the_main_block_to_the_keypad() {
+        for symbols in ["us", "de", "fr"] {
+            let Some(resolver) = layout(symbols) else { return };
+            for character in "*+/-.0123456789".chars() {
+                let chord = resolver.reverse(character, 0).unwrap();
+                assert!(!matches!(chord.code, 55 | 71..=83 | 95 | 96 | 98 | 117 | 118 | 121 | 179 | 180), "{symbols}: {character} resolved to keypad {chord:?}");
+            }
+        }
+        let Some(us) = layout("us") else { return };
+        assert_eq!(us.reverse('*', 0), Some(one_mk_proto::typing::Chord { code: 9, modifiers: vec![42] }));
+        assert_eq!(us.reverse('+', 0), Some(one_mk_proto::typing::Chord { code: 13, modifiers: vec![42] }));
+    }
+
+    #[test]
     fn typing_rejects_dead_keys_controls_and_overflow_without_mutating_state() {
         let Some(german) = layout("de") else { return };
         assert_eq!(german.resolve(13, LayoutState::default()), None);
@@ -352,6 +380,25 @@ mod tests {
         assert_eq!(german.resolve(u32::MAX, LayoutState::default()), None);
         assert_eq!(german.reverse('\n', 0), None);
         assert_eq!(german.resolve(21, LayoutState::default()).as_deref(), Some("z"));
+    }
+
+    #[test]
+    fn typing_compose_dead_keys_reset_and_reject_controls() {
+        let Some(german) = layout("de") else { return };
+        let mut compose = LayoutComposer::new(c"C.UTF-8").expect("system compose tables");
+        let masks = LayoutState::default();
+        assert_eq!(compose.feed(&german, 13, masks), Composition::Pending);
+        assert_eq!(compose.feed(&german, 18, masks), Composition::Text("é".into()));
+        assert_eq!(compose.feed(&german, 18, masks), Composition::Text("e".into()));
+        assert_eq!(compose.feed(&german, 13, masks), Composition::Pending);
+        compose.reset();
+        assert_eq!(compose.feed(&german, 18, masks), Composition::Text("e".into()));
+        for code in [28, 15, 1, u32::MAX] {
+            assert_eq!(compose.feed(&german, code, masks), Composition::Physical);
+        }
+        assert_eq!(compose.feed(&german, 13, masks), Composition::Pending);
+        assert_eq!(compose.feed(&german, 2, masks), Composition::Cancelled);
+        assert_eq!(compose.feed(&german, 18, masks), Composition::Text("e".into()));
     }
 
     const CAPS: u32 = 58;
