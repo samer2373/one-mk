@@ -1,1151 +1,894 @@
-# Live wallpaper: a continuous canvas across computers
-
-Research/design only · 30 October 2026 · baseline `9643605` (`main`).
-
-## Plain-language recommendation
-
-Build **one-mk-wall**, an optional program that plays a moving background,
-separate from the keyboard/mouse daemon. Treat all participating screens as
-windows looking into one large picture. Each computer downloads the same
-approved media, decodes it locally once, and shows its assigned rectangles at
-the agreed time. The first public release must support this across computers,
-not merely across the monitors plugged into one computer.
-
-Support Linux, Windows and macOS; support video, GIF, APNG and animated WebP.
-Use native Windows/macOS media facilities and GStreamer on Linux, behind a
-small common playback contract. GNOME needs an explicitly installed Shell
-integration; KDE needs a Plasma wallpaper integration. Neither is solved by
-opening a normal fullscreen window. Keep networking, downloads, decoding and
-animation timers out of the KVM daemon when wallpaper is off.
-
-**This is feasible, but not a frame-locked video wall.** Adjacent monitors on
-different computers may show slightly different moments, especially on Wi-Fi.
-Do not promise invisible seams. A local decode/clock prototype and real OS
-tests are release gates, not polish to defer until after shipping.
-
-| Decision | Recommendation | Consequence |
-|---|---|---|
-| Delivery | Three internal milestones; multi-device in release one | Milestone 1 alone is not a shippable answer |
-| Engine | Native per-OS adapters, one decode per computer, N outputs | More adapter work, fewer shipped media dependencies on Windows/macOS |
-| GNOME 50 | Optional, independently authored Shell bridge | Privileged integration; must pass disposable-session tests first |
-| Plasma | Optional wallpaper plugin, not layer-shell | Plugin/runtime licensing and Qt texture integration need a gate |
-| Canvas | Shared logical-pixel layout; include gaps by default | Optional gap compression and later physical calibration |
-| Synchronization | Monotonic epoch, measured clock offset, gentle rate correction | Best effort; measured quality indicator, no frame-exact claim |
-| Content | Own files, bounded HTTPS import, curated licensed download gallery | No videos bundled in source or installers |
-| Gallery | Start with audited Commons CC0/public-domain items | Pexels/Pixabay/Mixkit/Coverr not approved feeds |
-| Idle | Wallpaper engine absent when disabled; zero new periodic daemon work | Playing video necessarily consumes resources |
-| Scope | No web view, shaders, lock-screen replacement or automatic theming in release one | Shaders only a possible later extra |
-
-### Evidence and uncertainty key
-
-**VERIFIED-REPO** means inspected in this checkout. **VERIFIED-HOST** means a
-read-only probe succeeded here. **DOCUMENTED [Sxx]** means supported by the
-linked primary documentation, not exercised here. **PROPOSAL** means a design
-choice, budget or acceptance threshold, not an existing capability.
-**UNVERIFIED** explicitly marks missing evidence, uncertain integration, legal
-clearance or unmeasured performance. All future behavior below is PROPOSAL
-unless marked otherwise; a proposed API name is not a claim it exists.
-Sources were accessed on 30 October 2026. Recheck moving branches, contracts,
-SDK availability and the final dependency lockfile before implementation.
-This is an engineering licence assessment, not legal advice or legal approval.
-
-## 1. What was actually inspected
-
-### Repository contracts (VERIFIED-REPO)
-
-- `Cargo.toml`: workspace licence `MIT OR Apache-2.0`, version 0.1.13.
-  `README.md` and `docs/FEATURE-PLAN.md`: low latency, zero idle CPU, small
-  footprint, native UI/no web view, optional app/tray. Windows/macOS input
-  backends are described as compile/unit-tested, not real-hardware validated.
-- `crates/proto/src/geometry.rs`: `Rect` is signed integer logical pixels;
-  `Desktop` has monitor rectangles, bounds, gap-aware clamping and touching
-  edges. `motion.rs` applies placement offsets to pointer crossings. Reuse
-  rectangles/transforms, **not** pointer clamping for wallpaper texture lookup:
-  clamping would smear the picture across gaps.
-- `crates/proto/src/codec.rs`: `Control::Layout` carries screens and a trailing
-  optional offset; capability flags and `MAX_SCREENS` already bound protocol
-  data. `PROTOCOL_VERSION` is 2. New messages require explicit negotiation;
-  do not assume old peers ignore unknown tags.
-- `crates/ctl/src/status.rs`: `Status.screens`, `offsets`, boxed `layout` and
-  peer monitor data provide the Layout tab's evidence. Placement is relative,
-  not already a globally agreed, versioned scene graph. Side-only placement
-  does not identify a unique continuous canvas.
-- `crates/proto/src/transfer.rs`: `Offer`, `Accept { offset }`, `End { hash }`,
-  `Saved`/`Failed`; final hash is BLAKE3. Resume uses offered size/mtime.
-  `crates/one-mk/src/transfer.rs` handles file transfers. Wallpaper must reuse
-  the transport/integrity mechanisms without treating arbitrary Downloads
-  paths as playable media or weakening transfer authorization.
-- `crates/one-mk/src/control.rs`, `settings.rs`, `crates/ctl`, `crates/app`,
-  `crates/tray`, `docs/PACKAGING.md`, `.github/workflows/release.yml` and
-  `scripts/{bundle-deb,package-appimage,bundle-mac}.sh` are integration points.
-  No product files were changed for this research.
-
-### Host capability record (VERIFIED-HOST, not a playback test)
-
-Read-only commands: `gnome-shell --version`, `printenv`, `command -v`,
-`pkg-config --modversion`, `gst-inspect-1.0`, `gsettings get`, `busctl --user
-list`, D-Bus `Introspect` and `DisplayConfig.GetCurrentState`. Read installed
-`gdbus(1)`, `gst-inspect-1.0(1)` and `Xvfb(1)` man pages. The first sandboxed
-bus probe was denied; an approved read-only retry succeeded. Introspection
-lists mutating methods too: **none of those methods was called**.
-
-| Probe | Observation | What it does NOT establish |
-|---|---|---|
-| Session | `wayland`, `ubuntu:GNOME`, `wayland-0`; GNOME Shell **50.1** | No older GNOME/X11 or other compositor exercised |
-| Monitors | One `eDP-1`, current 1920×1080 at about 144.005 Hz, scale 1.25, position (0,0), transform 0 | No physical multi-monitor test; logical extent inferred as 1536×864 |
-| Shell extensions | Enabled list includes DING, Ubuntu Dock, tiling assistant and two search providers; global disable flag false | No Hanabi/one-mk wallpaper bridge found in inspected extension directories; list is not proof of every possible integration |
-| Display D-Bus | `MonitorsChanged`; `PowerSaveMode` property | Not a public wallpaper/video API |
-| ScreenSaver D-Bus | `ActiveChanged(bool)` | No authorization to draw on lock screen |
-| Power | UPower 1.91.1 exposes `OnBattery`; PowerProfiles 0.30 exposes `ActiveProfile` | No battery transition tested; do not set a profile |
-| Media runtime | GStreamer 1.28.2; `playbin3`, `appsink`, `glimagesink`, `avdec_h264` found | Decoder existence is not successful hardware decode |
-| Selected missing elements | `gtk4paintablesink`, `vah264dec`, `vaapih264dec` not found | Other hardware paths may exist; GPU/driver support **UNVERIFIED** |
-| Development metadata | No version returned for GStreamer/video/GL, libmpv, libavcodec, EGL, wayland-client or GTK4 `.pc` checks | Runtime libraries may exist without development packages |
-| Executables | `Xvfb`, `gdbus`, `busctl`, `gst-inspect-1.0`, `pkg-config` found; mpv, mpvpaper, ffmpeg, wayland-info, weston-info, Sway, Weston not found on PATH | Headless Wayland and transcode experiments cannot be claimed complete |
-
-No packages were installed; no extension, compositor, input backend, player or
-test daemon was started. No wallpaper, desktop setting, power setting or live
-window was changed. No compile, playback, power measurement or E2E test ran.
-No throwaway probe files were needed. Host observations do not certify a
-shippable GNOME backend.
-
-## 2. Inspiration without copying
-
-Muro's public README describes native looping video, gallery downloads,
-playlists/time schedules, menu-bar controls, one-time HEVC imports, automatic
-pauses and a 30 fps mode; its macOS 26 lock-screen/saver offering is distinct
-from ordinary desktop playback [S01]. Aura's README describes Rust/Linux
-integration, mpv/mpvpaper, scaling/monitor controls, catalogues, playlists,
-switching HUD, pause rules and colour theming [S02]. Its current README also
-advertises GNOME and Plasma integrations, so it is not accurate to describe
-today's Aura as COSMIC-only. These are feature descriptions, not validated
-performance claims or architecture specifications.
-
-**Hard boundary:** use neither project's implementation, translated code,
-close paraphrases, assets nor catalogue. Muro is source-available under
-PolyForm Shield 1.0.0, not unrestricted open source; treat it as prohibited for
-this implementation. Do not rely on the brief's pre-21-September-2026/v5.0 MIT
-history (**UNVERIFIED**, deliberately not investigated). Aura is GPL-3.0:
-do not copy or link its code into one-mk. No implementation files from either
-were read. Hanabi is likewise only a README-level example of a GNOME Shell
-extension plus external video renderer [S03]; do not copy its GPL code.
-
-## 3. Getting underneath desktop icons
-
-### Windows: Explorer-hosted wallpaper surfaces
-
-DOCUMENTED: `SetParent` can reparent a window, but cross-DPI-awareness
-reparenting can reset awareness or fail. DirectComposition can compose GPU
-surfaces; device loss requires recovery [S04, S05].
-
-The familiar wallpaper technique discovers `Progman`, `SHELLDLL_DefView`
-(desktop icon view) and `WorkerW`, sometimes asks Explorer to create a worker
-using undocumented message `0x052C`, then parents a nonactivating, input-passive
-window beneath the icons. **UNVERIFIED integration here:** the hierarchy and
-message are not a supported Microsoft wallpaper contract. Windows 11 24H2
-changed Explorer behavior; older sibling-WorkerW assumptions are unsafe.
-Microsoft documents wallpaper-app compatibility failures on 24H2 [S06].
-That evidence does not establish one universal replacement hierarchy. Detect
-actual parent/child ordering; test both raised-desktop/child-WorkerW and older
-arrangements, Explorer restart, virtual-desktop switch and shell updates.
-Fail closed to the existing static desktop if no safe host is found; never
-hide/kill Explorer, send endless recreate messages or cover icons as fallback.
-
-Adapter proposal: Media Foundation source reader / hardware-capable transform
-decodes once into D3D11 textures; DirectComposition/DXGI output per monitor
-samples the common texture. AV timing must be externally steerable; a separate
-player per output is not the production design. A libmpv render/D3D route is
-an alternative only after the build-specific licence gate in section 9.
-Media Foundation and hardware acceleration facilities exist [S07]; actual
-codec/profile/size/adapter compatibility is runtime-probed, not assumed.
-
-Use per-monitor DPI-awareness v2 deliberately. Enumerate monitor physical
-rectangles and effective DPI, convert into one-mk logical coordinates once,
-and keep an inverse map for presentation. `SM_XVIRTUALSCREEN`/Y can be negative;
-do not use primary-screen dimensions as the desktop. Handle `WM_DISPLAYCHANGE`,
-`WM_DPICHANGED`, rotation and GPU removal. Cross-GPU texture transfer may copy
-or fail (**UNVERIFIED**); cap costs or use a clearly reported second decoder
-only as an explicit fallback, not silently.
-
-### macOS: desktop-level AppKit windows and native decode
-
-DOCUMENTED building blocks: borderless `NSWindow`, appropriate window levels,
-`canJoinAllSpaces`/`stationary`, `NSScreen`, AVFoundation/VideoToolbox [S08–S11].
-Proposal: one non-key, nonactivating, mouse-ignoring window per `NSScreen`, at
-desktop level **below** Finder's desktop-icon level, not desktop-icon level
-itself. Recreate/reposition on screen-parameter changes; test Mission Control,
-Spaces, Show Desktop, Stage Manager and fullscreen Spaces. Collection behaviors
-alone do not prove all these combinations work (**UNVERIFIED on real macOS**).
-AppKit points are logical units; backing scale determines surface resolution.
-Convert AppKit's axis/origin conventions explicitly.
-
-`AVPlayerLayer` is the simplest native video presentation candidate. Do not
-claim N layers or N players guarantee one decoder or perfect synchronization.
-For the one-decode contract, own a single decode/output path, share each
-decoded `CVPixelBuffer`/IOSurface, and render crops through native layers or
-Metal. `AVSampleBufferDisplayLayer.controlTimebase` controls display timing;
-multiple layers can be driven from a common host-clock timebase. Apple's
-`AVPlayer.setRate(_:time:atHostTime:)` offers a scheduled-start building block
-[S09, S10]. Queue-depth/backpressure and sharing behavior need a prototype.
-Probe VideoToolbox support and require successful hardware-session creation,
-not merely a codec name [S11].
-
-**Correct an overbroad premise:** third-party screen savers existed before
-macOS 26; Apple documents `ScreenSaverView` [S12]. That is not permission to
-replace the secure login/lock-screen wallpaper with an ordinary app window.
-Muro advertises macOS-26-specific lock-screen/saver integration [S01], at idea
-level selecting media for OS-managed playback. Its underlying mechanism,
-public-API stability and suitability for one-mk are **UNVERIFIED** from its
-README. Do not infer Apple has a generally supported third-party live-lock-
-wallpaper API, before or after 26. Exclude this integration from release one;
-never bypass lock security, modify protected databases or rely on private APIs.
-
-### Linux X11: the root window is often not the visible desktop
-
-EWMH defines `_NET_WM_WINDOW_TYPE_DESKTOP` [S13]; it is a stacking hint, not a
-portable promise to sit between another desktop application's background and
-its icons. Updating a root pixmap is primarily a static-background convention,
-not a good video transport. Repeated CPU uploads to the root are rejected.
-
-| Desktop | Who owns the visible background/icons | Consequence for this design |
-|---|---|---|
-| GNOME on older X11 sessions | Shell background; optional desktop-icons extension or older file-manager desktop | Root video can be hidden. Extension-specific integration needed; GNOME 50 removed its X11 session [S14] |
-| KDE Plasma X11 | plasmashell desktop containment draws wallpaper and icons | Use Plasma wallpaper plugin; root/desktop-type window is not sufficient [S15] |
-| Xfce | xfdesktop manages background and icons [S16] | Desktop-type video may cover icons or sit below an opaque desktop; cooperative integration required |
-| Cinnamon | Nemo handles desktop icons [S17]; Cinnamon also participates in background handling | Precise stacking/transparency varies: **UNVERIFIED**; test actual session, no unsupported promise |
-| MATE | Caja manages desktop/background [S18] | Root can be covered; exact version/configuration stacking **UNVERIFIED** |
-| Bare X11 WM without a desktop manager | No competing opaque desktop | EWMH desktop surface plus GL rendering is the most tractable target; still test focus/stacking |
-
-Do not disable any existing desktop/icon manager automatically. Xvfb proves
-geometry and basic X rendering, **not** compatibility with these desktops.
-For Xfce/Cinnamon/MATE with incompatible background ownership, advertise
-unsupported until a cooperative backend passes the icon-preservation tests.
-
-### Linux Wayland: three materially different integration families
-
-1. **wlroots/Sway/Hyprland and COSMIC:** capability-detect
-   `zwlr_layer_shell_v1`; create output-bound surfaces in the `background`
-   layer, no keyboard interactivity, empty input region, no reserved work
-   area. Follow configure/ack/commit lifecycle, output scale/transform and
-   removal [S19]. A protocol in the compositor does not ensure its own
-   background client will not cover ours: test/coordinate that separately.
-   COSMIC/Hyprland/Sway support is documented by Aura/mpvpaper READMEs at idea
-   level [S02, S20], **UNVERIFIED here**. Do not copy their implementations.
-2. **KDE Plasma Wayland:** the Plasma desktop is above background layer-shell
-   surfaces. KWin supporting layer-shell does not fix an opaque plasmashell
-   desktop. Use an independently authored wallpaper plugin hosted in the
-   desktop containment [S15]. The scripting API can select/configure a
-   wallpaper plugin; it does not turn a video file into a renderer. Avoid
-   decoding inside plasmashell: plugin displays engine-owned frames through
-   a small native bridge. Texture import/private IPC and Qt module licence
-   compatibility are **UNVERIFIED gates**; a crash must not take down Plasma.
-3. **GNOME/Mutter:** no general wlr-layer-shell wallpaper route. An ordinary
-   client or XWayland root trick cannot reliably place video between Shell's
-   background and desktop icons. A custom Clutter actor in a Shell extension,
-   or a Shell bridge presenting/cloning external renderer surfaces, is the
-   credible route; Hanabi documents the latter product pattern [S03]. No
-   remote-desktop/input permission is needed merely to draw the wallpaper.
-
-### Exactly what the owner's GNOME 50 box can support
-
-VERIFIED-HOST: GNOME 50.1 Wayland, DING enabled, no discovered live-wallpaper
-bridge; external ordinary clients have no verified wallpaper surface here.
-Neither the display-config D-Bus object nor background picture settings accepts
-a live decoded frame stream. Installing mpvpaper alone would not solve this.
-
-PROPOSAL: a deliberately thin, independently written extension identifies only
-our authenticated local renderer's surfaces, suppresses their normal window
-decorations/focus/task-switcher presence, and presents cropped actors at the
-background position while preserving DING above them. The renderer owns one
-decode pipeline, clock and frame distribution; Shell owns only presentation
-and window-coverage observations. Multiple clones of a single texture are an
-optimization to prove, not a promise. Hidden-window frame throttling,
-Wayland actor cloning, maximum texture dimensions and efficient GPU sharing
-with GNOME 50 are **UNVERIFIED**. Do not place a media parser/decoder in Shell
-as an easier fallback. If external presentation fails the spike, stop and
-report a GNOME release blocker rather than shipping an always-on-top window.
-
-The extension could observe compositor windows/fullscreen/coverage, workspaces,
-monitor changes and Shell session state. It cannot add a Wayland global to
-Mutter, provide frame-lock across computers, safely change the secure login
-screen, or give an untrusted peer arbitrary Shell execution. It runs with
-Shell's privileges and can crash the session: keep its attack surface tiny,
-accept no media URLs/code, bound all messages and disconnect everything on
-disable. Exact layer placement relative to DING, Overview and lock screen is
-**UNVERIFIED until isolated-session tests**, not demonstrated by introspection.
-
-Ship an optional versioned extension ZIP/package with its own manifest/UUID
-and a narrowly versioned bridge protocol. Install/enable only after an explicit
-owner action, through normal GNOME extension tooling; per-user location is
-`~/.local/share/gnome-shell/extensions/<uuid>`, system packages use
-`/usr/share/gnome-shell/extensions`. Do not install it in this research task.
-On Wayland explain when logout/login is necessary; do not restart the live
-Shell. Test GNOME 45–50 separately: 45 changed extensions to ES modules [S21],
-and 50 removed X11 support but its guide does **not** claim all extension APIs
-changed [S14]. Pin tested versions, do not disable Shell version validation;
-unsupported versions get a static fallback and an actionable doctor message.
-Update signed one-mk/bridge artifacts together with rollback; an Extensions
-website listing, if pursued, requires its separate review/update process.
-Shell integration licensing must be reviewed independently (section 9).
-
-## 4. One canvas: coordinates, gaps and one decoder
-
-### Layout mathematics (PROPOSAL)
-
-Use signed 64-bit intermediates and finite bounded transforms. For monitor
-rectangle `R(d,m)` in device-local logical pixels and device placement `T(d)`,
-global rectangle is `G(d,m) = T(d) + R(d,m)`. The visible canvas is the union
-of those rectangles; its enclosing bounding box `B` defines media scaling.
-Retain the holes in the union. Normalize by `B.min`, not by the primary monitor
-or each device's bounds. Reuse existing rectangles but not unchecked `i32`
-addition for a network-defined large canvas.
-
-Example: A's monitor is `(0,0,1920,1080)`. B is placed at `(2020,-120)` and its
-monitor is `(0,0,1280,1024)`. The box is `(0,-120,3300,1200)`, with a 100-pixel
-horizontal gap. Monitor A samples global y starting at normalized y=120;
-B samples x=2020, y=0. Never independently fit the same movie to A and B.
-
-- **Include gaps (default B):** keep unlit pixels in the canvas, so an object
-  disappears behind the 100-pixel space before reappearing. Layout units are
-  not physical millimetres; visually physical continuity still needs manual
-  bezel/gap calibration if sizes/scales differ.
-- **Compress gaps (option A):** explicit virtual packing maps monitor
-  rectangles to a gapless logical arrangement. A simple horizontal strip can
-  subtract gaps; arbitrary L-shaped/overlapping arrangements have no unique
-  continuous compression. Require an editable deterministic packing preview,
-  never an undocumented nearest-monitor warp. Some content lines cannot stay
-  continuous at every edge after such packing. Defer arbitrary packing until
-  the included-gap mode passes; label this option's limitations.
-- **Optional physical calibration later:** EDID millimetres plus orientation
-  can map every monitor into common millimetres; provide manual width/height
-  and bezel corrections, because EDID may be absent/wrong. Physical size is
-  not present in the inspected `Rect` protocol; negotiate new metadata, do not
-  silently reinterpret KVM movement coordinates.
-
-For source dimensions `(Vw,Vh)` and canvas `(Bw,Bh)`, Fit uses uniform factor
-`min(Bw/Vw,Bh/Vh)` plus letterbox; Fill uses `max(...)` plus crop; Stretch uses
-separate factors; Centre uses 1 source pixel per canvas logical pixel and clips
-or pads. Anchor defaults to centre. Apply this transform **once per canvas**;
-for each output invert it on that output's global rectangle to get UV/source
-crop coordinates. Clamp sampling only to media bounds, fill padding with a
-chosen colour, and use pixel-centre conventions consistently to avoid seams.
-Bake source sample-aspect-ratio/rotation into display dimensions first.
-
-### Decode and presentation
-
-One computer decodes one selected representation once, then N surfaces sample
-the same immutable frame and timestamp. Do not allocate a giant RGBA canvas
-whose dimensions equal the complete cross-computer wall. Decode a bounded
-source frame and render viewports. Different computers necessarily have their
-own decoders; "one decoder" is per device/media, not one network-wide decoder.
-
-Use a small bounded frame queue and explicit GPU ownership/fences. Linux:
-GStreamer decoder → GL/DMABUF-compatible frame distribution → output surfaces;
-CPU `appsink` upload is a correctness fallback, not an efficiency claim.
-Windows: shared D3D textures. macOS: shared pixel buffers/Metal or sample-buffer
-layers. These zero-copy paths, especially across GPU adapters and Shell/Plasma
-process boundaries, are **UNVERIFIED** until measured. Common trait contracts:
-prepare, scheduled start, target timestamp/rate, crop updates, pause, frame
-position report, drain/stop, hardware-decoder status and error reporting.
-
-N decoders multiply decode surfaces, initialization and memory bandwidth and
-can drift independently. They may be acceptable as an opt-in compatibility
-fallback, never the default or the phase-1 acceptance path. A slow output
-drops/repeats frames; it never blocks other outputs or the KVM.
-
-Refresh rates are independent: a 30 fps frame can repeat at 60/144 Hz; there is
-no common physical scanout epoch. Use compositor/frame callbacks and PTS,
-not a 144 Hz busy loop. On mixed 60/144 Hz screens the displayed frame can
-differ by a refresh even on one GPU. Fractional HiDPI affects buffer sizes,
-not global crop geometry. Portrait displays apply native output rotation
-after logical crop; mirrored outputs must not expand the union twice.
-Limit release one to SDR sRGB/Rec.709; HDR/color-management parity across
-screens is **UNVERIFIED**, not a promised seamless result.
-
-Hotplug/mode/scale/rotation events produce a new layout revision. Keep the
-playback timeline running, allocate new surfaces first, then atomically switch
-crop transforms at a future agreed scene time; failed new outputs stay static.
-Removing a device should normally reserve its rectangle rather than zoom every
-other screen; offer explicit "reflow to online screens". The owner chooses
-whether local hotplug also reserves missing space. Never persist a half-applied
-layout or change KVM offsets implicitly.
-
-## 5. Across devices: distribution, authority and clock sync
-
-### A scene is more than a pointer placement
-
-Choose an explicit coordinator from the owner's paired devices; all members
-locally opt into wallpaper control by that coordinator. Pairing proves peer
-identity, not ownership or unlimited consent. Freeze a session manifest:
-session ID, coordinator fingerprint, generation, layout revision/hash,
-participating fingerprints, global rectangles, crop/scaling mode, media ID,
-representation IDs, duration/timebase, loop policy and future start epoch.
-
-Resolve relative offsets into coordinator coordinates; validate cycles by
-summing offsets, reject inconsistent cycles, ambiguous side-only placement,
-duplicate IDs, unreasonable counts/extents and unintended overlap. Provide a
-preview and placement action rather than guessing what "on your right" means.
-KVM pairwise layout updates can race; do not make every peer independently
-derive a different wallpaper graph. A frozen scene revision is the authority.
-Only coordinator-approved revisions can change it. Retain offline rectangles.
-
-### Media distribution
-
-Use the existing paired QUIC connection and resumable, hashed file-transfer
-machinery with a **new authorized wallpaper-cache purpose**, not a request to
-play `/some/path`. Audit existing transfer scheduling and add strict lower
-priority/bandwidth/concurrency bounds so large video transfers cannot starve
-input/clipboard. A separate stream is not, by itself, a congestion guarantee.
-
-1. Owner selects a file/URL/catalogue item locally. A restricted import process
-   downloads/probes/normalizes it; peers never fetch a URL sent by another peer.
-2. Hash original bytes with BLAKE3; record format, dimensions, frame times,
-   duration, loop count, colour profile and bounded provenance/rights metadata.
-   Validate before allocation. Use content hashes as cache names, not paths.
-3. Negotiate actual decoder capability, including codec/profile/level, bit
-   depth, max dimensions, hardware status and representation policy. A codec
-   listed by an API is not proof of efficient playback. Default muted playback;
-   strip audio and embedded attachments in normalized representations.
-4. Transcode **once per required representation**, then distribute/cache those
-   exact bytes; not once per screen or every loop. Prefer a common representation
-   if quality/size allow. No universal HEVC mandate. Conversion is optional and
-   explicitly consented; preserve the original and report conversion progress.
-5. Only verified complete files become playable. Resume partial transfers but
-   rehash the entire completed representation. Hash media identity and timeline
-   identity separately: different encodings can represent the same content.
-6. Each ready member pre-rolls its decoder. Start ready members at a future
-   coordinator epoch; never wait indefinitely for one slow/offline computer.
-   Late members join at current scene PTS after pre-roll, not at frame zero.
-
-### Codec decision matrix (not a hardware guarantee)
-
-DOCUMENTED native facilities: Media Foundation formats [S07], VideoToolbox
-hardware-support query [S11], GStreamer plugin discovery [S22]. All specific
-hardware/profile/OS combinations below are **UNVERIFIED on this host and must
-be negotiated by a real decode test**. This matrix describes selection policy,
-not a claim that every machine has the codec installed.
-
-| Codec | Windows native | macOS native | Linux GStreamer | Release policy |
-|---|---|---|---|---|
-| H.264, 8-bit 4:2:0 | Standard native decoder; Media Feature Pack/edition exceptions | AVFoundation/VideoToolbox candidate on supported systems | Plugin/driver dependent; software decoder found here | First common MP4 candidate; probe level/resolution and hardware |
-| HEVC | May require codec extension/licensing and compatible GPU | Strong modern-Mac candidate; Intel/old-model variation | VA/NV/V4L2/other plugin/driver variation | Optional efficient representation, never automatic paid-codec dependency |
-| VP9 | Extension/OS/GPU dependent | Native container/profile and hardware path not assumed | Common plugin possibilities; installed HW **UNVERIFIED** | Enable only after per-device probe |
-| AV1 | Extension + recent hardware often required for efficient use | Hardware only on some newer chips; exact model matrix **UNVERIFIED** | Recent GPU/driver/plugin needed for hardware | Optional; do not software-decode 4K silently |
-
-MP4, MKV and WebM are containers, not codecs. Accept them as import sources
-only when their actual contents pass the whitelist. Normalize to a tested
-SDR representation when native backends disagree. Preserve common rational
-frame timestamps, loop duration and frame count across transcodes; if needed
-normalize variable-frame-rate sources once. Offline transcoding can use native
-encoders or an audited LGPL FFmpeg build; availability of a suitable encoder
-on every platform is **UNVERIFIED**. Codec patents/HEVC commercial terms are
-separate from open-source copyright licences and need distribution review.
-
-### Clock synchronization: explicit algorithm
-
-Use monotonic clocks, not wall-clock UTC or the operating system's NTP setting.
-Do not change system time. QUIC RTT estimates alone cannot determine clock
-offset. Exchange four application timestamps over the authenticated control
-channel: A sends at `t1`; B receives at `t2`, replies at `t3`; A receives at
-`t4`. Estimate B−A offset `theta = ((t2-t1)+(t3-t4))/2`, network roundtrip
-`delta = (t4-t1)-(t3-t2)`, following the NTP measurement model [S23]. Include
-processing times, sequence/session IDs and monotonic-clock generation.
-
-Take a bounded initial burst (proposal: 8 samples), filter invalid/outlier and
-high-delay samples, use the lowest-delay sample set and a robust offset/drift
-fit. QUIC's smoothed RTT informs sample timing/uncertainty only. Bound allowed
-drift and offset changes; a peer cannot move another computer's OS clock.
-Maintain a mapping from each local monotonic time into coordinator time;
-invalidate it across sleep/reboot. Track uncertainty and sample age.
-
-Proposal: `PTS(now) = (coordinator_now - epoch + media_start) mod duration`.
-Start about 2 seconds ahead after readiness, adapt lead time to slow pre-roll.
-Re-estimate every 5–15 seconds **only while wallpaper is active**, with a
-bounded backoff under congestion. Schedule in the wallpaper process; daemon
-only routes active-session messages. Fully disabled/all-paused sessions have
-no wallpaper heartbeat. On resume do a fresh offset burst.
-
-Compare presented PTS (not decoder dequeue time) to target. Inside a deadband
-do nothing; for small errors use bounded rate nudges (initial tuning proposal
-±0.5%, up to ±1% under tested policy), then return to 1.0. A 20 ms error takes
-about 4 seconds to recover at 0.5%, so do not pretend this is instant. Large
-errors/sleep use one deliberate pre-rolled seek, preferably at a loop boundary;
-never seek every frame. Use seamless-loop preparation so loop correction does
-not repeatedly flash black. If an adapter cannot rate-adjust images, it selects
-the frame from the shared time schedule rather than running an independent
-animation timer. Paused local outputs resume to current group PTS; an explicit
-group pause instead freezes the shared epoch and increments generation.
-
-**Numbers we can justify, and numbers we cannot:** path asymmetry creates an
-offset error of half the forward/reverse delay difference. If that difference
-is 10 ms, offset error is 5 ms before decoder/display delays. At 60 Hz scanout
-quantization is 16.67 ms; at 30 fps content frames are 33.33 ms apart. A 50 ppm
-clock drifts 0.5 ms in 10 seconds (illustrative oscillator assumption, not a
-measured device). These are arithmetic, not Wi-Fi benchmarks. No numeric
-"typical Wi-Fi accuracy" was verified here.
-
-PROPOSAL quality targets: warm loopback pipeline P95 inter-process presented-
-PTS error ≤20 ms; qualified real wired/Wi-Fi configurations P95 ≤50 ms,
-P99 ≤100 ms after warmup, otherwise show "sync degraded". These are release
-targets, **UNVERIFIED achievable**, not guarantees on arbitrary Wi-Fi. Measure
-and publish RTT/asymmetry limitations and display error independently. At
-300 pixels/second, 20/50/100 ms mismatch is a 6/15/30-pixel jump at a seam.
-Fast pans make this visible. Content with slow movement tolerates it better.
-Frame-exact synchronization needs display/genlock support beyond this design.
-
-### Failure policy
-
-| Failure | Local response | Other devices |
-|---|---|---|
-| Sleeps/locks/display off | Stop decode/present; retain bounded scene metadata | Keep playing; reserve missing rectangle |
-| Rejoins late | Fresh clock sync, cache verification and pre-roll to current PTS | Never restart everyone |
-| Disconnection | Free-run cached local slice, show status when UI opens | No barrier/wait |
-| Coordinator disappears | Freeze last committed manifest and free-run; explicit owner takeover generates new authority epoch | Avoid competing automatic leaders in release one |
-| Slow decoder | Drop frames, request smaller approved representation, or freeze a poster with reason | Never slow the group timeline |
-| Corrupt/missing media or disk full | Reject, preserve previous working wallpaper, bound retries | Ready peers continue |
-| Layout conflict | Retain last committed scene; explain exact conflict | No guessed rearrangement |
-| Engine/bridge crash | Tear down our surfaces, native desktop remains; bounded restart backoff | KVM remains responsive |
-| Forgotten peer | Revoke wallpaper authority immediately; end streams and discard uncommitted offers | Existing local authorized cached playback need not be remotely erased |
-
-## 6. Security is part of the media architecture
-
-An authenticated video can still be malicious. A paired-but-compromised laptop
-is a realistic threat. FFmpeg publishes decoder security fixes [S24]; mpv's
-history includes URL/script-hook exposure, not just pixel decoding [S25].
-Do not claim that a hash, safe Rust wrapper or hardware decoder makes a video
-safe. Hardware decode still uses parsers, drivers and firmware.
-
-PROPOSAL default admission caps (tune only after tests): 512 MiB/source file,
-2 GiB aggregate cache, 4096×2160 decoded pixels, 60 fps source maximum,
-30 fps efficient representation, 10-minute loop, 2 queued imports, 1 concurrent
-transcode, 16 MiB decoded/control metadata ceiling reduced to much smaller
-per-message schemas, and 256 MiB decoded-animation working-set ceiling.
-Reuse or tighten existing monitor caps; bound canvas extents, sample queues,
-hashing buffers, network messages, retries and every integer multiplication.
-Higher 8K/wide-panorama support is opt-in only after resource/codec tests;
-large canvas does not imply large decode allocation.
-
-- Authorize per coordinator and per purpose. Remote commands reference only
-  validated cached media IDs and committed manifests. Never accept remote file
-  paths, arbitrary commands, playlist URLs, shell fragments or local-file URIs.
-- Import only explicit owner-requested HTTPS resources. Validate each redirect,
-  disallow credentials and local/private/link-local destinations by default,
-  defend against DNS rebinding, cap time/bytes/decompression, verify magic bytes,
-  and sanitize names. A generic web-page downloader/yt-dlp integration is not
-  in release one. URL imports are direct media, not DRM/paywall bypasses.
-- Use a purpose-restricted parser whitelist: tested MP4/MKV/WebM plus
-  GIF/PNG/WebP variants; no scripts, external references, embedded executables,
-  network playlists, subtitle fetches or arbitrary demuxer protocols. Extension
-  checks alone are insufficient. URL downloader exits before playback.
-- Decode/probe/transcode in low-privilege processes with no pairing private
-  keys, owner document access or network. Narrow file handles and bounded IPC;
-  Linux namespace/seccomp where deployable, Windows restricted token/job or
-  AppContainer feasibility spike, macOS sandbox/helper entitlement spike.
-  Actual sandbox profiles and GPU access compatibility are **UNVERIFIED**.
-- Prefer hardware decode for power, and offer a hardware-required policy that
-  refuses unsupported video rather than silently burning CPU. This is **not a
-  security sandbox**; bounded software image decoding is still necessary for
-  GIF/APNG/WebP. Keep both patched, and allow low-resolution software video only
-  after explicit consent. No decoder inside the daemon, Shell or plasmashell.
-- The main engine may need display access; split an even narrower decoder
-  child if robust GPU-handle transport is possible. Do not advertise isolation
-  against other same-user processes as solved by an ordinary child process.
-- Signed update/catalogue metadata, pinned schema versions, provenance records,
-  revocation handling, crash redaction and dependency advisories/SBOM are release
-  requirements. A checksum authenticates bytes only if its manifest is trusted.
-
-## 7. Power, idle CPU and event-driven pause
-
-**Mandatory invariant:** when disabled, `one-mk-wall` and its decoder/import
-children do not run, media libraries are not linked/loaded into the daemon,
-and no wallpaper timer/network polling remains. Starting the daemon alone
-must never start a wallpaper. Optional autostart is explicit and separate.
-
-The active engine maintains a set of pause reasons: manual, gaming, fullscreen,
-covered, session locked, display asleep, battery, low battery and low power.
-Resume only when all applicable reasons clear. Evaluate per output; pause the
-decoder when all local outputs are paused. Preserve the group timeline while
-hidden, then rejoin it. No sleep inhibition just to keep a wallpaper running.
-Static poster fallback should use an ordinary still surface/native background
-without continuously presenting frames.
-
-| Signal | Windows adapter | macOS adapter | Linux adapters |
-|---|---|---|---|
-| Fullscreen / maximized / coverage | `SetWinEventHook` foreground/location/show/hide/minimize events; inspect visible un-cloaked windows on those events | Workspace activation events; own window occlusion notifications alone are insufficient for full global coverage. AX window notifications require Accessibility consent; complete event-driven coverage without AX is **UNVERIFIED** | GNOME bridge observes compositor windows; Plasma integration KWin hooks where supported; X11 EWMH/property/configure events; Sway IPC/Hyprland events only when supported |
-| Lock/unlock | `WTSRegisterSessionNotification` session events | Workspace session-active/resign plus display sleep; exact secure-lock notification contract **UNVERIFIED**, conservative pause on session inactive | GNOME `ActiveChanged`; logind `LockedHint`/session state; compositor-specific lock signals may be unavailable |
-| Display sleep / system sleep | `RegisterPowerSettingNotification`, `GUID_CONSOLE_DISPLAY_STATE`, `WM_POWERBROADCAST` | `NSWorkspace.screensDidSleep`/wake, system sleep notifications | GNOME `PowerSaveMode`/properties; logind `PrepareForSleep`; output power events where compositor exposes them |
-| AC/battery / low battery | Power-setting notifications, battery percentage/status, one read on event | IOKit power-source run-loop callback, read power-source state on event | UPower `PropertiesChanged`, display-device percentage/warning level |
-| Low power | `GUID_POWER_SAVING_STATUS` / supported power notifications | `ProcessInfo.isLowPowerModeEnabled`, power-state-change notification | PowerProfiles `ActiveProfile` property changes; desktop-specific alternatives |
-| Gaming mode | one-mk gaming-state subscription; OS Game Mode integration **UNVERIFIED** | one-mk gaming state; native game-mode signal **UNVERIFIED** | one-mk gaming state; optional GameMode D-Bus integration **UNVERIFIED** |
-
-Named Windows/macOS APIs are documented building blocks [S26, S27]; complete
-coverage, timing and permissions remain **UNVERIFIED until OS tests**. Generic
-Wayland intentionally has no universal "enumerate every other application's
-windows" API; layer-shell is not a window-coverage API. Where unavailable,
-doctor reports that auto-coverage pause is unsupported; do not poll screenshots
-or silently claim the rule works. Compute union of opaque visible window
-regions, not just "some window maximized"; workspaces, transparent windows,
-panels and multi-monitor coverage matter. Unknown visibility uses conservative
-policy, with owner-selectable play/paused fallback.
-
-Efficient mode: offer 30 fps and 15 fps normalized representations. Merely
-presenting every second frame of a 60 fps video may still decode all 60 frames;
-it does not prove half the power. Keep preview hidden when not visible, mute
-audio, stop pipeline clocks while paused, and suspend active synchronization
-when every participant is paused. Playlists/day schedules use a next-deadline
-timer, not one-second wall-clock polling; recompute on timezone/clock-change
-events. Local timers do not change the monotonic playback epoch.
-
-### Resource budget: calculations versus estimates
-
-- Arithmetic: 3840×2160 NV12 (8-bit 4:2:0) is about **11.87 MiB/frame**;
-  RGBA is **31.64 MiB/frame**. Eight NV12 decode surfaces are about 94.9 MiB
-  before codec buffers, GPU alignment and output buffers. P010 costs more.
-  Three independent decoder pools can roughly triple that part of memory.
-- PROPOSAL/UNVERIFIED estimates: hardware-decoded 1080p30 engine might cost
-  0.5–3% of one CPU core; 4K30 1–5%, roughly 100–300 MiB combined engine/GPU
-  allocations depending on queue depth. Extra GPU/system power might be
-  0.5–3 W for modest content, much more with a discrete GPU or software decode.
-  These are budgeting hypotheses, not measurements of one-mk or the host.
-- PROPOSAL: disable must add **zero periodic wakeups** and zero sustained
-  daemon CPU relative to baseline; paused engine should be event-blocked with
-  zero animation presents/decodes. RSS alone does not measure GPU memory.
-  Report CPU as process CPU-time/wall-time and GPU power/memory separately;
-  never compare platform task-manager percentages without normalization.
-- Measure off/paused/playing at 1080p/4K and 15/30/60 fps, 1/2/3 monitors,
-  hardware/software decode, AC/battery, with and without the app/tray open.
-  Hold brightness/refresh/power profile constant in the lab. Measure a
-  no-wallpaper baseline first. No such numbers have been measured here.
-
-## 8. Content and gallery rights
-
-### Video and animated images are first-release content
-
-Own-file import supports MP4/MKV/WebM, then normalizes when necessary.
-GIF/APNG/animated WebP need explicit frame-disposal/blending, alpha, delays,
-finite/infinite loop semantics and dimension/allocation limits. Candidate
-`image` decoding API is permissively licensed [S28]; verify pinned-version
-support for each animated variant before adoption. Do not preload every frame:
-an uncompressed minute of 1080p30 RGBA is about 13.9 GiB. Use bounded decode
-checkpoints/cache or consented conversion to a common video representation.
-Preserve transparency via native image frames or a background-composited
-representation; ordinary H.264 does not preserve alpha.
-
-Normalize pathological zero delays to a documented minimum, then use an
-identical rational frame-time table/content duration on every device. At target
-PTS, select the frame whose interval contains that time. Respect a finite-loop
-file unless the owner chooses "loop forever". Transcoded images must preserve
-the agreed visual timing, not whichever delay heuristic each OS happens to
-use. Rate correction changes timeline mapping, not file frame metadata.
-
-Shaders could be a later optional extra with a shared time uniform, but the
-owner does **not** want shader animation in this implementation. No architecture
-or synchronization requirement depends on shaders. Web pages/HTML/canvas would
-require a browser/web view, conflict with one-mk's no-web-view direction, and
-are explicitly out of scope. No embedded browser for the gallery either.
-
-### Source-by-source terms audit
-
-Distinguish permission to use a downloaded video as one's own wallpaper from
-permission for **our app to operate a catalogue/download service**. Hosting
-only JSON, or downloading directly to the end user, does not erase source
-contracts, creators' rights, hotlink rules or standalone-distribution limits.
-The following is a conservative integration recommendation, not a legal ruling.
-
-| Source and evidence read | Usage/attribution and restrictions | JSON index, hotlinks, app download decision |
-|---|---|---|
-| **Pexels** API documentation + official wallpaper/terms help [S29] | Ordinary uses and API access are distinct; official API policy excludes wallpaper apps and competing libraries. Terms help specifically restricts standalone wallpaper distribution | **NO default integration.** No scraping, API key workaround or direct-CDN index. Written permission would be needed; a user's separately lawful file import is a different use |
-| **Pixabay** Terms (updated 20 October 2026) + API docs [S30] | Content licence disallows standalone distribution, explicitly includes wallpapers; resizing/cropping is still standalone. Historic pre-9-Jan-2019 CC0 content has different copyright terms. No blanket author/release guarantee | **NO default integration.** API forbids permanent image hotlinking; that wording is not proof of video-hotlink permission. App-side video index/API clearance **UNVERIFIED**; do not recommend even historic CC0 as a feed without access clearance |
-| **Mixkit** Video Free licence AND User Terms [S31] | Free licence permits broad reuse without mandatory attribution, but User Terms §9 restrict stock/inventory aggregation, competitive services and mass-download bots; Restricted licences differ | **NO default integration.** Free licence is not a blanket wallpaper-catalogue/API grant. Indexing/deep-link/download permission **UNVERIFIED**; seek written authorization |
-| **Coverr** licence AND Terms [S32] | Free personal/commercial usage, attribution appreciated rather than generally mandatory; licence excludes compiling a similar service and FAQ prohibits redistribution/video-providing services | **NO default integration.** Do not assume advertised API equals approval for a wallpaper gallery. Need written product-specific permission and applicable API contract |
-| **Wikimedia Commons** reuse guidance [S33], underlying CC terms [S34] | Per-file licence/author governs. Public-domain/CC0, CC BY, CC BY-SA and others differ. Link to licence, credit actual creator not merely uploader; mark adaptations; share-alike applies to adapted media, not automatically the Rust program | **YES, narrowly curated verified CC0/public-domain files first.** Guidance explicitly allows download/direct linking (hotlinking possible but discouraged). Download locally on click, don't continuously stream. Reuse factual index metadata, not copied site descriptions. Respect API access rules [S35] |
-| **Internet Archive** live Terms URL [S36] | Terms page returned only a JavaScript-required shell here; no substantive current contract retrieved. Item metadata is not a licence guarantee | **UNVERIFIED: NOT an approved feed.** Recheck actual terms, metadata API/download policy and each item's rights before recommending; no "Archive = public domain" assumption |
-| **NASA media** Brand Center images/media guidance [S37] | NASA-created media is generally not copyrighted in the US, but third-party credited work, music, logos/insignia, identifiable people and endorsement/publicity restrictions remain. Not all NASA-hosted assets are government-created | **Conditional candidate, not release-one default.** Only individually proven NASA-created/public-domain items; agency credit/provenance and non-endorsement text. Permission for our precise automated/API/catalogue delivery remains **UNVERIFIED**; use only after checking the specific host's access/API rules |
-
-**Approved initial gallery:** small manually audited Commons items with explicit
-CC0 or unambiguous public-domain status for relevant markets, or creators who
-give us an explicit CC0 grant and a documented download-host permission. No
-actual videos have been selected or cleared by this document. Do not label any
-specific file approved merely because it is on Commons. CC0/public domain do
-not clear trademark/publicity rights; prefer scenery/abstract scenes without
-people/logos. Optional CC BY items can follow after attribution/adaptation
-tests; do not initially ingest BY-SA, NC, ND, GFDL or ambiguous files simply to
-inflate catalogue size. This is a stricter product policy than the range of
-licences Commons permits.
-
-For Wikimedia API use [S35], the policy read requires an identifying user
-agent/contact, respect for throttling and content licences, and no disruptive
-traffic or request splitting to hide excessive use. It prohibits white-label
-API clients that obscure Wikimedia as the provider; identify Wikimedia in the
-gallery and never guarantee its API availability. Cache metadata and back off;
-no bulk crawler or per-frame remote request. Endpoint-specific numeric quotas
-are **UNVERIFIED** and must be checked before enabling a feed. Do not hotlink previews unless cleared; no
-third-party thumbnail is bundled in the installer either. Generate a local
-preview after an authorized download, or fetch a cleared thumbnail on demand.
-
-### Small JSON catalogue, clear rights, real takedowns
-
-Host only bounded signed JSON: item ID, source landing page, allowed download
-URL/host, title (original/factual), author, licence identifier/version and
-licence URL, copyright/credit line, required attribution, rights evidence,
-review date, size/duration/codec hints and byte checksum. Retain immutable
-licence evidence in the catalogue-maintenance process; **do not host videos**
-in repo, installers or catalogue infrastructure. Checksums require one
-authorized bounded download during curation, not guessing a CDN URL. Handle
-source revisions as new hashes; reject unexpected bytes. A source's hash may
-need mapping to BLAKE3 when it publishes another digest algorithm.
-
-The native gallery must show **licence and author per wallpaper** before
-download and in Library/About after it, with source and licence links, changes
-made by transcoding, a copyable credit line, byte cost, and a Report rights issue
-action. If metadata licence text is itself share-alike, comply or write our own
-factual title/summary; do not copy a site's entire description/database.
-Retain attribution/provenance alongside locally copied/paired media.
-
-Publish a contact/takedown route. Proposal: acknowledge within 2 business days,
-temporarily delist on a credible claim, investigate provenance, notify affected
-users and publish a signed index tombstone. Cache the last valid index for
-offline use, but stop new downloads of revoked items once notified. Do not
-silently delete owners' own files; offer removal of affected cached media and
-explain revocation. Re-review source terms on catalogue updates. Terms changes
-or a source shutdown disable that feed without affecting own-file playback.
-If no cleared items exist, ship an honest empty gallery with import guidance,
-not unlicensed placeholders; first-release gallery acceptance still requires
-real cleared download items before claiming the gallery is ready.
-
-## 9. Dependencies and licence decisions
-
-Keep one-mk-authored Rust under `MIT OR Apache-2.0`. Dependencies keep their
-own licences; a permissive source tree is not a promise that every distributed
-binary/dependency can be used without other obligations. No GPL library is
-approved for linking into one-mk binaries. Prefer OS frameworks already on the
-machine and a narrowly audited Linux runtime. All pinned transitive dependency
-licences and actual codec build options remain **UNVERIFIED until lockfile,
-build logs and shipped artifacts are audited**. Do not approve an entire
-plugin directory based on one package's top-level licence.
-
-| Candidate | Evidence/status | Compatibility and packaging action |
-|---|---|---|
-| Windows Media Foundation/D3D/DirectComposition; Apple AppKit/AVFoundation/VideoToolbox/Metal | OS APIs [S04, S05, S07–S12] | Use installed frameworks under platform SDK/runtime terms; no borrowed Muro/Aura code; codec extension/patent review separate |
-| Rust `windows` bindings | MIT licence read [S38] | Compatible; retain notices; review selected generated bindings/dependencies |
-| Rust `objc2` | MIT manifest read [S39] | Compatible; generated framework crates independently checked before pinning |
-| Rust `image` | MIT OR Apache-2.0 manifest [S28] | Compatible; enable only required GIF/PNG/WebP support; audit decoder dependencies/features |
-| Rust `wayland-client` | MIT manifest [S40] | Compatible; protocol-binding crates/GL bindings still need exact-version review |
-| Rust `gstreamer`/gstreamer-rs | MIT OR Apache-2.0; runtime LGPL-2.1-or-later [S41] | Rust wrapper compatible; dynamically ship/use replaceable LGPL runtime with notices/source compliance; audit selected plugins and codec libraries individually |
-| GStreamer native runtime | LGPL framework; plugins can have other requirements [S22, S41] | No blanket "all plugins are LGPL" claim; package an allowlist, expose runtime decoder/build details in doctor |
-| FFmpeg/libav* | LGPL-2.1+ baseline, GPL parts/configuration or version3 can change terms; nonfree builds may be unredistributable [S42] | Optional restricted import/transcode helper; prefer audited LGPL configuration, never `--enable-gpl`/`--enable-nonfree` in bundled permissive-linked path |
-| libmpv | GPL-2.0-or-later default; LGPL-2.1-or-later build possible, dependencies can change final obligations [S43] | Not default; reject unknown build licence. `-Dgpl=false` alone is not evidence every linked library is LGPL-compatible |
-| mpv/mpvpaper separate executable | mpv build-dependent above; mpvpaper GPL-3.0 [S20, S43] | Optional external experiment only. No source copied. Distribution of their binaries still requires corresponding licences/source/notices |
-| `wgpu` (architecture B only) | MIT OR Apache-2.0 in upstream workspace [S44] | Compatible renderer candidate, not a decoder or GNOME-background API; audit backends/transitives |
-| GNOME bridge / Plasma bridge | No implementation or dependency lock yet | **UNVERIFIED legal gate:** independently authored code; examine Shell/GJS/Clutter and selected Qt/KDE modules and plugin-linking obligations. A plugin loaded into a GPL host is not made licence-free by a permissive manifest |
-
-### What dynamic libmpv linking actually means
-
-Dynamic loading (`dlopen`/DLL loading) does **not** make GPL obligations vanish.
-Linking to a GPL libmpv build is not approved for a distributed one-mk binary
-under only its permissive licensing model. GPL-2-only combinations also raise
-Apache-2.0 compatibility concerns; do not solve this by claiming the default
-"GPL-2+" label automatically re-licenses one-mk. A GPL-compliant distribution
-would need a deliberate different combined-work licensing review, not just
-an About-box acknowledgement.
-
-With a genuinely LGPL-2.1+ libmpv build and compatible dependencies, dynamic
-linking can preserve our own code's permissive licence. Preserve notices,
-provide the LGPL text and required library source/modifications, allow user
-replacement/relinking with a modified compatible library, and do not prohibit
-reverse engineering for debugging library modifications. Static linking adds
-relinkable-object/source obligations; avoid it. Installer signatures and app
-bundles need a practical compliance/replacement review. LGPL-2.1 sections 4–6
-were read from the installed full licence text [S45]: section 6(b) permits a
-suitable replaceable shared-library mechanism; distributing the library itself
-also brings its source obligations. This is not an obligation to relicense our
-own independently authored source as GPL. Exact installer compliance remains
-**UNVERIFIED pending the actual binary/dependency audit**, not a legal sign-off.
-
-Spawning an independent player through command arguments/ordinary IPC is a
-different architectural boundary, not libmpv linking. It ordinarily lets
-one-mk remain independently permissively licensed, but distribution of that
-GPL player still has obligations; an intimate combined-work protocol also
-needs review. "It is a subprocess" is not a universal legal exemption. Using
-an installed OS media API avoids bundling libmpv/FFmpeg on Windows/macOS.
-
-## 10. Architecture options and selection
-
-Effort estimates are **UNVERIFIED planning ranges**, one experienced engineer's
-focused engineer-weeks, including basic integration tests but not waiting for
-hardware/access/legal approvals. All options still need the shared geometry,
-authenticated media flow, image timeline and clock protocol. A two-week
-mpvpaper demo is not an enterprise cross-platform implementation.
-
-| Architecture | Mechanism and coverage | Main risk / licences | Estimate |
-|---|---|---|---|
-| **A — selected: native adapters** | Shared Rust scene/clock/image scheduler; GStreamer/GL Linux renderer, MF/D3D Windows, AVFoundation/Metal macOS. Layer-shell plus separate GNOME/Plasma presenters; cooperative X11 targets only. One decode per device/N crops | Separate adapter maintenance and cross-process texture sharing; LGPL Linux runtime, permissive wrappers, OS APIs. GNOME/Plasma integration gate | **28–42 weeks** through qualified release one |
-| **B — common GPU renderer** | `wgpu` textures/crops across desktop-level surfaces, OS or library decode plus image path. Same platform integrations still required; does not make Shell/Plasma ordinary Wayland clients | Native video-buffer import into wgpu, copies, driver limits and codec distribution. wgpu permissive, decoder-specific licence | **36–54 weeks**; potentially better later shared render logic |
-| **C — spawn player** | mpv/mpvpaper on supported Linux layer-shell/X11; custom host windows/players on Windows/macOS; JSON IPC timing/crops where supported | Fast proof, N processes/decoders likely, player flags/security/build variation, GNOME/Plasma unsolved by process launch. GPL executables separate, not linked | **6–10 weeks** limited prototype; **22–36** attempting release scope, may still fail one-decoder requirement |
-
-A is the recommendation: smallest distributable media dependency burden on
-Windows/macOS and explicit control over resource/clock contracts. B is a
-reasonable future refactor only if shared rendering materially reduces risk.
-C is a disposable experiment if a player is already installed, not the first
-release foundation. None provides universal X11 desktop-manager compatibility.
-
-On this Linux box, pure scene/image/clock logic, protocol failure tests,
-software rendering and private Xvfb can be tested once implementation exists.
-Nested/headless Wayland, other desktops and hardware decode need additional
-lab prerequisites. Windows adapters can be compile-checked only if targets/
-toolchains exist; macOS Rust checks similarly cannot substitute for Apple
-framework link/sign/notarization tests on macOS. Availability of those tools
-here is **UNVERIFIED**; no compile was run in this research. Platform runners
-and actual Windows/Mac computers are required before claiming support.
-
-### Phased work: all three phases precede release one
-
-**Phase 1 — internal local-canvas and integration-risk milestone (8–12 weeks).**
-Build pure bounded scene geometry, deterministic video/image timeline,
-injectable monotonic clock and renderer/decoder trait from day one. Build
-Linux one-decode/N-crop pipeline in disposable displays; begin GNOME 50 and
-Plasma bridge spikes immediately rather than discovering blockers at the end.
-Compile native-adapter interfaces/stubs where toolchains allow.
-
-Acceptance: negative/gapped/portrait/mixed-scale golden crops pass; GIF/APNG/
-WebP frame timing/disposal/alpha fixtures pass; one verified decode instance
-feeds two virtual outputs; off-state daemon unchanged; malformed media bounded
-and isolated. GNOME spike must prove below-DING placement and external-renderer
-timing without decoder code in Shell, in a disposable session. If a spike
-fails, re-estimate explicitly. **Internal only, not a public single-PC release.**
-
-**Phase 2 — internal multi-device synchronization and native adapters
-(10–16 weeks).** Add authorized scene manifests, layout consistency checks,
-cache-purpose transfer negotiation, clock bursts, drift correction, pause/
-resume semantics and diagnostics. Two isolated Linux “computers” on loopback
-exercise the real paired QUIC route with null input. Finish Windows/macOS
-adapters and perform first real-device vertical slices. No WebView or shader
-shortcut for synchronization; test video and animated images separately.
-
-Acceptance: two processes with distinct virtual displays show disjoint slices
-of the same movie/image animation, not copies of the full frame; meet loopback
-sync target; survive sleep simulation/rejoin/disconnect/coordinator loss,
-corruption/disk-full/slow decode; no transfer can delay input beyond agreed
-baseline bounds. Test native Windows/Mac scheduling and icon placement on
-real hardware. A compile-only platform remains labelled untested and blocks
-the claimed all-three-platform release.
-
-**Phase 3 — first shippable release qualification (10–14 weeks).** Native
-Wallpaper tab/tray/CLI/doctor, own-file and safe URL imports, audited Commons
-gallery, playlists/day automations, event-driven pause, signing/packaging,
-licence/SBOM/security review and full physical matrix. Qualification may run in
-parallel with adapter completion, but none is skipped.
-
-Acceptance: real Linux↔Windows↔macOS scene across at least three computers,
-multiple physical monitors and qualified wired/Wi-Fi sync results; real video
-plus all three image formats; cleared gallery download + licence display;
-bounded crash/failure behavior; off-state CPU/wakeup proof; 24-hour soak;
-manual scripts signed off. Release notes name tested desktop/OS/GPU versions
-and limitations; mark other combinations experimental/unsupported, never just
-"cross-platform" based on compilation. A subset release needs an explicit
-owner scope change, not silent deferral of multi-device or an OS.
-
-## 11. Fit with one-mk
-
-PROPOSAL crate split: `crates/wall-core` for pure scene/image-time/clock math
-and bounded schemas, `crates/wall` for `one-mk-wall` OS playback/presenter
-adapters, plus a restricted import/decode helper mode if useful. Separate
-bridge artifacts under packaging; no media runtime dependency from
-`crates/one-mk`, `proto`, `net` or input libraries. `wall-core` must not turn
-`proto` into a media decoder dependency. Reuse existing QUIC/auth/transfer
-services through a bounded active subscription, not a second unauthenticated
-network listener. Peer private keys remain with their existing owner process.
-
-Potential local control requests: `WallpaperStatus`, `WallpaperAuthorize`,
-`WallpaperStart`, `WallpaperPause`, `WallpaperStop`, `WallpaperImport`,
-`WallpaperScene`, `WallpaperSubscribe`. Separate user-local IPC protected by
-same-user credentials/ACLs controls the engine; remote peers only get negotiated
-wallpaper schemas, never the generic local control channel. New protocol caps
-could include `wall_scene_v1`, `wall_cache_v1`, `wall_clock_v1`; a namespace or
-stream-kind/version strategy needs compatibility tests against current v2
-peers. No new unconditional heartbeat in the daemon.
-
-Proposed CLI, not existing commands:
+# Live wallpapers: one continuous canvas
+
+Revision 2 · 30 October 2026 · Wave 6E · **decision-ready design, not an implemented feature**.
+
+## What changed since revision 1
+
+Every numbered finding in the [independent review](WALLPAPER-DESIGN-REVIEW.md)
+has a disposition below. Spike evidence is retained, not relabelled as production
+acceptance. Section numbers identify the replacement contracts.
+
+| Review finding | Resolution or conscious rejection |
+|---|---|
+| 1. Encoder/codec contradiction | §5 chooses pinned, isolated GStreamer without libav; VP9/libvpx default, optional AV1/libaom. No H.264/HEVC output or GPL encoder; software royalty-free decode available by design on every OS. |
+| 2. 4096-wide cap versus wall width | §3/§5 separate global canvas and decoded representation; 4096×2160 is a default admission tier, not a canvas limit. Wide sources need measured opt-in, not implied full-resolution playback. |
+| 3. GNOME bridge licence | Ship only with one-mk, independently authored MIT OR Apache-2.0; no extensions.gnome.org listing. Host/dependency legal review still required (§8). |
+| 4. Hidden-window/frame callbacks | 6B proved one owned window feeding clipped clones on headless GNOME 50.1. Adopt that instead of the N-window precedent; physical GPU/HiDPI remains a gate (§4). No Hanabi code. |
+| 5. Display latency versus clock error | §6 separates clock uncertainty, reported presented-PTS error and filmed display error; predicted present time, calibration and manual nudge. |
+| 6. Clock plumbing/topology | §6 daemon timestamps, negotiated datagrams as production target, no claim 6C streams already implement this. Direct paired coordinator links only. |
+| 7. Fragile decoder-rate nudges/loops | Reuse 6C controller, implement rate via frame selection, not decoder instant-rate-change; closed GOPs, epoch rebase and explicit hard-cut loop (§5/§6). |
+| 8. Hybrid GPU | Integrated GPU first, inspect actual adapter; no silent dGPU activation (§5). |
+| 9. Unrealistic estimate | Replace 28–42 with 70–110 engineer-weeks, explicit milestones/reserve and post-M1 re-estimate (§10). |
+| 10. Plasma understated | Excluded from release one by owner; no cheap plugin assumption or decoder inside plasmashell. |
+| 11. Gallery scarcity/rights | Tens of curated compatible items, not thousands of loops; per-item evidence, rechecks, takedown/contact (§8). |
+| 12. URL/peer/security gaps | Concrete SSRF/resource bounds, IP pinning, no proxy inheritance, sandbox first, signed rollback/freeze-resistant catalogue (§7/§8). |
+| 13. Missing policies | Reduced motion/photosensitivity, remote sessions/user switching/lid, SDR/HDR/VRR/capture limits, no telemetry, bounded cache (§5/§7/§9). |
+| 14. WorkerW fragility | One spanning desktop window; actual hierarchy/build validation and fail-closed behavior (§4). |
+| 15. Packaging traps | No libav/libmpv/host autoplugging/whole-plugin-tree bundles; dynamic replaceable LGPL runtime, artifact audits and macOS signing gate (§8). |
+| 16. Overconfidence | GO WITH LIMITS is not a shipping verdict; hidden-window physical qualification remains a stop gate (§2/§10). |
+| 17. AVPlayer/WebM assumption | Reject native-container assumption; explicit decoder and Metal presenter. No AVPlayer timing dependency (§4/§5). |
+| 18. Physical DPI | Logical continuity now, manual logical bezel gaps; physical-mm calibration later, visible mismatch warning (§3). |
+| 19. Compositor power | Measure/budget Shell/DWM/WindowServer too; hide/destroy surfaces while paused, no speculative watts claim (§7). |
+| 20. Bridge updates | Exact handshake, tested Shell versions, matched component activation/rollback, static on either-direction mismatch (§4/§8). |
+
+| Spike evidence | Revision-2 consequence |
+|---|---|
+| 6B: one hidden window, two virtual monitors, 59.8–60 fps; Shell 3.1–10.2% of one core | External renderer plus clipped Clutter clones. Python stand-in CPU is not a Rust/video budget. |
+| 6B: no JS DMA-BUF import; software frame uploads take 10–15 ms/frame on Shell main thread | Both rejected as live product paths; no frame bytes or native decoder loaded into Shell. |
+| 6B: fullscreen does not stop clones; explicit hide does | Bridge enforces visibility, not just a pause request. Multi-window union coverage is new work. |
+| 6B: lock/DING extension rebase kills renderer; test client returned in 0.27 s | Treat as teardown/rejoin; real decoder restart latency UNVERIFIED. |
+| 6B: hot-plug needs replacement window; adoption 7–13 ms, visible gap unmeasured | New owned window per local layout; allow static transition, no seamless-hot-plug promise. |
+| 6B: hang fallback 3068 ms; clean disable and spoof rejection | Keep watchdog/backoff; tighten PID binding/cleanup and unicast product signals (§4). |
+| 6B: Overview remains static; GNOME 45–49 not run | Matching poster is opt-in; advertise only individually qualified Shell versions. |
+| 6C: tested estimator/controller/64-byte codec and frame selection | Reuse I/O-free `one-mk-wall-sync` in `crates/wall`, not a second clock algorithm. |
+| 6C: 1,152 synthetic hour runs; good/bad Wi-Fi P95 16.667 ms, selected max 33.333 ms | Supports further implementation, not a physical 50 ms claim. |
+| 6C: persistent one-way delay P95 266.667 ms; more probes do not help | Unobservable asymmetry warning; qualify with filmed scanout, never clock fit alone. |
+| 6C: real loopback proxy offset P95 0.052/1.090/3.891/61.116 ms (wired/good/bad/adversarial) | Clock-offset measurement only; no real distributed display gate passed. |
+| 6C: selected good/bad models skip 198/138 frames/hour despite no post-start corrective seeks | No invisible-correction or frame-exact promise. |
+| 6C: 11520×2160 one-decode/three-crop software throughput 38.81 fps | No software 3×4K60 promise; measured admission and downscale/fps/poster ladder (§5). |
+| 6C: Xvfb stitched crops have zero maximum channel error | Spatial evidence only; not atomic physical presentation. |
+| 6C: LGPL-labelled libav loads GPL-enabled FFmpeg; patch audit unresolved | Exclude libav/FFmpeg; actual binary dependency/licence/advisory verification gates packaging. H.264/x264 benchmark is evidence only. |
+
+## 1. Executive summary — the owner's decision
+
+**Recommend GO for gated implementation, not a release announcement.** An
+optional component, default **OFF**, paints one scene across the existing shared
+Layout. Each computer decodes once and displays its slices. Wallpaper failure
+must never break KVM, desktop icons or input.
+
+| Release one | Later, not silently promised |
+|---|---|
+| Linux GNOME Wayland on qualified Shell versions, Windows and macOS on qualified builds/hardware | Plasma, wlroots, other Linux desktops/X11; GNOME 45–49 until individually tested |
+| Multi-computer from first playback milestone; explicit receiver consent; reserve absent screens | Automatic leader election, routed sync, physical-DPI calibration, arbitrary gap compression |
+| Muted VP9/optional AV1 video, GIF/APNG/animated WebP imports; own files/direct HTTPS | Shaders, web pages, audio, scraper/streaming-site imports, playlists/day schedules |
+| Cover/contain/stretch/tile over the whole canvas, logical bezel gaps | HDR matching, genlock/frame lock, seamless-loop or invisible-hot-plug guarantees |
+| Commons CC0/public-domain download gallery, tens of audited items, no bundled video | Other sources/licences without new clearance |
+| Best-effort ~50 ms P95 on qualified LAN/Wi-Fi, honest quality indicator | Universal Wi-Fi or physical accuracy inferred from clock offset |
+
+**Effort: 70–110 engineer-weeks remaining**, including integration, security,
+packaging, independent review and physical QA. Adopt the review's range, not
+28–42: narrower Linux scope saves work, but three native adapters, media isolation,
+power enforcement and a multi-computer lab remain. Spikes retire architectural
+ideas, not production gates. Calendar duration depends on staffing/hardware;
+this is not 70–110 elapsed weeks or a date commitment. Re-estimate after M1.
+
+**Top five risks:** (1) private Shell APIs/undocumented WorkerW; (2) VP9/AV1 GPU
+limits, hybrid copies and compositor power; (3) asymmetric network/display delay
+defeating sync; (4) hostile media and GPU-capable sandbox/licence packaging;
+(5) physical mixed-platform qualification unavailable on the one-monitor dev box.
+
+**Owner must test:** Linux↔Windows↔macOS, two physical seams across computers,
+one computer with multiple monitors, mixed DPI/rotation/refresh, hybrid iGPU/dGPU,
+AC/battery/lock/sleep, real Shell/Explorer/Finder, filmed 30-minute sync and a
+24-hour soak (§11). Until then, each platform is **UNVERIFIED on real hardware**.
+If a required OS or GNOME fails, hold the full release claim. Shipping a subset
+requires an explicit owner scope change, not quiet deferral.
+
+## 2. Evidence and process boundaries
+
+**MEASURED** means only the experiment described in
+[6B](spikes/gnome-live-wallpaper-spike.md) or
+[6C](spikes/wallpaper-sync-spike.md). **VERIFIED-REPO** means inspected code.
+All future contracts/budgets below are **PROPOSED** unless labelled otherwise;
+**UNVERIFIED** is a gate. No Rust changes, builds, new benchmarks or desktop
+changes belong to this documentation revision.
+
+VERIFIED-REPO: `Rect`/`Desktop` define local logical screens; `Control::Layout`,
+status screens/offsets and `motion.rs` carry relative placement. Protocol version
+is 2; `MAX_SCREENS` is 64. Wallpaper tightens its scene to 16 outputs/8 devices.
+Layout is not already a globally committed scene. Existing paired QUIC and
+resumable BLAKE3 transfer are plumbing, not authority to play arbitrary files.
 
 ```text
-one-mk wallpaper doctor
+native UI / CLI ── owner-authenticated local IPC ── daemon (keys, consent, QUIC)
+                                                      │ bounded wall IPC
+GNOME bridge ── bounded D-Bus ── optional one-mk-wall ───┘
+   │ owns/spawns display client       │ one decode → N crops
+   └─ clipped clones                 └─ restricted media worker
+explicit import → bounded downloader → offline normalizer → verified cache
+```
+
+Windows/macOS use a per-user supervisor instead of the GNOME launcher. Keep the
+existing I/O-free `one-mk-wall-sync` separate from a new presenter package; do
+not add GStreamer to the daemon, input backend or timing core. No unauthenticated
+listener. Owner-only local sockets/pipes and peer credentials protect control;
+inherited one-use handles bind children to the authorized scene. Workers get
+read-only media handles/bounded channels, no keys, document access or generic RPC.
+
+## 3. Canvas and committed scene
+
+### Coordinates, fits and slices
+
+For local logical monitor `R(device, screen)` and existing Layout offset
+`T(device)`, global `G = T + R`. Use checked signed-64-bit edge arithmetic and
+finite transforms. `B` encloses the union of committed rectangles, including
+holes/negative origins/reserved offline space. Normalize by `B.min`, never the
+primary screen. Do not use pointer gap-clamping for texture lookup.
+
+Example: A `(0,0,1920,1080)`, B `(2020,-120,1280,1024)` gives
+`B=(0,-120,3300,1200)`. A samples canvas y=120, B x=2020/y=0; 100 logical units
+between screens consume picture space. Additional bezels are explicit
+wallpaper-only logical gaps in the Layout overlay, default zero; never change
+KVM pointer offsets. No inference of physical size from pixel count/EDID.
+
+Normalize source rotation/sample-aspect ratio first to `Vw×Vh`. Apply one
+centre-anchored source-to-canvas transform over `Bw×Bh`:
+
+| Fit | Global mapping |
+|---|---|
+| Cover (default) | Uniform `max(Bw/Vw,Bh/Vh)`, centred crop |
+| Contain | Uniform `min(...)`, centred, chosen opaque padding colour |
+| Stretch | Independent x/y scale, intentional distortion warning |
+| Tile | One display-source pixel per logical unit; repeat via positive modulo from `B.min`, never reset tile phase per monitor |
+
+For every physical output pixel centre: undo OS output rotation/scale into local
+logical coordinates, add `T`, subtract `B.min`, then invert the global fit.
+Sample that UV from the same immutable frame/PTS. Identical filter/pixel-centre
+and edge conventions prevent independent crop rounding. Retain fractional UVs;
+align subsampled chroma access without rounding each monitor seam independently.
+Contain uses padding, not edge smearing; tile uses modulo.
+
+Fractional scale changes sampling density, not global logical width. Apply
+90/270° rotation exactly once: Layout rectangles are already oriented, physical
+buffers need the inverse transform. Mirrors share geometry and do not expand B.
+Reject non-mirror overlaps until owner fixes preview. Mixed physical DPI can
+visibly change object size: logical continuity is not physical-mm continuity.
+Physical calibration later must not reinterpret KVM coordinates. SDR sRGB/
+Rec.709 only; HDR matching, VRR and mixed-refresh scanout parity unproven.
+
+### Manifest, consent and membership
+
+Bound scene manifest to 64 KiB, 8 devices/16 outputs, labels/IDs ≤256 UTF-8 bytes
+and global edges ±1,000,000 logical units. Fields: schema version, random 128-bit
+scene ID, paired coordinator fingerprint, authority generation/revision/layout
+hash, ordered member/screen IDs, G/scales/rotations/bezel gaps, fit/background,
+media and variant BLAKE3 hashes, rational duration/frame timebase, loop policy,
+rate/media-start/future coordinator monotonic epoch. No peer paths or URLs.
+
+Coordinator resolves relative offsets; reject inconsistent cycles, side-only
+ambiguous placement, duplicates, overflow/unintended overlap. Preview the frozen
+scene in Layout; wallpaper never rewrites KVM placement. Prepare → validate/
+verified cache/pre-roll → Ready → Commit future epoch. Start ready members only,
+show excluded ones, allow cancellation; preparation times out after 30 s. Do not
+claim all screens joined if one was excluded. Commit revisions atomically;
+stale generation/revision rejected. Late members join current PTS, not zero.
+New media needs local approval unless receiver explicitly authorized this
+coordinator's scene changes. Pairing alone is not that permission.
+
+Direct authenticated pairing to coordinator is required. A–B/B–C but no A–C:
+choose B or pair A–C. No transitive trust, forwarding or composed clock fits.
+No auto-election; explicit takeover requires receiver acceptance and a new
+authority generation, invalidating old probes/handles.
+
+Disconnect/sleep/lock/unplug reserves geometry; others retain B/epoch. A visible,
+AC-powered disconnected member may free-run its cached slice with stale quality.
+“Fit to connected screens” explicitly commits a new B at a future epoch, never
+surprise zoom. Added outputs require preview/commit; removed outputs stop locally
+immediately. Local hot-plug can replace presentation surfaces without reflowing
+the group. No sleeping member holds a group-wide barrier.
+
+## 4. Native presentation and bounded GNOME bridge
+
+### GNOME architecture proved only in an isolated session
+
+6B MEASURED on **headless GNOME 50.1/Mutter 18**: extension spawns fixed installed
+`one-mk-wall --present=gnome` with `Meta.WaylandClient.new_subprocess`;
+`owns_window` identifies its surface, not title/app-id. Set DESKTOP type before
+configure, suppress window-list presence; later stick/lower/hide source actor.
+One local spanning window feeds clipped `Clutter.Clone`s above native static
+wallpaper in private `Main.layoutManager._backgroundGroup`, below DING/windows.
+No normal pinned-below fallback: it stole focus and missed required layering.
+
+No decoder/native module in Shell. No JS DMA-BUF import (NO-GO in 6B); no live
+software frame uploads (10–15 ms/frame on Shell's main thread). Wayland window
+buffers allow Mutter to handle textures, but actual hardware zero-copy/HiDPI/
+hybrid behavior remains UNVERIFIED. Initially qualify GNOME 50; do not claim
+45–49 from API reading. Keep Shell version validation on, declare only tested
+versions, omit `unlock-dialog`. Test unsafe-mode harness never ships.
+Explicit normal extension installation/enabling; explain possible logout/login
+(not verified by fresh-session spike). Never restart the owner's live Shell.
+
+### Product D-Bus v1 (derived from 6B, fully bounded)
+
+Name **`org.onemk.WallpaperBridge1`**, object
+**`/org/onemk/WallpaperBridge1`**, interface **`org.onemk.WallpaperBridge1`**;
+extension owns without `ALLOW_REPLACEMENT`. No properties.
+
+```text
+Hello(u protocol) -> (u protocol, u layout_serial, a(iiiid) monitors)
+SetState(u state) -> ()
+Layout(u layout_serial, a(iiiid) monitors)          [unicast signal]
+PauseHint(u reasons)                               [unicast signal]
+```
+
+`u` uint32, `i` int32, `d` finite double. Protocol exactly 1; unknown version
+returns `org.onemk.WallpaperBridge1.NotSupported`. Monitor tuples `(x,y,w,h,scale)`
+are local logical rectangles, canonical Layout order, ≤16, positive w/h, scale
+0.5–4. Checked edges; local physical buffer extent ≤16384/side and ≤64 million
+pixels, or smaller probed GPU limit. Empty means no outputs/no surface. Payload
+≤4 KiB. Rotation/stable IDs come from authenticated daemon manifest, not new
+unbounded D-Bus fields; cross-check local geometry before adoption. Serial is
+nonzero local layout generation, separate from scene revision; wrap restarts
+bridge session. Keep current/latest pending only; coalesce events for ≤100 ms.
+
+State 0 starting, 1 playing, 2 paused, 3 failed. Unknown enums/bits/invalid geometry
+return `org.onemk.WallpaperBridge1.InvalidArgs`; unauthorized sender gets
+`org.freedesktop.DBus.Error.AccessDenied`. Reason mask values: 1 covered (all local
+outputs), 2 locked, 4 overview, 8 display-off, other bits zero. Mask zero permits
+resume, never overrides local battery/manual/session restrictions. Hide covered
+clones per monitor; all-covered sets the bit and stops decoder. Hello binds and
+returns layout, then immediately unicast current PauseHint; start hidden until
+that snapshot arrives. No FrameReady, pixels, media selection, paths, URLs,
+code, spawn parameters or generic command channel.
+
+Authentication/resource rules:
+
+1. Fixed argv only, while locally authorized/enabled, unlocked, AC-powered and
+   potentially visible. Desired state comes from owner-authenticated daemon IPC;
+   cold start reads once, dormant extension otherwise uses events, no polling.
+2. First Hello verifies current UID/exact spawned PID using bus credentials;
+   bind that unique bus name. Later calls compare binding without repeated PID
+   lookups. Clear PID/binding on exit/owner loss/disable and before spawn: no
+   PID-reuse window. At most one pending credential lookup, four/second.
+3. Signals go only to bound unique renderer name, not spike's broadcasts.
+   Renderer checks bridge owner PID equals `org.gnome.Shell` owner PID, pins
+   unique owner; owner change forces Hello again.
+4. Only owned correctly sized windows adopted. One current + one pending for
+   ≤2 s replacement; only one painted. Unexpected extra owned windows trigger
+   renderer teardown, not ordinary visible orphan windows. No title matching.
+5. SetState ≤10/second, duplicate states coalesced; replacement creation
+   ≤2/second. Rate accounting only on events, no idle tick. Arbitrary same-user
+   D-Bus saturation cannot be fully prevented here; do not claim it can.
+
+### Lifecycle, pause/resume and recovery
+
+Targets below are PROPOSED unless marked MEASURED:
+
+- Start hidden; Hello deadline 2 s, first healthy frame 5 s; otherwise static
+  and bounded restart. Reveal only after playing **and** fresh surface damage,
+  not a self-reported state alone.
+- Damage watchdog 1 Hz only while adopted animation expects progress; no damage
+  for 3 s hides clones and calls `check_alive` (Mutter ping timeout unverified).
+  MEASURED hang fallback 3068 ms; target ≤4 s including tick quantization.
+  Known still/long animation frame deadlines suppress false stale detection.
+- Failed-state repaint re-probe at 5/10/20/40/60 s, at most five attempts; expose
+  probe clone ≤250 ms to restore frame callbacks. Then stop all failure timers.
+  Spawn retry 1/2/4 s, ≤3 automatic starts in rolling 60 s, then static + doctor
+  Retry. Caps prevent no-clone/no-frame-callback recovery deadlock and storms.
+- Pause hides clones first, sends reasons, stops renderer/decoder ≤1 s
+  cooperatively. SIGTERM then SIGKILL after 2 s if needed, reap ≤3 s. Cancel
+  watchdog/re-probe immediately. No paused animation child/timer. Resume fresh
+  sync/pre-roll at current group PTS, never hidden catch-up decode.
+- Lock/DING/earlier-extension disable can rebase our extension: invalidate old
+  callback generation/bus binding, disconnect signals, remove clones/name,
+  stop child. Re-enable hidden; if locked remain dormant. Unlock rechecks all
+  reasons, spawns once, re-handshakes and rejoins. Do not reuse old windows/maps.
+  0.27 s was Python stand-in recovery; real renderer UNVERIFIED, target ≤5 s
+  once prerequisites are ready. Repeated cascades use same start cap; no
+  overlapping children or battery/manual pause override.
+- Hot-plug/mode/scale/rotation hides affected clones, emits Layout. DESKTOP
+  window resize failed in 6B: create new owned toplevel at new local canvas
+  extent, validate/adopt at redraw, close old. Deadline 2 s then static on
+  affected outputs; group epoch unchanged. 7–13 ms adoption was measured,
+  visible gap was not; no seamless claim.
+- Overview stays native static; hide/pause instead of private per-workspace
+  clone integration. “Use matching still picture in Overview” is **opt-in**:
+  save GNOME light/dark picture URI/style, install generated poster only after
+  consent. Restore only if still ours, never clobber newer owner background.
+  Explain OS may reuse it on lock screen; no secure-lock animation/hook.
+
+Cleanup is idempotent/destroy-aware (`connectObject`/`disconnectObject` pattern).
+Native static wallpaper always remains below; no focus/input grab on any failure.
+
+### Windows/macOS — proposed and UNVERIFIED
+
+| OS | Chosen renderer approach | Release qualification |
+|---|---|---|
+| Windows | One input-passive, nonactivating per-monitor-DPI-v2 D3D11/DirectComposition window spanning local virtual desktop; N viewports sample one texture under icons in validated WorkerW hierarchy | Progman/SHELLDLL_DefView/WorkerW and `0x052C` are not a supported wallpaper contract. Test actual Windows 11 24H2, 25H2, 26H1/builds individually; no inherited pass. Explorer restart/virtual desktops/icons/focus/device loss must pass. Fail static, never hide/kill Explorer or recreate endlessly. |
+| macOS | Non-key mouse-ignoring desktop-level NSWindow per NSScreen below Finder icons, stationary/all-Spaces behavior; one decode shares CVPixelBuffer/IOSurface-backed Metal crops | Intel/Apple silicon, Finder/Spaces/Mission Control/fullscreen/Stage Manager/Show Desktop, hot-plug, signed sandboxed helpers. Collection flags are not proof. No AVPlayer/WebM assumption or lock/saver replacement. |
+
+Cross-GPU sharing/copy costs unproven. Never silently create N decoders: use one
+compatible adapter with disclosed copies, downshift or poster. Completion/frame
+callbacks are not panel scanout timestamps on any OS.
+
+## 5. Decoder, normalization and resource ladder
+
+**Decision: pinned dynamically linked allow-listed GStreamer without libav or
+FFmpeg on all OSes**, OS-specific GPU presenters. Cost: optional media payload;
+benefit: one WebM/timing/normalization contract and no native-container gamble.
+Reject pinned LGPL-only FFmpeg for release one: possible to audit, but broader
+parser/configuration surface and another compliance system without demonstrated
+need. No shipped mpv/libmpv/mpvpaper fallback.
+
+Delivery default **WebM VP9 profile 0, 8-bit 4:2:0 SDR, 30 fps**; optional AV1
+same canonical duration/timebase. Exact libvpx/libaom permissive encoder builds
+audited. “Royalty-free” is codec selection policy, not universal patent warranty.
+
+| OS | Integrated-GPU path to qualify (UNVERIFIED) | Bounded fallback to implement/test |
+|---|---|---|
+| Linux | Explicit VA/VA-API VP9/AV1 factory on selected iGPU render node → GL/Wayland window; no nvcodec/dGPU autoselection | Explicit vpx/aom software decode → bounded upload |
+| Windows | Explicit GStreamer D3D11 VP9/AV1 hardware session on low-power DXGI adapter, verify textures/copies | vpx/aom software → D3D upload; no paid codec extension requirement |
+| macOS | VideoToolbox AV1 only where successful hardware session/throughput is proved, low-power device preference; VP9 hardware not assumed | WebM demux and vpx/aom software → Metal upload; no AVFoundation WebM claim |
+
+Use explicit factories/caps, no `playbin`/decodebin host autoplugging. Exact
+plugin names are build records, not assumed universal. Reject hardware routes
+needing forbidden libraries. Log actual adapter, driver, hardware flag, copies,
+codec/profile and reason. Probe a short local clip only after enable/import;
+no disabled GPU polling. No iGPU: report it, use bounded software/poster or
+require explicit dGPU choice. Decode and rendering may still wake a dGPU on
+externally wired outputs; measure/report rather than claim pinning solves it.
+
+One decoder/device/representation → immutable bounded pool → N crops/outputs.
+≤3 ready frames; reference surfaces separately capped by negotiated codec
+requirements. Slow output drops old frames, never blocks others or KVM.
+No giant cross-computer RGBA canvas. 6C one-decode/three-crop 4K CPU/RSS:
+81.83% of one core/161.76 MiB versus 262.17%/336.42 MiB for three decoders.
+True three-4K **11520×2160**: one decode/three crops **38.81 fps**, 255.83% core,
+376.26 MiB RSS. Short software H.264/fakesink run, NOT VP9/AV1, sustained complex
+video, GPU memory or actual presentation. Even 30 fps requires qualification.
+
+### Source detail versus canvas and fallback
+
+Three 1080p screens span 5760 source pixels, three 4K 11520; a 4096-wide source
+upscales ~1.4×/~2.8×. Preview shows source detail versus logical canvas/physical
+output demand. Default representation ≤4096×2160 (8,847,360 pixels). Opt-in wide
+tier ≤16384/side, ≤32 million decoded pixels, subject to smaller driver/codec/
+sandbox caps. 11520×2160 needs wide opt-in. Canvas itself can be much larger.
+
+Prefer one common full-scene representation; slower members may use smaller
+full-scene variants with same fit/duration/frame IDs/epoch, not different
+geometry. Pre-sliced per-device encodings deferred; not an invisible escape
+from one-decode requirement or canvas budget.
+
+After sandbox gate, preflight 10 s including complex interval: ≥1.25× target
+throughput, ≤1% late frames, stable memory, no thermal/power violation. Proposed
+gate, not spike result. Start iGPU 30 fps, then:
+
+1. Smaller approved derivative: width 4096 → 2560 → 1920, preserve aspect/epoch;
+   downscale wider sources into that ladder.
+2. Actual **normalized 15 fps file**, optionally combined with downscale; merely
+   presenting half the frames does not halve decoding.
+3. Still poster if bounded software tier fails or “Hardware only” selected.
+   Never silently start dGPU/unbounded software fallback.
+
+Three bad 10 s runtime windows downshift; evaluate only while playing. No
+automatic upshift until owner retry/next enable, no benchmark oscillation.
+Local tier changes announce blur/power reason, not a group slowdown.
+
+### Accepted imports, image timeline and loops
+
+Initial whitelist: VP9/AV1 WebM and GIF/APNG/animated WebP through audited,
+explicit Rust decoder features. Reject H.264/HEVC/VP8/Theora/other MP4/MKV inputs
+with “convert first” guidance. Own-file support is not “any codec”; gallery
+curation requires compatible sources. New legacy import decoder is separate
+security/licence scope, not an automatic GPL/system-FFmpeg fallback.
+
+Offline normalize VFR/images to shared rational timeline. Correct GIF/APNG/WebP
+disposal/background/previous, partial frames/alpha/finite loops; clamp delays
+<10 ms to 10 ms, preserve others on 1 ms ticks, flatten against chosen background.
+Same conversion/frame table/hash distributed to all peers, not OS-specific delay
+heuristics. Encode images once to VP9; preserve originals. Finite animation ends
+on final frame/poster unless “Repeat forever” explicitly chosen.
+
+Closed GOPs ≤1 s, no audio/subtitles/attachments/external streams. Default loop
+**hard cut**, labelled honestly: most Commons clips are not loops. Seamless
+crossfade/ping-pong later as offline new-hash/new-duration preparation; no second
+hidden decoder per loop. No web pages/shaders as a shortcut.
+
+## 6. Synchronization and quality semantics
+
+### Spike estimator/controller as the basis
+
+Reuse `Estimator`, `Timeline`, `Controller`, `frame_for_target`, codec/tests in
+`one-mk-wall-sync`. Four timestamps give coordinator-minus-local offset
+`((t2-t1)+(t3-t4))/2`, RTT `(t4-t1)-(t3-t2)`. Lowest-RTT half (≥3), median/MAD
+outlier rejection, 32 anchors, robust slopes ≥10 s apart. Defaults: eight
+exchanges 20 ms apart/5 s while active, fit ±500 ppm, drift slew ≤20 ppm and
+offset slew ≤5 ms/burst after acquisition. Drop first post-idle exchange, then
+collect eight valid samples; bounded 64 probes/exchange age ≤2 s. Initial retry
+after 1 s is proposed hybrid policy, not 6C-measured. Start only after fit ready/
+pre-roll at future epoch ≥500 ms ahead and ≥2× preparation latency +100 ms.
+
+Daemon stamps t1/t4 dispatch/arrival, coordinator daemon t2/t3 receive/transmit,
+not renderer/UI dequeue times. Negotiate `wall_scene_v1`, `wall_cache_v1`,
+`wall_clock_v1` first; unsupported old v2 peer gets no wallpaper messages and
+keeps ordinary KVM. Production clock target: authenticated QUIC datagrams,
+separate from reliable bulk streams. **6C used two example processes and
+bidirectional streams**, not production daemons/datagrams, revocation or
+input-priority dispatch. Those gates remain. No GstNetClientClock/GstPtpClock:
+they don't provide this paired QUIC consent/generation/presentation contract;
+do not add another LAN clock service or assume hardware PTP.
+
+Exact experimental envelope basis, not production tag allocation:
+
+| Bytes [start,end) | Little-endian field |
+|---|---|
+| 0–4 | ASCII `WCLK` |
+| 4 / 5 / 6–8 | version 1 / kind 1 request or 2 reply / reserved zero |
+| 8–16 / 16–24 | u64 generation / sequence |
+| 24–32 / 32–40 / 40–48 / 48–56 | f64 t1 / t2 / t3 / t4 monotonic seconds |
+| 56–64 | u64 connection-local session handle bound to complete authorized manifest |
+
+Exactly 64 bytes, no trailing data. Request t2/t3/t4 zero; reply t3≥t2, t4 zero,
+requester stamps arrival. Reject magic/version/kind/reserved mismatch, nonfinite/
+outside 0..1e9 seconds, invalid ordering, offset >one day, stale/unmatched
+session/generation/sequence/t1. Deduplicate/replay-fence before estimator;
+≤64 pending probes/member, 32 anchors, 256 frame metadata entries. Errors never
+partially mutate state. No URLs/paths/media payload. Capability-gate new dispatch
+before parsing, no unannounced existing-v2-tag changes. Clock traffic ≤20
+messages/s/member including replies, bulk initially ≤10% measured link goodput,
+one transfer/peer. Input priority must be tested: stream separation is not QoS.
+
+Pausing the coordinator locally must not leave a hidden timing worker alive.
+Before teardown, send one authenticated Suspended notice; followers stop clock
+probes to it and free-run their committed slices with stale quality. No forwarded
+or automatically elected clock authority. If the notice is lost, followers stop
+probing after 30 s without valid replies and wait for existing connection/Ready
+events. Coordinator resume announces Ready and requires fresh maps/pre-roll;
+remote visible animation does not override local lock/battery/coverage rules.
+No wallpaper replies or periodic clock work on a locally paused coordinator.
+
+### Presentation and controller policy
+
+Check every 100 ms only while playing; predict presentation at
+`now + calibrated display latency`, map into coordinator timeline, select latest
+eligible **unwrapped** PTS. Repeat/drop, not decoder instant-rate-change.
+6C controller defaults: 8 ms enter/3 ms exit hysteresis, absolute ±0.5% rate,
+seek near loop boundary >80 ms, hard resync >250 ms or gap >2 s, corrective
+seek/resync cooldown 5 s except startup/interruption. Reset rate to 1 after
+pre-roll/seek. Skips can be visible despite no corrective seeks.
+
+Group rate change commits future epoch with media-start equal to old unwrapped
+PTS at that epoch, then new slope; no discontinuity from rebasing. Sleep,
+backwards clock/generation change or accepted takeover resets maps/controller;
+fresh probes/pre-roll at current PTS. UTC/DST doesn't alter active playback.
+
+Auto latency estimates use compositor/presentation or native completion feedback,
+not decoder dequeue timestamps. They do not see panel/scanout delay. Manual
+per-output nudge ±250 ms, 1 ms steps, default zero; positive delays this output
+(choose earlier target PTS). Calibrate on filmed hardware; missing presentation
+feedback explicitly weakens confidence, not “zero latency”.
+
+### Quality indicator
+
+Three metrics, never conflated: clock-fit uncertainty/age, reported pairwise
+presented-PTS error, filmed physical display error. Use largest pairwise circular
+error among active members, not pooled average. Bounded 60 s window/10 Hz
+reports ≤600/member. Separate startup, warm statistics after 10 s. Active
+renderer publishes; closed UI adds no polling or measurement work.
+
+| Plain-language label + shape | Meaning |
+|---|---|
+| Measuring | Less than 30 s warm reports, no feedback or reacquiring; no reassuring physical number |
+| Good estimate | Valid feedback, accepted burst ≤15 s old, estimated clock uncertainty ≤10 ms, reported P95 ≤50 ms/P99 ≤100 ms; explicitly “estimate; display timing not verified” |
+| Degraded | Threshold exceeded, late frames, poster member or burst age >15 s; explain wired link/lower detail/nudge remedy |
+| Out of sync / offline | >250 ms reported mismatch or no valid clock >30 s; cached local free-run allowed, never good badge |
+| Paused / off | Reasons/scope; no measurements or heartbeat |
+
+Persistent one-way delay is indistinguishable from offset without independent
+assumptions. It can fool confidence and even “Good estimate”; always disclose
+unverified physical accuracy. Physical lab result is separate/datable, not a
+permanent guarantee badge. Higher probe frequency cannot cure asymmetry.
+
+6C good/bad synthetic Wi-Fi P95 16.667 ms, selected max 33.333 ms; adversarial
+P95 266.667 ms, no convergence. Loopback proxy offset P95
+0.052/1.090/3.891/61.116 ms isn't display accuracy. Selected good/bad runs
+skipped 198/138 frames/hour. Target qualified physical LAN/Wi-Fi pairwise display
+P95 ≤50 ms/P99 ≤100 ms over ≥30 minutes after 10 s warmup; warm loopback
+presented-PTS P95 ≤20 ms still unproved. Publish failures; no frame-exact,
+imperceptible-seam or arbitrary-Wi-Fi promise.
+
+## 7. Threat model, limits and zero-idle rule
+
+| Threat/boundary | Required mitigation and test |
+|---|---|
+| Malicious paired peer | Purpose/coordinator consent, authenticated bounded manifest, cache handles only, replay fencing. No remote generic local RPC, paths/URLs/execute. Forget/revoke closes streams/invalidates pending handles; no remote erasure of already authorized local cached files. |
+| Hostile video/image, even normalized by coordinator | Every peer validates/decodes in its own sandbox; hashes prove integrity, not safety. Whitelisted parsers, allocation/time caps, fuzzing and exact patched dependencies. Hardware decode doesn't sandbox firmware/drivers. |
+| Hostile URL/catalogue | Separate constrained downloader, no network in media worker; SSRF/signed metadata controls §8 plus schema/resource validation even if signed. |
+| Compromised renderer → extension | Bounded state/geometry only, owned/capped surfaces, no code/media bytes in Shell; spoof/flood/churn/hang tests. Can spoof a picture below windows, never trusted prompts/input capture. |
+| Same-user takeover/other session | Owner ACLs/credentials and session-local runtime paths; user may replace per-user extension/binary, not a fully solved hostile-user boundary. No cross-session control. |
+| Worker → OS/files/network/GPU | Linux namespaces/seccomp with only required render node/display socket; Windows AppContainer or equivalent restricted-token/job capabilities; macOS signed sandboxed helper. Prove denied network/keys/documents and bounded GPU IPC on each OS before decoding. Ordinary process isn't a sandbox; failure blocks adapter animation. |
+
+Admission defaults: source/download ≤512 MiB, duration ≤10 min, source ≤60 fps,
+≤36,000 source frames, normalized ≤30 fps, composited-animation working set
+≤256 MiB, 2 queued imports/one normalization worker, ≤10 min worker wall time,
+≤1 GiB resident worker ceiling including ≤256 MiB metadata/decoder auxiliaries.
+Check actual frames/decoded dimensions, not declared duration; reject changes/
+bombs before allocation. No MKV attachments/extra video tracks/subtitles/audio/
+external references. Output ≤512 MiB; wide opt-in doesn't waive memory caps.
+Stream image conversion, never retain every frame. Cancel kills/reaps/removes
+partials and preserves previous scene.
+
+Cache default 2 GiB: LRU completed unreferenced media, never active scene/poster/
+provenance. Reserve space first; active set fills quota → actionable refusal.
+Orphan partials >24 h cleaned at next activation, not off-state timer. Private
+content-addressed paths, no symlink/traversal; atomic rename after full BLAKE3
+verification even for resumed files.
+
+### Power and per-state budget
+
+Off: no renderer/import/decoder, media libraries in daemon, wallpaper heartbeat,
+polling or watchdog. Dormant optional GNOME extension retains passive listeners
+only. Imports require Enable on and an explicit user operation, never background
+autoplay; enabling the component does not itself start playback. Lock/battery/
+inactive session cancels and reaps import workers, retaining only resumable disk
+state, not a resident paused parser.
+
+Pause reasons ORed: manual, covered, locked, display-off, battery, low-power,
+reduced-motion, remote-session, user-inactive, gaming. Clear **all** applicable
+reasons before resume. Battery always pauses release-one animation; no override.
+Low-power/reduced-motion defaults poster. Hidden UI preview stops too.
+
+| State | Wallpaper-attributable steady budget / transition target |
+|---|---|
+| Off | 0 children/timers/packets/frames, 0 periodic daemon wakeups; core RSS unchanged except bounded unloaded config |
+| All local outputs covered / locked / battery / display off | Hide/destroy surfaces, stop children; 0 decode/present/probe/watchdog work after ≤1 s cooperative/≤3 s forced cleanup. Passive events only. |
+| Some local outputs visible | Hidden outputs don't repaint; one decoder for visible slices, no per-hidden-output frame loop |
+| Active admitted 1080p30 | Proposed presenter+decoder CPU ≤5% of one core/RSS ≤300 MiB; compositor delta separately targeted ≤10% core |
+| Active 4K30 / wide opt-in | Proposed CPU ≤10% / ≤25% core; RSS ≤512 / ≤768 MiB; GPU allocations ≤512 MiB / ≤1 GiB within driver caps; exceed → downshift/poster |
+| Failed | Native static, bounded §4 retries then no failure timer, explicit Retry |
+| Explicit import | One limited offline worker, cancelled/reaped on battery/lock/session-inactive; no autoplay |
+
+Budgets are targets, not spike measurements. Measure Shell/DWM/WindowServer,
+VRAM/power/dGPU residency too; stopping decoder alone doesn't stop compositor
+redraw. Compare hidden/destroyed outputs to native-static baseline. Ten-minute
+off/paused traces must show no periodic wallpaper work; bounded event handling
+is not a promise of literally zero instructions. If coverage pause cannot be
+enforced, adapter stays poster-only, not a silent power-rule exception.
+
+GNOME must compute union of opaque windows per output/workspace on compositor
+events (6B tested only maximized/fullscreen). Windows window/power/session events
+plus fullscreen suppression including `SHQueryUserNotificationState`; macOS
+workspace/display events and, if needed, explicit Accessibility consent for
+global coverage. Complete macOS coverage without consent UNVERIFIED: recommend
+poster-only until proved, no screenshot polling. Generic Wayland coverage not
+assumed portable.
+
+Observe GNOME enable-animations, Windows client-area-animation preference,
+macOS reduce-motion; first-use photosensitivity warning. Remote desktop
+(Windows SM_REMOTESESSION included), fast user switching/inactive/secure desktop
+pause. Closed lid with external screen follows actual output/power state, not
+lid alone. No sleep inhibition. Native screenshots/recordings can include the
+wallpaper; no capture-exclusion promise or covert capture for coverage.
+No telemetry; gallery/download discloses IP/User-Agent to host, explained before
+fetch; no off-state catalogue refresh.
+
+## 8. Licensing, packaging, URLs and gallery
+
+### Concrete shipping stack and release gates
+
+Original code/bridge MIT OR Apache-2.0; no Muro PolyForm Shield, Aura GPL-3.0,
+Hanabi GPL-3.0 code, translations, close implementation copies, assets/catalogue.
+Only independently authored integration from platform API descriptions. Bundled
+extension only, not extensions.gnome.org. Permissive MIT option doesn't relicense
+GPL Shell/dependencies or replace legal review.
+
+Optional package: pinned patched GStreamer core/needed plugins, WebM parser/
+demux, vpx/aom encode/decode, selected OS GPU factories, converters/presenters,
+audited image dependencies. **Exclude libav plugin, libavcodec, ffmpeg binary,
+x264/x265, libmpv, broad gdkpixbuf autoloading, network/playlist plugins and whole
+system plugin trees.** Spike x264/H.264 fixtures never enter release artifacts.
+
+Private audited plugin registry/scanner/search paths; clear inherited
+`GST_PLUGIN_PATH`, system plugin paths and library-loader overrides for normal
+launches. No host decoder discovery (Debian system FFmpeg may be GPL), including
+AppImage. Explicit documented compatible LGPL replacement mode is separate
+from silent host autoplugging. Dynamic LGPL libraries retain notices/licences,
+source/modifications and replacement/debugging rights; binary isn't “all MIT”.
+
+macOS media-helper signing/hardened runtime must allow demonstrable compatible
+modified-library replacement. If necessary narrow `disable-library-validation`
+to sandboxed media helper only, never daemon/UI; document local re-signing/
+replacement and review legally. No App Store promise. If signing/notarization/
+replaceability can't coexist, block that build, not silently static-link LGPL.
+
+Extend `.github/workflows/release.yml` and packaging scripts in M1/M5:
+
+1. Pin revisions/build flags/patch provenance/toolchains and plugin inventory.
+   Build controlled optional package, keep core/headless payload media-free.
+2. SPDX/CycloneDX SBOM includes Rust/native shared libraries/plugins/codec
+   sources/build tools; ship notices and corresponding library source route.
+3. Inspect every plugin's licence metadata **and recursive ELF/PE/Mach-O
+   dependencies**, plus actual loaded-library inventory in clean-machine decode.
+   Fail unknown/GPL/AGPL/nonfree media or libav/ffmpeg; wrapper licence is not
+   sufficient (6C). Negative test inserts forbidden transitive/plugin dependency.
+4. Scan exact advisories/backports; unresolved relevant parser/decoder issues
+   block release. Installed 1.28.2 is not clearance: 6C's parser/image advisory
+   audit remains unresolved for the chosen binaries; re-audit during build.
+5. Prove modified compatible LGPL replacement on every OS; archive inventory,
+   build manifest, SBOM/licences/source and scan results beside signatures.
+6. Clean OS install/update/rollback/uninstall, optional payload size measured;
+   no daemon media dependency or ambient host-library leakage.
+
+Activate bridge/presenter as matched signed v1 set with previous pair retained.
+Older/newer incompatible bridge → Hello refusal/static/doctor, never best guess.
+Partial update aborts/rolls back pair; normal reload/logout if needed, no Shell
+validation bypass. Doctor reports exact Shell/bridge/presenter/protocol and fix.
+
+### URL import safety
+
+Direct media only on explicit owner request. Peers distribute verified bytes/
+cache IDs, never ask receivers to fetch URLs. Downloader has bounded network
+but no keys/documents; normalizer/renderer no network:
+
+- HTTPS port 443 only; no credentials/fragments, file/data/ftp/playlists,
+  ambiguous numeric IP encodings or IPv6 zone identifiers.
+- Resolve/check all A/AAAA answers; reject private/loopback/link-local/
+  multicast/unspecified/reserved/cloud-metadata, IPv4-mapped IPv6, internal names.
+  Pin validated public address for actual connection, retain original hostname
+  for TLS/SNI/certificate checks; verify connected address, no re-resolution.
+- ≤3 redirects; revalidate/resolve/pin every target; forbid HTTPS→HTTP,
+  proxy/PAC/environment inheritance, cookies or ambient auth.
+- Connect 10 s, idle read 15 s, total 5 min, streamed ≤512 MiB even absent/lying
+  Content-Length. No HTTP decompression/archive expansion; bounded ≤64 KiB
+  metadata, sanitize names, MIME/magic/allowed parser validation.
+- Private partial file/hash; close downloader before offline probe/normalize.
+  Atomic cancel. Test rebinding, mixed public/private DNS, redirect to metadata,
+  mapped IPv6 and traversal. No yt-dlp/browser scraper fallback for web pages.
+
+### Gallery and rights operations
+
+Retain reviewed verdicts: Pexels/Pixabay/Mixkit/Coverr **not approved** feeds;
+NASA individually cleared later only; Internet Archive terms/access unverified,
+not approved. No new terms audit in revision 2; recheck before implementation.
+
+Commons CC0/jurisdiction-appropriate public domain only, individually reviewed
+compatible VP9/AV1 sources. Per item: creator (not assumed uploader), licence/
+version/link, source, rights evidence/date, original factual title, credit/
+adaptation text, byte size/duration/hash. Prefer scenery without people/logos;
+tags aren't Foundation warranties or trademark/publicity clearance. No actual
+item is cleared by this document. Expect **tens**, few true loops; no BY/SA/NC/
+ND/GFDL expansion just to fill it. Empty unavailable gallery is honest, but
+doesn't satisfy promised release-one gallery criterion.
+
+Host bounded signed index/provenance/tombstones only, **never videos** or bundled
+previews. Download source bytes only on click, not continuous hotlink playback.
+Identify Wikimedia/one-mk and contact in User-Agent, cache metadata/honour
+throttling; no white-label provider hiding or mass crawler. Native UI shows
+creator/licence/source/cost before fetch; preserve provenance beside cache and
+explain transcoding. No copied description/database prose. Previews generated
+locally after authorized download or separately cleared on-demand thumbnail.
+
+Use reviewed TUF-style implementation: offline 2-of-3 root keys, delegated online
+catalogue signing, old/new threshold-signed root rotation, timestamp/snapshot/
+targets consistency, expiry and stored highest versions. Index ≤1 MiB/1,000
+entries, metadata depth ≤4. Reject rollback/freeze/expired/hash mismatch;
+expiry disables new downloads, not verified own files. Bad local clock requires
+owner correction, not bypass. No home-grown signature-only substitute.
+
+Maintainers recheck deletion/licence before each catalogue publication and at
+least every 30 days, not each user's idle daemon. Publish contact/takedown and
+counter-notice/appeal policy; legal review of applicable DMCA/DSA duties. Aim
+acknowledgment ≤2 business days; credible claim temporarily delists with signed
+tombstone. Notify next explicit refresh, no silent original-file deletion or
+remote wipe; offline clients cannot learn revocations instantly.
+
+## 9. Settings, CLI/UI and failures
+
+Native Wallpaper surface uses existing Layout overlay, no second placement
+editor/web view/new always-on tray. Empty state: “Use a moving picture across
+your screens”, Enable default off, own-file/URL/Commons choices. Explain power,
+photosensitivity/download privacy/receiver authority before enabling. One clear
+primary action, accessible labels/keyboard; errors provide remedy, not raw paths.
+
+| Plain-language setting | Default/behavior |
+|---|---|
+| Enable live wallpaper / Start at login | Both off; component/extension install is separate consent |
+| This computer controls the picture | Explicit coordinator, local receiver approval; Apply shows scope |
+| Fit / gaps | Cover / preserve Layout; explicit “Fit to connected screens” commit |
+| Quality | Automatic, iGPU, 30 fps ladder; Advanced hardware-only/dGPU/nudge |
+| Pause | All applicable reasons shown; coverage/lock/battery/power/accessibility enforced |
+| Matching still in Overview | Off, consent and conditional restoration |
+| Pause here / Pause group / Stop | Local versus authorized coordinator scope clear; stop/autostart distinction explicit |
+| Library / Gallery / Remove cached copy | Rights/source shown; never removes original; no automatic network preview |
+
+Proposed, not implemented CLI:
+
+```text
 one-mk wallpaper import <file-or-https-url>
 one-mk wallpaper gallery list
 one-mk wallpaper gallery download <item-id>
-one-mk wallpaper scene preview
-one-mk wallpaper start <media-id> --scope paired --fit fill --gaps include
+one-mk wallpaper authorize <paired-computer> --scope wallpaper
+one-mk wallpaper scene preview <media-id> --fit cover
+one-mk wallpaper start <media-id> --scope paired --fit cover
 one-mk wallpaper pause --local
 one-mk wallpaper pause --group
+one-mk wallpaper stop --local
 one-mk wallpaper status --json
-one-mk wallpaper stop
+one-mk wallpaper doctor
 ```
 
-Persist `[wallpaper]` separately/versioned in `settings.toml`: disabled default,
-coordinator consent/member list, scene ID/layout revision, media IDs, fit/gaps,
-pause reasons/policies, hardware-required choice, fps/quality, caps, cache quota,
-playlist/schedule and explicit autostart. Keep media/cache in standard per-user
-data/cache directories in the eventual app, not executable/source directories.
-This document authorizes no writes there now. Separate policy and ephemeral
-clock/PTS; never persist peer-supplied absolute paths or network URL credentials.
+Exit 0 accepted/success, 2 usage/validation, 3 not-ready/unsupported, 4 refused
+authority, 5 operational failure. Async commands return operation ID, status
+preparing/playing/failed, never accepted-as-done. Atomic versioned settings and
+previous-build migrations/rollback; persist policy/consent/hashes, not clock fits,
+URL credentials or keys. Keep last good scene on parse failure, KVM untouched.
 
-Add a **Wallpaper tab** to the existing native egui app with Library/Gallery,
-rights labels, import progress, scene preview and a sync-quality view. Use
-existing Layout tab placements; add an optional wallpaper overlay there rather
-than a conflicting second layout editor. Warn about unspecified offsets,
-overlap, reserved/offline rectangles and maximum decode size. Preview only on
-explicit demand, stop when hidden. Tray entries: Play/Pause, Next, current
-scene, quality/degraded status and Stop; no always-running new tray process.
-Day automation chooses one shared scene using the coordinator's timezone;
-clock/DST changes change future schedules, not active PTS.
+Doctor/status: build/OS/tested label, bridge/protocol, actual decoder/GPU/copies/
+licence build, source/tier/memory/cache, scene/revision/members, reasons, clock
+age/uncertainty and reported-versus-physical error, missing permissions/action.
+Never installs bridge/grants Accessibility/plays preview silently.
 
-Doctor must state: backend selected, compositor/version, required bridge
-installed/enabled/protocol version, icon-preservation qualification, decoder
-actually selected/hardware status, format/codec availability, licence/build
-identity, GPU limits, cache bytes, permissions, local/remote scene versions,
-clock uncertainty/PTS error, unsupported pause rules, and actions that need
-owner consent. Never turn on Accessibility or install an extension silently.
+| Failure | Local recovery | Others |
+|---|---|---|
+| Stop/off | Hide/terminate/reap; conditionally restore opted-in still | Continue, reserve rectangle |
+| Coverage/lock/battery/display off/user switch | Hide immediately, ≤1 s cooperative/≤3 s forced cleanup | No implicit group pause |
+| Unlock/wake | New map/burst/pre-roll, static until ready, ≤5 s target after prerequisites | Current-PTS join, never restart group |
+| Network/coordinator gone | Visible cached free-run/stale quality; frozen manifest; explicit accepted takeover only | No barrier/reflow/election |
+| Slow decode/thermal/hardware failure | Repeat/drop briefly, ladder then poster | Group timeline unchanged |
+| Renderer crash/hang | §4 watchdog/restart cap then static + Retry | KVM/icons/input unaffected |
+| Hot-plug/DPI/rotation | Remove output, new local GNOME window ≤2 s or static; commit added geometry | Preserve B unless explicit reflow |
+| Shell/Explorer/Finder/GPU restart | Invalidate handles, revalidate host; one bounded restart sequence | Static if unsupported, no manipulation loop |
+| Version/partial update | Static, rollback matched pair, doctor instructions | Old KVM keeps working |
+| Bad media/hash/full cache/cancel | Reject partial, kill worker, preserve previous scene | Ready peers unaffected |
+| Revoked authority/hostile command | Refuse without side effects, invalidate purpose/handles, bounded redacted log | No onward fetch/execution |
+| Gallery expired/offline/tombstone | No new download, actionable contact/source, no remote deletion | Own-file playback unaffected |
 
-Packaging: optional `one-mk-wall` payload/component so existing headless daemon
-installs stay small. `.deb`: separate optional wallpaper package with exact
-GStreamer/plugin runtime dependencies and optional desktop bridge packages;
-do not add all media plugins to core Depends. AppImage: bundle audited runtime
-and scanner/allowlisted plugins or clearly require host components; test driver
-ABI/library replacement and report size. Windows installer: optional signed
-user-scoped wall/helper component, use OS MF; detect missing codec components,
-never buy/download paid extensions automatically. macOS bundle: signed helper,
-native framework linkage, notarization, minimal entitlements and universal/arch
-coverage. Inspect licensing for any Qt/bridge payload before distribution.
+## 10. Milestones, tests and estimate
 
-Uninstall removes only our autostart/bridges/settings on explicit request,
-never other wallpaper software or user source videos; preserve static fallback.
-Update packaging checks, installer smoke tests, README platform table,
-FEATURE-PLAN, dedicated user guide, gallery rights policy, protocol/schema
-documentation and troubleshooting/QA matrix. Do not report these changes as
-implemented by this research document.
+Every increment distributable behind setting **default OFF**, experimental/
+unsupported labels retained; not permission to claim full release. First playback
+M2 includes two authenticated “computers”, not a public single-PC-only phase.
 
-## 12. QA-agent executable plan and release evidence
+| ID / remaining effort | Gated increment | Exit criteria and tests |
+|---|---|---|
+| 6D-M1 / 12–18 engineer-weeks | Optional safe package/import/poster + capability/consent scaffolding | Prove sandbox filesystem/network/GPU constraints on all OSes and LGPL replacement/artifact negative tests. Re-run GNOME with real renderer/scale/lifecycle; prototype WorkerW/Mac host. Geometry/fuzz, bombs/cancel, off-state no timers. Stop/re-estimate if isolation/presentation fails. |
+| 6D-M2 / 10–16 | GNOME multi-computer local video/images | Two real daemons/private sessions, transfer/rehash/epoch/N crops/one decode, all fits/image timing. Datagrams/old-v2 compatibility, fake clocks/asymmetry/outage/revoke/replay. Warm loopback presented-PTS ≤20 ms P95, crop goldens, kill/focus/input cleanup. Other OSes remain static/unsupported-labelled. |
+| 6D-M3 / 16–24 | Windows/macOS + sync quality/power | Physical native layering/focus/Spaces/Explorer matrix, actual VP9/AV1/iGPU paths/ladder, union coverage, calibration, sleep/rebase/hot-plug. Zero off/paused periodic work, budgets including compositor. Compilation alone fails gate. |
+| 6D-M4 / 10–16 | URL/gallery/native controls/CLI/doctor | SSRF/limits/metadata rotation/freeze/rollback/takedown tests, ≥10 cleared compatible Commons items for gallery-ready. UI all states/screenshots/accessibility; settings migrations/cancel/failures. |
+| 6D-M5 / 14–22 | Qualified release-one optional package | Three-OS physical group, filmed wired/Wi-Fi, 24 h soak, clean install/update/rollback/uninstall/sign/notarize, security/licence and other-model review, independent user-journey QA, exact support matrix/SBOM/owner sign-off. |
+| Integration reserve / 8–14 | Cross-milestone fixes/security/dependency churn | Re-run affected gates, not excuse to drop GNOME/sandbox/multi-computer scope |
+| **Total / 70–110** | **Staged owner-authorized implementation** | **Re-estimate after M1; no calendar-date commitment** |
 
-**Mandatory quality bar:** polished native controls, actionable errors, atomic
-configuration updates, bounded recovery, no desktop/input regression, real
-end-to-end tests, and honest platform labels. Unit tests and compilation are
-necessary but not sufficient. The following is a future execution plan; all
-playback tests are **NOT RUN** in this task.
+Narrower Linux offsets costs, not enough to revive 28–42 weeks: new cross-platform
+royalty-free pipeline/sandbox work and lab remain. Plasma/other compositors,
+physical calibration and schedules need separate estimate. Hardware access
+before M3, not final week. 6B/6C research complete; implementation waits for
+owner GO/lab, not imaginary outstanding spike results.
 
-### Lab rules and prerequisites
+### One-monitor development and quality bar
 
-Use a disposable VM/session for desktop integration, never the owner's live
-GNOME session. No input backend except the explicit null test backend. Use
-private user state, trust store, cache and sockets; do not reuse real paired
-identities. Keep generated fixtures small under a worktree-owned lab directory,
-not a large `/tmp` RAM-disk video. Builds/tests use `-j 2`; never run
-`cargo fmt`. Installing a missing compositor/codec belongs to a separately
-approved lab setup, not this task. Inspect supported test-CLI options before
-launching; the proposed wallpaper commands above do not yet exist.
+Use 6B isolated headless Mutter/private bus/runtime/home harness, 1/2/3 virtual
+monitors. No inherited owner's socket/live desktop, real identities/config or
+installed unsafe test extension. Private Xvfb supports crop checks, not real
+RandR wall/desktop qualification. Generate small original clips in ignored
+worktree lab storage, not RAM-backed `/tmp`; always reap owned children/files.
 
-1. **Unit/golden stage:** run the eventual `cargo test -p one-mk-wall-core -j 2`
-   (package name to match implementation) and bounded schema/property tests.
-   Cases: negative origins; holes; 1/1.25/1.5/2 scales; 90/270° portrait;
-   mirror/overlap; graph cycles; side-only layouts; huge/overflow rectangles;
-   source rotation/SAR; Fit/Fill/Stretch/Centre; partial letterbox and gap masks.
-   Generate original numbered grid/diagonal/moving-bar fixtures in tests, no
-   third-party assets. Compare each crop against a CPU reference at fixed PTS;
-   exact pixels for nearest sampling, declared tolerance for GPU filtering.
-2. **Images:** handcrafted GIF/APNG/WebP fixtures with disposal/background/
-   previous, partial frames, alpha, varying/zero delay, finite loop and truncated
-   data. Compare canonical frame timeline and every composited frame on all
-   backends; random-access late join must select the same frame. Allocation
-   bombs hit limits before memory growth, and malformed files never reach Shell.
-3. **Private X11 display:** use installed Xvfb with private authorization and
-   `-nolisten tcp`, e.g. a harness-selected free display and bounded 1920×1080
-   screens. Add a tiny test WM/desktop fixture where needed. Multiple Xvfb
-   screens are separate X screens, **not automatically RandR-arranged monitors**;
-   emulate monitor rectangles in the harness or use a RandR-capable lab X server.
-   Capture only that server's wallpaper windows at chosen PTS; stitch reference
-   crops and compare. Run focus/input-pass-through and restart tests. This does
-   not qualify GNOME/KDE/Xfce/Cinnamon/MATE integration.
-4. **Private Wayland displays:** after approved prerequisites, launch two
-   independent headless wlroots/Sway lab compositors with two outputs each,
-   software rendering where necessary, isolated `XDG_RUNTIME_DIR`, distinct
-   `WAYLAND_DISPLAY`, private D-Bus and no inherited owner's display socket.
-   A harness environment can set `WLR_BACKENDS=headless`,
-   `WLR_HEADLESS_OUTPUTS=2`, `WLR_RENDERER=pixman`; exact compositor/backend
-   support is **UNVERIFIED until installed**, inspect its help. Weston headless
-   alone must not be assumed to support wlr-layer-shell. Use compositor frame
-   capture/protocols available in that lab, not screenshots of the live desktop.
-5. **Two “computers”, real transport:** launch two daemon instances in their
-   documented null-backend test mode, separate ports/configs/trust/caches,
-   pair test identities over loopback and place B at an explicit offset from A.
-   Attach one wall engine to each private display. Test third process for leader
-   conflict/offline behavior. Exercise existing file-stream resume and final
-   hash, not mocked file copies. Run once with video and once for each animated
-   format. Use a common future epoch and capture both surfaces at defined times.
-6. **Clock simulation and measurement:** injectable clocks test ±100 ppm,
-   ±2-second initial offset, monotonic reset, suspend, jitter, reordering, rate
-   clamp and loop wrap. Apply network impairment only inside a disposable
-   namespace/VM, never host Wi-Fi/routes. Test symmetric and asymmetric delay,
-   0/1/5% loss, transient outage and bandwidth contention; state that loopback
-   cannot reproduce real Wi-Fi contention/scanout.
-7. **Measure the display, not just the algorithm:** log session ID, local and
-   mapped presentation time, frame ID/PTS, clock estimate/uncertainty, decode
-   delay/drop count. On one host the monotonic clock provides independent ground
-   truth; inject artificial per-process clock transforms to avoid a vacuous test
-   where both simply read the same clock. Capture numbered frame IDs in both
-   render targets at a shared sampling instant and compute P50/P95/P99/max
-   presented-PTS error after 10-second warmup over ≥30 minutes. Fence-complete
-   offscreen capture measures rendering, not physical scanout; label it so.
-   On real machines film both monitors at high frame rate with an original
-   moving-bar/frame-counter clip; quantify frame mismatch and seam displacement.
-8. **Security/failure stage:** unpaired/refused/forgotten coordinator, replayed
-   generation, unauthorized media ID/path, traversal/symlink cache escape,
-   hostile metadata, quota/rate violation, malformed/oversized movie, URL to
-   loopback/private host/redirect/rebinding, spoofed catalogue signature/hash,
-   revoked item and interrupted import. Assert refusal, bounded RSS/CPU/disk,
-   preserved previous scene and no arbitrary file open. Crash decoder/engine/
-   bridge; desktop/input must continue. Examine child handles/permissions and
-   inability to read pairing keys or open network connections.
-9. **Power/soak stage:** 10-minute baseline/off/paused CPU-time and wakeup samples;
-   24-hour active/looping test with output hotplug, simulated battery/power
-   events, playlist rollover and one engine restart per hour. No growing queue,
-   bounded cache/RSS/GPU allocations, no periodic daemon wallpaper wakeups when
-   off, no resource leaks after 100 enable/disable cycles. Event-driven pauses
-   should stop decode/presentation within 1 second (PROPOSAL target); no polling
-   loop permitted to make the test pass. A pause reason must survive unrelated
-   reasons clearing.
-10. **UX/packaging stage:** fresh installs/updates/uninstalls on each supported
-    OS, missing runtime/bridge/codec, readonly/full cache, offline gallery,
-    keyboard navigation, accessibility labels, reduced-motion preview policy,
-    cancellation, corrupt settings rollback, no autoplay before consent,
-    source/author/licence display, signed update failure and safe-mode recovery.
+- Geometry: negative/gapped/scaled 1/1.25/1.5/2/portrait/mirrored/rejected overlap/
+  cycle/huge layouts, bezels/SAR/rotation/all fits/chroma. Stitched crops versus
+  CPU reference at fixed PTS; exact nearest pixels, stated GPU filter tolerance.
+- Images: disposal/alpha/partial/previous/background/delay/finite loop/truncation,
+  late-join same frame; fuzz header and decoded limits, mutation breaks tests.
+- Timing: reuse 6C seeds plus independently transformed per-process clocks;
+  sleep/backwards/takeover/one-way delay, 0/1/5% loss, reorder/correlated outage,
+  decoder stalls/input-bulk contention. Shared host clock isn't distributed proof.
+- E2E: two/three real daemons/null input/ephemeral pairing/separate caches/private
+  displays; real CLI/import/transfer/commit/status, not mocked file copies.
+  Kill -9 at prepare/commit/rename, full disk/revoke/old peer/bad wire/spoofed bus/
+  pause-refusing renderer. No stuck keys/buttons/pointer or orphan processes.
+- Lifecycle: 100 enable/disable/lock/DING cycles, rapid hot-plug, extra-window
+  refusal, long-frame deadlines, no-clone recovery deadlock; no Shell warnings,
+  leaks/focus grabs or off-state timers.
+- Resource: ten-minute baseline/off/paused traces, CPU/RSS/wakeups/compositor/
+  VRAM/power/dGPU residency; actual active queues/counts. Input P95 regression
+  ≤1 ms versus controlled loopback baseline under media transfer; record noise
+  and physical input results, no silent relaxed threshold.
 
-### Gate thresholds and report format
+Apply [FEATURE-PLAN quality bar](FEATURE-PLAN.md#wave-5-chosen-by-the-owner-from-a-checklist-2026-10-30):
+failing-first tests/integration, real binaries and failure runs, workspace tests/
+clippy ≤4 jobs during implementation, help/exit codes/actionable errors, every
+UI empty/error/offline/long-name/narrow/HiDPI/keyboard/reduced-motion/contrast
+state with inspected screenshots, on/off measurements, no leaked resources,
+property/fuzz/mutation tests, README/help/troubleshooting/doctor, honest tested
+labels. Hostile self-review, other-model review, independent user-journey QA are
+distinct gates. This docs-only task runs no builds or `cargo fmt` and does not
+count as an implementation validation pass.
 
-Gate on zero crash/desktop-icon/input regressions in supported configurations,
-one decode instance/device on normal path, capped resources, sync targets in
-section 5, correct crops/images and no unapproved/licence-ambiguous dependencies
-or gallery items. Input-latency nonregression target: transfer/active-wallpaper
-P95 increase ≤1 ms in the controlled loopback lab (PROPOSAL, tune with baseline
-noise); real remote-input measurements must also be reported, not inferred.
-Any threshold change needs owner review and published rationale.
+Reports retain commit/build/OS/Shell/GPU/driver/codec/adapter/copies, fixture/
+layout/hash, commands, timestamps/sample window, input baseline, P50/P95/P99/max,
+resource data/diffs/logs, passed/failed/skipped and recovery timings. Separate
+unit/compiled-only/offscreen/virtual-session/physical E2E; no cross-target clippy
+or screenshot certifies native hardware.
 
-QA records: commit/build hashes, OS/desktop/GPU/driver/codec versions, selected
-backend and actual decode mode, monitor map/scales/refresh, input baseline,
-fixture hash, clock/network scenario, commands, logs, screenshot diffs, sync
-distribution and resource graphs/data, passed/failed/skipped with reason.
-Mark `compiled only`, `offscreen tested`, `virtual-display E2E` and
-`physical-device E2E` separately. No passing Linux simulator result certifies
-Windows/macOS, secure desktop, real hardware power or physical seam quality.
+## 11. Owner-hardware acceptance script — not run here
 
-## 13. Owner manual scripts for real desktops
+After implementation, save work, use consenting disposable test logins and
+static/settings backups. Record versions/builds/GPU/driver/runtime. Original
+numbered grid/moving-bar VP9/AV1 plus GIF/APNG/WebP; Linux GNOME/Windows/Mac,
+≥2 physical seams, ≥1 device with multiple monitors, mixed scale/portrait/
+negative placement/refresh and hybrid laptop. Proposed CLI is not yet available.
 
-These scripts are for a consenting owner/tester **after** the feature exists,
-in a dedicated test session with saved work. They are not actions performed
-during this research. Prepare an original grid/moving-bar movie plus small
-GIF/APNG/WebP fixtures; record versions and keep a static fallback. Every run:
-use two differently sized/scaled monitors where possible, show desktop icons,
-select continuous canvas, inspect grid alignment, try all four scaling modes,
-check icon clicks/context menus/drag and task switching, then pause/stop and
-verify the original desktop returns. Capture failures before retrying.
+1. Clean install default off: no children/media library/heartbeat. Explicitly
+   install/enable matched GNOME bridge, doctor verifies. Windows 24H2/25H2/26H1
+   separately if claimed; Intel and Apple silicon if both claimed. Unsupported
+   combination static/actionable, never compile-check masquerading as support.
+2. Pair/approve coordinator per receiver, explicit Layout offsets, preview whole
+   canvas, import once/check hashes/variants. Verify disjoint slices/grid/holes/
+   bezels/four fits and all image types, physical-DPI mismatch disclosed. Test
+   5760/11520-wide demand and smaller source/visible quality downgrade.
+3. Click/drag/context-menu icons, Alt-Tab/Show Desktop, workspaces/Overview/DING,
+   Windows desktops, Mac Spaces/Mission Control/Stage Manager/fullscreen. No
+   focus theft/input capture. Poster opt-in only; change static background
+   yourself then stop, verify newer owner setting isn't overwritten.
+4. Maximize/fullscreen and cover each monitor with several windows; all-covered
+   stops children/timers/probes/presentation, uncover one restarts one decoder.
+   Lock/battery/power/reduced motion/remote desktop/user switch each pause; clear
+   one reason while another remains. Lid/external output and sleep/wake correct;
+   no secure-screen animation, current-PTS rejoin.
+5. Hot-plug/DPI/rotation/replug; expect static transition, record visible gap.
+   Disable earlier GNOME extension/lock repeatedly: cascade cap/no stale actor
+   or Shell crash. Disposable Explorer restart, GPU loss/renderer kill/hang:
+   fallback ≤4 s, cleanup ≤3 s, ready restart ≤5 s target after prerequisites.
+   Real unlock latency measured, never substituted with spike's 0.27 s.
+6. Film numbered frames across every seam ≥120 fps for ≥30 min each wired,
+   normal Wi-Fi and congested Wi-Fi, after 10 s warmup. Compute largest pairwise
+   physical P50/P95/P99/max/error/skips/displacement, camera uncertainty (120 fps
+   sampling 8.33 ms). Target P95 ≤50/P99 ≤100 ms; borderline uncertainty needs
+   faster capture, not rounding to pass. Compare estimator/nudge to film; inject
+   asymmetry and verify warnings/unverified physical accuracy, not guaranteed
+   green. Log outliers/startup separately too.
+7. Bulk transfer/KVM input under playback: latency baseline/regression. Sleep/
+   disconnect coordinator/receiver: reserve crop/epoch, cached free-run/stale,
+   no election/reflow. Explicit takeover rejects old authority; late rejoin
+   doesn't rewind group. All participants paused → zero wallpaper traffic.
+8. Truncated/hostile media/URL redirect/private-IP, full/read-only cache/cancel,
+   bad signature/expiry/revoked consent refuse safely. Real cleared Commons
+   download shows creator/licence; offline/missing codec actionable, no scraper/
+   paid/GPL auto-install fallback.
+9. 24 h soak with hourly restart/layout/power events, no growing queues/cache/
+   RSS/VRAM; record decoder count/compositor power/dGPU. Upgrade previous
+   settings, partial signed update/rollback, stop/uninstall optional package.
+   Originals/other wallpaper apps untouched; no leaked input/process/temp file
+   or disabled idle regression.
 
-| Platform / desktop | Manual sequence and pass condition |
+Owner signs exact matrix with failures/skips; independent QA follows journeys
+without author help. Missing hardware means **not tested**, not virtual pass.
+Required OS/GNOME/sandbox/power/physical-quality failure blocks full release
+unless fixed or owner explicitly revises scope/target.
+
+## 12. Open questions for the owner
+
+Already decided: three OSes, GNOME release one/no Plasma, multi-computer,
+VP9/AV1/no GPL encoders, iGPU, own/URL/Commons, best-effort sync. Do not reopen
+those implicitly. Remaining choices:
+
+| Question | Choices and recommendation |
 |---|---|
-| Windows 11 24H2 **and current supported Windows builds**, Windows 10 only if still claimed | Enable optional wall component; ensure window stays under icons, absent from Alt-Tab and never steals focus. Move a monitor left/above primary, change DPI/portrait, fullscreen game, maximize/minimize, switch virtual desktops, lock/unlock, sleep/wake, AC/battery and efficient mode. In a disposable session restart Explorer; wallpaper recovers or fails static without icon loss/refresh storms. Test missing HEVC/Media Feature Pack and mixed-GPU paths. Record OS build, not merely "Windows 11" |
-| macOS Intel and Apple silicon | Desktop-level placement under Finder icons; Spaces, Mission Control, Stage Manager and Show Desktop; fullscreen Space, hotplug, Retina scaling/portrait, low-power/battery, lock, display sleep. No wallpaper on secure login screen, no permissions silently enabled. Deny Accessibility and check honest unsupported coverage rule. Test native-decode capability failure and signed helper update. Do not claim Muro-style lock/saver support |
-| GNOME **50.1 Wayland**, then each additionally claimed 45–49 version | Use a disposable login/VM, explicitly install/enable matching bridge, keep DING/desktop-icons extension enabled. Verify icons above video, Overview/workspace switching, top bar/dock, fullscreen/maximized/partially covered windows, lock/unlock and display sleep. Disable bridge: no black desktop, orphan surface, key grab or crashed Shell. Upgrade/mismatched bridge fails static with doctor guidance; never disable version validation |
-| KDE Plasma Wayland **and X11 if claimed** | Select our actual wallpaper plugin in Desktop Settings; verify Folder View/icons remain usable and layer-shell test surface is not mistaken for a working plugin. Test containment/activity/virtual desktop changes, edit mode, compositor restart in disposable session, screen hotplug, power pause and plugin disable/update. Decoder crash must not crash plasmashell |
-| COSMIC Wayland | Verify advertised layer-shell and interaction with its own background service. Run common monitor/icon/fullscreen/power tests; if coverage events unavailable, doctor must say so. Stop restores existing background without disabling desktop services |
-| Sway / Hyprland (separate runs) | Capability/IPC discovery, two outputs, scale/transform, output unplug, workspaces/fullscreen, session lock, manual pause with no window-coverage IPC. No reserved work area or focus/input interception; own background-client conflict yields honest setup guidance |
-| GNOME X11 (older version only) | Test Shell/background/icon integration on an explicitly supported older GNOME release, not GNOME 50. Root-pixmap success is insufficient; icons and Shell background must coexist. Otherwise mark unsupported |
-| Xfce X11 | Leave xfdesktop/icons on; verify actual cooperative presentation. If video is hidden or hides icons, fail the desktop-support gate rather than turning xfdesktop off |
-| Cinnamon X11 | Leave Nemo desktop on; verify wallpaper/background ownership, icon interaction, lock, hotplug and restart. Version-specific failure means unsupported, not a root-window workaround claim |
-| MATE X11 | Leave Caja desktop on; same visibility/icon/lock/hotplug tests. Record Caja/WM/compositor versions and transparency settings; do not alter them automatically |
+| Q1. Authorize investment? | **A (recommend):** fund M1 (12–18 engineer-weeks), then re-estimate within 70–110. B: authorize all milestones now with same gates. C: hold, retain evidence only. |
+| Q2. GNOME breadth? | **A (recommend):** qualify named GNOME 50 builds first, older versions later. B: add selected 45–49 versions before release with added lab/effort. No unchecked range. |
+| Q3. Legacy imports? | **A (recommend):** VP9/AV1 WebM + GIF/APNG/WebP first, “convert first” errors. B: add audited isolated legacy import decoders before release, new estimate, still only VP9/AV1 output/no GPL artifacts. |
+| Q4. Native adapter/coverage fails? | **A (recommend):** keep static/experimental and block full release until fixed. B: explicitly narrow release scope, never call subset all three. |
+| Q5. Missing computer space? | **A (recommend):** reserve, explicit reflow only. B: auto-reflow opt-in, extra consensus/UX work and visible zoom. |
+| Q6. Overview matching? | **A (recommend):** unchanged still until opt-in. B: prompt once in GNOME setup, explain lock-screen reuse. Never silently change. |
+| Q7. Physical Wi-Fi target fails? | **A (recommend):** fix/calibrate or restrict qualified configurations, warn/hold required matrix. B: explicitly approve looser measured target and publish rationale. Never frame-exact. |
 
-**Cross-computer script (mandatory for release one):** pair the test Linux,
-Windows and Mac; opt in each receiver; give every device explicit offsets;
-place a moving bar across two physical seams and include a vertical/negative-
-coordinate monitor. Import once, confirm cache hashes and all three image
-formats, prepare/start the same scene, and film numbered frames on both sides
-of each seam. Record wired and Wi-Fi distributions. Close one lid, lock another,
-unplug Wi-Fi, throttle a test decoder, change layout, fill a test cache quota,
-and rejoin late. Others must continue; returners join the current slice/time
-without resetting the group. Forget a device and prove it can no longer make
-remote changes. Stop everywhere; verify KVM, clipboard, transfers, desktop
-icons, previous background and off-state CPU. A seam visibly jumping is a
-measured limitation to report, never hide behind a "synced" badge.
+### Evidence carried forward
 
-## 14. Decisions still needed from the owner
-
-The platform/content/gallery/multi-device answers are **settled**: all three
-OSes, video + animated images, own files + URL + gallery, no shaders/web pages,
-and multi-device in the first shippable version. Do not reopen them as excuses
-to ship a single-computer feature.
-
-1. Approve native-adapter architecture A and **28–42 engineer-week** planning
-   range, with GNOME/Plasma bridge feasibility as early stop/re-estimate gates?
-2. Which exact Linux desktop versions and Windows/macOS minimum releases must
-   pass release-one qualification, and who supplies real Windows/Mac hardware?
-   In particular, must Xfce/Cinnamon/MATE be supported rather than honestly
-   marked unsupported if icon-preserving integration is not available?
-3. Is an explicit optional GNOME Shell/Plasma plugin acceptable, including
-   privileged-host maintenance and any separately licensed bridge obligations?
-4. Accept best-effort sync with proposed 50 ms P95 qualified Wi-Fi target and
-   visible seam risk, or require tighter physical measurements that may change
-   scope/hardware? Default to included gaps and reserve offline rectangles?
-5. Accept proposed file/cache/resolution caps, SDR-only release one, hardware-
-   required video default and optional smaller/software representation consent?
-6. Accept a small CC0/public-domain Commons-only initial gallery rather than
-   restricted stock feeds, with no videos bundled and a real takedown contact?
-7. Choose coordinator authority and local-vs-group pause defaults; approve local
-   explicit opt-in even for paired computers and no automatic leader takeover?
-8. Is optional Accessibility permission on macOS acceptable for reliable
-   coverage pause, or should unavailable coverage be shown as a limitation?
-
-## Sources (primary unless explicitly noted)
-
-Repository and host evidence is listed in section 1. These links are evidence,
-not permission to copy implementation code. Only Muro/Aura/Hanabi READMEs and
-licensing metadata were used; not their implementation files.
-
-- **S01** Muro README, feature claims and licence: <https://github.com/MrRockySL/Muro#readme>.
-- **S02** Aura README, desktop/feature claims and GPL label: <https://github.com/antwny/aura#readme>.
-- **S03** Hanabi README, external-renderer/Shell integration pattern: <https://github.com/jeffshee/gnome-ext-hanabi#readme>.
-- **S04** Microsoft `SetParent`, including DPI caveats: <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setparent>.
-- **S05** Microsoft DirectComposition best practices/device loss: <https://learn.microsoft.com/en-us/windows/win32/directcomp/best-practices-for-directcomposition>.
-- **S06** Microsoft Windows 11 24H2 resolved issues, wallpaper customization apps: <https://learn.microsoft.com/windows/release-health/resolved-issues-windows-11-24h2>. Does not document WorkerW as a stable API.
-- **S07** Microsoft supported Media Foundation formats: <https://learn.microsoft.com/windows/win32/medfound/supported-media-formats-in-media-foundation>; MKV container support: <https://learn.microsoft.com/en-us/windows/win32/medfound/mkv-support>.
-- **S08** Apple NSWindow collection behavior: <https://developer.apple.com/documentation/appkit/nswindow/collectionbehavior-swift.struct>. Exact installed-OS stacking behavior not tested.
-- **S09** Apple AVSampleBufferDisplayLayer controlTimebase: <https://developer.apple.com/documentation/avfoundation/avsamplebufferdisplaylayer/controltimebase>.
-- **S10** Apple scheduled AVPlayer rate/time: <https://developer.apple.com/documentation/avfoundation/avplayer/setrate(_:time:athosttime:)>.
-- **S11** Apple VideoToolbox hardware query: <https://developer.apple.com/documentation/videotoolbox/vtishardwaredecodesupported(_:)>.
-- **S12** Apple Screen Saver framework: <https://developer.apple.com/documentation/ScreenSaver>.
-- **S13** EWMH desktop window type: <https://specifications.freedesktop.org/wm-spec/latest/ar01s05.html>.
-- **S14** GNOME 50 extension porting guide, including X11 removal: <https://gjs.guide/extensions/upgrading/gnome-shell-50.html>.
-- **S15** KDE Plasma plugin documentation: <https://develop.kde.org/docs/plasma/>. Efficient external texture bridge is not established by this page.
-- **S16** Xfce desktop-manager role: <https://xfce.org/projects>.
-- **S17** Linux Mint Nemo desktop-icon role: <https://community.linuxmint.com/software/view/nemo>.
-- **S18** MATE release note on Caja background/icon responsibility: <https://mate-desktop.com/id/blog/2024-02-27-mate-1-28-released/>; Caja documentation: <https://wiki.mate-desktop.org/mate-desktop/applications/caja/>.
-- **S19** wlr-layer-shell protocol definition: <https://wayland.app/protocols/wlr-layer-shell-unstable-v1>.
-- **S20** mpvpaper README/GPL-3.0 metadata and linked man page: <https://github.com/GhostNaN/mpvpaper>. No executable installed here.
-- **S21** GNOME 45 ES module transition: <https://gjs.guide/extensions/upgrading/gnome-shell-45.html>; extension creation/installation: <https://gjs.guide/extensions/development/creating.html>.
-- **S22** GStreamer application/plugin licensing FAQ: <https://gstreamer.freedesktop.org/documentation/frequently-asked-questions/licensing.html>; synchronization model: <https://gstreamer.freedesktop.org/documentation/additional/design/synchronisation.html>.
-- **S23** NTP four-timestamp model, RFC 5905: <https://www.rfc-editor.org/info/rfc5905/>. Not evidence of wallpaper Wi-Fi accuracy.
-- **S24** FFmpeg security fixes: <https://ffmpeg.org/security.html>.
-- **S25** mpv security issue CVE-2018-6360: primary upstream advisory/commit not retrieved, so exact historical exploit specifics **UNVERIFIED for this review**. Current player manual is the primary hardening reference: <https://mpv.io/manual/stable/> (configuration, scripts, network protocols, IPC).
-- **S26** Microsoft power-setting events: <https://learn.microsoft.com/en-us/windows/win32/power/registering-for-power-events>; other signal APIs named in section 7 require exact target-SDK validation before use.
-- **S27** Apple NSWorkspace sleep notifications: <https://developer.apple.com/documentation/appkit/nsworkspace>; power state notification: <https://developer.apple.com/documentation/foundation/nsnotification/name-swift.struct/nsprocessinfopowerstatedidchange>.
-- **S28** image crate manifest licence/features: <https://raw.githubusercontent.com/image-rs/image/main/Cargo.toml>; animation APIs: <https://docs.rs/crate/image/latest>.
-- **S29** Pexels API docs: <https://www.pexels.com/api/documentation/>; official wallpaper FAQ: <https://help.pexels.com/hc/en-us/articles/4405588861721-Can-I-use-the-API-as-a-wallpaper-app>; official terms explanation: <https://help.pexels.com/hc/en-us/articles/900005880463-What-are-the-Terms-and-Conditions>. Full separate API Terms URL fetch failed; no approval inferred.
-- **S30** Pixabay full Terms: <https://pixabay.com/service/terms/>; API hotlink/access policy: <https://pixabay.com/api/docs/>.
-- **S31** Mixkit licence: <https://mixkit.co/license/modal/videoFree/>; User Terms §9: <https://mixkit.co/terms/>.
-- **S32** Coverr licence: <https://coverr.co/license>; Terms of Use: <https://coverr.co/terms>.
-- **S33** Commons external reuse/download/linking guidance: <https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia>.
-- **S34** CC0 full legal code read: <https://creativecommons.org/publicdomain/zero/1.0/legalcode>. Waiver/fallback permits broad copyright reuse but does not clear all third-party rights or imply endorsement. No specific file has been selected or cleared; per-item clearance remains **UNVERIFIED**. Check the applicable full CC BY/CC BY-SA instrument before admitting such items later.
-- **S35** Wikimedia API access policy read: <https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_API_Usage_Guidelines> (page last edited 21 February 2026). Identifying client/contact, traffic/throttling and content-licence requirements; no provider-obscuring white-label API. Endpoint-specific numeric quotas remain **UNVERIFIED** and are an enablement gate.
-- **S36** Internet Archive Terms: <https://archive.org/about/terms.php> redirects to <https://archive.org/about/terms>; substantive terms inaccessible in this research.
-- **S37** NASA media/branding guidance: <https://www.nasa.gov/nasa-brand-center/images-and-media/>. Host/API-specific app download clearance not verified.
-- **S38** Windows Rust bindings MIT text: <https://raw.githubusercontent.com/microsoft/windows-rs/master/license-mit>.
-- **S39** objc2 MIT manifest: <https://raw.githubusercontent.com/madsmtm/objc2/master/crates/objc2/Cargo.toml>.
-- **S40** wayland-client MIT manifest: <https://raw.githubusercontent.com/Smithay/wayland-rs/master/wayland-client/Cargo.toml>.
-- **S41** gstreamer-rs licence section: <https://docs.rs/crate/gstreamer/latest>.
-- **S42** FFmpeg legal/configuration guidance: <https://www.ffmpeg.org/legal.html>; upstream licence: <https://github.com/FFmpeg/FFmpeg/blob/master/LICENSE.md>.
-- **S43** mpv copyright/build/licence conditions: <https://github.com/mpv-player/mpv/blob/master/Copyright>.
-- **S44** wgpu workspace licence: <https://raw.githubusercontent.com/gfx-rs/wgpu/trunk/Cargo.toml>.
-- **S45** LGPL-2.1 full text: website fetch timed out, but sections 4–6 read locally at `/usr/share/common-licenses/LGPL-2.1`; canonical reference <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html>. Actual release-binary compliance review remains outstanding.
+[Review](WALLPAPER-DESIGN-REVIEW.md), [GNOME spike/transcripts](spikes/gnome-live-wallpaper-spike.md),
+[sync/media spike/transcripts](spikes/wallpaper-sync-spike.md),
+[feature plan](FEATURE-PLAN.md), [UI review](DESIGN-REVIEW.md),
+[spatial prototype](design/spatial-prototype.html). Revision 1 remains in git
+history: its 28–42 week range/native-codec assumptions are superseded, not erased
+evidence. Spikes retain primary references/legal observations. Re-audit current
+terms/security advisories/exact binaries in M1/M5. This is engineering planning,
+not legal clearance or an already verified product architecture.
