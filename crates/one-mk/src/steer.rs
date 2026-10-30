@@ -68,7 +68,7 @@ pub async fn broadcast(dir: &Path, state: Option<Toggle>, idle_off: Option<u32>)
         return Ok(());
     };
     let Some(reply) = control::request(dir, Request::Broadcast(t)).await? else {
-        bail!("one-mk is not running, so nothing can be broadcast. Start it with `one-mk run` (or `one-mk install`)");
+        bail!("nothing to broadcast with: the one-mk service is not running here. Start it with `one-mk run` (or `one-mk install`)");
     };
     let mut lines = reply.lines();
     let (word, state) = (lines.next().unwrap_or(""), lines.next().unwrap_or(""));

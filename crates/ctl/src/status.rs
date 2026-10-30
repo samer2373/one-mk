@@ -266,7 +266,9 @@ impl Status {
             "" => "`one-mk broadcast off` stops it".to_owned(),
             key => format!("{key} or `one-mk broadcast off` stops it"),
         };
-        Some(format!("{who}. Everything you type, click and scroll here goes to {all} ({stop})."))
+        // Tried for real on Linux only so far.
+        let untested = if cfg!(any(windows, target_os = "macos")) { " Broadcast is untested on this system so far." } else { "" };
+        Some(format!("{who}. Everything you type, click and scroll here goes to {all} ({stop}).{untested}"))
     }
 
     /// One `key<TAB>value` line per fact (names never contain tabs or
@@ -569,16 +571,15 @@ mod tests {
         assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
         let text = s.render();
         let second = text.lines().nth(1).unwrap_or_default();
-        assert_eq!(
-            second,
-            "Broadcasting to 3 computers: mac mini, old pc and laptop. Everything you type, click and scroll here goes to all of them (Ctrl+Alt+B or `one-mk broadcast off` stops it)."
+        assert!(
+            second.starts_with("Broadcasting to 3 computers: mac mini, old pc and laptop. Everything you type, click and scroll here goes to all of them (Ctrl+Alt+B or `one-mk broadcast off` stops it)."),
+            "{second}"
         );
+        assert_eq!(second.contains("untested"), cfg!(any(windows, target_os = "macos")));
         assert!(!text.contains("The mouse and keyboard are"), "{text}");
         let one = Status { broadcast: vec!["b".into()], ..Status::default() };
-        assert_eq!(
-            one.broadcast_line().as_deref(),
-            Some("Broadcasting to 1 computer: b. Everything you type, click and scroll here goes to it (`one-mk broadcast off` stops it).")
-        );
+        assert!(one.broadcast_line().is_some_and(|l| l
+            .starts_with("Broadcasting to 1 computer: b. Everything you type, click and scroll here goes to it (`one-mk broadcast off` stops it).")));
         assert_eq!(Status::default().broadcast_line(), None);
         let odd = Status { broadcast: vec!["a\tb\nc".into()], broadcast_hotkey: "x\ty".into(), ..Status::default() };
         let back = Status::decode(&odd.encode()).unwrap();

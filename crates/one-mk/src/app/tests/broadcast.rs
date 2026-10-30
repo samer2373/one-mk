@@ -485,6 +485,24 @@ async fn swap_and_key_rules_apply_per_computer() {
     t.stop().await;
 }
 
+/// A key mapped to an action asks for it once per press, not once per
+/// computer: toggling the pointer lock twice would undo it.
+#[tokio::test]
+async fn a_key_action_runs_once_for_all_computers() {
+    const F12: u32 = 88;
+    let mut t = Trio::start("action", Swap::Auto, |_| {}).await;
+    set(&t.a.dir, |s| s.input.keymap.rule = vec![KeyRule { from: "f12".into(), to: Some(To::One("lock-pointer".into())), ..Default::default() }]).await;
+    t.on(1).await;
+    t.a.keys(&[(F12, true), (F12, false)]);
+    eventually_async("the lock", || async { status(&t.a.dir).await.pointer_locked }).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(status(&t.a.dir).await.pointer_locked, "toggled once, not once per computer");
+    assert_eq!(status(&t.a.dir).await.broadcast, ["bee", "sea"], "and broadcast carries on");
+    nothing_but_moves(&mut t.b.h);
+    nothing_but_moves(&mut t.c.h);
+    t.stop().await;
+}
+
 /// Starting while capture doesn't start gives up after a second, says
 /// why, and a capture that starts after all is handed straight back.
 #[tokio::test]
