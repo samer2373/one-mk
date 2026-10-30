@@ -4,6 +4,8 @@
 //! every platform backend.
 
 pub mod appmatch;
+pub mod autoscroll;
+pub mod gesture;
 mod codec;
 pub mod drag;
 mod edge;

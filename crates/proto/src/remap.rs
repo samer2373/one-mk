@@ -503,6 +503,22 @@ impl Mapper {
         &self.map
     }
 
+    /// Pulse a precompiled plain binding using this mapper's shared held
+    /// state, so a gesture cannot release another physical key's output.
+    pub fn pulse_binding(&mut self, binding: &Keymap, out: &mut impl FnMut(Emit)) {
+        let Some(rule) = binding.rules.first() else { return };
+        let Kind::Plain(output) = rule.kind else { return };
+        self.interrupt(out);
+        let original = std::mem::replace(&mut self.map, binding.clone());
+        self.once(output, out);
+        self.map = original;
+    }
+
+    /// Replay an unmapped short mouse click without releasing another holder.
+    pub fn click(&mut self, button: u32, out: &mut impl FnMut(Emit)) {
+        if crate::keynames::is_button(button) { self.pulse(Chord::key(button as u16), true, out); }
+    }
+
     /// A physical key (or button) went down or up; `down` again while down
     /// is an auto-repeat.
     pub fn key(&mut self, code: u32, down: bool, now: Instant, out: &mut impl FnMut(Emit)) {
@@ -919,6 +935,28 @@ mod tests {
 
     fn map(specs: &[RuleSpec]) -> Keymap {
         Keymap::compile(specs, PC, DEFAULT_TAP).unwrap().map
+    }
+
+    #[test]
+    fn gesture_pulses_and_click_replay_share_the_held_wire_invariant() {
+        use test_support::{Rng, Wire};
+        let binding = map(&[rule("button4", "ctrl+c")]);
+        let mut mapper = Mapper::new(map(&[rule("a", "button4")]));
+        let mut wire = Wire::default();
+        let mut rng = Rng(9157);
+        let now = Instant::now();
+        for _ in 0..10_000 {
+            match rng.below(6) {
+                0 => mapper.pulse_binding(&binding, &mut |event| wire.apply(event, false)),
+                1 => mapper.click(0x113, &mut |event| wire.apply(event, false)),
+                2 => mapper.key(A, true, now, &mut |event| wire.apply(event, true)),
+                3 => mapper.key(A, false, now, &mut |event| wire.apply(event, false)),
+                4 => mapper.key(LCTRL, true, now, &mut |event| wire.apply(event, true)),
+                _ => mapper.release_all(&mut |event| wire.apply(event, false)),
+            }
+        }
+        mapper.release_all(&mut |event| wire.apply(event, false));
+        assert!(wire.down.is_empty());
     }
 
     /// A mapper and a clock, recording what it emits.
