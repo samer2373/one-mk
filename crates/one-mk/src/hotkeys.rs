@@ -92,17 +92,34 @@ impl HotkeySettings {
         if let Some(j) = chord_or_none::<JumpChords>(&self.jump)? {
             list.extend((1..=9).map(|n| (Action::Jump(n), j.chord(n))));
         }
-        for (s, a) in [
-            (&self.cycle, Action::Cycle),
-            (&self.lock_pointer, Action::LockPointer),
-            (&self.home, Action::Home),
-            (&self.broadcast, Action::Broadcast),
-        ] {
+        for (s, a) in [(&self.cycle, Action::Cycle), (&self.lock_pointer, Action::LockPointer), (&self.home, Action::Home)] {
             if let Some(c) = chord_or_none::<Chord>(s)? {
                 list.push((a, c));
             }
         }
+        if let Some(c) = chord_or_none::<Chord>(&self.broadcast)?
+            && !self.broadcast_yields(&list, c)
+        {
+            list.push((Action::Broadcast, c));
+        }
         Bindings::new(list)
+    }
+
+    /// The broadcast shortcut came later than the others: its default
+    /// gives way to a chord the user already gave something else (a file
+    /// from before it, or a shortcut changed since), instead of making every
+    /// shortcut unusable. A chord chosen for broadcast clashes as usual.
+    fn broadcast_yields(&self, others: &[(Action, Chord)], c: Chord) -> bool {
+        let default = default_broadcast(cfg!(windows)).parse::<Chord>().ok();
+        default == Some(c) && others.iter().any(|(_, d)| *d == c)
+    }
+
+    /// The broadcast shortcut's default, if it gave way to another (see
+    /// `broadcast_yields`).
+    fn broadcast_gave_way(&self) -> Option<Chord> {
+        let c = chord_or_none::<Chord>(&self.broadcast).ok()??;
+        let all = self.bindings().ok()?;
+        (self.enabled && all.action(c).is_some_and(|a| a != Action::Broadcast)).then_some(c)
     }
 }
 
@@ -246,6 +263,9 @@ pub fn describe(s: &HotkeySettings, order: &[Numbered]) -> String {
         rows.push((c.label(), what.into()));
     }
     rows.push((EMERGENCY.label(), "always brings the pointer back (can't be changed)".into()));
+    if let Some(c) = s.broadcast_gave_way() {
+        rows.push((String::new(), format!("Broadcast has no shortcut: {} does something else here (`one-mk hotkeys --broadcast CHORD` sets one).", c.label())));
+    }
     let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     let mut out = "Keyboard shortcuts:\n".to_owned();
     for (k, what) in rows {
@@ -345,6 +365,33 @@ mod tests {
         assert_eq!(win.chord(7), "ctrl+alt+shift+7".parse().unwrap());
         assert_eq!(win.to_string(), "ctrl+alt+shift+{n}", "printed as written");
         assert_eq!(HotkeySettings::default().jump, default_jump(cfg!(windows)));
+    }
+
+    /// Upgrading with Ctrl+Alt+B (the broadcast default) already given to
+    /// another shortcut keeps every shortcut working: broadcast has none,
+    /// and `one-mk hotkeys` says so. A clash the user makes on purpose is
+    /// still refused.
+    #[test]
+    fn the_broadcast_default_gives_way_to_a_chord_already_in_use() {
+        let default = default_broadcast(cfg!(windows));
+        let dir = std::env::temp_dir().join(format!("one-mk-hotkeys-giveway-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.toml"), format!("[hotkeys]\nhome = \"{default}\"\n")).unwrap();
+        let s = Settings::load(&dir).unwrap().hotkeys;
+        let b = s.bindings().expect("still usable");
+        assert_eq!(b.action(default.parse().unwrap()), Some(Action::Home));
+        assert!(b.iter().all(|(a, _)| a != Action::Broadcast));
+        assert!(describe(&s, &order()).contains("Broadcast has no shortcut"), "{}", describe(&s, &order()));
+        assert!(!describe(&HotkeySettings::default(), &order()).contains("no shortcut"));
+        // Changing another shortcut to it on the command line works the same way.
+        let mut t = HotkeySettings::default();
+        HotkeyArgs { lock_pointer: Some(default.into()), ..HotkeyArgs::default() }.apply(&mut t).unwrap();
+        assert!(t.bindings().unwrap().iter().all(|(a, _)| a != Action::Broadcast));
+        // A broadcast chord chosen on purpose that clashes is refused.
+        let mut u = HotkeySettings::default();
+        assert!(HotkeyArgs { broadcast: Some("ctrl+alt+p".into()), ..HotkeyArgs::default() }.apply(&mut u).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Broadcast is Ctrl+Alt+B, plus Shift on Windows (AltGr+B types `{`
