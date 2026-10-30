@@ -737,6 +737,8 @@ pub async fn serve(
         broadcast: None,
     };
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
+    #[cfg(windows)]
+    app.reload_local_rules();
     if app.locked {
         println!("The pointer is locked to this computer (`one-mk lock-pointer off` frees it).");
     }
@@ -1969,6 +1971,8 @@ impl App {
         self.trust = new;
         let computers = crate::hotkeys::numbered_from(self.node.identity(), &self.trust).len();
         self.shortcuts.set_computers(computers);
+        #[cfg(windows)]
+        self.reload_local_rules();
         self.services.trusted.send_replace(trusted_set(&self.trust));
         for p in self.peers.iter().filter(|(fp, _)| !self.trust.is_trusted(fp)).map(|(_, p)| p) {
             p.conn.close(3u32.into(), b"forgotten");
@@ -2190,6 +2194,8 @@ impl App {
         self.apply_pointer_mode();
         self.sync_sides();
         self.shortcuts.reload(&self.settings.hotkeys);
+        #[cfg(windows)]
+        self.reload_local_rules();
         let paired: Vec<_> = self.trust.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone(), d.os)).collect();
         for p in self.settings.input.check(&paired) {
             tracing::warn!("input tuning in settings.toml: {p}");

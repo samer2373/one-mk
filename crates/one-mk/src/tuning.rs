@@ -1130,7 +1130,7 @@ impl TuningSettings {
             if *s.target() == Scope::Local {
                 if !cfg!(any(windows, target_os = "macos")) {
                     out.push("local rules need Windows or macOS and are ignored on this platform".into());
-                } else {
+                } else if !cfg!(windows) {
                     out.push("local key rules are inactive: native hook integration is not implemented yet (5H); experimental, untested on real Windows/macOS hardware".into());
                 }
                 let device = s.device().and_then(|device| device.parse::<Fingerprint>().ok());
@@ -1243,6 +1243,8 @@ impl TuningSettings {
         let has_local = self.local_rules || self.keymap.rule.iter().any(|rule| *rule.scope.target() == Scope::Local);
         let local = if cfg!(target_os = "linux") && has_local {
             "\nlocal key rules are not available on Linux"
+        } else if has_local && cfg!(windows) {
+            "\nlocal key rules: EXPERIMENTAL, native Windows UNTESTED (compile-checked only); see backend acknowledgement in status/doctor"
         } else if has_local {
             "\nlocal key rules are inactive: native hook integration is not implemented yet (5H); experimental, untested on real Windows/macOS hardware"
         } else {
@@ -1268,7 +1270,7 @@ fn check_scope(dir: &Path, scope: &Scope) -> Result<()> {
 /// apply on this computer, or aren't tested here.
 fn device_note(dir: &Path, scope: &Scope) {
     if *scope.target() == Scope::Local {
-        println!("Note: local key rules remain inactive; native integration is incomplete and untested on real Windows/macOS hardware. Local key rules are not available on Linux.");
+        println!("Note: {}", local_rules_note());
         return;
     }
     if scope.device().is_none() {
@@ -1371,7 +1373,7 @@ impl ScopeArgs {
 
 #[derive(clap::Args, Debug, Default, Clone)]
 pub struct KeyScopeArgs {
-    /// Reserve a local keyboard rule (inactive: native hooks are not wired yet).
+    /// Add an experimental local keyboard rule (Windows native UNTESTED).
     #[arg(long, conflicts_with_all = ["peer", "os"])]
     pub local: bool,
     #[command(flatten)]
@@ -1412,8 +1414,8 @@ impl KeyScopeArgs {
 pub enum KeymapCmd {
     /// Show the key rules.
     List,
-    /// Store the experimental local-key preference. Native activation is not
-    /// implemented yet; Windows/macOS are untested on real hardware.
+    /// Enable/disable experimental Windows local keys through settings reload.
+    /// Windows is native UNTESTED; macOS integration remains incomplete.
     Local {
         #[arg(value_name = "on|off", value_parser = settings::parse_on_off, action = clap::ArgAction::Set)]
         enabled: bool,
@@ -1466,21 +1468,45 @@ fn find_key_rule(rules: &[KeyRule], from: &Trigger, layer: &Option<String>, scop
     })
 }
 
+fn local_rules_note() -> &'static str {
+    if cfg!(windows) {
+        "EXPERIMENTAL, native Windows UNTESTED (compile-checked only); default OFF. Activation requires a healthy worker acknowledgement. Session/desktop/power changes require reload to resume."
+    } else if cfg!(target_os = "linux") {
+        "Local key rules are not available on Linux; stored rules remain inactive."
+    } else {
+        "Local key rules inactive: macOS integration incomplete; EXPERIMENTAL, native macOS UNTESTED (compile-checked only)."
+    }
+}
+
+async fn local_runtime_status(dir: &Path) {
+    if !cfg!(windows) { return; }
+    let reply = tokio::time::timeout(Duration::from_millis(1500), crate::control::request(dir, crate::control::Request::Status)).await;
+    let status = match reply {
+        Ok(Ok(Some(text))) => crate::manage::Status::decode(&text),
+        _ => None,
+    };
+    match status.as_ref().and_then(|status| status.input.iter().find(|line| line.starts_with("Local key rules "))) {
+        Some(line) => println!("{line}"),
+        None => println!("Local key rules inactive: no native backend acknowledgement; native Windows UNTESTED (compile-checked only)."),
+    }
+}
+
 fn list_keymap(s: &TuningSettings) {
     if s.keymap.rule.is_empty() {
         println!("No key rules: keys are sent as they are. Add one with `one-mk keymap add capslock esc`.");
         return;
     }
-    println!("Key rules (remote unless marked local; local integration is not active yet):");
+    println!("Key rules (remote unless marked local):");
     for r in &s.keymap.rule {
         let state = if *r.scope.target() == Scope::Local {
             if cfg!(target_os = "linux") { " [inactive: local key rules are not available on Linux]" }
+            else if cfg!(windows) { " [experimental; activation requires backend acknowledgement; native Windows UNTESTED]" }
             else { " [inactive: native integration incomplete; experimental, untested on real hardware]" }
         } else { "" };
         println!("  {}{}{state}", r.describe(), where_suffix(&r.scope, &r.app));
     }
     if s.keymap.rule.iter().any(|rule| *rule.scope.target() == Scope::Local) {
-        println!("Local key rules are inactive: native hook integration is not implemented yet (5H; experimental, untested on real Windows/macOS hardware).");
+        println!("{}", local_rules_note());
     }
     if let Some(ms) = s.keymap.tap_ms {
         println!("Tap/hold keys decide after {ms} ms.");
@@ -1489,18 +1515,23 @@ fn list_keymap(s: &TuningSettings) {
 
 pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
     match cmd.unwrap_or(KeymapCmd::List) {
-        KeymapCmd::List => list_keymap(&Settings::load(dir)?.input),
+        KeymapCmd::List => {
+            list_keymap(&Settings::load(dir)?.input);
+            local_runtime_status(dir).await;
+        }
         KeymapCmd::Local { enabled } => {
             Settings::update(dir, |settings| {
                 settings.input.local_rules = enabled;
                 Ok(())
             })?;
-            println!("Local key preference {}. Rules remain inactive: {}.", if enabled { "on" } else { "off" },
-                if cfg!(target_os = "linux") { "local key rules are not available on Linux" }
-                else { "native integration incomplete; experimental, untested on real Windows/macOS hardware" });
+            println!("Local key preference {}. {}", if enabled { "on" } else { "off" }, local_rules_note());
             settings::apply(dir).await?;
+            local_runtime_status(dir).await;
         }
-        KeymapCmd::Check => return check_command(dir),
+        KeymapCmd::Check => {
+            local_runtime_status(dir).await;
+            return check_command(dir);
+        }
         KeymapCmd::Clear => {
             let n = Settings::update(dir, |s| Ok(std::mem::take(&mut s.input.keymap.rule).len()))?;
             println!("Removed {n} key rule(s).");

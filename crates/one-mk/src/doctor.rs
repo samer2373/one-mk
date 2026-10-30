@@ -660,9 +660,13 @@ pub fn tuning_check(t: Option<&Tuning>) -> Check {
     check("input-tuning", "Input tuning", out)
 }
 
-pub fn local_rules_check() -> Check {
+pub fn local_rules_check(runtime: Option<&DaemonStatus>) -> Check {
     let outcome = if cfg!(target_os = "linux") {
         Outcome::skip("Local key rules are not available on Linux; stored rules remain inactive.")
+    } else if cfg!(windows) {
+        let detail = runtime.and_then(|status| status.input.iter().find(|line| line.starts_with("Local key rules ")))
+            .map(String::as_str).unwrap_or("Local key rules inactive: no native backend acknowledgement; EXPERIMENTAL, native Windows UNTESTED (compile-checked only).");
+        Outcome::warn(detail, "Default OFF. Native execution has not been accepted. Run `one-mk keymap local off` to disable; session/desktop/power changes require explicit reload. See docs/LOCAL-REMAP.md.")
     } else {
         Outcome::warn(
             "Experimental; untested on real Windows/macOS hardware. Native local hook integration is incomplete; rules remain inactive even with the preference on.",
@@ -1094,7 +1098,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
     checks.push(broadcast_check(&daemon, crate::settings::Settings::load(dir).ok().map(|s| s.broadcast).as_ref(), os));
     checks.push(tuning_check(probe_tuning(dir).as_ref()));
-    checks.push(local_rules_check());
+    checks.push(local_rules_check(daemon.status()));
     checks.push(device_rules_check(&probe_device_rules(dir, daemon.status().is_some())));
     checks.push(pointer_overlay_check(
         crate::pointeroverlay::support_here(daemon.status().map(|s| s.backend.as_str())),
@@ -1921,14 +1925,14 @@ mod tests {
 
     #[test]
     fn local_keys_never_claim_native_acceptance() {
-        let result = local_rules_check();
+        let result = local_rules_check(None);
         assert_eq!(result.id, "local-key-rules");
         if cfg!(target_os = "linux") {
             assert_eq!(st(&result), Status::Skip);
             assert!(result.outcome.detail.contains("not available on Linux"));
         } else {
             assert_eq!(st(&result), Status::Warn);
-            assert!(result.outcome.detail.contains("untested on real Windows/macOS hardware"));
+            assert!(result.outcome.detail.contains("untested on real Windows/macOS hardware") || result.outcome.detail.contains("UNTESTED (compile-checked only)"));
             assert!(result.outcome.detail.contains("inactive"));
         }
     }
