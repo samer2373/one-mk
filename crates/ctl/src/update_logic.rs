@@ -172,7 +172,9 @@ pub fn install_kind(path: &str, home: &str, appimage: bool, flatpak: bool) -> In
     if path.starts_with("/opt/") { return InstallKind::Managed; }
     let home = home.replace('\\', "/");
     if !home.is_empty() && (path.starts_with(&format!("{home}/")) || (home.contains(':') && lower.starts_with(&format!("{home}/").to_ascii_lowercase()))) {
-        if appimage && path.ends_with(".AppImage") { return InstallKind::AppImage; }
+        // The caller verified this process runs from that AppImage: whatever
+        // the file is called, it is the AppImage (window, tray, libraries).
+        if appimage { return InstallKind::AppImage; }
         if path == format!("{home}/.local/bin/one-mk") || lower == format!("{home}/appdata/local/one-mk-portable/one-mk.exe").to_ascii_lowercase() { return InstallKind::Portable; }
     }
     InstallKind::Managed
@@ -275,6 +277,9 @@ mod tests {
             ("/tmp/one-mk", "/home/me", InstallKind::Managed),
         ] { assert_eq!(install_kind(path, home, false, false), expected); }
         assert_eq!(install_kind("/home/me/one-mk.AppImage", "/home/me", true, false), InstallKind::AppImage);
+        // An AppImage keeps its kind under any name, but only inside the home folder.
+        assert_eq!(install_kind("/home/me/.local/bin/one-mk", "/home/me", true, false), InstallKind::AppImage);
+        assert_eq!(install_kind("/mnt/apps/one-mk.AppImage", "/home/me", true, false), InstallKind::Managed);
         assert_eq!(install_kind("/app/bin/one-mk", "/home/me", false, true), InstallKind::Flatpak);
         assert_eq!(install_kind("C:\\Users\\me\\AppData\\Local\\one-mk-portable\\one-mk.exe", "C:\\Users\\me", false, false), InstallKind::Portable);
         assert_eq!(install_kind("c:\\users\\ME\\AppData\\Local\\one-mk-portable\\one-mk.exe", "C:\\Users\\me", false, false), InstallKind::Portable);

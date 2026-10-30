@@ -26,8 +26,10 @@ The signed `update-manifest.json` is at most 256 KiB. Schema 1 fields: `version`
 `update-manifest.json.sig` is exactly 64 raw Ed25519 signature bytes. Duplicate
 fields, unknown fields, unsupported platforms/kinds, path-like names, invalid
 hashes, invalid versions and ambiguous asset selections are rejected. Only
-signed asset names construct download URLs; API-supplied download URLs are not
-trusted. Revocation blocks installing a revoked target; a revoked installed
+assets named in the signed manifest are downloaded. Their addresses come from
+the unsigned release listing, so each is restricted to the configured host or
+GitHub's release hosts, and the signed size and SHA-256 are checked before
+anything is installed. Revocation blocks installing a revoked target; a revoked installed
 version may still upgrade. Minimum version requires manual installation.
 
 Non-goals: compromised signing key, malicious signed executable, a hostile local

@@ -6,6 +6,10 @@ if [ "$#" -ne 1 ]; then
 fi
 directory=$1
 if [ -z "${ONE_MK_UPDATE_SIGNING_KEY:-}" ]; then
+  if grep -Eq 'PRODUCTION_KEY:[[:space:]]*bool[[:space:]]*=[[:space:]]*true' crates/one-mk/src/update_key.rs; then
+    echo 'PRODUCTION_KEY is on but ONE_MK_UPDATE_SIGNING_KEY is not configured: refusing to publish a release that trusts the production key but is unsigned.' >&2
+    exit 1
+  fi
   rm -f "$directory/update-manifest.json.sig"
   echo 'UNSIGNED release: ONE_MK_UPDATE_SIGNING_KEY is not configured. The updater refuses it.' | tee -a "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
   exit 0

@@ -287,3 +287,35 @@ fn hung_version_probe_terminates_its_process_group() -> Result<()> {
     }
     bail!("version probe left a running descendant")
 }
+
+#[test]
+fn downloads_may_only_come_from_the_origin_or_github() -> Result<()> {
+    let origin = Url::parse("https://api.github.com/repos/o/r/releases/latest")?;
+    for ok in ["https://api.github.com/x", "https://github.com/o/r/releases/download/v1/a", "https://objects.githubusercontent.com/a",
+        "https://release-assets.githubusercontent.com/a"] {
+        assert!(allowed(&Url::parse(ok)?, &origin), "{ok}");
+    }
+    for bad in ["https://attacker.example/a", "https://github.com.attacker.example/a", "http://github.com/a", "https://github.com:8443/a",
+        "https://evil.githubusercontent.com/a", "https://api.github.com:444/x"] {
+        assert!(!allowed(&Url::parse(bad)?, &origin), "{bad}");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_is_never_an_update_target_or_backup() -> Result<()> {
+    let scratch = Scratch::new()?;
+    let real = scratch.0.join("real");
+    fs::write(&real, "x")?;
+    let link = scratch.0.join("link");
+    std::os::unix::fs::symlink(&real, &link)?;
+    assert!(regular(&real).is_ok());
+    assert!(regular(&link).is_err());
+    assert!(regular(&scratch.0.join("missing")).is_err());
+    let candidate = scratch.0.join("candidate");
+    fs::write(&candidate, "new")?;
+    assert!(replace(&candidate, &link).is_err());
+    assert_eq!(fs::read_to_string(&real)?, "x", "the file behind the link is untouched");
+    Ok(())
+}

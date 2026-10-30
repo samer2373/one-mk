@@ -38,7 +38,7 @@ pub struct Options {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Settings { pub check: bool, pub url: Option<String> }
 
 impl Default for Settings {
@@ -220,7 +220,8 @@ fn line(reader: &mut impl BufRead, budget: &mut usize) -> Result<String> {
 
 fn request(url: &Url, origin: &Url, limit: u64, output: &mut impl Write) -> Result<u64> {
     let mut current = url.clone();
-    let deadline = Instant::now() + Duration::from_secs(120);
+    // 30 s, plus time for the size at a (slow) 32 KiB/s, at most an hour.
+    let deadline = Instant::now() + Duration::from_secs((30 + limit / (32 * 1024)).min(3600));
     for redirects in 0..=3 {
         validate_url(&current)?;
         ensure!(allowed(&current, origin), "update download redirected to an unapproved host; no files were replaced");
@@ -338,7 +339,15 @@ fn checked(home: &Path, endpoint: &str, key: &[u8], current: &str, state: &mut S
     let manifest = policy::parse(&bytes)?;
     ensure!(release.tag_name == format!("v{}", manifest.version), "release tag and signed version do not match");
     let digest = hex(digest::digest(&digest::SHA256, &bytes).as_ref());
-    let available = policy::accept(&manifest, current, state, &digest, FLOOR.and_then(|value| value.parse().ok()).unwrap_or(0))?;
+    let available = match policy::accept(&manifest, current, state, &digest, FLOOR.and_then(|value| value.parse().ok()).unwrap_or(0)) {
+        Ok(available) => available,
+        Err(error) => {
+            // A rejected release (revoked, too old, a downgrade) is no longer
+            // advertised.
+            if state.available.take().is_some() { save_state(home, state)?; }
+            return Err(error);
+        }
+    };
     state.sequence = manifest.sequence;
     state.digest = digest;
     state.highest_version = Some(manifest.version.clone());
@@ -349,7 +358,11 @@ fn checked(home: &Path, endpoint: &str, key: &[u8], current: &str, state: &mut S
 
 fn target() -> Result<(PathBuf, InstallKind)> {
     let executable = std::env::current_exe()?;
-    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
+    // `APPIMAGE` is inherited by every child of an AppImage (a terminal opened
+    // inside another AppImage, say): it only counts when this very process runs
+    // from that image's mount.
+    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from)
+        .filter(|_| std::env::var_os("APPDIR").is_some_and(|dir| executable.starts_with(dir)));
     let executable = appimage.clone().unwrap_or(executable);
     let home = directories::BaseDirs::new().map(|base| base.home_dir().to_string_lossy().into_owned()).unwrap_or_default();
     let kind = policy::install_kind(&executable.to_string_lossy(), &home, appimage.is_some(), std::env::var_os("FLATPAK_ID").is_some());
@@ -443,7 +456,18 @@ fn replace(candidate: &Path, target: &Path) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        if old.exists() { regular(&old)?; fs::remove_file(&old)?; }
+        // After an update the running daemon is mapped from `one-mk.old`, which
+        // Windows will not let us delete: move it aside under a unique name
+        // (removed later, best effort) instead.
+        if old.exists() {
+            regular(&old)?;
+            let stale = parent.join(format!("one-mk.old.{}", now()?));
+            fs::rename(&old, &stale).context("cannot move the previous executable aside; stop one-mk and retry")?;
+        }
+        for entry in fs::read_dir(parent)?.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with("one-mk.old.") { let _ = fs::remove_file(entry.path()); }
+        }
         fs::rename(target, &old)?;
         if let Err(error) = fs::rename(candidate, target) {
             fs::rename(&old, target).context("cannot restore old executable; rename one-mk.old back to one-mk.exe manually")?;
