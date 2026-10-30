@@ -16,7 +16,7 @@ impl FromStr for Direction {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Rule<T> {
     pub button: u32,
     pub direction: Direction,
@@ -28,7 +28,7 @@ pub struct Rule<T> {
 pub enum ButtonResult { Pass, Swallow, Replay(u32) }
 
 #[derive(Clone, Debug)]
-struct Press { button: u32, displacement: (f64, f64), fired: bool }
+struct Press { button: u32, displacement: (f64, f64), fired: bool, moved: bool }
 
 #[derive(Clone, Debug)]
 pub struct Gesture<T> {
@@ -38,20 +38,24 @@ pub struct Gesture<T> {
 
 impl<T> Gesture<T> {
     pub fn new(rules: Vec<Rule<T>>) -> Self {
-        Self { rules: rules.into_iter().filter(|rule| crate::keynames::is_button(rule.button)
+        Self { rules: rules.into_iter().filter(|rule| crate::keynames::is_button(rule.button) && !matches!(rule.button, 0x110 | 0x111)
             && rule.threshold_px.is_finite() && (1.0..=10_000.0).contains(&rule.threshold_px)).collect(), presses: Vec::new() }
     }
 
     pub fn cancel(&mut self) { self.presses.clear(); }
 
+    pub fn rules(&self) -> &[Rule<T>] { &self.rules }
+
+    pub fn active(&self) -> bool { !self.presses.is_empty() }
+
     pub fn button(&mut self, button: u32, down: bool) -> ButtonResult {
         if let Some(index) = self.presses.iter().position(|press| press.button == button) {
             if down { return ButtonResult::Swallow; }
             let press = self.presses.remove(index);
-            return if press.fired { ButtonResult::Swallow } else { ButtonResult::Replay(button) };
+            return if press.fired || press.moved { ButtonResult::Swallow } else { ButtonResult::Replay(button) };
         }
         if !self.rules.iter().any(|rule| rule.button == button) { return ButtonResult::Pass; }
-        if down { self.presses.push(Press { button, displacement: (0.0, 0.0), fired: false }); }
+        if down { self.presses.push(Press { button, displacement: (0.0, 0.0), fired: false, moved: false }); }
         ButtonResult::Swallow
     }
 
@@ -62,6 +66,9 @@ impl<T> Gesture<T> {
             press.displacement.0 = (press.displacement.0 + dx).clamp(-100_000.0, 100_000.0);
             press.displacement.1 = (press.displacement.1 + dy).clamp(-100_000.0, 100_000.0);
             let (horizontal, vertical) = press.displacement;
+            let slop = self.rules.iter().filter(|rule| rule.button == press.button)
+                .map(|rule| (rule.threshold_px / 2.0).min(16.0)).fold(16.0, f64::min);
+            press.moved |= horizontal.abs().max(vertical.abs()) >= slop;
             let direction = if horizontal.abs() > vertical.abs() {
                 if horizontal < 0.0 { Direction::Left } else { Direction::Right }
             } else if vertical < 0.0 { Direction::Up } else { Direction::Down };
@@ -78,6 +85,24 @@ impl<T> Gesture<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn primary_buttons_are_never_reserved() {
+        for button in [0x110, 0x111] {
+            let mut gesture = Gesture::new(vec![Rule { button, direction: Direction::Left, threshold_px: 60.0, output: () }]);
+            assert_eq!(gesture.button(button, true), ButtonResult::Pass);
+        }
+    }
+
+    #[test]
+    fn missed_swipes_never_replay_even_after_returning_to_origin() {
+        for (horizontal, vertical) in [(-55.0, 0.0), (0.0, -500.0), (-20.0, 0.0)] {
+            let mut gesture = state();
+            gesture.button(0x113, true);
+            gesture.motion(horizontal, vertical, &mut |_| panic!("unexpected gesture"));
+            gesture.motion(-horizontal, -vertical, &mut |_| panic!("unexpected gesture"));
+            assert_eq!(gesture.button(0x113, false), ButtonResult::Swallow);
+        }
+    }
     fn state() -> Gesture<()> {
         Gesture::new(vec![Rule { button: 0x113, direction: Direction::Left, threshold_px: 60.0, output: () }])
     }
@@ -86,7 +111,7 @@ mod tests {
         let mut state = state();
         let mut fired = 0;
         assert_eq!(state.button(0x113, true), ButtonResult::Swallow);
-        assert!(state.motion(-59.0, 0.0, &mut |_| fired += 1));
+        assert!(state.motion(-5.0, 0.0, &mut |_| fired += 1));
         assert_eq!(state.button(0x113, false), ButtonResult::Replay(0x113));
         state.button(0x113, true);
         state.motion(-60.0, 0.0, &mut |_| fired += 1);

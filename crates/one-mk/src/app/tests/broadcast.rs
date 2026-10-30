@@ -20,6 +20,30 @@ const LEFT_BUTTON: u32 = 0x110;
 const CENTER_B: Pos = Pos::new(960.0, 540.0);
 const CENTER_C: Pos = Pos::new(640.0, 400.0);
 
+#[tokio::test]
+async fn broadcast_does_not_intercept_mouse_mode_buttons_even_after_reload() {
+    let mut trio = Trio::start("mouse-modes", Swap::Auto, |dir| {
+        Settings::update(dir, |settings| {
+            settings.input.autoscroll.base.enabled = Some(true);
+            settings.input.gesture.push(crate::tuning::GestureRule { button: "button4".into(), direction: "left".into(),
+                to: To::One("back".into()), threshold_px: 60.0, scope: Scope::Global, app: None });
+            Ok(())
+        }).unwrap();
+    }).await;
+    trio.on(7).await;
+    for _ in 0..2 {
+        for button in [0x112, 0x113] {
+            for down in [true, false] {
+                trio.a.send(Event::Button { button, down, device: None });
+                let event = Inject::Button { button, down };
+                assert_eq!(trio.both().await, (event, event));
+            }
+        }
+        assert!(!ask(&trio.a.dir, Request::Reload).await.starts_with("error"));
+    }
+    trio.stop().await;
+}
+
 struct Daemon {
     dir: PathBuf,
     h: NullHandles,

@@ -820,13 +820,17 @@ press), and can try the rules before they are used. Details and the design:
   DPI and scaling work.
 - **Autoscroll and gestures (opt-in, not hardware-qualified).**
   `one-mk autoscroll --on` makes middle-click toggle continuous scrolling
-  on the other computer; Esc or another click stops it. `one-mk gestures
+  on the other computer; physical Esc (consumed) or another click stops it. `one-mk gestures
   preset side-swipe` makes a held side button switch desktops when swiped;
   short clicks still click once. The Mouse view has toggle/speed and
-  gesture preset/list controls. Only active autoscroll arms a timer.
+  gesture preset/list controls. Primary left/right buttons cannot be reserved;
+  attempted swipes never replay a click after leaving the small click slop.
+  These modes are disabled during broadcast and do not support device scopes.
+  Thresholds use backend motion units, not portable logical pixels.
+  Only active autoscroll arms a timer; unrelated reloads preserve it.
   See [input tuning](docs/INPUT-TUNING.md#autoscroll-and-gesture-buttons-5f)
   for scopes, actions, precedence, troubleshooting and hardware acceptance.
-  Linux null-backend coverage only; Windows/macOS compile-only, native
+  Linux null-backend routing and private-Xvfb capture/UI coverage; Windows/macOS compile-only, native
   desktop and Bluetooth behaviour untested.
 - **No stuck keys.** Held keys are tracked and released when the pointer
   leaves, a computer disconnects, traffic stops for 750 ms, or control is

@@ -1332,8 +1332,19 @@ impl App {
         let card = card_begin(ui, at, width, "Autoscroll & gestures");
         let content = card.inner;
         let mut top = content.top();
+        if matches!(self.keys.scope, Scope::Device(..)) {
+            top += para(ui, pos2(content.left(), top), content.width(), "Autoscroll and gestures apply to every mouse during a visit, not to one device. Choose All computers, an OS, or a computer in For: to change them.", regular(T_BODY), INK2);
+            return card.end(ui, top);
+        }
+        if let Some(Ok(problems)) = &self.keys.problems {
+            for problem in problems.iter().filter(|problem| problem.contains("autoscroll") || problem.contains("gesture") || problem.contains("primary left/right")) {
+                top += error_line(ui, content.left(), top, content.width(), &tune::plain_problem(problem)) + 6.0;
+            }
+        }
         let busy = self.tuning_busy();
         let mut rows: Vec<_> = input.autoscroll.iter().filter(|row| row.app.is_none())
+            .filter(|row| !matches!(row.scope, Scope::Device(..)))
+            .filter(|row| !row.button.as_deref().is_some_and(tune::primary_mouse_button))
             .filter_map(|row| Some((row.scope.rank(facts)?, row))).collect();
         rows.sort_by_key(|(rank, _)| *rank);
         let mut enabled = false;
@@ -1368,7 +1379,8 @@ impl App {
             self.tune_cmds("gestures", "mouse-modes", vec![args], None);
         }
         top += 38.0;
-        let gestures: Vec<_> = input.gestures.iter().filter(|row| row.scope.rank(facts).is_some()).collect();
+        let gestures: Vec<_> = input.gestures.iter().filter(|row| !matches!(row.scope, Scope::Device(..)))
+            .filter(|row| !tune::primary_mouse_button(&row.button)).filter(|row| row.scope.rank(facts).is_some()).collect();
         if gestures.is_empty() {
             top += para(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add a gesture with one-mk gestures add.", regular(T_BODY), INK2);
         }

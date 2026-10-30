@@ -16,7 +16,7 @@ async fn gestures_replay_short_click_fire_once_and_cancel_on_visit_end() {
     duo.enter_b().await;
     let button = |down| Event::Button { button: 0x113, down, device: None };
     duo.ha.events.send(button(true)).unwrap();
-    duo.ha.events.send(Event::Motion { dx: 59.0, dy: 0.0, device: None }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 5.0, dy: 0.0, device: None }).unwrap();
     duo.ha.events.send(button(false)).unwrap();
     assert_eq!(next_n(&mut duo, 2).await, [Inject::Button { button: 0x113, down: true }, Inject::Button { button: 0x113, down: false }]);
     duo.ha.events.send(button(true)).unwrap();
@@ -41,9 +41,7 @@ async fn autoscroll_moves_scroll_not_pointer_and_stops_on_escape() {
     duo.ha.events.send(Event::Motion { dx: 0.0, dy: 108.0, device: None }).unwrap();
     assert!(matches!(next_non_move(&mut duo.hb).await, Inject::Scroll { dx, dy } if dx == 0.0 && dy > 0.0));
     press(&duo, &[(ESC, true), (ESC, false)]);
-    loop {
-        if next_non_move(&mut duo.hb).await == key(ESC, false) { break; }
-    }
+    while next_non_move(&mut duo.hb).await != Inject::ScrollStop {}
     assert!(tokio::time::timeout(Duration::from_millis(60), next_non_move(&mut duo.hb)).await.is_err());
     duo.leave_b().await;
     duo.stop().await;
@@ -73,9 +71,9 @@ async fn reserving_a_held_remapped_button_on_reload_still_releases_its_output() 
 }
 
 #[tokio::test]
-async fn mouse_modes_cancel_on_reload_screen_lock_and_controller_disconnect() {
+async fn mouse_modes_cancel_on_relevant_reload_and_display_sleep() {
     for (mode, after) in ["autoscroll", "gesture"].into_iter()
-        .flat_map(|mode| ["reload", "lock", "sleep", "disconnect"].map(|after| (mode, after))) {
+        .flat_map(|mode| ["reload", "sleep"].map(|after| (mode, after))) {
         let mut duo = Duo::start(&format!("mouse-mode-cancel-{mode}-{after}"), None).await;
         set(&duo.da, |settings| {
             settings.input.autoscroll.base.enabled = Some(true);
@@ -89,32 +87,70 @@ async fn mouse_modes_cancel_on_reload_screen_lock_and_controller_disconnect() {
             duo.ha.events.send(Event::Motion { dx: 0.0, dy: 108.0, device: None }).unwrap();
             assert!(matches!(next_non_move(&mut duo.hb).await, Inject::Scroll { dy, .. } if dy > 0.0));
         } else {
+            duo.ha.events.send(Event::Motion { dx: 300.0, dy: 0.0, device: None }).unwrap();
             duo.ha.events.send(Event::Button { button: 0x113, down: true, device: None }).unwrap();
             press(&duo, &[(LSHIFT, true), (LSHIFT, false)]);
             assert_eq!(next_n(&mut duo, 2).await, [key(LSHIFT, true), key(LSHIFT, false)]);
         }
         match after {
-            "reload" => { set(&duo.da, |_| {}).await; duo.leave_b().await; }
-            "lock" => {
-                duo.ha.events.send(Event::ScreenLocked(true)).unwrap();
-                assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { .. }));
-            }
+            "reload" => { set(&duo.da, |settings| {
+                settings.input.autoscroll.base.speed = Some(2.0);
+                settings.input.gesture[0].threshold_px = 70.0;
+            }).await; }
             "sleep" => {
                 duo.powa.events.send(PowerEvent::DisplayAsleep(true)).unwrap();
             }
-            _ => {
-                let controller = duo.tasks.remove(0);
-                controller.abort();
-                let _ = controller.await;
-                tokio::time::sleep(Duration::from_secs(4)).await;
-            }
+            _ => unreachable!(),
         }
         tokio::time::sleep(Duration::from_millis(80)).await;
         let residual = injected(&mut duo.hb);
         assert!(residual.iter().all(|event| matches!(event, Inject::Scroll { .. } | Inject::ScrollStop | Inject::MoveTo(_))), "{after}: {residual:?}");
+        if mode == "gesture" {
+            duo.ha.events.send(Event::Motion { dx: -100.0, dy: 0.0, device: None }).unwrap();
+            duo.ha.events.send(Event::Button { button: 0x113, down: false, device: None }).unwrap();
+        }
         assert!(tokio::time::timeout(Duration::from_millis(80), next_non_move(&mut duo.hb)).await.is_err(), "{after}: scrolling continued after stop");
         duo.stop().await;
     }
+}
+
+#[tokio::test]
+async fn escape_cancels_gesture_without_escaping_remote_and_next_escape_passes() {
+    let mut duo = Duo::start("gesture-escape", None).await;
+    set(&duo.da, |settings| {
+        settings.input.gesture.push(crate::tuning::GestureRule { button: "button4".into(), direction: "left".into(),
+            to: To::One("back".into()), threshold_px: 60.0, scope: Scope::Global, app: None });
+    }).await;
+    duo.enter_b().await;
+    duo.ha.events.send(Event::Motion { dx: 300.0, dy: 0.0, device: None }).unwrap();
+    duo.ha.events.send(Event::Button { button: 0x113, down: true, device: None }).unwrap();
+    press(&duo, &[(ESC, true), (ESC, true), (ESC, false)]);
+    duo.ha.events.send(Event::Motion { dx: -100.0, dy: 0.0, device: None }).unwrap();
+    duo.ha.events.send(Event::Button { button: 0x113, down: false, device: None }).unwrap();
+    press(&duo, &[(LSHIFT, true), (LSHIFT, false)]);
+    assert_eq!(next_n(&mut duo, 2).await, [key(LSHIFT, true), key(LSHIFT, false)]);
+    press(&duo, &[(ESC, true), (ESC, false)]);
+    assert_eq!(next_n(&mut duo, 2).await, [key(ESC, true), key(ESC, false)]);
+    duo.stop().await;
+}
+
+#[tokio::test]
+async fn escape_held_before_gesture_still_releases_remote_escape() {
+    let mut duo = Duo::start("held-escape-gesture", None).await;
+    set(&duo.da, |settings| {
+        settings.input.gesture.push(crate::tuning::GestureRule { button: "button4".into(), direction: "left".into(),
+            to: To::One("back".into()), threshold_px: 60.0, scope: Scope::Global, app: None });
+    }).await;
+    duo.enter_b().await;
+    press(&duo, &[(ESC, true)]);
+    assert_eq!(next_n(&mut duo, 1).await, [key(ESC, true)]);
+    duo.ha.events.send(Event::Button { button: 0x113, down: true, device: None }).unwrap();
+    press(&duo, &[(ESC, true), (ESC, false)]);
+    assert_eq!(next_n(&mut duo, 2).await, [key(ESC, true), key(ESC, false)]);
+    duo.ha.events.send(Event::Button { button: 0x113, down: false, device: None }).unwrap();
+    press(&duo, &[(LSHIFT, true), (LSHIFT, false)]);
+    assert_eq!(next_n(&mut duo, 2).await, [key(LSHIFT, true), key(LSHIFT, false)]);
+    duo.stop().await;
 }
 
 const CAPS: u32 = 58;

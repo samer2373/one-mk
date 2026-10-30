@@ -34,6 +34,7 @@ pub(super) struct Tune {
     last_scroll: Option<DeviceRef>,
     autoscroll: Autoscroll,
     gestures: Gesture<one_mk_proto::remap::Keymap>,
+    cancel_escape: Vec<Option<DeviceRef>>,
     /// What the mapper emitted and is still to be sent; kept between
     /// events so its capacity is reused.
     out: Vec<Emit>,
@@ -48,6 +49,7 @@ impl Tune {
             scroll: ScrollTune::new(r.base.scroll),
             autoscroll: Autoscroll::new(r.base.autoscroll),
             gestures: Gesture::new(r.base.gestures),
+            cancel_escape: Vec::new(),
             by_device,
             last_scroll: None,
             out: Vec::new(),
@@ -66,7 +68,26 @@ impl Tune {
         (keymaps, by_device)
     }
 
-    /// When the mapper's timer must fire: only while a tap/hold key is undecided.
+    pub(super) fn without_mouse_modes(mut self) -> Self {
+        self.autoscroll = Autoscroll::default();
+        self.gestures = Gesture::new(Vec::new());
+        self
+    }
+
+    fn cancel_mouse_modes(&mut self) -> bool {
+        let stopped = self.autoscroll.active();
+        self.autoscroll.stop();
+        self.gestures.cancel();
+        stopped
+    }
+
+    fn release(&mut self) -> bool {
+        let stopped = self.cancel_mouse_modes();
+        self.mapper.release_all(&mut |event| self.out.push(event));
+        stopped
+    }
+
+    /// A pending tap/hold decision or an active autoscroll tick; none at idle.
     pub(super) fn deadline(&self) -> Option<std::time::Instant> {
         self.mapper.deadline().into_iter().chain(self.autoscroll.deadline()).min()
     }
@@ -89,8 +110,12 @@ impl Tune {
     /// `Mapper::set_keymaps`), scrolling keeps its remainders where its
     /// rules stay the same.
     fn replace(&mut self, new: Tune, out: &mut Vec<Emit>) {
-        self.autoscroll = new.autoscroll;
-        self.gestures = new.gestures;
+        if self.autoscroll.config() != new.autoscroll.config() {
+            self.autoscroll = new.autoscroll;
+        }
+        if self.gestures.rules() != new.gestures.rules() {
+            self.gestures = new.gestures;
+        }
         self.pointer = new.pointer;
         if self.scroll.config() != new.scroll.config() {
             self.scroll = new.scroll;
@@ -179,7 +204,8 @@ impl App {
         for w in r.base.warnings.iter().chain(r.devices.iter().flat_map(|(_, d)| &d.warnings)) {
             tracing::debug!(peer = %name, "input tuning: {w}");
         }
-        Tune::new(r)
+        let tune = Tune::new(r);
+        if self.broadcasting() { tune.without_mouse_modes() } else { tune }
     }
 
     /// The backend says which keyboards and mice are connected now. During
@@ -287,7 +313,7 @@ impl App {
         r.tune.replace(new, &mut out);
         r.tune.out = out;
         self.send_tuned();
-        if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
+        if stopped && !self.remote.as_ref().is_some_and(|remote| remote.tune.autoscroll.active()) { self.tuned_scroll(ScrollIn::Stop, None); }
     }
 
     /// A physical key or button transition during a visit, from `device`
@@ -297,6 +323,20 @@ impl App {
         let Some(r) = self.remote.as_mut() else { return };
         let now = tokio::time::Instant::now().into_std();
         let t = &mut r.tune;
+        if code == 1 {
+            if let Some(index) = t.cancel_escape.iter().position(|held| *held == device) {
+                if !down { t.cancel_escape.swap_remove(index); }
+                return;
+            }
+            if down && !t.mapper.holds(code, device) && (t.autoscroll.active() || t.gestures.active()) {
+                t.cancel_escape.push(device);
+                let stopped = t.autoscroll.active();
+                t.autoscroll.stop();
+                t.gestures.cancel();
+                if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
+                return;
+            }
+        }
         let active = t.autoscroll.active();
         let swallowed = t.autoscroll.key(code, down, now);
         let stopped = active && !t.autoscroll.active();
@@ -360,21 +400,14 @@ impl App {
     /// Stops mouse modes when this display sleeps, without ending the visit.
     pub(super) fn cancel_mouse_modes(&mut self) {
         let Some(remote) = self.remote.as_mut() else { return };
-        let stopped = remote.tune.autoscroll.active();
-        remote.tune.autoscroll.stop();
-        remote.tune.gestures.cancel();
+        let stopped = remote.tune.cancel_mouse_modes();
         if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
     }
 
     /// Lets go of everything the mapper sent (the visit ends).
     pub(super) fn release_tuned(&mut self) {
         let Some(r) = self.remote.as_mut() else { return };
-        let t = &mut r.tune;
-        let stopped = t.autoscroll.active();
-        t.autoscroll.stop();
-        t.gestures.cancel();
-        let out = &mut t.out;
-        t.mapper.release_all(&mut |e| out.push(e));
+        let stopped = r.tune.release();
         self.send_tuned();
         if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
     }
@@ -515,6 +548,87 @@ mod tests {
         assert!(tune.deadline().is_none());
         tokio::time::advance(Duration::from_secs(600)).await;
         assert_eq!(tune.autoscroll.tick(Instant::now().into_std()), None);
+    }
+
+    #[test]
+    fn unchanged_mouse_rules_preserve_active_scroll_and_gesture() {
+        let mut settings = TuningSettings::default();
+        settings.autoscroll.base.enabled = Some(true);
+        settings.gesture.push(crate::tuning::GestureRule { button: "button4".into(), direction: "left".into(),
+            to: crate::tuning::To::One("back".into()), threshold_px: 60.0, scope: crate::tuning::Scope::Global, app: None });
+        let resolve = |settings: &TuningSettings| Tune::new(ResolvedSet {
+            base: settings.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX, apps: &[], device: None }, false), devices: Vec::new() });
+        let mut tune = resolve(&settings);
+        let now = Instant::now().into_std();
+        tune.autoscroll.key(0x112, true, now);
+        tune.autoscroll.key(0x112, false, now);
+        tune.gestures.button(0x113, true);
+        settings.pointer.push(crate::tuning::PointerRule { speed: Some(2.0), ..Default::default() });
+        tune.replace(resolve(&settings), &mut Vec::new());
+        assert_eq!(tune.deadline(), Some(now + one_mk_proto::autoscroll::TICK));
+        assert_eq!(tune.gestures.button(0x113, false), ButtonResult::Replay(0x113));
+    }
+
+    #[test]
+    fn relevant_changes_cancel_only_the_changed_mouse_mode() {
+        for change_scroll in [false, true] {
+            let mut settings = TuningSettings::default();
+            settings.autoscroll.base.enabled = Some(true);
+            settings.gesture.push(crate::tuning::GestureRule { button: "button4".into(), direction: "left".into(),
+                to: crate::tuning::To::One("back".into()), threshold_px: 60.0, scope: crate::tuning::Scope::Global, app: None });
+            let resolve = |settings: &TuningSettings| Tune::new(ResolvedSet {
+                base: settings.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX, apps: &[], device: None }, false), devices: Vec::new() });
+            let mut tune = resolve(&settings);
+            let now = Instant::now().into_std();
+            tune.autoscroll.key(0x112, true, now);
+            tune.autoscroll.key(0x112, false, now);
+            tune.gestures.button(0x113, true);
+            if change_scroll { settings.autoscroll.base.speed = Some(2.0); }
+            else { settings.gesture[0].threshold_px = 70.0; }
+            tune.replace(resolve(&settings), &mut Vec::new());
+            assert_eq!(tune.autoscroll.active(), !change_scroll);
+            assert_eq!(tune.gestures.active(), change_scroll);
+            assert_eq!(tune.gestures.button(0x113, false),
+                if change_scroll { ButtonResult::Replay(0x113) } else { ButtonResult::Swallow });
+        }
+    }
+
+    #[test]
+    fn broadcast_mouse_modes_have_no_deadline_or_interception() {
+        let mut settings = TuningSettings::default();
+        settings.autoscroll.base.enabled = Some(true);
+        settings.gesture.push(crate::tuning::GestureRule { button: "button4".into(), direction: "left".into(),
+            to: crate::tuning::To::One("back".into()), threshold_px: 60.0, scope: crate::tuning::Scope::Global, app: None });
+        let base = settings.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX, apps: &[], device: None }, false);
+        let mut tune = Tune::new(ResolvedSet { base, devices: Vec::new() }).without_mouse_modes();
+        for down in [true, false] {
+            assert!(!tune.autoscroll.key(0x112, down, Instant::now().into_std()));
+            assert_eq!(tune.gestures.button(0x113, down), ButtonResult::Pass);
+        }
+        assert!(tune.deadline().is_none());
+    }
+
+    #[test]
+    fn retained_tune_cannot_emit_gesture_or_scroll_after_release() {
+        for release in [false, true] {
+            let mut settings = TuningSettings::default();
+            settings.autoscroll.base.enabled = Some(true);
+            settings.gesture.push(crate::tuning::GestureRule { button: "button4".into(), direction: "left".into(),
+                to: crate::tuning::To::One("back".into()), threshold_px: 60.0, scope: crate::tuning::Scope::Global, app: None });
+            let base = settings.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX, apps: &[], device: None }, false);
+            let mut tune = Tune::new(ResolvedSet { base, devices: Vec::new() });
+            let now = Instant::now().into_std();
+            tune.autoscroll.key(0x112, true, now);
+            tune.autoscroll.key(0x112, false, now);
+            tune.autoscroll.motion(0.0, 100.0);
+            tune.gestures.button(0x113, true);
+            assert!(if release { tune.release() } else { tune.cancel_mouse_modes() });
+            assert!(tune.deadline().is_none());
+            assert_eq!(tune.autoscroll.tick(now + Duration::from_secs(1)), None);
+            assert!(!tune.gestures.motion(-100.0, 0.0, &mut |_| panic!("cancelled gesture fired")));
+            assert_eq!(tune.gestures.button(0x113, false), ButtonResult::Swallow);
+            assert!(tune.out.is_empty());
+        }
     }
 
     /// The daemon's loop sleeps until `Tune::deadline` (as `next_deadline`

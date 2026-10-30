@@ -630,6 +630,22 @@ pub fn mouse_button_label(name: &str) -> String {
         .unwrap_or_else(|| name.to_owned())
 }
 
+pub fn primary_mouse_button(name: &str) -> bool {
+    name.trim().parse::<u32>().is_ok_and(|number| matches!(number, 1 | 2))
+        || keynames::parse_key(name).is_ok_and(|code| matches!(code, 0x110 | 0x111))
+}
+
+#[cfg(test)]
+#[test]
+fn mouse_mode_primary_button_aliases_are_unsafe() {
+    for name in ["1", "2", " 2 ", "button1", "button2", "leftbutton", "rightbutton", "mouse1", "mouse2"] {
+        assert!(primary_mouse_button(name), "{name}");
+    }
+    for name in ["middle", "button4", "button5"] {
+        assert!(!primary_mouse_button(name), "{name}");
+    }
+}
+
 fn alt_word() -> &'static str {
     if cfg!(target_os = "macos") { "Option" } else { "Alt" }
 }

@@ -20,6 +20,9 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<(), &'static str> {
+        if matches!(self.button, 0x110 | 0x111) {
+            return Err("primary left/right buttons must remain available for clicking; choose middle or button4 instead");
+        }
         if !crate::keynames::is_button(self.button) {
             return Err("choose a mouse button (for example middle or button4)");
         }
@@ -27,9 +30,17 @@ impl Config {
             return Err("autoscroll speed must be between 0.1 and 10");
         }
         if !self.dead_zone.is_finite() || !(0.0..=1000.0).contains(&self.dead_zone) {
-            return Err("autoscroll dead zone must be between 0 and 1000 pixels");
+            return Err("autoscroll dead zone must be between 0 and 1000 backend motion units");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn primary_buttons_cannot_capture_clicks() {
+    for button in [0x110, 0x111] {
+        assert!(Config { button, ..Config::default() }.validate().is_err());
     }
 }
 
@@ -47,6 +58,8 @@ impl Autoscroll {
     }
 
     pub fn active(&self) -> bool { self.next.is_some() }
+
+    pub fn config(&self) -> Option<Config> { self.config }
 
     pub fn deadline(&self) -> Option<Instant> { self.next }
 
