@@ -13,9 +13,9 @@
 //! event waits for its device any more (no latency).
 
 use crate::common_logic::now_ms;
-use crate::devcorr::{Correlator, Token, hid_button_to_evdev, windows_path};
+use crate::devcorr::{Correlated, Correlator, Token, hid_button_to_evdev, windows_path};
 use crate::win_logic::hook_key_to_evdev;
-use crate::{Bus, DeviceRef, Event, Fingerprint, InputDevice, Kinds};
+use crate::{Bus, DeviceRef, Fingerprint, InputDevice, Kinds};
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{HidD_GetProductString, HidD_GetSerialNumberString};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM};
 use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
@@ -57,7 +57,7 @@ impl RawDevices {
     }
 
     /// Stops reading Raw Input (capture ends); what waits goes to `out`.
-    pub(crate) fn unregister(&mut self, out: &mut Vec<Event>) {
+    pub(crate) fn unregister(&mut self, out: &mut Vec<Correlated>) {
         self.corr.finish(out);
         if !std::mem::take(&mut self.registered) {
             return;
@@ -76,7 +76,7 @@ impl RawDevices {
     /// said last time. Devices gone are forgotten (their numbers are not
     /// used again); input still waiting for them goes to `out`, to be sent
     /// before the new list.
-    pub(crate) fn enumerate(&mut self, out: &mut Vec<Event>) -> Option<Vec<InputDevice>> {
+    pub(crate) fn enumerate(&mut self, out: &mut Vec<Correlated>) -> Option<Vec<InputDevice>> {
         let handles = device_list();
         let before: Vec<InputDevice> = self.table.iter().map(|(_, d)| d.clone()).collect();
         self.table.retain(|(h, _)| handles.iter().any(|(x, _)| x == h));
@@ -100,7 +100,7 @@ impl RawDevices {
     }
 
     /// `WM_INPUT`: what a device did, for the matching.
-    pub(crate) fn on_input(&mut self, lparam: LPARAM, out: &mut Vec<Event>) {
+    pub(crate) fn on_input(&mut self, lparam: LPARAM, out: &mut Vec<Correlated>) {
         let mut raw = RAWINPUT::default();
         let mut size = size_of::<RAWINPUT>() as u32;
         // SAFETY: the buffer is a RAWINPUT, big enough for keyboard and

@@ -1,5 +1,10 @@
 # 5H native review remediation — 2026-10-31
 
+> Historical first-round results below are superseded by **Owner-only feature
+> gate and regression remediation** at the end of this document. In particular,
+> the earlier best-effort-up / fail-open-capture policy is no longer used by
+> experimental adapters. Default/release binaries exclude native local remap.
+
 Branch: `t3/fix-native-local-remap`. Baseline: local `wave5`,
 `c5bdfe7` (Save the Claude review of the native local remap).
 Review: `WAVE5-CLAUDE-REVIEW-5H-NATIVE.md`, **all 22 findings**, including its
@@ -108,3 +113,96 @@ particular, this report does **not** certify "enterprise-level / no known bugs"
 or fully resolve those delivery/provenance limitations. Default OFF and
 EXPERIMENTAL must remain until the disposable-session scripts in
 `../LOCAL-REMAP.md` pass separately on Windows and macOS.
+
+## Owner-only feature gate and regression remediation
+
+Branch: `t3/gate-native-remap-feature`. Reset baseline: `ad0f430` on local
+`wave5`. Scope: latest `WAVE5-CODEX-REVIEW-NATIVE-REGRESSION.md`, findings R1–R6.
+This section supersedes conflicting first-round claims, not the review itself.
+
+### Release containment
+
+`one-mk-input/native-local-remap` and its daemon forwarding feature have empty
+defaults. Default Windows/macOS backends are separate source files, restored
+from pre-5H `67cafc4`. The experimental copies, native worker/power modules,
+receipt hotkey filters and native `LocalRules` commands are feature-selected.
+Pure localmap/handoff/runtime modules remain always compiled. The app/tray
+launch the daemon rather than linking native capture, so no UI-only feature
+is necessary. Without the feature, `local on` prints exactly the missing-build
+explanation; a disabled preference does not add an unsolicited status warning.
+
+The default-source/main audit and independent 5I/typing exceptions are itemized
+in `../LOCAL-REMAP.md`. `win_logic.rs` has no diff against main. New pinned-main
+physical callback fixtures supplement existing activation fixtures. Contracts
+run in both configurations; they assert module selection, absent native-local
+symbols in default files, empty defaults and no feature-enabled CI/release
+commands. These are source/pure differential contracts, not native execution.
+
+### Finding-by-finding evidence
+
+| Finding | Implementation / regression evidence | Status |
+| --- | --- | --- |
+| R1 HIGH: unobserved macOS ups destroyed the ledger | Both directions wait for exact tap receipt on worker. Up held/type/flag state is retired only after receipt; Engine also refuses to retire unconfirmed ups. Failing-first `unconfirmed_releases_retain_obligations_until_recovery` failed at retained key 29 before the fix. It now verifies failed Remote fencing and successful later retry. Existing empty-fence/lost-down tests remain. | Source/pure corrected; native UNTESTED |
+| R2 HIGH: swallowed physical keys missed takeover | HID-only, controlled/debounced LocalInput notification precedes local admission/early return. Failing-first `swallowed_physical_takeover_precedes_local_admission` source harness failed its ordering check before relocation; it also pins the physical/inactive guard. Existing LocalGate pure tests cover debounce. | Wiring corrected; real takeover UNTESTED |
+| R3 HIGH: remote keys consumed as local cleanup | Correlation envelopes carry optional local sequence identity; only the exact admitted local sequence may pop local waiting state. Missing/mismatched local state fails closed and consumes the local envelope, never a remote event. Orphaned local envelopes cannot fall through to remote transmission after detach. Failing-first `local_dispatch_requires_its_own_sequence_not_a_matching_remote_key` source harness failed before the guard; pure `mixed_local_and_remote_envelopes_keep_origin_even_for_identical_keys` exercises equal and different codes and queue flushing. | Source/pure corrected; native interleaving UNTESTED |
+| R4 HIGH: release fence failed open | Installed experimental Local defers activation until matching successful completion; failure/400 ms expiry cancels the request. No capture callback waits on a worker. Failing-first `activation_waits_for_serialized_release_completion` source harness failed before deferred activation wiring; completion order is pinned and pure failed-release/empty-fence tests keep Remote closed until recovery. | Source/pure corrected; OS ordering UNTESTED |
+| R5 MEDIUM: stale mapper tombstones swallowed fresh presses | Fence work carries the fresh physical baseline behind admitted work. Mapper reconciliation retires absent source keys, preserving still-held tombstones. Failing-first `missed_up_baseline_retires_only_absent_tombstones` failed the fresh-down assertion; it now also verifies a still-held repeat is not repressed. | Pure corrected; native snapshot accuracy UNTESTED |
+| R6 MEDIUM: unconditional 5I timing regression | Correlator starts disabled; applicable per-device settings explicitly enable it. Local-only rules cannot enable it without both feature and preference. Disabled hooks forward immediately, device arrivals cannot arm deadlines, disabling flushes in order. macOS allocates a correlation timer only for pending work and invalidates it when empty. Failing-first `default_attribution_has_no_latency_or_deadline` failed because output length was zero rather than one. Disable/flush, settings-gate and unplug-order tests pass in both builds. | Default and experimental source/pure corrected; timing on hardware UNTESTED |
+
+Failing-first logs were captured under ignored `target/` during implementation
+(`r1-before.log`, `r5-before.log`, `r6-before.log`, `contracts-before.log`).
+R2/R3/R4 native wiring assertions are intentionally described as source
+harnesses, not a simulated OS or proof of native delivery. Regression test
+sources and main fixtures are committed; transient logs are not release assets.
+
+### Hostile self-review
+
+The final pass checked all correlation output paths, including unplug/release,
+disable and missing dispatch. It added orphan-local suppression and failure on
+an empty local pending queue; a matching keycode alone is never sufficient.
+Remote activation cannot use a failed completion; absent Local still follows
+the original activation body. Default sources contain no local worker or receipt
+path. No native hook/tap was installed or native code executed here.
+
+Residual blockers remain: no native receipt/delivery acceptance, mixed
+keyboard-type deferred provenance, approximate multi-keyboard correlation,
+passthrough/mapped ordering, unsupported macOS Caps/Fn/media/function sources,
+and no native idle CPU/RSS/latency measurements. Permissions/UIPI, a stuck OS
+call, kill/abort/OOM or device loss can prevent release; a tap receipt is not
+application delivery. Experimental crossing intentionally cancels on failed
+cleanup. Separate experimental/default source files require parity maintenance;
+the main contracts bound, but do not eliminate, drift. These risks are why the
+feature remains absent from default/release/CI builds. Owner build commands,
+disposable-session scripts, SSH/emergency recovery and exit criteria are in
+`../LOCAL-REMAP.md`. No enterprise/no-known-bugs certification is made.
+
+### Final validation
+
+All commands ran with `env -i`, explicit HOME/PATH, isolated XDG configuration,
+`CARGO_INCREMENTAL=0`, worktree-local Cargo artifacts and a private temporary
+directory. No real-session hook/tap was installed. Cargo used `-j 2 --offline`;
+no `cargo fmt` was run.
+
+| Check | Default | Experimental feature |
+| --- | --- | --- |
+| `cargo test -j 2 --offline --workspace -- --test-threads=2` | PASS: 1110 passed, 0 failed, 14 ignored across 35 suites | PASS: same totals; `--features one-mk/native-local-remap` |
+| `cargo clippy -j 2 --offline --workspace --all-targets -- -D warnings` | PASS | PASS; daemon forwarding feature enabled |
+| Windows `x86_64-pc-windows-msvc` cross clippy | PASS, COMPILE-CHECKED ONLY | PASS, COMPILE-CHECKED ONLY |
+| macOS `aarch64-apple-darwin` cross clippy | PASS, COMPILE-CHECKED ONLY | PASS, COMPILE-CHECKED ONLY |
+| Final correlator and native source-contract tests | PASS | PASS |
+
+Cross clippy used `-p one-mk-input -p one-mk-proto -p one-mk-ctl
+-p one-mk-app -p one-mk-tray --all-targets -- -D warnings`, with
+`--features one-mk-input/native-local-remap` only for the experimental runs.
+The final default workspace lint also passed after the final assertion updates.
+Ignored tests remain ignored, not represented as successful runtime coverage.
+
+The inverse feature graph (`cargo tree --offline -p one-mk -e features
+-i one-mk-input`) contains no `native-local-remap` in the default build and
+shows daemon-to-input forwarding with `--features native-local-remap`.
+`git diff main -- crates/input/src/win_logic.rs` is empty. Default backend
+diffs against main were audited against the explicit independent-change table
+in `LOCAL-REMAP.md`; activation and physical callbacks match pinned main fixtures
+after only the documented device-attribution normalization. These bounded source
+contracts do not prove whole-backend behavioral equivalence on native hardware.
+`git diff --check` passed. Detailed command logs remain in ignored `target/`.

@@ -920,6 +920,12 @@ impl TuningSettings {
         self.scoped().any(|(_, scope, _)| scope.device().is_some())
     }
 
+    #[cfg(any(windows, target_os = "macos", test))]
+    pub fn uses_native_devices(&self) -> bool {
+        self.scoped().any(|(_, scope, _)| scope.device().is_some()
+            && (*scope.target() != Scope::Local || cfg!(feature = "native-local-remap") && self.local_rules))
+    }
+
     /// The devices rules name, as written, each once.
     pub fn devices_named(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
@@ -1473,7 +1479,9 @@ fn find_key_rule(rules: &[KeyRule], from: &Trigger, layer: &Option<String>, scop
 }
 
 fn local_rules_note() -> &'static str {
-    if cfg!(windows) {
+    if !cfg!(feature = "native-local-remap") {
+        "this build does not include the experimental native local remap"
+    } else if cfg!(windows) {
         "EXPERIMENTAL, native Windows UNTESTED (compile-checked only); default OFF. Activation requires a healthy worker acknowledgement. Session/desktop/power changes require reload to resume."
     } else if cfg!(target_os = "linux") {
         "Local key rules are not available on Linux; stored rules remain inactive."
@@ -2633,7 +2641,24 @@ scope = {{ os = "mac", device = "{BIG}" }}
         let back = load(&toml::to_string_pretty(&Settings { input: t.clone(), ..Default::default() }).unwrap());
         assert_eq!(back, t, "round trip");
         assert!(t.uses_devices());
+        assert!(t.uses_native_devices());
         assert_eq!(t.devices_named(), [TRAVEL, BIG]);
+    }
+
+    #[test]
+    fn native_device_attribution_needs_an_applicable_rule() {
+        assert!(!TuningSettings::default().uses_native_devices());
+        let mut tuning = load(&format!(r#"
+[input]
+local_rules = true
+[[input.keymap.rule]]
+from = "capslock"
+to = "esc"
+scope = {{ device = "{TRAVEL}", local = true }}
+"#));
+        assert_eq!(tuning.uses_native_devices(), cfg!(feature = "native-local-remap"));
+        tuning.local_rules = false;
+        assert!(!tuning.uses_native_devices());
     }
 
     /// device + computer beats device + OS beats device beats computer

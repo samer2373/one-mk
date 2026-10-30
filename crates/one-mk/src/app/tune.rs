@@ -22,7 +22,7 @@ use one_mk_proto::{Control, swap_ctrl_meta};
 use std::path::{Path, PathBuf};
 use tokio::sync::oneshot;
 
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(all(feature = "native-local-remap", any(windows, target_os = "macos")), test))]
 fn local_rules_snapshot(settings: &crate::settings::Settings, devices: &[InputDevice], computers: usize) -> anyhow::Result<Option<std::sync::Arc<one_mk_input::localmap_runtime::Rules>>> {
     if !settings.input.local_rules { return Ok(None); }
     Ok(Some(std::sync::Arc::new(one_mk_input::localmap_runtime::Rules {
@@ -36,14 +36,26 @@ fn local_rules_snapshot(settings: &crate::settings::Settings, devices: &[InputDe
 impl App {
     pub(super) fn reload_local_rules(&mut self) {
         if self.backend_name != "native" { return; }
-        self.input_problems.insert("local-key-rules", "Local key rules inactive: waiting for current settings acknowledgement; EXPERIMENTAL, native Windows/macOS UNTESTED (compile-checked only)".into());
-        let (rules, inactive) = match local_rules_snapshot(&self.settings, self.devices.list(), self.trust.devices().len() + 1) {
-            Ok(rules) => (rules, None),
-            Err(error) => {
-                (None, Some(error.to_string()))
+        let _ = self.capture.send(one_mk_input::CaptureCmd::DeviceRules(self.settings.input.uses_native_devices()));
+        #[cfg(not(feature = "native-local-remap"))]
+        {
+            if self.settings.input.local_rules {
+                self.input_problems.insert("local-key-rules", "Local key rules inactive: this build does not include the experimental native local remap".into());
+            } else {
+                self.input_problems.remove("local-key-rules");
             }
-        };
-        let _ = self.capture.send(one_mk_input::CaptureCmd::LocalRules { rules, inactive });
+        }
+        #[cfg(feature = "native-local-remap")]
+        {
+            self.input_problems.insert("local-key-rules", "Local key rules inactive: waiting for current settings acknowledgement; EXPERIMENTAL, native Windows/macOS UNTESTED (compile-checked only)".into());
+            let (rules, inactive) = match local_rules_snapshot(&self.settings, self.devices.list(), self.trust.devices().len() + 1) {
+                Ok(rules) => (rules, None),
+                Err(error) => {
+                    (None, Some(error.to_string()))
+                }
+            };
+            let _ = self.capture.send(one_mk_input::CaptureCmd::LocalRules { rules, inactive });
+        }
     }
 }
 

@@ -42,14 +42,12 @@ use crate::win_logic::{
     wheel_to_wire, wire_to_wheel,
 };
 use crate::{Backend, CaptureCmd, Event, Inject};
-use crate::localmap_handoff::Destination;
-use crate::windows_localmap::Local;
 use anyhow::{Result, bail};
 use one_mk_proto::{Edge, Mods, Rect, Side};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
@@ -105,9 +103,6 @@ const TIMER_DEVICES: usize = 3;
 /// Posted when capture starts: read Raw Input from now on (not in the hook,
 /// which must return quickly).
 const WM_APP_DEVICES: u32 = WM_APP + 3;
-pub(crate) const WM_APP_LOCAL: u32 = WM_APP + 4;
-const TIMER_LOCAL: usize = 4;
-pub(crate) const WM_APP_LOCAL_DESKTOP: u32 = WM_APP + 5;
 
 /// Side of the cursor-hiding window, in physical pixels.
 const OVERLAY: i32 = 64;
@@ -159,20 +154,6 @@ fn set_thread_dpi_awareness() {
             // Windows 10 before 1703 has no v2; v1 gives the same coordinates.
             SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
         }
-    }
-}
-
-fn desktop_active() -> bool {
-    use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, DESKTOP_READOBJECTS, GetUserObjectInformationW, OpenInputDesktop, UOI_NAME};
-    // SAFETY: query-only input-desktop access; no desktop switching or input installation.
-    unsafe {
-        let desktop = OpenInputDesktop(0, 0, DESKTOP_READOBJECTS);
-        if desktop.is_null() { return false; }
-        let mut name = [0_u16; 64];
-        let mut needed = 0;
-        let read = GetUserObjectInformationW(desktop, UOI_NAME, name.as_mut_ptr().cast(), size_of_val(&name) as u32, &mut needed);
-        CloseDesktop(desktop);
-        read != 0 && name[..8] == [68, 101, 102, 97, 117, 108, 116, 0]
     }
 }
 
@@ -252,11 +233,6 @@ struct State {
     elevated_cache: Option<(usize, bool)>,
     /// Raw Input: the devices, and the matching of events to them.
     raw: crate::windows_devices::RawDevices,
-    local_rules: Option<Local>,
-    local_recovery: Option<crate::windows_localmap::Recovery>,
-    session_active: bool,
-    awake: bool,
-    session_notifications: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -440,10 +416,10 @@ fn capture_thread(
         // hit testing, and then the cursor shape would come from whatever
         // is underneath.
         SetLayeredWindowAttributes(hwnd, 0, 1, LWA_ALPHA);
+        // Lets us give the pointer back when the session is locked.
+        WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
         hwnd
     };
-    // SAFETY: register once on our own capture window and retain failure state.
-    let session_notifications = unsafe { WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) } != 0;
 
     let hooks = match Hooks::install() {
         Ok(h) => h,
@@ -480,11 +456,6 @@ fn capture_thread(
             self_elevated,
             elevated_cache: None,
             raw: Default::default(),
-            local_rules: None,
-            local_recovery: None,
-            session_active: true,
-            awake: true,
-            session_notifications,
         })
     });
     with_state(State::devices_changed);
@@ -576,11 +547,6 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     if code == HC_ACTION as i32 {
         // SAFETY: for HC_ACTION, lparam points to a KBDLLHOOKSTRUCT.
         let info = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-        let local_rules = with_state(|state| state.local_rules.is_some()).unwrap_or(false);
-        if info.dwExtraInfo == OUR_INPUT || local_rules && (info.flags & LLKHF_INJECTED != 0 || info.vkCode == 0xE5) {
-            // SAFETY: unmodified synthetic input and VK_PROCESSKEY bypass all routing.
-            return unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
-        }
         if let Some((swallow, effect, hwnd)) = with_state(|s| {
             let (swallow, effect) = s.on_key(info);
             (swallow, effect, s.hwnd)
@@ -607,106 +573,6 @@ enum Guard {
 }
 
 impl State {
-    fn local_status(&self, status: &str) {
-        let _ = self.tx.send(Event::Status {
-            part: "local-key-rules",
-            problem: Some(format!("Local key rules {status}; EXPERIMENTAL, native Windows UNTESTED (compile-checked only)")),
-        });
-    }
-
-    fn local_drain(&mut self) {
-        let mut out = Vec::new();
-        if let Some(local) = self.local_rules.as_mut() {
-            while let Some(key) = local.admission.pop() {
-                local.waiting.push_back(key);
-                let event = Event::Key { code: key.code, down: key.down, device: None };
-                if local.snapshots.load().maps.has_device_rules() {
-                    self.raw.corr.hook(event, now_ms(), &mut out);
-                } else { local.forward(&event); }
-            }
-        }
-        self.send_all(out);
-    }
-
-    fn local_fence(&mut self, destination: Destination) {
-        let Some(local) = self.local_rules.as_ref() else { return };
-        local.gate.close();
-        if destination == Destination::Remote { local.admission.fail(); }
-        self.local_drain();
-        let mut out = Vec::new();
-        self.raw.corr.finish(&mut out);
-        self.send_all(out);
-        if let Some(local) = self.local_rules.as_mut() { local.fence(destination); }
-        // SAFETY: our window; this watchdog exists only while work is outstanding.
-        unsafe { SetTimer(self.hwnd, TIMER_LOCAL, 10, None) };
-    }
-
-    fn local_pause(&mut self) {
-        if let Some(local) = self.local_rules.as_mut() {
-            local.gate.close();
-            local.admission.fail();
-            local.paused = true;
-        }
-        self.local_drain();
-        let mut out = Vec::new();
-        self.raw.corr.finish(&mut out);
-        self.send_all(out);
-        if let Some(local) = self.local_rules.as_mut() { local.fail(); }
-        if self.local_rules.is_some() { self.local_status("inactive: session/desktop/device change; reload local rules to resume"); }
-    }
-
-    fn local_pump(&mut self) -> Effect {
-        if self.local_recovery.as_ref().is_some_and(|recovery| recovery.finished()) { self.local_recovery = None; }
-        self.local_drain();
-        let mut action = None;
-        let mut done = None;
-        let mut failed = false;
-        let mut input = false;
-        if let Some(local) = self.local_rules.as_mut() {
-            input = std::mem::take(&mut local.input);
-            while let Some(next) = local.action() { action = Some(next); }
-            if self.tx.is_closed() || local.pending.is_some_and(|(_, started)| started.elapsed() >= crate::localmap_runtime::LEASE)
-                || !local.admission.healthy(Instant::now())
-                    && (local.pending.is_none() || local.admission.feedback().token() != local.recovery)
-            {
-                local.fail();
-                failed = true;
-            } else {
-                done = local.completion();
-            }
-            // SAFETY: our own event-driven watchdog, never armed at idle.
-            unsafe {
-                if local.pending.is_some() || local.admission.pending() {
-                    SetTimer(self.hwnd, TIMER_LOCAL, 10, None);
-                } else {
-                    KillTimer(self.hwnd, TIMER_LOCAL);
-                }
-            }
-        }
-        if input { self.local_input(); }
-        if failed { self.local_status("inactive: worker failed, timed out, or emergency shortcut; reload to recover"); }
-        if let Some(action) = action { let _ = self.tx.send(Event::Hotkey(action)); }
-        if let Some(done) = done {
-            if !done.success {
-                self.local_status("inactive: injection/fence failed; reload to retry releases");
-            } else if let Some(local) = self.local_rules.as_mut() {
-                let activation = local.activation.take();
-                let count = local.snapshots.load().count;
-                let enabled = local.enabled;
-                if done.destination == Destination::Remote {
-                    self.local_status("inactive: forwarding to another computer");
-                    if let Some((side, x, y)) = activation { return self.activate_now(side, x, y).1; }
-                } else if enabled {
-                    self.local_status(&format!("active ({count})"));
-                } else {
-                    let reason = local.inactive.clone();
-                    self.local_status(&format!("inactive: {reason}"));
-                }
-            }
-        }
-        Effect::None
-    }
-
     /// Sends to the daemon; if it is gone while captured, gives the pointer back.
     fn send(&mut self, ev: Event) -> Effect {
         if self.captured.is_some() {
@@ -723,10 +589,9 @@ impl State {
 
     /// Sends what the device matching let through; its timer runs only
     /// while an event waits.
-    fn send_all(&mut self, out: Vec<Event>) -> Effect {
+    fn send_all(&mut self, out: Vec<crate::devcorr::Correlated>) -> Effect {
         for ev in out {
-            if self.local_rules.as_mut().is_some_and(|local| local.forward(&ev)) { continue; }
-            if self.tx.send(ev).is_err() {
+            if self.tx.send(ev.event).is_err() {
                 return self.release(None);
             }
         }
@@ -748,12 +613,9 @@ impl State {
         let list = self.raw.enumerate(&mut out);
         // What waited for a device that went away comes before the news.
         for ev in out {
-            if !self.local_rules.as_mut().is_some_and(|local| local.forward(&ev)) {
-                let _ = self.tx.send(ev);
-            }
+            let _ = self.tx.send(ev.event);
         }
         if let Some(list) = list {
-            if self.local_rules.is_some() { self.local_pause(); }
             let _ = self.tx.send(Event::Devices(list));
         }
     }
@@ -765,21 +627,13 @@ impl State {
             Some(c) => {
                 // Events still waiting for their device go now, unknown.
                 let mut out = Vec::new();
-                if self.local_rules.as_ref().is_some_and(|local| local.enabled) {
-                    self.raw.corr.finish(&mut out);
-                } else {
-                    self.raw.unregister(&mut out);
-                }
+                self.raw.unregister(&mut out);
                 for ev in out {
-                    let _ = self.tx.send(ev);
+                    let _ = self.tx.send(ev.event);
                 }
                 // SAFETY: our own window and timer.
                 unsafe { KillTimer(self.hwnd, TIMER_DEVICES) };
                 self.fwd.clear();
-                if let Some(local) = self.local_rules.as_mut() { local.gate.close(); }
-                if self.local_rules.as_ref().is_some_and(|local| local.enabled && !local.paused) {
-                    self.local_fence(Destination::Local);
-                }
                 self.heading.reset();
                 if to.is_none() {
                     self.gate.disarm();
@@ -806,11 +660,6 @@ impl State {
     }
 
     fn activate(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
-        self.local_fence(Destination::Remote);
-        self.activate_now(side, x, y)
-    }
-
-    fn activate_now(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
         let pos = self.space.to_logical(x, y);
         let id = self.next_id.wrapping_add(1);
         // Key-ups hidden by the lock screen, Ctrl+Alt+Del or a UAC prompt
@@ -922,16 +771,6 @@ impl State {
         let down = info.flags & LLKHF_UP == 0;
         let code = hook_key_to_evdev(info.vkCode, info.scanCode, info.flags & LLKHF_EXTENDED != 0);
         if self.captured.is_none() {
-            if let Some(code) = code
-                && let Some(local) = self.local_rules.as_mut()
-            {
-                if self.tx.is_closed() { local.admission.fail(); }
-                let swallow = local.hook(code, down, Instant::now());
-                // SAFETY: deferred wake only; no mapper, allocation or injection in this callback.
-                unsafe { PostMessageW(self.hwnd, WM_APP_LOCAL, 0, 0) };
-                if !swallow { self.local.set(code, down); }
-                return (swallow, Effect::None);
-            }
             if let Some(c) = code {
                 self.local.set(c, down);
             }
@@ -948,15 +787,7 @@ impl State {
             // Unmapped, or AltGr's fake Ctrl: keep it from both machines.
             return (true, Effect::None);
         };
-        if let Some(swallow) = self.local_rules.as_mut().and_then(|local| local.shortcut(code, down)) {
-            // SAFETY: shortcut cleanup and daemon notification run outside the hook.
-            unsafe { PostMessageW(self.hwnd, WM_APP_LOCAL, 0, 0) };
-            return (swallow, Effect::None);
-        }
-        if self.local_rules.as_mut().is_some_and(|local| local.suppress_owned(code, down)) {
-            return (true, Effect::None);
-        }
-        if self.local.has(code) || self.local_rules.as_ref().is_some_and(|local| local.os_owned(code)) {
+        if self.local.has(code) {
             // Held since before the pointer left: auto-repeat stays
             // swallowed, the release goes to this machine. The daemon
             // counted a modifier as held (`Event::Modifiers` at activation),
@@ -965,14 +796,10 @@ impl State {
                 return (true, Effect::None);
             }
             self.local.set(code, false);
-            if let Some(local) = self.local_rules.as_mut() { local.os_release(code); }
             if Mods::is_modifier(code) {
                 let _ = self.tx.send(Event::LocalKeyUp { code });
             }
             return (false, Effect::None);
-        }
-        if self.local_rules.as_mut().is_some_and(|local| local.remote_key(code, down)) {
-            return (true, Effect::None);
         }
         // Auto-repeat (Caps Lock's too) is dropped; the peer repeats.
         if !self.fwd.forward(code, down) {
@@ -983,69 +810,10 @@ impl State {
 
     fn command(&mut self, cmd: CaptureCmd) -> Effect {
         match cmd {
-            CaptureCmd::LocalRules { rules, inactive } => {
-                if rules.as_ref().is_none_or(|rules| rules.count == 0 || !Local::supported(rules)) {
-                    self.local_pause();
-                    if let Some(local) = self.local_rules.take() { self.local_recovery = Some(local.retire()); }
-                    unsafe { KillTimer(self.hwnd, TIMER_LOCAL) };
-                    if self.captured.is_none() {
-                        let mut out = Vec::new();
-                        self.raw.unregister(&mut out);
-                        self.send_all(out);
-                    }
-                    let problem = rules.as_ref().filter(|rules| rules.count > 0).map(|_| {
-                        "Local key rules inactive: unsupported native output; EXPERIMENTAL, Windows UNTESTED".into()
-                    });
-                    let _ = self.tx.send(Event::Status { part: "local-key-rules", problem });
-                    return Effect::None;
-                }
-                if self.local_recovery.as_ref().is_some_and(|recovery| !recovery.finished()) {
-                    if let Some(recovery) = &self.local_recovery { recovery.retry(); }
-                    self.local_status("inactive: pending releases from previous local rules; retry after returning to the normal desktop");
-                    return Effect::None;
-                }
-                self.local_recovery = None;
-                if rules.is_some() && !self.session_notifications {
-                    // SAFETY: retry only after a failed registration on our own window.
-                    self.session_notifications = unsafe { WTSRegisterSessionNotification(self.hwnd, NOTIFY_FOR_THIS_SESSION) } != 0;
-                }
-                if rules.is_some() && !self.session_notifications {
-                    self.local_pause();
-                    self.local_status("inactive: Windows session notifications unavailable");
-                    return Effect::None;
-                }
-                if self.local_rules.is_none() && rules.is_some() {
-                    match Local::start(self.hwnd) {
-                        Ok(local) => self.local_rules = Some(local),
-                        Err(error) => {
-                            self.local_status(&format!("inactive: worker could not start: {error}"));
-                            return Effect::None;
-                        }
-                    }
-                }
-                let rules = rules.unwrap_or_default();
-                let supported = Local::supported(&rules);
-                let active = self.session_active && self.awake && desktop_active();
-                if let Some(local) = self.local_rules.as_mut() {
-                    let held = async_held();
-                    local.baseline((0..one_mk_proto::keynames::CODE_LIMIT).filter(|&code| held.has(code)));
-                    local.gate.close();
-                    local.enabled = supported && rules.count > 0;
-                    local.paused = !active;
-                    local.inactive = if !supported { "only physical scancode outputs and layers are supported".into() }
-                        else { inactive.unwrap_or_else(|| "preference off or no local rules".into()) };
-                    local.snapshots.replace(if supported { rules } else { Arc::default() });
-                    self.raw.register(self.hwnd);
-                    if active {
-                        self.local_fence(if self.captured.is_some() { Destination::Remote } else { Destination::Local });
-                    } else {
-                        self.local_pause();
-                    }
-                    if !supported { self.local_status("inactive: only physical scancode outputs and layers are supported"); }
-                } else {
-                    self.local_status(&format!("inactive: {}", inactive.unwrap_or_else(|| "preference off".into())));
-                }
-                Effect::None
+            CaptureCmd::DeviceRules(enabled) => {
+                let mut out = Vec::new();
+                self.raw.corr.configure(enabled, &mut out);
+                self.send_all(out)
             }
             CaptureCmd::SetEdges(edges) => {
                 self.edges = edges;
@@ -1172,45 +940,8 @@ fn reinstall_hooks(old: Hooks) -> bool {
     }
 }
 
-pub(crate) unsafe extern "system" fn desktop_changed(
-    _hook: windows_sys::Win32::UI::Accessibility::HWINEVENTHOOK, event: u32, _hwnd: HWND,
-    _object: i32, _child: i32, _thread: u32, _time: u32,
-) {
-    if !matches!(event, 3 | 0x20) { return; }
-    with_state(|state| {
-        if let Some(recovery) = &state.local_recovery { recovery.retry(); }
-        if state.local_rules.is_none() { return; }
-        if event == 3 && !state.foreground_elevated() {
-            let held = async_held();
-            if let Some(local) = state.local_rules.as_mut() && local.paused {
-                local.retry_releases();
-                local.baseline((0..one_mk_proto::keynames::CODE_LIMIT).filter(|&code| held.has(code)));
-            }
-            return;
-        }
-        if let Some(local) = state.local_rules.as_mut() { local.retry_releases(); local.paused = true; }
-        // SAFETY: our window; release and suspension run outside the notification callback.
-        unsafe { PostMessageW(state.hwnd, WM_APP_LOCAL_DESKTOP, 0, 0) };
-    });
-}
-
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
-        WM_APP_LOCAL | WM_TIMER if msg == WM_APP_LOCAL || wparam == TIMER_LOCAL => {
-            if let Some(effect) = with_state(State::local_pump) { apply(effect, hwnd); }
-            0
-        }
-        WM_APP_LOCAL_DESKTOP | 0x218 if msg == WM_APP_LOCAL_DESKTOP || matches!(wparam, 4 | 7 | 18) => {
-            if let Some(effect) = with_state(|state| {
-                if msg == 0x218 && wparam == 4 { state.awake = false; }
-                if msg == 0x218 && matches!(wparam, 7 | 18) { state.awake = true; }
-                if let Some(recovery) = &state.local_recovery { recovery.retry(); }
-                if state.local_rules.is_none() { return Effect::None; }
-                state.local_pause();
-                state.end()
-            }) { apply(effect, hwnd); }
-            1
-        }
         WM_APP_CMD => {
             let effects = with_state(|s| {
                 let mut out = Vec::new();
@@ -1332,20 +1063,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_WTSSESSION_CHANGE => {
-            with_state(|state| {
-                if wparam as u32 == WTS_SESSION_UNLOCK {
-                    state.session_active = true;
-                    if let Some(recovery) = &state.local_recovery { recovery.retry(); }
-                    let held = async_held();
-                    if let Some(local) = state.local_rules.as_mut() {
-                        local.retry_releases();
-                        local.baseline((0..one_mk_proto::keynames::CODE_LIMIT).filter(|&code| held.has(code)));
-                    }
-                }
-                if matches!(wparam as u32, WTS_SESSION_LOCK | WTS_SESSION_LOGOFF | WTS_CONSOLE_DISCONNECT | WTS_REMOTE_CONNECT) {
-                    state.session_active = false;
-                }
-            });
             match wparam as u32 {
                 WTS_SESSION_LOCK => with_state(|s| s.tx.send(Event::ScreenLocked(true))),
                 WTS_SESSION_UNLOCK => with_state(|s| s.tx.send(Event::ScreenLocked(false))),
@@ -1354,7 +1071,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if matches!(wparam as u32, WTS_SESSION_LOCK | WTS_SESSION_LOGOFF | WTS_CONSOLE_DISCONNECT | WTS_REMOTE_CONNECT) {
                 // Hooks see nothing on the lock screen; hand the pointer
                 // back so it is not stuck hidden when the user returns.
-                let effect = with_state(|state| { state.local_pause(); state.end() });
+                let effect = with_state(State::end);
                 if let Some(e) = effect {
                     apply(e, hwnd);
                 }
@@ -1490,7 +1207,7 @@ fn mouse(dx: i32, dy: i32, data: u32, flags: u32) -> INPUT {
     }
 }
 
-pub(crate) fn key(vk: u16, scan: u16, flags: u32) -> INPUT {
+fn key(vk: u16, scan: u16, flags: u32) -> INPUT {
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: OUR_INPUT } },

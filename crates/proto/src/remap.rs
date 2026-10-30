@@ -697,6 +697,18 @@ impl Mapper {
         self.repeat_of(code, device).is_some()
     }
 
+    /// Reconcile missed physical releases against a recovery snapshot.
+    pub fn reconcile_physical(&mut self, held: &HeldKeys, out: &mut impl FnMut(Emit)) {
+        for source in 0..self.sources.len() {
+            for code in self.sources[source].phys.clone().iter() {
+                if !held.is_held(code) {
+                    self.sources[source].phys.update(code, false);
+                    self.release(source, code, out);
+                }
+            }
+        }
+    }
+
     /// Whether any source has `code` physically down.
     pub fn held_anywhere(&self, code: u32) -> bool {
         self.sources.iter().any(|s| s.phys.is_held(code))

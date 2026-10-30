@@ -20,7 +20,7 @@ pub(crate) static PHYSICAL_HOTKEYS: AtomicBool = AtomicBool::new(false);
 
 enum Work {
     Key(Key, Option<DeviceRef>),
-    Fence { serial: u64, watermark: u64, health: u64, destination: Destination, rules: Arc<Rules> },
+    Fence { serial: u64, watermark: u64, health: u64, destination: Destination, rules: Arc<Rules>, baseline: Option<Vec<u32>> },
     Fail,
     Retire,
     Stop,
@@ -84,6 +84,7 @@ pub(crate) struct Local {
     pub input: bool,
     pub inactive: String,
     physical: Physical,
+    baseline: Option<Vec<u32>>,
     actions: ArrayQueue<Action>,
     serial: u64,
     work: mpsc::Sender<Work>,
@@ -212,7 +213,7 @@ impl Local {
         PHYSICAL_HOTKEYS.store(true, Ordering::Release);
         Ok(Self {
             admission, gate, snapshots: Snapshots::default(), waiting: VecDeque::new(), pending: None,
-            enabled: false, paused: false, activation: None, input: false, inactive: "preference off".into(), physical: Physical::default(),
+            enabled: false, paused: false, activation: None, input: false, inactive: "preference off".into(), physical: Physical::default(), baseline: None,
             actions: ArrayQueue::new(crate::localmap_runtime::CAPACITY), serial: 0, work, completions,
             thread: Some(thread), desktop_hook, wake, watchdog: Some(watchdog), failed: false, recovery: 0,
         })
@@ -233,7 +234,9 @@ impl Local {
     }
 
     pub fn baseline(&mut self, held: impl Iterator<Item = u32>) {
-        self.physical.baseline(held);
+        let held: Vec<_> = held.collect();
+        self.physical.baseline(held.iter().copied());
+        self.baseline = Some(held);
     }
 
     /// Physical shortcuts run before any remapping, with fixed-size state.
@@ -249,9 +252,11 @@ impl Local {
         swallow
     }
 
-    pub fn forward(&mut self, event: &Event) -> bool {
+    pub fn forward(&mut self, event: &Event, sequence: Option<u64>) -> bool {
+        let Some(sequence) = sequence else { return false };
         let Event::Key { code, down, device } = *event else { return false };
-        let Some(key) = self.waiting.pop_front() else { return false };
+        let Some(key) = self.waiting.pop_front() else { self.fail(); return true };
+        if key.sequence != sequence { self.fail(); return true; }
         if key.code == code && key.down == down && !self.physical.correlated(code, down, device) {
             self.fail();
             return true;
@@ -277,13 +282,14 @@ impl Local {
     }
 
     pub fn fence(&mut self, destination: Destination) {
+        if let Some(held) = &self.baseline { self.physical.baseline(held.iter().copied()); }
         let Some(serial) = self.serial.checked_add(1) else { self.fail(); return };
         self.serial = serial;
         self.failed = false;
         self.recovery = self.admission.feedback().token();
         self.pending = Some((serial, Instant::now()));
         if self.work.send(Work::Fence {
-            serial, watermark: self.admission.watermark(), health: self.recovery, destination, rules: self.snapshots.load(),
+            serial, watermark: self.admission.watermark(), health: self.recovery, destination, rules: self.snapshots.load(), baseline: self.baseline.take(),
         }).is_err() { self.fail(); }
     }
 
@@ -359,7 +365,8 @@ fn run(
             Some(Work::Key(key, device)) => {
                 engine.admitted_key(key, device, feedback);
             }
-            Some(Work::Fence { serial, watermark, health, destination, rules }) => {
+            Some(Work::Fence { serial, watermark, health, destination, rules, baseline }) => {
+                if let Some(held) = baseline { engine.baseline(held.into_iter()); }
                 let success = engine.recover_fence(watermark, destination, Some(&rules), feedback, health);
                 complete(Completion { serial, destination, success });
             }
