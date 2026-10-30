@@ -16,7 +16,8 @@ step of `.github/workflows/release.yml`, and what has and has not been tried.
 `<target>` is the Rust target triple. File names carry no version, so
 `https://github.com/samer2373/one-mk/releases/latest/download/<file>` always
 gets the newest one (that is how `install.sh` works). `SHA256SUMS` in each
-release lists the checksums of the files made by the build job.
+release lists the checksums of every other file attached to it, the Homebrew
+and Flatpak files included.
 
 The scripts never build the programs themselves, so CI and a developer
 package exactly the same binaries:
@@ -175,7 +176,9 @@ like the release's other Linux files.
 the release's Linux tarball, `one-mk-x86_64-unknown-linux-gnu.tar.gz` (a
 `simple` module), so the Rust build does not have to work offline inside the
 sandbox. `scripts/package-flatpak.sh [URL_OR_FILE]`
-fills it in; with `flatpak-builder` installed it also builds a bundle. Nothing
+fills it in (`scripts/package-flatpak.sh FILE URL`: the manifest names `URL`
+with the checksum of `FILE`, the file that is published there); with
+`flatpak-builder` installed it also builds a bundle. Nothing
 in it has been run: `flatpak-builder` is not available here. Runtime
 `org.freedesktop.Platform//25.08` is the newest at the time of writing;
 adjust it to what exists.
@@ -186,9 +189,11 @@ into `sources/` next to it (each with its `sha256:`), writes relative `path:`s
 only, and packs the folder as `one-mk-flatpak-sources.tar.gz`
 (sorted, clamped times, so the same bytes every time). Given a URL, the
 tarball source is that URL with its checksum (from a download made by the
-script); given a file, the tarball is copied into the bundle too. The release
-workflow's publish job makes it from the tarball's release URL after the
-release exists, and uploads it; extract it anywhere and run `flatpak-builder` in
+script); given a file, the tarball is copied into the bundle too; given a
+file and a URL, the manifest names the URL with the file's checksum. The
+release workflow's publish job makes it that way from the downloaded
+tarball and its future release URL, before the release is public, and
+uploads it with everything else; extract it anywhere and run `flatpak-builder` in
 the folder (`README.txt` has the command). `check-packaging.sh` builds a
 bundle, extracts it in another folder after deleting the original and checks
 that every `path:` resolves there and matches its checksum, with no checkout
@@ -255,10 +260,24 @@ What cannot work (or will not work as it does on the host):
    (installed and run) and the AppImage (run) on Linux. Every `one-mk-*.*`
    file at the top of the checkout is uploaded as one artifact named after the
    target.
-2. `publish` (tag pushes only) collects every artifact into `dist/`, writes
-   `SHA256SUMS` and the download table of the release notes, creates the
-   release, and then writes and attaches the Homebrew cask and formula and the
-   Flatpak source bundle (they need the release's own URLs and checksums).
+2. `publish` (tag pushes only, the only job with `contents: write`), in this
+   order, so nothing is public until every advertised file is there:
+   1. collects every artifact into `dist/`;
+   2. writes the Homebrew cask and formula (checksums of the two `.dmg` files
+      and of the tag's source tarball) and the Flatpak source bundle (the
+      manifest names the Linux tarball's release URL with the checksum of
+      the file about to be uploaded there);
+   3. stages all of it in `assets/` and writes `SHA256SUMS` over every file;
+   4. writes the release notes;
+   5. creates the release as a **draft** (`--verify-tag`), unless a draft or
+      release for the tag exists already (a re-run), uploads every staged
+      file with `--clobber`, checks that the release lists every staged file,
+      and only then publishes it (`gh release edit --draft=false`).
+   A failure before the last step leaves at most a draft, which a re-run of
+   the job completes. Untested here (no GitHub Actions): the YAML parses, every
+   `run:` block passes `bash -n`, and steps 2 to 5 ran locally on stand-in
+   files with a stub `gh` (first run, re-run over an existing release, and an
+   upload gone missing, which stops before publishing).
 
 `ci.yml` runs `cargo test` on Linux, macOS and Windows for every push to
 `main` and every pull request, and `scripts/check-packaging.sh` on a debug

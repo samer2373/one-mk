@@ -2,12 +2,15 @@
 # Writes the Flatpak manifest and everything it names, packs them as one
 # self-contained source bundle, and builds the Flatpak if flatpak-builder is
 # installed. UNTESTED end to end (no flatpak-builder here).
-#   sh scripts/package-flatpak.sh [URL_OR_FILE_OF_THE_TARBALL]
+#   sh scripts/package-flatpak.sh [URL_OR_FILE_OF_THE_TARBALL [URL]]
 # Without an argument it uses dist/one-mk-x86_64-unknown-linux-gnu.tar.gz
 # (the plain Linux archive the release workflow's "Package" step makes and
 # publishes, the one install.sh downloads). With a URL, the manifest downloads the
 # tarball from there (and its checksum is taken from a download made here);
-# with a file, the tarball is copied into the bundle.
+# with a file, the tarball is copied into the bundle. With a file and a URL
+# (the release workflow), the manifest downloads the tarball from the URL
+# with the file's checksum: the file is what will be published there, so
+# the bundle can be made before anything is public.
 #
 # Writes dist/flatpak/ (io.github.onemk.OneMk.yml and sources/) and
 # dist/one-mk-flatpak-sources.tar.gz: that folder, packed with
@@ -16,6 +19,7 @@
 . "$(dirname "$0")/package-common.sh"
 
 arg=${1:-$OUT_DIR/one-mk-x86_64-unknown-linux-gnu.tar.gz}
+url=${2:-}
 dir=$OUT_DIR/flatpak
 rm -rf "$dir"
 mkdir -p "$dir/sources"
@@ -29,8 +33,12 @@ case "$arg" in
         sha=$(sha256sum "$tmp/t.tar.gz" | cut -d' ' -f1) ;;
     *)
         [ -f "$arg" ] || die "$arg not found; build the release tarball first (see docs/PACKAGING.md)"
-        cp "$arg" "$dir/sources/$(basename "$arg")"
-        key=path ref=sources/$(basename "$arg")
+        case "$url" in
+            http://*|https://*) key=url ref=$url ;;
+            '') cp "$arg" "$dir/sources/$(basename "$arg")"
+                key=path ref=sources/$(basename "$arg") ;;
+            *) die "$url is not a URL" ;;
+        esac
         sha=$(sha256sum "$arg" | cut -d' ' -f1) ;;
 esac
 

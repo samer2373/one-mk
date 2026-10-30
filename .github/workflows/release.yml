@@ -115,7 +115,25 @@ jobs:
         with: { persist-credentials: false }
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
-      - run: cd dist && sha256sum one-mk-* > SHA256SUMS
+      # Every file the release advertises is made here, before anything is
+      # public: the Homebrew cask and formula (checksums of the two .dmg
+      # files and of the tag's source tarball, which exists once the tag is
+      # pushed) and the Flatpak source bundle (the manifest names the Linux
+      # tarball's release URL, with the checksum of the file uploaded
+      # there below, and holds every other file it names). Putting them in
+      # a tap or on Flathub is by hand.
+      - name: Homebrew and Flatpak files
+        run: |
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          src=$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" | sha256sum | cut -d' ' -f1)
+          SOURCE_SHA256=$src sh scripts/package-homebrew.sh
+          sh scripts/package-flatpak.sh dist/one-mk-x86_64-unknown-linux-gnu.tar.gz "$base/one-mk-x86_64-unknown-linux-gnu.tar.gz"
+      # What is uploaded, and SHA256SUMS over all of it.
+      - name: Stage the assets
+        run: |
+          mkdir assets
+          cp dist/one-mk-* dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb assets/
+          cd assets && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - name: Notes
         run: |
           cat > notes.md <<'MD'
@@ -137,24 +155,26 @@ jobs:
 
           For packagers: `one-mk.rb` (Homebrew cask), `one-mk-source.rb` (Homebrew formula, builds from source) and `one-mk-flatpak-sources.tar.gz` (Flatpak manifest and the files it names) are attached too.
           MD
-      - env:
-          GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY"
-          --title "$GITHUB_REF_NAME" --notes-file notes.md --generate-notes
-      # Package-manager files that need the published release: the Homebrew
-      # cask and formula (checksums of the two .dmg files and of the tag's
-      # source tarball) and the Flatpak source bundle (the manifest with the
-      # Linux tarball's release URL and checksum, and every other file it
-      # names, relative to it, so it builds anywhere). They are attached to
-      # the release; putting them in a tap or on Flathub is by hand.
-      - name: Homebrew and Flatpak files
+      # Published only once every asset is up: a draft first (a re-run
+      # finds it, or the release, and uploads over it), then every file,
+      # checked against what the release lists, then made public.
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
-          src=$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" | sha256sum | cut -d' ' -f1)
-          SOURCE_SHA256=$src sh scripts/package-homebrew.sh
-          sh scripts/package-flatpak.sh "$base/one-mk-x86_64-unknown-linux-gnu.tar.gz"
-          gh release upload "$GITHUB_REF_NAME" dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb \
-            dist/one-mk-flatpak-sources.tar.gz --repo "$GITHUB_REPOSITORY"
+          set -eu
+          tag=$GITHUB_REF_NAME
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "$tag" --notes-file notes.md --generate-notes
+          fi
+          gh release upload "$tag" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          export LC_ALL=C   # one collation for sort and comm
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > uploaded
+          (cd assets && ls) | sort > staged
+          missing=$(comm -23 staged uploaded)
+          if [ -n "$missing" ]; then
+            echo "not uploaded: $missing" >&2
+            exit 1
+          fi
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false

@@ -69,6 +69,12 @@ origin's design won; what origin lacked was re-applied on top of it.
   (`on_connected` reloads the store first): a device forgotten while it
   held back its Hello is closed as "not paired" and never becomes a peer,
   so it can't send input even without ever sending `Layout`.
+- **A release is public only once every file is attached.** The publish
+  job writes the Homebrew and Flatpak files from the downloaded artifacts
+  first, stages every asset with `SHA256SUMS` over all of them, uploads to
+  a draft (a re-run reuses it, `--clobber`), checks the list and then
+  publishes. Not run on GitHub; simulated locally with a stub `gh`
+  (docs/PACKAGING.md, "The release workflow").
 
 ## Where things stand (updated 2026-10-29, end of the second batch)
 

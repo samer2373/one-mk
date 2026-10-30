@@ -86,6 +86,16 @@ if [ -n "$bundle" ]; then
     done
     grep -q "$ROOT\|$scratch\|@[A-Z0-9_]*@" "$manifest" && bad "flatpak manifest holds a checkout path or a placeholder" || ok "flatpak manifest holds no checkout path or placeholder"
 else bad "no flatpak source bundle was written"; fi
+# As the release workflow makes it, before the release is public: the
+# tarball's checksum from the local file, the manifest naming its URL.
+url=https://github.com/samer2373/one-mk/releases/download/v$VERSION/one-mk-x86_64-unknown-linux-gnu.tar.gz
+if OUT_DIR=$scratch/u sh "$ROOT/scripts/package-flatpak.sh" "$scratch/t/one-mk-x86_64-unknown-linux-gnu.tar.gz" "$url" >/dev/null 2>&1; then
+    m=$scratch/u/flatpak/io.github.onemk.OneMk.yml
+    want=$(sha256sum < "$scratch/t/one-mk-x86_64-unknown-linux-gnu.tar.gz" | cut -d' ' -f1)
+    awk -v u="$url" -v w="$want" '$1=="url:" && $2==u {f=1; next} f && $1=="sha256:" {exit !($2==w)} END {if (!f) exit 1}' "$m" \
+        && ok "flatpak manifest made from a local tarball names its release URL with its sha256" || bad "flatpak manifest from a local tarball and a URL"
+    [ ! -e "$scratch/u/flatpak/sources/one-mk-x86_64-unknown-linux-gnu.tar.gz" ] && ok "a tarball named by URL is not copied into the bundle" || bad "a tarball named by URL was copied into the bundle"
+else bad "package-flatpak.sh with a local tarball and its URL"; fi
 
 # The Homebrew files, from stand-ins named like the release's .dmg files.
 mkdir -p "$scratch/h"
