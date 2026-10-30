@@ -154,6 +154,15 @@ pub async fn note(title: &str, body: &str) {
     sys::note(title, body).await;
 }
 
+/// Says that something changed (broadcast started or stopped), on a task of
+/// its own: returns at once. Never during tests, and not with `--no-notify`.
+pub fn info(title: String, body: String) {
+    if disabled() || cfg!(test) {
+        return;
+    }
+    tokio::spawn(async move { sys::note(&title, &body).await });
+}
+
 pub async fn sent(count: usize, peer: &str) {
     let body = format!("Sent {count} files to {}", display(peer));
     println!("{body}");

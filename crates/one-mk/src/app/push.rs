@@ -204,10 +204,6 @@ impl App {
         if unique { device_arg(&name, &fp.short()) } else { fp.short() }
     }
 
-    fn name_for(&self, fp: Fingerprint) -> String {
-        self.trust.get(&fp).map_or_else(|| fp.short(), |d| sanitize_name(&d.name))
-    }
-
     fn suggest(&mut self, fp: Fingerprint, side: Side, now: Instant) {
         self.push.shown = Some(Shown { key: fp, side, at: now });
         let Some(s) = self.suggestion() else { return };

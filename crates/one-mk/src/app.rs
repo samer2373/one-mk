@@ -37,6 +37,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
 mod push;
+mod broadcast;
 mod shortcuts;
 mod tune;
 
@@ -282,6 +283,54 @@ impl Remote {
         self.last_send = now;
         self.resends = 0;
         self.resend_at = Some(now + RESEND_AFTER[0]);
+    }
+
+    /// When this visit next needs the timer: the peer's answer to `Enter`
+    /// running out, else the next resend or keepalive.
+    fn deadline(&self) -> Instant {
+        if self.acked {
+            let keepalive = self.last_send + KEEPALIVE;
+            self.resend_at.map_or(keepalive, |t| t.min(keepalive))
+        } else {
+            self.entered_at + ENTER_TIMEOUT
+        }
+    }
+
+    /// Resends the position after the mouse stopped, and keeps the peer
+    /// awake and informed while it doesn't move (an accepted visit).
+    fn keepalive(&mut self, peers: &HashMap<Fingerprint, Connected>, now: Instant) {
+        let resend = self.resend_at.is_some_and(|at| now >= at);
+        if resend {
+            self.resends += 1;
+            self.resend_at = RESEND_AFTER.get(self.resends).map(|d| now + (*d - RESEND_AFTER[self.resends - 1]));
+        }
+        // An idle resend is also the keepalive: the same position and seq.
+        if resend || now >= self.last_send + KEEPALIVE {
+            send_datagram(peers, self.peer, self.cursor.current());
+            self.last_send = now;
+        }
+    }
+
+    /// The peer answered `Enter` for this visit in time: what waited goes.
+    fn accepted(&mut self, peers: &HashMap<Fingerprint, Connected>, now: Instant) {
+        self.acked = true;
+        let Some(peer) = peers.get(&self.peer) else { return };
+        if self.queued.is_empty() {
+            self.send_motion(peers, self.cursor.current());
+        } else {
+            // Input queued while waiting goes first, in order. It
+            // travels on the control stream, which another task
+            // writes, so the newest position follows a moment
+            // later (the first resend) instead of overtaking a
+            // queued click on the faster datagram path. (The
+            // receiver copes with a late click anyway.)
+            for m in self.queued.drain(..) {
+                peer.ctl.send(m);
+            }
+            self.last_send = now;
+            self.resends = 0;
+            self.resend_at = Some(now + RESEND_AFTER[0]);
+        }
     }
 
     /// Where the pointer lands back on `local`: where it is on the peer,
@@ -543,6 +592,8 @@ struct App {
     dial_backoff: Duration,
     /// Edges where no computer sits: pointer wrap and layout learning.
     push: push::EdgePush,
+    /// `one-mk broadcast`: input goes to every connected peer at once.
+    broadcast: Option<broadcast::Broadcast>,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -667,6 +718,7 @@ pub async fn serve(
         dial_at: None,
         dial_backoff: DIAL_INTERVAL,
         push: Default::default(),
+        broadcast: None,
     };
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
     if app.locked {
@@ -733,6 +785,7 @@ pub async fn serve(
         app.sync_focus_watch();
     }
 
+    app.stop_broadcast(broadcast::End::Quit);
     app.go_home();
     if let Some((id, a)) = app.approach.take() {
         app.release_capture(id, Some(a.pos()));
@@ -970,6 +1023,7 @@ impl App {
         match ev {
             Event::Key { code, down } if self.captured_shortcut(code, down) => {}
             ev @ (Event::Hotkey(_) | Event::Hotkeys(_)) => self.on_shortcut_event(ev),
+            ev if self.broadcast_takes(&ev) => self.broadcast_input(ev, events),
             Event::Desktop(d) => {
                 tracing::debug!(screens = ?d.screens, "local screens");
                 for p in self.peers.values() {
@@ -1115,6 +1169,9 @@ impl App {
         self.push.new_capture();
         self.handed_back = None;
         self.tapped.clear();
+        if self.broadcast_activated(id) {
+            return;
+        }
         if let Some((fp, _)) = self.switching.take() {
             self.enter_peer_at_center(id, fp);
             return;
@@ -1320,19 +1377,29 @@ impl App {
 
     /// Starts a visit to `fp` (whose `Enter` goes out now) on capture
     /// `activation`.
-    fn begin_visit(&mut self, activation: u32, fp: Fingerprint, mut cursor: RemoteCursor) {
+    fn begin_visit(&mut self, activation: u32, fp: Fingerprint, cursor: RemoteCursor) {
+        let mut r = self.visit(activation, fp, cursor);
+        let peer = &self.peers[&fp];
+        let epoch = r.cursor.epoch();
+        if wants_relative(self.settings.gaming, peer.caps, false) && r.cursor.set_relative(true) {
+            peer.ctl.send(Control::PointerMode { epoch, relative: true });
+        }
+        tracing::debug!(peer = %peer.name, side = %peer.side, relative = r.cursor.is_relative(), "pointer moved to peer");
+        self.remote = Some(r);
+        self.apply_pointer_mode(); // gaming `auto` starts watching
+        self.update_sides();
+    }
+
+    /// A visit to connected peer `fp` on capture `activation`, its `Enter`
+    /// sent: Ctrl/Cmd swap and tuning resolved for it, nothing held.
+    fn visit(&self, activation: u32, fp: Fingerprint, cursor: RemoteCursor) -> Remote {
         let peer = &self.peers[&fp];
         let setting = self.trust.get(&fp).map_or(Swap::Auto, |d| d.swap_ctrl_cmd);
         let swap = swap_applies(setting, os::local(), peer.os);
         let tune = self.tune_for(fp, swap, &[]);
-        let epoch = cursor.epoch();
-        peer.ctl.send(Control::Enter { epoch, pos: cursor.pos() });
-        if wants_relative(self.settings.gaming, peer.caps, false) && cursor.set_relative(true) {
-            peer.ctl.send(Control::PointerMode { epoch, relative: true });
-        }
-        tracing::debug!(peer = %peer.name, side = %peer.side, relative = cursor.is_relative(), "pointer moved to peer");
+        peer.ctl.send(Control::Enter { epoch: cursor.epoch(), pos: cursor.pos() });
         let now = Instant::now();
-        self.remote = Some(Remote {
+        Remote {
             activation,
             peer: fp,
             side: peer.side,
@@ -1354,9 +1421,7 @@ impl App {
             apps_heard: false,
             inhibit_sent: false,
             tune,
-        });
-        self.apply_pointer_mode(); // gaming `auto` starts watching
-        self.update_sides();
+        }
     }
 
     /// Switches the visit in progress between absolute and relative motion
@@ -1464,15 +1529,8 @@ impl App {
             o.focus_check.map_or(lease, |c| c.min(lease))
         });
         let lease = lease.into_iter().chain(waits).min();
-        let visit = self.remote.as_ref().map(|r| {
-            if r.acked {
-                let keepalive = r.last_send + KEEPALIVE;
-                r.resend_at.map_or(keepalive, |t| t.min(keepalive))
-            } else {
-                r.entered_at + ENTER_TIMEOUT
-            }
-        });
-        lease.into_iter().chain(visit).min()
+        let visit = self.remote.as_ref().map(Remote::deadline);
+        lease.into_iter().chain(visit).chain(self.broadcast_deadline()).min()
     }
 
     fn on_timer(&mut self) {
@@ -1499,6 +1557,7 @@ impl App {
             self.end_owner(true);
         }
         self.tune_timer(now.into_std());
+        self.broadcast_timer(now);
         if self.owner.as_ref().and_then(|o| o.focus_check).is_some_and(|t| now >= t) {
             self.report_focus();
         }
@@ -1523,16 +1582,7 @@ impl App {
             }
             return;
         }
-        let resend = r.resend_at.is_some_and(|at| now >= at);
-        if resend {
-            r.resends += 1;
-            r.resend_at = RESEND_AFTER.get(r.resends).map(|d| now + (*d - RESEND_AFTER[r.resends - 1]));
-        }
-        // An idle resend is also the keepalive: the same position and seq.
-        if resend || now >= r.last_send + KEEPALIVE {
-            send_datagram(&self.peers, r.peer, r.cursor.current());
-            r.last_send = now;
-        }
+        r.keepalive(&self.peers, now);
     }
 
     // ------------------------------------------------- being controlled
@@ -1713,6 +1763,7 @@ impl App {
             if self.remote.as_ref().is_some_and(|r| r.peer == fp) {
                 self.go_home();
             }
+            self.broadcast_peer_gone(fp);
             if self.owner.as_ref().is_some_and(|o| o.peer == fp) {
                 self.end_owner(false);
             }
@@ -1791,12 +1842,14 @@ impl App {
                 if self.switching.is_some_and(|(s, _)| s == fp) {
                     self.switching = None;
                 }
+                self.broadcast_peer_gone(fp);
                 self.update_sides();
             }
         }
     }
 
     fn on_control(&mut self, fp: Fingerprint, id: usize, msg: Control) {
+        let Some(msg) = self.broadcast_control(fp, msg) else { return };
         match msg {
             Control::Hello { .. } => {}
             Control::Screens(screens) => self.on_peer_screens(fp, screens),
@@ -1816,24 +1869,8 @@ impl App {
                 }) else {
                     return;
                 };
-                r.acked = true;
+                r.accepted(&self.peers, now);
                 let peer = &self.peers[&fp];
-                if r.queued.is_empty() {
-                    r.send_motion(&self.peers, r.cursor.current());
-                } else {
-                    // Input queued while waiting goes first, in order. It
-                    // travels on the control stream, which another task
-                    // writes, so the newest position follows a moment
-                    // later (the first resend) instead of overtaking a
-                    // queued click on the faster datagram path. (The
-                    // receiver copes with a late click anyway.)
-                    for m in r.queued.drain(..) {
-                        peer.ctl.send(m);
-                    }
-                    r.last_send = now;
-                    r.resends = 0;
-                    r.resend_at = Some(now + RESEND_AFTER[0]);
-                }
                 if let Some(clip) = &self.services.clip {
                     clip.push(fp, &peer.name, peer.conn.remote_address());
                 }
@@ -1994,6 +2031,7 @@ impl App {
                 }
             }
         }
+        self.broadcast_power(block);
         let want = self.owner.as_ref().is_some_and(|o| o.inhibit);
         let inhibitor = &mut self.inhibitor;
         self.awake.set(want, || inhibitor.inhibit("A computer is controlling this one (one-mk)"));
@@ -2045,7 +2083,7 @@ impl App {
     /// controlled display blanks because injected input doesn't count, the
     /// controller's because its input goes elsewhere). Sleep sync waits.
     fn visiting(&self) -> bool {
-        self.remote.is_some() || self.owner.is_some()
+        self.remote.is_some() || self.owner.is_some() || self.broadcasting()
     }
 
     /// `Sleep { id }` to every peer that understands it, except `except`.
@@ -2130,6 +2168,7 @@ impl App {
             tracing::warn!("input tuning in settings.toml: {p}");
         }
         self.retune();
+        self.broadcast_retune();
         Ok(())
     }
 
@@ -2161,6 +2200,10 @@ impl App {
                 Err(e) => format!("error {e:#}\n"),
             },
             Request::Switch(to) => self.switch(to),
+            Request::Broadcast(t) => {
+                self.broadcast_request(t, reply);
+                return false;
+            }
             Request::LockPointer(t) => {
                 let was = self.locked;
                 self.locked = t.apply(was);
@@ -2248,6 +2291,8 @@ impl App {
             backend: self.backend_name.into(),
             controlling: self.remote.as_ref().map(|r| name_of(&r.peer)),
             controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
+            broadcast: self.broadcast_names(),
+            broadcast_hotkey: self.broadcast_hotkey(),
             peers: peers.collect(),
             screens: self.local.as_ref().map_or_else(Vec::new, |d| d.screens.clone()),
             offsets: offsets.collect(),
@@ -2278,6 +2323,9 @@ impl App {
     /// `one-mk switch` (and, later, its keyboard shortcut). The reply's
     /// first line is `ok`, `already`, `here` or `error <why>`.
     fn switch(&mut self, to: SwitchTo) -> String {
+        if to != SwitchTo::Here {
+            self.stop_broadcast(broadcast::End::Switched);
+        }
         match to {
             SwitchTo::Here => self.switch_here(),
             SwitchTo::Next => {
@@ -2315,6 +2363,9 @@ impl App {
             self.release_capture(id, Some(a.pos()));
         }
         let mut what = Vec::new();
+        if self.stop_broadcast(broadcast::End::Switched) {
+            what.push("stopped broadcasting".to_owned());
+        }
         if let Some(r) = self.remote.as_ref() {
             let name = self.peers.get(&r.peer).map_or_else(String::new, |p| p.name.clone());
             tracing::info!(peer = %name, "`one-mk switch here`: pointer is home");
@@ -2377,6 +2428,7 @@ impl App {
     /// Nothing may stay held across a lock: the lock screen would swallow
     /// the key-ups, leaving keys stuck after unlocking.
     fn let_go_for_lock(&mut self) {
+        self.stop_broadcast(broadcast::End::ScreenLocked);
         self.go_home();
         if let Some((id, a)) = self.approach.take() {
             self.release_capture(id, Some(a.pos()));
@@ -2498,7 +2550,9 @@ impl App {
     fn update_sides(&mut self) {
         let mut edges: Vec<(Edge, Fingerprint)> = Vec::new();
         let mut conflicts = Vec::new();
-        let switching = self.switching.map(|(fp, _)| fp);
+        // A switch or broadcast about to start (or a broadcast on) needs
+        // its edge armed (see below).
+        let switching = self.switching.map(|(fp, _)| fp).or(self.broadcast_edge());
         if let Some(local) = &self.local {
             let mut here: Vec<_> = self.peers.iter().filter_map(|(fp, p)| Some((*fp, p, p.desktop.as_ref()?))).collect();
             here.sort_by_key(|(fp, ..)| *fp);
@@ -2559,7 +2613,7 @@ impl App {
         let Some(target) = &self.dropzones else { return };
         let mut zones = Vec::new();
         if self.settings.drag.enabled && !self.locked && !self.lock_sync.is_locked()
-            && self.owner.is_none() && self.remote.is_none()
+            && self.owner.is_none() && self.remote.is_none() && !self.broadcasting()
             && let Some(local) = &self.local
         {
             let bounds = local.bounds();
@@ -4803,6 +4857,8 @@ mod tests {
     /// Pointer wrap and layout learning between daemons (in
     /// `app/tests/push.rs`).
     mod push;
+    /// Broadcast between three daemons (in `app/tests/broadcast.rs`).
+    mod broadcast;
 
     #[test]
     fn swaps_only_between_a_mac_and_something_else() {

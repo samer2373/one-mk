@@ -233,6 +233,9 @@ pub struct App {
     /// A fix just copied (its row), and when, to say so.
     copied: Option<(usize, f64)>,
     pending_lock: Option<(bool, f64)>,
+    /// Broadcast asked to start (true) or stop, and when: shown so until
+    /// the daemon says, or 5 s pass.
+    pending_broadcast: Option<(bool, f64)>,
     /// The Keys & mouse page.
     keys: keys::KeysUi,
     /// Text being typed into fields, by field.
@@ -436,6 +439,7 @@ impl App {
             doctor: None,
             copied: None,
             pending_lock: None,
+            pending_broadcast: None,
             keys: keys::KeysUi::new(),
             drafts: HashMap::new(),
             profile_open: None,
@@ -525,6 +529,9 @@ impl App {
         if self.pending_lock.is_some_and(|(_, t)| now - t > 5.0) {
             self.pending_lock = None;
         }
+        if self.pending_broadcast.is_some_and(|(_, t)| now - t > 5.0) {
+            self.pending_broadcast = None;
+        }
         self.pairing_steps(now);
         // A side the daemon never confirmed: show what it really has.
         let before = self.pending_side.len();
@@ -598,6 +605,11 @@ impl App {
                 self.pending_lock = None;
                 let word = if on { "keep the pointer here" } else { "let the pointer cross again" };
                 self.toast_error(format!("Couldn't {word}."), e, now);
+            }
+            Job::Broadcast(on) => {
+                self.pending_broadcast = None;
+                let what = if on { "start broadcasting to every computer" } else { "stop broadcasting" };
+                self.toast_error(format!("Couldn't {what}."), e, now);
             }
             Job::LockAll => self.toast_error("Couldn't lock the screens.", e, now),
             Job::Clip { send, name, .. } => {
@@ -721,6 +733,11 @@ impl App {
             && self.pending_lock.is_some_and(|(on, _)| on == s.pointer_locked)
         {
             self.pending_lock = None;
+        }
+        if let Some(s) = &status
+            && self.pending_broadcast.is_some_and(|(on, _)| on != s.broadcast.is_empty())
+        {
+            self.pending_broadcast = None;
         }
         let listed = self.just_paired.as_ref().is_some_and(|(j, _)| peers.iter().any(|p| &p.id == j));
         if listed || self.just_paired.as_ref().is_some_and(|(_, t)| now - t > 6.0) {
@@ -1401,7 +1418,11 @@ impl App {
         let r = Rect::from_min_size(pos2(rect.right() - 16.0 - w, rect.center().y - 17.0), vec2(w, 34.0));
         let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
         child.set_opacity(shown);
-        let a11y_label = (label == "Take back").then_some("Take back control of this computer");
+        let a11y_label = match label {
+            "Take back" => Some("Take back control of this computer"),
+            "Stop broadcast" => Some("Stop broadcasting to every computer"),
+            _ => None,
+        };
         if self.running().is_some() {
             let busy = self.busy.contains(&Job::Stop);
             // The short word when the long one would run into the tabs.
@@ -1426,6 +1447,7 @@ impl App {
                     self.busy.push(Job::TakeBack);
                     self.link.take_back();
                 }
+                Some(Job::Broadcast(on)) => self.ask_broadcast(on),
                 _ => self.start_pairing(now),
             }
         }
@@ -1434,10 +1456,13 @@ impl App {
     /// The top bar's button: what it says and does.
     fn action(&self) -> (String, Look, bool, Option<Job>) {
         let controlled = self.running().is_some_and(|s| s.controlled_by.is_some());
+        let broadcasting = self.running().is_some_and(|s| !s.broadcast.is_empty());
         let narrow = self.ctx.content_rect().width() < 900.0;
         let (label, look, enabled, job) = match self.status.as_ref() {
             Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
             Some(None) => ("Start one·mk", Look::Primary, true, Some(Job::Start)),
+            _ if broadcasting && self.busy.contains(&Job::Broadcast(false)) => ("Stopping…", Look::Primary, false, None),
+            _ if broadcasting => ("Stop broadcast", Look::Primary, true, Some(Job::Broadcast(false))),
             _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
             _ if controlled => ("Take back", Look::Primary, true, Some(Job::TakeBack)),
             _ if self.running().is_some_and(|s| !s.peers.is_empty()) => (if narrow { "Pair another" } else { "Pair another computer" }, Look::Quiet, true, None),
@@ -1464,6 +1489,20 @@ impl App {
         let Some(s) = s else {
             return ("one·mk isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
         };
+        if !s.broadcast.is_empty() {
+            let title = match &s.broadcast[..] {
+                [one] => format!("Broadcasting to {one}"),
+                all => format!("Broadcasting to {} computers", all.len()),
+            };
+            // The title names one; more than three are on the desk above.
+            let names = match &s.broadcast[..] {
+                [_] => "it".to_owned(),
+                [rest @ .., last] if rest.len() < 3 => format!("{} and {last}", rest.join(", ")),
+                _ => "all of them".to_owned(),
+            };
+            let key = if s.broadcast_hotkey.is_empty() { String::new() } else { format!("{}, ", s.broadcast_hotkey) };
+            return (title, format!("Everything you type, click and scroll here goes to {names}. Stop it with {key}Stop broadcast, or Ctrl+Alt+Shift+Esc."));
+        }
         if let Some(p) = &s.controlled_by {
             let sub = if cfg!(target_os = "linux") {
                 format!("Choose Take back, or stop sending input from {p}. Control comes back by itself after a minute without input from it.")
@@ -2254,6 +2293,8 @@ impl eframe::App for App {
 ///   `ONE_MK_APP_KEY_CHOOSE=esc` makes the opened key that, as a click
 ///   would; `ONE_MK_APP_BUTTON=4` opens a mouse button; `ONE_MK_APP_KEY_TEST=
 ///   58d0,58u85` types into the test box (code, down/up, ms).
+/// - `ONE_MK_APP_BROADCAST=1` turns broadcast on (or off), as the Desk's
+///   switch does.
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(debug_assertions)]
 mod debug {
@@ -2298,6 +2339,10 @@ mod debug {
         }
         if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
             app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("one-mk didn't answer within 3 seconds".into()), now);
+        }
+        if ready && var("ONE_MK_APP_BROADCAST").is_some() && now > 1.0 && once(&ctx, "broadcast") {
+            let on = !app.broadcasting();
+            app.ask_broadcast(on);
         }
         if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
             ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));

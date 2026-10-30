@@ -601,6 +601,32 @@ pub fn hotkey_check(d: &Daemon, portal: Option<&Result<u32, String>>) -> Check {
     check("hotkeys", "Keyboard shortcuts", out)
 }
 
+/// Broadcast (`one-mk broadcast`): on right now (said, so typing that goes
+/// everywhere is never a mystery), its shortcut and when it stops by
+/// itself, and where it has not been tried yet.
+pub fn broadcast_check(d: &Daemon, settings: Option<&crate::settings::BroadcastSettings>, os: Os) -> Check {
+    let idle = settings.map_or_else(|| "by itself after 15 minutes without input".to_owned(), |b| b.describe_idle_off());
+    // Tried for real: Linux with the null and X11 backends.
+    let untested = match (os, d.status().map(|s| s.backend.as_str())) {
+        (Os::Windows | Os::Mac, _) => Some("Broadcast has not been tried on this system yet (untested)."),
+        (_, Some("portal" | "wlroots")) => Some("Broadcast has not been tried with this input backend yet (untested)."),
+        _ => None,
+    };
+    let note = untested.map_or_else(String::new, |n| format!(" {n}"));
+    let out = match d.status() {
+        Some(s) if !s.broadcast.is_empty() => Outcome::warn(
+            format!("On: everything typed, clicked and scrolled here goes to {} ({}). It stops {idle}.{note}", s.broadcast.len(), s.broadcast.join(", ")),
+            "If you didn't mean it, stop it: `one-mk broadcast off`, its shortcut, or Ctrl+Alt+Shift+Esc.",
+        ),
+        Some(s) if s.broadcast_hotkey.is_empty() => {
+            Outcome::pass(format!("Off. No shortcut starts it (`one-mk hotkeys --broadcast CHORD` sets one); `one-mk broadcast on` does. It stops {idle}.{note}"))
+        }
+        Some(s) => Outcome::pass(format!("Off. {} or `one-mk broadcast on` starts it; it stops {idle}.{note}", s.broadcast_hotkey)),
+        None => Outcome::skip(format!("Checked while one-mk runs.{note}")),
+    };
+    check("broadcast", "Broadcast", out)
+}
+
 /// `[input]` in settings.toml, read from the file (`None`: it can't be read).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tuning {
@@ -988,6 +1014,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         checks.push(check("clipboard", "Clipboard", Outcome::pass(settings.clipboard.summary())));
     }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
+    checks.push(broadcast_check(&daemon, crate::settings::Settings::load(dir).ok().map(|s| s.broadcast).as_ref(), os));
     checks.push(tuning_check(probe_tuning(dir).as_ref()));
     checks.push(pointer_overlay_check(
         crate::pointeroverlay::support_here(daemon.status().map(|s| s.backend.as_str())),
@@ -1594,6 +1621,32 @@ mod tests {
         assert_eq!(st(&hotkey_check(&Daemon::NotRunning, Some(&Ok(1)))), Status::Pass);
         assert_eq!(st(&hotkey_check(&Daemon::NotRunning, Some(&Err("no portal".into())))), Status::Warn);
         assert_eq!(st(&hotkey_check(&Daemon::NotRunning, None)), Status::Skip);
+    }
+
+    #[test]
+    fn broadcast_decisions() {
+        let base = |f: &dyn Fn(&mut DaemonStatus)| {
+            let mut s = status("aaaa-aaaa", 24900, &[]);
+            f(&mut s);
+            Daemon::Running(Box::new(s))
+        };
+        let b = crate::settings::BroadcastSettings::default();
+        let off = broadcast_check(&base(&|s| s.broadcast_hotkey = "Ctrl+Alt+B".into()), Some(&b), Os::Linux);
+        assert_eq!(st(&off), Status::Pass);
+        assert!(off.outcome.detail.contains("Ctrl+Alt+B or `one-mk broadcast on` starts it; it stops by itself after 15 minutes"), "{off:?}");
+        let none = broadcast_check(&base(&|_| {}), Some(&b), Os::Linux);
+        assert!(none.outcome.detail.contains("No shortcut starts it"), "{none:?}");
+        let on = broadcast_check(&base(&|s| s.broadcast = vec!["bee".into(), "sea".into()]), Some(&b), Os::Linux);
+        assert_eq!(st(&on), Status::Warn);
+        assert!(on.outcome.detail.contains("goes to 2 (bee, sea)") && on.outcome.fix.as_deref().unwrap().contains("broadcast off"), "{on:?}");
+        // Untested where it has not been tried.
+        for os in [Os::Windows, Os::Mac] {
+            assert!(broadcast_check(&base(&|_| {}), Some(&b), os).outcome.detail.contains("untested"));
+        }
+        let portal = broadcast_check(&base(&|s| s.backend = "portal".into()), Some(&b), Os::Linux);
+        assert!(portal.outcome.detail.contains("untested"), "{portal:?}");
+        assert!(!off.outcome.detail.contains("untested"));
+        assert_eq!(st(&broadcast_check(&Daemon::NotRunning, None, Os::Linux)), Status::Skip);
     }
 
     #[test]

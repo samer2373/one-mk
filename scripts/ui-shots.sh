@@ -102,6 +102,13 @@ C=$W/controlled.status
 printf 'ok\nname\tsamer-Victus\nid\tabcd-ef01\nport\t24800\ncontrolled_by\tStudio PC\n' >"$C"
 printf 'peer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\nlink\t1111-2222\t4200\t0\t900\n' >>"$C"
 shot 21-controlled-small 3 "$W/off" ONE_MK_APP_STATUS="$C" ONE_MK_APP_SIZE=760x540
+# Broadcast (docs/BROADCAST.md): to five computers, long names included, wide and small.
+BC=$W/broadcast.status
+{ printf 'ok\nname\tsamer-Victus\nid\tabcd-ef01\nport\t24800\nbroadcast_hotkey\tCtrl+Alt+B\n'
+  for n in "MacBook Air" "$LONG" "Gaming PC" "Мастерская" "工作站"; do printf 'broadcast\t%s\n' "$n"; done
+  grep '^peer' "$F"; } >"$BC"
+shot 52-broadcasting-many 3 "$W/off" ONE_MK_APP_STATUS="$BC"
+shot 53-broadcasting-small 3 "$W/off" ONE_MK_APP_STATUS="$BC" ONE_MK_APP_SIZE=760x540
 
 # Layout, transfers, health and settings in detail: a status with several
 # monitors, offsets, profiles and transfers, settings files to match, and

@@ -95,6 +95,8 @@ pub enum Job {
     /// The mouse and keyboard to a computer (an id, or `here`).
     Switch { to: String, name: String },
     LockPointer(bool),
+    /// Starting (true) or stopping broadcast to every connected computer.
+    Broadcast(bool),
     LockAll,
     /// Sending this clipboard to a computer (`send`), or fetching its.
     Clip { send: bool, id: String, name: String },
@@ -333,6 +335,11 @@ impl Link {
     pub fn lock_pointer(&self, on: bool) {
         let t = if on { Toggle::On } else { Toggle::Off };
         self.job(Job::LockPointer(on), move |l| l.ask(Request::LockPointer(t)));
+    }
+
+    pub fn broadcast(&self, on: bool) {
+        let t = if on { Toggle::On } else { Toggle::Off };
+        self.job(Job::Broadcast(on), move |l| l.ask(Request::Broadcast(t)));
     }
 
     pub fn lock_all(&self) {

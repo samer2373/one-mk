@@ -49,6 +49,9 @@ pub enum Action {
     LockPointer,
     /// Bring the mouse and keyboard back here (`one-mk switch here`).
     Home,
+    /// Send what is typed here to every connected computer, or stop
+    /// (`one-mk broadcast toggle`).
+    Broadcast,
 }
 
 impl Action {
@@ -60,6 +63,7 @@ impl Action {
             Action::Cycle => "cycle".into(),
             Action::LockPointer => "lock-pointer".into(),
             Action::Home => "home".into(),
+            Action::Broadcast => "broadcast".into(),
         }
     }
 
@@ -68,6 +72,7 @@ impl Action {
             "cycle" => Some(Action::Cycle),
             "lock-pointer" => Some(Action::LockPointer),
             "home" => Some(Action::Home),
+            "broadcast" => Some(Action::Broadcast),
             _ => {
                 let n: u8 = id.strip_prefix("jump-")?.parse().ok()?;
                 (1..=9).contains(&n).then_some(Action::Jump(n))
@@ -82,6 +87,7 @@ impl Action {
             Action::Cycle => "Move the mouse and keyboard to the next computer".into(),
             Action::LockPointer => "Lock the pointer to this computer (or unlock it)".into(),
             Action::Home => "Bring the mouse and keyboard back to this computer".into(),
+            Action::Broadcast => "Type on every connected computer at once (or stop)".into(),
         }
     }
 }
@@ -478,6 +484,7 @@ fn describe_short(a: Action) -> String {
         Action::Cycle => "next computer".into(),
         Action::LockPointer => "lock the pointer".into(),
         Action::Home => "come back here".into(),
+        Action::Broadcast => "broadcast to every computer".into(),
     }
 }
 
@@ -762,7 +769,7 @@ mod tests {
 
     #[test]
     fn actions_have_stable_ids() {
-        for a in [Action::Jump(1), Action::Jump(9), Action::Cycle, Action::LockPointer, Action::Home] {
+        for a in [Action::Jump(1), Action::Jump(9), Action::Cycle, Action::LockPointer, Action::Home, Action::Broadcast] {
             assert_eq!(Action::from_id(&a.id()), Some(a));
         }
         for bad in ["jump-0", "jump-10", "jump-x", "jump", "", "Cycle"] {
