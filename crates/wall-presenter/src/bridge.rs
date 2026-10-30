@@ -69,6 +69,7 @@ pub struct Bridge {
     _gobject: Library,
     connection: *mut c_void,
     subscription: u32,
+    wayland_source: u32,
     unsubscribe: unsafe extern "C" fn(*mut c_void, u32),
     object_unref: unsafe extern "C" fn(*mut c_void),
     iterate: unsafe extern "C" fn(*mut c_void, i32) -> i32,
@@ -79,6 +80,11 @@ pub struct Bridge {
 impl Drop for Bridge {
     fn drop(&mut self) {
         unsafe {
+            if self.wayland_source != 0 {
+                let remove: libloading::Symbol<unsafe extern "C" fn(u32) -> i32>
+                    = self._glib.get(b"g_source_remove\0").expect("loaded GLib source API");
+                remove(self.wayland_source);
+            }
             (self.unsubscribe)(self.connection, self.subscription);
             (self.object_unref)(self.connection);
         }
@@ -86,6 +92,21 @@ impl Drop for Bridge {
 }
 
 impl Bridge {
+    pub fn wait(&mut self, wayland_fd: std::os::fd::RawFd) -> Result<(), String> {
+        unsafe extern "C" fn ready(_: i32, _: u32, _: *mut c_void) -> i32 { 1 }
+        unsafe {
+            let add: unsafe extern "C" fn(i32, i32, u32,
+                unsafe extern "C" fn(i32, u32, *mut c_void) -> i32, *mut c_void, *mut c_void) -> u32
+                = *self._glib.get(b"g_unix_fd_add_full\0").map_err(|error| error.to_string())?;
+            if self.wayland_source == 0 {
+                self.wayland_source = add(0, wayland_fd, 1 | 8 | 16, ready, ptr::null_mut(), ptr::null_mut());
+                if self.wayland_source == 0 { return Err("cannot watch private Wayland connection".into()); }
+            }
+            (self.iterate)(ptr::null_mut(), 1);
+        }
+        Ok(())
+    }
+
     pub unsafe fn new() -> Result<Self, String> {
         unsafe {
             let gio = Library::new("libgio-2.0.so.0").map_err(|error| error.to_string())?;
@@ -112,7 +133,7 @@ impl Bridge {
             let iterate = *glib.get(b"g_main_context_iteration\0").map_err(|error| error.to_string())?;
             let connection = get_bus(2, ptr::null_mut(), ptr::null_mut());
             if connection.is_null() { return Err("private session bus unavailable".into()); }
-            let mut bridge = Self { _gio: gio, _glib: glib, _gobject: gobject, connection, subscription: 0,
+            let mut bridge = Self { _gio: gio, _glib: glib, _gobject: gobject, connection, subscription: 0, wayland_source: 0,
                 unsubscribe, object_unref, iterate, inbox: Box::new(Inbox { variants, events: Vec::new() }), monitors: Vec::new() };
             bridge.subscription = subscribe(connection, c"org.onemk.WallpaperBridgeSpike1".as_ptr(),
                 c"org.onemk.WallpaperBridgeSpike1".as_ptr(), ptr::null(), c"/org/onemk/WallpaperBridgeSpike1".as_ptr(),

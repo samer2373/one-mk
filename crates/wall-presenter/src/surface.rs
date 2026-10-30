@@ -1,7 +1,7 @@
 use libloading::Library;
 use std::ffi::{c_char, c_void};
 use std::fs::File;
-use std::os::fd::{AsFd, FromRawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -236,7 +236,11 @@ pub unsafe fn present(_root: &Path, gst: &Library, pipeline: *mut c_void) -> Res
                     }
                     if eos(sink) != 0 && seek(pipeline, 3, 5, 0) == 0 { return Err("fixture loop seek failed".into()); }
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                if paused {
+                    bridge.wait(connection.as_fd().as_raw_fd())?;
+                } else {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
             }
             Ok(())
         })();
