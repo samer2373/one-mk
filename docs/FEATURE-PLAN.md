@@ -493,11 +493,25 @@ unless it is turned on.
 
 | ID | Task | Author | Status |
 |---|---|---|---|
-| 6A | Feasibility and design document `docs/WALLPAPER-DESIGN.md` (no code; on branch `t3/research-live-wallpaper-design`, 1151 lines, estimate 28 to 42 engineer-weeks for the full plan) | Codex | done; being reviewed by Claude |
-| 6B | Spike: GNOME 50 video behind windows and icons, in an ISOLATED headless session (never the live one) | Claude | running |
-| 6C | Spike: cross-computer clock sync (simulated Wi-Fi models plus a real loopback check) and one-decode-many-crops, reusable crate `one-mk-wall-sync` | Codex | running |
-| 6E | Revise `docs/WALLPAPER-DESIGN.md` with the fixes in `docs/WALLPAPER-DESIGN-REVIEW.md` (codec and encoder path, source resolution versus canvas, GNOME bridge licence, sync rewritten around presentation latency, hybrid GPU, honest estimate, sandbox as a phase-1 gate) and with the spike results | Codex | blocked on 6B and 6C |
-| 6D | Implementation in phases, with the quality bar | tbd | blocked on 6E and the owner's go/no-go |
+| 6A | Revision-1 feasibility/design, reviewed in `docs/WALLPAPER-DESIGN-REVIEW.md` | Codex | done; original 28–42 engineer-week estimate superseded by revision 2, not a delivery commitment |
+| 6B | GNOME isolated headless spike, `docs/spikes/gnome-live-wallpaper-spike.md` | Claude | done: GO WITH LIMITS on 50.1; one owned hidden window feeds two clipped clones at ~60 fps; no JS DMA-BUF import/live software upload; lock/DING restarts, hot-plug replaces window, Overview static. Physical GPU/HiDPI/real decoder unverified |
+| 6C | Sync/media spike, `docs/spikes/wallpaper-sync-spike.md`; reusable I/O-free `one-mk-wall-sync` | Codex | done: synthetic good/bad Wi-Fi P95 16.667 ms, persistent one-way-delay failure 266.667 ms; real loopback measures clock offset only. One-decode/three-crop 11520×2160 software 38.81 fps; linked GPL-enabled FFmpeg packaging risk. No physical sync/hardware-decode gate passed |
+| 6E | Revision 2 of `docs/WALLPAPER-DESIGN.md`: all 20 review dispositions, both spikes, exact bridge/sync contracts, safe codec/package choice, power/security, owner decisions and acceptance script | Codex | done (documentation only); recommendation GO M1 first, remaining estimate 70–110 engineer-weeks, full three-OS release gated on physical QA |
+| 6D-M1 | Safe optional package/import/poster, consent/capability scaffolding, three-OS sandbox and native-host stop gates; 12–18 engineer-weeks | tbd | awaiting owner GO; exit: isolation/replacement/licence-negative tests, real-renderer GNOME risk rerun, geometry/fuzz and zero off-state timers |
+| 6D-M2 | GNOME multi-computer local video/images from first playback increment; 10–16 engineer-weeks | tbd | after M1; exit: two real daemons/private sessions, cache transfer/rehash, one decode/N crops, negotiated clock datagrams, old-peer/fault tests, warm loopback presented-PTS P95 ≤20 ms |
+| 6D-M3 | Windows/macOS presenters, quality indicator, measured iGPU/fallback/power enforcement; 16–24 engineer-weeks | tbd | after M2 and owner hardware access; exit: physical native layering/coverage/lock/sleep/hot-plug/calibration, no off/paused periodic work; compilation alone insufficient |
+| 6D-M4 | Safe HTTPS import, audited Commons gallery, polished native UI/CLI/doctor; 10–16 engineer-weeks | tbd | after M2, may overlap M3; exit: SSRF/limits/signed-index rotation/revocation tests, ≥10 cleared compatible items, inspected accessible UI and migration/failure runs |
+| 6D-M5 | Three-OS release qualification and distribution; 14–22 engineer-weeks | tbd | after M3/M4; exit: filmed wired/Wi-Fi P95 ≤50 ms/P99 ≤100 ms, 24-hour soak, packaging/signing/rollback/SBOM, independent review and user-journey QA, owner acceptance |
+
+All 6D increments ship only behind an explicit setting, **default OFF**, with
+experimental/unsupported labels until their gates pass. Full estimate includes
+an additional **8–14 engineer-week integration/security reserve**, totalling
+**70–110 remaining engineer-weeks**, not elapsed calendar weeks. Re-estimate
+after M1. A required-platform, sandbox, power or physical-sync failure blocks
+the full release claim; a narrower release needs a new owner decision. The
+one-monitor dev box can run virtual Mutter/fake-clock/fault tests, but cannot
+replace the owner-hardware acceptance script in design §11. No implementation
+milestone is marked done by the completed research/documentation.
 
 More owner decisions (2026-10-30, after the design review): the GNOME extension ships ONLY with one-mk (not listed on extensions.gnome.org), so it can stay MIT OR Apache-2.0 and is not bound by that site's GPL/no-binaries/review rules; gallery and imported videos are normalised to ROYALTY-FREE codecs (VP9 or AV1 via permissively licensed encoders), never a GPL encoder (x264/x265) in shipped artifacts; hybrid-GPU machines decode on the integrated GPU by default; Plasma is not in release one.
 
