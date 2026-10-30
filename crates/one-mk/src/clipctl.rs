@@ -86,7 +86,7 @@ pub fn handle(dir: &Path, services: &Services, online: Vec<Online>, trust: &Trus
                 let _ = reply.send(match result { Ok(body) => format!("ok\n{body}"), Err(error) => format!("error {error}\n") });
             });
         }
-        Request::Invitation | Request::Status | Request::Reload | Request::TakeBack | Request::Stop | Request::Switch(_) | Request::LockPointer(_) | Request::LockAll | Request::DismissSuggestion | Request::Broadcast(_) => {
+        Request::WallpaperStatus | Request::Invitation | Request::Status | Request::Reload | Request::TakeBack | Request::Stop | Request::Switch(_) | Request::LockPointer(_) | Request::LockAll | Request::DismissSuggestion | Request::Broadcast(_) => {
             let _ = reply.send("error unexpected request\n".to_owned());
         }
     }

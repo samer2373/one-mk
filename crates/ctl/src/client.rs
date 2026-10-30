@@ -19,6 +19,7 @@ use crate::status::TransferStatus;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
+    WallpaperStatus,
     /// Who we are, who is paired and online, and who controls whom.
     Status,
     /// Active invitation link and expiry (private bearer credential), or none.
@@ -162,6 +163,7 @@ impl Request {
             Request::Broadcast(_) => "broadcast",
             Request::LockAll => "lock-all",
             Request::Settings => "settings",
+            Request::WallpaperStatus => "wallpaper-status",
             Request::ClipSend(_) => "clip-send",
             Request::ClipGet(_) => "clip-get",
             Request::ClipHistory { .. } => "clip-history",
@@ -219,6 +221,7 @@ impl Request {
             "lock-pointer" => Toggle::parse(arg).map(Request::LockPointer),
             "broadcast" => Toggle::parse(arg).map(Request::Broadcast),
             "settings" if arg.is_empty() => Some(Request::Settings),
+            "wallpaper-status" if arg.is_empty() => Some(Request::WallpaperStatus),
             "clip-send" => Some(Request::ClipSend(device())),
             "clip-get" => Some(Request::ClipGet(device())),
             "transfer" if !arg.is_empty() => {
@@ -392,6 +395,7 @@ mod tests {
     #[test]
     fn requests_have_names() {
         for r in [
+            Request::WallpaperStatus,
             Request::Status,
             Request::Reload,
             Request::TakeBack,
