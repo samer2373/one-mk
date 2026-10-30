@@ -716,7 +716,7 @@ impl Ctx {
             T::MouseMoved | T::LeftMouseDragged | T::RightMouseDragged | T::OtherMouseDragged => {
                 let (dx, dy) = mouse_delta(ev);
                 if dx != 0.0 || dy != 0.0 {
-                    send(Event::Motion { dx, dy });
+                    send(Event::Motion { dx, dy, device: None });
                 }
             }
             T::LeftMouseDown | T::LeftMouseUp | T::RightMouseDown | T::RightMouseUp | T::OtherMouseDown | T::OtherMouseUp => {
@@ -727,7 +727,7 @@ impl Ctx {
                 };
                 let down = matches!(ty, T::LeftMouseDown | T::RightMouseDown | T::OtherMouseDown);
                 if let Some(button) = logic::mac_to_evdev_button(n) {
-                    send(Event::Button { button, down });
+                    send(Event::Button { button, down, device: None });
                 }
             }
             T::ScrollWheel => {
@@ -739,7 +739,7 @@ impl Ctx {
                 // The receiving side does its own key repeat.
                 let repeat = CGEvent::integer_value_field(e, CGEventField::KeyboardEventAutorepeat) != 0;
                 if !repeat && let Some(code) = logic::mac_to_evdev(keycode(ev)) {
-                    send(Event::Key { code, down: true });
+                    send(Event::Key { code, down: true, device: None });
                 }
             }
             T::KeyUp => {
@@ -748,15 +748,15 @@ impl Ctx {
                     return true;
                 }
                 if let Some(code) = logic::mac_to_evdev(kc) {
-                    send(Event::Key { code, down: false });
+                    send(Event::Key { code, down: false, device: None });
                 }
             }
             T::FlagsChanged => {
                 let kc = keycode(ev);
                 if kc == logic::MAC_CAPS_LOCK {
                     // macOS reports caps lock as a toggle: one event per press.
-                    send(Event::Key { code: KEY_CAPSLOCK, down: true });
-                    send(Event::Key { code: KEY_CAPSLOCK, down: false });
+                    send(Event::Key { code: KEY_CAPSLOCK, down: true, device: None });
+                    send(Event::Key { code: KEY_CAPSLOCK, down: false, device: None });
                 } else if let Some(down) = logic::modifier_down(kc, CGEvent::flags(e).0) {
                     if !down && st.take_local_key(kc) {
                         // Held since before the capture: released here, but
@@ -767,7 +767,7 @@ impl Ctx {
                         return true;
                     }
                     if let Some(code) = logic::mac_to_evdev(kc) {
-                        send(Event::Key { code, down });
+                        send(Event::Key { code, down, device: None });
                     }
                 }
             }
@@ -776,7 +776,7 @@ impl Ctx {
                     // Everything else system-defined (power button, ...) is swallowed
                     // with the rest; so is a repeat, as the receiver repeats by itself.
                     if let Some((code, down)) = logic::media_to_evdev(media) {
-                        send(Event::Key { code, down });
+                        send(Event::Key { code, down, device: None });
                     }
                 }
             }

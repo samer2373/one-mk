@@ -6,6 +6,7 @@
 use super::*;
 use std::io::BufRead;
 use std::process::{Child, Command, Stdio};
+use crate::Bus;
 use x11rb::protocol::xproto::GrabStatus;
 
 const W: i16 = 1280;
@@ -31,7 +32,7 @@ async fn partial_right_edge_does_not_capture_the_wall() {
             observer.move_to(W - 1, y);
             observer.move_by(10, 0);
             tokio::time::sleep(Duration::from_millis(50)).await;
-            assert!(backend.events.try_recv().is_err(), "wall captured (barriers={barriers}, y={y})");
+            assert!(nothing(&mut backend.events), "wall captured (barriers={barriers}, y={y})");
             assert!(observer.can_grab());
         }
         observer.move_to(600, 500);
@@ -136,6 +137,49 @@ impl Observer {
         self.fake(xproto::MOTION_NOTIFY_EVENT, 1, NONE, dx, dy);
     }
 
+    /// The device id of the core XTEST `kind` ("keyboard" or "pointer"):
+    /// what this client's XTest input comes from.
+    fn xtest(&self, kind: &str) -> DeviceRef {
+        let name = format!("Virtual core XTEST {kind}");
+        let infos = self.conn.xinput_xi_query_device(0u16).unwrap().reply().unwrap().infos;
+        DeviceRef(u32::from(infos.iter().find(|d| d.name == name.as_bytes()).expect("XTEST device").deviceid))
+    }
+
+    fn xi_id(&self, name: &str) -> u16 {
+        let infos = self.conn.xinput_xi_query_device(0u16).unwrap().reply().unwrap().infos;
+        infos.iter().find(|d| d.name == name.as_bytes()).unwrap_or_else(|| panic!("no device {name}")).deviceid
+    }
+
+    /// Adds a master pointer and keyboard `name`, each with its own XTEST
+    /// slave: as far as X is concerned, a keyboard and mouse plugged in.
+    fn add_master(&self, name: &str) {
+        let add = xinput::HierarchyChangeDataAddMaster { send_core: true, enable: true, name: name.as_bytes().to_vec() };
+        let len = ((8 + name.len()).div_ceil(4)) as u16;
+        let change = xinput::HierarchyChange { len, data: xinput::HierarchyChangeData::AddMaster(add) };
+        self.conn.xinput_xi_change_hierarchy(&[change]).unwrap();
+        self.conn.sync().unwrap();
+    }
+
+    /// Removes the master `name` and its XTEST slaves: unplugged.
+    fn remove_master(&self, name: &str) {
+        let remove = xinput::HierarchyChangeDataRemoveMaster {
+            deviceid: self.xi_id(&format!("{name} pointer")),
+            return_mode: xinput::ChangeMode::FLOAT,
+            return_pointer: 0,
+            return_keyboard: 0,
+        };
+        let change = xinput::HierarchyChange { len: 3, data: xinput::HierarchyChangeData::RemoveMaster(remove) };
+        self.conn.xinput_xi_change_hierarchy(&[change]).unwrap();
+        self.conn.sync().unwrap();
+    }
+
+    /// From now on this client's XTest input comes through the devices of
+    /// master `name` (`Virtual core` for the first ones).
+    fn type_through(&self, name: &str) {
+        self.conn.xinput_xi_set_client_pointer(NONE, self.xi_id(&format!("{name} pointer"))).unwrap();
+        self.conn.sync().unwrap();
+    }
+
     fn sync(&self) {
         self.conn.sync().unwrap();
     }
@@ -163,15 +207,26 @@ fn eventually(what: &str, mut f: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
-/// The next event that is not a status report.
+/// The next event that is not a status report or the list of devices.
 async fn next(events: &mut mpsc::UnboundedReceiver<Event>) -> Event {
     loop {
         let ev = tokio::time::timeout(Duration::from_secs(3), events.recv())
             .await
             .expect("an event within 3 s")
             .expect("backend alive");
-        if !matches!(ev, Event::Status { .. }) {
+        if !matches!(ev, Event::Status { .. } | Event::Devices(_)) {
             return ev;
+        }
+    }
+}
+
+/// Whether nothing but status reports and device lists is waiting.
+fn nothing(events: &mut mpsc::UnboundedReceiver<Event>) -> bool {
+    loop {
+        match events.try_recv() {
+            Err(_) => return true,
+            Ok(Event::Status { .. } | Event::Devices(_)) => {}
+            Ok(_) => return false,
         }
     }
 }
@@ -270,7 +325,7 @@ async fn pushing_against_an_edge_captures_until_released() {
     o.move_to(0, 400);
     o.move_by(-10, 0);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(b.events.try_recv().is_err(), "nothing captured yet");
+    assert!(nothing(&mut b.events), "nothing captured yet");
     assert!(o.can_grab());
 
     o.move_to(W - 1, 400);
@@ -281,19 +336,19 @@ async fn pushing_against_an_edge_captures_until_released() {
 
     // Local input now goes to the peer, and nowhere here.
     o.move_by(-3, 2);
-    assert_eq!(next(&mut b.events).await, Event::Motion { dx: -3.0, dy: 2.0 });
+    assert_eq!(next(&mut b.events).await, Event::Motion { dx: -3.0, dy: 2.0, device: Some(o.xtest("pointer")) });
     assert_eq!((o.pointer().0, o.pointer().1), (W - 1, 400), "the pointer stays put");
     o.fake(2, 38, NONE, 0, 0);
     o.fake(3, 38, NONE, 0, 0);
-    assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: true });
-    assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: false });
+    assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: true, device: Some(o.xtest("keyboard")) });
+    assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: false, device: Some(o.xtest("keyboard")) });
     o.fake(4, 1, NONE, 0, 0);
     o.fake(5, 1, NONE, 0, 0);
-    assert_eq!(next(&mut b.events).await, Event::Button { button: 0x110, down: true });
-    assert_eq!(next(&mut b.events).await, Event::Button { button: 0x110, down: false });
+    assert_eq!(next(&mut b.events).await, Event::Button { button: 0x110, down: true, device: Some(o.xtest("pointer")) });
+    assert_eq!(next(&mut b.events).await, Event::Button { button: 0x110, down: false, device: Some(o.xtest("pointer")) });
     o.fake(4, 5, NONE, 0, 0);
     o.fake(5, 5, NONE, 0, 0);
-    assert_eq!(next(&mut b.events).await, Event::ScrollDiscrete { dx: 0, dy: 120 });
+    assert_eq!(next(&mut b.events).await, Event::ScrollDiscrete { dx: 0, dy: 120, device: Some(o.xtest("pointer")) });
 
     // A release for an older activation is ignored; ours lets go.
     b.capture.send(CaptureCmd::Release { id: id.wrapping_sub(1), pos: None }).unwrap();
@@ -318,7 +373,7 @@ async fn pushing_against_an_edge_captures_until_released() {
     o.move_to(W - 1, 100);
     o.move_by(10, 0);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(b.events.try_recv().is_err(), "no capture while locked");
+    assert!(nothing(&mut b.events), "no capture while locked");
     b.capture.send(CaptureCmd::Activate { side: Side::Right }).unwrap();
     assert!(matches!(next(&mut b.events).await, Event::Error(_)));
     locked.send(false).unwrap();
@@ -328,7 +383,7 @@ async fn pushing_against_an_edge_captures_until_released() {
     b.inject.send(Inject::Controlled(true)).unwrap();
     b.inject.send(Inject::MoveBy { dx: -2, dy: 0 }).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(b.events.try_recv().is_err(), "injected motion is not local input");
+    assert!(nothing(&mut b.events), "injected motion is not local input");
     // (XTest is all this X server has: the observer's own XTest device
     // counts as ours, so this is as far as Xvfb lets us check.)
 
@@ -341,7 +396,7 @@ async fn pushing_against_an_edge_captures_until_released() {
     o.move_by(10, 0);
     o.move_by(10, 0);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(b.events.try_recv().is_err(), "no capture while another client has the keyboard");
+    assert!(nothing(&mut b.events), "no capture while another client has the keyboard");
     o.conn.ungrab_keyboard(CURRENT_TIME).unwrap();
     o.move_by(-20, 0);
     o.move_by(30, 0);
@@ -363,14 +418,14 @@ async fn without_barriers_an_edge_window_captures() {
     o.move_to(W - 1, 400);
     b.capture.send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(b.events.try_recv().is_err(), "the pointer was there before: no capture");
+    assert!(nothing(&mut b.events), "the pointer was there before: no capture");
     o.move_to(600, 400);
     o.move_to(W - 1, 400);
     let (id, side, pos) = activated(&mut b.events).await;
     assert_eq!((side, pos), (Side::Right, Pos::new(f64::from(W - 1), 400.0)));
     assert!(!o.can_grab());
     o.move_by(-4, 1);
-    assert_eq!(next(&mut b.events).await, Event::Motion { dx: -4.0, dy: 1.0 });
+    assert_eq!(next(&mut b.events).await, Event::Motion { dx: -4.0, dy: 1.0, device: Some(o.xtest("pointer")) });
 
     // Put back onto the edge: no capture until it has left the edge.
     b.capture.send(CaptureCmd::Release { id, pos: Some(Pos::new(f64::from(W - 1), 300.0)) }).unwrap();
@@ -378,7 +433,7 @@ async fn without_barriers_an_edge_window_captures() {
     assert!(o.can_grab());
     o.move_to(W - 1, 310);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(b.events.try_recv().is_err(), "no capture while still on the edge");
+    assert!(nothing(&mut b.events), "no capture while still on the edge");
     o.move_to(W - 10, 310);
     o.move_to(W - 1, 320);
     let (_, side, _) = activated(&mut b.events).await;
@@ -448,4 +503,76 @@ fn kill_9_releases_the_grab() {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     let (_b, _locked) = rt.block_on(async { open_on(&x.display) }).unwrap();
     eventually("A let go of by the next start", || !o.key_down(38));
+}
+
+/// The next list of devices for which `want` holds.
+async fn devices_where(events: &mut mpsc::UnboundedReceiver<Event>, want: impl Fn(&[InputDevice]) -> bool) -> Vec<InputDevice> {
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(3), events.recv()).await.expect("devices within 3 s").expect("backend alive");
+        if let Event::Devices(list) = ev
+            && want(&list)
+        {
+            return list;
+        }
+    }
+}
+
+/// Xvfb has no real keyboard or mouse: only X's own XTEST devices, which
+/// stand in for them here, and its own built-in ones (no device node, so
+/// their connection is unknown). They are listed, input says
+/// which one it came from, and a master added and removed (as a device
+/// plugged in and out) shows up and goes away.
+#[tokio::test]
+async fn devices_are_listed_and_input_says_which_one() {
+    let Some(x) = Xvfb::start() else { return };
+    let o = x.observer();
+    let (mut b, _locked) = open_on(&x.display).unwrap();
+    let list = devices_where(&mut b.events, |_| true).await;
+    let names: Vec<&str> = list.iter().map(|d| d.fingerprint.name.as_str()).collect();
+    assert_eq!(names, ["Virtual core XTEST pointer", "Virtual core XTEST keyboard", "Xvfb mouse", "Xvfb keyboard"]);
+    let buses: Vec<Bus> = list.iter().map(|d| d.fingerprint.bus).collect();
+    assert_eq!(buses, [Bus::Virtual, Bus::Virtual, Bus::Unknown, Bus::Unknown]);
+    let keyboard = list.iter().find(|d| d.kinds.keyboard).unwrap();
+    assert_eq!(keyboard.id, o.xtest("keyboard"));
+    assert_eq!(keyboard.fingerprint.to_string(), "virtual/0000:0000//Virtual core XTEST keyboard");
+
+    o.add_master("second");
+    let list = devices_where(&mut b.events, |l| l.len() == 6).await;
+    let second = list.iter().find(|d| d.fingerprint.name == "second XTEST keyboard").expect("plugged in").id;
+    assert_eq!(second, DeviceRef(u32::from(o.xi_id("second XTEST keyboard"))));
+
+    b.capture.send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    o.move_to(W - 1, 400);
+    o.move_by(10, 0);
+    activated(&mut b.events).await;
+    o.fake(2, 38, NONE, 0, 0);
+    o.fake(3, 38, NONE, 0, 0);
+    assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: true, device: Some(keyboard.id) });
+    assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: false, device: Some(keyboard.id) });
+    o.type_through("second");
+    o.fake(2, 38, NONE, 0, 0);
+    o.fake(3, 38, NONE, 0, 0);
+    assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: true, device: Some(second) });
+    assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: false, device: Some(second) });
+
+    // Unplugged while its key is down: it leaves the list (the daemon lets
+    // go of what it held), and a press of the same key later on another
+    // device is a press, not a repeat.
+    o.fake(2, 38, NONE, 0, 0);
+    assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: true, device: Some(second) });
+    o.type_through("Virtual core");
+    o.remove_master("second");
+    let list = devices_where(&mut b.events, |l| l.len() == 4).await;
+    assert!(list.iter().all(|d| !d.fingerprint.name.starts_with("second")));
+    o.fake(2, 38, NONE, 0, 0);
+    o.fake(3, 38, NONE, 0, 0);
+    let mut rest = Vec::new();
+    while rest.len() < 2 {
+        match next(&mut b.events).await {
+            Event::Key { code: 30, device, down } => rest.push((down, device)),
+            ev => panic!("unexpected {ev:?}"),
+        }
+    }
+    assert_eq!(rest.last(), Some(&(false, Some(keyboard.id))), "{rest:?}");
 }

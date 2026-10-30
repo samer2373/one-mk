@@ -1,5 +1,5 @@
 use crate::system::{FakeFocus, FakeLocker, FocusNotify};
-use crate::{Backend, CaptureCmd, Event, Inject};
+use crate::{Backend, Bus, CaptureCmd, DeviceRef, Event, Fingerprint, Inject, InputDevice, Kinds};
 use one_mk_proto::{Desktop, Focus};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
@@ -43,4 +43,32 @@ pub(crate) fn open(desktop: Desktop) -> (Backend, NullHandles) {
         locker: Box::new(FakeLocker { events: ev_tx.clone(), count: locks.clone(), error: lock_error.clone() }),
     };
     (backend, NullHandles { events: ev_tx, capture: cap_rx, inject: inj_rx, focus, focus_probes, focus_notify, locks, lock_error })
+}
+
+impl NullHandles {
+    /// Says which keyboards and mice are connected, as a backend does at
+    /// start and whenever one is plugged in, unplugged, sleeps or wakes.
+    pub fn devices(&self, devices: Vec<InputDevice>) {
+        let _ = self.events.send(Event::Devices(devices));
+    }
+
+    /// A key (or, for button codes, a button) from `device` (`None`: the
+    /// backend can't tell which).
+    pub fn key_from(&self, code: u32, down: bool, device: Option<DeviceRef>) {
+        let ev = if one_mk_proto::keynames::is_button(code) {
+            Event::Button { button: code, down, device }
+        } else {
+            Event::Key { code, down, device }
+        };
+        let _ = self.events.send(ev);
+    }
+}
+
+/// A USB keyboard for tests: `DeviceRef(id)`, vendor 0x1234, product `id`.
+pub fn fake_keyboard(id: u32, name: &str) -> InputDevice {
+    InputDevice {
+        id: DeviceRef(id),
+        fingerprint: Fingerprint::new(Bus::Usb, 0x1234, id as u16, None, name),
+        kinds: Kinds { keyboard: true, pointer: false },
+    }
 }

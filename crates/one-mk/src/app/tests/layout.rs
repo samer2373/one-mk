@@ -63,17 +63,17 @@ async fn offset_crossing_maps_and_walls() {
 
     // To the laptop's bottom-left corner, below the end of A's edge (A's
     // 1080 is the laptop's 780): pushing left is a wall.
-    duo.ha.events.send(Event::Motion { dx: 0.0, dy: 99.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 0.0, dy: 99.0, device: None }).unwrap();
     assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 799.0)));
-    duo.ha.events.send(Event::Motion { dx: -50.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: -50.0, dy: 0.0, device: None }).unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert!(duo.ha.capture.try_recv().is_err(), "the pointer must not come home there");
     assert!(status(&duo.da).await.controlling.is_some());
 
     // Higher up it comes home, at the matching point of A's edge.
-    duo.ha.events.send(Event::Motion { dx: 0.0, dy: -100.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 0.0, dy: -100.0, device: None }).unwrap();
     assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 699.0)));
-    duo.ha.events.send(Event::Motion { dx: -5.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: -5.0, dy: 0.0, device: None }).unwrap();
     assert_eq!(released_near(next_capture(&mut duo.ha).await), (2, Pos::new(1918.0, 999.0)));
     duo.stop().await;
 }
@@ -95,15 +95,15 @@ async fn dwell_at_an_inner_edge() {
 
     let started = Instant::now();
     duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 900.0) }).unwrap();
-    duo.ha.events.send(Event::Motion { dx: 1.0, dy: 0.0 }).unwrap();
-    duo.ha.events.send(Event::Motion { dx: 40.0, dy: 10.0 }).unwrap(); // pushing, sliding down
+    duo.ha.events.send(Event::Motion { dx: 1.0, dy: 0.0, device: None }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 40.0, dy: 10.0, device: None }).unwrap(); // pushing, sliding down
     assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 190.0)));
     assert!(started.elapsed() >= Duration::from_millis(300), "{:?}", started.elapsed());
     assert!(duo.ha.capture.try_recv().is_err(), "never handed back");
     duo.leave_b().await;
 
     duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 900.0) }).unwrap();
-    duo.ha.events.send(Event::Motion { dx: -30.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: -30.0, dy: 0.0, device: None }).unwrap();
     assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: Some(Pos::new(1889.0, 900.0)) });
     duo.stop().await;
 }
@@ -129,7 +129,7 @@ async fn crossing_between_multi_monitor_desktops() {
     // -200 on A is 40 below the top of A's desktop, 640 below the top of
     // B's: -440 on B, on its upper monitor.
     assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, -440.0)));
-    duo.ha.events.send(Event::Motion { dx: -1.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: -1.0, dy: 0.0, device: None }).unwrap();
     assert_eq!(released_near(next_capture(&mut duo.ha).await), (1, Pos::new(2998.0, -200.0)));
     duo.stop().await;
 }
@@ -247,7 +247,7 @@ async fn two_neighbours_share_one_edge() {
     let right = 1920.0 - 1.0 / 256.0;
     duo.hb.events.send(Event::Activated { id: 1, side: Side::Left, pos: Pos::new(0.0, 100.0) }).unwrap();
     assert_eq!(next_inject(&mut duo.ha).await, Inject::MoveTo(Pos::new(right, 640.0)));
-    duo.hb.events.send(Event::Motion { dx: 1.0, dy: 0.0 }).unwrap();
+    duo.hb.events.send(Event::Motion { dx: 1.0, dy: 0.0, device: None }).unwrap();
     assert_eq!(next_capture(&mut duo.hb).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(2.0, 100.0)) });
 
     duo.hb.events.send(Event::Activated { id: 2, side: Side::Left, pos: Pos::new(0.0, 900.0) }).unwrap();
@@ -334,7 +334,7 @@ async fn no_overlap_warns_and_a_switch_still_comes_home() {
     }
     duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
     assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(640.0, 400.0)));
-    duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0, device: None }).unwrap();
     loop {
         match next_capture(&mut duo.ha).await {
             CaptureCmd::Release { id: 3, pos: Some(p) } => break assert_eq!(p.x.round(), 1918.0, "just inside A's right edge: {p:?}"),
@@ -359,13 +359,13 @@ async fn input_caught_at_a_wall_is_typed_here() {
     duo.settle_as(only(edge(Side::Right, 1920, 300, 1080)), only(edge(Side::Left, 0, 0, 780))).await;
     duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 100.0) }).unwrap();
     for ev in [
-        Event::Key { code: 30, down: true },
-        Event::Key { code: 30, down: false },
-        Event::Button { button: 0x110, down: true },
-        Event::ScrollDiscrete { dx: 0, dy: 1 },
-        Event::Button { button: 0x110, down: false },
+        Event::Key { code: 30, down: true, device: None },
+        Event::Key { code: 30, down: false, device: None },
+        Event::Button { button: 0x110, down: true, device: None },
+        Event::ScrollDiscrete { dx: 0, dy: 1, device: None },
+        Event::Button { button: 0x110, down: false, device: None },
         // Went down here before the capture: its release is due here.
-        Event::Key { code: 31, down: false },
+        Event::Key { code: 31, down: false, device: None },
     ] {
         duo.ha.events.send(ev).unwrap();
     }

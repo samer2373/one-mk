@@ -17,6 +17,8 @@ pub mod localmap;
 pub mod dropzone;
 pub mod hotkeys;
 #[cfg(any(target_os = "linux", test))]
+mod linux_devices;
+#[cfg(any(target_os = "linux", test))]
 mod linux_logic;
 #[cfg(target_os = "linux")]
 mod linux_rt;
@@ -42,7 +44,7 @@ mod win_logic;
 pub mod windows_service_logic;
 
 pub use cursoroverlay::InjectTx;
-pub use null::NullHandles;
+pub use null::{NullHandles, fake_keyboard};
 pub use system::{DisplaySleeper, FocusProbe, Inhibitor, Power, PowerEvent, PowerHandles, ScreenLocker, fake_power};
 #[cfg(target_os = "linux")]
 pub use portal::{PortalProbe, probe_portals};
@@ -50,9 +52,36 @@ pub use portal::{PortalProbe, probe_portals};
 pub use linux_logic::{LinuxBackend, SessionFacts, choose as choose_linux_backend};
 
 use anyhow::Result;
+pub use one_mk_proto::device::{Bus, DeviceRef, Fingerprint, InputDevice, Kinds};
 use one_mk_proto::{Desktop, Edge, Mods, Pos, Side};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
+
+/// Why per-device rules can't work with the Wayland backends (portals,
+/// wlroots): the compositor merges every keyboard and mouse into one before
+/// one-mk sees any input.
+pub const MERGED_DEVICES: &str =
+    "per-device rules are not available on this desktop: the desktop merges all keyboards and mice before one-mk sees them";
+
+/// The same for the X11 backend on an XWayland server, which has only its
+/// own merged virtual devices.
+pub const XWAYLAND_DEVICES: &str =
+    "per-device rules are not available on this desktop: XWayland merges all keyboards and mice before one-mk sees them";
+
+/// Whether a backend can tell keyboards and mice apart, before it runs:
+/// `Ok(note)` where it can (the note says what isn't tested), `Err(why)`
+/// where it can't. The running backend has the last word
+/// (`Event::DevicesUnavailable`), as X11 does under XWayland.
+pub fn device_support(backend: &str) -> Result<Option<&'static str>, &'static str> {
+    match backend {
+        "x11" => Ok(None),
+        "portal" | "wlroots" => Err(MERGED_DEVICES),
+        "null" => Err("the null input backend captures no keyboard or mouse"),
+        "native" if cfg!(windows) => Ok(Some("untested on real Windows hardware (Raw Input, compile-checked only)")),
+        "native" if cfg!(target_os = "macos") => Ok(Some("untested on a real Mac (IOHIDManager, compile-checked only)")),
+        _ => Err("this input backend doesn't say which keyboard or mouse input came from"),
+    }
+}
 
 /// From the backend to the daemon.
 #[derive(Clone, Debug, PartialEq)]
@@ -64,12 +93,24 @@ pub enum Event {
     /// `id` identifies this activation; later `Deactivated`/`Release`
     /// carry it so stale ones can be ignored.
     Activated { id: u32, side: Side, pos: Pos },
-    Motion { dx: f64, dy: f64 },
-    Button { button: u32, down: bool },
-    Scroll { dx: f64, dy: f64 },
-    ScrollDiscrete { dx: i32, dy: i32 },
+    /// The input events below say which keyboard or mouse they came from
+    /// (`device`, an entry of the latest `Devices`), `None` when the
+    /// backend can't tell (see `docs/INPUT-TUNING.md`, "Per-device rules"):
+    /// such input gets only the rules that name no device.
+    Motion { dx: f64, dy: f64, device: Option<DeviceRef> },
+    Button { button: u32, down: bool, device: Option<DeviceRef> },
+    Scroll { dx: f64, dy: f64, device: Option<DeviceRef> },
+    ScrollDiscrete { dx: i32, dy: i32, device: Option<DeviceRef> },
     ScrollStop,
-    Key { code: u32, down: bool },
+    Key { code: u32, down: bool, device: Option<DeviceRef> },
+    /// The keyboards and mice connected now, sent at start and whenever
+    /// one is plugged in, unplugged, falls asleep or wakes. A device
+    /// missing from the list is gone: whatever it held is let go of.
+    Devices(Vec<InputDevice>),
+    /// This backend can't tell keyboards and mice apart (the desktop merges
+    /// them before one-mk sees them): every input event's `device` is
+    /// `None`. Sent once, at start, by such backends.
+    DevicesUnavailable(&'static str),
     /// Capture `id` ended without us asking (session closed, permission
     /// revoked, monitors changed, backend failure).
     Deactivated { id: u32 },

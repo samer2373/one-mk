@@ -531,13 +531,14 @@ pub fn scroll_to_wire(s: &MacScroll) -> [Option<Event>; 2] {
         if s.momentum != 0 {
             return [None, None];
         }
-        let delta = (s.point_x != 0.0 || s.point_y != 0.0).then(|| Event::Scroll { dx: -s.point_x, dy: -s.point_y });
+        let delta = (s.point_x != 0.0 || s.point_y != 0.0).then(|| Event::Scroll { dx: -s.point_x, dy: -s.point_y, device: None });
         let stop = (s.phase & (PHASE_ENDED | PHASE_CANCELLED) != 0).then_some(Event::ScrollStop);
         [delta, stop]
     } else {
         let ev = (s.line_x != 0 || s.line_y != 0).then(|| Event::ScrollDiscrete {
             dx: (-s.line_x).saturating_mul(120).clamp(i32::MIN.into(), i32::MAX.into()) as i32,
             dy: (-s.line_y).saturating_mul(120).clamp(i32::MIN.into(), i32::MAX.into()) as i32,
+            device: None,
         });
         [ev, None]
     }
@@ -785,11 +786,11 @@ mod tests {
 
         // A wheel notch "up" on macOS (+1 line) is -120 on the wire.
         let wheel = MacScroll { line_y: 1, ..Default::default() };
-        assert_eq!(scroll_to_wire(&wheel), [Some(Event::ScrollDiscrete { dx: 0, dy: -120 }), None]);
+        assert_eq!(scroll_to_wire(&wheel), [Some(Event::ScrollDiscrete { dx: 0, dy: -120, device: None }), None]);
 
         // Trackpad: smooth deltas, then a stop when the fingers lift.
         let pad = MacScroll { continuous: true, point_y: -12.0, phase: 2, ..Default::default() };
-        assert_eq!(scroll_to_wire(&pad), [Some(Event::Scroll { dx: -0.0, dy: 12.0 }), None]);
+        assert_eq!(scroll_to_wire(&pad), [Some(Event::Scroll { dx: -0.0, dy: 12.0, device: None }), None]);
         let end = MacScroll { continuous: true, phase: 4, ..Default::default() };
         assert_eq!(scroll_to_wire(&end), [None, Some(Event::ScrollStop)]);
         let momentum = MacScroll { continuous: true, point_y: 3.0, momentum: 2, ..Default::default() };

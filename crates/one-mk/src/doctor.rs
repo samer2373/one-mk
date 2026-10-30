@@ -767,7 +767,7 @@ pub fn render_text(checks: &[Check]) -> String {
     out
 }
 
-fn json_str(s: &str) -> String {
+pub(crate) fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for ch in s.chars() {

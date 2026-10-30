@@ -75,6 +75,7 @@ pub(crate) const INPUT_CAPTURE_TOKEN: &str = "input-capture.token";
 
 pub(crate) async fn open(state_dir: PathBuf) -> Result<Backend> {
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+    let _ = ev_tx.send(Event::DevicesUnavailable(crate::MERGED_DEVICES));
     // The lock watcher's events pass through `watch_power` on their way.
     let (sys_tx, sys_rx) = mpsc::unbounded_channel();
     let (focus, locker) = crate::system::native(&sys_tx);
@@ -849,12 +850,12 @@ async fn run_capture(
                         context.flush()?;
                         continue;
                     }
-                    EiEvent::PointerMotion(m) => Event::Motion { dx: f64::from(m.dx), dy: f64::from(m.dy) },
-                    EiEvent::Button(b) => Event::Button { button: b.button, down: b.state == ei::button::ButtonState::Press },
-                    EiEvent::ScrollDelta(s) => Event::Scroll { dx: f64::from(s.dx), dy: f64::from(s.dy) },
-                    EiEvent::ScrollDiscrete(s) => Event::ScrollDiscrete { dx: s.discrete_dx, dy: s.discrete_dy },
+                    EiEvent::PointerMotion(m) => Event::Motion { dx: f64::from(m.dx), dy: f64::from(m.dy), device: None },
+                    EiEvent::Button(b) => Event::Button { button: b.button, down: b.state == ei::button::ButtonState::Press, device: None },
+                    EiEvent::ScrollDelta(s) => Event::Scroll { dx: f64::from(s.dx), dy: f64::from(s.dy), device: None },
+                    EiEvent::ScrollDiscrete(s) => Event::ScrollDiscrete { dx: s.discrete_dx, dy: s.discrete_dy, device: None },
                     EiEvent::ScrollStop(_) => Event::ScrollStop,
-                    EiEvent::KeyboardKey(k) => Event::Key { code: k.key, down: k.state == ei::keyboard::KeyState::Press },
+                    EiEvent::KeyboardKey(k) => Event::Key { code: k.key, down: k.state == ei::keyboard::KeyState::Press, device: None },
                     EiEvent::KeyboardModifiers(m) => Event::Modifiers(Mods::from_xkb(m.depressed | m.latched)),
                     EiEvent::Disconnected(d) => bail!("input capture disconnected: {:?}", d.explanation),
                     _ => continue,

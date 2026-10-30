@@ -17,7 +17,7 @@ use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
 use one_mk_ctl::client::SwitchTo;
-use one_mk_input::{Backend, CaptureCmd, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, InjectTx, PowerEvent, ScreenLocker};
+use one_mk_input::{Backend, CaptureCmd, DeviceRef, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, InjectTx, PowerEvent, ScreenLocker};
 use one_mk_input::dropzone::{DropTarget, Zone};
 use one_mk_net::{
     ControlWriter, Discovery, Fingerprint, Found, Identity, Node, Peer, Swap, TrustStore, read_stream_kind,
@@ -535,6 +535,8 @@ struct App {
     network_seen: bool,
     /// What the input backend says needs the user, by part (`Event::Status`).
     input_problems: std::collections::BTreeMap<&'static str, String>,
+    /// The keyboards and mice connected, for per-device rules.
+    devices: tune::Devices,
     /// The focus probe is asked to say when the front window changes.
     focus_watched: bool,
     /// When to dial missing peers again, and the wait after that.
@@ -615,6 +617,7 @@ pub async fn serve(
     let mut drop_jobs = tokio::task::JoinSet::new();
     let computers = crate::hotkeys::numbered_from(&identity, &trust).len();
     let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys, computers);
+    let devices = tune::Devices::load(&dir, name);
     let mut app = App {
         dropzones,
         dir,
@@ -660,6 +663,7 @@ pub async fn serve(
         auto_profile: None,
         network_seen: false,
         input_problems: Default::default(),
+        devices,
         focus_watched: false,
         dial_at: None,
         dial_backoff: DIAL_INTERVAL,
@@ -734,6 +738,7 @@ pub async fn serve(
         app.release_capture(id, Some(a.pos()));
     }
     app.end_owner(false);
+    app.devices.stopped();
     node.close();
     tokio::time::sleep(Duration::from_millis(50)).await; // let the Leave and close go out
     Ok(())
@@ -922,12 +927,12 @@ struct Coalesced {
 /// the first other event or when the pointer leaves.
 fn coalesce(
     cursor: &mut RemoteCursor,
-    (dx, dy): (f64, f64),
+    (dx, dy, device): (f64, f64, Option<DeviceRef>),
     events: &mut mpsc::UnboundedReceiver<Event>,
-    tune: impl Fn(f64, f64) -> (f64, f64),
+    tune: impl Fn(f64, f64, Option<DeviceRef>) -> (f64, f64),
 ) -> Coalesced {
     let mut out = Coalesced::default();
-    let (dx, dy) = tune(dx, dy);
+    let (dx, dy) = tune(dx, dy, device);
     let mut step = cursor.motion(dx, dy);
     for _ in 0..MAX_COALESCE {
         match step {
@@ -939,8 +944,8 @@ fn coalesce(
             Step::Still => {}
         }
         match events.try_recv() {
-            Ok(Event::Motion { dx, dy }) => {
-                let (dx, dy) = tune(dx, dy);
+            Ok(Event::Motion { dx, dy, device }) => {
+                let (dx, dy) = tune(dx, dy, device);
                 step = cursor.motion(dx, dy);
             }
             Ok(ev) => {
@@ -964,7 +969,7 @@ impl App {
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
         match ev {
-            Event::Key { code, down } if self.captured_shortcut(code, down) => {}
+            Event::Key { code, down, .. } if self.captured_shortcut(code, down) => {}
             ev @ (Event::Hotkey(_) | Event::Hotkeys(_)) => self.on_shortcut_event(ev),
             Event::Desktop(d) => {
                 tracing::debug!(screens = ?d.screens, "local screens");
@@ -980,25 +985,25 @@ impl App {
                 self.update_sides();
             }
             Event::Activated { id, side, pos } => self.on_activated(id, side, pos),
-            Event::Motion { dx, dy } => {
+            Event::Motion { dx, dy, device } => {
                 if let (Some((_, a)), Some(local)) = (self.approach.as_mut(), self.local.as_ref()) {
                     let next = a.motion(local, dx, dy, std::time::Instant::now());
                     self.on_approach(next, None);
-                } else if let Some(next) = self.on_motion(dx, dy, events) {
+                } else if let Some(next) = self.on_motion(dx, dy, device, events) {
                     self.on_input(next, events);
                 }
             }
-            Event::Button { button, down } if self.approach.is_some() => {
+            Event::Button { button, down, .. } if self.approach.is_some() => {
                 self.approach_input(Inject::Button { button, down });
             }
-            Event::Key { code, down } if self.approach.is_some() => {
+            Event::Key { code, down, .. } if self.approach.is_some() => {
                 self.mods.update(code, down);
                 let (Some((_, a)), Some(local)) = (self.approach.as_mut(), self.local.as_ref()) else { return };
                 let next = a.key(local, code, down, std::time::Instant::now());
                 self.on_approach(next, None); // `next` says what to type here
             }
-            Event::Scroll { dx, dy } if self.approach.is_some() => self.approach_input(Inject::Scroll { dx, dy }),
-            Event::ScrollDiscrete { dx, dy } if self.approach.is_some() => {
+            Event::Scroll { dx, dy, .. } if self.approach.is_some() => self.approach_input(Inject::Scroll { dx, dy }),
+            Event::ScrollDiscrete { dx, dy, .. } if self.approach.is_some() => {
                 self.approach_input(Inject::ScrollDiscrete { dx, dy });
             }
             Event::ScrollStop if self.approach.is_some() => self.approach_input(Inject::ScrollStop),
@@ -1029,13 +1034,8 @@ impl App {
             {
                 self.replay_here(ev);
             }
-            Event::Button { button, down } => {
-                let Some(r) = self.remote.as_mut() else { return };
-                if r.held.update(button, down) {
-                    self.tuned_key(button, down);
-                }
-            }
-            Event::Key { code, down } => {
+            Event::Button { button, down, device } => self.tuned_key(button, down, device),
+            Event::Key { code, down, device } => {
                 self.mods.update(code, down);
                 let Some(r) = self.remote.as_mut() else { return };
                 if down && code == KEY_ESC && [CTRL, ALT, SHIFT].iter().all(|k| k.iter().any(|&c| r.held.is_held(c))) {
@@ -1044,13 +1044,13 @@ impl App {
                     return;
                 }
                 // Remapped (then Ctrl/Cmd swapped) in `tune.rs`.
-                if r.held.update(code, down) {
-                    self.tuned_key(code, down);
-                }
+                self.tuned_key(code, down, device);
             }
-            Event::Scroll { dx, dy } => self.tuned_scroll(tune::ScrollIn::Smooth(dx, dy)),
-            Event::ScrollDiscrete { dx, dy } => self.tuned_scroll(tune::ScrollIn::Discrete(dx, dy)),
-            Event::ScrollStop => self.tuned_scroll(tune::ScrollIn::Stop),
+            Event::Scroll { dx, dy, device } => self.tuned_scroll(tune::ScrollIn::Smooth(dx, dy), device),
+            Event::ScrollDiscrete { dx, dy, device } => self.tuned_scroll(tune::ScrollIn::Discrete(dx, dy), device),
+            Event::ScrollStop => self.tuned_scroll(tune::ScrollIn::Stop, None),
+            Event::Devices(list) => self.on_devices(list),
+            Event::DevicesUnavailable(why) => self.on_devices_unavailable(why),
             Event::LocalInput => {
                 if self.owner.is_some() {
                     tracing::info!("this computer's own mouse or keyboard was used; it takes back control");
@@ -1086,10 +1086,10 @@ impl App {
 
     /// Moves the remote pointer, coalescing motion that queued up meanwhile.
     /// Returns the event that ended the run, to be handled next.
-    fn on_motion(&mut self, dx: f64, dy: f64, events: &mut mpsc::UnboundedReceiver<Event>) -> Option<Event> {
+    fn on_motion(&mut self, dx: f64, dy: f64, device: Option<DeviceRef>, events: &mut mpsc::UnboundedReceiver<Event>) -> Option<Event> {
         let r = self.remote.as_mut()?;
         let tune = &r.tune;
-        let c = coalesce(&mut r.cursor, (dx, dy), events, |dx, dy| tune.motion(dx, dy));
+        let c = coalesce(&mut r.cursor, (dx, dy, device), events, |dx, dy, device| tune.motion(dx, dy, device));
         if let Some(d) = c.moved
             && r.acked
         {
@@ -1206,10 +1206,10 @@ impl App {
     /// typed here.
     fn replay_here(&mut self, ev: Event) {
         let input = match ev {
-            Event::Key { code, down } => Inject::Key { code, down },
-            Event::Button { button, down } => Inject::Button { button, down },
-            Event::Scroll { dx, dy } => Inject::Scroll { dx, dy },
-            Event::ScrollDiscrete { dx, dy } => Inject::ScrollDiscrete { dx, dy },
+            Event::Key { code, down, .. } => Inject::Key { code, down },
+            Event::Button { button, down, .. } => Inject::Button { button, down },
+            Event::Scroll { dx, dy, .. } => Inject::Scroll { dx, dy },
+            Event::ScrollDiscrete { dx, dy, .. } => Inject::ScrollDiscrete { dx, dy },
             Event::ScrollStop => Inject::ScrollStop,
             _ => return,
         };
@@ -2792,18 +2792,18 @@ mod tests {
         ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
         assert_eq!(next_inject(&mut hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
 
-        ha.events.send(Event::Motion { dx: 100.0, dy: -40.0 }).unwrap();
+        ha.events.send(Event::Motion { dx: 100.0, dy: -40.0, device: None }).unwrap();
         assert_eq!(next_inject(&mut hb).await, Inject::MoveTo(Pos::new(100.0, 500.0)));
 
         // Hold Shift, click.
-        ha.events.send(Event::Key { code: 42, down: true }).unwrap();
+        ha.events.send(Event::Key { code: 42, down: true, device: None }).unwrap();
         assert_eq!(next_inject(&mut hb).await, Inject::Key { code: 42, down: true });
-        ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        ha.events.send(Event::Button { button: 0x110, down: true, device: None }).unwrap();
         assert_eq!(next_inject(&mut hb).await, Inject::MoveTo(Pos::new(100.0, 500.0)));
         assert_eq!(next_inject(&mut hb).await, Inject::Button { button: 0x110, down: true });
 
         // Move back across the edge while Shift and the button are held.
-        ha.events.send(Event::Motion { dx: -300.0, dy: 0.0 }).unwrap();
+        ha.events.send(Event::Motion { dx: -300.0, dy: 0.0, device: None }).unwrap();
         match next_capture(&mut ha).await {
             CaptureCmd::Release { pos: Some(p), .. } => {
                 assert_eq!(p.x, 1917.0);
@@ -2980,7 +2980,7 @@ mod tests {
 
         /// Moves the pointer back from B to A.
         async fn leave_b(&mut self) {
-            self.ha.events.send(Event::Motion { dx: -100.0, dy: 0.0 }).unwrap();
+            self.ha.events.send(Event::Motion { dx: -100.0, dy: 0.0, device: None }).unwrap();
             assert!(matches!(next_capture(&mut self.ha).await, CaptureCmd::Release { pos: Some(_), .. }));
         }
 
@@ -3012,7 +3012,7 @@ mod tests {
         duo.enter_b().await;
         // Play/pause, a tap: down, up. Volume up and brightness stay held.
         for (code, down) in [(164, true), (164, false), (115, true), (225, true)] {
-            duo.ha.events.send(Event::Key { code, down }).unwrap();
+            duo.ha.events.send(Event::Key { code, down, device: None }).unwrap();
             assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code, down });
         }
         duo.leave_b().await;
@@ -3151,26 +3151,26 @@ mod tests {
         let mut c = RemoteCursor::enter(desk, Side::Left, 0.5, 1); // at (0, 540)
         let (tx, mut rx) = mpsc::unbounded_channel();
         // Pinned at the right edge, then back: a sum of deltas would be wrong.
-        tx.send(Event::Motion { dx: 5000.0, dy: 0.0 }).unwrap();
-        tx.send(Event::Motion { dx: -100.0, dy: 10.0 }).unwrap();
-        tx.send(Event::Key { code: 30, down: true }).unwrap();
-        tx.send(Event::Motion { dx: 1.0, dy: 0.0 }).unwrap();
-        let out = coalesce(&mut c, (10.0, 0.0), &mut rx, |dx, dy| (dx, dy));
+        tx.send(Event::Motion { dx: 5000.0, dy: 0.0, device: None }).unwrap();
+        tx.send(Event::Motion { dx: -100.0, dy: 10.0, device: None }).unwrap();
+        tx.send(Event::Key { code: 30, down: true, device: None }).unwrap();
+        tx.send(Event::Motion { dx: 1.0, dy: 0.0, device: None }).unwrap();
+        let out = coalesce(&mut c, (10.0, 0.0, None), &mut rx, |dx, dy, _| (dx, dy));
         let pos = Pos::new(1920.0 - 1.0 / 256.0 - 100.0, 550.0);
         assert_eq!(out.moved, Some(Datagram::Motion { epoch: 1, seq: 3, pos }));
         assert_eq!(out.leave, None);
         // Stops at the key, which is handled next, in order.
-        assert_eq!(out.next, Some(Event::Key { code: 30, down: true }));
-        assert_eq!(rx.try_recv(), Ok(Event::Motion { dx: 1.0, dy: 0.0 }));
+        assert_eq!(out.next, Some(Event::Key { code: 30, down: true, device: None }));
+        assert_eq!(rx.try_recv(), Ok(Event::Motion { dx: 1.0, dy: 0.0, device: None }));
 
         // Leaving ends the run after the position reached so far.
-        tx.send(Event::Motion { dx: -5000.0, dy: 0.0 }).unwrap();
-        tx.send(Event::Motion { dx: 1.0, dy: 0.0 }).unwrap();
-        let out = coalesce(&mut c, (1.0, 0.0), &mut rx, |dx, dy| (dx, dy));
+        tx.send(Event::Motion { dx: -5000.0, dy: 0.0, device: None }).unwrap();
+        tx.send(Event::Motion { dx: 1.0, dy: 0.0, device: None }).unwrap();
+        let out = coalesce(&mut c, (1.0, 0.0, None), &mut rx, |dx, dy, _| (dx, dy));
         assert!(matches!(out.moved, Some(Datagram::Motion { seq: 4, .. })));
         assert!(out.leave.is_some());
         assert_eq!(out.next, None);
-        assert_eq!(rx.try_recv(), Ok(Event::Motion { dx: 1.0, dy: 0.0 }));
+        assert_eq!(rx.try_recv(), Ok(Event::Motion { dx: 1.0, dy: 0.0, device: None }));
         assert!(rx.try_recv().is_err());
     }
 
@@ -3194,8 +3194,8 @@ mod tests {
         const N: usize = 400;
         for i in 0..N {
             let dy = if i % 2 == 0 { 1.0 } else { -1.0 };
-            duo.ha.events.send(Event::Motion { dx: 0.0, dy }).unwrap();
-            duo.ha.events.send(Event::Key { code: 30, down: i % 2 == 0 }).unwrap();
+            duo.ha.events.send(Event::Motion { dx: 0.0, dy, device: None }).unwrap();
+            duo.ha.events.send(Event::Key { code: 30, down: i % 2 == 0, device: None }).unwrap();
             if i % 50 == 0 {
                 tokio::task::yield_now().await;
             }
@@ -3212,13 +3212,13 @@ mod tests {
     async fn local_input_takes_control_back() {
         let mut duo = Duo::start("local", None).await;
         duo.enter_b().await;
-        duo.ha.events.send(Event::Key { code: 42, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 42, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 42, down: true });
         duo.hb.events.send(Event::LocalInput).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 42, down: false });
         assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(_) }));
         // A's input no longer reaches B.
-        duo.ha.events.send(Event::Key { code: 30, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 30, down: true, device: None }).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         let after: Vec<_> = std::iter::from_fn(|| duo.hb.inject.try_recv().ok()).collect();
         assert_eq!(after, vec![Inject::Controlled(false)], "only the end of control");
@@ -3236,7 +3236,7 @@ mod tests {
         duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
         assert_eq!(next_raw_inject(&mut duo.hb).await, Inject::Controlled(true));
         assert_eq!(next_raw_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
-        duo.ha.events.send(Event::Key { code: 42, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 42, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 42, down: true });
 
         let reply = control::request(&duo.db, Request::TakeBack).await.unwrap().unwrap();
@@ -3491,7 +3491,7 @@ mod tests {
         c.send(Control::Enter { epoch: 5, pos: Pos::new(5.0, 5.0) }).await;
         assert_eq!(c.next().await, Control::Busy { epoch: 5 });
         c.send(Control::Key { code: 31, down: true }).await;
-        duo.ha.events.send(Event::Motion { dx: 10.0, dy: 0.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: 10.0, dy: 0.0, device: None }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(10.0, 540.0)));
 
         // Once A leaves, C may enter.
@@ -3533,7 +3533,7 @@ mod tests {
         duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 700.0) }).unwrap();
         // Not (0, 700) as by fraction: 700 - 500.
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 200.0)));
-        duo.ha.events.send(Event::Motion { dx: -100.0, dy: 0.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: -100.0, dy: 0.0, device: None }).unwrap();
         match next_capture(&mut duo.ha).await {
             CaptureCmd::Release { pos: Some(p), .. } => assert_eq!((p.x.round(), p.y), (1918.0, 700.0)),
             other => panic!("expected release, got {other:?}"),
@@ -3692,25 +3692,25 @@ mod tests {
         duo.settle().await;
         duo.enter_b().await;
         for (code, sent) in [(29, 125), (30, 30)] {
-            duo.ha.events.send(Event::Key { code, down: true }).unwrap();
+            duo.ha.events.send(Event::Key { code, down: true, device: None }).unwrap();
             assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: sent, down: true });
         }
         // The setting changes mid-visit.
         let fb = duo.fb.clone();
         Duo::layout(&duo.da, &fb, None, Some(Swap::Off)).await;
         for (code, sent) in [(29, 125), (30, 30)] {
-            duo.ha.events.send(Event::Key { code, down: false }).unwrap();
+            duo.ha.events.send(Event::Key { code, down: false, device: None }).unwrap();
             assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: sent, down: false });
         }
         // Still swapped for the rest of this visit; leaving releases the swapped code.
-        duo.ha.events.send(Event::Key { code: 97, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 97, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 126, down: true });
         duo.leave_b().await;
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 126, down: false });
 
         // The next visit follows the new setting.
         duo.enter_b().await;
-        duo.ha.events.send(Event::Key { code: 29, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 29, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 29, down: true });
         duo.stop().await;
     }
@@ -3906,14 +3906,14 @@ mod tests {
         assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("already\n"));
         assert!(status(&duo.da).await.controlling.is_some());
 
-        duo.ha.events.send(Event::Key { code: 29, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 29, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 29, down: true });
         // Back here: A's pointer goes to its own centre, B lets go of Ctrl.
         assert!(ask(&duo.da, Request::Switch(SwitchTo::Here)).await.starts_with("here\nleft "));
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 9, pos: Some(CENTER) });
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 29, down: false });
         // The Ctrl release that follows on A goes nowhere.
-        duo.ha.events.send(Event::Key { code: 29, down: false }).unwrap();
+        duo.ha.events.send(Event::Key { code: 29, down: false, device: None }).unwrap();
 
         // next: here -> B -> here.
         assert!(ask(&duo.da, Request::Switch(SwitchTo::Next)).await.starts_with("ok\n"));
@@ -3921,7 +3921,7 @@ mod tests {
         duo.ha.events.send(Event::Activated { id: 10, side: Side::Right, pos: Pos::new(1919.0, 3.0) }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
         // The edge facing A still leads back.
-        duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0, device: None }).unwrap();
         assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 10, pos: Some(_) }));
         assert!(ask(&duo.da, Request::Switch(SwitchTo::Next)).await.starts_with("ok\n"));
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
@@ -3938,7 +3938,7 @@ mod tests {
     async fn switch_here_takes_back_and_unanswered_switch_gives_up() {
         let mut duo = Duo::start("switch-back", None).await;
         duo.enter_b().await;
-        duo.ha.events.send(Event::Key { code: 42, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 42, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 42, down: true });
         let reply = ask(&duo.db, Request::Switch(SwitchTo::Here)).await;
         assert!(reply.starts_with("here\ntook control back from "), "{reply}");
@@ -3974,7 +3974,7 @@ mod tests {
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
         duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
-        duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: -2000.0, dy: 0.0, device: None }).unwrap();
         assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: Some(_) }));
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetEdges(vec![]), "locked again once home");
 
@@ -4008,17 +4008,17 @@ mod tests {
 
         // On B: a key held while the chord's key goes down is typing, not a shortcut.
         for (code, down) in [(KEY_X, true), (CTRL, true), (ALT, true), (KEY_H, true), (KEY_H, false), (KEY_X, false)] {
-            duo.ha.events.send(Event::Key { code, down }).unwrap();
+            duo.ha.events.send(Event::Key { code, down, device: None }).unwrap();
             assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code, down });
         }
         // Ctrl+Alt+H alone (Ctrl and Alt still held) brings it home; B
         // releases Ctrl and Alt and never sees the H.
-        duo.ha.events.send(Event::Key { code: KEY_H, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: KEY_H, down: true, device: None }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 5, pos: Some(CENTER) });
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: CTRL, down: false });
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: ALT, down: false });
         for code in [KEY_H, CTRL, ALT] {
-            duo.ha.events.send(Event::Key { code, down: false }).unwrap();
+            duo.ha.events.send(Event::Key { code, down: false, device: None }).unwrap();
         }
 
         // Back on B (the system's "next"), Ctrl+Alt+<this computer's
@@ -4028,7 +4028,7 @@ mod tests {
         duo.ha.events.send(Event::Activated { id: 6, side: Side::Right, pos: Pos::new(1919.0, 3.0) }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
         duo.ha.events.send(Event::Modifiers(Mods::from_keys([CTRL, ALT]))).unwrap();
-        duo.ha.events.send(Event::Key { code: 1 + u32::from(n(&duo.fa)), down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 1 + u32::from(n(&duo.fa)), down: true, device: None }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 6, pos: Some(CENTER) });
         assert!(injected(&mut duo.hb).iter().all(|i| !matches!(i, Inject::Key { .. })), "no key reached B");
 
@@ -4043,7 +4043,7 @@ mod tests {
         set(&duo.da, |s| s.hotkeys.enabled = false).await;
         assert_eq!(status(&duo.da).await.hotkeys, "off");
         duo.enter_b().await;
-        duo.ha.events.send(Event::Key { code: KEY_H, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: KEY_H, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: KEY_H, down: true });
         duo.stop().await;
     }
@@ -4090,7 +4090,7 @@ mod tests {
         for code in [CTRL, ALT] {
             duo.ha.events.send(Event::LocalKeyUp { code }).unwrap();
         }
-        duo.ha.events.send(Event::Key { code: KEY_H, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: KEY_H, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: KEY_H, down: true }, "H, not Ctrl+Alt+H");
         assert!(duo.ha.capture.try_recv().is_err(), "the pointer stayed on B");
         duo.stop().await;
@@ -4112,7 +4112,7 @@ mod tests {
         duo.ha.events.send(Event::LocalKeyUp { code: 42 }).unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(injected(&mut duo.hb), vec![], "did not cross");
-        duo.ha.events.send(Event::Motion { dx: -30.0, dy: 0.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: -30.0, dy: 0.0, device: None }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(1889.0, 540.0)) });
         duo.stop().await;
     }
@@ -4126,13 +4126,13 @@ mod tests {
         assert_eq!(status(&duo.da).await.edges, "dwell 200 ms");
         let started = Instant::now();
         duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
-        duo.ha.events.send(Event::Motion { dx: 40.0, dy: 10.0 }).unwrap(); // pushing, sliding down
+        duo.ha.events.send(Event::Motion { dx: 40.0, dy: 10.0, device: None }).unwrap(); // pushing, sliding down
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 550.0)));
         assert!(started.elapsed() >= Duration::from_millis(200), "{:?}", started.elapsed());
         duo.leave_b().await;
 
         duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
-        duo.ha.events.send(Event::Motion { dx: -30.0, dy: 0.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: -30.0, dy: 0.0, device: None }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: Some(Pos::new(1889.0, 540.0)) });
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(injected(&mut duo.hb), vec![], "never crossed");
@@ -4154,21 +4154,21 @@ mod tests {
         duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(injected(&mut duo.hb), vec![], "held at the edge: Shift was released when capture ended");
-        duo.ha.events.send(Event::Key { code: 54, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 54, down: true, device: None }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
-        duo.ha.events.send(Event::Key { code: 30, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 30, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 30, down: true }, "Shift was not sent");
-        duo.ha.events.send(Event::Key { code: 30, down: false }).unwrap();
+        duo.ha.events.send(Event::Key { code: 30, down: false, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 30, down: false });
         duo.leave_b().await;
 
         duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
-        duo.ha.events.send(Event::Key { code: 30, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 30, down: true, device: None }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 3, pos: Some(Pos::new(1919.0, 540.0)) });
         assert_eq!(next_inject(&mut duo.ha).await, Inject::Key { code: 30, down: true }, "typed here, not lost");
         assert_eq!(next_inject(&mut duo.ha).await, Inject::Key { code: 30, down: false }, "and released here");
         // Its real key-up comes once capture has ended; nothing more.
-        duo.ha.events.send(Event::Key { code: 30, down: false }).unwrap();
+        duo.ha.events.send(Event::Key { code: 30, down: false, device: None }).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(injected(&mut duo.ha), vec![]);
         duo.stop().await;
@@ -4187,8 +4187,8 @@ mod tests {
         })
         .await;
         duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
-        duo.ha.events.send(Event::Key { code: 42, down: true }).unwrap();
-        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 42, down: true, device: None }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: true, device: None }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(1919.0, 540.0)) });
         let mut got = Vec::new();
         for _ in 0..4 {
@@ -4204,8 +4204,8 @@ mod tests {
             ]
         );
         // Their real releases, still captured: already done here.
-        duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
-        duo.ha.events.send(Event::Key { code: 42, down: false }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: false, device: None }).unwrap();
+        duo.ha.events.send(Event::Key { code: 42, down: false, device: None }).unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(injected(&mut duo.ha), vec![]);
         assert_eq!(injected(&mut duo.hb), vec![], "never crossed");
@@ -4223,9 +4223,9 @@ mod tests {
         let mut duo = Duo::start("handback-click", None).await;
         set(&duo.da, |s| s.edge.all.dwell_ms = Some(5000)).await;
         duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
-        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: true, device: None }).unwrap();
         // The button-up, captured before the release took effect.
-        duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: false, device: None }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(Pos::new(1919.0, 540.0)) });
         assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: true });
         assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: false });
@@ -4245,7 +4245,7 @@ mod tests {
             let mut duo = Duo::start(&format!("click-{after}"), None).await;
             set(&duo.da, |s| s.edge.all.dwell_ms = Some(5000)).await;
             duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
-            duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+            duo.ha.events.send(Event::Button { button: 0x110, down: true, device: None }).unwrap();
             assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, .. }), "{after}");
             assert_eq!(next_inject(&mut duo.ha).await, Inject::Button { button: 0x110, down: true }, "{after}");
             // At once, not when a release that may never be seen arrives.
@@ -4317,14 +4317,14 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await; // B's caps arrive
         duo.enter_b().await;
         assert!(status(&duo.da).await.relative);
-        duo.ha.events.send(Event::Motion { dx: 10.4, dy: 5.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: 10.4, dy: 5.0, device: None }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveBy { dx: 10, dy: 5 });
-        duo.ha.events.send(Event::Motion { dx: 0.4, dy: 0.0 }).unwrap(); // the fractions add up
+        duo.ha.events.send(Event::Motion { dx: 0.4, dy: 0.0, device: None }).unwrap(); // the fractions add up
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveBy { dx: 1, dy: 0 });
         // Far past A's side of B: still on B, still relative.
-        duo.ha.events.send(Event::Motion { dx: -5000.0, dy: 0.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: -5000.0, dy: 0.0, device: None }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveBy { dx: -5000, dy: 0 });
-        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: true, device: None }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::Button { button: 0x110, down: true }, "no warp first");
         assert!(duo.ha.capture.try_recv().is_err(), "the pointer did not leave B");
 
@@ -4345,16 +4345,16 @@ mod tests {
         duo.enter_b().await;
         eventually_async("relative motion", || async { status(&duo.da).await.relative }).await;
         assert!(duo.hb.focus_probes.load(std::sync::atomic::Ordering::SeqCst) > 0);
-        duo.ha.events.send(Event::Motion { dx: 3.0, dy: 0.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: 3.0, dy: 0.0, device: None }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveBy { dx: 3, dy: 0 });
 
         *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: false, apps: vec![] });
-        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: true, device: None }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::Button { button: 0x110, down: true });
         eventually_async("absolute motion", || async { !status(&duo.da).await.relative }).await;
         // Absolute again from the estimate (B's left edge + 3), then on.
         assert_eq!(next_non_rel_move(&mut duo.hb).await, Inject::MoveTo(Pos::new(3.0, 540.0)));
-        duo.ha.events.send(Event::Motion { dx: 1.0, dy: 0.0 }).unwrap();
+        duo.ha.events.send(Event::Motion { dx: 1.0, dy: 0.0, device: None }).unwrap();
         assert_eq!(next_non_rel_move(&mut duo.hb).await, Inject::MoveTo(Pos::new(4.0, 540.0)));
         duo.stop().await;
     }
@@ -4373,14 +4373,14 @@ mod tests {
         // Plain typing (a game's W) doesn't make B look.
         let probes = duo.hb.focus_probes.load(std::sync::atomic::Ordering::SeqCst);
         for (code, down) in [(17, true), (17, false)] {
-            duo.ha.events.send(Event::Key { code, down }).unwrap();
+            duo.ha.events.send(Event::Key { code, down, device: None }).unwrap();
         }
         tokio::time::sleep(FOCUS_SETTLE * 3).await;
         assert_eq!(duo.hb.focus_probes.load(std::sync::atomic::Ordering::SeqCst), probes, "WASD costs nothing");
         // Alt+Tab: the game loses the focus.
         *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: false, apps: vec![] });
         for (code, down) in [(56, true), (15, true), (15, false), (56, false)] {
-            duo.ha.events.send(Event::Key { code, down }).unwrap();
+            duo.ha.events.send(Event::Key { code, down, device: None }).unwrap();
         }
         eventually_async("absolute motion", || async { !status(&duo.da).await.relative }).await;
         duo.stop().await;
@@ -4484,7 +4484,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec![] });
         duo.enter_b().await;
-        duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
+        duo.ha.events.send(Event::Button { button: 0x110, down: true, device: None }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
         assert_eq!(next_inject(&mut duo.hb).await, Inject::Button { button: 0x110, down: true });
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -4551,7 +4551,7 @@ mod tests {
         use std::sync::atomic::Ordering::SeqCst;
         async fn click(duo: &mut Duo) {
             for down in [true, false] {
-                duo.ha.events.send(Event::Button { button: 0x110, down }).unwrap();
+                duo.ha.events.send(Event::Button { button: 0x110, down, device: None }).unwrap();
                 loop {
                     match next_inject(&mut duo.hb).await {
                         Inject::Button { down: d, .. } if d == down => break,
@@ -4623,8 +4623,8 @@ mod tests {
     async fn lock_and_unlock_release_held_keys() {
         let mut duo = Duo::start("unlock", None).await;
         duo.enter_b().await;
-        duo.ha.events.send(Event::Key { code: 125, down: true }).unwrap();
-        duo.ha.events.send(Event::Key { code: 38, down: true }).unwrap();
+        duo.ha.events.send(Event::Key { code: 125, down: true, device: None }).unwrap();
+        duo.ha.events.send(Event::Key { code: 38, down: true, device: None }).unwrap();
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 125, down: true });
         assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 38, down: true });
         duo.hb.events.send(Event::ScreenLocked(true)).unwrap();

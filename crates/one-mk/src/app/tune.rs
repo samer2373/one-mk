@@ -2,17 +2,22 @@
 //! speed, scroll tuning and button remapping (`[input]`, see
 //! `crate::tuning` and `docs/INPUT-TUNING.md`). Hotkeys have seen the
 //! physical keys before anything here; the Ctrl/Cmd swap applies after.
+//! Input from a keyboard or mouse with rules of its own (per-device rules)
+//! uses those on top of the rest; see "Per-device rules" in the doc.
 
 use super::App;
 use crate::control::Request;
-use crate::tuning::{PeerFacts, Resolved};
+use crate::inputdevices::{DaemonNote, Remembered};
+use crate::tuning::{PeerFacts, ResolvedSet};
 use one_mk_ctl::client::{SwitchTo, Toggle};
+use one_mk_input::{DeviceRef, InputDevice};
 use one_mk_net::Fingerprint;
 use one_mk_proto::keynames::is_button;
 use one_mk_proto::pointer::PointerTune;
-use one_mk_proto::remap::{Action, Emit, Mapper};
+use one_mk_proto::remap::{Action, Emit, KeymapSet, Mapper};
 use one_mk_proto::scroll::{ScrollOut, ScrollTune};
 use one_mk_proto::{Control, swap_ctrl_meta};
+use std::path::{Path, PathBuf};
 use tokio::sync::oneshot;
 
 /// The tuning of one visit, resolved for its computer.
@@ -20,14 +25,39 @@ pub(super) struct Tune {
     mapper: Mapper,
     pointer: PointerTune,
     scroll: ScrollTune,
+    /// Devices with rules of their own: their pointer tuning and their
+    /// own scrolling (remainders of one wheel never carry into another's).
+    by_device: Vec<(DeviceRef, PointerTune, ScrollTune)>,
+    /// The device whose scrolling came last: a `ScrollStop` is for it.
+    last_scroll: Option<DeviceRef>,
     /// What the mapper emitted and is still to be sent; kept between
     /// events so its capacity is reused.
     out: Vec<Emit>,
 }
 
 impl Tune {
-    pub(super) fn new(r: Resolved) -> Self {
-        Tune { mapper: Mapper::new(r.keymap), pointer: r.pointer, scroll: ScrollTune::new(r.scroll), out: Vec::new() }
+    pub(super) fn new(r: ResolvedSet) -> Self {
+        let (keymaps, by_device) = Self::split(&r);
+        Tune {
+            mapper: Mapper::with_set(keymaps),
+            pointer: r.base.pointer,
+            scroll: ScrollTune::new(r.base.scroll),
+            by_device,
+            last_scroll: None,
+            out: Vec::new(),
+        }
+    }
+
+    /// The keymaps, and the pointer and scroll tuning of each device with
+    /// rules of its own.
+    fn split(r: &ResolvedSet) -> (KeymapSet, Vec<(DeviceRef, PointerTune, ScrollTune)>) {
+        let mut keymaps = KeymapSet::new(r.base.keymap.clone());
+        let mut by_device = Vec::new();
+        for (ids, d) in &r.devices {
+            keymaps.add(ids, d.keymap.clone());
+            by_device.extend(ids.iter().map(|&id| (id, d.pointer, ScrollTune::new(d.scroll))));
+        }
+        (keymaps, by_device)
     }
 
     /// When the mapper's timer must fire: only while a tap/hold key is undecided.
@@ -35,9 +65,91 @@ impl Tune {
         self.mapper.deadline()
     }
 
-    /// One motion report, before the remote cursor adds it up.
-    pub(super) fn motion(&self, dx: f64, dy: f64) -> (f64, f64) {
-        self.pointer.apply(dx, dy, crate::tuning::RAW_MOTION)
+    /// One motion report from `device`, before the remote cursor adds it up.
+    pub(super) fn motion(&self, dx: f64, dy: f64, device: Option<DeviceRef>) -> (f64, f64) {
+        let pointer = device.and_then(|d| self.by_device.iter().find(|x| x.0 == d)).map_or(&self.pointer, |x| &x.1);
+        pointer.apply(dx, dy, crate::tuning::RAW_MOTION)
+    }
+
+    /// The scrolling of `device` (`None`: not known).
+    fn scroll(&mut self, device: Option<DeviceRef>) -> &mut ScrollTune {
+        match device.and_then(|d| self.by_device.iter().position(|x| x.0 == d)) {
+            Some(i) => &mut self.by_device[i].2,
+            None => &mut self.scroll,
+        }
+    }
+
+    /// Takes the rules that apply now: what is held stays held (see
+    /// `Mapper::set_keymaps`), scrolling keeps its remainders where its
+    /// rules stay the same.
+    fn replace(&mut self, new: Tune, out: &mut Vec<Emit>) {
+        self.pointer = new.pointer;
+        if self.scroll.config() != new.scroll.config() {
+            self.scroll = new.scroll;
+        }
+        let mut by_device = new.by_device;
+        for (id, _, scroll) in &mut by_device {
+            if let Some(old) = self.by_device.iter_mut().find(|x| x.0 == *id && x.2.config() == scroll.config()) {
+                std::mem::swap(scroll, &mut old.2);
+            }
+        }
+        self.by_device = by_device;
+        self.mapper.set_keymaps(new.mapper.keymaps().clone(), &mut |e| out.push(e));
+    }
+}
+
+/// The keyboards and mice connected here, as the backend said, and the
+/// ones seen before (`input-devices.toml`).
+pub(super) struct Devices {
+    dir: PathBuf,
+    /// Connected now (`None`: the backend hasn't said).
+    connected: Option<Vec<InputDevice>>,
+    /// Why the backend can't tell devices apart, if it said so.
+    unavailable: Option<&'static str>,
+    memory: Remembered,
+}
+
+impl Devices {
+    /// The devices seen before; none counts as connected until the backend
+    /// says (a daemon that was killed couldn't say what went away since).
+    pub(super) fn load(dir: &Path, backend: &str) -> Self {
+        let mut memory = Remembered::load(dir).unwrap_or_else(|e| {
+            tracing::warn!("{e:#}; starting a new list of input devices");
+            Remembered::default()
+        });
+        memory.daemon = DaemonNote { backend: backend.to_owned(), unavailable: None };
+        memory.disconnect_all(crate::inputdevices::now());
+        let d = Devices { dir: dir.to_owned(), connected: None, unavailable: None, memory };
+        d.save();
+        d
+    }
+
+    pub(super) fn list(&self) -> &[InputDevice] {
+        self.connected.as_deref().unwrap_or_default()
+    }
+
+    fn save(&self) {
+        if let Err(e) = self.memory.save(&self.dir) {
+            tracing::warn!("can't write {}: {e:#}", crate::inputdevices::path(&self.dir).display());
+        }
+    }
+
+    /// Writes down what is connected now, if that changed.
+    fn remember(&mut self) {
+        let unavailable = self.unavailable.map(str::to_owned);
+        let note_changed = self.memory.daemon.unavailable != unavailable;
+        self.memory.daemon.unavailable = unavailable;
+        let list = self.connected.clone().unwrap_or_default();
+        if self.memory.update(&list, crate::inputdevices::now()) || note_changed {
+            self.save();
+        }
+    }
+
+    /// The daemon stops: nothing is known to be connected any more.
+    pub(super) fn stopped(&mut self) {
+        if self.memory.disconnect_all(crate::inputdevices::now()) {
+            self.save();
+        }
     }
 }
 
@@ -54,11 +166,62 @@ impl App {
     pub(super) fn tune_for(&self, fp: Fingerprint, swap: bool, apps: &[String]) -> Tune {
         let (name, os) = self.peers.get(&fp).map_or(("", one_mk_proto::os::UNKNOWN), |p| (p.name.as_str(), p.os));
         let id = fp.to_string();
-        let r = self.settings.input.resolve(&PeerFacts { name, id: &id, os, apps }, swap);
-        for w in &r.warnings {
+        let facts = PeerFacts { name, id: &id, os, apps, device: None };
+        let r = self.settings.input.resolve_devices(&facts, swap, self.devices.list());
+        for w in r.base.warnings.iter().chain(r.devices.iter().flat_map(|(_, d)| &d.warnings)) {
             tracing::debug!(peer = %name, "input tuning: {w}");
         }
         Tune::new(r)
+    }
+
+    /// The backend says which keyboards and mice are connected now. During
+    /// a visit, whatever a device that went away (unplugged, asleep) held
+    /// is let go of at once, and devices with rules of their own get them.
+    pub(super) fn on_devices(&mut self, list: Vec<InputDevice>) {
+        // A number reused for another device counts as one gone, too.
+        let gone: Vec<DeviceRef> = self.devices.list().iter().filter(|d| !list.contains(d)).map(|d| d.id).collect();
+        tracing::debug!(devices = list.len(), gone = gone.len(), "keyboards and mice connected");
+        self.devices.connected = Some(list);
+        self.devices.unavailable = None;
+        if let Some(r) = self.remote.as_mut()
+            && !gone.is_empty()
+        {
+            let t = &mut r.tune;
+            let out = &mut t.out;
+            for &d in &gone {
+                t.mapper.device_gone(d, &mut |e| out.push(e));
+            }
+            let still: Vec<u32> = r.held.iter().filter(|&c| !t.mapper.held_anywhere(c)).collect();
+            for code in still {
+                r.held.update(code, false);
+            }
+            self.send_tuned();
+        }
+        self.retune();
+        self.devices.remember();
+    }
+
+    /// The backend can't tell keyboards and mice apart (the desktop merges
+    /// them): rules for one device never apply here.
+    pub(super) fn on_devices_unavailable(&mut self, why: &'static str) {
+        tracing::info!("{why}");
+        self.devices.unavailable = Some(why);
+        self.devices.connected = Some(Vec::new());
+        self.devices.remember();
+    }
+
+    /// Why rules for one device are not in force, for `one-mk status`.
+    fn device_rule_notes(&self) -> Option<String> {
+        if !self.settings.input.uses_devices() {
+            return None;
+        }
+        let support = one_mk_input::device_support(self.backend_name);
+        match (self.devices.unavailable, &self.devices.connected, support) {
+            (Some(why), ..) | (None, None, Err(why)) => Some(format!("Rules for one keyboard or mouse are not in force: {why}.")),
+            (None, _, Ok(Some(untested))) => Some(format!("Rules for one keyboard or mouse: {untested}.")),
+            // The backend lists devices: they work.
+            (None, Some(_), _) | (None, None, Ok(None)) => None,
+        }
     }
 
     /// The apps that rules for `fp` name: while there are any, the visit
@@ -66,7 +229,7 @@ impl App {
     pub(super) fn app_rules_for(&self, fp: Fingerprint) -> Vec<String> {
         let Some(p) = self.peers.get(&fp) else { return Vec::new() };
         let id = fp.to_string();
-        self.settings.input.apps_for(&PeerFacts { name: &p.name, id: &id, os: p.os, apps: &[] })
+        self.settings.input.apps_for(&PeerFacts { name: &p.name, id: &id, os: p.os, apps: &[], device: None })
     }
 
     /// Why rules for apps on a connected computer are not in force, one
@@ -90,6 +253,7 @@ impl App {
             }
         }
         out.sort();
+        out.extend(self.device_rule_notes());
         out
     }
 
@@ -102,25 +266,25 @@ impl App {
         let Some(r) = self.remote.as_ref() else { return };
         let new = self.tune_for(r.peer, r.swap, &r.peer_apps);
         let Some(r) = self.remote.as_mut() else { return };
-        let t = &mut r.tune;
-        t.pointer = new.pointer;
-        if t.scroll.config() != new.scroll.config() {
-            t.scroll = new.scroll;
-        }
-        let keymap = new.mapper.keymap().clone();
-        let out = &mut t.out;
-        t.mapper.set_keymap(keymap, &mut |e| out.push(e));
+        let mut out = std::mem::take(&mut r.tune.out);
+        r.tune.replace(new, &mut out);
+        r.tune.out = out;
         self.send_tuned();
     }
 
-    /// A physical key or button transition during a visit (already
-    /// filtered: a release always follows a press).
-    pub(super) fn tuned_key(&mut self, code: u32, down: bool) {
+    /// A physical key or button transition during a visit, from `device`
+    /// (`None`: not known). A release of something not pressed during the
+    /// visit does nothing (the mapper knows what was).
+    pub(super) fn tuned_key(&mut self, code: u32, down: bool, device: Option<DeviceRef>) {
         let Some(r) = self.remote.as_mut() else { return };
         let now = tokio::time::Instant::now().into_std();
         let t = &mut r.tune;
         let out = &mut t.out;
-        t.mapper.key(code, down, now, &mut |e| out.push(e));
+        t.mapper.key_from(code, down, device, now, &mut |e| out.push(e));
+        // Held here from any device: what shortcuts and focus watching see.
+        if down || !t.mapper.held_anywhere(code) {
+            r.held.update(code, down);
+        }
         self.send_tuned();
     }
 
@@ -148,24 +312,31 @@ impl App {
     /// Scrolling during a visit: a pending tap/hold key counts as held,
     /// modifiers that change scrolling are lifted off the target, then the
     /// tuned scroll goes out.
-    pub(super) fn tuned_scroll(&mut self, input: ScrollIn) {
+    pub(super) fn tuned_scroll(&mut self, input: ScrollIn, device: Option<DeviceRef>) {
         let Some(r) = self.remote.as_mut() else { return };
         let t = &mut r.tune;
-        let out = &mut t.out;
+        let mut out = std::mem::take(&mut t.out);
+        let mods = t.mapper.mods();
         let tuned = match input {
-            ScrollIn::Stop => one_mk_proto::scroll::Tuned { out: t.scroll.stop(), used: 0 },
+            ScrollIn::Stop => {
+                let last = t.last_scroll;
+                one_mk_proto::scroll::Tuned { out: t.scroll(last).stop(), used: 0 }
+            }
             ScrollIn::Smooth(dx, dy) => {
                 t.mapper.interrupt(&mut |e| out.push(e));
-                t.scroll.smooth(dx, dy, t.mapper.mods())
+                t.last_scroll = device;
+                t.scroll(device).smooth(dx, dy, mods)
             }
             ScrollIn::Discrete(dx, dy) => {
                 t.mapper.interrupt(&mut |e| out.push(e));
-                t.scroll.discrete(dx, dy, t.mapper.mods())
+                t.last_scroll = device;
+                t.scroll(device).discrete(dx, dy, mods)
             }
         };
         if tuned.used != 0 {
             t.mapper.lift(tuned.used, &mut |e| out.push(e));
         }
+        t.out = out;
         self.send_tuned();
         match tuned.out {
             Some(ScrollOut::Smooth { dx, dy }) => self.send_input(Control::Scroll { dx: dx as f32, dy: dy as f32 }),
@@ -247,7 +418,8 @@ mod tests {
         let mut s = TuningSettings::default();
         s.keymap.rule =
             vec![KeyRule { from: "capslock".into(), tap: Some("esc".into()), hold: Some("lctrl".into()), ..Default::default() }];
-        Tune::new(s.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX, apps: &[] }, false))
+        let base = s.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX, apps: &[], device: None }, false);
+        Tune::new(ResolvedSet { base, devices: Vec::new() })
     }
 
     /// The daemon's loop sleeps until `Tune::deadline` (as `next_deadline`

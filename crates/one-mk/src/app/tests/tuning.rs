@@ -28,7 +28,7 @@ fn key(code: u32, down: bool) -> Inject {
 /// Presses (or releases) keys on A, in order.
 fn press(duo: &Duo, keys: &[(u32, bool)]) {
     for &(code, down) in keys {
-        duo.ha.events.send(Event::Key { code, down }).unwrap();
+        duo.ha.events.send(Event::Key { code, down, device: None }).unwrap();
     }
 }
 
@@ -149,15 +149,15 @@ async fn buttons_are_remapped_and_keys_can_switch() {
     })
     .await;
     duo.enter_b().await;
-    duo.ha.events.send(Event::Button { button: 0x112, down: true }).unwrap();
-    duo.ha.events.send(Event::Motion { dx: 50.0, dy: 0.0 }).unwrap();
-    duo.ha.events.send(Event::Button { button: 0x112, down: false }).unwrap();
+    duo.ha.events.send(Event::Button { button: 0x112, down: true, device: None }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 50.0, dy: 0.0, device: None }).unwrap();
+    duo.ha.events.send(Event::Button { button: 0x112, down: false, device: None }).unwrap();
     assert_eq!(
         next_n(&mut duo, 2).await,
         [Inject::Button { button: 0x110, down: true }, Inject::Button { button: 0x110, down: false }]
     );
-    duo.ha.events.send(Event::Button { button: 0x113, down: true }).unwrap();
-    duo.ha.events.send(Event::Button { button: 0x113, down: false }).unwrap();
+    duo.ha.events.send(Event::Button { button: 0x113, down: true, device: None }).unwrap();
+    duo.ha.events.send(Event::Button { button: 0x113, down: false, device: None }).unwrap();
     assert_eq!(next_n(&mut duo, 4).await, [key(LALT, true), key(LEFT, true), key(LEFT, false), key(LALT, false)]);
     press(&duo, &[(183, true)]);
     assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { .. }), "f13 brought the pointer home");
@@ -181,12 +181,12 @@ async fn scrolling_is_tuned_and_the_modifier_is_lifted() {
     })
     .await;
     duo.enter_b().await;
-    duo.ha.events.send(Event::ScrollDiscrete { dx: 0, dy: 120 }).unwrap();
+    duo.ha.events.send(Event::ScrollDiscrete { dx: 0, dy: 120, device: None }).unwrap();
     assert_eq!(next_n(&mut duo, 1).await, [Inject::ScrollDiscrete { dx: 0, dy: -120 }]);
     press(&duo, &[(LSHIFT, true)]);
     assert_eq!(next_n(&mut duo, 1).await, [key(LSHIFT, true)]);
-    duo.ha.events.send(Event::ScrollDiscrete { dx: 0, dy: 120 }).unwrap();
-    duo.ha.events.send(Event::ScrollDiscrete { dx: 0, dy: 120 }).unwrap();
+    duo.ha.events.send(Event::ScrollDiscrete { dx: 0, dy: 120, device: None }).unwrap();
+    duo.ha.events.send(Event::ScrollDiscrete { dx: 0, dy: 120, device: None }).unwrap();
     assert_eq!(
         next_n(&mut duo, 3).await,
         [key(LSHIFT, false), Inject::ScrollDiscrete { dx: -120, dy: 0 }, Inject::ScrollDiscrete { dx: -120, dy: 0 }]
@@ -194,7 +194,7 @@ async fn scrolling_is_tuned_and_the_modifier_is_lifted() {
     // Released here: nothing more for B; pressed again, it goes through.
     press(&duo, &[(LSHIFT, false), (LSHIFT, true), (LSHIFT, false)]);
     assert_eq!(next_n(&mut duo, 2).await, [key(LSHIFT, true), key(LSHIFT, false)]);
-    duo.ha.events.send(Event::Scroll { dx: 0.0, dy: 4.0 }).unwrap();
+    duo.ha.events.send(Event::Scroll { dx: 0.0, dy: 4.0, device: None }).unwrap();
     assert_eq!(next_n(&mut duo, 1).await, [Inject::Scroll { dx: 0.0, dy: -4.0 }]);
     duo.stop().await;
 }
@@ -205,7 +205,7 @@ async fn pointer_speed_scales_the_remote_motion() {
     let mut duo = Duo::start("tune-pointer", None).await;
     set(&duo.da, |s| s.input.pointer = vec![PointerRule { speed: Some(2.0), ..Default::default() }]).await;
     duo.enter_b().await;
-    duo.ha.events.send(Event::Motion { dx: 10.0, dy: 5.25 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 10.0, dy: 5.25, device: None }).unwrap();
     assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(20.0, 550.5)));
     duo.stop().await;
 }
@@ -220,8 +220,8 @@ fn focus_b(duo: &Duo, apps: Option<&[&str]>) {
 /// A click on B (which makes B look at its focus again, as a click may
 /// move it there).
 async fn click(duo: &mut Duo) {
-    duo.ha.events.send(Event::Button { button: 0x110, down: true }).unwrap();
-    duo.ha.events.send(Event::Button { button: 0x110, down: false }).unwrap();
+    duo.ha.events.send(Event::Button { button: 0x110, down: true, device: None }).unwrap();
+    duo.ha.events.send(Event::Button { button: 0x110, down: false, device: None }).unwrap();
     assert_eq!(
         next_n(duo, 2).await,
         [Inject::Button { button: 0x110, down: true }, Inject::Button { button: 0x110, down: false }]
@@ -240,9 +240,9 @@ async fn next_pos(duo: &mut Duo) -> Pos {
 /// The pointer speed in force for B: how far 10 px of A's mouse moves it
 /// (there and back, so it stays put).
 async fn speed(duo: &mut Duo) -> f64 {
-    duo.ha.events.send(Event::Motion { dx: 10.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 10.0, dy: 0.0, device: None }).unwrap();
     let there = next_pos(duo).await;
-    duo.ha.events.send(Event::Motion { dx: -10.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: -10.0, dy: 0.0, device: None }).unwrap();
     let back = next_pos(duo).await;
     (there.x - back.x) / 10.0
 }
@@ -275,7 +275,7 @@ async fn per_app_rules_follow_the_peers_focused_app() {
     focus_b(&duo, Some(&["firefox", "Firefox"]));
     duo.enter_b().await;
     eventually("B looked at its focus", || duo.hb.focus_probes.load(std::sync::atomic::Ordering::SeqCst) > 0).await;
-    duo.ha.events.send(Event::Motion { dx: 100.0, dy: 0.0 }).unwrap(); // away from the edge
+    duo.ha.events.send(Event::Motion { dx: 100.0, dy: 0.0, device: None }).unwrap(); // away from the edge
     next_pos(&mut duo).await;
     assert_eq!(speed(&mut duo).await, 1.0);
     press(&duo, &[(CAPS, true), (CAPS, false)]);
@@ -310,7 +310,7 @@ async fn per_app_rules_follow_the_peers_focused_app() {
     let notes = status(&duo.da).await.tuning;
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert!(notes[0].starts_with("Rule for app code not active: ") && notes[0].contains("does not report its focused app"), "{notes:?}");
-    duo.ha.events.send(Event::Motion { dx: -500.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: -500.0, dy: 0.0, device: None }).unwrap();
     assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { pos: Some(_), .. }), "home");
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(injected(&mut duo.hb).iter().all(|i| !matches!(i, Inject::Key { .. })), "nothing was left to release");
@@ -368,7 +368,7 @@ async fn per_app_rules_follow_a_switch_made_with_enter() {
     set(&duo.da, |s| s.input.pointer = vec![PointerRule { speed: Some(2.0), app: Some("code".into()), ..Default::default() }]).await;
     focus_b(&duo, Some(&["code"]));
     duo.enter_b().await;
-    duo.ha.events.send(Event::Motion { dx: 100.0, dy: 0.0 }).unwrap(); // away from the edge
+    duo.ha.events.send(Event::Motion { dx: 100.0, dy: 0.0, device: None }).unwrap(); // away from the edge
     next_pos(&mut duo).await;
     until_speed(&mut duo, 2.0).await;
     let counter = duo.hb.focus_probes.clone();
@@ -400,7 +400,7 @@ async fn per_app_rules_follow_a_switch_with_no_input() {
     set(&duo.da, |s| s.input.pointer = vec![PointerRule { speed: Some(2.0), app: Some("code".into()), ..Default::default() }]).await;
     focus_b(&duo, Some(&["code"]));
     duo.enter_b().await;
-    duo.ha.events.send(Event::Motion { dx: 100.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 100.0, dy: 0.0, device: None }).unwrap();
     next_pos(&mut duo).await;
     until_speed(&mut duo, 2.0).await;
     eventually("B listens for focus changes", || duo.hb.focus_notify.lock().unwrap().is_some()).await;
@@ -408,8 +408,73 @@ async fn per_app_rules_follow_a_switch_with_no_input() {
     (duo.hb.focus_notify.lock().unwrap().as_ref().unwrap())();
     until_speed(&mut duo, 1.0).await;
     // Leaving B: B stops listening.
-    duo.ha.events.send(Event::Motion { dx: -500.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: -500.0, dy: 0.0, device: None }).unwrap();
     assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { pos: Some(_), .. }), "home");
     eventually("B stopped listening", || duo.hb.focus_notify.lock().unwrap().is_none()).await;
+    duo.stop().await;
+}
+
+// ------------------------------------------------------ per-device rules
+
+/// Caps Lock is Esc on keyboard A only. A's keys follow A's rule; B's,
+/// and keys whose keyboard isn't known, don't. A falls asleep (Bluetooth)
+/// while holding a key: B is told to let go of what A's keys sent, and of
+/// nothing of B's. A's pointer is twice as fast; B's isn't.
+#[tokio::test]
+async fn per_device_rules_follow_the_keyboard_they_come_from() {
+    use one_mk_input::{DeviceRef, fake_keyboard};
+    let a = fake_keyboard(7, "Keyboard A");
+    let b = fake_keyboard(8, "Keyboard B");
+    let mut duo = Duo::start("tune-devices", None).await;
+    let fa = a.fingerprint.to_string();
+    set(&duo.da, |s| {
+        s.input.keymap.rule = vec![
+            KeyRule { scope: Scope::Device(fa.clone(), Box::new(Scope::Global)), ..to("capslock", "esc") },
+            KeyRule { scope: Scope::Device(fa.clone(), Box::new(Scope::Global)), ..to("h", "lctrl") },
+        ];
+        s.input.pointer = vec![PointerRule { speed: Some(2.0), scope: Scope::Device(fa.clone(), Box::new(Scope::Global)), ..Default::default() }];
+    })
+    .await;
+    duo.ha.devices(vec![a.clone(), b.clone()]);
+    duo.enter_b().await;
+    let (da, db) = (Some(DeviceRef(7)), Some(DeviceRef(8)));
+    for (device, want) in [(da, ESC), (db, CAPS), (None, CAPS)] {
+        duo.ha.key_from(CAPS, true, device);
+        duo.ha.key_from(CAPS, false, device);
+        assert_eq!(next_n(&mut duo, 2).await, [key(want, true), key(want, false)], "from {device:?}");
+    }
+    // A holds H (Ctrl by its rule) and Shift, B holds H and C.
+    duo.ha.key_from(H, true, da);
+    duo.ha.key_from(LSHIFT, true, da);
+    duo.ha.key_from(H, true, db);
+    duo.ha.key_from(C, true, db);
+    assert_eq!(next_n(&mut duo, 4).await, [key(LCTRL, true), key(LSHIFT, true), key(H, true), key(C, true)]);
+    // A falls asleep: its Ctrl and Shift come up on B, B's keys stay down.
+    duo.ha.devices(vec![b.clone()]);
+    let mut up = next_n(&mut duo, 2).await;
+    up.sort_by_key(|i| if let Inject::Key { code, .. } = i { *code } else { 0 });
+    assert_eq!(up, [key(LCTRL, false), key(LSHIFT, false)]);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(injected(&mut duo.hb).into_iter().filter(|i| !matches!(i, Inject::MoveTo(_))).count(), 0, "nothing of B's");
+    // A's late releases (if any came) do nothing; B's work as ever.
+    duo.ha.key_from(H, false, da);
+    duo.ha.key_from(H, false, db);
+    duo.ha.key_from(C, false, db);
+    assert_eq!(next_n(&mut duo, 2).await, [key(H, false), key(C, false)]);
+    // A wakes up with another number, and its rule still holds.
+    let a2 = one_mk_input::InputDevice { id: DeviceRef(9), ..a.clone() };
+    duo.ha.devices(vec![b.clone(), a2]);
+    duo.ha.key_from(CAPS, true, Some(DeviceRef(9)));
+    duo.ha.key_from(CAPS, false, Some(DeviceRef(9)));
+    assert_eq!(next_n(&mut duo, 2).await, [key(ESC, true), key(ESC, false)]);
+    // The pointer: A's at twice the speed, B's and unknown at its own.
+    let mut speeds = Vec::new();
+    for device in [Some(DeviceRef(9)), db, None] {
+        duo.ha.events.send(Event::Motion { dx: 10.0, dy: 0.0, device }).unwrap();
+        let there = next_pos(&mut duo).await;
+        duo.ha.events.send(Event::Motion { dx: -10.0, dy: 0.0, device }).unwrap();
+        speeds.push((there.x - next_pos(&mut duo).await.x) / 10.0);
+    }
+    assert_eq!(speeds, [2.0, 1.0, 1.0]);
     duo.stop().await;
 }

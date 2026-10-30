@@ -211,6 +211,10 @@ impl Pressed {
     pub(crate) fn clear(&mut self) {
         self.0.clear();
     }
+    /// Keeps only the presses `keep` says.
+    pub(crate) fn retain(&mut self, keep: impl FnMut(&u32) -> bool) {
+        self.0.retain(keep);
+    }
 }
 
 // ----------------------------------------------------------------- scroll
@@ -315,9 +319,9 @@ impl AxisFrame {
         let mut out = Vec::new();
         let [h, v] = f.v120;
         if h != 0 || v != 0 {
-            out.push(Event::ScrollDiscrete { dx: h, dy: v });
+            out.push(Event::ScrollDiscrete { dx: h, dy: v, device: None });
         } else if !f.wheel && (f.value[0] != 0.0 || f.value[1] != 0.0) {
-            out.push(Event::Scroll { dx: f.value[0], dy: f.value[1] });
+            out.push(Event::Scroll { dx: f.value[0], dy: f.value[1], device: None });
         }
         if f.stop {
             out.push(Event::ScrollStop);
@@ -722,14 +726,14 @@ mod tests {
         f.wheel_source();
         f.value(0, 15.0);
         f.value120(0, 120);
-        assert_eq!(f.finish(), vec![Event::ScrollDiscrete { dx: 0, dy: 120 }]);
+        assert_eq!(f.finish(), vec![Event::ScrollDiscrete { dx: 0, dy: 120, device: None }]);
         f.wheel_source();
         f.value(1, -15.0);
         f.discrete(1, -1);
-        assert_eq!(f.finish(), vec![Event::ScrollDiscrete { dx: -120, dy: 0 }]);
+        assert_eq!(f.finish(), vec![Event::ScrollDiscrete { dx: -120, dy: 0, device: None }]);
         f.value(0, 3.5);
         f.value(1, 1.0);
-        assert_eq!(f.finish(), vec![Event::Scroll { dx: 1.0, dy: 3.5 }]);
+        assert_eq!(f.finish(), vec![Event::Scroll { dx: 1.0, dy: 3.5, device: None }]);
         f.stop();
         assert_eq!(f.finish(), vec![Event::ScrollStop]);
         assert_eq!(f.finish(), vec![]);

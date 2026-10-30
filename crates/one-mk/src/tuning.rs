@@ -16,6 +16,7 @@ use one_mk_proto::pointer::{self, Accel, PointerTune};
 use one_mk_proto::remap::{self, Keymap, Output, RuleSpec, What};
 use one_mk_proto::scroll::{self, ModScroll, Natural, ScrollConfig};
 use one_mk_proto::appmatch::AppPattern;
+use one_mk_proto::device::{DeviceRef, Fingerprint, InputDevice};
 use one_mk_proto::os;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -59,7 +60,14 @@ pub enum Scope {
     Os(u8),
     /// One paired computer, by name or id.
     Peer(String),
+    /// One keyboard or mouse (its fingerprint, as written), on the
+    /// computers the inner scope names (`Global`, `Os` or `Peer`).
+    Device(String, Box<Scope>),
 }
+
+/// How much a device rule outranks the same rule without a device: any
+/// device rule beats every rule for a computer or OS.
+const DEVICE_RANK: u8 = 3;
 
 impl Scope {
     pub fn is_global(&self) -> bool {
@@ -77,15 +85,55 @@ impl Scope {
         }
     }
 
-    /// How specific the scope is for a computer (`None`: not for it):
-    /// a computer beats an OS beats everything.
+    /// How specific the scope is for a computer and the device input comes
+    /// from (`None`: not for them): a device (on a computer, on an OS, on
+    /// any) beats a computer beats an OS beats everything. A device rule
+    /// never applies to input whose device isn't known.
     fn rank(&self, peer: &PeerFacts) -> Option<u8> {
         match self {
             Scope::Local => None,
             Scope::Global => Some(0),
             Scope::Os(o) => (*o == peer.os).then_some(1),
             Scope::Peer(p) => peer_matches(p, peer.name, peer.id).then_some(2),
+            Scope::Device(fp, on) => {
+                let device = peer.device?;
+                fp.parse::<Fingerprint>().ok()?.matches(device).then_some(())?;
+                Some(on.rank(peer)? + DEVICE_RANK)
+            }
         }
+    }
+
+    /// The computers the scope is for, leaving its device aside.
+    pub fn target(&self) -> &Scope {
+        match self {
+            Scope::Device(_, on) => on,
+            s => s,
+        }
+    }
+
+    /// The device it is for, as written.
+    pub fn device(&self) -> Option<&str> {
+        match self {
+            Scope::Device(fp, _) => Some(fp),
+            _ => None,
+        }
+    }
+
+    /// This scope for `device` only (`None`: for any device).
+    pub fn for_device(self, device: Option<String>) -> Scope {
+        match device {
+            Some(d) => Scope::Device(d, Box::new(self)),
+            None => self,
+        }
+    }
+}
+
+/// A device as people know it: its name, from its fingerprint.
+pub fn device_name(fp: &str) -> String {
+    match fp.parse::<Fingerprint>() {
+        Ok(f) if !f.name.is_empty() => f.name,
+        Ok(f) => format!("{} {}", f.bus.words(), f.ids()),
+        Err(_) => fp.to_owned(),
     }
 }
 
@@ -120,6 +168,10 @@ impl fmt::Display for Scope {
             Scope::Global => f.write_str("every computer"),
             Scope::Os(o) => write!(f, "{} computers", os_name(*o)),
             Scope::Peer(p) => write!(f, "{p}"),
+            Scope::Device(fp, on) => match **on {
+                Scope::Global => write!(f, "the device \"{}\"", device_name(fp)),
+                ref on => write!(f, "the device \"{}\" on {on}", device_name(fp)),
+            },
         }
     }
 }
@@ -144,6 +196,16 @@ impl Serialize for Scope {
                 m.serialize_entry("peer", p)?;
                 m.end()
             }
+            Scope::Device(fp, on) => {
+                let mut m = s.serialize_map(None)?;
+                m.serialize_entry("device", fp)?;
+                match &**on {
+                    Scope::Os(o) => m.serialize_entry("os", os_name(*o))?,
+                    Scope::Peer(p) => m.serialize_entry("peer", p)?,
+                    _ => {}
+                }
+                m.end()
+            }
         }
     }
 }
@@ -154,7 +216,7 @@ impl<'de> Deserialize<'de> for Scope {
         impl<'de> Visitor<'de> for V {
             type Value = Scope;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str(r#""global", { os = "mac|windows|linux" }, { peer = "computer" } or { local = true }"#)
+                f.write_str(r#""global", { os = "mac|windows|linux" }, { peer = "computer" }, { device = "..." } or { local = true }"#)
             }
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Scope, E> {
                 if v.trim().eq_ignore_ascii_case("global") {
@@ -165,9 +227,21 @@ impl<'de> Deserialize<'de> for Scope {
             }
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Scope, A::Error> {
                 let mut out = None;
+                let mut device: Option<String> = None;
                 while let Some(key) = map.next_key::<String>()? {
+                    if key == "device" {
+                        let value: String = map.next_value()?;
+                        if device.is_some() {
+                            return Err(de::Error::custom("a scope names one device"));
+                        }
+                        if value.trim().is_empty() {
+                            return Err(de::Error::custom("scope device is empty"));
+                        }
+                        device = Some(value.trim().to_owned());
+                        continue;
+                    }
                     if out.is_some() {
-                        return Err(de::Error::custom("a scope has one entry: os, peer or local"));
+                        return Err(de::Error::custom("a scope has one entry: os, peer or local (and maybe a device)"));
                     }
                     if key == "local" {
                         if !map.next_value::<bool>()? {
@@ -181,10 +255,15 @@ impl<'de> Deserialize<'de> for Scope {
                         "os" => Scope::Os(parse_os(&value).map_err(de::Error::custom)?),
                         "peer" if value.trim().is_empty() => return Err(de::Error::custom("scope peer is empty")),
                         "peer" => Scope::Peer(value.trim().to_owned()),
-                        other => return Err(de::Error::custom(format!("scope {other:?}: say os or peer, or local = true"))),
+                        other => return Err(de::Error::custom(format!("scope {other:?}: say os, peer or device, or local = true"))),
                     });
                 }
-                out.ok_or_else(|| de::Error::custom("an empty scope: say os or peer, or local = true"))
+                match (out, device) {
+                    (Some(Scope::Local), Some(_)) => Err(de::Error::custom("a local rule can't be for one device")),
+                    (out, Some(d)) => Ok(Scope::Device(d, Box::new(out.unwrap_or_default()))),
+                    (Some(s), None) => Ok(s),
+                    (None, None) => Err(de::Error::custom("an empty scope: say os, peer or device, or local = true")),
+                }
             }
         }
         d.deserialize_any(V)
@@ -513,11 +592,14 @@ pub struct PeerFacts<'a> {
     /// The names of the app with the focus there, as it said (empty: it
     /// didn't, or can't tell; then no rule for an app applies).
     pub apps: &'a [String],
+    /// The keyboard or mouse input comes from (`None`: not known; then no
+    /// rule for a device applies).
+    pub device: Option<&'a Fingerprint>,
 }
 
 /// How much a rule for an app outranks one without: any scope's rule for
-/// the focused app beats every rule that names no app.
-const APP_RANK: u8 = 3;
+/// the focused app beats every rule that names no app (device rules too).
+const APP_RANK: u8 = 2 * DEVICE_RANK;
 
 /// How a rule's `app` bears on `peer`: what it adds to the rule's rank if
 /// it applies, `None` if it doesn't, an error if it can't be used.
@@ -552,6 +634,15 @@ pub struct Resolved {
     pub warnings: Vec<String>,
 }
 
+/// What applies to a computer, for input from each device with rules of
+/// its own: the base (input from other devices, or not known), and per
+/// group of devices the same rules apply to, what applies to them.
+#[derive(Clone, Debug, Default)]
+pub struct ResolvedSet {
+    pub base: Resolved,
+    pub devices: Vec<(Vec<DeviceRef>, Resolved)>,
+}
+
 /// A rule's place: `[input.keymap.rule] #3`, for messages.
 fn place(table: &str, i: usize) -> String {
     format!("{table} #{}", i + 1)
@@ -573,7 +664,7 @@ impl TuningSettings {
     }
 
     fn local_compiled(&self) -> Result<remap::Compiled> {
-        let peer = PeerFacts { name: "", id: "", os: os::local(), apps: &[] };
+        let peer = PeerFacts { name: "", id: "", os: os::local(), apps: &[], device: None };
         let (specs, warnings) = self.specs_in(&peer, true);
         if !warnings.is_empty() {
             bail!("{}", warnings.join("; "));
@@ -647,6 +738,54 @@ impl TuningSettings {
         let (scroll, w) = self.scroll_for(peer);
         warnings.extend(w);
         Resolved { keymap, pointer, scroll, warnings }
+    }
+
+    /// What applies to `peer` for input from each of `devices` (the ones
+    /// connected): devices that have rules of their own (matching, for
+    /// that computer and app) get them on top of the rest; devices with
+    /// the same such rules share one result.
+    pub fn resolve_devices(&self, peer: &PeerFacts, swap: bool, devices: &[InputDevice]) -> ResolvedSet {
+        let base = self.resolve(&PeerFacts { device: None, ..*peer }, swap);
+        let mut groups: Vec<(Vec<usize>, Vec<DeviceRef>, &Fingerprint)> = Vec::new();
+        for d in devices {
+            let facts = PeerFacts { device: Some(&d.fingerprint), ..*peer };
+            let which: Vec<usize> = self
+                .scoped()
+                .enumerate()
+                .filter(|(_, (_, scope, app))| scope.device().is_some() && rank_for(scope, app, &facts).is_some())
+                .map(|(i, _)| i)
+                .collect();
+            if which.is_empty() {
+                continue;
+            }
+            match groups.iter_mut().find(|g| g.0 == which) {
+                Some(g) => g.1.push(d.id),
+                None => groups.push((which, vec![d.id], &d.fingerprint)),
+            }
+        }
+        let devices = groups
+            .into_iter()
+            .map(|(_, ids, fp)| (ids, self.resolve(&PeerFacts { device: Some(fp), ..*peer }, swap)))
+            .collect();
+        ResolvedSet { base, devices }
+    }
+
+    /// Whether any rule is for one device.
+    pub fn uses_devices(&self) -> bool {
+        self.scoped().any(|(_, scope, _)| scope.device().is_some())
+    }
+
+    /// The devices rules name, as written, each once.
+    pub fn devices_named(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (_, scope, _) in self.scoped() {
+            if let Some(d) = scope.device()
+                && !out.iter().any(|x| x == d)
+            {
+                out.push(d.to_owned());
+            }
+        }
+        out
     }
 
     /// Pointer rules for `peer`, field by field, the most specific last.
@@ -756,7 +895,7 @@ impl TuningSettings {
         let mut out: Vec<String> = Vec::new();
         for (_, scope, app) in self.scoped() {
             if let Some(a) = app
-                && scope.rank(peer).is_some()
+                && scope.target().rank(peer).is_some()
                 && let Ok(p) = a.parse::<AppPattern>()
                 && !out.contains(&p.to_string())
             {
@@ -788,8 +927,8 @@ impl TuningSettings {
                     continue;
                 }
             };
-            let target = match scope {
-                Scope::Global | Scope::Local => None,
+            let target = match scope.target() {
+                Scope::Global | Scope::Local | Scope::Device(..) => None,
                 Scope::Os(o) => Some(*o),
                 Scope::Peer(name) => paired.iter().find(|(n, id, _)| peer_matches(name, n, id)).map(|(.., o)| *o),
             };
@@ -812,10 +951,15 @@ impl TuningSettings {
             }
         }
         for s in &scopes {
-            if let Scope::Peer(p) = s
+            if let Scope::Peer(p) = s.target()
                 && !paired.iter().any(|(name, id, _)| peer_matches(p, name, id))
             {
                 out.push(format!("rules for {p:?} never apply: no paired computer is called that"));
+            }
+            if let Some(d) = s.device()
+                && let Err(e) = d.parse::<Fingerprint>()
+            {
+                out.push(format!("rules for the device {d:?} never apply: {e}"));
             }
         }
         let focused: Vec<Vec<String>> = std::iter::once(Vec::new()).chain(plain_apps.into_iter().map(|a| vec![a])).collect();
@@ -832,13 +976,17 @@ impl TuningSettings {
                 }
                 continue;
             }
+            let device = s.device().and_then(|d| d.parse::<Fingerprint>().ok());
+            if s.device().is_some() && device.is_none() {
+                continue; // reported above
+            }
             for apps in &focused {
-                let facts = match s {
-                    Scope::Local => unreachable!(),
-                    Scope::Global => PeerFacts { name: "", id: "", os: os::UNKNOWN, apps },
-                    Scope::Os(o) => PeerFacts { name: "", id: "", os: *o, apps },
-                    Scope::Peer(p) => PeerFacts { name: p, id: "", os: os::UNKNOWN, apps },
+                let mut facts = match s.target() {
+                    Scope::Os(o) => PeerFacts { name: "", id: "", os: *o, apps, device: None },
+                    Scope::Peer(p) => PeerFacts { name: p, id: "", os: os::UNKNOWN, apps, device: None },
+                    _ => PeerFacts { name: "", id: "", os: os::UNKNOWN, apps, device: None },
                 };
+                facts.device = device.as_ref();
                 let (specs, warnings) = self.specs(&facts);
                 out.extend(warnings.into_iter().filter(|w| !w.contains(" skipped: ")));
                 let target = remap::Target { os: facts.os, swap: false };
@@ -920,7 +1068,7 @@ impl TuningSettings {
 
 /// Checks that `--peer` names a paired computer.
 fn check_scope(dir: &Path, scope: &Scope) -> Result<()> {
-    if let Scope::Peer(p) = scope
+    if let Scope::Peer(p) = scope.target()
         && TrustStore::load(dir)?.find(p).is_none()
     {
         return Err(crate::manage::unknown_device(p));
@@ -967,15 +1115,37 @@ pub struct ScopeArgs {
     /// anything, `!` in front means every app but this one.
     #[arg(long, value_name = "NAME")]
     pub app: Option<String>,
+    /// Only for input from this keyboard or mouse, on this computer: its
+    /// name (or a part of it) or fingerprint, as `one-mk input-devices`
+    /// lists it. Combines with --peer or --os.
+    #[arg(long, value_name = "NAME|FINGERPRINT")]
+    pub device: Option<String>,
+}
+
+/// The fingerprint `--device` means: one of the devices seen here, or of
+/// the devices rules already name (so a rule for a device long gone can
+/// still be removed), or a fingerprint written out.
+fn device_arg(dir: &Path, query: &str) -> Result<String> {
+    let mut known = crate::inputdevices::Remembered::load(dir).unwrap_or_default();
+    if let Ok(s) = Settings::load(dir) {
+        for fp in s.input.devices_named() {
+            if !known.devices.iter().any(|d| d.fingerprint == fp) {
+                known.devices.push(crate::inputdevices::Seen { fingerprint: fp, ..Default::default() });
+            }
+        }
+    }
+    known.find(query)
 }
 
 impl ScopeArgs {
-    fn selected(&self) -> Result<Scope> {
-        Scope::from_args(self.peer.as_deref(), self.os.as_deref())
+    /// The scope asked for; `--device` is looked up in the devices seen.
+    fn selected(&self, dir: &Path) -> Result<Scope> {
+        let device = self.device.as_deref().map(|d| device_arg(dir, d)).transpose()?;
+        Ok(Scope::from_args(self.peer.as_deref(), self.os.as_deref())?.for_device(device))
     }
 
     fn scope(&self, dir: &Path) -> Result<Scope> {
-        let s = self.selected()?;
+        let s = self.selected(dir)?;
         check_scope(dir, &s)?;
         Ok(s)
     }
@@ -996,26 +1166,26 @@ impl ScopeArgs {
 #[derive(clap::Args, Debug, Default, Clone)]
 pub struct KeyScopeArgs {
     /// Reserve a local keyboard rule (inactive: native hooks are not wired yet).
-    #[arg(long, conflicts_with_all = ["peer", "os"])]
+    #[arg(long, conflicts_with_all = ["peer", "os", "device"])]
     pub local: bool,
     #[command(flatten)]
     pub remote: ScopeArgs,
 }
 
 impl KeyScopeArgs {
-    fn selected(&self) -> Result<Scope> {
+    fn selected(&self, dir: &Path) -> Result<Scope> {
         if self.local {
-            if self.remote.peer.is_some() || self.remote.os.is_some() {
-                bail!("say --local, --peer or --os, not more than one");
+            if self.remote.peer.is_some() || self.remote.os.is_some() || self.remote.device.is_some() {
+                bail!("say --local, or --peer, --os and --device, not both");
             }
             Ok(Scope::Local)
         } else {
-            self.remote.selected()
+            self.remote.selected(dir)
         }
     }
 
     fn scope(&self, dir: &Path) -> Result<Scope> {
-        let s = self.selected()?;
+        let s = self.selected(dir)?;
         check_scope(dir, &s)?;
         Ok(s)
     }
@@ -1143,7 +1313,8 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
                     s.input.local_keymap()?;
                 }
                 let focused: Vec<String> = app.iter().filter(|a| !a.starts_with('!') && !a.contains('*')).cloned().collect();
-                let facts = PeerFacts { name: "", id: "", os: os::UNKNOWN, apps: &focused };
+                let device = scope.device().and_then(|d| d.parse::<Fingerprint>().ok());
+                let facts = PeerFacts { name: "", id: "", os: os::UNKNOWN, apps: &focused, device: device.as_ref() };
                 let (specs, _) = s.input.specs(&facts);
                 Keymap::compile(&specs, remap::Target { os: os::UNKNOWN, swap: false }, s.input.keymap.tap())
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1154,7 +1325,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
         }
         KeymapCmd::Remove { from, layer, scope } => {
             let app = scope.app()?;
-            let scope = scope.selected()?;
+            let scope = scope.selected(dir)?;
             let t: Trigger = from.parse().map_err(|e: keynames::NameError| anyhow::anyhow!("{e}"))?;
             let removed = Settings::update(dir, |s| {
                 Ok(find_key_rule(&s.input.keymap.rule, &t, &layer, &scope, &app).map(|i| s.input.keymap.rule.remove(i)))
@@ -1295,9 +1466,10 @@ pub struct ScrollArgs {
     /// ctrl=vertical, meta=unchanged (repeatable; unchanged removes it).
     #[arg(long, value_name = "MOD=WHAT")]
     pub modifier: Vec<String>,
-    /// Only for wheels or only for touchpads.
+    /// Only for wheels or only for touchpads (`--device wheel|touchpad`
+    /// still works too).
     #[arg(long, value_enum)]
-    pub device: Option<Device>,
+    pub kind: Option<Device>,
     /// Forget the scroll settings for this scope (and device).
     #[arg(long)]
     pub reset: bool,
@@ -1349,7 +1521,16 @@ impl ScrollArgs {
     }
 }
 
-pub async fn scroll_command(dir: &Path, args: ScrollArgs) -> Result<()> {
+pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
+    // `--device wheel|touchpad` named the kind of scrolling before devices
+    // could be named: it still does.
+    if let Some(kind) = args.scope.device.as_deref().and_then(|d| <Device as clap::ValueEnum>::from_str(d.trim(), true).ok()) {
+        if args.kind.is_some() {
+            bail!("--device {kind:?} is the kind of scrolling, as --kind: say it once", kind = args.scope.device.as_deref().unwrap_or_default());
+        }
+        args.kind = Some(kind);
+        args.scope.device = None;
+    }
     if !args.changes_anything() {
         describe_scroll(&Settings::load(dir)?.input);
         return Ok(());
@@ -1372,14 +1553,14 @@ pub async fn scroll_command(dir: &Path, args: ScrollArgs) -> Result<()> {
     }
     let s = Settings::update(dir, |s| {
         let rules = &mut s.input.scroll;
-        let at = rules.iter().position(|r| r.scope == scope && r.device == args.device && same_app(&r.app, &app));
+        let at = rules.iter().position(|r| r.scope == scope && r.device == args.kind && same_app(&r.app, &app));
         if args.reset {
             if let Some(i) = at {
                 rules.remove(i);
             }
             return Ok(s.input.clone());
         }
-        let blank = ScrollRule { scope: scope.clone(), device: args.device, app: app.clone(), ..Default::default() };
+        let blank = ScrollRule { scope: scope.clone(), device: args.kind, app: app.clone(), ..Default::default() };
         let i = at.unwrap_or_else(|| {
             rules.push(blank.clone());
             rules.len() - 1
@@ -1490,7 +1671,7 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
         }
         ButtonsCmd::Unmap { button, scope } => {
             let app = scope.app()?;
-            let scope = scope.selected()?;
+            let scope = scope.selected(dir)?;
             let (_, t) = button_from(&button)?;
             let removed = Settings::update(dir, |s| {
                 let at = s.input.button.iter().position(|r| {
@@ -1530,7 +1711,7 @@ mod tests {
     const ID: &str = "abcdef0123456789";
 
     fn facts(os: u8) -> PeerFacts<'static> {
-        PeerFacts { name: "Laptop", id: ID, os, apps: &[] }
+        PeerFacts { name: "Laptop", id: ID, os, apps: &[], device: None }
     }
 
     /// What the rule for `from` does for `peer`, if there is one.
@@ -1783,7 +1964,7 @@ scope = { peer = "laptop" }
         );
         let code = names(&["code"]);
         assert_eq!(rule_for(&t, &with_app(os::LINUX, &code), "a"), Some(What::To("c".parse().unwrap())));
-        let other = PeerFacts { name: "Desk", id: "ffff", os: os::LINUX, apps: &code };
+        let other = PeerFacts { name: "Desk", id: "ffff", os: os::LINUX, apps: &code, device: None };
         assert_eq!(rule_for(&t, &other, "a"), Some(What::To("b".parse().unwrap())));
         let vim = names(&["vim"]);
         assert_eq!(rule_for(&t, &with_app(os::LINUX, &vim), "a"), Some(What::To("d".parse().unwrap())));
@@ -1849,7 +2030,7 @@ to = "back"
         assert_eq!(mac.pointer.speed(), 1.5);
         assert_eq!(mac.scroll.modifiers[1], ModScroll::Horizontal);
         assert_eq!(mac.scroll.modifiers[2], ModScroll::Multiply(5.0));
-        let other = PeerFacts { name: "Desk", id: "ffff", os: os::WINDOWS, apps: &[] };
+        let other = PeerFacts { name: "Desk", id: "ffff", os: os::WINDOWS, apps: &[], device: None };
         let win = t.resolve(&other, false);
         assert_eq!(win.pointer.speed(), 1.0, "not the laptop");
         assert_eq!(win.scroll.wheel.mode, scroll::Mode::Discrete);
@@ -1880,7 +2061,10 @@ scope = { peer = "Laptop" }
         for (bad, says) in [
             (r#"scope = "everywhere""#, "say \"global\""),
             (r#"scope = { os = "beos" }"#, "not an OS here"),
-            (r#"scope = { planet = "mars" }"#, "say os or peer"),
+            (r#"scope = { planet = "mars" }"#, "say os, peer or device"),
+            (r#"scope = { device = "" }"#, "device is empty"),
+            (r#"scope = { device = "usb/0001:0002//k", local = true }"#, "can't be for one device"),
+            (r#"scope = { device = "usb/0001:0002//k", os = "mac", peer = "x" }"#, "one entry"),
             (r#"scope = { peer = "" }"#, "peer is empty"),
             (r#"scope = { os = "mac", peer = "x" }"#, "one entry"),
         ] {
@@ -1925,15 +2109,15 @@ scope = { peer = "Laptop" }
 
         let parsed = Keys::try_parse_from(["keymap", "add", "a", "b", "--local"]).unwrap();
         let KeymapCmd::Add { scope, .. } = parsed.command else { panic!("not an add") };
-        assert_eq!(scope.selected().unwrap(), Scope::Local);
+        assert_eq!(scope.selected(Path::new("/nonexistent")).unwrap(), Scope::Local);
         let parsed = Keys::try_parse_from(["keymap", "remove", "a", "--local"]).unwrap();
         let KeymapCmd::Remove { scope, .. } = parsed.command else { panic!("not a removal") };
-        assert_eq!(scope.selected().unwrap(), Scope::Local);
-        for selector in ["--peer", "--os"] {
+        assert_eq!(scope.selected(Path::new("/nonexistent")).unwrap(), Scope::Local);
+        for selector in ["--peer", "--os", "--device"] {
             assert!(Keys::try_parse_from(["keymap", "add", "a", "b", "--local", selector, "mac"]).is_err());
         }
         assert!(Remote::try_parse_from(["pointer", "--local"]).is_err());
-        assert_eq!(Remote::try_parse_from(["pointer", "--os", "mac"]).unwrap().scope.selected().unwrap(), Scope::Os(os::MACOS));
+        assert_eq!(Remote::try_parse_from(["pointer", "--os", "mac"]).unwrap().scope.selected(Path::new("/nonexistent")).unwrap(), Scope::Os(os::MACOS));
     }
 
     #[test]
@@ -1974,15 +2158,15 @@ scope = { peer = "Laptop" }
         let first = |p: &PeerFacts| t.specs(p).0[0].what.clone();
         let to = |s: &str| What::To(s.parse().unwrap());
         assert_eq!(first(&facts(os::MACOS)), to("lctrl"));
-        assert_eq!(first(&PeerFacts { name: "x", id: "0000", os: os::MACOS, apps: &[] }), to("lmeta"));
-        assert_eq!(first(&PeerFacts { name: "x", id: "0000", os: os::LINUX, apps: &[] }), to("esc"));
+        assert_eq!(first(&PeerFacts { name: "x", id: "0000", os: os::MACOS, apps: &[], device: None }), to("lmeta"));
+        assert_eq!(first(&PeerFacts { name: "x", id: "0000", os: os::LINUX, apps: &[], device: None }), to("esc"));
         // By id prefix too.
-        assert_eq!(first(&PeerFacts { name: "renamed", id: ID, os: os::LINUX, apps: &[] }), to("esc"));
+        assert_eq!(first(&PeerFacts { name: "renamed", id: ID, os: os::LINUX, apps: &[], device: None }), to("esc"));
         let by_id = TuningSettings {
             keymap: KeymapSettings { rule: vec![rule("lctrl", Scope::Peer("abcd-ef01".into()))], ..Default::default() },
             ..Default::default()
         };
-        assert_eq!(by_id.specs(&PeerFacts { name: "renamed", id: ID, os: os::LINUX, apps: &[] }).0.len(), 1);
+        assert_eq!(by_id.specs(&PeerFacts { name: "renamed", id: ID, os: os::LINUX, apps: &[], device: None }).0.len(), 1);
         assert!(t.specs(&facts(os::MACOS)).1.is_empty(), "overrides are not conflicts");
     }
 
@@ -2100,4 +2284,165 @@ acceleration = "off"
         let t = load("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\n[[input.button]]\nfrom = 4\nto = \"back\"\n");
         assert_eq!(t.summary().unwrap(), "Input tuning: 1 key rule, 1 button rule (one-mk keymap, buttons, pointer, scroll).");
     }
+    const TRAVEL: &str = "bluetooth/04e8:7021/f4:73:35:aa:bb:cc/Travel Keyboard";
+    const BIG: &str = "usb/046d:c31c//Logitech USB Keyboard";
+
+    fn fp(s: &str) -> Fingerprint {
+        s.parse().unwrap()
+    }
+
+    fn device<'a>(peer: PeerFacts<'a>, d: &'a Fingerprint) -> PeerFacts<'a> {
+        PeerFacts { device: Some(d), ..peer }
+    }
+
+    #[test]
+    fn device_scopes_parse_print_and_combine() {
+        let t = load(&format!(
+            r#"
+[[input.keymap.rule]]
+from = "capslock"
+to = "esc"
+scope = {{ device = "{TRAVEL}" }}
+
+[[input.keymap.rule]]
+from = "lalt"
+to = "lmeta"
+scope = {{ device = "{TRAVEL}", peer = "Laptop" }}
+
+[[input.pointer]]
+speed = 2.0
+scope = {{ os = "mac", device = "{BIG}" }}
+"#
+        ));
+        assert_eq!(t.keymap.rule[0].scope, Scope::Device(TRAVEL.into(), Box::new(Scope::Global)));
+        assert_eq!(t.keymap.rule[1].scope, Scope::Device(TRAVEL.into(), Box::new(Scope::Peer("Laptop".into()))));
+        assert_eq!(t.pointer[0].scope, Scope::Device(BIG.into(), Box::new(Scope::Os(os::MACOS))));
+        assert_eq!(t.keymap.rule[1].scope.to_string(), "the device \"Travel Keyboard\" on Laptop");
+        assert_eq!(t.pointer[0].scope.to_string(), "the device \"Logitech USB Keyboard\" on mac computers");
+        let back = load(&toml::to_string_pretty(&Settings { input: t.clone(), ..Default::default() }).unwrap());
+        assert_eq!(back, t, "round trip");
+        assert!(t.uses_devices());
+        assert_eq!(t.devices_named(), [TRAVEL, BIG]);
+    }
+
+    /// device + computer beats device + OS beats device beats computer
+    /// beats OS beats everything; a rule for the focused app beats them all.
+    #[test]
+    fn device_rules_rank_above_computer_rules() {
+        let t = load(&format!(
+            r#"
+[[input.keymap.rule]]
+from = "a"
+to = "b"
+
+[[input.keymap.rule]]
+from = "a"
+to = "c"
+scope = {{ os = "linux" }}
+
+[[input.keymap.rule]]
+from = "a"
+to = "d"
+scope = {{ peer = "Laptop" }}
+
+[[input.keymap.rule]]
+from = "a"
+to = "e"
+scope = {{ device = "{TRAVEL}" }}
+
+[[input.keymap.rule]]
+from = "a"
+to = "f"
+scope = {{ device = "{TRAVEL}", os = "linux" }}
+
+[[input.keymap.rule]]
+from = "a"
+to = "g"
+scope = {{ device = "{TRAVEL}", peer = "Laptop" }}
+
+[[input.keymap.rule]]
+from = "a"
+to = "h"
+app = "code"
+"#
+        ));
+        let to = |s: &str| Some(What::To(s.parse().unwrap()));
+        let travel = fp(TRAVEL);
+        let big = fp(BIG);
+        let laptop = facts(os::LINUX);
+        let desk = PeerFacts { name: "Desk", id: "", ..facts(os::WINDOWS) };
+        assert_eq!(rule_for(&t, &laptop, "a"), to("d"), "unknown device: no device rule");
+        assert_eq!(rule_for(&t, &device(laptop, &big), "a"), to("d"), "another device");
+        assert_eq!(rule_for(&t, &device(laptop, &travel), "a"), to("g"));
+        assert_eq!(rule_for(&t, &device(PeerFacts { name: "Other", id: "", ..facts(os::LINUX) }, &travel), "a"), to("f"));
+        assert_eq!(rule_for(&t, &device(desk, &travel), "a"), to("e"));
+        assert_eq!(rule_for(&t, &desk, "a"), to("b"));
+        let code = names(&["code"]);
+        assert_eq!(rule_for(&t, &device(with_app(os::LINUX, &code), &travel), "a"), to("h"), "the app's rule beats a device's");
+        assert!(t.specs(&device(laptop, &travel)).1.is_empty(), "no two rules in one scope: {:?}", t.specs(&device(laptop, &travel)).1);
+    }
+
+    /// Devices with the same rules share one result; devices without get
+    /// the base; a device's pointer and scroll settings stay its own.
+    #[test]
+    fn resolving_for_the_connected_devices() {
+        use one_mk_proto::device::{DeviceRef, Kinds};
+        let t = load(&format!(
+            r#"
+[[input.keymap.rule]]
+from = "capslock"
+to = "esc"
+scope = {{ device = "usb/1234:0001//Twin" }}
+
+[[input.pointer]]
+speed = 3.0
+scope = {{ device = "{BIG}" }}
+
+[[input.scroll]]
+reverse_vertical = true
+scope = {{ device = "{BIG}" }}
+
+[[input.keymap.rule]]
+from = "a"
+to = "b"
+"#
+        ));
+        let d = |id: u32, f: &str| InputDevice { id: DeviceRef(id), fingerprint: fp(f), kinds: Kinds { keyboard: true, pointer: true } };
+        let devices = [d(1, "usb/1234:0001//Twin"), d(2, "usb/1234:0001//twin"), d(3, BIG), d(4, TRAVEL)];
+        let r = t.resolve_devices(&facts(os::LINUX), false, &devices);
+        assert_eq!(r.devices.len(), 2, "the twins share, the travel keyboard has no rules");
+        assert_eq!(r.devices[0].0, [DeviceRef(1), DeviceRef(2)]);
+        assert_eq!(r.devices[1].0, [DeviceRef(3)]);
+        assert_eq!((r.base.pointer.speed(), r.devices[1].1.pointer.speed(), r.devices[0].1.pointer.speed()), (1.0, 3.0, 1.0));
+        assert!(r.devices[1].1.scroll.wheel.reverse_y && !r.base.scroll.wheel.reverse_y);
+        assert_ne!(r.devices[0].1.keymap, r.base.keymap);
+        assert!(t.resolve_devices(&facts(os::LINUX), false, &[d(4, TRAVEL)]).devices.is_empty());
+    }
+
+    #[test]
+    fn checking_device_rules() {
+        let t = load(
+            r#"
+[[input.keymap.rule]]
+from = "a"
+to = "b"
+scope = { device = "not a device" }
+
+[[input.keymap.rule]]
+from = "c"
+to = "d"
+scope = { device = "usb/0001:0002//Pad", peer = "Nowhere" }
+
+[[input.keymap.rule]]
+from = "e"
+to = "layer:nav"
+scope = { device = "usb/0001:0002//Pad" }
+"#,
+        );
+        let p = t.check(&[]).join("\n");
+        assert!(p.contains("rules for the device \"not a device\" never apply: "), "{p}");
+        assert!(p.contains("rules for \"Nowhere\" never apply"), "{p}");
+        assert!(p.contains("layer \"nav\" has no rules"), "the device's keymap is compiled too: {p}");
+    }
+
 }

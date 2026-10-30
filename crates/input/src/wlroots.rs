@@ -78,6 +78,7 @@ const FALLBACK_KEYMAP: &str = "xkb_keymap {\n\
 
 pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
+    let _ = ev_tx.send(Event::DevicesUnavailable(crate::MERGED_DEVICES));
     let (sys_tx, sys_rx) = mpsc::unbounded_channel();
     let (focus, locker) = crate::system::native(&sys_tx);
     drop(sys_tx);
@@ -814,7 +815,7 @@ impl State {
             P::Button { button, state, .. } => {
                 let down = state == WEnum::Value(wl_pointer::ButtonState::Pressed);
                 if self.capture.is_some() && self.pressed.update(button, down) {
-                    self.send(Event::Button { button, down });
+                    self.send(Event::Button { button, down, device: None });
                 }
             }
             P::Axis { axis, value, .. } => {
@@ -874,7 +875,7 @@ impl State {
     fn on_relative(&mut self, dx: f64, dy: f64) {
         if self.capture.is_some() {
             if dx != 0.0 || dy != 0.0 {
-                self.send(Event::Motion { dx, dy });
+                self.send(Event::Motion { dx, dy, device: None });
             }
             return;
         }
@@ -919,7 +920,7 @@ impl State {
                     _ => return,
                 };
                 if self.capture.is_some() && self.pressed.update(key, down) {
-                    self.send(Event::Key { code: key, down });
+                    self.send(Event::Key { code: key, down, device: None });
                 }
             }
             K::Modifiers { mods_depressed, mods_latched, group, .. } => {

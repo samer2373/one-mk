@@ -22,6 +22,14 @@
 //!   only makes applications draw larger, so the desktop is reported in
 //!   physical pixels, as the pointer moves in them.
 //!
+//! - Devices: raw events name the slave device they came from
+//!   (`sourceid`), so input carries a `DeviceRef` (the X device id) and
+//!   the slaves are reported as `Event::Devices`, with their identity read
+//!   from the `Device Node` property and sysfs (see `linux_devices`), at
+//!   start and on every XI hierarchy change (hot-plug, a Bluetooth device
+//!   sleeping or waking). Under XWayland every device is one merged
+//!   virtual one: input then carries no device.
+//!
 //! Nothing may stay stuck. A grab belongs to the X connection, so it ends
 //! with the process however that dies (even `kill -9`); while running,
 //! capture ends (with `Event::Deactivated`) when the daemon goes away,
@@ -38,7 +46,8 @@ use crate::linux_logic::{
     evdev_to_x_button, evdev_to_xkeycode, fp1616, fp3232, notch_buttons, set_bits, x_button, xkeycode_to_evdev,
 };
 use crate::linux_rt::{Socket, forward_lock, lock_changed, spawn_thread};
-use crate::{Backend, CaptureCmd, Event, Inject};
+use crate::linux_devices::{event_node, fingerprint, is_xtest, is_xwayland, read_sysfs};
+use crate::{Backend, CaptureCmd, DeviceRef, Event, Inject, InputDevice, Kinds};
 use anyhow::{Context, Result, bail};
 use one_mk_proto::{Desktop, Edge, Mods, Pos, Rect, Side};
 use std::collections::HashMap;
@@ -98,6 +107,9 @@ struct Shared {
     locked: bool,
     reported: Option<Desktop>,
     shown: Option<String>,
+    /// The devices last reported; whether XWayland's merging was reported.
+    devices: Option<Vec<InputDevice>>,
+    merged: bool,
 }
 
 impl Shared {
@@ -109,6 +121,18 @@ impl Shared {
         if self.reported.as_ref() != Some(d) {
             self.reported = Some(d.clone());
             self.send(Event::Desktop(d.clone()));
+        }
+    }
+
+    fn report_devices(&mut self, d: &XDevices) {
+        if d.xwayland {
+            if !self.merged {
+                self.merged = true;
+                self.send(Event::DevicesUnavailable(crate::XWAYLAND_DEVICES));
+            }
+        } else if self.devices.as_ref() != Some(&d.list) {
+            self.devices = Some(d.list.clone());
+            self.send(Event::Devices(d.list.clone()));
         }
     }
 
@@ -143,6 +167,8 @@ async fn run(
         locked: *locked.borrow_and_update(),
         reported: None,
         shown: None,
+        devices: None,
+        merged: false,
     };
     let mut backoff = Backoff::default();
     loop {
@@ -212,6 +238,23 @@ struct Grab {
     window: xproto::Window,
 }
 
+/// The X server's slave keyboards and pointers.
+#[derive(Debug, Default)]
+struct XDevices {
+    list: Vec<InputDevice>,
+    xtest: Vec<u16>,
+    /// An XWayland server: its devices merge all real ones.
+    xwayland: bool,
+}
+
+/// The device properties that say who a device is (`NONE` if the server
+/// has none).
+#[derive(Clone, Copy, Debug)]
+struct Atoms {
+    node: xproto::Atom,
+    product_id: xproto::Atom,
+}
+
 enum Edges {
     /// XFixes barriers.
     Barriers(Vec<(xfixes::Barrier, Side)>),
@@ -226,7 +269,8 @@ struct X {
     /// XFixes 5 and XInput 2.3.
     barriers: bool,
     randr: bool,
-    xtest_devices: Vec<u16>,
+    atoms: Atoms,
+    known: XDevices,
     blank: xproto::Cursor,
     desktop: Desktop,
     edges: Edges,
@@ -244,6 +288,8 @@ const RAW_CAPTURE: u32 = (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16) | (1 << 1
 const RAW_LOCAL: u32 = (1 << 13) | (1 << 15) | (1 << 17);
 const BARRIER_HIT: u32 = 1 << 25;
 const BARRIER_LEAVE: u32 = 1 << 26;
+const HIERARCHY: u32 = 1 << 11;
+const ALL_DEVICES: u16 = 0;
 const ALL_MASTER_DEVICES: u16 = 1;
 
 impl X {
@@ -267,14 +313,8 @@ impl X {
             && fixes.is_some_and(|f| f.major_version >= 5);
         let randr = rr.is_some_and(|r| (r.major_version, r.minor_version) >= (1, 5));
 
-        let xtest_devices = conn
-            .xinput_xi_query_device(0u16)?
-            .reply()?
-            .infos
-            .iter()
-            .filter(|d| d.name.windows(5).any(|w| w == b"XTEST"))
-            .map(|d| d.deviceid)
-            .collect();
+        let atom = |name: &[u8]| conn.intern_atom(true, name).ok().and_then(|c| c.reply().ok()).map_or(NONE, |r| r.atom);
+        let atoms = Atoms { node: atom(b"Device Node"), product_id: atom(b"Device Product ID") };
 
         // An invisible cursor for while the pointer is away.
         let pixmap = conn.generate_id()?;
@@ -290,7 +330,8 @@ impl X {
             root,
             barriers,
             randr,
-            xtest_devices,
+            atoms,
+            known: XDevices::default(),
             blank,
             desktop: Desktop::new(vec![Rect::new(0, 0, 1, 1)]),
             edges: if barriers { Edges::Barriers(Vec::new()) } else { Edges::Windows { windows: Vec::new(), ignore: None } },
@@ -301,10 +342,77 @@ impl X {
             failed_hit: None,
         };
         x.desktop = x.read_desktop()?;
+        x.known = x.query_devices()?;
         x.select(false, false);
         x.conn.flush()?;
         tracing::info!(barriers, randr, screens = ?x.desktop.screens, "X11 input ready");
         Ok(x)
+    }
+
+    /// The slave keyboards and pointers, and who each is.
+    fn query_devices(&self) -> Result<XDevices> {
+        let infos = self.conn.xinput_xi_query_device(ALL_DEVICES)?.reply()?.infos;
+        let mut out = XDevices::default();
+        for d in &infos {
+            let name = String::from_utf8_lossy(&d.name);
+            if is_xtest(&name) {
+                out.xtest.push(d.deviceid);
+            }
+            out.xwayland |= is_xwayland(&name);
+            let kinds = match d.type_ {
+                xinput::DeviceType::SLAVE_KEYBOARD => Kinds { keyboard: true, pointer: false },
+                xinput::DeviceType::SLAVE_POINTER => Kinds { keyboard: false, pointer: true },
+                _ => continue,
+            };
+            let sys = self.property(d.deviceid, self.atoms.node).and_then(|items| match items {
+                xinput::XIGetPropertyItems::Data8(bytes) => {
+                    let node = String::from_utf8_lossy(bytes.split(|&b| b == 0).next().unwrap_or_default()).into_owned();
+                    event_node(&node).and_then(|e| read_sysfs(std::path::Path::new("/sys"), e))
+                }
+                _ => None,
+            });
+            let product_id = self.property(d.deviceid, self.atoms.product_id).and_then(|items| match items {
+                xinput::XIGetPropertyItems::Data32(v) if v.len() == 2 => Some((v[0], v[1])),
+                _ => None,
+            });
+            let fingerprint = fingerprint(&name, sys.as_ref(), product_id);
+            out.list.push(InputDevice { id: DeviceRef(u32::from(d.deviceid)), fingerprint, kinds });
+        }
+        out.list.sort_by_key(|d| d.id);
+        Ok(out)
+    }
+
+    /// A device property, if the device has it (a device unplugged
+    /// meanwhile has none).
+    fn property(&self, device: u16, atom: xproto::Atom) -> Option<xinput::XIGetPropertyItems> {
+        if atom == NONE {
+            return None;
+        }
+        let any = u32::from(xproto::AtomEnum::ANY);
+        let reply = self.conn.xinput_xi_get_property(device, false, atom, any, 0, 256).ok()?.reply().ok()?;
+        Some(reply.items)
+    }
+
+    /// Which device input from slave `source` is: none under XWayland, or
+    /// for a device not (yet) known.
+    fn device(&self, source: u16) -> Option<DeviceRef> {
+        let id = DeviceRef(u32::from(source));
+        (!self.known.xwayland && self.known.list.iter().any(|d| d.id == id)).then_some(id)
+    }
+
+    /// Devices came or went: says which are there now. Keys of a device
+    /// that went away no longer count as pressed (the daemon lets go of
+    /// what they emitted), and its valuators are asked again if its id is
+    /// used anew.
+    fn devices_changed(&mut self, st: &mut Shared) -> Result<()> {
+        let now = self.query_devices()?;
+        let gone: Vec<u16> =
+            self.known.list.iter().filter(|d| !now.list.contains(d)).filter_map(|d| u16::try_from(d.id.0).ok()).collect();
+        self.pressed.retain(|key| !gone.contains(&((key >> 16) as u16)));
+        self.devices.clear();
+        self.known = now;
+        st.report_devices(&self.known);
+        Ok(())
     }
 
     fn read_desktop(&self) -> Result<Desktop> {
@@ -336,8 +444,12 @@ impl X {
             return;
         }
         self.selected = mask;
-        let m = xinput::EventMask { deviceid: ALL_MASTER_DEVICES, mask: vec![mask.into()] };
-        if let Err(e) = self.conn.xinput_xi_select_events(self.root, &[m]) {
+        // Hot-plug is always watched: it happens rarely, and costs nothing between.
+        let m = [
+            xinput::EventMask { deviceid: ALL_MASTER_DEVICES, mask: vec![mask.into()] },
+            xinput::EventMask { deviceid: ALL_DEVICES, mask: vec![HIERARCHY.into()] },
+        ];
+        if let Err(e) = self.conn.xinput_xi_select_events(self.root, &m) {
             tracing::debug!("selecting XInput events: {e}");
         }
     }
@@ -498,6 +610,7 @@ impl X {
         self.let_go(st)?;
         self.release_leftovers()?;
         self.select(st.controlled, !st.held.is_empty());
+        st.report_devices(&self.known);
         st.show(None);
         let mut batch = Vec::new();
         loop {
@@ -614,6 +727,7 @@ impl X {
                 self.raw_button(st, e.sourceid, e.detail, false, emulated)?;
             }
             E::XinputRawMotion(e) => self.raw_motion(st, &e)?,
+            E::XinputHierarchy(_) => self.devices_changed(st)?,
             E::Error(e) => tracing::debug!("X error: {e:?}"),
             _ => {}
         }
@@ -625,7 +739,7 @@ impl X {
         if self.grab.is_some() {
             return false;
         }
-        if !self.xtest_devices.contains(&source) && st.gate.check(now_ms(), st.controlled) {
+        if !self.known.xtest.contains(&source) && st.gate.check(now_ms(), st.controlled) {
             st.send(Event::LocalInput);
         }
         true
@@ -636,9 +750,9 @@ impl X {
             return;
         }
         if let Some(code) = xkeycode_to_evdev(keycode)
-            && self.pressed.update(code, down)
+            && self.pressed.update(per_source(source, code), down)
         {
-            st.send(Event::Key { code, down });
+            st.send(Event::Key { code, down, device: self.device(source) });
         }
     }
 
@@ -648,14 +762,14 @@ impl X {
         }
         match x_button(button) {
             Some(XButton::Button(b)) => {
-                if self.pressed.update(b, down) {
-                    st.send(Event::Button { button: b, down });
+                if self.pressed.update(per_source(source, b), down) {
+                    st.send(Event::Button { button: b, down, device: self.device(source) });
                 }
             }
             // Devices with scroll valuators report scrolling through
             // those (smoothly); their wheel buttons are emulated.
             Some(XButton::Scroll(dx, dy)) if down && self.axes(source)?.scroll.is_empty() => {
-                st.send(Event::ScrollDiscrete { dx, dy });
+                st.send(Event::ScrollDiscrete { dx, dy, device: self.device(source) });
             }
             _ => {}
         }
@@ -667,6 +781,7 @@ impl X {
             return Ok(());
         }
         let bounds = self.desktop.bounds();
+        let device = self.device(e.sourceid);
         let axes = self.axes(e.sourceid)?;
         let (mut dx, mut dy, mut sx, mut sy) = (0.0, 0.0, 0, 0);
         let numbers = e
@@ -695,10 +810,10 @@ impl X {
             }
         }
         if dx != 0.0 || dy != 0.0 {
-            st.send(Event::Motion { dx, dy });
+            st.send(Event::Motion { dx, dy, device });
         }
         if sx != 0 || sy != 0 {
-            st.send(Event::ScrollDiscrete { dx: sx, dy: sy });
+            st.send(Event::ScrollDiscrete { dx: sx, dy: sy, device });
         }
         Ok(())
     }
@@ -782,7 +897,7 @@ impl X {
     /// for long, so whatever is down when we start is stuck.
     fn release_leftovers(&self) -> Result<()> {
         let mut released = 0;
-        for &id in &self.xtest_devices {
+        for &id in &self.known.xtest {
             let Ok(Ok(state)) = self.conn.xinput_query_device_state(id as u8).map(|c| c.reply()) else { continue };
             for class in state.classes {
                 let (type_, held) = match class.data {
@@ -825,6 +940,12 @@ impl X {
         self.conn.get_input_focus()?.reply()?;
         Ok(())
     }
+}
+
+/// A key or button as pressed on one device: the same key on two keyboards
+/// is two presses (the daemon's mapper tells them apart).
+fn per_source(source: u16, code: u32) -> u32 {
+    (u32::from(source) << 16) | code
 }
 
 /// For tests: the backend against the X server at `display`.

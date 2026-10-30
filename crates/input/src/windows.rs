@@ -681,12 +681,12 @@ impl State {
                     Effect::None
                 } else {
                     let (dx, dy) = self.space.delta_to_logical(dx, dy);
-                    self.send(Event::Motion { dx, dy })
+                    self.send(Event::Motion { dx, dy, device: None })
                 }
             }
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
                 let (dx, dy) = wheel_to_wire(hi as i16, msg == WM_MOUSEHWHEEL);
-                self.send(Event::ScrollDiscrete { dx, dy })
+                self.send(Event::ScrollDiscrete { dx, dy, device: None })
             }
             _ => match button {
                 // A button held before the pointer left: release it here.
@@ -694,7 +694,7 @@ impl State {
                     self.local.set(b, false);
                     return (false, Effect::None);
                 }
-                Some(b) => self.send(Event::Button { button: b, down }),
+                Some(b) => self.send(Event::Button { button: b, down, device: None }),
                 None => Effect::None,
             },
         };
@@ -743,7 +743,7 @@ impl State {
         if !self.fwd.forward(code, down) {
             return (true, Effect::None);
         }
-        (true, self.send(Event::Key { code, down }))
+        (true, self.send(Event::Key { code, down, device: None }))
     }
 
     fn command(&mut self, cmd: CaptureCmd) -> Effect {

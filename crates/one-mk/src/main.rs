@@ -23,6 +23,7 @@ mod control;
 mod doctor;
 mod hooks;
 mod hotkeys;
+mod inputdevices;
 mod install;
 mod integrate;
 mod invite;
@@ -332,6 +333,14 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<tuning::ButtonsCmd>,
     },
+    /// List the keyboards and mice this computer has seen, for rules that
+    /// apply to one of them (--device on keymap, buttons, pointer and
+    /// scroll). Says whether this desktop can tell them apart.
+    InputDevices {
+        /// Machine-readable output for a program to read.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show this computer's name and id.
     Id,
     /// Find out why computers are not connecting, and how to fix it.
@@ -530,6 +539,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::PointerOverlay { mode } => pointeroverlay::command(&dir, mode.as_deref()).await,
             Cmd::Scroll(args) => tuning::scroll_command(&dir, args).await,
             Cmd::Buttons { cmd } => tuning::buttons(&dir, cmd).await,
+            Cmd::InputDevices { json } => inputdevices::command(&dir, json).await,
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;
                 println!("{} ({})", id.name, id.fingerprint.short());
