@@ -875,6 +875,10 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     }
 
     let mut checks = vec![daemon_check(&daemon)];
+    let (configured, managed, detail) = crate::update::doctor();
+    checks.push(check("updates", "Updates", if !configured {
+        Outcome::warn(detail, "Use manual installation until signing and real-OS validation are complete; see docs/UPDATES.md.")
+    } else if managed { Outcome::skip(detail) } else { Outcome::pass(detail) }));
     checks.push(check("drag", "File edge drops", Outcome::skip(one_mk_input::dropzone::availability())));
     checks.extend(config_checks(&config, dir));
     checks.push(port_check(&daemon, &port_facts));

@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 const POLL: Duration = Duration::from_millis(250);
 
 pub enum Event {
+    UpdateAvailable(Option<String>),
+    UpdateOutput(String),
     /// `None`: one-mk is not running.
     Status(Option<Status>),
     Autostart(bool),
@@ -36,6 +38,7 @@ pub enum Event {
 /// A command the window started, with what it needs to report on it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Job {
+    Update,
     Start,
     Layout { id: String, name: String, side: one_mk_proto::Side },
     Swap { id: String, name: String, swap: String },
@@ -158,6 +161,7 @@ impl Link {
                 if stamp != Some(now) {
                     stamp = Some(now);
                     link.send(Event::Prefs(link.prefs()));
+                    link.send(Event::UpdateAvailable(one_mk_ctl::update_logic::cached_version(&link.dir, env!("CARGO_PKG_VERSION"))));
                 }
                 let Ok(now) = link.status() else {
                     std::thread::sleep(POLL);
@@ -181,9 +185,9 @@ impl Link {
         });
     }
 
-    fn prefs_stamp(&self) -> [Option<(std::time::SystemTime, u64)>; 2] {
+    fn prefs_stamp(&self) -> [Option<(std::time::SystemTime, u64)>; 3] {
         let look = |f: &str| std::fs::metadata(self.dir.join(f)).ok().map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()));
-        [look("settings.toml"), look("profiles.toml")]
+        [look("settings.toml"), look("profiles.toml"), look("update-state.json")]
     }
 
     pub fn prefs(&self) -> Prefs {
@@ -236,6 +240,14 @@ impl Link {
             if !client::is_running(&l.dir) {
                 anyhow::bail!("It didn't answer within 4 seconds. Details are in {}.", l.dir.join("daemon.log").display());
             }
+            Ok(())
+        });
+    }
+
+    pub fn update(&self) {
+        self.job(Job::Update, |link| {
+            let output = link.one_mk(&["update"])?;
+            link.send(Event::UpdateOutput(output));
             Ok(())
         });
     }

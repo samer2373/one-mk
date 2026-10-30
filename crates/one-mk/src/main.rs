@@ -41,6 +41,8 @@ mod steer;
 mod track;
 mod transfer;
 mod tuning;
+mod update;
+mod update_key;
 
 use anyhow::{Context, Result};
 use clipctl::OnOff;
@@ -145,6 +147,10 @@ impl Action {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Check for or explicitly install a signed release; never updates in the background.
+    Update(update::Options),
+    /// Stop the sharing service for this settings folder before restarting it.
+    Stop,
     /// Show or configure file edge-drop zones (X11).
     Drag {
         #[arg(long, conflicts_with = "off")]
@@ -478,6 +484,8 @@ fn run(cli: Cli) -> Result<()> {
             Action::Other(cmd) => cmd,
         };
         match cmd {
+            Cmd::Update(options) => update::run(&dir, options),
+            Cmd::Stop => update::stop(&dir).await,
             Cmd::Drag { on, off, zone } => drag::configure(&dir, on, off, zone).await,
             Cmd::Run(_) => unreachable!("handled above"),
             Cmd::Clipboard { text, html, image, max_mb, skip_sensitive, allow_fetch } => {

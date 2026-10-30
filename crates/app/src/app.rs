@@ -171,6 +171,8 @@ struct Slot {
 }
 
 pub struct App {
+    update_available: Option<String>,
+    update_output: Option<String>,
     link: Link,
     rx: Receiver<Event>,
     /// `None` until the first look at the daemon.
@@ -394,6 +396,8 @@ impl App {
             rx,
             status: None,
             autostart: None,
+            update_available: None,
+            update_output: None,
             scene,
             tab,
             drag: None,
@@ -472,6 +476,8 @@ impl App {
                     self.sync_scene();
                 }
                 Event::Autostart(on) => self.autostart = Some(on),
+                Event::UpdateAvailable(version) => self.update_available = version,
+                Event::UpdateOutput(output) => self.update_output = Some(output),
                 Event::Latency(l) => {
                     self.measuring = None;
                     self.failed_measure.remove(&l.peer);
@@ -535,6 +541,7 @@ impl App {
         };
         let e = Some(e);
         match what {
+            Job::Update => self.update_output = e,
             Job::Measure(id) => {
                 // Not again by itself: it would fail again, forever.
                 self.measuring = None;
@@ -2132,7 +2139,29 @@ impl eframe::App for App {
         }
         widgets::set_locked(ui.ctx(), self.sheet_open());
         self.shortcuts(ui);
-        let full = ui.max_rect();
+        let mut full = ui.max_rect();
+        if let Some(version) = self.update_available.clone() {
+            let busy = self.busy.contains(&Job::Update);
+            let blocked = self.sheet_open();
+            egui::Frame::new().fill(GROUND).inner_margin(12.0).show(ui, |ui| {
+                let title = format!("one-mk {version} is available");
+                ui.add(egui::Label::new(egui::RichText::new(&title).color(INK)).truncate()).on_hover_text(title);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add_enabled(!busy && !blocked, egui::Button::new(if busy { "Updating…" } else { "Update" })).clicked() {
+                        self.update_output = None;
+                        self.busy.push(Job::Update);
+                        self.link.update();
+                    }
+                    ui.hyperlink_to("Release notes", "https://github.com/samer2373/one-mk/releases/latest");
+                });
+                if let Some(output) = &self.update_output {
+                    egui::ScrollArea::vertical().id_salt("update-result").max_height(72.0).show(ui, |ui| {
+                        ui.label(egui::RichText::new(output).color(INK2));
+                    });
+                }
+            });
+            full.min.y = ui.cursor().min.y;
+        }
         ui.painter().rect_filled(full, 0.0, GROUND);
         let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - PANEL_H), full.max);
         let desk = Rect::from_min_max(full.min, pos2(full.right(), panel.top()));
