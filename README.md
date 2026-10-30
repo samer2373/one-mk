@@ -775,19 +775,17 @@ Good to know:
   computer once you scroll with it, so it never sees Shift+scroll.
 - `natural auto` assumes this computer scrolls its OS's default way
   (natural on a Mac); otherwise use `--reverse-vertical on`.
-- Only input sent to other computers is changed. Local keyboard rules
+- Remote rules change only input sent to other computers. Local keyboard rules
   (`scope = { local = true }`, or `one-mk keymap add capslock esc --local`)
-  can be stored and checked, but are **inactive on every platform**: the
-  Windows/macOS hook integration is not implemented yet (5H incomplete;
-  experimental and **untested on real Windows/macOS hardware**).
+  have experimental Windows and partial macOS native adapters: **COMPILE-CHECKED
+  ONLY, native Windows/macOS UNTESTED**, not production-accepted (5H incomplete).
   `--local --device NAME` stores a rule for one attached keyboard;
   local+device rules override local rules, never peer rules. The default-off
-  `[input] local_rules` preference (`one-mk keymap local on|off`) is stored
-  but cannot activate the unfinished native integration. See
-  `docs/LOCAL-REMAP.md` for the handoff design and native acceptance script.
-  The tested groundwork includes an atomic hook-visible routing gate and
-  ownership-preserving releases even when a shortcut matcher flags key-ups;
-  neither is wired to a native local-rule interceptor yet.
+  `[input] local_rules` preference (`one-mk keymap local on|off`) opts in;
+  runtime status requires a healthy acknowledged fence, not just the preference.
+  macOS refuses Caps Lock/Fn/media/function-key rules; its CGEventPost receipt
+  path and modifier flags are natively UNTESTED. See `docs/LOCAL-REMAP.md` for
+  platform restrictions, manual acceptance and emergency/SSH/permission recovery.
   Linux status says `local key rules are not available on Linux`; its
   Wayland portal only supplies keys while forwarding. Local rules never
   change keys sent to a peer. See `docs/INPUT-TUNING.md` for the safety gates.

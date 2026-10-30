@@ -59,7 +59,7 @@ buttons) or per field (pointer and scroll):
 | global | (nothing), `scope = "global"` | every computer |
 | OS | `scope = { os = "mac" }` (`mac`, `windows`, `linux`) | targets running that OS (from its `Hello`) |
 | one computer | `scope = { peer = "laptop" }` | a paired computer, by name or id (prefix) |
-| local keyboard (inactive groundwork) | `scope = { local = true }` | separate rule set, never a remote target; native integration is not implemented yet |
+| local keyboard (experimental, default OFF) | `scope = { local = true }` | separate rule set, never a remote target; Windows and partial macOS adapters are compile-checked only, natively UNTESTED; Linux inactive |
 
 | one keyboard or mouse | `scope = { device = "usb/046d:c52b//Logitech USB Receiver" }` | input from that physical device only (see "Per-device rules"); may be combined with `os` or `peer` |
 
@@ -157,14 +157,18 @@ Mapper::set_keymap (as a reload)
   previous app's rules (`app::tests::tuning::per_app_rules_follow_a_switch_made_with_enter`,
   `..._with_no_input`, `system::linux::tests::watch_says_when_the_active_window_changes`).
 
-### Local keyboard scope: groundwork only (4C / 5H incomplete)
+### Local keyboard scope: experimental native adapters (5H incomplete)
 
-Windows/macOS are experimental and **untested on real hardware**. The
+Windows/macOS are EXPERIMENTAL, **COMPILE-CHECKED ONLY, native UNTESTED**. The
 acknowledged handoff model and held-key matrix are in `LOCAL-REMAP.md`;
 native activation is still incomplete. `[input] local_rules = false` is the
 default, including when upgrading old files. `one-mk keymap local on|off`
-stores this preference but explicitly reports that native integration is
-inactive. It does not install a hook. Mouse buttons and local pointer speed
+opts in on native Windows/macOS backends; a healthy acknowledged worker fence
+is required before status says `active (N)`. macOS integration is partial:
+Caps Lock/Fn/media/function-key sources and outputs reject the entire local
+snapshot. Caps Lock is a delayed toggle, not a reliable `flagsChanged` down/up
+pair; actual physical Caps Lock remapping remains a 5H-4 blocker. Its original
+toggle passes untouched. Mouse buttons and local pointer speed
 are outside this feature.
 
 The native-free tests cover the ticketed ownership fence, stale/foreign
@@ -173,12 +177,16 @@ device/transition/failure streams and allocation-free gate decisions. They
 do not establish native hook latency or actual injection/release delivery.
 The hook-visible gate is now an acquire/release atomic handle; the worker's
 ticket state remains private to that worker. Shortcut flags cannot divert an
-OS-owned key-up, even during handoff or failure. Native consumers and the
-serialized injection queue are still missing, so this is not activation.
+OS-owned key-up, even during handoff or failure. Native adapters now consume
+these primitives; native delivery, modifier flags, no-stuck-keys and idle CPU
+acceptance have NOT passed. macOS requires tagged tap receipts after posting;
+CGEventPost enqueueing alone cannot acknowledge release delivery.
 
 `one-mk keymap add capslock esc --local` stores a local rule; `one-mk
 keymap remove capslock --local` removes it, and `one-mk keymap` labels it
-`this computer (local)` and warns that it is inactive. `--local` cannot be
+`this computer (local)` and reports backend activity separately. On macOS this
+Caps Lock example is stored but deliberately inactive; use a supported key such
+as `one-mk keymap add a b --local` in a disposable acceptance session. `--local` cannot be
 combined with `--peer` or `--os`, and is not offered for pointer, scroll or
 button commands. In the file it is written as:
 
@@ -191,13 +199,18 @@ scope = { local = true }
 
 The existing remote-only Keys & mouse editor omits local-scoped rules
 rather than mislabeling or modifying them as global rules; manage these
-inactive rules through the CLI or file for now.
+local rules through the CLI or file for now.
 
-**This does not remap local typing yet, including on Windows and macOS.**
-`one-mk keymap check` reports the limitation. With local rules configured,
+**Do not treat experimental activation as production acceptance.**
+`one-mk keymap check` reports the native UNTESTED limitation. With local rules configured,
 Linux `status` adds exactly one availability line:
 `local key rules are not available on Linux`. Windows/macOS instead report
-the missing native hook integration. Remote rules keep their existing
+`active (N)` or the reason inactive, always labelled native UNTESTED. On macOS,
+tap-disable/session/sleep/wake/Secure Input failures request release-all and
+pause until all physical keys are released and settings explicitly reloaded.
+Accessibility and Input Monitoring permissions are independently required.
+See `LOCAL-REMAP.md` for manual acceptance and recovery from another computer.
+Remote rules keep their existing
 meaning: global/OS/peer rules do not become local rules, and local rules
 never enter a peer's mapper. Local compilation targets this computer's OS
 without the remote Ctrl/Cmd swap. Invalid and duplicate local rules are
