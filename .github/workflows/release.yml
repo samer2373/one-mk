@@ -8,6 +8,22 @@ permissions:
   contents: read
 
 jobs:
+  wallpaper-gnome-dry-run:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with: { toolchain: stable }
+      - name: Build optional bridge component (not the fixture renderer)
+        run: cargo build --release --locked -j 2 -p one-mk-wall --features gnome-bridge
+      - name: Package without installing, enabling, or publishing
+        run: sh scripts/package-wallpaper-gnome.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wallpaper-gnome-component-dry-run
+          path: target/wallpaper-gnome-dry-run
+
   wallpaper-sbom-dry-run:
     runs-on: ubuntu-22.04
     steps:
