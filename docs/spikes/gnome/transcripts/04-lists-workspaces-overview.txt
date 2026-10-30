@@ -7,3 +7,10 @@ overview shown                               client fps 0.3 (min 0.0 over 3 s)  
 "{\"altTabCandidates\":[\"App on workspace 1\"],\"runningApps\":[\"window:4:App on workspace 1\"],\"rendererApp\":\"window:2\",\"rendererSkipTaskbar\":true,\"rendererOnAllWorkspaces\":true,\"nWorkspaces\":2,\"active\":1,\"focus\":\"Desktop Icons 1\"}"
 workspace 2 (empty)                          client fps 59.0 (min 56.9 over 3 s)   shell CPU  10.0%  client CPU  23.1%  damage  59.1/s
 "back"
+## Overview as a pause reason (after fix) (2026-10-30T19:12:30+03:00)
+"shown"
+hint paused=1 reason=overview
+"hidden"
+hint paused=0 reason=none
+1 s after leaving the Overview               client fps 59.8 (min 58.0 over 4 s)   shell CPU   3.9%  client CPU   0.0%  damage  59.7/s
+"[\"790304987 overview-hidden\",\"790312088 overview-showing\",\"790320421 overview-hidden\"]"

@@ -408,6 +408,8 @@ class Bridge {
         this._clones.forEach((c, i) => (c.visible = !covered[i]));
         if (Main.sessionMode.isLocked || Main.screenShield?.locked)
             reason = 'locked';
+        else if (Main.overview.visible)
+            reason = 'overview';   // layer not painted there: no frames come
         else if (covered.every(Boolean))
             reason = 'covered';
         const paused = reason !== 'none';
