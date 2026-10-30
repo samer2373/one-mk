@@ -44,6 +44,8 @@ mod wlroots;
 mod x11;
 #[cfg(target_os = "linux")]
 mod xkb;
+#[cfg(target_os = "linux")]
+pub use xkb::{LayoutResolver, LayoutState};
 #[cfg(any(windows, test))]
 mod win_logic;
 #[cfg(any(windows, test))]

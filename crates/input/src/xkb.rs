@@ -59,6 +59,8 @@ library! {
     state_update_mask = c"xkb_state_update_mask": fn(*mut c_void, u32, u32, u32, u32, u32, u32) -> c_int;
     state_serialize_mods = c"xkb_state_serialize_mods": fn(*mut c_void, c_int) -> u32;
     state_serialize_layout = c"xkb_state_serialize_layout": fn(*mut c_void, c_int) -> u32;
+    state_get_keymap = c"xkb_state_get_keymap": fn(*mut c_void) -> *mut c_void;
+    state_key_get_utf8 = c"xkb_state_key_get_utf8": fn(*mut c_void, u32, *mut c_char, usize) -> c_int;
 }
 
 fn lib() -> Option<&'static Lib> {
@@ -133,6 +135,72 @@ impl State {
 impl Drop for State {
     fn drop(&mut self) {
         unsafe { (self.lib.state_unref)(self.state) };
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutState {
+    pub depressed: u32,
+    pub latched: u32,
+    pub locked: u32,
+    pub group: u32,
+}
+
+pub struct LayoutResolver {
+    state: State,
+}
+
+impl LayoutResolver {
+    pub fn from_keymap(keymap: &[u8]) -> Option<Self> {
+        if keymap.len() > 1024 * 1024 {
+            return None;
+        }
+        State::new(keymap).map(|state| Self { state })
+    }
+
+    fn query(&self, masks: LayoutState) -> Option<State> {
+        let lib = self.state.lib;
+        let state = unsafe { (lib.state_new)((lib.state_get_keymap)(self.state.state)) };
+        if state.is_null() {
+            return None;
+        }
+        unsafe { (lib.state_update_mask)(state, masks.depressed, masks.latched, masks.locked, 0, 0, masks.group) };
+        Some(State { lib, state })
+    }
+
+    fn text(state: &State, code: u32) -> Option<String> {
+        let key = code.checked_add(EVDEV_OFFSET)?;
+        let mut bytes = [0u8; one_mk_proto::typing::MAX_TEXT_BYTES + 1];
+        let length = unsafe { (state.lib.state_key_get_utf8)(state.state, key, bytes.as_mut_ptr().cast(), bytes.len()) };
+        let length = usize::try_from(length).ok()?;
+        if length == 0 || length >= bytes.len() {
+            return None;
+        }
+        let text = std::str::from_utf8(&bytes[..length]).ok()?;
+        one_mk_proto::typing::valid_text(text).then(|| text.to_owned())
+    }
+
+    pub fn resolve(&self, code: u32, masks: LayoutState) -> Option<String> {
+        Self::text(&self.query(masks)?, code)
+    }
+
+    pub fn reverse(&self, character: char, group: u32) -> Option<one_mk_proto::typing::Chord> {
+        if !one_mk_proto::typing::printable(character) {
+            return None;
+        }
+        let wanted = character.to_string();
+        for modifiers in [vec![], vec![42], vec![100], vec![42, 100]] {
+            let mut state = self.query(LayoutState { group, ..LayoutState::default() })?;
+            for modifier in &modifiers {
+                state.key(*modifier, true);
+            }
+            for code in 1..=255 {
+                if Self::text(&state, code).as_deref() == Some(wanted.as_str()) {
+                    return Some(one_mk_proto::typing::Chord { code, modifiers });
+                }
+            }
+        }
+        None
     }
 }
 
@@ -221,6 +289,70 @@ impl KeyboardMods {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn layout(symbols: &str) -> Option<LayoutResolver> {
+        if lib().is_none() || !std::path::Path::new("/usr/share/X11/xkb/symbols/us").exists() {
+            eprintln!("SKIP: libxkbcommon or system XKB data unavailable");
+            return None;
+        }
+        let keymap = format!("xkb_keymap {{ xkb_keycodes {{ include \"evdev+aliases(qwerty)\" }}; xkb_types {{ include \"complete\" }}; xkb_compat {{ include \"complete\" }}; xkb_symbols {{ include \"pc+{symbols}+inet(evdev)\" }}; }};");
+        Some(LayoutResolver::from_keymap(keymap.as_bytes()).expect("system layout compiles"))
+    }
+
+    #[test]
+    fn typing_real_layout_tables_include_shift_and_altgr() {
+        for (symbols, code, modifiers, expected) in [
+            ("de", 21, vec![], "z"),
+            ("de", 21, vec![42], "Z"),
+            ("de", 16, vec![100], "@"),
+            ("fr", 16, vec![], "a"),
+            ("fr", 11, vec![100], "@"),
+            ("es", 3, vec![100], "@"),
+            ("tr", 23, vec![], "ı"),
+            ("pl", 38, vec![100], "ł"),
+            ("us(dvorak)", 44, vec![], ";"),
+            ("hu", 48, vec![100], "{"),
+            ("jp", 30, vec![], "a"),
+        ] {
+            let Some(resolver) = layout(symbols) else { return };
+            let mut state = resolver.query(LayoutState::default()).unwrap();
+            for modifier in modifiers {
+                state.key(modifier, true);
+            }
+            let actual = LayoutResolver::text(&state, code);
+            assert_eq!(actual.as_deref(), Some(expected), "{symbols}, code {code}");
+        }
+    }
+
+    #[test]
+    fn typing_shortcut_reverse_lookup_roundtrip_across_layouts() {
+        let Some(german) = layout("de") else { return };
+        let Some(us) = layout("us") else { return };
+        let text = german.resolve(21, LayoutState::default()).unwrap();
+        let chord = us.reverse(text.chars().next().unwrap(), 0).unwrap();
+        assert_eq!(chord, one_mk_proto::typing::Chord { code: 44, modifiers: vec![] });
+        for symbols in ["de", "fr", "es", "tr", "pl", "us(dvorak)", "hu"] {
+            let Some(resolver) = layout(symbols) else { return };
+            for character in ['z', 'Z', '@'] {
+                let chord = resolver.reverse(character, 0).unwrap();
+                let mut state = resolver.query(LayoutState::default()).unwrap();
+                for modifier in chord.modifiers {
+                    state.key(modifier, true);
+                }
+                assert_eq!(LayoutResolver::text(&state, chord.code).as_deref(), Some(character.to_string().as_str()), "{symbols}");
+            }
+        }
+    }
+
+    #[test]
+    fn typing_rejects_dead_keys_controls_and_overflow_without_mutating_state() {
+        let Some(german) = layout("de") else { return };
+        assert_eq!(german.resolve(13, LayoutState::default()), None);
+        assert_eq!(german.resolve(28, LayoutState::default()), None);
+        assert_eq!(german.resolve(u32::MAX, LayoutState::default()), None);
+        assert_eq!(german.reverse('\n', 0), None);
+        assert_eq!(german.resolve(21, LayoutState::default()).as_deref(), Some("z"));
+    }
 
     const CAPS: u32 = 58;
     const LCTRL: u32 = 29;

@@ -7,3 +7,5 @@ edition = "2024"
 test-support = []
 
 [dependencies]
+unicode-general-category = "1.1.0"
+unicode-segmentation = "1.13.3"

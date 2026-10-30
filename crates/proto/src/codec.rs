@@ -147,6 +147,7 @@ pub mod caps {
     /// [`Control::WatchFocus`](crate::Control::WatchFocus) asks for it, and
     /// can be asked for that alone. Per-app input rules use it.
     pub const FOCUS_APP: u32 = 32;
+    pub const TEXT: u32 = 64;
     /// What this build supports.
     pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT | FOCUS_APP;
 }
@@ -247,6 +248,9 @@ pub enum Control {
     /// Put your display to sleep (sleep sync). `id` names the event, so a
     /// computer that passes it on never gets it back as a new one.
     Sleep { id: u64 },
+    Text { text: String },
+    CharacterKey { code: u32, down: bool, character: char },
+    KeyboardLayout(Box<crate::typing::LayoutDescriptor>),
 }
 
 impl Control {
@@ -364,6 +368,23 @@ impl Control {
                 w.u8(20);
                 w.u64(*id);
             }
+            Control::Text { text } => {
+                w.u8(21);
+                w.long_str(if crate::typing::valid_text(text) { text } else { "" }, crate::typing::MAX_TEXT_BYTES);
+            }
+            Control::CharacterKey { code, down, character } => {
+                w.u8(22);
+                w.u32(*code);
+                w.u8(u8::from(*down));
+                w.u32(*character as u32);
+            }
+            Control::KeyboardLayout(layout) => {
+                w.u8(23);
+                let valid = layout.valid();
+                for field in [&layout.name, &layout.variant, &layout.rules, &layout.model] {
+                    w.long_str(if valid { field } else { "" }, 128);
+                }
+            }
         }
     }
 
@@ -426,6 +447,40 @@ impl Control {
             }
             19 => Control::Inhibit { epoch: r.u16()?, on: r.u8()? != 0 },
             20 => Control::Sleep { id: r.u64()? },
+            21 => {
+                let text = r.bounded_str(crate::typing::MAX_TEXT_BYTES)?;
+                if !crate::typing::valid_text(&text) || !r.0.is_empty() {
+                    return Err(DecodeError::Invalid("typing text"));
+                }
+                Control::Text { text }
+            }
+            22 => {
+                let code = r.u32()?;
+                if !crate::typing::valid_key_code(code) {
+                    return Err(DecodeError::Invalid("typing key code"));
+                }
+                let down = match r.u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(DecodeError::Invalid("typing key direction")),
+                };
+                let character = char::from_u32(r.u32()?).filter(|character| crate::typing::printable(*character))
+                    .ok_or(DecodeError::Invalid("typing key character"))?;
+                if !r.0.is_empty() {
+                    return Err(DecodeError::Invalid("typing key trailing bytes"));
+                }
+                Control::CharacterKey { code, down, character }
+            }
+            23 => {
+                let layout = crate::typing::LayoutDescriptor {
+                    name: r.bounded_str(128)?, variant: r.bounded_str(128)?,
+                    rules: r.bounded_str(128)?, model: r.bounded_str(128)?,
+                };
+                if !layout.valid() || !r.0.is_empty() {
+                    return Err(DecodeError::Invalid("keyboard layout descriptor"));
+                }
+                Control::KeyboardLayout(Box::new(layout))
+            }
             t => return Err(DecodeError::UnknownTag(t)),
         };
         Ok(c)
@@ -593,6 +648,13 @@ impl Reader<'_> {
         let (s, rest) = self.0.split_at(n);
         self.0 = rest;
         String::from_utf8(s.to_vec()).map_err(|_| DecodeError::BadString)
+    }
+    fn bounded_str(&mut self, max: usize) -> Result<String, DecodeError> {
+        let length = self.0.get(..2).ok_or(DecodeError::Truncated)?;
+        if usize::from(u16::from_le_bytes([length[0], length[1]])) > max {
+            return Err(DecodeError::Invalid("typing string length"));
+        }
+        self.long_str()
     }
     /// Monitors: positive sizes, at most [`MAX_SCREENS`], and every edge
     /// and the overall span representable in `i32`.

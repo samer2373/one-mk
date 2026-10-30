@@ -3256,6 +3256,10 @@ dependencies = [
 [[package]]
 name = "one-mk-proto"
 version = "0.1.12"
+dependencies = [
+ "unicode-general-category",
+ "unicode-segmentation",
+]
 
 [[package]]
 name = "one-mk-tray"
