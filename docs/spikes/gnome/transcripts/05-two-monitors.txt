@@ -1,0 +1,6 @@
+## two virtual monitors, one renderer window, two cropped clones (2026-10-30T18:54:56+03:00)
+"[[0,0,0,1920,1080],[1,1920,0,1920,1080]]"
+"{\"title\":\"one-mk wallpaper spike renderer\",\"frame\":[0,0,3840,1080],\"buffer\":[0,0,3840,1080],\"actorVisible\":false,\"opacity\":255,\"mapped\":false,\"damage\":291,\"focus\":\"Desktop Icons 1\",\"type\":1,\"paused\":false,\"reason\":\"none\",\"stale\":false,\"events\":[\"789250346 overview-hidden\",\"789253736 adopted window \\\"null\\\" pid=2301426\"],\"hints\":[]}"
+2 monitors: 3840x1080 source, 2 clones       client fps 59.8 (min 59.0 over 10 s)  shell CPU   6.6%  client CPU  12.4%  damage  59.8/s
+"[[0,0,0,0,3840,1080],[1920,0,-1920,0,3840,1080]]"
+(true, '/tmp/omk-gs-spike/step2-two-monitors.png')

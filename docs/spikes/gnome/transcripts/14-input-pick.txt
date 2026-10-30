@@ -1,0 +1,3 @@
+## input: what is under the pointer on the empty desktop with the renderer adopted (2026-10-30T19:08:17+03:00)
+"{\"pickedChain\":[\"unknown_MetaSurfaceActorWayland\",\"unknown_MetaSurfaceContainerActorWayland\",\"unknown_MetaWindowActorWayland(\\\"Desktop Icons 1\\\")\",\"Meta_WindowGroup\",\"UiActor\",\"Meta_Stage\"]}"
+"{\"focus\":\"Desktop Icons 1\"}"

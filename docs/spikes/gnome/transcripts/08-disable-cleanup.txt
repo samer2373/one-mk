@@ -1,0 +1,26 @@
+## disable / re-enable cleanup, client kill (re-run after fix) (2026-10-30T19:00:06+03:00)
+2333972
+renderer pid 2333972
+"{\"oneMkActors\":[\"one-mk-wallpaper-layer\"],\"clonesOnStage\":[\"unknown_MetaWindowActorWayland\",\"unknown_MetaWindowActorWayland\"],\"extState\":1,\"bridge\":true,\"windows\":[\"one-mk wallpaper spike renderer\"]}"
+running                                      client fps 60.0 (min 60.0 over 3 s)   shell CPU   6.1%  client CPU   9.7%  damage  59.7/s
+-- SIGKILL renderer
+"{\"oneMkActors\":[\"one-mk-wallpaper-layer\"],\"clonesOnStage\":[],\"extState\":1,\"bridge\":true,\"windows\":[]}"
+2335353
+new renderer pid 2335353
+"{\"oneMkActors\":[\"one-mk-wallpaper-layer\"],\"clonesOnStage\":[\"unknown_MetaWindowActorWayland\",\"unknown_MetaWindowActorWayland\"],\"extState\":1,\"bridge\":true,\"windows\":[\"one-mk wallpaper spike renderer\"]}"
+-- disable through org.gnome.Shell.Extensions.DisableExtension
+(true,)
+t+1x0.5s: "{\"oneMkActors\":[],\"clonesOnStage\":[],\"extState\":2,\"bridge\":false,\"windows\":[\"one-mk wallpaper spike renderer\"]}"
+t+2x0.5s: "{\"oneMkActors\":[],\"clonesOnStage\":[],\"extState\":2,\"bridge\":false,\"windows\":[\"one-mk wallpaper spike renderer\"]}"
+t+3x0.5s: "{\"oneMkActors\":[],\"clonesOnStage\":[],\"extState\":2,\"bridge\":false,\"windows\":[\"one-mk wallpaper spike renderer\"]}"
+t+4x0.5s: "{\"oneMkActors\":[],\"clonesOnStage\":[],\"extState\":2,\"bridge\":false,\"windows\":[]}"
+t+5x0.5s: "{\"oneMkActors\":[],\"clonesOnStage\":[],\"extState\":2,\"bridge\":false,\"windows\":[]}"
+t+6x0.5s: "{\"oneMkActors\":[],\"clonesOnStage\":[],\"extState\":2,\"bridge\":false,\"windows\":[]}"
+(false,)
+renderer process alive? no
+-- 3 rapid enable/disable cycles, then enabled
+"{\"oneMkActors\":[\"one-mk-wallpaper-layer\"],\"clonesOnStage\":[],\"extState\":1,\"bridge\":true,\"windows\":[]}"
+"{\"oneMkActors\":[],\"clonesOnStage\":[],\"extState\":2,\"bridge\":false,\"windows\":[]}"
+-- CRITICAL/JS errors mentioning the spike extension in the Shell log:
+0
+      1 (gnome-shell:2332945): GNOME Shell-CRITICAL **: 19:00:00.874: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files

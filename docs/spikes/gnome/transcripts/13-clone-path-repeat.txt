@@ -1,0 +1,6 @@
+## repeat: clone path, 1 monitor 1920x1080@60, python GTK4 test renderer, host shared with other builds (2026-10-30T19:07:16+03:00); load: 3.59 4.46 4.43
+A run 1: hidden source + clone               client fps 59.9 (min 59.0 over 9 s)   shell CPU   5.5%  client CPU   9.9%  damage  59.9/s
+A run 2: hidden source + clone               client fps 60.0 (min 60.0 over 9 s)   shell CPU   3.1%  client CPU   5.6%  damage  60.0/s
+A run 3: hidden source + clone               client fps 60.0 (min 60.0 over 9 s)   shell CPU   3.3%  client CPU   5.8%  damage  60.1/s
+idle: source hidden, no clone (renderer throttled) client fps 0.1 (min 0.0 over 9 s)     shell CPU   0.1%  client CPU   0.0%  damage   0.1/s
+load after: 2.58 4.08 4.30

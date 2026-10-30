@@ -1,0 +1,51 @@
+## LIVE session, read-only snapshots (no writes were made to it)
+# start of run, 18:36:25 (first, coarser script; the 'app:' PIDs were false positives of pgrep -f matching other sessions' shell/cargo command lines, not a running one-mk-app)
+enabled-extensions: ['snapd-search-provider@canonical.com', 'web-search-provider@ubuntu.com', 'ding@rastersoft.com', 'ubuntu-dock@ubuntu.com', 'tiling-assistant@ubuntu.com']
+disable-ext-version-validation: false
+picture-uri: 'file:///usr/share/backgrounds/moskalenko-v-Snowy_Ubuntu_Light.webp'
+live gnome-shell: 52867 
+owner one-mk: 759937  app: 2189722 2189724 2189725 2190143 
+ext dir mtime: 
+dconf user mtime: 2026-10-30 18:27:50.510445008 +0300
+
+# mid-run, 19:09 (precise script: live Shell = the gnome-shell whose XDG_RUNTIME_DIR is /run/user/1000)
+enabled-extensions: ['snapd-search-provider@canonical.com', 'web-search-provider@ubuntu.com', 'ding@rastersoft.com', 'ubuntu-dock@ubuntu.com', 'tiling-assistant@ubuntu.com']
+disable-ext-version-validation: false
+picture-uri: 'file:///usr/share/backgrounds/moskalenko-v-Snowy_Ubuntu_Light.webp'
+live gnome-shell pid: 52867 (/usr/bin/gnome-shell --mode=ubuntu )
+owner one-mk run pid(s): 759937 
+owner one-mk-app pid(s): 
+~/.local/share/gnome-shell/extensions exists: no
+dconf user mtime: 2026-10-30 18:27:50.510445008 +0300
+live-bus owner of org.onemk.WallpaperBridgeSpike1: (false,)
+
+# after all isolated sessions were stopped, 2026-10-30T19:14:04+03:00
+enabled-extensions: ['snapd-search-provider@canonical.com', 'web-search-provider@ubuntu.com', 'ding@rastersoft.com', 'ubuntu-dock@ubuntu.com', 'tiling-assistant@ubuntu.com']
+disable-ext-version-validation: false
+picture-uri: 'file:///usr/share/backgrounds/moskalenko-v-Snowy_Ubuntu_Light.webp'
+live gnome-shell pid: 52867 (/usr/bin/gnome-shell --mode=ubuntu )
+owner one-mk run pid(s): 759937 
+owner one-mk-app pid(s): 
+~/.local/share/gnome-shell/extensions exists: no
+dconf user mtime: 2026-10-30 18:27:50.510445008 +0300
+live-bus owner of org.onemk.WallpaperBridgeSpike1: (false,)
+
+# process start times prove they were never restarted
+    PID                  STARTED CMD
+  52867 Wed Oct 21 16:06:39 2026 /usr/bin/gnome-shell --mode=ubuntu
+ 759937 Thu Oct 29 02:40:00 2026 /home/samer/.local/bin/one-mk run
+
+# the snapshot script (read-only):
+#!/bin/sh
+# Read-only snapshot of the LIVE session (no writes). Live Shell = the one on /run/user/1000.
+echo "enabled-extensions: $(gsettings get org.gnome.shell enabled-extensions)"
+echo "disable-ext-version-validation: $(gsettings get org.gnome.shell disable-extension-version-validation)"
+echo "picture-uri: $(gsettings get org.gnome.desktop.background picture-uri)"
+for p in $(pgrep -x gnome-shell); do
+  if tr '\0' '\n' < /proc/$p/environ 2>/dev/null | grep -qx 'XDG_RUNTIME_DIR=/run/user/1000'; then echo "live gnome-shell pid: $p ($(tr '\0' ' ' < /proc/$p/cmdline))"; fi
+done
+echo "owner one-mk run pid(s): $(pgrep -f '^/home/samer/.local/bin/one-mk run' | tr '\n' ' ')"
+echo "owner one-mk-app pid(s): $(pgrep -x one-mk-app | tr '\n' ' ')"
+echo "~/.local/share/gnome-shell/extensions exists: $([ -e $HOME/.local/share/gnome-shell/extensions ] && echo yes || echo no)"
+echo "dconf user mtime: $(stat -c '%y' $HOME/.config/dconf/user)"
+echo "live-bus owner of org.onemk.WallpaperBridgeSpike1: $(gdbus call --session -d org.freedesktop.DBus -o /org/freedesktop/DBus -m org.freedesktop.DBus.NameHasOwner org.onemk.WallpaperBridgeSpike1)"
