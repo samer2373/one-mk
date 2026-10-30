@@ -626,7 +626,10 @@ impl Mapper {
 
     /// Replay an unmapped short mouse click without releasing another holder.
     pub fn click(&mut self, button: u32, out: &mut impl FnMut(Emit)) {
-        if crate::keynames::is_button(button) { self.pulse(Chord::key(button as u16), true, out); }
+        if crate::keynames::is_button(button) {
+            self.interrupt(out);
+            self.pulse(Chord::key(button as u16), true, out);
+        }
     }
 
     /// A physical key (or button) went down or up, on a device not known;
@@ -1343,6 +1346,16 @@ mod tests {
         assert_eq!(t.key(CAPS, true), [d(LCTRL)], "a held hold repeats");
         assert_eq!(t.tap(C), [d(C), u(C)]);
         assert_eq!(t.key(CAPS, false), [u(LCTRL)]);
+    }
+
+    #[test]
+    fn replay_click_interrupts_pending_hold_before_the_button() {
+        let mut state = T::new(&[dual("capslock", "esc", "lctrl")]);
+        state.key(CAPS, true);
+        let mut events = Vec::new();
+        state.m.click(0x113, &mut |event| events.push(event));
+        assert_eq!(events, [d(LCTRL), d(0x113), u(0x113)]);
+        assert_eq!(state.key(CAPS, false), [u(LCTRL)]);
     }
 
     #[test]
