@@ -8,7 +8,7 @@ pub fn installed() -> Option<std::path::PathBuf> {
 
 pub fn run(arguments: &[OsString]) -> ExitCode {
     let Some(helper) = installed() else {
-        let message = "sandbox unavailable: refusing to import; install the optional one-mk-wall-import package and an audited runtime; main daemon contains no media decoder";
+        let message = "sandbox unavailable: refusing to import; install the optional one-mk-wall-import package and an audited runtime; main daemon has no wallpaper/video decoder (clipboard PNG remains)";
         if arguments.iter().any(|argument| argument == "--json") { println!("{}", serde_json::json!({"error": message, "exit_code": 3})); }
         else { eprintln!("Wallpaper import sandbox: unavailable, {message}"); }
         return ExitCode::from(3);

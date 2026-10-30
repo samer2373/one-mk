@@ -1,14 +1,21 @@
 # Wallpaper import: M1b development implementation
 
-Evidence date: **2026-10-30**. Baseline: `wave5`, commit `76534af`.
+Security follow-up evidence: **2026-10-31**. Baseline reset: local `wave5`,
+commit `c5bdfe7`; implementation branch `t3/wallpaper-import-security`.
 This is an optional, finite **source admission and poster** pipeline, not a
 wallpaper presenter, normalized cache, consent implementation or M1 sign-off.
 The existing presentation stop is unchanged; no Mutter/GNOME harness was run.
 
 ## Trust boundary and process lifetime
 
-The daemon does not depend on `one-mk-wall-import`, `image`, or GStreamer for
-this feature. Its explicit `wallpaper` command dispatches before configuration,
+The shipping daemon does not depend on `one-mk-wall-import` or GStreamer.
+It already uses `image` with PNG for clipboard support; it is not decoder-free.
+Build shipping binaries separately from the optional importer:
+`cargo build --release --locked -j 2 -p one-mk -p one-mk-tray -p one-mk-app`.
+An explicit `--workspace` build unifies importer GIF/WebP features into shared
+dependencies and is not the shipping build command. The artifact gate checks
+`cargo tree --locked -p one-mk -e features`, allowing only PNG image features.
+Its explicit `wallpaper` command dispatches before configuration,
 identity, logging or the async runtime; it executes only a fixed sibling helper
 with a cleared environment. Missing helper/runtime reports unavailable, not a
 background retry. General `doctor` is passive; explicit wallpaper `doctor`
@@ -24,21 +31,40 @@ serializes imports targeting that directory. It is not a machine-wide queue.
 
 Linux requires `/usr/bin/bwrap`, working user/PID/network/IPC/UTS namespaces and
 seccomp. The worker sees only a read-only **complete runtime root**, its own
-executable and one read-only input, private proc/dev and a 16 MiB scratch tmpfs.
+executable and one read-only input, read-only private proc/dev and a 16 MiB
+scratch tmpfs. `/dev` has an explicit 64 KiB size and is remounted read-only;
+`/dev/shm` is a read-only empty directory. Only null/zero/urandom device nodes
+are bound. Every tmpfs has an explicit size. Doctor checks mount capacity,
+read-only flags and actual write denial before advertising availability.
 No host home, document tree, display socket, render node or network capability
-is mounted. The input worker installs `no_new_privs` and architecture-checked
-seccomp before inspecting bytes. Sockets/connect/bind/listen, namespace/mount
-changes, ptrace, process-VM operations, io_uring, keyctl, bpf and alternate x32
-syscall entry are denied. Only anonymous AF_UNIX socketpairs remain for
+is mounted. The parent exports architecture-checked seccomp to a sealed memfd
+and passes `--seccomp FD` to bubblewrap: it applies before the worker's runtime
+loader executes. The worker verifies inherited seccomp and `no_new_privs`.
+This is a **denylist, not a default-deny allowlist**. Socket/connect/bind/listen,
+accept/accept4, ptrace, process-VM operations, io_uring, keyctl/add_key/request_key,
+bpf, perf_event_open, userfaultfd, open_by_handle_at, mount/umount and the new
+fsopen/fsmount/move_mount/open_tree/mount_setattr/fspick APIs are denied.
+Unshare/setns, namespace clone flags (including NEWTIME), and alternate x32
+entry are blocked; clone3 returns ENOSYS. Bubblewrap also disables nested user
+namespaces and asserts that restriction. Memfd creation and SysV shmget/shmat
+are denied, so anonymous shmem cannot bypass the scratch-file ceiling.
+Only anonymous AF_UNIX socketpairs remain for
 GStreamer internal wakeups; no external endpoint can be opened.
 
-Image decoding cannot create subprocesses. WebM decoding creates one fixed
+After admission, image workers install an additional process-creation filter.
+WebM decoding creates one fixed
 `/worker --decode-webm` wrapper, which installs restrictions before executing
 the pinned gst-launch pipeline; subsequent process creation is denied (thread
-clones remain allowed). There is no decodebin, URI loader or encoder in that
+clones remain allowed). **Execve/execveat are not blocked**: replacement of the
+current process remains possible. Before that additional filter, ordinary
+fork/clone is allowed for the fixed wrapper. A compromised loader therefore
+has more authority than a post-admission decoder; this is not arbitrary-code
+containment by an allowlist. There is no decodebin, URI loader or encoder in that
 pipeline. GStreamer plugin registry/search paths are private and explicit;
 registry scanning does not fork. PID namespace teardown and bubblewrap's
-parent-death contract kill descendants on worker/launcher death. The parent
+parent-death contract kill descendants on worker/launcher death. The launcher
+also gets PR_SET_PDEATHSIG with a parent-PID race check, covering importer
+SIGKILL. The parent
 drains bounded output/error pipes, kills on timeout/cancel/overflow, and waits
 for both child and reader threads. SIGINT/SIGTERM cancellation returns 130.
 
@@ -47,6 +73,17 @@ daemon or unsandboxed import fallback exists. Namespace/seccomp/runtime setup
 failure produces `sandbox unavailable: refusing to import`. A Linux platform
 without this bubblewrap configuration is unavailable, even if another sandbox
 technology might be installed.
+
+**Memory fallback is explicitly weaker than the design.** No delegated cgroup
+memory/pids controller is implemented. Doctor reports `NO aggregate cgroup
+memory/pids ceiling`, even when available. The development fallback is a
+per-process 1 GiB virtual-address rlimit plus bounded private storage, finite
+CPU/wall time and descendant teardown. It is not a 1 GiB aggregate resident or
+kernel-memory limit, nor a thread-count limit. Do not ship this fallback as
+the design's cgroup guarantee. The bounded scratch pressure test verifies
+mount/rlimit caps first, then writes at most 16 MiB plus one 64 KiB attempt;
+it never attempts to fill host memory. Device writes do not allocate storage;
+read-only mounts and shmem API denial are checked separately.
 
 ## Admission, output and limits
 
@@ -66,8 +103,8 @@ decoder PTS normalization is **not implemented**.
 | Canvas | positive dimensions, at most 4096 × 2160 / 8,847,360 pixels |
 | Timeline | 2–36,000 frames, at most 600,000 ms, source at most 60 fps |
 | Image frame delay | at least 17 ms; faster/zero-delay animations require conversion |
-| Total decoded work | at most 1,000,000,000 pixels; deliberately stricter than duration alone |
-| Image decoder allocation | 256 MiB image-library allocation limit; frames streamed/disposed |
+| Total decoded work | at most 1,000,000,000 pixels, rejected at admission before decode; reduce resolution/frame count/duration and convert first |
+| Image decoder allocation | explicit RGBA canvas reservation and image::Limits 256 MiB best-effort allocation policy; frames streamed/disposed; not an aggregate or strict codec-internal ceiling |
 | Uncompressed poster | opaque black alpha flattening, at most 320 × 180 RGB PPM |
 | Metadata | at most 256 KiB before passing to decoders |
 | Per-process virtual memory | RLIMIT_AS 1 GiB, inherited by decoder |
@@ -75,8 +112,17 @@ decoder PTS normalization is **not implemented**.
 | File / descriptors / cores | 512 MiB per file, 64 descriptors, no core dumps |
 | Worker result / stderr | 1 MiB / 16 KiB; overflow tears down worker |
 
+Timeline limits are independent upper bounds, not a promise of ten minutes at
+4K: the pixel budget permits 113 frames at 4096 × 2160 or 482 at 1920 × 1080
+(about 1.88 s and 8.03 s at 60 fps). Small canvases can reach 36,000 frames /
+ten minutes. Boundary tests reach independent frame, duration, fps and exact
+pixel ceilings without large allocations.
+
 The source and poster are rehashed in the parent. Strict bounded worker JSON
-must have matching valid dimensions/frame/duration fields. Source, poster and
+must have valid format/dimensions/frame/duration/fps/pixel-budget fields, checked
+again in the parent. The parent requires exact canonical P6 dimensions,
+maxval 255 and exact RGB payload length for the expected aspect-preserving
+thumbnail (no upscaling). A P6 prefix alone is insufficient. Source, poster and
 record use create-new files (0600) in a 0700 directory; fsync precedes Linux
 `renameat2(RENAME_NOREPLACE)`, then output-directory fsync. Content directories
 are named by source BLAKE3. Existing objects, including symlinks, are never
@@ -86,8 +132,9 @@ contains no timestamps, absolute source path or owner metadata; repeating an
 import into an empty output produces the same record and poster hash.
 
 Failure before commit removes staging through RAII. A parent SIGKILL can leave
-an unpublished `.import-*` directory; owned private partials older than 24 hours
-are cleaned at the next explicit import, never by an off-state timer (bounded
+an unpublished `.import-*` directory; owned private partials are cleaned
+immediately under the exclusive output lock at the next explicit import,
+never by an off-state timer (bounded
 to the first 4,096 directory entries per activation). Completed objects survive
 failure. A directory-sync error after rename explicitly reports that commit
 already happened; never blindly retry as though nothing persisted.
@@ -110,15 +157,21 @@ Error JSON contains `error` and `exit_code`; doctor JSON has `available/reason`.
 
 GStreamer is pinned to **1.28.2**. `runtime.json` schema 1 inventories every file
 with SHA-256 and a licence expression. Unlisted, changed, symlink/device or
-group/world-writable runtime members are refused. Runtime identity is an
+group/world-writable runtime members are refused. Every ancestor and member
+must be owned by root or the caller. Directory components are opened with
+O_PATH/O_DIRECTORY/O_NOFOLLOW and checked by descriptor; the exact checked
+root is held through bubblewrap `--ro-bind-fd`, not resolved again by path.
+This pins directory identity, not immutable contents. Runtime identity is an
 **administrator/packager trust input**, not something obtained from the media.
 The manifest is not signed: it does not authenticate a malicious packager or
 prevent same-user concurrent mutation. A production immutable signed package
 and provenance audit remain required.
 
 `scripts/check-wallpaper-artifact.py` traverses the importer Cargo closure,
-checks SPDX AND/OR/WITH expressions, and optionally inventories the **entire**
-runtime, checks ELF NEEDED closure/RPATH and requires exactly these plugins:
+checks SPDX AND/OR/WITH expressions, and delegates runtime validation to the
+helper's `--runtime-inventory` command. Import and packaging share the same
+Rust policy: bounded ELF64 little-endian parsing checks NEEDED closure,
+rejects RPATH/RUNPATH and ELF filter/auxiliary loader edges, and requires exactly these plugins:
 coreelements, matroska, vpx, aom, videoconvertscale. FFmpeg/libav/libswscale,
 libswresample, mpv, x264/x265 and unknown/nonapproved licences fail closed.
 The explicit plugin allowlist also rejects other encoder plugins. vpx/aom
@@ -133,15 +186,19 @@ as a blanket GPL permission. Shipping still requires exact licence notices,
 source/build offers and the LGPL replacement test specified in the design.
 MIT/Apache licensing of this application does not erase those obligations.
 
-The gate's self-test injects an FFmpeg Cargo node **and an on-disk FFmpeg runtime
-member with valid inventory hashes** and proves both fail; it also tests GPL,
-unknown/malformed SPDX expressions and forbidden plugin names. `--helper`
+The Python self-test injects an FFmpeg Cargo node and asserts the exact expected
+rejection (a missing root/graph no longer counts as success). It also tests GPL,
+unknown/malformed SPDX and forbidden daemon features. Rust runtime tests reject
+an inventoried extra OpenH264 plugin and unbundled ELF edges/loader paths.
+`--helper`
 executes the trusted build's `--build-info` and rejects fault-injection builds.
 Use this explicit invocation on a candidate runtime before any future packaging:
 
 ```sh
 cargo metadata --locked --format-version 1 > target/wallpaper-metadata.json
+cargo tree --locked -p one-mk -e features > target/daemon-features.txt
 python3 scripts/check-wallpaper-artifact.py --metadata target/wallpaper-metadata.json \
+  --daemon-features target/daemon-features.txt \
   --helper target/debug/one-mk-wall-import --runtime /absolute/candidate-runtime \
   --sbom target/wallpaper-import.cdx.json
 ```
@@ -156,15 +213,18 @@ publishes the helper/runtime nor claims a complete shipping SBOM without
 ## Reproduction and evidence
 
 Use a cleared environment with explicit Cargo/rustup homes; `cargo ... -j 2`;
-never run cargo fmt. All generated media/runtime/tools belong under ignored
-`target/wall-import-lab`, not the small host `/tmp` filesystem.
+never run cargo fmt. Generated media/tools belong under ignored
+`target/wall-import-lab`, not the small host `/tmp` filesystem. Runtime ownership
+and permissions must be trusted along the entire absolute path. If the worktree
+has a writable ancestor, use a disposable directory below a caller-owned 0700
+trusted path; do not relax runtime policy for the lab. Remove it after testing.
 
 `scripts/wallpaper-lab-runtime.py ROOT --worker BINARY` creates a **lab-only**
 snapshot from a matching trusted installed GStreamer. It is not a redistributable
 runtime, supply-chain pin, licence audit, source offer or update mechanism.
 Run `--help` for its exact arguments. Generate image fixtures using the crate's
 `fixtures` example. The explicit sandbox test also expects two original
-64 × 64, six-frame, 30 fps clips at `media/six.webm` (VP9) and
+small six-frame, 30 fps clips at `media/six.webm` (VP9) and
 `media/six-av1.webm` (AV1), generated with videotestsrc and the matching
 permissive encoder/webmmux. Never accept a downloaded test runtime implicitly.
 
@@ -179,7 +239,11 @@ Default CI explicitly logs that real sandbox tests are **not qualified** without
 the runtime; an early return is not sandbox evidence. `test-faults` is empty by
 default and must never ship. The real-binary test SIGSTOPs and then SIGKILLs the
 worker at start/probe/decode/decoder-child/poster/response stages, and cancels
-via SIGTERM. It verifies empty output and disappearance of recorded descendants.
+via SIGTERM. It also SIGKILLs the import parent, verifies an unpublished partial,
+then immediately retries and verifies recovery. An RAII child/subreaper guard
+reaps tracked descendants even if an assertion fails. It verifies empty output
+and disappearance of recorded descendants. A separate bounded storage test
+checks denial on read-only mounts and ENOSPC at the private scratch cap.
 Generated fixtures exercise truncation, huge dimensions, metadata bombs,
 polyglots, wrong codecs/containers, output symlinks and source path tricks.
 Seeded mutation tests and 256 proptest cases exercise raw/magic-prefixed inputs.
@@ -193,7 +257,10 @@ duplicates, deterministic records, cancellation and killed-worker cleanup.
 No performance, 4K maximum-load, full ten-minute or 24-hour qualification is
 claimed from these tiny fixtures.
 
-### Validation record (2026-10-30)
+### Prior baseline validation record (2026-10-30)
+
+This is historical evidence retained from `wave5`, not a claim that the full
+daemon suite or native operating systems were requalified here.
 
 | Check | Observed result |
 | --- | --- |
@@ -216,7 +283,74 @@ not claimed proven baseline failures: no clean-baseline comparison was run.
 They remain an unmet requested validation criterion, not an importer pass.
 No Mutter/GNOME presentation harness or owner-session access was used.
 
-## Hostile self-review and deliberately unmet exit criteria
+### Security follow-up validation (2026-10-31)
+
+- Importer: 7 unit, 9 admission/property and 5 real binary tests pass with an
+  explicit pinned 32-file Linux lab runtime and `test-faults` (binary suite
+  43.55 s). Tiny GIF/APNG/WebP and original 16 × 16 VP9/AV1 six-frame clips
+  exercise actual decoders, not throughput. Default tests also pass; opt-out
+  real-runtime early returns are not counted as qualification.
+- Doctor verifies external seccomp, nested-userns refusal, read-only bounded
+  `/dev`, bounded scratch and rlimits. The capped write test reaches ENOSPC.
+  No unbounded allocation or host-memory-fill test was run.
+- Linux whole-workspace/all-target/all-feature clippy passes with `-D warnings`.
+  Windows x86_64 and macOS arm64 all-target/all-feature cross-clippy passes for
+  input/proto/ctl/app/tray/wall/wall-sync/**wall-import**, with `blake3/pure`.
+  This is compile-only, not native execution or full-workspace cross validation.
+  Full-workspace attempts stop in `ring`: Windows lacks MSVC `lib.exe`; macOS
+  lacks a target-capable C compiler/SDK (`cc` rejects `-arch`/deployment flags).
+- Wallpaper daemon unit tests (4), clean/null-backend CLI (1) and e2e tests (3)
+  pass, including distinct replay/identity/epoch/rate-limit reasons and actual
+  idle CPU tick measurement. Fabricated timers/children status fields are gone.
+  The full daemon unit suite was not rerun; historical failures remain open.
+- Shared runtime inventory + Cargo/helper/daemon-feature gate passes with 134
+  CycloneDX dry-run records. Python negative self-tests pass. No artifact ships.
+- Cargo-deny 0.20.2: advisories, bans, licences and sources pass; warnings are
+  duplicate miniz_oxide versions and unused licence allowances. CI pins this
+  version and uses the verified global `--config` argument before `check`.
+
+### Per-finding disposition and hostile self-review
+
+1. **Fixed with documented fallback:** read-only 64 KiB `/dev`, read-only shm,
+   explicit 16 MiB scratch, doctor and real capped ENOSPC regression. Hostile
+   self-review additionally reproduced then blocked memfd/SysV shmem escape
+   from the storage cap. **Consciously not implemented:** delegated cgroup
+   aggregate memory/pids enforcement; it needs a controlled delegated hierarchy
+   and native qualification, not mutation of the owner's session hierarchy.
+   Doctor and this document disclose the weaker development
+   fallback. Aggregate-memory production acceptance remains open.
+2. **Fixed:** externally installed sealed seccomp, trusted ownership and mode
+   across ancestors/members, O_PATH directory pinning and `--ro-bind-fd`, plus
+   disabled nested userns. Same-UID runtime-content mutation is still outside
+   the trust boundary; immutable signed packaging remains necessary.
+3. **Fixed:** pixel admission precedes decoding with conversion guidance;
+   independent limits and actual resolution-dependent frame budgets are stated.
+   A 114-frame 4K GIF structural regression admitted before the fix and now
+   fails at pixel admission. Tiny image tests reach width/allocation limits;
+   replacing decoder `set_limits` with defaults made the test fail. The WebP
+   allocation test exposed its best-effort max_alloc behavior, motivating an
+   explicit canvas reservation. Strict total codec allocation is not claimed.
+4. **Documented alternative, not an allowlist:** expanded the denylist to the
+   reported key/mount/socket/nested-namespace gaps; documented exec replacement,
+   pre-additional-filter process creation and allowed thread clones precisely.
+   A tested default-deny policy for every loader/codec version remains future
+   work; pretending an incomplete allowlist is safe would be worse.
+5. **Fixed:** parent metadata limits and canonical P6 header/payload validation;
+   forged poster and fps/pixel regressions failed before the fix.
+6. **Fixed via build isolation and truthful claim:** shipping package selection,
+   default members excluding importer, explicit separate importer build, and
+   a daemon feature-tree gate. Whole-workspace builds still unify features;
+   clipboard PNG remains intentionally present.
+7. **Fixed scoped gates/lifecycle:** remove invented status fields, distinguish
+   flood reasons, require the intended dependency-negative failure, share runtime
+   plugin/ELF validation, expand cargo-deny FFmpeg/libav/mpv/GPL codec families,
+   and test parent SIGKILL/recovery. The recovery test failed against the old
+   24-hour cleanup and now passes immediately under the lock. OpenH264 policy
+   and status regressions failed first. Cargo bans are finite names, not a
+   provenance oracle; renamed binaries/crates and dishonest licence metadata
+   still require supply-chain audit. CI without a runtime is not sandbox proof.
+
+## Deliberately unmet exit criteria
 
 - **M1b is not complete or shippable.** Linux RLIMIT_AS is a per-process virtual
   limit, not the design's aggregate ≤1 GiB resident/cgroup ceiling. Decoder

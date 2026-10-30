@@ -10,12 +10,18 @@ pub(crate) struct Decoded {
     pub poster: Vec<u8>,
 }
 
-pub(crate) fn decode(bytes: &[u8], mut media: Media) -> Result<Decoded, String> {
+pub(crate) fn decode(bytes: &[u8], media: Media) -> Result<Decoded, String> {
     if !matches!(media.format, Format::Vp9Webm | Format::Av1Webm) { crate::sandbox::deny_subprocesses()?; }
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(4096);
     limits.max_image_height = Some(2160);
     limits.max_alloc = Some(256 * 1024 * 1024);
+    decode_with_limits(bytes, media, limits)
+}
+
+fn decode_with_limits(bytes: &[u8], mut media: Media, limits: image::Limits) -> Result<Decoded, String> {
+    let mut canvas_budget = limits.clone();
+    canvas_budget.reserve(u64::from(media.width) * u64::from(media.height) * 4).map_err(|error| error.to_string())?;
     let poster = match media.format {
         Format::Gif => {
             let mut decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
@@ -69,10 +75,16 @@ fn animation(frames: image::Frames<'_>, media: &mut Media) -> Result<Vec<u8>, St
 }
 
 fn poster_bytes(image: &image::RgbImage) -> Vec<u8> {
-    let thumbnail = image::DynamicImage::ImageRgb8(image.clone()).thumbnail(320, 180).to_rgb8();
+    let (width, height) = poster_dimensions(image.width(), image.height());
+    let thumbnail = image::DynamicImage::ImageRgb8(image.clone()).thumbnail_exact(width, height).to_rgb8();
     let mut bytes = format!("P6\n{} {}\n255\n", thumbnail.width(), thumbnail.height()).into_bytes();
     bytes.extend_from_slice(thumbnail.as_raw());
     bytes
+}
+
+pub(crate) fn poster_dimensions(width: u32, height: u32) -> (u32, u32) {
+    let ratio = (320.0 / f64::from(width)).min(180.0 / f64::from(height)).min(1.0);
+    ((f64::from(width) * ratio).round().max(1.0) as u32, (f64::from(height) * ratio).round().max(1.0) as u32)
 }
 
 fn webm(media: &Media) -> Result<Vec<u8>, String> {
@@ -128,3 +140,23 @@ pub(crate) fn exec_webm(codec: &str, width: u32, height: u32) -> Result<(), Stri
 
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn exec_webm(_codec: &str, _width: u32, _height: u32) -> Result<(), String> { crate::sandbox::worker_restrictions() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    mod fixtures { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mod.rs")); }
+
+    #[test]
+    fn every_image_decoder_enforces_image_limits() {
+        for bytes in [fixtures::gif(2, 2, 2), fixtures::apng(), fixtures::webp()] {
+            for allocation_only in [false, true] {
+                let media = crate::inspect(&bytes).unwrap();
+                let mut limits = image::Limits::default();
+                if allocation_only { limits.max_alloc = Some(1); }
+                else { limits.max_image_width = Some(1); }
+                let error = decode_with_limits(&bytes, media, limits).unwrap_err();
+                assert!(error.to_lowercase().contains("limit"), "{error}");
+            }
+        }
+    }
+}

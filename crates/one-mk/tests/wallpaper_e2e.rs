@@ -159,12 +159,15 @@ async fn three_real_null_daemons_consent_hostility_kill_restart_and_upgrade() {
     attacker.send(Control::Wallpaper(canvas)).await;
     observed(&home_b,|status| status["pending_canvases"] == 1).await;
     attacker.send(Control::Wallpaper(message)).await;
+    observed(&home_b,|status| status["rejection_reasons"]["replayed or stale sequence"].as_u64().unwrap_or(0) >= 1).await;
     let mut spoofed = message; spoofed.sequence = 2; spoofed.coordinator = identity_a.fingerprint.0;
     attacker.send(Control::Wallpaper(spoofed)).await;
+    observed(&home_b,|status| status["rejection_reasons"]["wrong receiver identity"].as_u64().unwrap_or(0) >= 1).await;
     let mut wrong_epoch = message; wrong_epoch.sequence = 2; wrong_epoch.epoch = [4;16];
     attacker.send(Control::Wallpaper(wrong_epoch)).await;
+    observed(&home_b,|status| status["rejection_reasons"]["wrong receiver epoch"].as_u64().unwrap_or(0) >= 1).await;
     for sequence in 2..=40 { let mut flood = message; flood.sequence = sequence; attacker.send(Control::Wallpaper(flood)).await; }
-    observed(&home_b,|status| status["rejected"].as_u64().unwrap_or(0) >= 10).await;
+    observed(&home_b,|status| status["rejection_reasons"]["wallpaper rate limit"].as_u64().unwrap_or(0) >= 1).await;
     Lab::cli(&home_b,&["wallpaper","consent","revoke",&identity_bad.fingerprint.to_string(),"--json"],0);
     let before = Lab::cli(&home_b,&["wallpaper","status","--json"],0);
     message.sequence = 100; attacker.send(Control::Wallpaper(message)).await;
@@ -187,7 +190,7 @@ async fn three_real_null_daemons_consent_hostility_kill_restart_and_upgrade() {
     Lab::cli(&home_b,&["wallpaper","disable","--json"],0);
     let status = Lab::cli(&home_b,&["wallpaper","status","--json"],0);
     assert_eq!(status["daemon"]["receivers"],0);
-    assert_eq!(status["daemon"]["timers"],0);
+    assert!(status["daemon"].get("timers").is_none());
     Lab::cli(&home_b,&["wallpaper","doctor","--json"],0);
     let saved = std::fs::read_to_string(home_b.join("settings.toml")).unwrap();
     assert!(saved.contains("notify_files = false"));
@@ -213,7 +216,7 @@ async fn isolated_off_and_enabled_scaffolding_have_zero_idle_cpu_ticks() {
         eprintln!("wallpaper enabled={enabled}: {delta} CPU ticks / 2 seconds");
         assert_eq!(delta,0);
         let status = Lab::cli(&home,&["wallpaper","status","--json"],0);
-        assert_eq!(status["daemon"]["timers"],0);
-        assert_eq!(status["daemon"]["children"],0);
+        assert!(status["daemon"].get("timers").is_none());
+        assert!(status["daemon"].get("children").is_none());
     }
 }
