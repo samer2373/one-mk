@@ -1,0 +1,6 @@
+[package]
+name = "one-mk-wall-canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded I/O-free exact wallpaper canvas geometry"
