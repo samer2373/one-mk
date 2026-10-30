@@ -5,6 +5,7 @@
 
 mod cells;
 mod keys;
+mod links;
 mod pages;
 mod place;
 
@@ -193,11 +194,18 @@ pub struct App {
     sheet_key: String,
     toast: Option<Toast>,
     latency: HashMap<String, Measured>,
+    /// Round trips of the connected computers, while a graph is on screen.
+    rtts: crate::rtt::Rtts,
+    /// Set while a screenshot's scripted history stands in for live samples.
+    rtt_frozen: Option<f64>,
     failed_measure: HashSet<String>,
     measuring: Option<String>,
     /// Sides (and offsets) chosen here and not yet reported back by the
     /// daemon, and when.
     pending_side: HashMap<String, (Side, Offset, f64)>,
+    /// Layout learning's question (computer id, side) answered here, and
+    /// hidden until the daemon stops asking it.
+    answered: Option<(String, Side)>,
     /// Computers placed where no screen of theirs touches ours.
     apart: HashSet<String>,
     pending_swap: HashMap<String, String>,
@@ -225,6 +233,9 @@ pub struct App {
     /// A fix just copied (its row), and when, to say so.
     copied: Option<(usize, f64)>,
     pending_lock: Option<(bool, f64)>,
+    /// Broadcast asked to start (true) or stop, and when: shown so until
+    /// the daemon says, or 5 s pass.
+    pending_broadcast: Option<(bool, f64)>,
     /// The Keys & mouse page.
     keys: keys::KeysUi,
     /// Text being typed into fields, by field.
@@ -407,9 +418,12 @@ impl App {
             sheet_key: String::new(),
             toast: None,
             latency: HashMap::new(),
+            rtts: Default::default(),
+            rtt_frozen: None,
             failed_measure: HashSet::new(),
             measuring: None,
             pending_side: HashMap::new(),
+            answered: None,
             apart: HashSet::new(),
             pending_swap: HashMap::new(),
             hop: None,
@@ -425,6 +439,7 @@ impl App {
             doctor: None,
             copied: None,
             pending_lock: None,
+            pending_broadcast: None,
             keys: keys::KeysUi::new(),
             drafts: HashMap::new(),
             profile_open: None,
@@ -461,6 +476,12 @@ impl App {
         while let Ok(e) = self.rx.try_recv() {
             match e {
                 Event::Status(s) => {
+                    // Round trips: what the daemon says now, or nothing once it is gone.
+                    match (&s, self.rtt_frozen) {
+                        (Some(st), None) => self.rtts.record(now, &st.links),
+                        (None, None) => self.rtts = Default::default(),
+                        _ => {}
+                    }
                     self.status = Some(s);
                     let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).collect());
                     self.fonts.cover(&self.ctx, names.iter().map(String::as_str));
@@ -471,6 +492,8 @@ impl App {
                     self.failed_measure.retain(|id| online.contains(id));
                     self.sync_scene();
                 }
+                Event::Links(links) if self.rtt_frozen.is_none() => self.rtts.record(now, &links),
+                Event::Links(_) => {}
                 Event::Autostart(on) => self.autostart = Some(on),
                 Event::Latency(l) => {
                     self.measuring = None;
@@ -506,6 +529,9 @@ impl App {
         }
         if self.pending_lock.is_some_and(|(_, t)| now - t > 5.0) {
             self.pending_lock = None;
+        }
+        if self.pending_broadcast.is_some_and(|(_, t)| now - t > 5.0) {
+            self.pending_broadcast = None;
         }
         self.pairing_steps(now);
         // A side the daemon never confirmed: show what it really has.
@@ -580,6 +606,11 @@ impl App {
                 self.pending_lock = None;
                 let word = if on { "keep the pointer here" } else { "let the pointer cross again" };
                 self.toast_error(format!("Couldn't {word}."), e, now);
+            }
+            Job::Broadcast(on) => {
+                self.pending_broadcast = None;
+                let what = if on { "start broadcasting to every computer" } else { "stop broadcasting" };
+                self.toast_error(format!("Couldn't {what}."), e, now);
             }
             Job::LockAll => self.toast_error("Couldn't lock the screens.", e, now),
             Job::Clip { send, name, .. } => {
@@ -703,6 +734,11 @@ impl App {
             && self.pending_lock.is_some_and(|(on, _)| on == s.pointer_locked)
         {
             self.pending_lock = None;
+        }
+        if let Some(s) = &status
+            && self.pending_broadcast.is_some_and(|(on, _)| on != s.broadcast.is_empty())
+        {
+            self.pending_broadcast = None;
         }
         let listed = self.just_paired.as_ref().is_some_and(|(j, _)| peers.iter().any(|p| &p.id == j));
         if listed || self.just_paired.as_ref().is_some_and(|(_, t)| now - t > 6.0) {
@@ -1383,7 +1419,11 @@ impl App {
         let r = Rect::from_min_size(pos2(rect.right() - 16.0 - w, rect.center().y - 17.0), vec2(w, 34.0));
         let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
         child.set_opacity(shown);
-        let a11y_label = (label == "Take back").then_some("Take back control of this computer");
+        let a11y_label = match label {
+            "Take back" => Some("Take back control of this computer"),
+            "Stop broadcast" => Some("Stop broadcasting to every computer"),
+            _ => None,
+        };
         if self.running().is_some() {
             let busy = self.busy.contains(&Job::Stop);
             // The short word when the long one would run into the tabs.
@@ -1408,6 +1448,7 @@ impl App {
                     self.busy.push(Job::TakeBack);
                     self.link.take_back();
                 }
+                Some(Job::Broadcast(on)) => self.ask_broadcast(on),
                 _ => self.start_pairing(now),
             }
         }
@@ -1416,10 +1457,13 @@ impl App {
     /// The top bar's button: what it says and does.
     fn action(&self) -> (String, Look, bool, Option<Job>) {
         let controlled = self.running().is_some_and(|s| s.controlled_by.is_some());
+        let broadcasting = self.running().is_some_and(|s| !s.broadcast.is_empty());
         let narrow = self.ctx.content_rect().width() < 900.0;
         let (label, look, enabled, job) = match self.status.as_ref() {
             Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
             Some(None) => ("Start one·mk", Look::Primary, true, Some(Job::Start)),
+            _ if broadcasting && self.busy.contains(&Job::Broadcast(false)) => ("Stopping…", Look::Primary, false, None),
+            _ if broadcasting => ("Stop broadcast", Look::Primary, true, Some(Job::Broadcast(false))),
             _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
             _ if controlled => ("Take back", Look::Primary, true, Some(Job::TakeBack)),
             _ if self.running().is_some_and(|s| !s.peers.is_empty()) => (if narrow { "Pair another" } else { "Pair another computer" }, Look::Quiet, true, None),
@@ -1446,6 +1490,20 @@ impl App {
         let Some(s) = s else {
             return ("one·mk isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
         };
+        if !s.broadcast.is_empty() {
+            let title = match &s.broadcast[..] {
+                [one] => format!("Broadcasting to {one}"),
+                all => format!("Broadcasting to {} computers", all.len()),
+            };
+            // The title names one; more than three are on the desk above.
+            let names = match &s.broadcast[..] {
+                [_] => "it".to_owned(),
+                [rest @ .., last] if rest.len() < 3 => format!("{} and {last}", rest.join(", ")),
+                _ => "all of them".to_owned(),
+            };
+            let key = if s.broadcast_hotkey.is_empty() { String::new() } else { format!("{}, ", s.broadcast_hotkey) };
+            return (title, format!("Everything you type, click and scroll here goes to {names}. Stop it with {key}Stop broadcast, or Ctrl+Alt+Shift+Esc."));
+        }
         if let Some(p) = &s.controlled_by {
             let sub = if cfg!(target_os = "linux") {
                 format!("Choose Take back, or stop sending input from {p}. Control comes back by itself after a minute without input from it.")
@@ -1657,9 +1715,12 @@ impl App {
             info_row(ui, c, y0, "Status", "Not found on the network", false, 1.0);
             let hint = fit(ui.painter(), "Start one·mk on it, on the same Wi-Fi.", &regular(T_META), c.width());
             ui.painter().text(pos2(c.left(), y1), Align2::LEFT_CENTER, hint, regular(T_META), INK2);
+            // No graph of a connection that isn't there.
+            info_row(ui, c, c.top() + 116.0, "Latency", "offline", false, 1.0);
             return;
         }
         self.quick_actions(ui, c, c.top() + 116.0, Some(&peer));
+        self.latency_card(ui, c, c.top() + links::CARD_Y, &peer);
         match self.latency.get(&peer.id) {
             Some(m) => {
                 // New numbers count over from the old ones, in fixed-width digits.
@@ -2135,7 +2196,7 @@ impl eframe::App for App {
         self.shortcuts(ui);
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, GROUND);
-        let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - PANEL_H), full.max);
+        let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - self.panel_h()), full.max);
         let desk = Rect::from_min_max(full.min, pos2(full.right(), panel.top()));
         let top = Rect::from_min_size(full.min, vec2(full.width(), TOP_H));
         // Files let go over a page without the desk: ask where they go.
@@ -2157,8 +2218,11 @@ impl eframe::App for App {
             child.set_opacity(e);
             child
         };
+        // Layout learning's question has a strip of its own under the desk.
+        let card = self.suggestion_card(ui, desk);
+        let scene = card.as_ref().map_or(desk, |c| Rect::from_min_max(desk.min, pos2(desk.right(), c.rect.top() - 6.0)));
         match self.tab {
-            t if t.desk() => self.desk(ui, desk, now),
+            t if t.desk() => self.desk(ui, scene, now),
             _ => {}
         }
         let body = Rect::from_min_max(pos2(full.left(), top.bottom()), full.max);
@@ -2181,11 +2245,18 @@ impl eframe::App for App {
         if !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys) {
             self.panel(ui, panel, now);
         }
+        if let Some(card) = card {
+            self.suggestion_banner(ui, card);
+        }
         widgets::set_locked(ui.ctx(), false);
         // The sheet sits over the panel, leaving the desk room to show
         // what is being paired.
         self.sheet(ui, full, now);
         self.toast_view(ui, desk, now);
+        // Tell the link whether a graph was drawn: it asks the daemon for
+        // round trips only then (a minimised window draws nothing).
+        let hidden = ui.input(|i| i.viewport().minimized == Some(true));
+        self.link.showing.frame(self.graph_wanted() && !hidden);
         #[cfg(debug_assertions)]
         debug::shot(ui.ctx(), now);
     }
@@ -2200,6 +2271,9 @@ impl eframe::App for App {
 ///   `ONE_MK_APP_SHOT_AFTER` seconds (default 3) and quits;
 /// - `ONE_MK_APP_PAIR=1` starts pairing; `ONE_MK_APP_TAB=files|keyboard`
 ///   opens a tab; `ONE_MK_APP_SELECT=name` selects a computer (`me`: this one);
+/// - `ONE_MK_APP_RTT="ID=4,5,6+2;ID2=..."` fills the latency graphs with a
+///   history, one reading a second in ms (`+n`: n packets lost), and stops
+///   live samples; the id is the computer's id in the status;
 /// - `ONE_MK_APP_DROP=n` drops n files where it's unclear who gets them;
 /// - `ONE_MK_APP_DRAG=1` carries the first other computer across this one;
 /// - `ONE_MK_APP_FOCUS=1` puts the keyboard on the position control;
@@ -2222,6 +2296,8 @@ impl eframe::App for App {
 ///   `ONE_MK_APP_KEY_CHOOSE=esc` makes the opened key that, as a click
 ///   would; `ONE_MK_APP_BUTTON=4` opens a mouse button; `ONE_MK_APP_KEY_TEST=
 ///   58d0,58u85` types into the test box (code, down/up, ms).
+/// - `ONE_MK_APP_BROADCAST=1` turns broadcast on (or off), as the Desk's
+///   switch does.
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(debug_assertions)]
 mod debug {
@@ -2245,6 +2321,14 @@ mod debug {
         if app.status.is_some() && var("ONE_MK_APP_PAIR").is_some() && once(&ctx, "pair") {
             app.start_pairing(now);
         }
+        if ready && let Some(script) = var("ONE_MK_APP_RTT") && once(&ctx, "rtt") {
+            for part in script.split(';') {
+                if let Some((id, series)) = part.split_once('=') {
+                    app.rtts.set(id, crate::rtt::scripted(now, series));
+                }
+            }
+            app.rtt_frozen = Some(now);
+        }
         if ready && let Some(name) = var("ONE_MK_APP_SELECT") {
             let id = if name == "me" { Some(name) } else { app.running().and_then(|s| s.peers.iter().find(|p| p.name == name)).map(|p| p.id.clone()) };
             if let Some(id) = id
@@ -2258,6 +2342,10 @@ mod debug {
         }
         if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
             app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("one-mk didn't answer within 3 seconds".into()), now);
+        }
+        if ready && var("ONE_MK_APP_BROADCAST").is_some() && now > 1.0 && once(&ctx, "broadcast") {
+            let on = !app.broadcasting();
+            app.ask_broadcast(on);
         }
         if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
             ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));

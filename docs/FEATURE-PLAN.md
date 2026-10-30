@@ -404,6 +404,31 @@ the PC, with one mouse), plus a keyboard mapper for any key.
 
 ## Wave 5 (chosen by the owner from a checklist, 2026-10-30)
 
+**Quality bar (owner, 2026-10-30): enterprise level, polished, no known issues.**
+The owner found very major bugs and unpolished work in earlier features, so
+"tests pass" is not the bar. A feature is done only when ALL of these hold:
+
+1. Built, then run end to end through the real binaries (two real daemons, the
+   real CLI, window screenshots), including failure paths, restart, `kill -9`
+   mid-operation, sleep/disconnect, and upgrading from settings files written
+   by the previous build.
+2. Commands: clear `--help`, actionable errors, right exit codes, no panics.
+3. UI: every state (empty, error, offline, long names, narrow, HiDPI),
+   keyboard, reduced motion, contrast; screenshots looked at and fixed.
+4. Idle CPU and memory measured with the feature on and off; no timer unless
+   documented.
+5. No stuck key, button, pointer, window, process or temp file after any
+   failure; tests fail when the fix is removed.
+6. Property or fuzz tests for parsers and state machines, including hostile
+   input.
+7. README, `--help`, troubleshooting entry and a `doctor` check.
+8. Anything not run on a real OS (Windows, macOS, wlroots, Bluetooth hardware)
+   is labelled untested in docs, `status`, `doctor` and the report.
+9. The author self-reviews as a hostile reviewer; the OTHER model reviews;
+   then an independent end-to-end QA pass written from a user's point of view
+   finds nothing left; the report includes a manual test script for real
+   hardware and the known limitations.
+
 Branch `wave5` (worktree `.claude/worktrees/wave5`), from `main` at d7b8c6b
 (which includes origin's release 0.1.12). Same rules as before: failing-first
 tests, cross-review by the other model, full validation before merging.
@@ -411,14 +436,72 @@ tests, cross-review by the other model, full validation before merging.
 | ID | Task | Author | Status |
 |---|---|---|---|
 | 5A | Clipboard history and a hotkey to paste from another computer's clipboard (must skip sensitive copies) | Codex | todo |
-| 5B | Live latency graph per computer in the window (event-driven; no polling when the window is closed) | Claude | todo |
-| 5C | Broadcast input to all connected computers (explicit, visible, auto-off, no stuck keys) | Claude | todo |
-| 5D | Edge pushes where no computer sits: pointer wrap to the opposite edge, and push-toward-it layout learning | Claude | todo |
+| 5B | Live latency graph per computer in the window (event-driven; no polling when the window is closed) | Claude | built (see 5B notes below) |
+| 5C | Broadcast input to all connected computers (explicit, visible, auto-off, no stuck keys). `one-mk broadcast`, Ctrl+Alt+B (Ctrl+Alt+Shift+B on Windows), tray, window, doctor; design and limits in docs/BROADCAST.md. Real runs: three daemons on loopback (null backend), X11 capture in a private Xvfb, notifications on GNOME. Windows, macOS, wlroots and the portal untested | Claude | done, awaiting cross-review |
+| 5D | Edge pushes where no computer sits: pointer wrap to the opposite edge, and push-toward-it layout learning (`docs/EDGE-PUSH.md`). Tested end to end on X11 (Xvfb, real daemons, a 0.1.12 peer); untested on the portals, wlroots, Windows, macOS | Claude | done, review pending |
 | 5E | Keyboard layout and AltGr fix: send the typed character when layouts differ; starts after 5I (both change the key event) | Codex | blocked on 5I |
 | 5F | Autoscroll (middle-click) and gesture buttons | Claude | todo |
 | 5G | Auto-update from signed GitHub Releases (build on the owner's release workflow) | Codex | todo |
 | 5H | Activate local-only key remap on Windows and macOS (acknowledged handoff, no stuck keys); builds on 5I | Codex | blocked on 5I |
 | 5I | Per-device scope: key and mouse rules for ONE specific keyboard or mouse, saved on the computer the device is plugged into (owner request 2026-10-30). X11 via XI2 source ids; Windows Raw Input and macOS IOHID compile-checked only; NOT possible on GNOME/KDE/wlroots Wayland (the compositor merges devices): say so | Claude | done: X11 tested; Windows and macOS compile-checked only |
+
+### 5B notes (live latency graph)
+
+- Data: `quinn::Connection::stats().path` (smoothed RTT, lost and sent
+  packets). The daemon reads it inside `status()` when someone asks: no timer,
+  no probe traffic, nothing between requests. The status gets one additive
+  line per connected computer, `link<TAB>id<TAB>rtt_us<TAB>lost<TAB>sent`
+  (older readers skip it; hostile values are capped or dropped). `one-mk
+  status` prints `online, rtt 4 ms`; `one-mk doctor` has a "Connection
+  quality" check (over 40 ms, or 2 % of packets lost, warns).
+- Window: it already polled the daemon every 250 ms while open, and sent an
+  update on every change. Round trips change at every look, so they are
+  left out of that comparison and go as a separate once-a-second sample,
+  asked for only while a graph is on screen (Desk tab with an online computer
+  selected, or Health): the window stamps every frame that draws one, and the
+  link stops sampling when the stamp is 3 s old (minimised, covered, other
+  tab). Closed: the process is gone. No timer in the tray or the daemon.
+- A history is 120 readings per computer on a two-minute time axis (a stretch
+  nobody looked at is a gap, not a flat line), memory only. Offline computers
+  lose theirs. `crates/app/src/rtt.rs` is the pure view-model (tested);
+  `crates/app/src/app/links.rs` draws it.
+- States: Smooth (95th percentile at most 40 ms, no loss), Some stalls (over
+  40 ms, or any lost packet), Slow (over 100 ms, or 8 lost packets), still
+  measuring (under 3 readings), offline, and "Restart one·mk" for a daemon
+  from before this (after an upgrade). Amber only for the last two warnings
+  and always with the word.
+- The Desk panel is taller (the inspector needed 58 pt more); Layout, Files and
+  the other tabs keep their height.
+- Not seen on a real screen reader, on Windows or on macOS (compile-checked
+  only); Wi-Fi loss was not produced on real hardware: the loss states were
+  drawn from scripted histories.
+
+## Wave 6: live wallpapers on one continuous canvas (owner request, 2026-10-30)
+
+Like Muro (macOS) and Aura (Linux), but the video or animation runs as ONE
+continuous picture across ALL monitors, and across the owner's computers too
+(each computer plays its slice, in sync, placed by one-mk's shared layout).
+Licensing rule: no code is copied from Muro (PolyForm Shield) or Aura (GPL-3.0);
+one-mk is MIT OR Apache-2.0 and every dependency's licence must be checked.
+
+Owner's choices: platforms Linux, Windows and macOS; content video files and
+animated images (no shaders, no web pages); multi-computer from the start;
+sources: own files, URL import and a built-in download gallery (free-to-use
+sources only, after reading their terms; we host at most a small index, never
+the videos). The wallpaper engine is a separate optional process: nothing runs
+unless it is turned on.
+
+| ID | Task | Author | Status |
+|---|---|---|---|
+| 6A | Feasibility and design document `docs/WALLPAPER-DESIGN.md` (no code; on branch `t3/research-live-wallpaper-design`, 1151 lines, estimate 28 to 42 engineer-weeks for the full plan) | Codex | done; being reviewed by Claude |
+| 6B | Spike: GNOME 50 video behind windows and icons, in an ISOLATED headless session (never the live one) | Claude | running |
+| 6C | Spike: cross-computer clock sync (simulated Wi-Fi models plus a real loopback check) and one-decode-many-crops, reusable crate `one-mk-wall-sync` | Codex | running |
+| 6E | Revise `docs/WALLPAPER-DESIGN.md` with the fixes in `docs/WALLPAPER-DESIGN-REVIEW.md` (codec and encoder path, source resolution versus canvas, GNOME bridge licence, sync rewritten around presentation latency, hybrid GPU, honest estimate, sandbox as a phase-1 gate) and with the spike results | Codex | blocked on 6B and 6C |
+| 6D | Implementation in phases, with the quality bar | tbd | blocked on 6E and the owner's go/no-go |
+
+More owner decisions (2026-10-30, after the design review): the GNOME extension ships ONLY with one-mk (not listed on extensions.gnome.org), so it can stay MIT OR Apache-2.0 and is not bound by that site's GPL/no-binaries/review rules; gallery and imported videos are normalised to ROYALTY-FREE codecs (VP9 or AV1 via permissively licensed encoders), never a GPL encoder (x264/x265) in shipped artifacts; hybrid-GPU machines decode on the integrated GPU by default; Plasma is not in release one.
+
+Owner's decisions (2026-10-30): start by PROVING THE RISKY PARTS (6B and 6C), then decide the full scope with real results; GNOME is the one Linux desktop that must work in the first release (others are not promised); sync is best effort, about 50 ms on Wi-Fi, with a quality indicator; the gallery starts with Wikimedia Commons CC0 / public-domain items only (no videos bundled, author and licence shown, a takedown contact).
 
 ## Out of scope for now
 

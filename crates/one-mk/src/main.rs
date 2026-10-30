@@ -27,6 +27,7 @@ mod inputdevices;
 mod install;
 mod integrate;
 mod invite;
+mod learn;
 mod link;
 mod manage;
 mod netwatch;
@@ -227,7 +228,8 @@ enum Cmd {
     },
     /// List paired computers.
     Devices,
-    /// Show whether one-mk is running, who is connected and who controls whom.
+    /// Show whether one-mk is running, who is connected (with how long each
+    /// answer takes, "rtt 4 ms") and who controls whom.
     Status,
     /// Take this computer back from the computer controlling it (on Linux,
     /// where using this computer's own mouse or keyboard can't be noticed;
@@ -285,8 +287,22 @@ enum Cmd {
         #[arg(value_name = "on|off|toggle", value_parser = ["on", "off", "toggle"])]
         state: String,
     },
+    /// Type on every connected computer at once: everything you type, click
+    /// and scroll here goes to all of them until you stop it (also with
+    /// Ctrl+Alt+B, or Ctrl+Alt+Shift+Esc). Without arguments, says whether
+    /// it is on.
+    #[command(after_help = "Examples:\n  one-mk broadcast on\n  one-mk broadcast off\n  one-mk broadcast --idle-off 30    stop by itself after 30 minutes without input (0 = never)\n\nSee docs/BROADCAST.md for what is sent where and how it stops.")]
+    Broadcast {
+        #[arg(value_name = "on|off|toggle", value_parser = ["on", "off", "toggle"])]
+        state: Option<String>,
+        /// Stop by itself after this many minutes without any key, click,
+        /// scroll or movement (0 = never; default 15).
+        #[arg(long, value_name = "MINUTES")]
+        idle_off: Option<u32>,
+    },
     /// Show or change the rules for crossing edges: dead corners, a dwell
-    /// time, a key to hold, and not leaving a fullscreen window.
+    /// time, a key to hold, not leaving a fullscreen window, and what edges
+    /// with no computer do (pointer wrap, layout learning).
     Edge(settings::EdgeArgs),
     /// Gaming mode: on another computer, send raw mouse movement (for games)
     /// instead of positions.
@@ -295,7 +311,7 @@ enum Cmd {
         mode: settings::Gaming,
     },
     /// Show or change the keyboard shortcuts: jump to computer N, the next
-    /// one, lock the pointer, come back here.
+    /// one, lock the pointer, come back here, broadcast.
     Hotkeys(hotkeys::HotkeyArgs),
     /// Lock this computer's screen and every connected computer's.
     LockAll,
@@ -526,6 +542,10 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Switch { to } => steer::switch(&dir, &to).await,
             Cmd::LockPointer { state } => {
                 steer::lock_pointer(&dir, steer::Toggle::parse(&state).context("on, off or toggle")?).await
+            }
+            Cmd::Broadcast { state, idle_off } => {
+                let state = state.map(|s| steer::Toggle::parse(&s).context("on, off or toggle")).transpose()?;
+                steer::broadcast(&dir, state, idle_off).await
             }
             Cmd::Edge(args) => settings::edge(&dir, args).await,
             Cmd::Gaming { mode } => settings::gaming(&dir, mode).await,

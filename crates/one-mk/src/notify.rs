@@ -144,6 +144,25 @@ pub async fn failure(title: &str, body: &str) {
     sys::failure(title, body).await;
 }
 
+/// A plain note for the user (layout learning's question, or what it did).
+/// The caller prints the same words, so nothing is lost where there are no
+/// desktop notifications (Windows, for now). Never fails.
+pub async fn note(title: &str, body: &str) {
+    if disabled() || cfg!(test) {
+        return;
+    }
+    sys::note(title, body).await;
+}
+
+/// Says that something changed (broadcast started or stopped), on a task of
+/// its own: returns at once. Never during tests, and not with `--no-notify`.
+pub fn info(title: String, body: String) {
+    if disabled() || cfg!(test) {
+        return;
+    }
+    tokio::spawn(async move { sys::note(&title, &body).await });
+}
+
 pub async fn sent(count: usize, peer: &str) {
     let body = format!("Sent {count} files to {}", display(peer));
     println!("{body}");
@@ -183,6 +202,21 @@ mod sys {
 
     /// A plain error notification: D-Bus, else `notify-send`, else stderr.
     pub async fn failure(title: &str, body: &str) {
+        let success = title == "one-mk files sent";
+        let (icon, category) = if success { ("document-send", "transfer.complete") } else { ("dialog-error", "transfer.error") };
+        if !message(title, body, icon, category).await {
+            eprintln!("one-mk: {title}: {body}");
+        }
+    }
+
+    /// A note: D-Bus, else `notify-send`, else nothing (the daemon printed it).
+    pub async fn note(title: &str, body: &str) {
+        message(title, body, "input-mouse", "device").await;
+    }
+
+    /// Shows a notification without actions; false if neither D-Bus nor
+    /// `notify-send` could.
+    async fn message(title: &str, body: &str, icon: &str, category: &str) -> bool {
         let shown = async {
             let conn = zbus::Connection::session().await?;
             let proxy = zbus::Proxy::new(
@@ -192,29 +226,24 @@ mod sys {
                 "org.freedesktop.Notifications",
             )
             .await?;
-            let success = title == "one-mk files sent";
-            let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from(if success { "transfer.complete" } else { "transfer.error" }))]);
+            let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from(category))]);
             proxy
-                .call::<_, _, u32>(
-                    "Notify",
-                    &("one-mk", 0u32, if success { "document-send" } else { "dialog-error" }, title, escape_markup(body), Vec::<&str>::new(), hints, -1i32),
-                )
+                .call::<_, _, u32>("Notify", &("one-mk", 0u32, icon, title, escape_markup(body), Vec::<&str>::new(), hints, -1i32))
                 .await?;
             anyhow::Ok(())
         };
-        if let Err(e) = shown.await {
-            tracing::debug!("notification over D-Bus failed ({e:#}); trying notify-send");
-            let status = Command::new("notify-send")
-                .args(["--app-name=one-mk", "--icon=dialog-error", "--"])
-                .arg(title)
-                .arg(escape_markup(body))
-                .stdin(Stdio::null())
-                .status()
-                .await;
-            if !status.is_ok_and(|s| s.success()) {
-                eprintln!("one-mk: {title}: {body}");
-            }
-        }
+        let Err(e) = shown.await else { return true };
+        tracing::debug!("notification over D-Bus failed ({e:#}); trying notify-send");
+        let status = Command::new("notify-send")
+            .args(["--app-name=one-mk", &format!("--icon={icon}"), "--"])
+            .arg(title)
+            .arg(escape_markup(body))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+        status.is_ok_and(|s| s.success())
     }
 
     async fn via_dbus(n: &FilesReceived) -> anyhow::Result<()> {
@@ -361,6 +390,10 @@ mod sys {
         notify(body, title).await;
     }
 
+    pub async fn note(title: &str, body: &str) {
+        notify(body, title).await;
+    }
+
     /// Title and body go in as arguments, never into the script text.
     pub async fn show(n: FilesReceived) {
         notify(&n.body(), &n.title()).await;
@@ -404,6 +437,11 @@ mod sys {
     pub async fn failure(title: &str, body: &str) {
         eprintln!("one-mk: {title}: {body}");
     }
+
+    /// Printed by the caller already (see the TODO above about toasts).
+    pub async fn note(title: &str, _body: &str) {
+        tracing::debug!("not notifying {title:?} (notifications are not implemented on Windows yet)");
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -413,6 +451,7 @@ mod sys {
     pub async fn failure(title: &str, body: &str) {
         eprintln!("one-mk: {title}: {body}");
     }
+    pub async fn note(_: &str, _: &str) {}
 }
 
 #[cfg(test)]

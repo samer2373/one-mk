@@ -312,7 +312,7 @@ fn dist2(a: Pos, b: Pos) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn dual() -> Desktop {
@@ -430,18 +430,18 @@ mod tests {
     }
 
     /// A tiny deterministic generator, so failures reproduce.
-    struct Rng(u64);
+    pub(crate) struct Rng(pub(crate) u64);
     impl Rng {
-        fn next(&mut self) -> u64 {
+        pub(crate) fn next(&mut self) -> u64 {
             self.0 ^= self.0 << 13;
             self.0 ^= self.0 >> 7;
             self.0 ^= self.0 << 17;
             self.0
         }
-        fn below(&mut self, n: u64) -> i32 {
+        pub(crate) fn below(&mut self, n: u64) -> i32 {
             (self.next() % n.max(1)) as i32
         }
-        fn pick<T: Copy>(&mut self, of: &[T]) -> T {
+        pub(crate) fn pick<T: Copy>(&mut self, of: &[T]) -> T {
             of[self.next() as usize % of.len()]
         }
     }
@@ -449,7 +449,7 @@ mod tests {
     /// A connected desktop of 1 to 4 monitors of assorted sizes (logical
     /// pixels, as a scaled monitor reports), each placed against a side of
     /// one already there at a random offset, never overlapping.
-    fn random_desktop(rng: &mut Rng) -> Desktop {
+    pub(crate) fn random_desktop(rng: &mut Rng) -> Desktop {
         const SIZES: [(i32, i32); 7] = [(1920, 1080), (2560, 1440), (1280, 800), (1080, 1920), (1440, 900), (3840, 1600), (1707, 1067)];
         let (w, h) = rng.pick(&SIZES);
         let mut screens = vec![Rect::new(rng.below(400) - 200, rng.below(400) - 200, w, h)];

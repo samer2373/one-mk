@@ -20,6 +20,7 @@ pub mod remap;
 pub mod scroll;
 mod sleep;
 mod transfer;
+mod wrap;
 
 pub use codec::{Control, Datagram, DecodeError, FOCUS_REPEAT, FOCUS_SILENCE, MAX_SCREENS, StreamKind, caps, os};
 pub use edge::{
@@ -32,6 +33,7 @@ pub use lock::{CAUSE_WINDOW, LockSync, OnRemote};
 pub use motion::{HOME_INSET, MotionReceiver, Received, RelReceived, RemoteCursor, Step};
 pub use sleep::{OnRemoteSleep, SleepSync};
 pub use transfer::{Batch, ClipAck, ClipFormat, ClipHeader, FileMsg};
+pub use wrap::{free_edges, wrap_point};
 
 /// Bumped on any incompatible wire change; peers refuse mismatched versions.
 pub const PROTOCOL_VERSION: u16 = 2;

@@ -1,5 +1,6 @@
-//! Commands that steer a running daemon: `switch`, `lock-pointer` and
-//! `lock-all`. Replies are a status word on the first line, then details.
+//! Commands that steer a running daemon: `switch`, `lock-pointer`,
+//! `lock-all` and `broadcast`. Replies are a status word on the first line,
+//! then details.
 
 use crate::control::{self, Request};
 use anyhow::{Result, bail};
@@ -41,6 +42,75 @@ pub async fn lock_pointer(dir: &Path, t: Toggle) -> Result<()> {
         ("ok", "off") => println!("The pointer is free to cross edges again."),
         _ => bail!("unexpected answer from one-mk: {word:?}"),
     }
+    Ok(())
+}
+
+/// `one-mk broadcast [on|off|toggle] [--idle-off MINUTES]`: starts or stops
+/// broadcast, or with neither says what it is doing; `--idle-off` changes
+/// when it stops by itself.
+pub async fn broadcast(dir: &Path, state: Option<Toggle>, idle_off: Option<u32>) -> Result<()> {
+    use crate::settings::{MAX_IDLE_OFF_MINUTES, Settings};
+    if let Some(minutes) = idle_off {
+        if minutes > MAX_IDLE_OFF_MINUTES {
+            bail!("--idle-off takes at most {MAX_IDLE_OFF_MINUTES} minutes (a day); 0 means it never stops by itself");
+        }
+        let b = Settings::update(dir, |s| {
+            s.broadcast.idle_off_minutes = minutes;
+            Ok(s.broadcast.clone())
+        })?;
+        println!("Broadcast now stops {}.", b.describe_idle_off());
+        crate::settings::apply(dir).await?;
+    }
+    let Some(t) = state else {
+        if idle_off.is_none() {
+            show_broadcast(dir, &Settings::load(dir)?.broadcast).await?;
+        }
+        return Ok(());
+    };
+    let Some(reply) = control::request(dir, Request::Broadcast(t)).await? else {
+        bail!("nothing to broadcast with: the one-mk service is not running here. Start it with `one-mk run` (or `one-mk install`)");
+    };
+    let mut lines = reply.lines();
+    let (word, state) = (lines.next().unwrap_or(""), lines.next().unwrap_or(""));
+    if let Some(msg) = word.strip_prefix("error ") {
+        bail!("{msg}");
+    }
+    match (word, state) {
+        ("ok" | "already", "on") => {
+            if word == "already" {
+                println!("Broadcast is already on.");
+            }
+            // Said as `one-mk status` says it, with the shortcut in force.
+            let status = control::request(dir, Request::Status).await?.and_then(|r| one_mk_ctl::status::Status::decode(&r));
+            match status.and_then(|s| s.broadcast_line()) {
+                Some(line) => println!("{line}"),
+                None => println!("Broadcasting. `one-mk broadcast off` stops it."),
+            }
+        }
+        ("ok", "off") => println!("Broadcast stopped. The mouse and keyboard are back on this computer."),
+        ("already", "off") => println!("Broadcast is already off."),
+        _ => bail!("unexpected answer from one-mk: {word:?}"),
+    }
+    Ok(())
+}
+
+/// `one-mk broadcast` alone: on or off, and how it stops.
+async fn show_broadcast(dir: &Path, settings: &crate::settings::BroadcastSettings) -> Result<()> {
+    let status = control::request(dir, Request::Status).await?.and_then(|r| one_mk_ctl::status::Status::decode(&r));
+    match &status {
+        None => println!("one-mk is not running, so broadcast is off."),
+        Some(s) => match s.broadcast_line() {
+            Some(line) => println!("{line}"),
+            None => {
+                let key = if s.broadcast_hotkey.is_empty() { String::new() } else { format!(" or {}", s.broadcast_hotkey) };
+                println!("Broadcast is off. `one-mk broadcast on`{key} sends everything you type, click and scroll here to every connected computer at once.");
+            }
+        },
+    }
+    println!(
+        "Broadcast stops {}; `one-mk broadcast --idle-off MINUTES` changes that (0 = never). Ctrl+Alt+Shift+Esc always stops it.",
+        settings.describe_idle_off()
+    );
     Ok(())
 }
 

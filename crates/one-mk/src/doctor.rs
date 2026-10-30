@@ -601,6 +601,32 @@ pub fn hotkey_check(d: &Daemon, portal: Option<&Result<u32, String>>) -> Check {
     check("hotkeys", "Keyboard shortcuts", out)
 }
 
+/// Broadcast (`one-mk broadcast`): on right now (said, so typing that goes
+/// everywhere is never a mystery), its shortcut and when it stops by
+/// itself, and where it has not been tried yet.
+pub fn broadcast_check(d: &Daemon, settings: Option<&crate::settings::BroadcastSettings>, os: Os) -> Check {
+    let idle = settings.map_or_else(|| "by itself after 15 minutes without input".to_owned(), |b| b.describe_idle_off());
+    // Tried for real: Linux with the null and X11 backends.
+    let untested = match (os, d.status().map(|s| s.backend.as_str())) {
+        (Os::Windows | Os::Mac, _) => Some("Broadcast has not been tried on this system yet (untested)."),
+        (_, Some("portal" | "wlroots")) => Some("Broadcast has not been tried with this input backend yet (untested)."),
+        _ => None,
+    };
+    let note = untested.map_or_else(String::new, |n| format!(" {n}"));
+    let out = match d.status() {
+        Some(s) if !s.broadcast.is_empty() => Outcome::warn(
+            format!("On: everything typed, clicked and scrolled here goes to {} ({}). It stops {idle}.{note}", s.broadcast.len(), s.broadcast.join(", ")),
+            "If you didn't mean it, stop it: `one-mk broadcast off`, its shortcut, or Ctrl+Alt+Shift+Esc.",
+        ),
+        Some(s) if s.broadcast_hotkey.is_empty() => {
+            Outcome::pass(format!("Off. No shortcut starts it (`one-mk hotkeys --broadcast CHORD` sets one); `one-mk broadcast on` does. It stops {idle}.{note}"))
+        }
+        Some(s) => Outcome::pass(format!("Off. {} or `one-mk broadcast on` starts it; it stops {idle}.{note}", s.broadcast_hotkey)),
+        None => Outcome::skip(format!("Checked while one-mk runs.{note}")),
+    };
+    check("broadcast", "Broadcast", out)
+}
+
 /// `[input]` in settings.toml, read from the file (`None`: it can't be read).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tuning {
@@ -693,6 +719,65 @@ pub fn pointer_overlay_check(support: Support, mode: DrawMode) -> Check {
     check("pointer-overlay", "Pointer without a mouse", out)
 }
 
+/// Pointer wrap and layout learning (`[edge] wrap`, `learn`): what is on,
+/// whether it was tried with this input backend (`backend` as `one-mk
+/// status` names it; empty when one-mk isn't running), and the question
+/// learning is asking, if any.
+pub fn edge_push_check(edge: &crate::settings::EdgeSettings, backend: &str, question: Option<String>) -> Check {
+    use crate::settings::{Learn, Wrap};
+    let id = "edge-push";
+    let title = "Edges with no computer";
+    if edge.wrap == Wrap::Off && edge.learn == Learn::Off {
+        return check(id, title, Outcome::skip("Pointer wrap and layout learning are off."));
+    }
+    let wrap = match edge.wrap {
+        Wrap::Off => "Pointer wrap is off",
+        Wrap::On => "The pointer wraps round at left and right edges with no computer",
+        Wrap::All => "The pointer wraps round at every edge with no computer",
+    };
+    let learn = match edge.learn {
+        Learn::Off => "layout learning is off",
+        Learn::Suggest => "pushing toward a computer that isn't placed yet suggests where it is",
+        Learn::Auto => "pushing toward a computer that isn't placed yet places it",
+    };
+    let mut detail = format!("{wrap}; {learn}.");
+    if let Some(q) = question {
+        detail += &format!(" Asking now: {q}");
+    }
+    let acts = edge.wrap != Wrap::Off || edge.learn == Learn::Auto;
+    let out = match edge_push_tested(backend) {
+        Some(true) | None => Outcome::pass(detail),
+        Some(false) if acts => Outcome::warn(
+            format!("{detail} Not yet tested on {}.", backend_words(backend)),
+            "If the pointer misbehaves at an edge with no computer, turn it off with `one-mk edge --wrap off --learn suggest`, and report it.",
+        ),
+        Some(false) => Outcome::pass(format!("{detail} Not yet tested on {}.", backend_words(backend))),
+    };
+    check(id, title, out)
+}
+
+/// Where `backend` (as `one-mk status` names it) runs, in words.
+pub fn backend_words(backend: &str) -> &str {
+    match backend {
+        "portal" => "the Wayland desktop portals (GNOME, KDE)",
+        "wlroots" => "wlroots desktops (Sway, Hyprland)",
+        "native" if cfg!(windows) => "Windows",
+        "native" if cfg!(target_os = "macos") => "macOS",
+        other => other,
+    }
+}
+
+/// Whether wrap and learning were tried with `backend` (`None`: unknown,
+/// one-mk isn't running). Only X11 was, on a private X server; the null
+/// backend captures nothing.
+pub fn edge_push_tested(backend: &str) -> Option<bool> {
+    match backend {
+        "" => None,
+        "x11" | "null" => Some(true),
+        _ => Some(false),
+    }
+}
+
 fn probe_tuning(dir: &Path) -> Option<Tuning> {
     let input = Settings::load(dir).ok()?.input;
     let paired = TrustStore::load(dir)
@@ -769,6 +854,44 @@ pub fn network_check(addrs: &[Addr]) -> Check {
         )
     };
     check("network", title, out)
+}
+
+/// How the connections to the connected computers are doing right now,
+/// from what QUIC measures (the window draws the same over time).
+pub fn connection_check(d: &Daemon) -> Check {
+    let title = "Connection quality";
+    let Some(status) = d.status() else {
+        return check("link", title, Outcome::skip("one-mk is not running, so there is no connection to measure."));
+    };
+    let live: Vec<(&str, one_mk_ctl::status::LinkStats)> =
+        status.peers.iter().filter(|p| p.online).filter_map(|p| Some((p.name.as_str(), status.link_of(&p.id)?))).collect();
+    if live.is_empty() {
+        return check("link", title, Outcome::skip("No computer is connected right now."));
+    }
+    let shown = |us: u32| crate::manage::LinkStats { rtt_us: us, ..Default::default() }.render().replacen("rtt ", "", 1);
+    let slow: Vec<String> = live
+        .iter()
+        .filter_map(|(name, l)| {
+            // A fifty-th of the packets lost, once enough have been sent to say.
+            let lossy = l.sent >= 200 && l.lost * 50 >= l.sent;
+            match (l.rtt_us > one_mk_ctl::status::LinkStats::STALL_US, lossy) {
+                (true, true) => Some(format!("{name} answers in {} and lost {} of {} packets", shown(l.rtt_us), l.lost, l.sent)),
+                (true, false) => Some(format!("{name} answers in {}", shown(l.rtt_us))),
+                (false, true) => Some(format!("{name} lost {} of {} packets", l.lost, l.sent)),
+                (false, false) => None,
+            }
+        })
+        .collect();
+    let out = if slow.is_empty() {
+        let list: Vec<String> = live.iter().map(|(name, l)| format!("{name} {}", shown(l.rtt_us))).collect();
+        Outcome::pass(format!("Answers come back fast: {}.", list.join(", ")))
+    } else {
+        Outcome::warn(
+            format!("{}. Mouse moves may stall (under 40 ms is smooth).", slow.join("; ")),
+            "Move closer to the Wi-Fi router, use the 5 GHz band or a network cable, and pause big downloads on this network. The Health page in the window shows how it changes.",
+        )
+    };
+    check("link", title, out)
 }
 
 // ------------------------------------------------------------- renderer --
@@ -936,13 +1059,20 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         checks.push(check("clipboard", "Clipboard", Outcome::pass(settings.clipboard.summary())));
     }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
+    checks.push(broadcast_check(&daemon, crate::settings::Settings::load(dir).ok().map(|s| s.broadcast).as_ref(), os));
     checks.push(tuning_check(probe_tuning(dir).as_ref()));
     checks.push(device_rules_check(&probe_device_rules(dir, daemon.status().is_some())));
     checks.push(pointer_overlay_check(
         crate::pointeroverlay::support_here(daemon.status().map(|s| s.backend.as_str())),
         crate::settings::Settings::load(dir).map(|s| s.pointer.draw_when_no_mouse).unwrap_or_default(),
     ));
+    if let Ok(settings) = crate::settings::Settings::load(dir) {
+        let status = daemon.status();
+        let question = status.and_then(|s| s.suggestion.as_ref()).map(|g| one_mk_ctl::status::is_it_there(&g.name, g.side));
+        checks.push(edge_push_check(&settings.edge, status.map_or("", |s| s.backend.as_str()), question));
+    }
     checks.push(network_check(&addrs));
+    checks.push(connection_check(&daemon));
     let seen = mdns.seen.as_deref().unwrap_or_default();
     checks.extend(peer_checks(&daemon, &paired, seen));
     checks
@@ -1218,12 +1348,60 @@ mod tests {
         }
     }
 
+    fn connected(links: &[(&str, u32, u64, u64)]) -> Daemon {
+        let mut s = status("aaaa-aaaa", 24900, &links.iter().map(|l| (l.0, true)).collect::<Vec<_>>());
+        s.links = links.iter().map(|(id, rtt_us, lost, sent)| ((*id).into(), one_mk_ctl::status::LinkStats { rtt_us: *rtt_us, lost: *lost, sent: *sent })).collect();
+        Daemon::Running(Box::new(s))
+    }
+
+    #[test]
+    fn connection_quality_reads_what_quic_measured() {
+        let c = connection_check(&Daemon::NotRunning);
+        assert_eq!(st(&c), Status::Skip);
+        assert_eq!(st(&connection_check(&running())), Status::Skip);
+        let c = connection_check(&connected(&[("1111-1111", 4_200, 0, 5000)]));
+        assert_eq!(st(&c), Status::Pass);
+        assert!(c.outcome.detail.contains("laptop 4 ms"), "{}", c.outcome.detail);
+        // Late answers, loss, or both warn, and say which computer.
+        let c = connection_check(&connected(&[("1111-1111", 85_000, 0, 5000)]));
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.detail.contains("laptop answers in 85 ms") && c.outcome.fix.unwrap().contains("5 GHz"), "{}", c.outcome.detail);
+        let c = connection_check(&connected(&[("1111-1111", 4_000, 150, 5000)]));
+        assert!(c.outcome.detail.contains("lost 150 of 5000 packets"), "{}", c.outcome.detail);
+        let c = connection_check(&connected(&[("1111-1111", 90_000, 150, 5000)]));
+        assert!(c.outcome.detail.contains("answers in 90 ms and lost 150"), "{}", c.outcome.detail);
+        // 40 ms is the edge, and a handful of packets in the first seconds says nothing.
+        assert_eq!(st(&connection_check(&connected(&[("1111-1111", 40_000, 3, 100)]))), Status::Pass);
+        assert_eq!(st(&connection_check(&connected(&[("1111-1111", 40_001, 0, 100)]))), Status::Warn);
+        // A computer that is not connected has no link to judge.
+        let mut s = status("aaaa-aaaa", 24900, &[("1111-1111", false)]);
+        s.links = vec![("1111-1111".into(), one_mk_ctl::status::LinkStats { rtt_us: 900_000, lost: 9, sent: 10 })];
+        assert_eq!(st(&connection_check(&Daemon::Running(Box::new(s)))), Status::Skip);
+    }
+
     fn running() -> Daemon {
         Daemon::Running(Box::new(status("aaaa-aaaa", 24900, &[])))
     }
 
     fn st(c: &Check) -> Status {
         c.outcome.status
+    }
+
+    #[test]
+    fn edge_push_states() {
+        use crate::settings::{EdgeSettings, Learn, Wrap};
+        let edge = |wrap, learn| EdgeSettings { wrap, learn, ..EdgeSettings::default() };
+        assert_eq!(st(&edge_push_check(&edge(Wrap::Off, Learn::Off), "x11", None)), Status::Skip);
+        let default = edge_push_check(&EdgeSettings::default(), "portal", Some("Is B on your left?".into()));
+        assert_eq!(st(&default), Status::Pass, "suggesting only hands the pointer back");
+        assert!(default.outcome.detail.contains("Not yet tested on the Wayland desktop portals"), "{}", default.outcome.detail);
+        assert!(default.outcome.detail.contains("Asking now: Is B on your left?"));
+        let wrap = edge_push_check(&edge(Wrap::On, Learn::Suggest), "wlroots", None);
+        assert_eq!(st(&wrap), Status::Warn);
+        assert!(wrap.outcome.fix.as_deref().is_some_and(|f| f.contains("one-mk edge --wrap off")));
+        assert_eq!(st(&edge_push_check(&edge(Wrap::All, Learn::Auto), "x11", None)), Status::Pass);
+        assert_eq!(st(&edge_push_check(&edge(Wrap::Off, Learn::Auto), "native", None)), Status::Warn);
+        assert_eq!(st(&edge_push_check(&edge(Wrap::On, Learn::Auto), "", None)), Status::Pass, "not running: nothing to say");
     }
 
     #[test]
@@ -1489,6 +1667,32 @@ mod tests {
         assert_eq!(st(&hotkey_check(&Daemon::NotRunning, Some(&Ok(1)))), Status::Pass);
         assert_eq!(st(&hotkey_check(&Daemon::NotRunning, Some(&Err("no portal".into())))), Status::Warn);
         assert_eq!(st(&hotkey_check(&Daemon::NotRunning, None)), Status::Skip);
+    }
+
+    #[test]
+    fn broadcast_decisions() {
+        let base = |f: &dyn Fn(&mut DaemonStatus)| {
+            let mut s = status("aaaa-aaaa", 24900, &[]);
+            f(&mut s);
+            Daemon::Running(Box::new(s))
+        };
+        let b = crate::settings::BroadcastSettings::default();
+        let off = broadcast_check(&base(&|s| s.broadcast_hotkey = "Ctrl+Alt+B".into()), Some(&b), Os::Linux);
+        assert_eq!(st(&off), Status::Pass);
+        assert!(off.outcome.detail.contains("Ctrl+Alt+B or `one-mk broadcast on` starts it; it stops by itself after 15 minutes"), "{off:?}");
+        let none = broadcast_check(&base(&|_| {}), Some(&b), Os::Linux);
+        assert!(none.outcome.detail.contains("No shortcut starts it"), "{none:?}");
+        let on = broadcast_check(&base(&|s| s.broadcast = vec!["bee".into(), "sea".into()]), Some(&b), Os::Linux);
+        assert_eq!(st(&on), Status::Warn);
+        assert!(on.outcome.detail.contains("goes to 2 (bee, sea)") && on.outcome.fix.as_deref().unwrap().contains("broadcast off"), "{on:?}");
+        // Untested where it has not been tried.
+        for os in [Os::Windows, Os::Mac] {
+            assert!(broadcast_check(&base(&|_| {}), Some(&b), os).outcome.detail.contains("untested"));
+        }
+        let portal = broadcast_check(&base(&|s| s.backend = "portal".into()), Some(&b), Os::Linux);
+        assert!(portal.outcome.detail.contains("untested"), "{portal:?}");
+        assert!(!off.outcome.detail.contains("untested"));
+        assert_eq!(st(&broadcast_check(&Daemon::NotRunning, None, Os::Linux)), Status::Skip);
     }
 
     #[test]

@@ -130,10 +130,12 @@ impl App {
         }
     }
 
-    /// A key captured while the pointer is on another computer or held at an
-    /// edge. True if it belongs to a shortcut and must go no further.
+    /// A key captured while the pointer is on another computer, held at an
+    /// edge, or broadcast. True if it belongs to a shortcut and must go no
+    /// further.
     pub(super) fn captured_shortcut(&mut self, code: u32, down: bool) -> bool {
-        let capture = self.remote.as_ref().map(|r| r.activation).or(self.approach.as_ref().map(|(id, _)| *id));
+        let capture =
+            self.remote.as_ref().map(|r| r.activation).or(self.approach.as_ref().map(|(id, _)| *id)).or(self.broadcast_activation());
         let s = &mut self.shortcuts;
         if capture.is_none() || s.bindings.is_empty() {
             return false;

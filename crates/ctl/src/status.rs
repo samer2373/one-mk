@@ -22,6 +22,48 @@ pub fn placement(side: Side, offset: Option<(i32, i32)>) -> String {
     }
 }
 
+/// "Is B on your left?" / "Is B above this computer?": the question layout
+/// learning asks.
+pub fn is_it_there(name: &str, side: Side) -> String {
+    let at = match side {
+        Side::Left | Side::Right => on_your(side),
+        Side::Top => "above this computer",
+        Side::Bottom => "below this computer",
+    };
+    format!("Is {name} {at}?")
+}
+
+/// How to name a computer on the command line: its name where that is
+/// safe to type as it is (quoted if it has spaces), else its id.
+pub fn device_arg(name: &str, id: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_');
+    if !name.is_empty() && name.chars().all(plain) {
+        name.to_owned()
+    } else if !name.trim().is_empty() && name.chars().all(|c| plain(c) || c == ' ') && name.trim() == name {
+        format!("\"{name}\"")
+    } else {
+        id.to_owned()
+    }
+}
+
+/// A computer layout learning thinks is on `side` (see `docs/EDGE-PUSH.md`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Suggestion {
+    pub id: String,
+    pub name: String,
+    pub side: Side,
+    /// How to name it in `one-mk layout` (see [`device_arg`]); the name is
+    /// not always unique.
+    pub arg: String,
+}
+
+impl Suggestion {
+    /// The command that places it there.
+    pub fn command(&self) -> String {
+        format!("one-mk layout {} {}", self.arg, self.side)
+    }
+}
+
 /// How the person at this computer takes control back from a peer. On
 /// Linux the portals can't tell their own mouse and keyboard from injected
 /// input, so only the command (or the idle rule) works there.
@@ -53,6 +95,12 @@ pub struct Status {
     pub controlling: Option<String>,
     /// The paired computer controlling this one right now.
     pub controlled_by: Option<String>,
+    /// Broadcast is on (`one-mk broadcast`): the computers everything typed,
+    /// clicked and scrolled here goes to. Empty while it is off.
+    pub broadcast: Vec<String>,
+    /// The keyboard shortcut that starts and stops broadcast, for people
+    /// (`Ctrl+Alt+B`); empty when there is none.
+    pub broadcast_hotkey: String,
     pub peers: Vec<PeerStatus>,
     /// `one-mk lock-pointer` is on: edges lead nowhere.
     pub pointer_locked: bool,
@@ -90,6 +138,46 @@ pub struct Status {
     /// pixels, for the peers that have one. Kept here rather than on
     /// [`PeerStatus`] so its literals elsewhere stay valid.
     pub offsets: Vec<(String, (i32, i32))>,
+    /// (peer id, link): how the connection to each connected peer is doing
+    /// right now. Offline peers have none. Kept here, like `offsets`, so
+    /// [`PeerStatus`] literals elsewhere stay valid.
+    pub links: Vec<(String, LinkStats)>,
+    /// A computer that seems to be somewhere else than where it is placed:
+    /// the pointer was pushed twice against an edge where no computer sits.
+    /// Shown for a few minutes.
+    pub suggestion: Option<Suggestion>,
+}
+
+/// What QUIC already knows about a connection, read on a status request
+/// (no probe traffic, no timer: quinn measures it with every packet).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LinkStats {
+    /// Current round-trip time, in microseconds.
+    pub rtt_us: u32,
+    /// Packets declared lost on this connection since it began; a rise
+    /// between two looks is loss.
+    pub lost: u64,
+    /// Packets sent since it began.
+    pub sent: u64,
+}
+
+impl LinkStats {
+    /// The longest round trip taken at face value (a minute): a hostile
+    /// or damaged line can't make a graph scale absurdly.
+    pub const MAX_RTT_US: u32 = 60_000_000;
+    /// A round trip above this is a mouse move that arrives late: "some
+    /// stalls" in the window, a warning in `one-mk doctor`.
+    pub const STALL_US: u32 = 40_000;
+    /// ... and above this the link is "slow".
+    pub const SLOW_US: u32 = 100_000;
+
+    /// "rtt 4 ms", "rtt <1 ms".
+    pub fn render(&self) -> String {
+        match self.rtt_us {
+            0..=999 => "rtt <1 ms".to_owned(),
+            us => format!("rtt {} ms", us.saturating_add(500) / 1000),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -247,6 +335,24 @@ impl Status {
         })
     }
 
+    /// "Broadcasting to 2 computers: A and B. ...", while broadcast is on.
+    pub fn broadcast_line(&self) -> Option<String> {
+        let names = &self.broadcast;
+        let who = match &names[..] {
+            [] => return None,
+            [one] => format!("Broadcasting to 1 computer: {one}"),
+            [rest @ .., last] => format!("Broadcasting to {} computers: {} and {last}", names.len(), rest.join(", ")),
+        };
+        let all = if names.len() == 1 { "it" } else { "all of them" };
+        let stop = match self.broadcast_hotkey.as_str() {
+            "" => "`one-mk broadcast off` stops it".to_owned(),
+            key => format!("{key} or `one-mk broadcast off` stops it"),
+        };
+        // Tried for real on Linux only so far.
+        let untested = if cfg!(any(windows, target_os = "macos")) { " Broadcast is untested on this system so far." } else { "" };
+        Some(format!("{who}. Everything you type, click and scroll here goes to {all} ({stop}).{untested}"))
+    }
+
     /// One `key<TAB>value` line per fact (names never contain tabs or
     /// newlines: they are sanitized).
     pub fn encode(&self) -> String {
@@ -255,6 +361,12 @@ impl Status {
             if let Some(w) = who {
                 out += &format!("{key}\t{w}\n");
             }
+        }
+        for name in &self.broadcast {
+            out += &format!("broadcast\t{}\n", name.replace(['\t', '\n', '\r'], " "));
+        }
+        if !self.broadcast_hotkey.is_empty() {
+            out += &format!("broadcast_hotkey\t{}\n", self.broadcast_hotkey.replace(['\t', '\n', '\r'], " "));
         }
         for p in &self.peers {
             out += &format!("peer\t{}\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.swap, p.name);
@@ -272,6 +384,9 @@ impl Status {
         }
         for (id, (x, y)) in &self.offsets {
             out += &format!("offset\t{id}\t{x}\t{y}\n");
+        }
+        for (id, l) in &self.links {
+            out += &format!("link\t{id}\t{}\t{}\t{}\n", l.rtt_us, l.lost, l.sent);
         }
         // Lines of their own, which readers from before them skip.
         let l = &self.layout;
@@ -309,6 +424,10 @@ impl Status {
         for line in &self.tuning {
             out += &format!("tuning\t{}\n", line.replace(['\t', '\n', '\r'], " "));
         }
+        if let Some(g) = &self.suggestion {
+            let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+            out += &format!("suggest\t{}\t{}\t{}\t{}\n", clean(&g.id), g.side, clean(&g.arg), clean(&g.name));
+        }
         for t in &self.transfers {
             out += &format!(
                 "transfer\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -327,6 +446,18 @@ impl Status {
     /// Where `peer`'s (0,0) sits in this computer's pixels, if it was placed.
     pub fn offset_of(&self, peer: &str) -> Option<(i32, i32)> {
         self.offsets.iter().find(|(id, _)| id == peer).map(|(_, o)| *o)
+    }
+
+    /// How the connection to `peer` is doing; `None` while it is offline
+    /// (or the daemon is from before this).
+    pub fn link_of(&self, peer: &str) -> Option<LinkStats> {
+        self.links.iter().find(|(id, _)| id == peer).map(|(_, l)| *l)
+    }
+
+    /// The same status, leaving out what changes with every look (the
+    /// links), for noticing when anything else changed.
+    pub fn without_links(&self) -> Status {
+        Status { links: Vec::new(), ..self.clone() }
     }
 
     pub fn decode(text: &str) -> Option<Self> {
@@ -348,6 +479,8 @@ impl Status {
                 ["backend", value] => s.backend = value.into(),
                 ["controlling", v] => s.controlling = Some(v.into()),
                 ["controlled_by", v] => s.controlled_by = Some(v.into()),
+                ["broadcast", v] => s.broadcast.push(v.into()),
+                ["broadcast_hotkey", v] => s.broadcast_hotkey = v.into(),
                 ["pointer_locked", v] => s.pointer_locked = v == "1",
                 ["screen_locked", v] => s.screen_locked = v == "1",
                 ["relative", v] => s.relative = v == "1",
@@ -360,6 +493,11 @@ impl Status {
                 ["input", v] => s.input.push(v.into()),
                 ["warning", v] => s.layout.warnings.push(v.into()),
                 ["tuning", v] => s.tuning.push(v.into()),
+                ["suggest", id, side, arg, name] => {
+                    if let Ok(side) = side.parse() {
+                        s.suggestion = Some(Suggestion { id: id.into(), name: name.into(), side, arg: arg.into() });
+                    }
+                }
                 // Cosmetic: a line that doesn't parse is skipped, not fatal.
                 ["transfer", id, dir, files, done, total, rate, peer] => s.transfers.extend(|| -> Option<_> {
                     Some(TransferStatus {
@@ -389,6 +527,15 @@ impl Status {
                         screens.push(Rect::new(x, y, w, h));
                     }
                 }
+                // Cosmetic like the screens: a line that doesn't parse costs
+                // only that graph; the first line for a computer counts.
+                ["link", id, rtt, lost, sent] => {
+                    if let (Ok(rtt_us), Ok(lost), Ok(sent)) = (rtt.parse::<u32>(), lost.parse(), sent.parse())
+                        && s.link_of(id).is_none()
+                    {
+                        s.links.push((id.into(), LinkStats { rtt_us: rtt_us.min(LinkStats::MAX_RTT_US), lost, sent }));
+                    }
+                }
                 ["offset", id, x, y] => {
                     if let (Ok(x), Ok(y)) = (x.parse(), y.parse()) {
                         s.offsets.push((id.into(), (x, y)));
@@ -405,13 +552,24 @@ impl Status {
         if !self.backend.as_str().is_empty() {
             out += &format!("Input backend: {}.\n", self.backend.as_str());
         }
+        if let Some(line) = self.broadcast_line() {
+            out += &format!("{line}\n");
+        }
         out += &match (&self.controlling, &self.controlled_by) {
+            _ if !self.broadcast.is_empty() => String::new(),
             (Some(p), _) => format!("The mouse and keyboard are controlling {p} right now.\n"),
             (_, Some(p)) => format!("{p} is controlling this computer right now. {}\n", takeback_hint()),
             _ => "The mouse and keyboard are on this computer.\n".to_owned(),
         };
         for line in self.input.iter().chain(&self.layout.warnings).chain(&self.tuning) {
             out += &format!("{line}\n");
+        }
+        if let Some(g) = &self.suggestion {
+            out += &format!(
+                "{} You pushed the pointer against that edge twice. To place it there, run `{}` (`one-mk edge --dismiss` hides this).\n",
+                is_it_there(&g.name, g.side),
+                g.command()
+            );
         }
         if self.pointer_overlay {
             out += "one-mk draws the pointer here: this computer shows none of its own (`one-mk pointer-overlay` to change).\n";
@@ -442,7 +600,11 @@ impl Status {
             out += "No computers are paired yet. Run `one-mk pair` on this and the other computer.\n";
         }
         for p in &self.peers {
-            let state = if p.online { "online" } else { "offline" };
+            let state = match self.link_of(&p.id).filter(|_| p.online) {
+                Some(l) => format!("online, {}", l.render()),
+                None if p.online => "online".to_owned(),
+                None => "offline".to_owned(),
+            };
             out += &format!("  {:<24} {:<10} {:<14} {state}\n", p.name, os_name(p.os), on_your(p.side));
             if let Some(offset) = self.offset_of(&p.id) {
                 out += &format!("  {:<24} {}\n", "", placement(p.side, Some(offset)));
@@ -458,6 +620,20 @@ impl Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggestions_name_the_computer_safely() {
+        assert_eq!(device_arg("laptop", "ab12-cd34"), "laptop");
+        assert_eq!(device_arg("Sam's Mac", "ab12-cd34"), "ab12-cd34", "a quote would need escaping");
+        assert_eq!(device_arg("studio pc", "ab12-cd34"), "\"studio pc\"");
+        assert_eq!(device_arg(" pc", "ab12-cd34"), "ab12-cd34");
+        assert_eq!(device_arg("", "ab12-cd34"), "ab12-cd34");
+        for hostile in ["$(rm -rf ~)", "a`b`", "a;b", "x\ny", "名前", "a|b", "%PATH%"] {
+            assert_eq!(device_arg(hostile, "ab12-cd34"), "ab12-cd34", "{hostile}");
+        }
+        assert_eq!(is_it_there("B", Side::Top), "Is B above this computer?");
+        assert_eq!(is_it_there("B", Side::Right), "Is B on your right?");
+    }
 
     #[test]
     fn every_backend_roundtrips() {
@@ -514,10 +690,51 @@ mod tests {
         // A line can't break the format.
         let odd = Status { input: vec!["a\tb\nc".into()], ..Status::default() };
         assert_eq!(Status::decode(&odd.encode()).unwrap().input, ["a b c"]);
+        let suggestion = Suggestion { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Left, arg: "\"mac mini\"".into() };
+        let suggested = Status { suggestion: Some(suggestion), ..Status::default() };
+        assert_eq!(Status::decode(&suggested.encode()), Some(suggested.clone()));
+        let text = suggested.render();
+        assert!(text.contains("Is mac mini on your left? You pushed the pointer against that edge twice. To place it there, run `one-mk layout \"mac mini\" left`"), "{text}");
+        // A side this reader doesn't know only costs the suggestion.
+        let odd = suggested.encode().replace("suggest\t1234-5678\tleft", "suggest\t1234-5678\tnorth");
+        assert_eq!(Status::decode(&odd).unwrap().suggestion, None);
         let layout = LayoutStatus { warnings: vec!["layout of B does not overlap yours".into()], ..LayoutStatus::default() };
         let warned = Status { layout: Box::new(layout), ..Status::default() };
         assert_eq!(Status::decode(&warned.encode()).unwrap(), warned);
         assert!(warned.render().contains("does not overlap"));
+    }
+
+    /// Broadcast survives the wire, comes first in `one-mk status`, and
+    /// replaces the "mouse and keyboard are on/controlling" sentence (it is
+    /// neither). Older readers skip its lines; a name can't break the format.
+    #[test]
+    fn broadcast_survives_the_wire_and_is_said_first() {
+        let s = Status {
+            name: "desk".into(),
+            broadcast: vec!["mac mini".into(), "old pc".into(), "laptop".into()],
+            broadcast_hotkey: "Ctrl+Alt+B".into(),
+            pointer_locked: true,
+            ..Status::default()
+        };
+        assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
+        let text = s.render();
+        let second = text.lines().nth(1).unwrap_or_default();
+        assert!(
+            second.starts_with("Broadcasting to 3 computers: mac mini, old pc and laptop. Everything you type, click and scroll here goes to all of them (Ctrl+Alt+B or `one-mk broadcast off` stops it)."),
+            "{second}"
+        );
+        assert_eq!(second.contains("untested"), cfg!(any(windows, target_os = "macos")));
+        assert!(!text.contains("The mouse and keyboard are"), "{text}");
+        let one = Status { broadcast: vec!["b".into()], ..Status::default() };
+        assert!(one.broadcast_line().is_some_and(|l| l
+            .starts_with("Broadcasting to 1 computer: b. Everything you type, click and scroll here goes to it (`one-mk broadcast off` stops it).")));
+        assert_eq!(Status::default().broadcast_line(), None);
+        let odd = Status { broadcast: vec!["a\tb\nc".into()], broadcast_hotkey: "x\ty".into(), ..Status::default() };
+        let back = Status::decode(&odd.encode()).unwrap();
+        assert_eq!((back.broadcast, back.broadcast_hotkey), (vec!["a b c".to_owned()], "x y".to_owned()));
+        // A reader from before broadcast: the same text, minus nothing it knows.
+        let old: String = s.encode().lines().filter(|l| !l.starts_with("broadcast")).map(|l| format!("{l}\n")).collect();
+        assert_eq!(Status::decode(&old), Some(Status { broadcast: vec![], broadcast_hotkey: String::new(), ..s }));
     }
 
     /// What a layout editor reads: our monitors, each peer's monitors and
@@ -598,6 +815,58 @@ mod tests {
         let text = controlled.render();
         assert!(text.contains("laptop is controlling this computer right now."), "{text}");
         assert!(text.contains("one-mk takeback"), "{text}");
+    }
+
+    #[test]
+    fn link_stats_survive_the_wire_and_old_readers_skip_them() {
+        let peer = |id: &str, online| PeerStatus { id: id.into(), name: id.into(), side: Side::Left, os: os::LINUX, online, swap: "auto".into(), screens: vec![] };
+        let s = Status {
+            name: "desk".into(),
+            peers: vec![peer("1111-2222", true), peer("3333-4444", false)],
+            links: vec![("1111-2222".into(), LinkStats { rtt_us: 4_200, lost: 3, sent: 90_000 })],
+            ..Status::default()
+        };
+        let encoded = s.encode();
+        assert_eq!(Status::decode(&encoded), Some(s.clone()));
+        assert_eq!(s.link_of("1111-2222").map(|l| l.rtt_us), Some(4_200));
+        assert_eq!(s.link_of("3333-4444"), None);
+        let text = s.render();
+        assert!(text.contains("online, rtt 4 ms"), "{text}");
+        assert!(text.lines().any(|l| l.contains("3333-4444") && l.trim_end().ends_with("offline") && !l.contains("rtt")), "{text}");
+        // What a reader from before the link line makes of it: the rest.
+        let old: Vec<&str> = encoded.lines().filter(|l| !l.starts_with("link\t")).collect();
+        let older = Status::decode(&(old.join("\n") + "\n")).unwrap();
+        assert_eq!((older.peers.len(), older.links.len()), (2, 0));
+        assert!(older.render().contains("online\n"));
+        assert_eq!(s.without_links().links, vec![]);
+        assert_eq!(s.without_links().peers, s.peers);
+        assert_eq!(LinkStats { rtt_us: 400, ..LinkStats::default() }.render(), "rtt <1 ms");
+        assert_eq!(LinkStats { rtt_us: 1_499, ..LinkStats::default() }.render(), "rtt 1 ms");
+        assert_eq!(LinkStats { rtt_us: 12_600, ..LinkStats::default() }.render(), "rtt 13 ms");
+        assert_eq!(LinkStats { rtt_us: u32::MAX, ..LinkStats::default() }.render(), "rtt 4294967 ms");
+    }
+
+    #[test]
+    fn hostile_link_lines_cost_only_their_graph() {
+        let head = "ok\nname\tdesk\n";
+        for bad in [
+            "link\t1\tabc\t0\t0",
+            "link\t1\t-5\t0\t0",
+            "link\t1\t4294967296\t0\t0",
+            "link\t1\t5\t-1\t0",
+            "link\t1\t5\t0",
+            "link\t1\t5\t0\t0\t0",
+            "link\t\t\t\t",
+            "link",
+        ] {
+            let s = Status::decode(&format!("{head}{bad}\nport\t7\n")).unwrap();
+            assert_eq!((s.links.len(), s.port), (0, 7), "{bad:?}");
+        }
+        // A silly round trip is capped; a repeated id keeps its first line.
+        let s = Status::decode(&format!("{head}link\t1\t4000000000\t18446744073709551615\t7\nlink\t1\t5\t0\t0\n")).unwrap();
+        assert_eq!(s.links, vec![("1".to_owned(), LinkStats { rtt_us: LinkStats::MAX_RTT_US, lost: u64::MAX, sent: 7 })]);
+        // Text in an id can't break the line: ids are fields, tabs split them.
+        assert!(Status::decode(&format!("{head}link\ta\tb\t1\t2\t3\n")).unwrap().links.is_empty());
     }
 
     #[test]

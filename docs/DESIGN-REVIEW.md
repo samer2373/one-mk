@@ -230,3 +230,37 @@ Contrast, sampled from the committed PNGs (most contrasting pixel against the re
 
 Not verified: real key presses into the window on Windows and macOS (only Linux/Wayland screenshots, and
 key events were simulated through the debug hooks); a screen reader speaking the keyboard.
+
+## Live latency graph (plan 5B)
+
+The graph is on the Desk tab under the selected computer (shots 70 to 78, 82) and on Health, one row per
+computer (79 to 81). Its one job: show a Wi-Fi problem as it happens, quietly. Nothing moves: the line is
+redrawn once a second, never animated, so reduced motion changes nothing.
+
+| # | screenshot | problem | fix |
+|---|---|---|---|
+| l1 | first draft of the Desk card | The inspector had no room left: the card sat below the panel's bottom edge, cut off. | The Desk panel is 58 pt taller (only on the Desk tab, once a computer is paired). The card is compact: the line on the left, the number now and its word beside it, min / avg / max below. |
+| l2 | first draft of the loss states | A lost packet was a short amber tick at the foot, where it hid behind the spike of the same moment and could not be told from a slow reading. | A thin line the full height of the graph that ends in a ring, so loss reads apart from slowness by shape, not only by colour. |
+| l3 | 82 | After an upgrade, a daemon that still runs the old version reports no round trips: the card said "Measuring…" for ever. | "Restart one·mk to see latency" (Desk) and "Restart one·mk" (Health), also in the accessible text. |
+| l4 | 70, 06 | A graph that is only seconds old fills a tenth of its width. | Kept: the time axis is fixed at two minutes so the line doesn't rescale under the eye; "Measuring…" shows until three readings exist. |
+
+Found by tests rather than by eye: a count of lost packets that goes down means another connection, so the
+history starts again (a test had it going down by accident, which cleared it); the millisecond formatter
+overflowed on the largest round trip a hostile status could carry.
+
+Colour: grey while smooth, amber for "Some stalls" and "Slow". Amber is brand-allowed for live state, and the
+word beside every line says the same, so the graph is never colour-only; "Slow" also draws the line thicker.
+
+| what | contrast |
+|---|---|
+| Graph line, grey (INK2 on raised) | 7.01:1 |
+| Graph line and word, amber (on raised / panel) | 9.84:1 / 10.24:1 |
+| Lost-packet line (60 % amber on raised) | 4.31:1 (3:1 needed) |
+| min / avg / max text (INK2 on panel) | 7.30:1 |
+
+Text equivalent (one screen-reader item per graph): "Latency to desk: 4 ms, smooth. Over the last 2 minutes:
+lowest 3 ms, average 4 ms, highest 9 ms." plus "2 packets were lost." when they were. Offline: "Latency to
+desk: offline." Computed from the same numbers as the drawing (`rtt::Summary::describe`).
+
+Not verified: a screen reader actually speaking it; Windows and macOS rendering; Wi-Fi loss on real hardware
+(the loss and slow states come from scripted histories; the live shot 70 is real loopback readings).

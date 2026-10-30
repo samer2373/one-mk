@@ -47,6 +47,8 @@ pub struct Settings {
     /// Drawing the pointer on a computer with no mouse (see
     /// `pointeroverlay.rs`).
     pub pointer: crate::pointeroverlay::PointerSettings,
+    /// Broadcast to every connected computer (see `docs/BROADCAST.md`).
+    pub broadcast: BroadcastSettings,
 }
 
 impl Default for Settings {
@@ -64,6 +66,42 @@ impl Default for Settings {
             hotkeys: Default::default(),
             input: Default::default(),
             pointer: Default::default(),
+            broadcast: Default::default(),
+        }
+    }
+}
+
+/// `[broadcast]` in `settings.toml`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BroadcastSettings {
+    /// Broadcast stops by itself after this many minutes without any key,
+    /// click, scroll or movement, so it can't be forgotten on. 0 = never.
+    pub idle_off_minutes: u32,
+}
+
+/// The longest `idle_off_minutes` honoured (a day); more counts as this.
+pub const MAX_IDLE_OFF_MINUTES: u32 = 24 * 60;
+
+impl Default for BroadcastSettings {
+    fn default() -> Self {
+        Self { idle_off_minutes: 15 }
+    }
+}
+
+impl BroadcastSettings {
+    /// How long broadcast may go without input, or `None` for no limit.
+    pub fn idle_off(&self) -> Option<std::time::Duration> {
+        let minutes = self.idle_off_minutes.min(MAX_IDLE_OFF_MINUTES);
+        (minutes > 0).then(|| std::time::Duration::from_secs(u64::from(minutes) * 60))
+    }
+
+    /// "after 15 minutes without input", for sentences.
+    pub fn describe_idle_off(&self) -> String {
+        match self.idle_off_minutes.min(MAX_IDLE_OFF_MINUTES) {
+            0 => "only when you stop it".into(),
+            1 => "by itself after 1 minute without input".into(),
+            n => format!("by itself after {n} minutes without input"),
         }
     }
 }
@@ -170,6 +208,77 @@ pub struct EdgeSettings {
     pub top: Option<Rules>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bottom: Option<Rules>,
+    /// Where no computer sits, the pointer comes back in at the opposite
+    /// edge (`docs/EDGE-PUSH.md`).
+    #[serde(skip_serializing_if = "is_default")]
+    pub wrap: Wrap,
+    /// Pushing the pointer twice against an edge where no computer sits
+    /// suggests (or sets) where a computer is.
+    #[serde(skip_serializing_if = "is_default")]
+    pub learn: Learn,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+/// Pointer wrap (`[edge] wrap`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Wrap {
+    /// An edge where no computer sits stops the pointer (the default).
+    #[default]
+    Off,
+    /// The left and right edges where no computer sits lead round to the opposite edge.
+    On,
+    /// Every edge where no computer sits does, the top and bottom too.
+    All,
+}
+
+impl Wrap {
+    /// The edges that wrap.
+    pub fn sides(self) -> &'static [Side] {
+        match self {
+            Wrap::Off => &[],
+            Wrap::On => &[Side::Left, Side::Right],
+            Wrap::All => &Side::ALL,
+        }
+    }
+}
+
+/// `off`, `on` or `all`; a hand-written `true` or `false` means on or off.
+impl<'de> Deserialize<'de> for Wrap {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Word(String),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Bool(on) => Ok(if on { Wrap::On } else { Wrap::Off }),
+            Raw::Word(w) => match w.to_ascii_lowercase().as_str() {
+                "off" => Ok(Wrap::Off),
+                "on" => Ok(Wrap::On),
+                "all" => Ok(Wrap::All),
+                _ => Err(serde::de::Error::custom(format!("wrap must be off, on or all, not {w:?}"))),
+            },
+        }
+    }
+}
+
+/// Layout learning (`[edge] learn`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Learn {
+    /// Pushing toward a computer does nothing.
+    Off,
+    /// Say where a computer seems to be, and how to place it there (the default).
+    #[default]
+    Suggest,
+    /// Place it there (beside you on the left or right; above or below is
+    /// only suggested), and say how to undo that.
+    Auto,
 }
 
 /// Edge rules; anything unset falls back to the rules for every edge (and
@@ -256,6 +365,21 @@ impl EdgeSettings {
         }
     }
 
+    /// What edges with no computer do, in a sentence (for `one-mk edge`).
+    pub fn no_computer(&self) -> String {
+        let wrap = match self.wrap {
+            Wrap::Off => "the pointer stops there",
+            Wrap::On => "the pointer wraps round to the opposite edge on the left and right",
+            Wrap::All => "the pointer wraps round to the opposite edge",
+        };
+        let learn = match self.learn {
+            Learn::Off => "pushing toward a computer does nothing",
+            Learn::Suggest => "pushing twice toward a computer that isn't placed yet suggests where it is",
+            Learn::Auto => "pushing twice toward a computer that isn't placed yet places it there",
+        };
+        format!("Where no computer sits, {wrap}, and {learn} (`--wrap`, `--learn`).")
+    }
+
     /// In words, for `one-mk status`; empty if no rule is on.
     pub fn describe(&self) -> String {
         let mut parts = Vec::new();
@@ -275,6 +399,16 @@ impl EdgeSettings {
         }
         if uses_guard && !self.fullscreen_block.is_empty() {
             parts.push(format!("never leaving {}", self.fullscreen_block.join(" ")));
+        }
+        match self.wrap {
+            Wrap::Off => {}
+            Wrap::On => parts.push("the pointer wraps round at left and right edges with no computer".into()),
+            Wrap::All => parts.push("the pointer wraps round at every edge with no computer".into()),
+        }
+        match self.learn {
+            Learn::Suggest => {}
+            Learn::Off => parts.push("no layout learning".into()),
+            Learn::Auto => parts.push("layout learning places computers".into()),
         }
         // Status lines are tab-separated.
         parts.join("; ").replace(['\t', '\n'], " ")
@@ -425,9 +559,22 @@ pub struct EdgeArgs {
     /// Remove a program from both lists (repeatable).
     #[arg(long, value_name = "APP")]
     pub fullscreen_forget: Vec<String>,
-    /// Turn every rule off (for one edge with --side).
+    /// Turn every rule off (for one edge with --side); for every edge,
+    /// also --wrap and --learn go back to off and suggest.
     #[arg(long)]
     pub reset: bool,
+    /// Where no computer sits, bring the pointer in at the opposite edge:
+    /// off, on (left and right edges) or all (every edge). For every edge.
+    #[arg(long, value_enum, value_name = "off|on|all")]
+    pub wrap: Option<Wrap>,
+    /// Pushing the pointer twice toward a computer that isn't placed yet:
+    /// off, suggest (say where it seems to be) or auto (place it). For
+    /// every edge.
+    #[arg(long, value_enum, value_name = "off|suggest|auto")]
+    pub learn: Option<Learn>,
+    /// Hide the layout suggestion shown now (in `one-mk status` and the window).
+    #[arg(long)]
+    pub dismiss: bool,
 }
 
 pub fn parse_on_off(s: &str) -> Result<bool, String> {
@@ -448,6 +595,8 @@ impl EdgeArgs {
             || !self.fullscreen_allow.is_empty()
             || !self.fullscreen_block.is_empty()
             || !self.fullscreen_forget.is_empty()
+            || self.wrap.is_some()
+            || self.learn.is_some()
     }
 
     /// Applies these options to `s`.
@@ -461,6 +610,9 @@ impl EdgeArgs {
         let lists = !self.fullscreen_allow.is_empty() || !self.fullscreen_block.is_empty();
         if self.side.is_some() && lists {
             bail!("the fullscreen program lists are for every edge; leave out --side");
+        }
+        if self.side.is_some() && (self.wrap.is_some() || self.learn.is_some()) {
+            bail!("--wrap and --learn are for every edge; leave out --side");
         }
         let rules = match self.side {
             Some(side) => s.side_mut(side).get_or_insert_with(Rules::default),
@@ -502,6 +654,12 @@ impl EdgeArgs {
         if self.reset && self.side.is_none() {
             *s = EdgeSettings::default();
         }
+        if let Some(wrap) = self.wrap {
+            s.wrap = wrap;
+        }
+        if let Some(learn) = self.learn {
+            s.learn = learn;
+        }
         Ok(())
     }
 }
@@ -525,7 +683,11 @@ pub async fn edge(dir: &Path, args: EdgeArgs) -> Result<()> {
         } else {
             println!("Edges: {d}.");
         }
+        println!("{}", e.no_computer());
     };
+    if args.dismiss && !args.changes_anything() {
+        return dismiss(dir).await;
+    }
     if !args.changes_anything() {
         let settings = Settings::load(dir)?;
         describe(&settings.edge);
@@ -542,7 +704,25 @@ pub async fn edge(dir: &Path, args: EdgeArgs) -> Result<()> {
     if args.fullscreen_guard == Some(true) && cfg!(target_os = "linux") {
         println!("{}", FULLSCREEN_LINUX);
     }
-    apply(dir).await
+    if args.wrap == Some(Wrap::All) && edge.all.dwell_ms.unwrap_or(0) == 0 {
+        println!("Tip: with the top and bottom edges wrapping, a short dwell (`one-mk edge --dwell 300`) keeps menus and the taskbar easy to reach.");
+    }
+    apply(dir).await?;
+    if args.dismiss {
+        dismiss(dir).await?;
+    }
+    Ok(())
+}
+
+/// `one-mk edge --dismiss`: hides the layout suggestion.
+async fn dismiss(dir: &Path) -> Result<()> {
+    match control::request(dir, Request::DismissSuggestion).await?.as_deref() {
+        None => println!("one-mk is not running, so there is no layout suggestion to hide."),
+        Some("ok\n") => println!("The layout suggestion is hidden. one-mk won't suggest that computer again for 10 minutes."),
+        Some("none\n") => println!("There is no layout suggestion to hide."),
+        Some(other) => bail!("unexpected answer from one-mk: {other:?}"),
+    }
+    Ok(())
 }
 
 const FULLSCREEN_LINUX: &str = "Note: on Wayland only programs running through XWayland (most games) can be seen as fullscreen; \
@@ -584,6 +764,33 @@ pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// `[broadcast]`: a file from before it gets 15 minutes; 0 means never;
+    /// absurd values are capped at a day; a negative number makes the file
+    /// unreadable like any other type error (the daemon then keeps its
+    /// settings and says why).
+    #[test]
+    fn broadcast_idle_off_defaults_and_bounds() {
+        use std::time::Duration;
+        let dir = temp_dir("broadcast-settings");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "lock_sync = true\n[hotkeys]\nhome = \"ctrl+alt+end\"\n").unwrap();
+        let old = Settings::load(&dir).unwrap();
+        assert_eq!(old.broadcast, BroadcastSettings::default());
+        assert_eq!(old.broadcast.idle_off(), Some(Duration::from_secs(15 * 60)));
+        assert!(old.lock_sync, "the rest of the file is kept");
+        for (text, want) in [("0", None), ("1", Some(60)), ("4294967295", Some(u64::from(MAX_IDLE_OFF_MINUTES) * 60))] {
+            std::fs::write(dir.join(FILE), format!("[broadcast]\nidle_off_minutes = {text}\n")).unwrap();
+            assert_eq!(Settings::load(&dir).unwrap().broadcast.idle_off(), want.map(Duration::from_secs), "{text}");
+        }
+        std::fs::write(dir.join(FILE), "[broadcast]\nidle_off_minutes = -5\n").unwrap();
+        assert!(Settings::load(&dir).is_err());
+        assert_eq!(BroadcastSettings { idle_off_minutes: 0 }.describe_idle_off(), "only when you stop it");
+        assert_eq!(BroadcastSettings::default().describe_idle_off(), "by itself after 15 minutes without input");
+        let saved = toml::to_string_pretty(&Settings::default()).unwrap();
+        assert!(saved.contains("[broadcast]\nidle_off_minutes = 15"), "{saved}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn legacy_clipboard_fetch_is_migrated_but_explicit_v2_is_kept() {
         let dir = temp_dir("clipboard-version");
@@ -674,6 +881,47 @@ mod tests {
         EdgeArgs { reset: true, ..EdgeArgs::default() }.apply(&mut s).unwrap();
         assert_eq!(s, EdgeSettings::default());
         assert_eq!(s.describe(), "");
+    }
+
+    /// `[edge] wrap` and `learn`: the defaults are not written, a file
+    /// from before them still loads, and hand edits are read kindly where
+    /// they can be and refused clearly where they can't.
+    #[test]
+    fn wrap_and_learn_settings() {
+        let dir = temp_dir("wrap-learn");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[edge]\ncorner = 20\n[edge.left]\ndwell_ms = 300\n").unwrap();
+        let old = Settings::load(&dir).unwrap();
+        assert_eq!((old.edge.wrap, old.edge.learn, old.edge.guard(Side::Left).dwell_ms), (Wrap::Off, Learn::Suggest, 300));
+        assert!(!toml::to_string(&Settings::default()).unwrap().contains("wrap"), "defaults stay out of the file");
+        assert!(!toml::to_string(&Settings::default()).unwrap().contains("learn"));
+        for (text, wrap) in [("true", Wrap::On), ("false", Wrap::Off), ("'ON'", Wrap::On), ("'all'", Wrap::All), ("'off'", Wrap::Off)] {
+            std::fs::write(dir.join(FILE), format!("[edge]\nwrap = {text}\nlearn = 'auto'\n")).unwrap();
+            let s = Settings::load(&dir).unwrap();
+            assert_eq!((s.edge.wrap, s.edge.learn), (wrap, Learn::Auto), "{text}");
+            // Round trip through the file.
+            s.save(&dir).unwrap();
+            assert_eq!(Settings::load(&dir).unwrap().edge, s.edge);
+        }
+        for bad in ["wrap = 'sideways'", "wrap = 3", "learn = 'maybe'", "learn = true"] {
+            std::fs::write(dir.join(FILE), format!("[edge]\n{bad}\n")).unwrap();
+            let e = format!("{:#}", Settings::load(&dir).unwrap_err());
+            assert!(e.contains("settings.toml"), "{bad}: {e}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+
+        let mut s = EdgeSettings::default();
+        EdgeArgs { wrap: Some(Wrap::On), learn: Some(Learn::Off), ..EdgeArgs::default() }.apply(&mut s).unwrap();
+        assert_eq!((s.wrap, s.learn), (Wrap::On, Learn::Off));
+        assert_eq!(s.describe(), "the pointer wraps round at left and right edges with no computer; no layout learning");
+        assert!(EdgeArgs { side: Some(Side::Left), wrap: Some(Wrap::All), ..EdgeArgs::default() }.apply(&mut s).is_err());
+        assert_eq!(s.wrap, Wrap::On, "nothing changed by a refused option");
+        EdgeArgs { reset: true, ..EdgeArgs::default() }.apply(&mut s).unwrap();
+        assert_eq!((s.wrap, s.learn), (Wrap::Off, Learn::Suggest));
+        assert!(EdgeArgs { learn: Some(Learn::Auto), ..EdgeArgs::default() }.changes_anything());
+        assert!(!EdgeArgs { dismiss: true, ..EdgeArgs::default() }.changes_anything());
+        assert_eq!(Wrap::On.sides(), [Side::Left, Side::Right]);
+        assert!(Wrap::Off.sides().is_empty());
     }
 
     #[test]

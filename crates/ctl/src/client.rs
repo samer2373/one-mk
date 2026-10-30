@@ -33,6 +33,9 @@ pub enum Request {
     Switch(SwitchTo),
     /// Keep the pointer on this computer: edges lead nowhere while on.
     LockPointer(Toggle),
+    /// Send everything typed, clicked and scrolled here to every connected
+    /// computer at once (`one-mk broadcast`), or stop.
+    Broadcast(Toggle),
     /// Lock this computer's screen and ask every connected one to lock too.
     LockAll,
     /// `settings.toml` (clipboard and notification settings) changed: apply it now.
@@ -45,6 +48,9 @@ pub enum Request {
     /// A running `one-mk send` reports how far it is, so `status` and the
     /// window can show it. `finished` ends the report.
     Transfer { t: TransferStatus, finished: bool },
+    /// Hide the layout suggestion shown now (`one-mk edge --dismiss`, the
+    /// window's "No"): that computer is not suggested again for a while.
+    DismissSuggestion,
     /// Shut the daemon down, as if it had been sent Ctrl-C.
     Stop,
 }
@@ -126,11 +132,13 @@ impl Request {
             Request::TakeBack => "takeback",
             Request::Switch(_) => "switch",
             Request::LockPointer(_) => "lock-pointer",
+            Request::Broadcast(_) => "broadcast",
             Request::LockAll => "lock-all",
             Request::Settings => "settings",
             Request::ClipSend(_) => "clip-send",
             Request::ClipGet(_) => "clip-get",
             Request::Transfer { .. } => "transfer",
+            Request::DismissSuggestion => "dismiss-suggestion",
             Request::Stop => "stop",
         }
     }
@@ -140,6 +148,7 @@ impl Request {
         match self {
             Request::Switch(to) => format!("switch {}", to.as_str()),
             Request::LockPointer(t) => format!("lock-pointer {}", t.as_str()),
+            Request::Broadcast(t) => format!("broadcast {}", t.as_str()),
             Request::ClipSend(d) | Request::ClipGet(d) => {
                 let device = d.as_deref().map(|d| format!(" {}", d.replace(['\n', '\r'], " "))).unwrap_or_default();
                 format!("{}{device}", self.name())
@@ -169,8 +178,10 @@ impl Request {
             "takeback" if arg.is_empty() => Some(Request::TakeBack),
             "lock-all" if arg.is_empty() => Some(Request::LockAll),
             "stop" if arg.is_empty() => Some(Request::Stop),
+            "dismiss-suggestion" if arg.is_empty() => Some(Request::DismissSuggestion),
             "switch" => SwitchTo::parse(arg).map(Request::Switch),
             "lock-pointer" => Toggle::parse(arg).map(Request::LockPointer),
+            "broadcast" => Toggle::parse(arg).map(Request::Broadcast),
             "settings" if arg.is_empty() => Some(Request::Settings),
             "clip-send" => Some(Request::ClipSend(device())),
             "clip-get" => Some(Request::ClipGet(device())),
@@ -298,6 +309,28 @@ mod tests {
         d
     }
 
+    /// Hostile request lines: random words, toggles, spaces, tabs, control
+    /// characters and non-ASCII never panic, and whatever parses writes
+    /// back as a line that parses to the same request.
+    #[test]
+    fn random_request_lines_parse_safely_and_round_trip() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let words = ["broadcast", "lock-pointer", "switch", "status", "on", "off", "toggle", "here", " ", "\t", "\u{0}", "é", "\r", "1"];
+        for _ in 0..20_000 {
+            let n = (next() % 5) as usize;
+            let line: String = (0..n).map(|_| words[(next() % words.len() as u64) as usize]).collect::<Vec<_>>().join(" ");
+            if let Some(r) = Request::parse(&line) {
+                assert_eq!(Request::parse(&r.line()), Some(r.clone()), "{line:?}");
+            }
+        }
+    }
+
     #[test]
     fn requests_have_names() {
         for r in [
@@ -306,12 +339,16 @@ mod tests {
             Request::TakeBack,
             Request::Stop,
             Request::LockAll,
+            Request::DismissSuggestion,
             Request::Switch(SwitchTo::Here),
             Request::Switch(SwitchTo::Next),
             Request::Switch(SwitchTo::Device("mac mini".into())),
             Request::LockPointer(Toggle::On),
             Request::LockPointer(Toggle::Off),
             Request::LockPointer(Toggle::Toggle),
+            Request::Broadcast(Toggle::On),
+            Request::Broadcast(Toggle::Off),
+            Request::Broadcast(Toggle::Toggle),
             Request::Settings,
             Request::ClipSend(None),
             Request::ClipSend(Some("mac mini".into())),
@@ -335,6 +372,10 @@ mod tests {
         assert_eq!(Request::parse("switch"), None);
         assert_eq!(Request::parse("switch  "), None);
         assert_eq!(Request::parse("lock-pointer maybe"), None);
+        for bad in ["broadcast", "broadcast maybe", "broadcast on off", "broadcast\ton", "broadcast ON"] {
+            assert_eq!(Request::parse(bad), None, "{bad:?}");
+        }
+        assert_eq!(Request::parse("broadcast  toggle "), Some(Request::Broadcast(Toggle::Toggle)));
         assert!(!Toggle::Toggle.apply(true));
         assert!(Toggle::On.apply(true));
     }

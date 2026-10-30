@@ -10,16 +10,56 @@ use one_mk_ctl::proc;
 use one_mk_ctl::status::Status;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How often the window looks at the daemon while it is open. A status
 /// request is one small message over a local socket.
 const POLL: Duration = Duration::from_millis(250);
 
+/// Whether a graph of the connections is on screen, so the window asks the
+/// daemon for round-trip times only then. The window stamps it on every
+/// frame it draws one; a window that is minimised or covered stops drawing,
+/// the stamp goes stale and nothing more is asked.
+#[derive(Clone)]
+pub struct Showing {
+    /// Milliseconds since `epoch` at the last frame with a graph; 0: none.
+    stamp: Arc<AtomicU64>,
+    epoch: Instant,
+}
+
+/// A stamp older than this says the graph is no longer on screen.
+const SHOWING_FOR: Duration = Duration::from_millis(3000);
+/// How often the connections are sampled while a graph is on screen.
+const SAMPLE: Duration = Duration::from_millis((crate::rtt::EVERY * 1000.0) as u64);
+
+impl Showing {
+    pub fn new() -> Self {
+        Self { stamp: Arc::default(), epoch: Instant::now() }
+    }
+
+    fn ms(&self) -> u64 {
+        self.epoch.elapsed().as_millis() as u64 + 1
+    }
+
+    /// A frame was drawn with (`true`) or without a graph.
+    pub fn frame(&self, graph: bool) {
+        self.stamp.store(if graph { self.ms() } else { 0 }, Ordering::Relaxed);
+    }
+
+    fn on_screen(&self) -> bool {
+        let at = self.stamp.load(Ordering::Relaxed);
+        at != 0 && self.ms().saturating_sub(at) < SHOWING_FOR.as_millis() as u64
+    }
+}
+
 pub enum Event {
     /// `None`: one-mk is not running.
     Status(Option<Status>),
+    /// A round-trip sample of every connected computer, while a graph shows.
+    Links(Vec<(String, one_mk_ctl::status::LinkStats)>),
     Autostart(bool),
     /// A command finished: what it was for, and its error if it failed.
     Done { what: Job, error: Option<String> },
@@ -58,6 +98,8 @@ pub enum Job {
     /// The mouse and keyboard to a computer (an id, or `here`).
     Switch { to: String, name: String },
     LockPointer(bool),
+    /// Starting (true) or stopping broadcast to every connected computer.
+    Broadcast(bool),
     LockAll,
     /// Sending this clipboard to a computer (`send`), or fetching its.
     Clip { send: bool, id: String, name: String },
@@ -99,6 +141,7 @@ pub struct Link {
     ctx: egui::Context,
     /// The input tuning worker, started on first use.
     tuning: std::sync::Arc<std::sync::Mutex<Option<Sender<Tuning>>>>,
+    pub showing: Showing,
 }
 
 impl Link {
@@ -111,7 +154,7 @@ impl Link {
         let me = std::env::current_exe()?;
         let daemon = install::sibling(&me, "one-mk").unwrap_or_else(|| PathBuf::from("one-mk"));
         let tray = install::sibling(&me, "one-mk-tray");
-        Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default() })
+        Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default(), showing: Showing::new() })
     }
 
     pub fn home_args(&self) -> Vec<String> {
@@ -146,7 +189,10 @@ impl Link {
         std::thread::spawn(move || {
             link.send(Event::Autostart(install::is_installed()));
             link.show_tray();
+            // What changed apart from the round-trip times, which change at
+            // every look: those go as samples, only while a graph shows.
             let mut last: Option<Option<Status>> = None;
+            let mut sampled = Instant::now();
             let mut gone = 0;
             let mut stamp = None;
             let opened = std::time::SystemTime::now();
@@ -173,12 +219,23 @@ impl Link {
                     std::thread::sleep(POLL);
                     continue;
                 }
-                if last.as_ref() != Some(&now) {
-                    if link.tx.send(Event::Status(now.clone())).is_err() {
+                let same = now.as_ref().map(Status::without_links);
+                if last.as_ref() != Some(&same) {
+                    if link.tx.send(Event::Status(now)).is_err() {
                         return;
                     }
                     link.ctx.request_repaint();
-                    last = Some(now);
+                    last = Some(same);
+                    sampled = Instant::now();
+                } else if let Some(s) = now.filter(|s| !s.links.is_empty())
+                    && sampled.elapsed() >= SAMPLE
+                    && link.showing.on_screen()
+                {
+                    if link.tx.send(Event::Links(s.links)).is_err() {
+                        return;
+                    }
+                    link.ctx.request_repaint();
+                    sampled = Instant::now();
                 }
                 std::thread::sleep(POLL);
             }
@@ -282,6 +339,11 @@ impl Link {
     pub fn lock_pointer(&self, on: bool) {
         let t = if on { Toggle::On } else { Toggle::Off };
         self.job(Job::LockPointer(on), move |l| l.ask(Request::LockPointer(t)));
+    }
+
+    pub fn broadcast(&self, on: bool) {
+        let t = if on { Toggle::On } else { Toggle::Off };
+        self.job(Job::Broadcast(on), move |l| l.ask(Request::Broadcast(t)));
     }
 
     pub fn lock_all(&self) {

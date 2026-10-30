@@ -142,12 +142,13 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 
 | Command | What it does |
 |---|---|
-| `one-mk status` | Is it running? Who is paired, online, where, and who controls whom |
+| `one-mk status` | Is it running? Who is paired, online (with `rtt 4 ms`: how long an answer takes), where, and who controls whom |
 | `one-mk takeback` | Take this computer back from the one controlling it |
 | `one-mk switch <pc\|here\|next>` | Move the mouse and keyboard to another computer without crossing an edge (`here`: back to this one) |
 | `one-mk lock-pointer on\|off\|toggle` | Keep the pointer on this computer: edges lead nowhere |
+| `one-mk broadcast [on\|off\|toggle] [--idle-off MIN]` | Type on every connected computer at once (see below) |
 | `one-mk hotkeys [options]` | Show or change the keyboard shortcuts (see below) |
-| `one-mk edge [options]` | Rules for crossing edges (see below) |
+| `one-mk edge [options]` | Rules for crossing edges, pointer wrap and layout learning (see below) |
 | `one-mk gaming on\|off\|auto` | Raw mouse movement for games on another computer |
 | `one-mk lock-all` | Lock this computer's screen and every connected one's |
 | `one-mk lock-sync on\|off` | Locking any computer locks the others (those with lock sync on) |
@@ -351,6 +352,7 @@ as with any crossing. The keyboard shortcuts below do the same.
 | `Ctrl+Alt+PageDown` | The next computer (`one-mk switch next`) |
 | `Ctrl+Alt+P` | Lock the pointer to this computer, or unlock it |
 | `Ctrl+Alt+H` | Back to this computer (`one-mk switch here`) |
+| `Ctrl+Alt+B` (Windows: `Ctrl+Alt+Shift+B`) | Broadcast to every connected computer, or stop |
 
 Computers are numbered by name, this one included, so when every computer is
 paired with every other, `Ctrl+Alt+2` means the same computer on every
@@ -394,6 +396,25 @@ Linux the desktop still takes the chord, and one-mk ignores it.
   it.
 - Windows and macOS shortcuts are not tested on real hardware yet.
 
+**Broadcast: type on every computer at once.** `one-mk broadcast on` (or
+`Ctrl+Alt+B`, or the tray's or window's "Broadcast to all computers") sends
+everything you type, click and scroll here to every connected computer at
+the same time, for setting up several computers alike or running the same
+command on all of them. Each computer gets its own pointer, starting at the
+middle of its main screen, that moves by the same amount as your mouse and
+stops at that computer's own screen edges; each gets its own Ctrl/Cmd swap
+and key rules, as in a normal visit. It goes to the computers connected when
+it starts (one that connects later is not added), and stops with the
+shortcut, `one-mk broadcast off`, any switch, `Ctrl+Alt+Shift+Esc`, the screen
+locking, the last computer leaving, or after 15 minutes without input
+(`one-mk broadcast --idle-off 30` changes that; 0 = never). Nothing stays held
+on any computer when it stops or when one drops out. `one-mk status`, the
+tray, the window and a notification say it is on. The clipboard does not
+follow during broadcast, and gaming mode and rules for apps don't apply. All
+the details are in [docs/BROADCAST.md](docs/BROADCAST.md). Tested on Linux
+(X11 and the test backend); untested on Windows, macOS, wlroots and the
+GNOME/KDE portal.
+
 **Lock to this computer.** `one-mk lock-pointer on` (like Scroll Lock in
 Barrier) stops the edges from leading anywhere, for example while playing a
 game here; `one-mk switch` still works. `one-mk run --start-locked` starts
@@ -424,6 +445,32 @@ X11 windows can be seen, which on Wayland means programs running through
 XWayland (most games); macOS can't tell yet. Where it can't tell, the
 pointer crosses as usual. Settings are kept in `settings.toml` and apply at
 once.
+
+**Edges where no computer sits.** Pointer wrap brings the pointer in at
+the opposite edge when you push it out through an edge with no computer
+(like "wrap mouse" in Mouse Without Borders); layout learning notices when
+you push twice toward a computer that isn't placed yet:
+
+```bash
+one-mk edge --wrap on            # left and right edges wrap round (all: top and bottom too; off: the default)
+one-mk edge --learn suggest      # the default: "Is laptop on your left? Run: one-mk layout laptop left"
+one-mk edge --learn auto         # place it there (left or right only; above and below are suggested) and say how to undo
+one-mk edge --dismiss            # hide the question shown now
+```
+
+Wrap keeps the height (on several monitors, the same row: out at the right
+of the rightmost monitor, in at the left of the leftmost one on that row),
+follows the edge rules above (dead corners, dwell, modifier, fullscreen
+guard), never happens on a side where a paired computer sits (even an
+offline one), while the pointer is locked, or while another computer
+controls this one. Learning only ever looks at a computer whose place is
+still pairing's guess: once you place it (`one-mk layout`, the window, a
+profile) or cross to it, it is left alone, and no edge is watched for it any
+more. It asks at most once per computer every 10 minutes; the question
+shows in `one-mk status`, as a notification and on the window's Layout
+tab ("Yes, place it" / "No"). Tested on X11; untested on the Wayland
+portals, wlroots, Windows and macOS (`one-mk doctor` says so). Details:
+[docs/EDGE-PUSH.md](docs/EDGE-PUSH.md).
 
 **Gaming mode.** Games capture the pointer and want raw movement, not
 positions. With `one-mk gaming on`, while the pointer is on another computer
@@ -696,6 +743,17 @@ Open it from the tray ("Open one·mk…", or a left click on Linux) or run
 - drop files or folders onto a computer to send them;
 - see how fast the connection is (measured, not estimated: click a computer
   to measure again);
+- watch the connection to each computer live: a small graph of the last two
+  minutes under the selected computer on the Desk tab, and one line per
+  computer on Health. It shows the time an answer takes now, the lowest,
+  average and highest, and says **Smooth**, **Some stalls** (more than 1 in 20
+  readings over 40 ms, or any lost packet) or **Slow** (more than 1 in 20 over
+  100 ms, or 8 lost packets); amber means it is worth a look, and the word
+  says the same without colour. An offline computer says "offline" and has no graph. The
+  numbers come free from the connection itself: one-mk sends nothing extra
+  and runs no timer for it. The window asks once a second, only while a
+  graph is on screen (not on other tabs, minimised or closed), and keeps
+  120 readings per computer in memory, nothing on disk;
 - move the mouse and keyboard to a computer (**Switch to it**), send it this
   clipboard or get its clipboard, keep the pointer here and lock every
   screen;
@@ -725,7 +783,8 @@ Open it from the tray ("Open one·mk…", or a left click on Linux) or run
 - **Health:** the results of `one-mk doctor` (run when the page opens and on
   **Recheck**), each with its fix and a button to copy the command (or, for
   starting and pairing, the window's own button), plus what one-mk says
-  right now (for example a permission still to approve);
+  right now (for example a permission still to approve) and the live
+  connection to each computer;
 - **Advanced:** settings most people never change: edge rules (not crossing
   near corners, waiting at the edge, a key to hold, staying in fullscreen
   windows), keeping controlled computers awake, sleep and lock sync, gaming
@@ -758,6 +817,8 @@ The menu shows:
 - **Switch to <computer>** and **Send clipboard to <computer>** for each
   connected computer (**Switch back here** while another one has control);
 - **Open one·mk…**, which opens the window;
+- **Broadcast to all computers** (a checkmark; while a computer is
+  connected), and the headline "Broadcasting to N computers" while it is on;
 - **Keep the pointer here** (a checkmark), **Lock every screen**, **Take
   back control**, **Start one·mk** (when it is not running), **Pair a
   computer…** (when none is paired; it opens the window) and **Start at
@@ -813,8 +874,9 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
 
 Start with `one-mk doctor`. It checks that one-mk is running and paired,
 the port, discovery, the firewall, the desktop permission (Linux), the
-keyboard shortcuts, the pointer drawn on a computer with no mouse and the
-network, and prints a plain fix for each problem.
+keyboard shortcuts, broadcast, the pointer drawn on a computer with no mouse, the
+network and how fast each connected computer answers, and prints a plain fix
+for each problem.
 It only reads: it never changes your firewall or settings, needs no root,
 and exits with status 1 if something failed.
 
@@ -860,11 +922,37 @@ and exits with status 1 if something failed.
 - **macOS.** Allow one-mk under System Settings > Privacy & Security >
   Accessibility and Input Monitoring, then start it again. (Not yet tested on
   real hardware.)
+- **The mouse stutters or lags on another computer.** Look at the graph on
+  the window's Desk or Health tab, or run `one-mk status` (`rtt 4 ms` per
+  connected computer) and `one-mk doctor` ("Connection quality"). Under about
+  40 ms is smooth. Higher, or **Some stalls** with lost packets, is the network
+  between the two computers, usually Wi-Fi: move closer to the router, use the
+  5 GHz band or a cable, and pause big downloads. `one-mk bench --connect`
+  measures the pointer's whole path.
 - **A paired computer is on the wrong side.** `one-mk layout "<name>" <side>`.
+- **The pointer jumps to the other side of the screen.** Pointer wrap is
+  on: `one-mk edge --wrap off`, or `--wrap on` to wrap only the left and
+  right edges, or add a dwell (`one-mk edge --dwell 300`) so a quick flick
+  to an edge doesn't wrap.
+- **"Is laptop on your left?" but it isn't.** Choose No in the window, or
+  `one-mk edge --dismiss`; place it where it really is (`one-mk layout`) and
+  it is never asked about again. `one-mk edge --learn off` stops the
+  questions. If `learn = auto` moved it, the notification and the daemon's
+  output give the command that puts it back.
 - **The pointer won't cross part of an edge.** With an offset, only where
   the other computer's screens touch yours leads there (`one-mk status` and
   `one-mk devices` show the offset). `--offset none` makes all of the edge
   lead there again.
+- **What I type appears on every computer.** Broadcast is on: `one-mk status`
+  starts with "Broadcasting to ...". Stop it with `Ctrl+Alt+B`,
+  `Ctrl+Alt+Shift+Esc` or `one-mk broadcast off` (from another terminal or
+  over SSH: this computer's own mouse and keyboard are captured meanwhile, so
+  the window and tray can't be clicked). It also stops by itself after 15
+  minutes without input. If `Ctrl+Alt+B` does nothing, another shortcut may
+  already use it: `one-mk hotkeys` says so; set another with
+  `one-mk hotkeys --broadcast 'ctrl+alt+shift+b'`.
+- **Broadcast says no computer is connected.** It needs at least one paired
+  computer online (`one-mk status`); see "Computers don't find each other".
 - **Another computer already controls this one.** Only one computer can
   control another at a time. Take it back with `one-mk takeback` on the
   controlled computer (on Windows and macOS, using its mouse or keyboard
