@@ -64,6 +64,7 @@ pub enum Event {
     /// A round-trip sample of every connected computer, while a graph shows.
     Links(Vec<(String, one_mk_ctl::status::LinkStats)>),
     ClipboardHistory(Result<Vec<HistoryItem>, String>),
+    ClipboardReveal(u64, u64, Result<String, String>),
     Autostart(bool),
     /// A command finished: what it was for, and its error if it failed.
     Done { what: Job, error: Option<String> },
@@ -158,6 +159,16 @@ pub struct Link {
 }
 
 impl Link {
+    pub fn history_reveal(&self, id: u64, epoch: u64) {
+        let link = self.clone();
+        std::thread::spawn(move || {
+            let content = client::request(&link.dir, Request::ClipHistory { action: client::HistoryAction::Show(id), json: false }, Duration::from_secs(5))
+                .map_err(|_| "Could not reveal this item. Try Refresh.".to_owned())
+                .and_then(|reply| reply.and_then(|reply| reply.strip_prefix("ok\n").map(|body| body.chars().filter(|ch| !ch.is_control()).take(80).collect())).ok_or_else(|| "This item is no longer available.".to_owned()));
+            link.send(Event::ClipboardReveal(id, epoch, content));
+        });
+    }
+
     pub fn history(&self) {
         let link = self.clone();
         std::thread::spawn(move || {
@@ -664,7 +675,7 @@ impl Link {
 fn parse_history(body: &str) -> Result<Vec<HistoryItem>, String> {
     let bad = || "Could not read history. Update one·mk and try Refresh.".to_owned();
     if body == "Clipboard history is empty.\n" { return Ok(Vec::new()); }
-    if body.len() > 512 * 1024 || body.lines().count() > 1000 { return Err(bad()); }
+    if body.len() > 1000 * (2 * 80 * 4 + 128) || body.lines().count() > 1000 { return Err(bad()); }
     body.lines().map(|line| {
         if line.chars().any(|ch| ch.is_control() && ch != '\t') { return Err(bad()); }
         let mut fields = line.splitn(6, '\t');
@@ -700,6 +711,8 @@ mod tests {
 
     #[test]
     fn history_metadata_and_hostile_generated_lines() {
+        let largest = format!("1\ttext\t12 B\t123\tfrom {}\t{}\n", "🦀".repeat(80), "🦀".repeat(80)).repeat(1000);
+        assert_eq!(parse_history(&largest).unwrap().len(), 1000);
         let valid = "7\ttext\t12 B\t123\tfrom desk\thello\n";
         let parsed = parse_history(valid).unwrap();
         assert_eq!(parsed[0].id, 7);

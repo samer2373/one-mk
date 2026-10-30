@@ -774,7 +774,7 @@ mod tests {
 
     #[test]
     fn actions_have_stable_ids() {
-        for a in [Action::Jump(1), Action::Jump(9), Action::Cycle, Action::LockPointer, Action::Home, Action::Broadcast] {
+        for a in [Action::Jump(1), Action::Jump(9), Action::Cycle, Action::LockPointer, Action::Home, Action::Broadcast, Action::FetchClipboard] {
             assert_eq!(Action::from_id(&a.id()), Some(a));
         }
         for bad in ["jump-0", "jump-10", "jump-x", "jump", "", "Cycle"] {

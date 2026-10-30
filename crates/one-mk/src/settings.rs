@@ -134,6 +134,8 @@ pub struct ClipSettings {
     pub fetch_migrated: bool,
     #[serde(skip)]
     pub fetch_notice: Option<PathBuf>,
+    #[serde(skip)]
+    pub history_notice: Option<PathBuf>,
 }
 
 fn is_false(value: &bool) -> bool { !*value }
@@ -141,8 +143,8 @@ fn is_false(value: &bool) -> bool { !*value }
 impl Default for ClipSettings {
     fn default() -> Self {
         Self {
-            history_max: 20,
-            history_max_mb: 64,
+            history_max: 0,
+            history_max_mb: 16,
             history_persist: false,
             history_skip_apps: vec!["keepassxc".into(), "keepass".into(), "1password".into(), "bitwarden".into(), "org.keepassxc.KeePassXC".into()],
             text: true,
@@ -153,6 +155,7 @@ impl Default for ClipSettings {
             allow_pull: false,
             fetch_migrated: false,
             fetch_notice: None,
+            history_notice: None,
         }
     }
 }
@@ -174,13 +177,13 @@ impl ClipSettings {
     pub fn summary(&self) -> String {
         let on = |b: bool| if b { "on" } else { "off" };
         let summary = format!(
-            "text {}, html {}, images {}, size limit {} MB, skip password managers {}, others may fetch it {}, history {} items ({})",
+            "text {}, html {}, images {}, size limit {} MB, skip marked sensitive content {}, others may fetch it {}, history {} items ({})",
             on(self.text),
             on(self.html),
             on(self.image),
             self.max_mb.clamp(1, Self::MAX_MB_LIMIT),
             on(self.skip_sensitive),
-            on(self.allow_pull), self.history_max.min(1000), if self.history_persist { "plain text on disk" } else { "memory only" }
+            on(self.allow_pull), self.history_max.min(1000), if self.history_max == 0 || self.history_max_mb == 0 { "disabled" } else if self.history_persist { "plain text on disk" } else { "memory only" }
         );
         let show_notice = self.fetch_migrated && !self.allow_pull && self.fetch_notice.as_ref().is_none_or(|path| {
             let mut options = std::fs::OpenOptions::new();
@@ -195,8 +198,20 @@ impl ClipSettings {
                 Err(error) => error.kind() != std::io::ErrorKind::AlreadyExists,
             }
         });
-        if show_notice {
+        let summary = if show_notice {
             format!("{summary}; clipboard fetching was switched off by this update; turn it on with one-mk clipboard --allow-fetch on")
+        } else { summary };
+        if self.history_max == 0 && self.history_notice.as_ref().is_some_and(|path| {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+            match options.open(path) {
+                Ok(_) => true,
+                Err(error) => error.kind() != std::io::ErrorKind::AlreadyExists,
+            }
+        }) {
+            format!("{summary}; privacy update: this upgraded install has no explicit history choice, so history stays OFF. To opt in, set clipboard.history_max in settings.toml; unmarked secrets may be retained")
         } else { summary }
     }
 }
@@ -464,6 +479,10 @@ impl Settings {
         match crate::hooks::read_settings(&path) {
             Ok((s, unsafe_reason)) => {
                 let mut settings: Settings = toml::from_str(&s).with_context(|| format!("reading {}", path.display()))?;
+                let fields: toml::Value = toml::from_str(&s)?;
+                if fields.get("clipboard").and_then(|clipboard| clipboard.get("history_max")).is_none() {
+                    settings.clipboard.history_notice = Some(dir.join(".clipboard-history-update-noticed"));
+                }
                 if settings.settings_version < 2 && settings.clipboard.allow_pull {
                     settings.clipboard.allow_pull = false;
                     settings.clipboard.fetch_migrated = true;
@@ -776,6 +795,20 @@ pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn upgraded_history_is_off_with_one_time_explanation() {
+        let directory = temp_dir("history-update-notice");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(FILE), "[clipboard]\nmax_mb = 5\n").unwrap();
+        let settings = Settings::load(&directory).unwrap();
+        assert_eq!(settings.clipboard.history_max, 0);
+        assert!(settings.clipboard.summary().contains("privacy update:"));
+        assert!(!Settings::load(&directory).unwrap().clipboard.summary().contains("privacy update:"));
+        std::fs::write(directory.join(FILE), "[clipboard]\nhistory_max = 12\n").unwrap();
+        let explicit = Settings::load(&directory).unwrap();
+        assert_eq!(explicit.clipboard.history_max, 12);
+        assert!(explicit.clipboard.history_notice.is_none());
+    }
     /// `[broadcast]`: a file from before it gets 15 minutes; 0 means never;
     /// absurd values are capped at a day; a negative number makes the file
     /// unreadable like any other type error (the daemon then keeps its
@@ -804,7 +837,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_clipboard_settings_gain_memory_only_history() {
+    fn existing_clipboard_settings_keep_history_off() {
         let dir = temp_dir("history-migration");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(FILE), "settings_version = 2\n[clipboard]\ntext = false\nmax_mb = 5\nallow_pull = true\n").unwrap();
@@ -812,7 +845,7 @@ mod tests {
         assert!(!settings.clipboard.text);
         assert_eq!(settings.clipboard.max_mb, 5);
         assert!(settings.clipboard.allow_pull);
-        assert_eq!(settings.clipboard.history_max, 20);
+        assert_eq!(settings.clipboard.history_max, 0);
         assert!(!settings.clipboard.history_persist);
         assert!(!dir.join("clipboard-history.bin").exists());
         std::fs::remove_dir_all(dir).unwrap();

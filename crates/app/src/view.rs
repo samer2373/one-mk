@@ -247,6 +247,7 @@ pub struct Prefs {
     pub clip_max_mb: u32,
     pub clip_allow_fetch: bool,
     pub history_persist: bool,
+    pub history_enabled: bool,
     pub notify_files: bool,
     /// Gaming mode: `off`, `on` or `auto`.
     pub gaming: String,
@@ -324,6 +325,7 @@ impl Prefs {
             // a file from before `settings_version = 2` has its old `true` switched off.
             clip_allow_fetch: num("", "settings_version", 1) >= 2 && flag("clipboard", "allow_pull", false),
             history_persist: flag("clipboard", "history_persist", false),
+            history_enabled: num("clipboard", "history_max", 0) > 0 && num("clipboard", "history_max_mb", 16) > 0,
             notify_files: flag("", "notify_files", true),
             gaming: text("", "gaming", "off"),
             typing: match text("typing", "keys", "physical").as_str() {

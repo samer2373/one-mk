@@ -127,16 +127,10 @@ impl ClipSync {
         self.cb.history_skip_apps(s.history_skip_apps.clone());
         let path = self.history_dir.lock().unwrap_or_else(|error| error.into_inner()).as_ref().map(|dir| dir.join("clipboard-history.bin"));
         if !s.history_persist && let Some(path) = &path {
-            match std::fs::remove_file(path) {
-                Ok(()) => {},
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
-                Err(_) => self.cb.history().lock().unwrap_or_else(|error| error.into_inner()).error = Some(
-                    "Could not remove saved clipboard history; remove clipboard-history.bin from the settings folder.".into()
-                ),
-            }
+            self.cb.history().lock().unwrap_or_else(|error| error.into_inner()).remove_saved_file(path.clone());
         }
         self.cb.history().lock().unwrap_or_else(|error| error.into_inner()).configure(
-            s.history_max, (s.history_max_mb.min(256) as usize) << 20, s.filter().max_bytes(), s.history_persist.then_some(path).flatten()
+            s.history_max, (s.history_max_mb.min(256) as usize) << 20, one_mk_clipboard::CEILING_BYTES, s.history_persist.then_some(path).flatten()
         );
         self.allow_pull.store(s.allow_pull, Ordering::Relaxed);
         // What was skipped (too large, sensitive) may be sendable now.
@@ -617,6 +611,19 @@ mod tests {
                 }
             });
         }
+    }
+
+    #[tokio::test]
+    async fn shrinking_sharing_limit_keeps_retained_history() {
+        let computer = Pc::new();
+        computer.settings(ClipSettings { history_max: 20, ..Default::default() });
+        let data = Arc::new(ClipData { text: Some("x".repeat(2 << 20)), ..Default::default() });
+        computer.clip.clipboard().history().lock().unwrap().record(data, false, "peer");
+        computer.settings(ClipSettings { history_max: 20, max_mb: 1, ..Default::default() });
+        assert_eq!(computer.clip.clipboard().history().lock().unwrap().len(), 1);
+        assert!(crate::history::handle(computer.clip.clipboard(), one_mk_ctl::client::HistoryAction::Copy(1), false).await.is_err());
+        computer.settings(ClipSettings { history_max: 20, ..Default::default() });
+        assert!(crate::history::handle(computer.clip.clipboard(), one_mk_ctl::client::HistoryAction::Copy(1), false).await.is_ok());
     }
 
     async fn eventually(what: &str, mut ok: impl FnMut() -> bool) {

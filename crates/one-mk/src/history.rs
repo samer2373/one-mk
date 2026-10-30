@@ -50,6 +50,7 @@ impl ClipboardCommand {
 }
 
 pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result<String> {
+    let durable = matches!(action, HistoryAction::Delete(_) | HistoryAction::Clear);
     if let HistoryAction::Copy(id) = action {
         let entry = cb.history().lock().unwrap_or_else(|error| error.into_inner()).get(id)
             .ok_or_else(|| anyhow::anyhow!("Clipboard item {id} is no longer in history; run one-mk clipboard history list"))?;
@@ -59,14 +60,14 @@ pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result
         return Ok(if json { "{\"copied\":true}\n".into() } else { "Copied the item to this computer only.\n".into() });
     }
     let shared = cb.history().clone();
-    tokio::task::spawn_blocking(move || -> Result<String> {
+    let response = tokio::task::spawn_blocking(move || -> Result<String> {
         let mut history = shared.lock().unwrap_or_else(|error| error.into_inner());
         match action {
             HistoryAction::List => {
                 let entries = history.list();
                 if json { return Ok(format!("[{}]\n", entries.iter().map(entry_json).collect::<Vec<_>>().join(","))); }
                 if entries.is_empty() { return Ok("Clipboard history is empty.\n".into()); }
-                Ok(entries.iter().map(|entry| format!("{}\t{}\t{}\t{}\tfrom {}\t{}\n", entry.id, entry.kind(), crate::clip::mb(entry.data.len()), entry.timestamp, entry.origin, entry.preview())).collect())
+                Ok(entries.iter().map(|entry| format!("{}\t{}\t{}\t{}\tfrom {}\t[hidden; use Show]\n", entry.id, entry.kind(), crate::clip::mb(entry.data.len()), entry.timestamp, entry.origin)).collect())
             }
             HistoryAction::Show(id) => {
                 let entry = history.get(id).ok_or_else(|| anyhow::anyhow!("Clipboard item {id} is no longer in history; run one-mk clipboard history list"))?;
@@ -85,12 +86,14 @@ pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result
             }
             HistoryAction::Copy(_) => bail!("Could not restore clipboard history; try again"),
         }
-    }).await.map_err(|_| anyhow::anyhow!("Could not read clipboard history; restart one-mk and try again"))?
+    }).await.map_err(|_| anyhow::anyhow!("Could not read clipboard history; restart one-mk and try again"))??;
+    if durable { cb.flush_history().await?; }
+    Ok(response)
 }
 
 fn entry_json(entry: &Entry) -> String {
     format!("{{\"id\":{},\"kind\":{},\"preview\":{},\"size\":{},\"timestamp\":{},\"origin\":{}}}",
-        entry.id, quote(entry.kind()), quote(&entry.preview()), entry.data.len(), entry.timestamp, quote(&entry.origin))
+        entry.id, quote(entry.kind()), quote("[hidden; use Show]"), entry.data.len(), entry.timestamp, quote(&entry.origin))
 }
 
 fn quote(value: &str) -> String {
@@ -98,7 +101,9 @@ fn quote(value: &str) -> String {
     for ch in value.chars() {
         match ch {
             '"' => result.push_str("\\\""), '\\' => result.push_str("\\\\"),
-            ch if ch.is_control() || invisible(ch) => result.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch if ch.is_control() || invisible(ch) => {
+                for unit in ch.encode_utf16(&mut [0; 2]) { result.push_str(&format!("\\u{unit:04x}")); }
+            }
             ch => result.push(ch),
         }
     }
@@ -107,7 +112,7 @@ fn quote(value: &str) -> String {
 }
 
 fn invisible(ch: char) -> bool {
-    matches!(ch, '\u{061c}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}')
+    !ch.is_control() && one_mk_clipboard::history::invisible(ch)
 }
 
 fn terminal_text(value: &str) -> String {
@@ -122,6 +127,16 @@ fn terminal_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn lists_are_masked_until_explicit_show() {
+        let (clipboard, _) = Clipboard::memory();
+        clipboard.write(one_mk_clipboard::ClipData { text: Some("dummy-secret".into()), ..Default::default() }).await.unwrap();
+        for json in [false, true] {
+            assert!(!handle(&clipboard, HistoryAction::List, json).await.unwrap().contains("dummy-secret"));
+        }
+        assert!(handle(&clipboard, HistoryAction::Show(1), false).await.unwrap().contains("dummy-secret"));
+    }
 
     #[test]
     fn terminal_and_json_never_emit_hostile_controls() {
