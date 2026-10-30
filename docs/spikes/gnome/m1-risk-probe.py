@@ -69,6 +69,35 @@ def warning_records(log):
     return records
 
 
+def idle_trace_summary(trace, window):
+    counts = {'syscall_returns': 0, 'poll_returns': 0, 'blocking_poll_returns': 0,
+              'timer_returns': 0}
+    for line in trace.splitlines():
+        match = re.match(r'\d+\s+(\d+\.\d+)\s+(.*)', line)
+        if not match or ' = ' not in match[2] or '<unfinished ...>' in match[2]:
+            continue
+        body = match[2]
+        duration = re.search(r'<(\d+\.\d+)>$', body)
+        elapsed = float(duration[1]) if duration else 0
+        completed = float(match[1]) + (0 if body.startswith('<... ') else elapsed)
+        if not window['wall_start'] <= completed <= window['wall_end']:
+            continue
+        counts['syscall_returns'] += 1
+        polling = bool(re.match(r'(?:<\.\.\. )?(?:p?poll)(?:\(| resumed)', body))
+        if polling:
+            counts['poll_returns'] += 1
+            if elapsed >= 0.001:
+                counts['blocking_poll_returns'] += 1
+        if (re.match(r'(?:<\.\.\. )?(?:clock_nanosleep|nanosleep)(?:\(| resumed)', body)
+                or (polling and ' = 0 ' in body and elapsed >= 0.001)
+                or ('futex' in body and 'ETIMEDOUT' in body)):
+            counts['timer_returns'] += 1
+    seconds = window['wall_end'] - window['wall_start']
+    return {**counts, 'seconds': round(seconds, 6),
+            'blocking_poll_returns_per_second': round(counts['blocking_poll_returns'] / seconds, 6),
+            'timer_returns_per_second': round(counts['timer_returns'] / seconds, 6)}
+
+
 def clean_environment():
     return {
         "PATH": "/usr/bin:/bin",
@@ -113,6 +142,9 @@ def snapshot():
             damage: bridge?.stats.damage ?? 0, stale: bridge?._stale ?? false,
             fresh: renderer?.firstDamage ?? false,
             watchdog: bridge?._watchdogId ?? 0,
+            coverage: bridge?._coverageId ?? 0,
+            pid: bridge?._pid ?? null,
+            reason: bridge?._reason ?? null,
             restart: bridge?._restartId ?? 0,
             cloneCount: bridge?._clones.length ?? 0,
             events: bridge?.stats.events.slice(-15) ?? [],
@@ -133,6 +165,26 @@ def descendants(process_id):
         result.extend(descendants(child))
         result.append(child)
     return result
+
+
+def supervisor_observation():
+    observation = {'shell_processes': [], 'memory_events': {}}
+    for process_id in descendants(os.getpid()):
+        try:
+            process = Path(f'/proc/{process_id}')
+            if ((process / 'comm').read_text().strip() == 'gnome-shell'
+                    and f'XDG_RUNTIME_DIR={ROOT}/run'.encode() in
+                    (process / 'environ').read_bytes().split(b'\0')):
+                observation['shell_processes'].append({'pid': process_id,
+                    'stat': (process / 'stat').read_text().strip()})
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            pass
+    for entry in Path('/proc/self/cgroup').read_text().splitlines():
+        if entry.startswith('0::'):
+            events = Path('/sys/fs/cgroup') / entry[3:].lstrip('/') / 'memory.events'
+            if events.exists():
+                observation['memory_events'] = dict(line.split() for line in events.read_text().splitlines())
+    return observation
 
 
 def cleanup():
@@ -176,10 +228,17 @@ def main():
     parser.add_argument('--label', default='presentation')
     parser.add_argument('--sink', choices=['wayland', 'own'], default='own')
     parser.add_argument('--matrix', action='store_true')
+    parser.add_argument('--idle-only', action='store_true')
+    parser.add_argument('--debug-shell', action='store_true')
+    parser.add_argument('--security-only', action='store_true')
     parser.add_argument('--baseline', action='store_true')
     parser.add_argument('--baseline-log', type=Path)
     parser.add_argument('--binary', type=Path, default=BINARY)
     args = parser.parse_args()
+    if args.idle_only and (not args.matrix or args.baseline):
+        parser.error('--idle-only requires a candidate --matrix')
+    if args.security_only and (args.matrix or args.baseline or args.idle_only):
+        parser.error('--security-only is a separate negative test session')
     args.binary = args.binary.resolve(strict=True)
     if args.baseline and not args.matrix:
         parser.error('--baseline requires the lifecycle matrix')
@@ -193,17 +252,24 @@ def main():
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         directory.chmod(0o700)
     report = {"date_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-              "baseline": args.baseline,
+              "baseline": args.baseline, "idle_only": args.idle_only,
               "status": "failed", "runtime": "host GStreamer: UNQUALIFIED, trusted generated fixture only",
               "stages": [], "measurements": {}}
     report['binary_sha256'] = hashlib.sha256(args.binary.read_bytes()).hexdigest()
+    report['supervisor_before'] = supervisor_observation()
     if args.baseline_log:
         report['baseline_log'] = {'file': str(args.baseline_log),
                                  'sha256': hashlib.sha256(args.baseline_log.read_bytes()).hexdigest()}
     started = False
     try:
+        report['shell_version'] = command(['gnome-shell', '--version'], clean_environment())
+        if report['shell_version'] != 'GNOME Shell 50.1':
+            raise RuntimeError('unqualified Shell version: isolated M1 requires 50.1')
         started = True
-        report["harness_start"] = command([str(HARNESS), "start", "3" if args.matrix else "2"], clean_environment())
+        session_environment = clean_environment()
+        if args.debug_shell:
+            session_environment['DEBUG_SHELL'] = '1'
+        report["harness_start"] = command([str(HARNESS), "start", "3" if args.matrix else "2"], session_environment)
         ROOT.chmod(0o700)
         plugins = ROOT / "plugins"
         plugins.mkdir(mode=0o700)
@@ -234,7 +300,7 @@ def main():
         fixture_hash = command([str(args.binary), "--risk-hash-fixture"], media_environment)
         report["fixture"] = {"blake3": fixture_hash, "bytes": (ROOT / "fixture.webm").stat().st_size,
                              "dimensions": [3840, 1080], "frames": 1200, "fps": 30}
-        for extension in ["spike-harness@one-mk.test"] + ([] if args.baseline else ["wallpaper-spike@one-mk.test"]):
+        for extension in ["spike-harness@one-mk.test"] + ([] if args.baseline or args.security_only else ["wallpaper-spike@one-mk.test"]):
             private(["gdbus", "call", "--session", "-d", "org.gnome.Shell.Extensions", "-o", "/org/gnome/Shell/Extensions",
                      "-m", "org.gnome.Shell.Extensions.EnableExtension", extension])
         evaluate('Main.overview.hide(); "hidden"')
@@ -243,7 +309,14 @@ def main():
         arguments = ["/usr/bin/env", *[f"{name}={value}" for name, value in media_environment.items()
                       if name.startswith(("GST_", "ONE_MK_WALL_")) or name == 'WAYLAND_DEBUG'], f"ONE_MK_WALL_RISK_HASH={fixture_hash}",
                      str(args.binary), "--present=gnome", "--risk-probe"]
-        if args.matrix:
+        if args.idle_only:
+            arguments = ['/usr/bin/strace', '-D', '-f', '-ttt', '-T', '-o',
+                         str(ROOT / 'log/renderer.strace'), *arguments]
+        if args.security_only:
+            runpy.run_path(str(HERE / 'm1a-security.py'))['run_security'](
+                evaluate, private, arguments, ROOT, HERE, HARNESS, clean_environment(), report)
+            report['status'] = 'security-negative-tests-pass-not-M1-acceptance'
+        elif args.matrix:
             report['measurements'] = runpy.run_path(str(HERE / 'm1a-matrix.py'))['run_matrix'](
                 evaluate, private, snapshot, arguments, ROOT, LAB, report)
             report['status'] = 'partial-risk-pass-not-M1-acceptance'
@@ -280,9 +353,39 @@ def main():
             report["status"] = "partial-risk-pass-not-M1-acceptance"
     except Exception as error:
         report["failure"] = str(error)
+        report['failure_traceback'] = traceback.format_exc()
         report['status'] = 'failed'
+        if started:
+            try:
+                report['failure_bridge'] = snapshot()
+                report['failure_bus_owner'] = private(['gdbus', 'call', '--session',
+                    '-d', 'org.freedesktop.DBus', '-o', '/org/freedesktop/DBus',
+                    '-m', 'org.freedesktop.DBus.GetNameOwner', 'org.onemk.WallpaperBridgeSpike1'])
+            except Exception as observation_error:
+                report['failure_observation_error'] = str(observation_error)
     finally:
         if started:
+            report['supervisor_before_cleanup'] = supervisor_observation()
+            report['shell_exit_before_cleanup'] = ((ROOT / 'shell.exit').read_text().strip()
+                                                   if (ROOT / 'shell.exit').exists() else None)
+            report['host_core_pattern'] = Path('/proc/sys/kernel/core_pattern').read_text().strip()
+            core = ROOT / 'log/shell.core'
+            if core.exists():
+                destination = LAB / f'{args.label}-shell.core'
+                shutil.move(core, destination)
+                report['shell_core'] = str(destination)
+            trace = ROOT / 'log/renderer.strace'
+            if trace.exists():
+                shutil.copyfile(trace, LAB / f'{args.label}-renderer.strace')
+                report['idle_syscalls'] = {state: idle_trace_summary(trace.read_text(), window)
+                    for state, window in report['measurements'].items()
+                    if state in ('cpu_paused', 'cpu_covered')}
+                if any(window['timer_returns'] for window in report['idle_syscalls'].values()):
+                    report['status'] = 'failed'
+                    report['idle_gate'] = 'FAILED: timer work during settled pause/coverage'
+            elif args.idle_only:
+                report['status'] = 'failed'
+                report['idle_gate'] = 'FAILED: missing renderer syscall trace'
             log = (ROOT / 'log/shell.log').read_text(errors='replace') if (ROOT / 'log/shell.log').exists() else ''
             try:
                 log = cleanup()

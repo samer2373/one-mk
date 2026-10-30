@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import signal
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 
 BRIDGE = 'Main.extensionManager.lookup("wallpaper-spike@one-mk.test").stateObj.bridge'
@@ -14,8 +13,6 @@ UUID = 'wallpaper-spike@one-mk.test'
 def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
     measurements = {}
     report['measurements'] = measurements
-    shots = lab / ('m1a-shots-' + report['date_utc'].replace(':', '-'))
-    shots.mkdir(exist_ok=True)
     here = Path(__file__).resolve().parent
 
     def extension(action, uuid=UUID):
@@ -76,39 +73,33 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
     measurements['shell_pid'] = shell
 
     def measure_cpu(pid, seconds=3):
+        wall_start = time.time()
         start = time.monotonic()
         before = cpu(pid), cpu(shell)
         time.sleep(seconds)
         elapsed = time.monotonic() - start
         after = cpu(pid), cpu(shell)
-        return {'seconds': round(elapsed, 3), 'before_ticks': before, 'after_ticks': after,
+        return {'seconds': round(elapsed, 3), 'wall_start': wall_start, 'wall_end': time.time(),
+            'before_ticks': before, 'after_ticks': after,
             'renderer_percent_one_core': round(
             100 * (after[0] - before[0]) / os.sysconf('SC_CLK_TCK') / elapsed, 2),
             'shell_percent_one_core': round(100 * (after[1] - before[1]) /
                                           os.sysconf('SC_CLK_TCK') / elapsed, 2)}
 
     def burst(label, action):
-        before = time.monotonic()
-        measurements[label + '_origin_monotonic_ms'] = round(before * 1000, 3)
-        worker = ThreadPoolExecutor(max_workers=1)
-        transition = worker.submit(action)
-        frames = []
-        try:
-            for index in range(41):
-                target = before + index * 0.05
-                time.sleep(max(0, target - time.monotonic()))
-                shot = shots / f'{label}-{index:02}.png'
-                captured = time.monotonic()
-                reply = private(['gdbus', 'call', '--session', '-d', 'org.gnome.Shell.Screenshot',
-                    '-o', '/org/gnome/Shell/Screenshot', '-m', 'org.gnome.Shell.Screenshot.Screenshot',
-                    'false', 'false', str(shot)])
-                frames.append({'scheduled_ms': index * 50, 'requested_ms': round((captured - before) * 1000, 2),
-                    'completed_ms': round((time.monotonic() - before) * 1000, 2),
-                    'file': str(shot.relative_to(lab)), 'reply': reply, 'snapshot': snapshot()})
-            transition.result(timeout=10)
-        finally:
-            worker.shutdown(wait=True, cancel_futures=True)
-        return frames
+        origin = evaluate('Main.extensionManager.lookup("spike-harness@one-mk.test").stateObj.timeUs()')
+        action()
+        time.sleep(2)
+        return compositor_timing(origin)
+
+    def compositor_timing(origin):
+        events = evaluate('Main.extensionManager.lookup("spike-harness@one-mk.test").stateObj.events')
+        damage = [] if args_baseline else evaluate(
+            'Main.extensionManager.lookup("wallpaper-spike@one-mk.test").stateObj._recovery.damageTimes')
+        events = [event for event in events if event['us'] >= origin]
+        frames = [frame for frame in damage if frame['us'] >= origin]
+        return {'origin_us': origin, 'shell_events': events, 'damage': frames,
+                'snapshot': snapshot(), 'interpretation': 'compositor damage, not physical scanout'}
 
     def layout(count, scale=1):
         private(['python3', str(here / 'client/displayconfig.py'), 'apply', str(count), str(scale)])
@@ -126,7 +117,8 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
     pid = measurements['startup']['pid']
     measurements['cpu_on'] = measure_cpu(pid)
     measurements['layouts'] = []
-    for count, scale in [(1, 1), (2, 1), (3, 1), (1, 2), (2, 2), (3, 2), (3, 1.25)]:
+    for count, scale in ([] if report.get('idle_only') else
+                        [(1, 1), (2, 1), (3, 1), (1, 2), (2, 2), (3, 2), (3, 1.25)]):
         try:
             layout(count, scale)
             time.sleep(0.5)
@@ -136,8 +128,9 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
             measurements['layouts'].append({'monitors': count, 'scale': scale, 'unavailable': str(error)})
     layout(2)
     time.sleep(0.5)
-    measurements['unplug_shots'] = burst('unplug', lambda: layout(1))
-    measurements['replug_shots'] = burst('replug', lambda: layout(2))
+    if not report.get('idle_only'):
+        measurements['unplug_shots'] = burst('unplug', lambda: layout(1))
+        measurements['replug_shots'] = burst('replug', lambda: layout(2))
     measurements['paused_before'] = snapshot()
     evaluate('Main.overview.show(); "overview"')
     time.sleep(1)
@@ -172,6 +165,23 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
         cover.wait(timeout=5)
         cover_second.wait(timeout=5)
     time.sleep(0.5)
+    if report.get('idle_only'):
+        measurements['resumed'] = snapshot()
+        measurements['qualification_failures'] = []
+        if not measurements['covered']['paused']:
+            measurements['qualification_failures'].append('coverage did not pause renderer')
+        if measurements['resumed']['damage'] <= measurements['paused_after']['damage']:
+            measurements['qualification_failures'].append('event-driven resume produced no new damage')
+        if any(measurements['paused_after'][source] for source in ('watchdog', 'restart', 'coverage')):
+            measurements['qualification_failures'].append('settled paused extension retains a source')
+        extension('Disable')
+        deadline = time.monotonic() + 3
+        while Path(f'/proc/{pid}').exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        measurements['off_renderer_exists'] = Path(f'/proc/{pid}').exists()
+        if measurements['off_renderer_exists']:
+            measurements['qualification_failures'].append('disabled renderer was not reaped')
+        return measurements
     if args_baseline:
         measurements['renderer_faults'] = 'not applicable: extension disabled, no renderer'
     else:
@@ -181,6 +191,7 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
     measurements['locked_state'] = evaluate('({locked: Main.screenShield.locked, mode: Main.sessionMode.currentMode})')
     measurements['unlock_shots'] = burst('unlock', lambda: evaluate('Main.screenShield.deactivate(false); "unlock"'))
     measurements['unlock_restart'] = start() if args_baseline else automatic(pre_lock_pid)
+    measurements['unlock_compositor'] = compositor_timing(measurements['unlock_shots']['origin_us'])
     measurements['cycles'] = []
     for index in range(100):
         current_pid = None if args_baseline else evaluate(f'{BRIDGE}._pid')
