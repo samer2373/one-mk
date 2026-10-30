@@ -1,0 +1,145 @@
+{
+  "date_utc": "2026-10-30T20:51:02.668386+00:00",
+  "baseline": false,
+  "idle_only": false,
+  "status": "security-negative-tests-pass-not-M1-acceptance",
+  "runtime": "host GStreamer: UNQUALIFIED, trusted generated fixture only",
+  "stages": [],
+  "measurements": {
+    "name_squatting": {
+      "failure": "bridge-name-unavailable",
+      "ownsName": false,
+      "children": 0,
+      "restart": 0,
+      "refused": true
+    },
+    "renderer_refused_before_hello": true,
+    "frame_file_method_absent": true,
+    "retired_window_rehidden": true,
+    "uncooperative_replacement_reaped": true,
+    "shell_responsive_after_negative_tests": true
+  },
+  "binary_sha256": "14409d9abaf92dd2c6ea4eb1cdaddaf7058f7a15d0349873099255f39c8f50c9",
+  "supervisor_before": {
+    "shell_processes": [],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "baseline_log": {
+    "file": "docs/spikes/gnome/m1a2-evidence/baseline-shell.log",
+    "sha256": "b0b3c293e1d88e8bc6dc1614b022f4302dae678831709d47221552527ddc9c52"
+  },
+  "shell_version": "GNOME Shell 50.1",
+  "harness_start": "isolated Shell up: leader 3436051 bus unix:path=/tmp/dbus-kxONHCqa1n,guid=d2cb90bc7ce4294037d7a7536ae50336",
+  "runtime_version": "gst-inspect-1.0 version 1.28.2\nGStreamer 1.28.2\nhttps://launchpad.net/ubuntu/+source/gstreamer1.0",
+  "native_dependencies": {
+    "coreelements": "linux-vdso.so.1 (0x000078f5d04ae000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000078f5d02b4000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000078f5d0230000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000078f5d00d8000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000078f5d0074000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000078f5cfe00000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000078f5d006b000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000078f5cfcda000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000078f5d0060000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000078f5cfc2e000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000078f5d004f000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000078f5d04b0000)",
+    "matroska": "linux-vdso.so.1 (0x000075e215d53000)\n\tlibgstpbutils-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstpbutils-1.0.so.0 (0x000075e215c92000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000075e215bac000)\n\tlibgstaudio-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstaudio-1.0.so.0 (0x000075e215b21000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000075e215a9d000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000075e215930000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000075e2158ca000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000075e215772000)\n\tlibgstriff-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstriff-1.0.so.0 (0x000075e215761000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x000075e21571f000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x000075e215701000)\n\tlibbz2.so.1.0 => /usr/lib/x86_64-linux-gnu/libbz2.so.1.0 (0x000075e2156ec000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000075e2155c4000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000075e215200000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000075e2155ba000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000075e2154b7000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000075e2154b0000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000075e21549d000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000075e215492000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000075e215154000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000075e215d55000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000075e21547b000)",
+    "vpx": "linux-vdso.so.1 (0x00007bd81c87b000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007bd81c6d7000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007bd81c673000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007bd81c51b000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x00007bd81c4d9000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007bd81c3f3000)\n\tlibvpx.so.12 => /usr/lib/x86_64-linux-gnu/libvpx.so.12 (0x00007bd81c000000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007bd81bc00000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007bd81c3ea000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007bd81beda000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007bd81c3d9000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007bd81c3cc000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007bd81be2e000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007bd81bb7c000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x00007bd81bb5e000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007bd81c3c2000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007bd81ba5b000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007bd81c87d000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007bd81ba44000)",
+    "videoconvertscale": "linux-vdso.so.1 (0x000071e9bc9d7000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000071e9bc8c4000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000071e9bc757000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000071e9bc6f3000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000071e9bc59b000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000071e9bc515000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000071e9bc200000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000071e9bc50b000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000071e9bc0fd000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000071e9bbfd7000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000071e9bc502000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000071e9bc4f1000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000071e9bc4e6000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000071e9bc43a000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000071e9bc9d9000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000071e9bc423000)",
+    "waylandsink": "linux-vdso.so.1 (0x000078a93f530000)\n\tlibgstwayland-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstwayland-1.0.so.0 (0x000078a93f4ed000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000078a93f380000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000078a93f31c000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000078a93f1c4000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000078a93f0de000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000078a93f0d2000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000078a93ee00000)\n\tlibwayland-client.so.0 => /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 (0x000078a93f0bf000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000078a93f0b8000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000078a93ecda000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000078a93f0a5000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000078a93f09a000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000078a93ec2e000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000078a93ebaa000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000078a93eaa7000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000078a93f081000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000078a93f532000)",
+    "videotestsrc": "linux-vdso.so.1 (0x000077ac9a83d000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000077ac9a728000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000077ac9a5bb000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x000077ac9a557000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000077ac9a3ff000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x000077ac9a37b000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x000077ac9a276000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000077ac9a150000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000077ac99e00000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x000077ac9a146000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000077ac9a13f000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x000077ac9a12c000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000077ac9a121000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x000077ac9a075000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000077ac9a83f000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x000077ac9a05e000)",
+    "app": "linux-vdso.so.1 (0x0000754aa8d5c000)\n\tlibgstapp-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstapp-1.0.so.0 (0x0000754aa8d20000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000754aa8bb3000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000754aa8b2f000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000754aa8acb000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000754aa8973000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000754aa8600000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000754aa896a000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000754aa8844000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000754aa8833000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000754aa8828000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000754aa8554000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000754aa8d5e000)"
+  },
+  "fixture": {
+    "blake3": "40a9c1d71276312e12134ebd025643c68fe8e22711a66a61d16f703b43360ff8",
+    "bytes": 312344,
+    "dimensions": [
+      3840,
+      1080
+    ],
+    "frames": 1200,
+    "fps": 30
+  },
+  "supervisor_before_cleanup": {
+    "shell_processes": [
+      {
+        "pid": 3436093,
+        "stat": "3436093 (gnome-shell) S 3436056 3436051 3436051 0 -1 4194304 50081 34541 10 1 106 29 66 18 20 0 29 0 80702521 6912028672 64865 18446744073709551615 96638004940800 96638004948857 140721946715920 0 0 0 0 16781316 16394 0 0 0 17 1 0 0 0 0 0 96638004955664 96638004957552 96638324105216 140721946716788 140721946716915 140721946716915 140721946718179 0"
+      }
+    ],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "shell_exit_before_cleanup": null,
+  "host_core_pattern": "|/usr/share/apport/apport -p%p -s%s -c%c -d%d -P%P -u%u -g%g -F%F -- %E",
+  "cleanup": "all owned children reaped; session directory and generated media removed",
+  "shell_log_tail": [
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Activating service name='org.freedesktop.portal.IBus' requested by ':1.9' (uid=1000 pid=3436174 comm=\"ibus-daemon --panel disable\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.freedesktop.portal.IBus'",
+    "GNOME Shell-Message: 23:51:03.911: No permission to control network connections: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files",
+    "** Message: 23:51:03.923: Failed to start camera monitor",
+    "GNOME Shell-Message: 23:51:03.952: Failed to get PolKit permission: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files",
+    "GNOME Shell-Message: 23:51:03.953: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.GeoClue2 was not provided by any .service files",
+    "",
+    "(gnome-shell:3436093): accountsservice-WARNING **: 23:51:03.957: ActUserManager: user (null) has no username (uid: -1)",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.12' (uid=1000 pid=3436250 comm=\"/usr/libexec/ibus-extension-gtk3\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Activating service name='org.freedesktop.portal.Documents' requested by ':1.15' (uid=1000 pid=3436518 comm=\"/usr/libexec/xdg-desktop-portal\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.freedesktop.portal.Documents'",
+    "fusermount3: mount failed: Operation not permitted",
+    "error: fuse init failed: Can't mount path /home/samer/.t3/worktrees/one-mk/t3-5cb4127b/target/wall-m1-lab/wall-m1-session/run/doc",
+    "",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.041: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gnome' requested by ':1.15' (uid=1000 pid=3436518 comm=\"/usr/libexec/xdg-desktop-portal\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Activating service name='org.gnome.Settings.GlobalShortcutsProvider' requested by ':1.17' (uid=1000 pid=3436533 comm=\"/usr/libexec/xdg-desktop-portal-gnome\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.gnome.Settings.GlobalShortcutsProvider'",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gnome'",
+    "",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.256: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.256: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.256: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.15' (uid=1000 pid=3436518 comm=\"/usr/libexec/xdg-desktop-portal\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'",
+    "",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.300: Failed to connect to PipeWire: Couldn't connect to PipeWire",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Activating service name='org.freedesktop.secrets' requested by ':1.15' (uid=1000 pid=3436518 comm=\"/usr/libexec/xdg-desktop-portal\" label=\"t3code (unconfined)\")",
+    "** Message: 23:51:04.306: couldn't access control socket: /home/samer/.t3/worktrees/one-mk/t3-5cb4127b/target/wall-m1-lab/wall-m1-session/run/keyring/control: No such file or directory",
+    "discover_other_daemon: 0dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.freedesktop.secrets'",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.freedesktop.portal.Desktop'",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.gnome.Shell.Screencast'",
+    "GNOME Shell-Message: 23:51:05.045: GNOME Shell started at Fri Oct 30 2026 23:51:03 GMT+0300 (GMT+03:00)",
+    "GNOME Shell-Message: 23:51:05.047: Registering display with GDM",
+    "GNOME Shell-Message: 23:51:05.048: Error registering display with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, \u201c()\u201d, does not match expected type \u201c(a{ss})\u201d",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.25' (uid=1000 pid=3438314 comm=\"gdbus call --session -d org.gnome.Shell.Extensions\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'",
+    "GNOME Shell-Message: 23:51:29.022: one-mk wallpaper bridge REFUSED: bus name unavailable (bridge-name-unavailable)",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "wallpaper risk probe refused/failed: bridge unique owner is not the authenticated private Wayland peer",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.71' (uid=1000 pid=3439103 comm=\"gdbus call --session -d org.gnome.Shell.Extensions\" label=\"t3code (unconfined)\")",
+    "dbus-daemon[3436055]: [session uid=1000 pid=3436055 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'",
+    "** Message: 23:51:32.609: Shutting down GNOME Shell"
+  ],
+  "shell_warnings": [
+    "(gnome-shell:3436093): libmutter-WARNING **: 23:51:03.248: Unknown experimental feature 'scale-monitor-framebuffer'",
+    "(gnome-shell:3436093): libmutter-WARNING **: 23:51:03.248: Unknown experimental feature 'xwayland-native-scaling'",
+    "(gnome-shell:3436093): libmutter-WARNING **: 23:51:03.435: There is no colord server available",
+    "(gnome-shell:3436093): GNOME Shell-WARNING **: 23:51:03.756: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3436093): GNOME Shell-CRITICAL **: 23:51:03.815: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3436093): GNOME Shell-CRITICAL **: 23:51:03.816: Could not get proxy for session null: Error: Argument string may not be null",
+    "(gnome-shell:3436093): GNOME Shell-WARNING **: 23:51:03.816: Failed to start state machine: can't access property \"connectObject\", this._loginUser is null",
+    "(gnome-shell:3436093): Gjs-WARNING **: 23:51:03.816: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:",
+    "(gnome-shell:3436093): accountsservice-WARNING **: 23:51:03.957: ActUserManager: user (null) has no username (uid: -1)",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.041: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.256: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.256: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.256: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3436518): xdg-desktop-portal-WARNING **: 23:51:04.300: Failed to connect to PipeWire: Couldn't connect to PipeWire"
+  ],
+  "new_warnings": []
+}

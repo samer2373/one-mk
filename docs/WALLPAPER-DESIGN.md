@@ -216,12 +216,21 @@ current surface; released buffers and frame callbacks bound presentation.
 The extension still adopts by connection ownership, sets DESKTOP before map,
 and clones one decoder's output per monitor. Empty input regions avoid source
 window input. This removes the initial-content warning in isolated runs,
-**not** the complete lifecycle warning gate: stack/allocation warnings and
-retained managed windows remain. `gtk4paintablesink` is unavailable in this
+**not** the complete lifecycle gate. The unchanged disabled baseline now
+accounts for stack/allocation warnings; successful cycles leave no retained
+managed windows, but M1a-3 fails Hello at cycle 75 while private Shell remains
+alive. Its export lifecycle and the older Shell loss remain unresolved.
+`gtk4paintablesink` is unavailable in this
 lab and has not been runtime-qualified. See the [resolution and continued
 stop](spikes/wallpaper-m1-stop.md) for primary evidence and the next experiment.
-CPU shared-memory copies, fixed-fixture scaling, broadcast spike signals and
-manual test restarts are not the production GPU/HiDPI/bounded bridge design.
+M1a-3 pins the spike bridge's unique owner to the inherited Wayland peer PID,
+checks variant types/4096-byte bounds before field access, unicasts to the
+bound renderer, refuses name squatting and removes FrameReady/image-file
+ingestion. Replaced windows retain re-hide enforcement until destroyed; clients
+that retain them beyond two seconds are terminated. Paused renderer timers are
+gone, but compositor-origin wakeups remain. None of this delivers the product
+protocol/component/CLI/doctor described below. CPU shared-memory copies and
+fixed-fixture scaling are not the production GPU/HiDPI design.
 No live-desktop deployment or shipping presenter is authorized by this result.
 
 No decoder/native module in Shell. No JS DMA-BUF import (NO-GO in 6B); no live
@@ -275,7 +284,7 @@ Authentication/resource rules:
    bind that unique bus name. Later calls compare binding without repeated PID
    lookups. Clear PID/binding on exit/owner loss/disable and before spawn: no
    PID-reuse window. At most one pending credential lookup, four/second.
-3. Signals go only to bound unique renderer name, not spike's broadcasts.
+3. Signals go only to bound unique renderer name, never broadcast.
    Renderer checks bridge owner PID equals `org.gnome.Shell` owner PID, pins
    unique owner; owner change forces Hello again.
 4. Only owned correctly sized windows adopted. One current + one pending for

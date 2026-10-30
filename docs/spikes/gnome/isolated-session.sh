@@ -73,7 +73,17 @@ for i in \$(seq 50); do [ -S "$SPIKE/run/system_bus" ] && break; sleep 0.1; done
 # FAKE_GDM=1: answer GDM's Version on the PRIVATE system bus so the Shell
 # enables its lock screen (needed only for the lock-screen test).
 [ "${FAKE_GDM:-0}" = 1 ] && { python3 "$HERE/client/fake_gdm.py" & sleep 0.5; }
-exec gnome-shell --wayland --headless --no-x11 --wayland-display spike-wl-0 $mons
+ulimit -c 0
+if [ "${DEBUG_SHELL:-0}" = 1 ]; then
+    gdb --batch -ex 'set pagination off' -ex 'set confirm off' \
+        -ex 'set debuginfod enabled off' -ex 'handle SIGPIPE nostop noprint pass' \
+        -ex run -ex 'thread apply all bt full' \
+        -ex 'generate-core-file $SPIKE/log/shell.core' \
+        --args gnome-shell --wayland --headless --no-x11 --wayland-display spike-wl-0 $mons
+else
+    gnome-shell --wayland --headless --no-x11 --wayland-display spike-wl-0 $mons
+fi
+echo \$? > "$SPIKE/shell.exit"
 EOF
 	chmod +x "$SPIKE/inner.sh"
 	# setsid: own process group/session so stop can kill all of it.

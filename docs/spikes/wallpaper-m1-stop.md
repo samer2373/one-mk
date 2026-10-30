@@ -1,3 +1,122 @@
+# 6D-M1a-3: bridge security/idle resolutions; lifecycle still STOPPED
+
+Date: October 30–31, 2026 (Asia/Amman). Branch:
+`t3/wallpaper-lifecycle-gates`, reset as requested to local `wave5` at
+`b6d14c8`, then implementation commits. **Diagnostic work, not M1 delivery.**
+Only the private headless/no-Xwayland Mutter harness was used. Owner desktop,
+running one-mk and user extension installation remain untouched.
+
+## M1a-3 decision
+
+**STOP remains.** The independent review's three GNOME findings are fixed in
+the spike, and settled renderer polling is removed. The final-code full matrix
+fails at cycle 75 with a reproducible bridge `UnknownMethod` while Shell stays
+alive. Five final-code clean 100-cycle runs are not demonstrated. The original
+private Shell disappearance is not root-caused, and the production-shaped
+extension/bridge/CLI/doctor component (task 6) is **not delivered**. Do not
+promote the spike or describe these findings as production acceptance.
+
+Primary evidence and attempt classification:
+[M1a-3 index](gnome/m1a3-evidence/README.md),
+[final security checks](gnome/m1a3-evidence/security-verified.json),
+[settled idle measurement](gnome/m1a3-evidence/idle-final.json),
+[final lifecycle failure](gnome/m1a3-evidence/qualified-1.json),
+[full failing Shell/GDB log](gnome/m1a3-evidence/qualified-1-shell.log).
+The unchanged warning baseline remains
+[M1a-2 baseline](gnome/m1a2-evidence/baseline-shell.log).
+
+| Gate / measurement | M1a-3 result | Disposition |
+|---|---|---|
+| PAUSED polling | 3.000 s; renderer/Shell 0 CPU ticks; zero timer returns; 0.333293 blocking-poll completions/s | Own periodic work removed; compositor traffic still wakes renderer |
+| Fully covered polling | 3.000 s; renderer/Shell 0 CPU ticks; zero timer returns; 0.666572 blocking-poll completions/s | Same scope; not a literal zero-total-wakeup claim |
+| Extension settled overview sources | watchdog/restart/coverage IDs all 0 | Event-driven; no extension periodic timer while paused |
+| OFF | renderer absent after disable, owned children reaped | No renderer process left to poll |
+| Name squatting / malformed messages | Foreign owner refused before Hello; exact variant signatures, ≤4096-byte bodies, ≤16 monitors, checked canvas; bounded 32-event inbox | Review C(a) fixed in spike; not the complete product protocol |
+| FrameReady file ingestion | Method, image mode and Cogl upload path removed | Review C(b) fixed; no compositor-thread frame-file read |
+| Replaced renderer window | Re-hide remains until destruction; ≤2 s retirement; retained client killed/reaped | Review C(c) fixed; explicit negative fixture passes |
+| Stability, final code | 74 clean cycles; cycle 75 fails Hello with UnknownMethod; Shell alive, OOM counters 0 | **FAIL**; no five final-code clean repeats |
+| Pre-security diagnostic repeats | Five consecutive clean 100-cycle runs | Not final-code proof; retained separately |
+| Hot-plug notification → first new-window damage | Unplug 37.069 ms; replug 30.588 ms | Compositor-side microsecond timestamps, not physical scanout |
+| Unlock → first damage | 4092.193 ms | Explained by shared restart budget's 4000 ms third backoff; not 4.5 s decoder preroll |
+| Injected hang | Stale fallback observed 2574 ms; fresh automatic replacement | Partial lifecycle result before repeat failure |
+| kill -9 / DING / layouts | Fresh recovery; DING enabled; 1/2/3 outputs at scales 1/2, plus 3 at 1.25, correct extents | Partial final matrix, not a passed full lifecycle gate |
+| New warnings versus committed baseline | 0 in final security, idle and failed lifecycle runs | Strict baseline gate unchanged; no allowlist added |
+| Production bridge / doctor / extension CLI | Not implemented | **OPEN / undelivered** |
+
+## What changed, and what must happen next
+
+The paused presenter now blocks on persistent private Wayland/GLib FD sources
+with no timeout; a per-wait source-add/remove attempt self-woke and was rejected.
+The full renderer trace includes worker threads: settled windows show no
+5 ms sleeps, timeout polls or timed-out futex waits. Blocking-poll completions
+are a strace proxy, not perf scheduler counts. The extension's source IDs are
+also checked; unrelated Shell event sources are not attributed to the extension.
+
+The renderer resolves the bridge unique owner through the bus, verifies its
+PID/UID against the inherited authenticated Wayland socket peer, then sends
+Hello and subscribes only to that unique name. It checks signatures and sizes
+before reading children and checks geometry before allocation. The extension
+refuses to spawn without owning its name, publishes a latched
+`bridge-name-unavailable` diagnostic and log message, pins the renderer unique
+sender after exact spawned-PID authentication, and unicasts signals. The
+negative tests also bypass the extension guard deliberately to prove the
+renderer independently refuses the squatter. These are spike security fixes,
+not a claim that GIO cannot allocate transport buffers for arbitrary bus traffic.
+
+The repeated failure is now better isolated: after 74 correct lifecycle cycles,
+three successive renderers get `org.freedesktop.DBus.Error.UnknownMethod` for
+Hello from the authenticated private Shell connection. The bridge object still
+exists in JS and owns its name; no new Shell warning, Shell exit or core is
+observed. **Why its exported method becomes unavailable remains unknown.**
+Next work needs GJS/GDBus export-registration/lifetime tracing at enable/disable
+and GC boundaries, plus retained interface introspection at failure. The older
+cycle-19 Shell disconnect still needs independent reproduction with exit/core
+evidence; it cannot be attributed to this failure or to OOM from existing data.
+Increasing Hello deadlines/retries or hiding warnings would not resolve it.
+
+Compositor-side timestamps replace screenshot-over-IPC gap sampling. They show
+damage readiness, not guaranteed painting/physical scanout. Unlock consumes
+the same 1/2/4-second budget after the injected hang and kill; the log records
+4000 ms scheduled backoff, then approximately 51 ms spawn-to-first-damage.
+Keeping the budget matches §4's anti-crash-loop policy; shortening decoder
+preroll would not remove this delay. A different recovery policy would require
+a deliberate design decision, not resetting the budget on unlock.
+
+The next product increment must still supply independently authored extension
+sources and the full §4 v1 messages/rate limits/status, qualified-version
+refusal, a separate optional daemon-side component, doctor exhaustion reporting,
+explicit user-run install/uninstall/status, private-HOME installation tests and
+uninstall cleanliness. Nothing is installed/enabled by default. No shortcut
+that disables GNOME validation, uses the owner session or links this into the
+daemon hot path is authorized by these diagnostics.
+
+## Validation and estimate
+
+Clean-environment Linux workspace tests with the risk feature enabled:
+**1052 passed, 0 failed, 13 ignored**. Linux workspace all-target clippy, both
+default and risk-feature-enabled, passes `-D warnings`. Windows MSVC and Apple
+ARM all-target clippy passes for input/proto/ctl/app/tray and all four wallpaper
+crates with the documented `blake3/pure` cross setting. These are compile-only,
+not native-host qualification. Six Python gate tests and shell syntax pass.
+Every cargo command uses `-j 2`; no cargo fmt. Evidence includes the initial
+wrong-package cross-check's missing lib.exe failure and corrected checks.
+
+Reproduce with `bash docs/spikes/gnome/qualify-m1a3.sh`; generated media/traces
+stay under ignored `target/wall-m1-lab`. Each supervisor reaps its own children
+and removes the private session. The evidence index distinguishes rejected
+iterations, pre-security passes and the final failure; no failed run is counted
+as acceptance.
+
+Retain the provisional **16–26 engineer-weeks remaining for M1**, and
+**74–118 remaining engineer-weeks overall**, with low confidence until the
+export failure and original Shell loss are root-caused. These fixes do not
+justify reducing the estimate or marking task 6 delivered. A new estimate is
+required after stable final-code repeats and product-component qualification.
+
+---
+
+# Historical M1a-2 resolution (superseded by M1a-3 above)
+
 # 6D-M1a-2: lifecycle resolutions; production remains STOPPED
 
 Date: 2026-10-30. Branch: `t3/wallpaper-m1-lifecycle-gates`.
