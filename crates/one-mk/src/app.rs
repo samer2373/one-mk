@@ -12,7 +12,7 @@ use crate::clip::ClipSync;
 use crate::control::{self, Request};
 use crate::link::{self, Link, LinkEvent, Rank};
 use crate::profiles::{NetworkId, Profiles};
-use crate::manage::{LayoutStatus, LayoutVerdict, PeerStatus, Status, on_your, placement, resolve_layout, takeback_hint};
+use crate::manage::{LayoutStatus, LayoutVerdict, LinkStats, PeerStatus, Status, on_your, placement, resolve_layout, takeback_hint};
 use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
 use anyhow::{Context, Result};
@@ -2207,6 +2207,14 @@ impl App {
             let live = d.fingerprint().and_then(|fp| self.peers.get(&fp));
             Some((d.short_id(), live.map_or(d.offset, |p| p.offset)?))
         });
+        // What QUIC measured with the packets already flowing: read now, on
+        // request. Nothing runs for it between looks.
+        let links = self.trust.devices().iter().filter_map(|d| {
+            let live = self.peers.get(&d.fingerprint()?)?;
+            let stats = live.conn.stats().path;
+            let us = u32::try_from(stats.rtt.as_micros()).unwrap_or(u32::MAX).min(LinkStats::MAX_RTT_US);
+            Some((d.short_id(), LinkStats { rtt_us: us, lost: stats.lost_packets, sent: stats.sent_packets }))
+        });
         Status {
             name: sanitize_name(&id.name),
             id: id.fingerprint.short(),
@@ -2217,6 +2225,7 @@ impl App {
             peers: peers.collect(),
             screens: self.local.as_ref().map_or_else(Vec::new, |d| d.screens.clone()),
             offsets: offsets.collect(),
+            links: links.collect(),
             pointer_locked: self.locked,
             screen_locked: self.lock_sync.is_locked(),
             gaming: self.settings.gaming.to_string(),
@@ -3573,6 +3582,38 @@ mod tests {
         assert!(control::request(&duo.db, Request::Reload).await.unwrap().is_some());
         for _ in 0..250 {
             if !Duo::peer_status(&duo.da).await.online {
+                duo.stop().await;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("A still sees B online after B forgot A");
+    }
+
+    /// A connected peer's round-trip time is in the status (read from QUIC
+    /// on the request; nothing is probed), and an offline one has none.
+    #[tokio::test]
+    async fn status_carries_the_round_trip_of_connected_peers_only() {
+        let duo = Duo::start("status-rtt", None).await;
+        let s = status(&duo.da).await;
+        let peer = &s.peers[0];
+        assert!(peer.online);
+        let link = s.link_of(&peer.id).expect("a connected peer has its link stats");
+        assert!(link.rtt_us < 5_000_000 && link.sent > 0, "{link:?}");
+        assert!(s.render().contains(&format!("online, {}", link.render())), "{}", s.render());
+        // The status text is what carries it: older readers skip the line.
+        let text = control::request(&duo.da, Request::Status).await.unwrap().unwrap();
+        assert_eq!(text.lines().filter(|l| l.starts_with("link\t")).count(), 1, "{text}");
+
+        let mut trust = TrustStore::load(&duo.db).unwrap();
+        trust.remove(&duo.fa[..8]).unwrap();
+        trust.save().unwrap();
+        assert!(control::request(&duo.db, Request::Reload).await.unwrap().is_some());
+        for _ in 0..250 {
+            let s = status(&duo.da).await;
+            if !s.peers[0].online {
+                assert!(s.links.is_empty(), "an offline computer has no link: {:?}", s.links);
+                assert!(!s.render().contains("rtt"), "{}", s.render());
                 duo.stop().await;
                 return;
             }

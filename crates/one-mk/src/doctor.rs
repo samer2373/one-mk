@@ -726,6 +726,44 @@ pub fn network_check(addrs: &[Addr]) -> Check {
     check("network", title, out)
 }
 
+/// How the connections to the connected computers are doing right now,
+/// from what QUIC measures (the window draws the same over time).
+pub fn connection_check(d: &Daemon) -> Check {
+    let title = "Connection quality";
+    let Some(status) = d.status() else {
+        return check("link", title, Outcome::skip("one-mk is not running, so there is no connection to measure."));
+    };
+    let live: Vec<(&str, one_mk_ctl::status::LinkStats)> =
+        status.peers.iter().filter(|p| p.online).filter_map(|p| Some((p.name.as_str(), status.link_of(&p.id)?))).collect();
+    if live.is_empty() {
+        return check("link", title, Outcome::skip("No computer is connected right now."));
+    }
+    let shown = |us: u32| crate::manage::LinkStats { rtt_us: us, ..Default::default() }.render().replacen("rtt ", "", 1);
+    let slow: Vec<String> = live
+        .iter()
+        .filter_map(|(name, l)| {
+            // A fifty-th of the packets lost, once enough have been sent to say.
+            let lossy = l.sent >= 200 && l.lost * 50 >= l.sent;
+            match (l.rtt_us > one_mk_ctl::status::LinkStats::STALL_US, lossy) {
+                (true, true) => Some(format!("{name} answers in {} and lost {} of {} packets", shown(l.rtt_us), l.lost, l.sent)),
+                (true, false) => Some(format!("{name} answers in {}", shown(l.rtt_us))),
+                (false, true) => Some(format!("{name} lost {} of {} packets", l.lost, l.sent)),
+                (false, false) => None,
+            }
+        })
+        .collect();
+    let out = if slow.is_empty() {
+        let list: Vec<String> = live.iter().map(|(name, l)| format!("{name} {}", shown(l.rtt_us))).collect();
+        Outcome::pass(format!("Answers come back fast: {}.", list.join(", ")))
+    } else {
+        Outcome::warn(
+            format!("{}. Mouse moves may stall (under 40 ms is smooth).", slow.join("; ")),
+            "Move closer to the Wi-Fi router, use the 5 GHz band or a network cable, and pause big downloads on this network. The Health page in the window shows how it changes.",
+        )
+    };
+    check("link", title, out)
+}
+
 // ------------------------------------------------------------- renderer --
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -897,6 +935,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         crate::settings::Settings::load(dir).map(|s| s.pointer.draw_when_no_mouse).unwrap_or_default(),
     ));
     checks.push(network_check(&addrs));
+    checks.push(connection_check(&daemon));
     let seen = mdns.seen.as_deref().unwrap_or_default();
     checks.extend(peer_checks(&daemon, &paired, seen));
     checks
@@ -1170,6 +1209,37 @@ mod tests {
                 .collect(),
             ..DaemonStatus::default()
         }
+    }
+
+    fn connected(links: &[(&str, u32, u64, u64)]) -> Daemon {
+        let mut s = status("aaaa-aaaa", 24900, &links.iter().map(|l| (l.0, true)).collect::<Vec<_>>());
+        s.links = links.iter().map(|(id, rtt_us, lost, sent)| ((*id).into(), one_mk_ctl::status::LinkStats { rtt_us: *rtt_us, lost: *lost, sent: *sent })).collect();
+        Daemon::Running(Box::new(s))
+    }
+
+    #[test]
+    fn connection_quality_reads_what_quic_measured() {
+        let c = connection_check(&Daemon::NotRunning);
+        assert_eq!(st(&c), Status::Skip);
+        assert_eq!(st(&connection_check(&running())), Status::Skip);
+        let c = connection_check(&connected(&[("1111-1111", 4_200, 0, 5000)]));
+        assert_eq!(st(&c), Status::Pass);
+        assert!(c.outcome.detail.contains("laptop 4 ms"), "{}", c.outcome.detail);
+        // Late answers, loss, or both warn, and say which computer.
+        let c = connection_check(&connected(&[("1111-1111", 85_000, 0, 5000)]));
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.detail.contains("laptop answers in 85 ms") && c.outcome.fix.unwrap().contains("5 GHz"), "{}", c.outcome.detail);
+        let c = connection_check(&connected(&[("1111-1111", 4_000, 150, 5000)]));
+        assert!(c.outcome.detail.contains("lost 150 of 5000 packets"), "{}", c.outcome.detail);
+        let c = connection_check(&connected(&[("1111-1111", 90_000, 150, 5000)]));
+        assert!(c.outcome.detail.contains("answers in 90 ms and lost 150"), "{}", c.outcome.detail);
+        // 40 ms is the edge, and a handful of packets in the first seconds says nothing.
+        assert_eq!(st(&connection_check(&connected(&[("1111-1111", 40_000, 3, 100)]))), Status::Pass);
+        assert_eq!(st(&connection_check(&connected(&[("1111-1111", 40_001, 0, 100)]))), Status::Warn);
+        // A computer that is not connected has no link to judge.
+        let mut s = status("aaaa-aaaa", 24900, &[("1111-1111", false)]);
+        s.links = vec![("1111-1111".into(), one_mk_ctl::status::LinkStats { rtt_us: 900_000, lost: 9, sent: 10 })];
+        assert_eq!(st(&connection_check(&Daemon::Running(Box::new(s)))), Status::Skip);
     }
 
     fn running() -> Daemon {

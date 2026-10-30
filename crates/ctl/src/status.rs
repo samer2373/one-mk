@@ -90,6 +90,42 @@ pub struct Status {
     /// pixels, for the peers that have one. Kept here rather than on
     /// [`PeerStatus`] so its literals elsewhere stay valid.
     pub offsets: Vec<(String, (i32, i32))>,
+    /// (peer id, link): how the connection to each connected peer is doing
+    /// right now. Offline peers have none. Kept here, like `offsets`, so
+    /// [`PeerStatus`] literals elsewhere stay valid.
+    pub links: Vec<(String, LinkStats)>,
+}
+
+/// What QUIC already knows about a connection, read on a status request
+/// (no probe traffic, no timer: quinn measures it with every packet).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LinkStats {
+    /// Current round-trip time, in microseconds.
+    pub rtt_us: u32,
+    /// Packets declared lost on this connection since it began; a rise
+    /// between two looks is loss.
+    pub lost: u64,
+    /// Packets sent since it began.
+    pub sent: u64,
+}
+
+impl LinkStats {
+    /// The longest round trip taken at face value (a minute): a hostile
+    /// or damaged line can't make a graph scale absurdly.
+    pub const MAX_RTT_US: u32 = 60_000_000;
+    /// A round trip above this is a mouse move that arrives late: "some
+    /// stalls" in the window, a warning in `one-mk doctor`.
+    pub const STALL_US: u32 = 40_000;
+    /// ... and above this the link is "slow".
+    pub const SLOW_US: u32 = 100_000;
+
+    /// "rtt 4 ms", "rtt <1 ms".
+    pub fn render(&self) -> String {
+        match self.rtt_us {
+            0..=999 => "rtt <1 ms".to_owned(),
+            us => format!("rtt {} ms", us.saturating_add(500) / 1000),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -273,6 +309,9 @@ impl Status {
         for (id, (x, y)) in &self.offsets {
             out += &format!("offset\t{id}\t{x}\t{y}\n");
         }
+        for (id, l) in &self.links {
+            out += &format!("link\t{id}\t{}\t{}\t{}\n", l.rtt_us, l.lost, l.sent);
+        }
         // Lines of their own, which readers from before them skip.
         let l = &self.layout;
         if let Some(p) = &l.profile {
@@ -327,6 +366,18 @@ impl Status {
     /// Where `peer`'s (0,0) sits in this computer's pixels, if it was placed.
     pub fn offset_of(&self, peer: &str) -> Option<(i32, i32)> {
         self.offsets.iter().find(|(id, _)| id == peer).map(|(_, o)| *o)
+    }
+
+    /// How the connection to `peer` is doing; `None` while it is offline
+    /// (or the daemon is from before this).
+    pub fn link_of(&self, peer: &str) -> Option<LinkStats> {
+        self.links.iter().find(|(id, _)| id == peer).map(|(_, l)| *l)
+    }
+
+    /// The same status, leaving out what changes with every look (the
+    /// links), for noticing when anything else changed.
+    pub fn without_links(&self) -> Status {
+        Status { links: Vec::new(), ..self.clone() }
     }
 
     pub fn decode(text: &str) -> Option<Self> {
@@ -389,6 +440,15 @@ impl Status {
                         screens.push(Rect::new(x, y, w, h));
                     }
                 }
+                // Cosmetic like the screens: a line that doesn't parse costs
+                // only that graph; the first line for a computer counts.
+                ["link", id, rtt, lost, sent] => {
+                    if let (Ok(rtt_us), Ok(lost), Ok(sent)) = (rtt.parse::<u32>(), lost.parse(), sent.parse())
+                        && s.link_of(id).is_none()
+                    {
+                        s.links.push((id.into(), LinkStats { rtt_us: rtt_us.min(LinkStats::MAX_RTT_US), lost, sent }));
+                    }
+                }
                 ["offset", id, x, y] => {
                     if let (Ok(x), Ok(y)) = (x.parse(), y.parse()) {
                         s.offsets.push((id.into(), (x, y)));
@@ -442,7 +502,11 @@ impl Status {
             out += "No computers are paired yet. Run `one-mk pair` on this and the other computer.\n";
         }
         for p in &self.peers {
-            let state = if p.online { "online" } else { "offline" };
+            let state = match self.link_of(&p.id).filter(|_| p.online) {
+                Some(l) => format!("online, {}", l.render()),
+                None if p.online => "online".to_owned(),
+                None => "offline".to_owned(),
+            };
             out += &format!("  {:<24} {:<10} {:<14} {state}\n", p.name, os_name(p.os), on_your(p.side));
             if let Some(offset) = self.offset_of(&p.id) {
                 out += &format!("  {:<24} {}\n", "", placement(p.side, Some(offset)));
@@ -598,6 +662,58 @@ mod tests {
         let text = controlled.render();
         assert!(text.contains("laptop is controlling this computer right now."), "{text}");
         assert!(text.contains("one-mk takeback"), "{text}");
+    }
+
+    #[test]
+    fn link_stats_survive_the_wire_and_old_readers_skip_them() {
+        let peer = |id: &str, online| PeerStatus { id: id.into(), name: id.into(), side: Side::Left, os: os::LINUX, online, swap: "auto".into(), screens: vec![] };
+        let s = Status {
+            name: "desk".into(),
+            peers: vec![peer("1111-2222", true), peer("3333-4444", false)],
+            links: vec![("1111-2222".into(), LinkStats { rtt_us: 4_200, lost: 3, sent: 90_000 })],
+            ..Status::default()
+        };
+        let encoded = s.encode();
+        assert_eq!(Status::decode(&encoded), Some(s.clone()));
+        assert_eq!(s.link_of("1111-2222").map(|l| l.rtt_us), Some(4_200));
+        assert_eq!(s.link_of("3333-4444"), None);
+        let text = s.render();
+        assert!(text.contains("online, rtt 4 ms"), "{text}");
+        assert!(text.lines().any(|l| l.contains("3333-4444") && l.trim_end().ends_with("offline") && !l.contains("rtt")), "{text}");
+        // What a reader from before the link line makes of it: the rest.
+        let old: Vec<&str> = encoded.lines().filter(|l| !l.starts_with("link\t")).collect();
+        let older = Status::decode(&(old.join("\n") + "\n")).unwrap();
+        assert_eq!((older.peers.len(), older.links.len()), (2, 0));
+        assert!(older.render().contains("online\n"));
+        assert_eq!(s.without_links().links, vec![]);
+        assert_eq!(s.without_links().peers, s.peers);
+        assert_eq!(LinkStats { rtt_us: 400, ..LinkStats::default() }.render(), "rtt <1 ms");
+        assert_eq!(LinkStats { rtt_us: 1_499, ..LinkStats::default() }.render(), "rtt 1 ms");
+        assert_eq!(LinkStats { rtt_us: 12_600, ..LinkStats::default() }.render(), "rtt 13 ms");
+        assert_eq!(LinkStats { rtt_us: u32::MAX, ..LinkStats::default() }.render(), "rtt 4294967 ms");
+    }
+
+    #[test]
+    fn hostile_link_lines_cost_only_their_graph() {
+        let head = "ok\nname\tdesk\n";
+        for bad in [
+            "link\t1\tabc\t0\t0",
+            "link\t1\t-5\t0\t0",
+            "link\t1\t4294967296\t0\t0",
+            "link\t1\t5\t-1\t0",
+            "link\t1\t5\t0",
+            "link\t1\t5\t0\t0\t0",
+            "link\t\t\t\t",
+            "link",
+        ] {
+            let s = Status::decode(&format!("{head}{bad}\nport\t7\n")).unwrap();
+            assert_eq!((s.links.len(), s.port), (0, 7), "{bad:?}");
+        }
+        // A silly round trip is capped; a repeated id keeps its first line.
+        let s = Status::decode(&format!("{head}link\t1\t4000000000\t18446744073709551615\t7\nlink\t1\t5\t0\t0\n")).unwrap();
+        assert_eq!(s.links, vec![("1".to_owned(), LinkStats { rtt_us: LinkStats::MAX_RTT_US, lost: u64::MAX, sent: 7 })]);
+        // Text in an id can't break the line: ids are fields, tabs split them.
+        assert!(Status::decode(&format!("{head}link\ta\tb\t1\t2\t3\n")).unwrap().links.is_empty());
     }
 
     #[test]
