@@ -153,8 +153,9 @@ pub mod caps {
     /// minute: a broadcast controller enters it again with the next input,
     /// but never after a plain `Revoked` (the user took control back).
     pub const IDLE_REVOKE: u32 = 128;
+    pub const WALLPAPER: u32 = 256;
     /// What this build supports.
-    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT | FOCUS_APP | IDLE_REVOKE;
+    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT | FOCUS_APP | IDLE_REVOKE | WALLPAPER;
 }
 
 /// How often a computer with [`caps::FOCUS_BEAT`] repeats `Focus` while
@@ -261,6 +262,7 @@ pub enum Control {
     Text { text: String },
     CharacterKey { code: u32, down: bool, character: char },
     KeyboardLayout(Box<crate::typing::LayoutDescriptor>),
+    Wallpaper(crate::wallpaper::Message),
 }
 
 impl Control {
@@ -274,6 +276,10 @@ impl Control {
 
     fn encode_body(&self, w: &mut Writer) {
         match self {
+            Control::Wallpaper(message) => {
+                w.u8(crate::wallpaper::CONTROL_TAG);
+                w.bytes(&message.encode());
+            }
             Control::Hello { version, name, screens, nonce, os } => {
                 w.u8(1);
                 w.u16(*version);
@@ -409,6 +415,7 @@ impl Control {
     pub fn decode(b: &[u8]) -> Result<Self, DecodeError> {
         let mut r = Reader(b);
         let c = match r.u8()? {
+            25 => Control::Wallpaper(crate::wallpaper::Message::decode(r.0)?),
             1 => match r.u16()? {
                 PROTOCOL_VERSION => Control::Hello {
                     version: PROTOCOL_VERSION,

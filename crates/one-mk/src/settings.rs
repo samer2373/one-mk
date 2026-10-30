@@ -26,6 +26,7 @@ pub const MAX_DWELL_MS: u32 = 5000;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub wallpaper: crate::wallpaper::WallpaperSettings,
     pub update: crate::update::Settings,
     pub drag: crate::drag::Settings,
     #[serde(default)]
@@ -56,6 +57,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            wallpaper: Default::default(),
             update: Default::default(),
             drag: Default::default(),
             settings_version: 2,

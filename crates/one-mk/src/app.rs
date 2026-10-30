@@ -558,6 +558,7 @@ struct App {
     focus: Box<dyn FocusProbe>,
     locker: Box<dyn ScreenLocker>,
     settings: Settings,
+    wallpaper: crate::wallpaper::Runtime,
     /// `one-mk lock-pointer`: edges lead nowhere (no barriers are armed).
     locked: bool,
     /// Modifier keys held here, as far as we know (`Event::Modifiers`, and
@@ -711,6 +712,7 @@ pub async fn serve(
         focus,
         locker,
         settings,
+        wallpaper: Default::default(),
         locked: opts.start_locked,
         mods: Mods::default(),
         approach: None,
@@ -737,6 +739,7 @@ pub async fn serve(
         broadcast: None,
     };
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
+    app.wallpaper.refresh(&app.settings.wallpaper);
     if app.locked {
         println!("The pointer is locked to this computer (`one-mk lock-pointer off` frees it).");
     }
@@ -1823,6 +1826,7 @@ impl App {
         {
             ctl.send(Control::Screens(local.screens.clone()));
         }
+        self.wallpaper.disconnected(fp);
         if let Some(old) = self.peers.insert(fp, Connected { id, name, os, rank, side, offset, conn, ctl, desktop, caps: 0 }) {
             old.conn.close(2u32.into(), b"duplicate");
         }
@@ -1851,6 +1855,7 @@ impl App {
             }
             LinkEvent::Control(msg) => self.on_control(fp, id, msg),
             LinkEvent::Closed => {
+                self.wallpaper.disconnected(fp);
                 let peer = self.peers.remove(&fp).expect("present");
                 if self.owner.as_ref().is_some_and(|o| o.peer == fp) {
                     self.end_owner(false);
@@ -1876,6 +1881,11 @@ impl App {
     fn on_control(&mut self, fp: Fingerprint, id: usize, msg: Control) {
         let Some(msg) = self.broadcast_control(fp, msg) else { return };
         match msg {
+            Control::Wallpaper(message) => {
+                if self.trust.is_trusted(&fp) && self.peers.get(&fp).is_some_and(|peer| peer.id == id && peer.caps & caps::WALLPAPER != 0) {
+                    self.wallpaper.receive_now(fp,message);
+                }
+            }
             Control::Hello { .. } => {}
             Control::Screens(screens) => self.on_peer_screens(fp, screens),
             Control::Layout { side_of_you, version, offset } => self.on_peer_layout(fp, side_of_you, version, offset),
@@ -1908,6 +1918,7 @@ impl App {
                     p.caps = bits;
                 }
                 self.apply_pointer_mode();
+                self.announce_wallpaper(fp);
             }
             Control::PointerMode { epoch, relative } => {
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
@@ -2179,11 +2190,20 @@ impl App {
         }
     }
 
+    fn announce_wallpaper(&mut self, peer: Fingerprint) {
+        if let Some(link) = self.peers.get(&peer).filter(|link| link.caps & caps::WALLPAPER != 0 && self.trust.is_trusted(&peer)) {
+            for message in self.wallpaper.announcements(peer) { link.ctl.send(Control::Wallpaper(message)); }
+        }
+    }
+
     /// Reads `settings.toml` and applies all of it: clipboard and
     /// notifications, edge rules, gaming mode and lock sync. A file that
     /// can't be read changes nothing.
     fn reload_settings(&mut self) -> Result<()> {
         self.settings = Settings::load(&self.dir)?;
+        self.wallpaper.refresh(&self.settings.wallpaper);
+        let peers: Vec<_> = self.peers.keys().copied().collect();
+        for peer in peers { self.announce_wallpaper(peer); }
         crate::hooks::warn_if_unsafe(&self.dir, &self.settings.hooks);
         crate::clipctl::apply(&self.settings, &self.services);
         self.inject.set_overlay_mode(self.settings.pointer.draw_when_no_mouse);
@@ -2204,6 +2224,7 @@ impl App {
         self.reload_trust();
         let stop = req == Request::Stop;
         let text = match req {
+            Request::WallpaperStatus => self.wallpaper.status(),
             Request::Status => self.status().encode(),
             Request::Invitation => {
                 crate::invite::query(&self.dir, reply);

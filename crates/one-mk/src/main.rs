@@ -47,6 +47,7 @@ mod tuning;
 mod update;
 mod update_key;
 mod typing;
+mod wallpaper;
 
 use anyhow::{Context, Result};
 use clipctl::OnOff;
@@ -358,6 +359,8 @@ enum Cmd {
         #[arg(value_name = "auto|always|never", value_parser = ["auto", "always", "never"])]
         mode: Option<String>,
     },
+    /// Receiver-owned wallpaper consent; this build does not play media.
+    Wallpaper(wallpaper::WallpaperArgs),
     /// Scrolling on the computers this one controls: direction, natural,
     /// speed, smooth or by notches, modifier keys.
     Scroll(tuning::ScrollArgs),
@@ -482,7 +485,7 @@ fn main() -> ExitCode {
                 // One line; -v shows each cause on its own.
                 eprintln!("one-mk: {e:#}");
             }
-            ExitCode::FAILURE
+            ExitCode::from(e.downcast_ref::<wallpaper::Failure>().map_or(1, |failure| failure.code))
         }
     }
 }
@@ -590,6 +593,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Keymap { cmd } => tuning::keymap(&dir, cmd).await,
             Cmd::Pointer(args) => tuning::pointer_command(&dir, args).await,
             Cmd::PointerOverlay { mode } => pointeroverlay::command(&dir, mode.as_deref()).await,
+            Cmd::Wallpaper(args) => wallpaper::command(&dir, args).await,
             Cmd::Scroll(args) => tuning::scroll_command(&dir, args).await,
             Cmd::Autoscroll(args) => tuning::autoscroll_command(&dir, args).await,
             Cmd::Gestures { cmd } => tuning::gestures_command(&dir, cmd).await,
@@ -681,6 +685,7 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
 fn forget(dir: &Path, device: &str) -> Result<()> {
     let mut trust = TrustStore::load(dir)?;
     let d = trust.remove(device).ok_or_else(|| manage::unknown_device(device))?;
+    wallpaper::forget(dir, &d.fingerprint)?;
     trust.save()?;
     println!("Forgot {}.", d.name);
     Ok(())

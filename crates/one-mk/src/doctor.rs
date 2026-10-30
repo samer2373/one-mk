@@ -1056,6 +1056,11 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     }
 
     let mut checks = vec![daemon_check(&daemon)];
+    checks.push(check("wallpaper", "Wallpaper", match Settings::load(dir) {
+        Ok(settings) if settings.wallpaper.enabled => Outcome::warn(crate::wallpaper::summary(&settings.wallpaper), "This build has no qualified renderer. No playback is available; use one-mk wallpaper disable to turn the feature off."),
+        Ok(settings) => Outcome::pass(crate::wallpaper::summary(&settings.wallpaper)),
+        Err(_) => Outcome::warn("Wallpaper settings could not be read.", "Repair settings.toml before enabling wallpaper."),
+    }));
     let (configured, managed, detail) = crate::update::doctor();
     checks.push(check("updates", "Updates", if !configured {
         Outcome::warn(detail, "Use manual installation until signing and real-OS validation are complete; see docs/UPDATES.md.")

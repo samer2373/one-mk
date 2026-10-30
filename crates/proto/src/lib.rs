@@ -24,6 +24,7 @@ pub mod scroll;
 mod sleep;
 mod transfer;
 mod wrap;
+pub mod wallpaper;
 
 pub use codec::{Control, Datagram, DecodeError, FOCUS_REPEAT, FOCUS_SILENCE, MAX_SCREENS, StreamKind, caps, os};
 pub use edge::{

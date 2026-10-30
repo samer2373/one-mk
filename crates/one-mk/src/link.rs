@@ -120,9 +120,11 @@ impl Link {
         let (ctl_conn, ctl_events) = (conn.clone(), events.clone());
         tokio::spawn(async move {
             let mut buf = Vec::with_capacity(256);
+            let mut wallpaper_ingress = crate::wallpaper::Ingress::default();
             loop {
                 match read_frame(&mut recv, &mut buf).await {
                     Ok(Some(msg)) => {
+                        if matches!(msg, Control::Wallpaper(_)) && !wallpaper_ingress.admit() { continue; }
                         if ctl_events.send((fp, id, LinkEvent::Control(msg))).is_err() {
                             break;
                         }
@@ -131,6 +133,7 @@ impl Link {
                     // The whole frame was read, so the stream is still in
                     // step: skip it. Unknown tags come from newer peers.
                     Err(e) => match e.downcast_ref::<DecodeError>() {
+                        Some(_) if buf.first() == Some(&one_mk_proto::wallpaper::CONTROL_TAG) => break,
                         Some(DecodeError::UnknownTag(t)) => tracing::debug!(peer = %name, "skipping unknown message {t}"),
                         Some(d) => tracing::warn!(peer = %name, "ignoring a malformed message: {d}"),
                         None => {
