@@ -119,6 +119,12 @@ pub struct Receiver {
 }
 
 impl Receiver {
+    /// All physical keyboard events must use this same accounting as resolved
+    /// character chords, including forwarded Shift and AltGr keys.
+    pub fn physical_key(&mut self, code: u32, down: bool) -> Vec<(u32, bool)> {
+        self.key(code, down, || Chord { code, modifiers: Vec::new() })
+    }
+
     pub fn key(&mut self, source: u32, down: bool, resolve: impl FnOnce() -> Chord) -> Vec<(u32, bool)> {
         if !valid_key_code(source) {
             return Vec::new();
@@ -270,6 +276,8 @@ mod tests {
             let target = ((random >> 40) % 30) as u32 + 100;
             let events = if random.is_multiple_of(101) {
                 receiver.release_all()
+            } else if random & 8 != 0 {
+                receiver.physical_key(42, down)
             } else {
                 receiver.key(source, down, || Chord { code: target, modifiers: vec![42] })
             };
@@ -287,6 +295,21 @@ mod tests {
             assert!(held.remove(&code).is_some());
         }
         assert!(held.is_empty());
+    }
+
+    #[test]
+    fn physical_and_character_keys_share_modifier_references() {
+        let mut receiver = Receiver::default();
+        assert_eq!(receiver.physical_key(42, true), vec![(42, true)]);
+        assert_eq!(receiver.key(21, true, || Chord { code: 44, modifiers: vec![42] }), vec![(44, true)]);
+        assert_eq!(receiver.key(21, false, || unreachable!()), vec![(44, false)]);
+        assert_eq!(receiver.physical_key(42, false), vec![(42, false)]);
+
+        assert_eq!(receiver.key(21, true, || Chord { code: 44, modifiers: vec![42] }), vec![(42, true), (44, true)]);
+        assert!(receiver.physical_key(42, true).is_empty());
+        assert!(receiver.physical_key(42, false).is_empty());
+        assert_eq!(receiver.release_all(), vec![(44, false), (42, false)]);
+        assert!(receiver.release_all().is_empty());
     }
 
     #[test]
