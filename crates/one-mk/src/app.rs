@@ -2247,7 +2247,7 @@ impl App {
             gaming: self.settings.gaming.to_string(),
             relative: self.remote.as_ref().is_some_and(|r| r.cursor.is_relative()),
             lock_sync: self.settings.lock_sync,
-            edges: self.settings.edge.describe(),
+            edges: self.edges_status(),
             transfers: self.services.inbox.transfers().snapshot(),
             hotkeys,
             hotkeys_detail,

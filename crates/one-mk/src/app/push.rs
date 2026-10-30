@@ -268,6 +268,18 @@ impl App {
         Some(Suggestion { id: d.short_id(), name: self.name_for(s.key), side: s.side, arg: self.arg_for(s.key) })
     }
 
+    /// The edge rules in words, for `one-mk status`, saying when wrap or
+    /// learning acts with an input backend it wasn't tested with.
+    pub(super) fn edges_status(&self) -> String {
+        let edge = &self.settings.edge;
+        let mut words = edge.describe();
+        let acts = edge.wrap != crate::settings::Wrap::Off || edge.learn == Learn::Auto;
+        if acts && crate::doctor::edge_push_tested(self.backend_name) == Some(false) {
+            words += &format!(" (not yet tested on {})", crate::doctor::backend_words(self.backend_name));
+        }
+        words
+    }
+
     /// `one-mk edge --dismiss`, the window's "No".
     pub(super) fn dismiss_suggestion(&mut self) -> String {
         let shown = self.suggestion().is_some();
