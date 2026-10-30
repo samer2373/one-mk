@@ -102,7 +102,19 @@ def port():
 
 
 def history(home):
-    return json.loads(cli(home, "clipboard", "history", "--json"))
+    items = json.loads(cli(home, "clipboard", "history", "--json"))
+    retained = []
+    for item in items:
+        assert item["preview"] == "[hidden; use Show]", item
+        result = subprocess.run([str(BINARY), "--home", str(home), "clipboard", "history", "show", str(item["id"]), "--json"],
+                                env=checked_environment(), text=True, capture_output=True, timeout=50)
+        if result.returncode and "no longer in history" in result.stderr:
+            continue
+        assert result.returncode == 0, result.stderr
+        content = json.loads(result.stdout)["content"]
+        item["preview"] = content[:80]
+        retained.append(item)
+    return retained
 
 
 def copied(env, text, target=None):
@@ -248,7 +260,7 @@ class IsolatedX11:
 def main():
     global ENVIRONMENT
     previous = os.environ.get("PREVIOUS_ONE_MK")
-    with tempfile.TemporaryDirectory(prefix="one-mk-history-") as directory:
+    with tempfile.TemporaryDirectory(prefix="h-", dir=ROOT / "target") as directory:
         base = pathlib.Path(directory)
         runtime = base / "runtime"
         runtime.mkdir(mode=0o700)
@@ -287,11 +299,20 @@ def main():
         copied(first_env, "password-manager-synthetic-secret")
         time.sleep(0.5)
         assert not any("synthetic-secret" in item["preview"] for item in history(first))
+        copied(second_env, "protected receiver sentinel")
+        cli(first, "clipboard", "--allow-fetch", "on")
+        cli(second, "clip-get", success=False)
+        assert clipboard(second_env) == "protected receiver sentinel"
+        cli(first, "switch", "next")
+        time.sleep(0.4)
+        assert clipboard(second_env) == "protected receiver sentinel"
+        cli(first, "switch", "here")
+        cli(first, "clipboard", "--allow-fetch", "off")
         isolated.password_focus(False)
         copied(first_env, "local alpha")
         time.sleep(0.2)
         isolated.close()
-        print("PASS focused password-manager app excluded via synthetic X11 WM_CLASS")
+        print("PASS skipped X11 app excluded from history, fetch and pointer-follow sharing")
         print(cli(first, "switch", "next").strip())
         received = eventually(lambda: history(second), lambda items: any(item["preview"] == "local alpha" for item in items))
         alpha = next(item for item in received if item["preview"] == "local alpha")
@@ -334,6 +355,7 @@ def main():
         settings(first, persist=True)
         assert control(first, "settings").startswith("ok")
         saved = first / "clipboard-history.bin"
+        eventually(saved.exists, bool)
         assert saved.exists() and saved.stat().st_mode & 0o777 == 0o600
         stop(first_daemon, force=True)
         first_daemon = daemon(first, first_env, first_port, second_port)
@@ -368,7 +390,7 @@ def main():
         copied(first_env, picture.getvalue(), "image/png")
         image_items = eventually(lambda: history(first), lambda items: any(item["kind"] == "image" for item in items))
         image_item = next(item for item in image_items if item["kind"] == "image")
-        assert image_item["preview"] == "image 8x6", image_item
+        assert image_item["preview"].startswith("image 8x6"), image_item
         assert "image 8x6" in cli(first, "clipboard", "history", "show", str(image_item["id"]))
         cli(first, "clipboard", "history", "copy", str(image_item["id"]))
         copied(first_env, "<b>history html</b>", "text/html")
@@ -409,7 +431,11 @@ def main():
             if name == "normal":
                 isolated = IsolatedX11(first_env)
                 isolated.activate(first_env)
-                isolated.click(400, 550)
+                isolated.click(930, 572)
+                time.sleep(0.5)
+                ImageGrab.grab(xdisplay=first_env["DISPLAY"]).crop((0, 0, *dimensions)).save(screenshot_dir / "revealed.png")
+                isolated.click(930, 572)
+                isolated.click(400, 572)
                 time.sleep(0.3)
                 selected = clipboard(first_env)
                 assert selected.startswith("History item"), selected
@@ -418,6 +444,8 @@ def main():
                 isolated.enter()
                 eventually(lambda: clipboard(first_env), lambda value: value == selected)
                 print("PASS real window mouse copy and keyboard Enter restore")
+                isolated.click(932, 495)
+                time.sleep(0.3)
                 isolated.click(932, 495)
                 eventually(lambda: history(first), lambda items: not items)
                 time.sleep(1)
@@ -435,6 +463,16 @@ def main():
                 isolated.close()
             stop(app)
         print("PASS captured real window screenshots in .clipboard-history-qa")
+        settings(first, maximum=0)
+        control(first, "settings")
+        app = start([str(ROOT / "target/debug/one-mk-app"), "--home", str(first)],
+                    env=dict(first_env, ONE_MK_APP_TAB="files", ONE_MK_APP_SIZE="980x660"),
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(4)
+        ImageGrab.grab(xdisplay=first_env["DISPLAY"]).crop((0, 0, 980, 660)).save(screenshot_dir / "disabled.png")
+        stop(app)
+        settings(first)
+        control(first, "settings")
         print(cli(first, "status"))
         print(cli(first, "clipboard", "history", "--help"))
         for operation in ("list", "show", "copy", "delete", "clear"):
@@ -447,8 +485,17 @@ def main():
         check = next(item for item in json.loads(diagnostic.stdout)["checks"] if item["id"] == "clipboard-history")
         assert "Memory only" in check["detail"] and "untested" in check["detail"], check
         print("PASS real doctor reports retention and untested platform coverage:", check["detail"])
+        copied(first_env, "persistence baseline")
+        eventually(lambda: history(first), bool)
         settings(first, persist=True)
         control(first, "settings")
+        eventually(saved.exists, bool)
+        app = start([str(ROOT / "target/debug/one-mk-app"), "--home", str(first)],
+                    env=dict(first_env, ONE_MK_APP_TAB="files", ONE_MK_APP_SIZE="980x660"),
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(4)
+        ImageGrab.grab(xdisplay=first_env["DISPLAY"]).crop((0, 0, 980, 660)).save(screenshot_dir / "persisted.png")
+        stop(app)
         cli(first, "clipboard", "--max-mb", "16")
         complete_history = history(first)
         payload = "interrupted-save-" + "x" * (8 << 20)
@@ -488,7 +535,7 @@ def main():
         cli(first, "clipboard", "history", "clear")
         assert history(first) == []
         assert "Could not load clipboard history" not in cli(first, "status")
-        assert saved.stat().st_mode & 0o777 == 0o600
+        assert not saved.exists()
         print("PASS damaged saved history is reported without overwrite; real CLI Clear recovers")
         stop(first_daemon)
         app = start([str(ROOT / "target/debug/one-mk-app"), "--home", str(first)],
