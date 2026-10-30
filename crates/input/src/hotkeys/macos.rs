@@ -125,7 +125,8 @@ fn on_event(shared: &Shared, ty: CGEventType, ev: &CGEvent) -> bool {
     };
     let mut swallowed = shared.swallowed.lock().unwrap_or_else(|e| e.into_inner());
     if !logic::hotkey_applies(
-        CGEvent::integer_value_field(e, CGEventField::EventSourceUserData) == crate::macos::OUR_EVENTS,
+        CGEvent::integer_value_field(e, CGEventField::EventSourceUserData) == crate::macos::OUR_EVENTS
+            || crate::macos_localmap_logic::receipt(CGEvent::integer_value_field(e, CGEventField::EventSourceUserData)).is_some(),
         shared.paused.load(Ordering::Acquire),
     ) {
         // Still let the release of a key that fired go: it was swallowed

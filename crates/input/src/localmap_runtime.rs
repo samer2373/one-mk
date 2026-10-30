@@ -288,10 +288,11 @@ impl Admission {
     pub fn feedback(&self) -> Arc<Feedback> { self.feedback.clone() }
 }
 
-/// Return the exact successfully injected prefix, not queue acceptance.
+/// Return the delivered prefix (or conservatively posted downs retained for cleanup).
 /// Calls are serialized by the worker, including recovery and fences.
 pub trait Injector {
     fn inject(&mut self, keys: &[(u32, bool)]) -> usize;
+    fn settled(&self) -> bool { true }
 }
 
 pub struct Engine<I: Injector> {
@@ -329,7 +330,7 @@ impl<I: Injector> Engine<I> {
         }
         let sent = self.injector.inject(&keys);
         for &(code, down) in keys.iter().take(sent) { self.held.update(code, down); }
-        sent == keys.len()
+        sent == keys.len() && self.injector.settled()
     }
 
     /// Failed releases stay in the ledger even after Mapper releases its state.
@@ -340,7 +341,7 @@ impl<I: Injector> Engine<I> {
         let releases: Vec<_> = self.held.iter().map(|code| (code, false)).collect();
         let sent = self.injector.inject(&releases);
         for &(code, _) in releases.iter().take(sent) { self.held.update(code, false); }
-        self.held.is_empty()
+        self.held.is_empty() && self.injector.settled()
     }
 
     pub fn key(&mut self, key: Key, device: Option<DeviceRef>) -> bool {
@@ -466,6 +467,74 @@ mod tests {
             what: What::To("switch next".parse().unwrap()),
         }], Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map;
         assert!(!map.supports_local_keys(|_| true));
+    }
+
+    #[test]
+    fn unreceipted_post_never_acknowledges_even_an_empty_remote_fence() {
+        struct Posted { settled: bool }
+        impl Injector for Posted {
+            fn inject(&mut self, keys: &[(u32, bool)]) -> usize { keys.len() }
+            fn settled(&self) -> bool { self.settled }
+        }
+        let mut engine = Engine::new(Posted { settled: true });
+        assert!(engine.fence(0, Destination::Local, Some(&rules())));
+        engine.injector.settled = false;
+        assert!(!engine.key(Key { sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+        assert!(!engine.fence(1, Destination::Remote, None));
+        assert_eq!(engine.handoff.state(), State::Disabled);
+        engine.injector.settled = true;
+        assert!(engine.fence(1, Destination::Remote, None));
+    }
+
+    #[test]
+    fn macos_modifier_streams_tap_disable_and_secure_input_use_the_production_gate() {
+        let map = Keymap::compile(&[RuleSpec { from: "lshift".parse().unwrap(), layer: None,
+            what: What::To("lctrl".parse().unwrap()),
+        }], Target { os: one_mk_proto::os::MACOS, swap: false }, Duration::from_millis(200)).unwrap().map;
+        let rules = Rules { maps: KeymapSet::new(map), count: 1, ..Rules::default() };
+        let record = Arc::new(Mutex::new(Record::default()));
+        let mut engine = Engine::new(Fake(record.clone()));
+        let mut admission = Admission::new(engine.gate());
+        let feedback = admission.feedback();
+        let mut hook = Physical::default();
+        let mut flags = crate::macos_localmap_logic::Flags::default();
+        let mut modifiers = crate::macos_logic::Modifiers::default();
+        let mut random = 0x7220_7173_u64;
+        let now = Instant::now();
+        assert!(engine.recover_fence(0, Destination::Local, Some(&rules), &feedback, feedback.token()));
+        for _ in 0..30_000 {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            match random % 19 {
+                0 | 1 => {
+                    admission.fail();
+                    while let Some(key) = admission.pop() { engine.admitted_key(key, None, &feedback); }
+                    assert!(engine.fail());
+                }
+                2 | 3 => {
+                    admission.gate.close();
+                    while let Some(key) = admission.pop() { engine.admitted_key(key, None, &feedback); }
+                    let destination = if random & 32 == 0 { Destination::Remote } else { Destination::Local };
+                    assert!(engine.recover_fence(admission.watermark(), destination, Some(&rules), &feedback, feedback.token()));
+                }
+                _ => {
+                    let down = random & 32 != 0;
+                    modifiers.update(42, down);
+                    let decoded = crate::macos_logic::modifier_down(0x38, modifiers.flags()).unwrap();
+                    assert_eq!(decoded, down);
+                    let swallowed = hook.key(physical(decoded, true), 42, now, &rules, &mut admission, |_| true);
+                    flags.key(42, decoded, swallowed);
+                    while let Some(key) = admission.pop() { assert!(engine.admitted_key(key, None, &feedback)); }
+                }
+            }
+            if engine.handoff.state() == State::Remote { assert!(record.lock().unwrap().held.is_empty()); }
+        }
+        assert!(engine.fail());
+        flags.key(42, false, true);
+        assert_eq!(flags.apply(0, 0), 0);
+        let record = record.lock().unwrap();
+        assert_eq!(record.downs, record.ups);
     }
 
     #[test]
