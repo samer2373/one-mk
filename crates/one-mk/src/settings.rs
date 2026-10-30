@@ -208,16 +208,6 @@ impl Wrap {
     }
 }
 
-impl fmt::Display for Wrap {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Wrap::Off => "off",
-            Wrap::On => "on",
-            Wrap::All => "all",
-        })
-    }
-}
-
 /// `off`, `on` or `all`; a hand-written `true` or `false` means on or off.
 impl<'de> Deserialize<'de> for Wrap {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -251,16 +241,6 @@ pub enum Learn {
     /// Place it there (beside you on the left or right; above or below is
     /// only suggested), and say how to undo that.
     Auto,
-}
-
-impl fmt::Display for Learn {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Learn::Off => "off",
-            Learn::Suggest => "suggest",
-            Learn::Auto => "auto",
-        })
-    }
 }
 
 /// Edge rules; anything unset falls back to the rules for every edge (and
@@ -686,7 +666,7 @@ pub async fn edge(dir: &Path, args: EdgeArgs) -> Result<()> {
     if args.fullscreen_guard == Some(true) && cfg!(target_os = "linux") {
         println!("{}", FULLSCREEN_LINUX);
     }
-    if args.wrap.is_some_and(|w| w != Wrap::Off) && edge.wrap == Wrap::All && edge.all.dwell_ms.unwrap_or(0) == 0 {
+    if args.wrap == Some(Wrap::All) && edge.all.dwell_ms.unwrap_or(0) == 0 {
         println!("Tip: with the top and bottom edges wrapping, a short dwell (`one-mk edge --dwell 300`) keeps menus and the taskbar easy to reach.");
     }
     apply(dir).await?;

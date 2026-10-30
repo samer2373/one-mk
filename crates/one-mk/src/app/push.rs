@@ -245,6 +245,7 @@ impl App {
     /// The pointer crossed to `fp` through the edge it was guessed (or
     /// learned) to be at: that place is right, and learning leaves it be.
     pub(super) fn confirm_place(&mut self, fp: Fingerprint) {
+        self.push.pushes.reset(); // the pointer went elsewhere
         if self.push.shown.is_some_and(|s| s.key == fp) {
             self.push.shown = None;
         }

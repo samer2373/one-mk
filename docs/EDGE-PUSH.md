@@ -18,8 +18,9 @@ pointer stops there like at the edge of any screen.
 Code: the geometry is pure, in `crates/proto/src/wrap.rs`; the push
 counting, cooldown and the choice of computer are pure, in
 `crates/one-mk/src/learn.rs`; the daemon side is `crates/one-mk/src/app/push.rs`,
-which `app.rs` calls in five places (arming, a capture, a crossing, a
-connection, a request). No backend changed.
+which `app.rs` reaches through one-line calls (arming in `update_sides`, a
+capture in `on_activated` and `on_approach`, a crossing, control starting
+and ending, a connection, the status and the dismiss request). No backend changed.
 
 ## One set of armed edges
 

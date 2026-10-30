@@ -239,7 +239,17 @@ async fn placing_the_suggested_computer_ends_the_suggestion() {
 /// above is only ever suggested.
 #[tokio::test]
 async fn auto_places_it_and_the_mirror_syncs() {
-    let mut duo = guessed("push-auto").await;
+    // Both places are pairing's guesses: each probes its free edges.
+    let both = |a_sees_b: &mut Device, b_sees_a: &mut Device| {
+        a_sees_b.placed_by = PlacedBy::Default;
+        b_sees_a.placed_by = PlacedBy::Default;
+    };
+    let mut duo = Duo::start_with("push-auto", None, both).await;
+    let all_but = |taken: Side| {
+        let rest = Side::ALL.into_iter().filter(move |s| *s != taken).map(whole);
+        edges(&std::iter::once(whole(taken)).chain(rest).collect::<Vec<_>>())
+    };
+    duo.settle_as(all_but(Side::Right), all_but(Side::Left)).await;
     set(&duo.da, |s| s.edge.learn = Learn::Auto).await;
     assert!(status(&duo.da).await.edges.contains("layout learning places computers"));
     push_twice(&mut duo, Side::Left, Pos::new(0.0, 500.0), 1).await;
@@ -248,10 +258,12 @@ async fn auto_places_it_and_the_mirror_syncs() {
     let d = record(&duo.da, &duo.fb);
     assert_eq!((d.side(), d.offset, d.placed_by), (Side::Left, None, PlacedBy::Learned));
     assert_eq!(status(&duo.da).await.suggestion, None);
-    // B takes the mirror image: A is on its right now.
+    // B takes the mirror image: A is on its right now, placed there by
+    // A's choice, so B watches no edge for it any more.
     assert_eq!(next_capture(&mut duo.hb).await, armed(Side::Right));
     assert_eq!(Duo::peer_status(&duo.db).await.side, Side::Right);
-    assert_eq!(record(&duo.db, &duo.fa).layout_version, d.layout_version);
+    let mirror = record(&duo.db, &duo.fa);
+    assert_eq!((mirror.layout_version, mirror.placed_by), (d.layout_version, PlacedBy::User));
 
     // Crossing to B there: right, so learning leaves it be from now on.
     duo.ha.events.send(Event::Activated { id: 9, side: Side::Left, pos: Pos::new(0.0, 500.0) }).unwrap();

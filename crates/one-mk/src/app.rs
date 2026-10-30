@@ -1946,6 +1946,7 @@ impl App {
                 dev.side = side_of_you.to_string();
                 dev.offset = offset;
                 dev.layout_version = version;
+                dev.placed_by = one_mk_net::PlacedBy::User; // chosen there
             }
             // A newer version than the tie, which the peer (new or old)
             // takes over. It stays quiet about it, so that is the one
