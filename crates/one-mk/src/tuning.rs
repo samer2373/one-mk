@@ -1076,6 +1076,20 @@ fn check_scope(dir: &Path, scope: &Scope) -> Result<()> {
     Ok(())
 }
 
+/// After a change to a rule for one device: says so if such rules can't
+/// apply on this computer, or aren't tested here.
+fn device_note(dir: &Path, scope: &Scope) {
+    if scope.device().is_none() {
+        return;
+    }
+    let seen = crate::inputdevices::Remembered::load(dir).unwrap_or_default();
+    match crate::inputdevices::support(&seen, false) {
+        Ok(None) => {}
+        Ok(Some(untested)) => println!("Note: per-device rules here are {untested}."),
+        Err(why) => println!("Note: {why}, so this rule doesn't apply here. It is kept: it works in an X11 session, on Windows and on macOS."),
+    }
+}
+
 fn paired(dir: &Path) -> Vec<(String, String, u8)> {
     TrustStore::load(dir)
         .map(|t| t.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone(), d.os)).collect())
@@ -1321,6 +1335,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
                 Ok(())
             })?;
             println!("{shown}{}.", where_suffix(&scope, &app));
+            device_note(dir, &scope);
             settings::apply(dir).await?;
         }
         KeymapCmd::Remove { from, layer, scope } => {
@@ -1439,6 +1454,7 @@ pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
         Ok(s.input.clone())
     })?;
     describe_pointer(&s);
+    device_note(dir, &scope);
     settings::apply(dir).await
 }
 
@@ -1585,6 +1601,7 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
         Ok(s.input.clone())
     })?;
     describe_scroll(&s);
+    device_note(dir, &scope);
     settings::apply(dir).await
 }
 
@@ -1663,11 +1680,13 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             let rule = ButtonRule { from, to, scope, app };
             rule.spec().map_err(anyhow::Error::msg)?;
             let line = format!("{} -> {}{}", rule.from.describe(), rule.to.describe(), where_suffix(&rule.scope, &rule.app));
+            let scope = rule.scope.clone();
             Settings::update(dir, |s| {
                 set_button(&mut s.input.button, rule, &t);
                 Ok(())
             })?;
             println!("{line}.");
+            device_note(dir, &scope);
         }
         ButtonsCmd::Unmap { button, scope } => {
             let app = scope.app()?;
@@ -1695,6 +1714,7 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
                 Ok(())
             })?;
             println!("Buttons 4 and 5 go back and forward{} (Alt+Left/Right; Cmd+[ and Cmd+] on a Mac).", where_suffix(&scope, &app));
+            device_note(dir, &scope);
         }
         ButtonsCmd::Clear => {
             let n = Settings::update(dir, |s| Ok(std::mem::take(&mut s.input.button).len()))?;

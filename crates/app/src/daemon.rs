@@ -31,6 +31,9 @@ pub enum Event {
     /// `one-mk keymap check`: the problems with the input tuning (none:
     /// fine), or why it couldn't be run.
     KeymapCheck(Result<Vec<String>, String>),
+    /// `one-mk input-devices --json`: the keyboards and mice seen here, or
+    /// why they couldn't be listed.
+    InputDevices(Result<crate::tune::InputDevices, String>),
 }
 
 /// A command the window started, with what it needs to report on it.
@@ -74,6 +77,7 @@ enum Tuning {
     /// one with the same `key` (a slider moving) replaces it while queued.
     Run { job: Job, cmds: Vec<Vec<String>>, key: Option<String> },
     Check,
+    Devices,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -310,6 +314,11 @@ impl Link {
         self.tuning_send(Tuning::Check);
     }
 
+    /// Lists the keyboards and mice seen here (`one-mk input-devices`).
+    pub fn input_devices(&self) {
+        self.tuning_send(Tuning::Devices);
+    }
+
     fn tuning_send(&self, t: Tuning) {
         let mut slot = self.tuning.lock().unwrap_or_else(|e| e.into_inner());
         let t = match slot.as_ref() {
@@ -347,6 +356,7 @@ impl Link {
                             link.send(Event::Done { what: job, error });
                         }
                         Tuning::Check => link.send(Event::KeymapCheck(link.run_keymap_check())),
+                        Tuning::Devices => link.send(Event::InputDevices(link.run_input_devices())),
                     }
                 }
             }
@@ -368,6 +378,23 @@ impl Link {
             return Err(err.trim().trim_start_matches("one-mk: ").to_owned());
         }
         Ok(problems)
+    }
+
+    fn run_input_devices(&self) -> Result<crate::tune::InputDevices, String> {
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os("ONE_MK_APP_INPUT_DEVICES") {
+            // Development aid: a list to show instead of the real one.
+            let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+            return view::parse_input_devices(&text).ok_or_else(|| "could not read the list".into());
+        }
+        let mut cmd = Command::new(&self.daemon);
+        cmd.args(["input-devices", "--json"]).args(self.home_args()).stdin(Stdio::null());
+        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("one-mk didn't start: {e}"))?;
+        view::parse_input_devices(&String::from_utf8_lossy(&out.stdout)).ok_or_else(|| {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let err = err.trim().trim_start_matches("one-mk: ");
+            if err.is_empty() { "one-mk gave no list".to_owned() } else { err.to_owned() }
+        })
     }
 
     /// Runs `one-mk doctor --json` and reports the checks.

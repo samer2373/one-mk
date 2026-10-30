@@ -258,6 +258,12 @@ pub fn support(r: &Remembered, running: bool) -> Result<Option<String>, String> 
     guess_support().map(|n| n.map(str::to_owned)).map_err(str::to_owned)
 }
 
+/// `s` with its first letter a capital.
+pub fn sentence(s: &str) -> String {
+    let mut chars = s.chars();
+    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+}
+
 /// "just now", "5 minutes ago", "3 days ago".
 fn ago(then: u64, now: u64) -> String {
     let s = now.saturating_sub(then);
@@ -299,11 +305,7 @@ pub fn render_text(r: &Remembered, running: bool, support: &Result<Option<String
             let _ = writeln!(out, "Per-device rules: available on this computer, but {note}.");
         }
         Err(why) => {
-            let mut why = why.clone();
-            if let Some(first) = why.get_mut(..1) {
-                first.make_ascii_uppercase();
-            }
-            let _ = writeln!(out, "{why}.");
+            let _ = writeln!(out, "{}.", sentence(why));
         }
     }
     if let Some(p) = problem {

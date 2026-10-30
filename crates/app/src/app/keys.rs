@@ -72,6 +72,8 @@ pub(super) struct KeysUi {
     /// Values being dragged or just set, until settings.toml has them.
     pub drafts: HashMap<&'static str, f64>,
     pub device: Option<Device>,
+    /// The keyboards and mice seen here, for "For:" (`None`: not asked yet).
+    pub devices: Option<Result<tune::InputDevices, String>>,
     choices: Option<(bool, Vec<tune::Choice>)>,
     /// Cards are as tall as they were last drawn.
     heights: HashMap<&'static str, f32>,
@@ -548,30 +550,95 @@ impl App {
         let c = pos2(r.right() - 16.0, r.center().y);
         p.add(egui::Shape::line(vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)], Stroke::new(1.5, INK2)));
         let peers = self.scope_peers();
+        // Development aid (screenshots): the menu opens by itself.
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ONE_MK_APP_KEY_SCOPE_MENU").is_some() {
+            let once = Id::unique("debug-scope-menu");
+            if !ui.ctx().data(|d| d.get_temp::<bool>(once).unwrap_or(false)) {
+                ui.ctx().data_mut(|d| d.insert_temp(once, true));
+                egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&resp));
+                self.link.input_devices();
+            }
+        }
+        if resp.clicked() {
+            // Asked afresh each time: devices come and go.
+            self.link.input_devices();
+        }
+        let devices = self.keys.devices.clone();
+        let current = self.keys.scope.clone();
         let mut chosen = None;
         egui::Popup::menu(&resp).width(260.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
             let mut opts = vec![Scope::All, Scope::Os(os::MACOS), Scope::Os(os::WINDOWS), Scope::Os(os::LINUX)];
             opts.extend(peers.iter().map(|p| Scope::Peer(p.name.clone())));
-            let p = ui.painter().clone();
-            for (k, s) in opts.iter().enumerate() {
-                if k == 4 {
-                    let (r, _) = ui.allocate_exact_size(vec2(260.0, 22.0), Sense::hover());
-                    p.text(r.left_center() + vec2(8.0, 2.0), Align2::LEFT_CENTER, "One computer", regular(T_META), INK2);
-                }
-                let (r, resp) = ui.allocate_exact_size(vec2(260.0, 28.0), Sense::click());
+            let heading = |ui: &mut Ui, text: &str| {
+                let (r, _) = ui.allocate_exact_size(vec2(260.0, 22.0), Sense::hover());
+                ui.painter().text(r.left_center() + vec2(8.0, 2.0), Align2::LEFT_CENTER, text, regular(T_META), INK2);
+                a11y_text(ui, Id::unique(("keys-scope-heading", text)), r, Role::Heading, text, None);
+            };
+            // A choice: a check when it is the one in force, a second line
+            // in small type if given.
+            let mut item = |ui: &mut Ui, s: &Scope, title: &str, sub: Option<&str>| {
+                let (r, resp) = ui.allocate_exact_size(vec2(260.0, if sub.is_some() { 42.0 } else { 28.0 }), Sense::click());
+                // The painter of the area it is in: a list that scrolls clips it.
+                let p = ui.painter().clone();
                 let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
                 p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, PILL, hover));
                 widgets::focus_ring(ui, &resp, r, 6);
-                let on = *s == self.keys.scope;
+                let on = *s == current;
+                let mid = if sub.is_some() { r.top() + 14.0 } else { r.center().y };
                 if on {
-                    widgets::draw_check(&p, pos2(r.left() + 16.0, r.center().y), 10.0, INK, 1.0);
+                    widgets::draw_check(&p, pos2(r.left() + 16.0, mid), 10.0, INK, 1.0);
                 }
-                let text = fit(&p, &s.label(), &regular(T_BODY), r.width() - 40.0);
-                p.text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, &text, regular(T_BODY), if on { INK } else { INK_HOVER });
-                widgets::a11y(&resp, Role::MenuItemRadio, &format!("For: {}", s.label()), Some(on));
+                let text = fit(&p, title, &regular(T_BODY), r.width() - 40.0);
+                p.text(pos2(r.left() + 30.0, mid), Align2::LEFT_CENTER, &text, regular(T_BODY), if on { INK } else { INK_HOVER });
+                if let Some(sub) = sub {
+                    let sub = fit(&p, sub, &regular(T_META), r.width() - 40.0);
+                    p.text(pos2(r.left() + 30.0, r.top() + 31.0), Align2::LEFT_CENTER, &sub, regular(T_META), INK2);
+                }
+                let name = match sub {
+                    Some(sub) => format!("For: {title}, {sub}"),
+                    None => format!("For: {title}"),
+                };
+                widgets::a11y(&resp, Role::MenuItemRadio, &name, Some(on));
                 if resp.clicked() {
                     chosen = Some(s.clone());
                     ui.close();
+                }
+            };
+            for (k, s) in opts.iter().enumerate() {
+                if k == 4 {
+                    heading(ui, "One computer");
+                }
+                item(ui, s, &s.label(), None);
+            }
+            heading(ui, "One keyboard or mouse");
+            let note = |ui: &mut Ui, text: &str| {
+                let galley = ui.painter().layout(text.to_owned(), regular(T_META), INK2, 236.0);
+                let (r, _) = ui.allocate_exact_size(vec2(260.0, galley.size().y + 10.0), Sense::hover());
+                ui.painter().galley(r.left_top() + vec2(12.0, 4.0), galley, INK2);
+                a11y_text(ui, Id::unique(("keys-scope-note", text)), r, Role::Label, text, None);
+            };
+            match &devices {
+                None => note(ui, "Looking for keyboards and mice…"),
+                Some(Err(e)) => note(ui, &format!("Couldn't list the keyboards and mice: {e}")),
+                Some(Ok(d)) if !d.available => note(ui, &tune::devices_unavailable_text(d.note.as_deref())),
+                Some(Ok(d)) if !d.devices.iter().any(|x| !x.is_virtual()) => {
+                    note(ui, "None seen yet. A keyboard or mouse shows up here once it has been connected while one-mk runs.");
+                }
+                Some(Ok(d)) => {
+                    // Devices made by software (X's own XTEST ones) are no
+                    // one's keyboard: `one-mk input-devices` lists them.
+                    let rows = d.devices.iter().filter(|x| !x.is_virtual()).count().min(5) as f32;
+                    let list = egui::ScrollArea::vertical().id_salt("keys-scope-devices").max_height(42.0 * 5.0).min_scrolled_height(42.0 * rows);
+                    list.show(ui, |ui| {
+                        for dev in d.devices.iter().filter(|x| !x.is_virtual()) {
+                            let s = Scope::Device(dev.fingerprint.clone(), Box::new(Scope::All));
+                            item(ui, &s, &dev.name, Some(&dev.about()));
+                        }
+                    });
+                    if let Some(n) = &d.note {
+                        note(ui, &tune::devices_untested_text(n));
+                    }
                 }
             }
         });
@@ -908,6 +975,7 @@ impl App {
             Scope::All => "Changes here are for every computer.".to_owned(),
             Scope::Os(o) => format!("Changes here are only for {}.", tune::os_plural(*o)),
             Scope::Peer(p) => format!("Changes here are only for {p}."),
+            Scope::Device(fp, _) => format!("Changes here are only for keys typed on {}.", tune::device_name(fp)),
         };
         let scope_note = match &self.keys.app {
             Some(a) => format!("{}, {}.", scope_note.trim_end_matches('.'), tune::app_text(a)),
@@ -1152,12 +1220,12 @@ impl App {
             t.clear();
         }
         let mut y = c.top() - 6.0;
-        let who = match &self.keys.scope {
-            Scope::All => "every computer".to_owned(),
-            Scope::Os(o) => tune::os_plural(*o).to_owned(),
-            Scope::Peer(p) => p.clone(),
+        let intro = match &self.keys.scope {
+            Scope::All => "Type in the box to see what every computer would get. Nothing is sent.".to_owned(),
+            Scope::Os(o) => format!("Type in the box to see what {} would get. Nothing is sent.", tune::os_plural(*o)),
+            Scope::Peer(p) => format!("Type in the box to see what {p} would get. Nothing is sent."),
+            Scope::Device(fp, _) => format!("Type in the box to see what typing on {} would send. Nothing is sent.", tune::device_name(fp)),
         };
-        let intro = format!("Type in the box to see what {who} would get. Nothing is sent.");
         y += para(ui, pos2(c.left(), y), c.width(), &intro, regular(T_BODY), INK2) + 10.0;
         let id = Id::unique(TEST_ID);
         let r = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 78.0));

@@ -497,6 +497,7 @@ impl App {
                 }
                 Event::Doctor(d) => self.doctor = Some((d, now)),
                 Event::KeymapCheck(r) => self.keys.problems = Some(r),
+                Event::InputDevices(r) => self.keys.devices = Some(r),
             }
         }
         // Health is open and nothing ran yet: run the checks.
@@ -2212,7 +2213,9 @@ impl eframe::App for App {
 ///   `one-mk doctor`; `ONE_MK_APP_ZOOM=2` draws everything twice as big
 ///   (a high-density screen); `ONE_MK_APP_SIZE=WxH` (main.rs).
 /// - `ONE_MK_APP_TAB=keys`: `ONE_MK_APP_KEYS=mouse` shows the mouse;
-///   `ONE_MK_APP_KEY_SCOPE=mac|windows|linux|NAME` chooses "For:";
+///   `ONE_MK_APP_KEY_SCOPE=mac|windows|linux|NAME|FINGERPRINT` chooses
+///   "For:" (`ONE_MK_APP_KEY_SCOPE_MENU=1` opens its menu;
+///   `ONE_MK_APP_INPUT_DEVICES=file.json` lists those devices there);
 ///   `ONE_MK_APP_KEY=capslock` opens that key (`ONE_MK_APP_KEY_MORE=1`
 ///   with "hold for another key" open, `ONE_MK_APP_KEY_CAPTURE=1` waiting
 ///   for a key, `ONE_MK_APP_KEY_PICK=query` with the list open);
@@ -2277,6 +2280,8 @@ mod debug {
                     "mac" => crate::tune::Scope::Os(os::MACOS),
                     "windows" => crate::tune::Scope::Os(os::WINDOWS),
                     "linux" => crate::tune::Scope::Os(os::LINUX),
+                    // A device's fingerprint.
+                    _ if s.contains('/') => crate::tune::Scope::Device(s, Box::default()),
                     _ => crate::tune::Scope::Peer(s),
                 };
             }

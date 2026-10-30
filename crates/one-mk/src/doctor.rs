@@ -634,6 +634,51 @@ pub fn tuning_check(t: Option<&Tuning>) -> Check {
     check("input-tuning", "Input tuning", out)
 }
 
+/// What decides the per-device rules check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceRules {
+    /// `Ok(untested note)` where this computer can tell devices apart,
+    /// `Err(why not)` where it can't.
+    pub support: Result<Option<String>, String>,
+    /// Devices seen, and how many of them are connected now.
+    pub seen: usize,
+    pub connected: usize,
+    /// Rules for one device are set.
+    pub rules: bool,
+}
+
+/// Per-device rules (5I): pass where devices can be told apart (saying
+/// what is untested), skip with the reason where the desktop merges them,
+/// warn when such rules are set there.
+pub fn device_rules_check(d: &DeviceRules) -> Check {
+    let out = match &d.support {
+        Ok(note) => {
+            let mut detail = format!(
+                "This computer can tell its keyboards and mice apart: {} seen, {} connected now (`one-mk input-devices`).",
+                d.seen, d.connected
+            );
+            if let Some(n) = note {
+                detail.push_str(&format!(" Note: {n}."));
+            }
+            Outcome::pass(detail)
+        }
+        Err(why) if d.rules => Outcome::warn(
+            format!("Rules for one keyboard or mouse are set, but {why}, so they never apply here."),
+            "They work on X11 sessions, Windows and macOS. Remove them with `one-mk keymap remove ... --device ...` (and buttons, pointer, scroll), or leave them for another session.",
+        ),
+        Err(why) => Outcome::skip(format!("{}.", crate::inputdevices::sentence(why))),
+    };
+    check("per-device-rules", "Per-device rules", out)
+}
+
+fn probe_device_rules(dir: &Path, running: bool) -> DeviceRules {
+    let r = crate::inputdevices::Remembered::load(dir).unwrap_or_default();
+    let support = crate::inputdevices::support(&r, running);
+    let rules = Settings::load(dir).map(|s| s.input.uses_devices()).unwrap_or(false);
+    let connected = if running { r.devices.iter().filter(|x| x.connected).count() } else { 0 };
+    DeviceRules { support, seen: r.devices.len(), connected, rules }
+}
+
 /// The pointer one-mk draws where a computer has no mouse (plan 3A):
 /// available, not needed or not available here.
 pub fn pointer_overlay_check(support: Support, mode: DrawMode) -> Check {
@@ -892,6 +937,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
     checks.push(tuning_check(probe_tuning(dir).as_ref()));
+    checks.push(device_rules_check(&probe_device_rules(dir, daemon.status().is_some())));
     checks.push(pointer_overlay_check(
         crate::pointeroverlay::support_here(daemon.status().map(|s| s.backend.as_str())),
         crate::settings::Settings::load(dir).map(|s| s.pointer.draw_when_no_mouse).unwrap_or_default(),
@@ -1634,4 +1680,22 @@ mod tests {
         assert!(noted.outcome.detail.contains("Wayland window has the focus"), "{}", noted.outcome.detail);
         let _ = std::fs::remove_dir_all(&dir);
     }
+    #[test]
+    fn per_device_rules_check() {
+        let d = |support: Result<Option<String>, String>, rules| DeviceRules { support, seen: 3, connected: 2, rules };
+        let ok = device_rules_check(&d(Ok(None), false));
+        assert_eq!((st(&ok), ok.id.as_str()), (Status::Pass, "per-device-rules"));
+        assert!(ok.outcome.detail.contains("3 seen, 2 connected now"), "{:?}", ok.outcome.detail);
+        let untested = device_rules_check(&d(Ok(Some("untested on real Windows hardware".into())), true));
+        assert_eq!(st(&untested), Status::Pass);
+        assert!(untested.outcome.detail.contains("untested on real Windows hardware"));
+        let merged = one_mk_input::MERGED_DEVICES.to_owned();
+        let skip = device_rules_check(&d(Err(merged.clone()), false));
+        assert_eq!(st(&skip), Status::Skip);
+        assert!(skip.outcome.detail.starts_with("Per-device rules are not available on this desktop: the desktop merges all keyboards and mice"), "{}", skip.outcome.detail);
+        let warn = device_rules_check(&d(Err(merged), true));
+        assert_eq!(st(&warn), Status::Warn);
+        assert!(warn.outcome.fix.as_deref().unwrap_or_default().contains("--device"));
+    }
+
 }

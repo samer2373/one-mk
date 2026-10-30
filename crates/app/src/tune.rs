@@ -8,6 +8,7 @@
 //! Plain data in, plain data out: tested without a window.
 
 use crate::view::{Entry, Val};
+use one_mk_proto::device::Fingerprint;
 use one_mk_proto::keynames::{self, Chord, Trigger};
 use one_mk_proto::os;
 use one_mk_proto::remap::{self, Action, Emit, Keymap, Mapper, Nav, Output, RuleSpec, What};
@@ -25,6 +26,94 @@ pub enum Scope {
     Os(u8),
     /// One paired computer, by name (or id).
     Peer(String),
+    /// One keyboard or mouse (its fingerprint, as `one-mk input-devices`
+    /// lists it) on the computers the inner scope is for.
+    Device(String, Box<Scope>),
+}
+
+/// A keyboard or mouse as people know it: its name, from its fingerprint.
+pub fn device_name(fp: &str) -> String {
+    match fp.parse::<Fingerprint>() {
+        Ok(f) if !f.name.is_empty() => f.name,
+        Ok(f) => format!("{} {}", f.bus.words(), f.ids()),
+        Err(_) => fp.to_owned(),
+    }
+}
+
+/// The keyboards and mice this computer has seen (`one-mk input-devices
+/// --json`), and whether it can tell them apart.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InputDevices {
+    pub available: bool,
+    /// Why not, where they can't be told apart; what is untested where they can.
+    pub note: Option<String>,
+    pub devices: Vec<SeenDevice>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SeenDevice {
+    pub fingerprint: String,
+    pub name: String,
+    /// `usb`, `bluetooth`, `receiver`, `internal`, `virtual` or `unknown`.
+    pub bus: String,
+    /// "USB", "Bluetooth", "USB receiver"...
+    pub connection: String,
+    pub keyboard: bool,
+    pub pointer: bool,
+    pub connected: bool,
+}
+
+/// Why keys can't be changed for one keyboard or mouse here, in plain words.
+pub fn devices_unavailable_text(note: Option<&str>) -> String {
+    match note {
+        Some(n) if n.contains("merges") => {
+            "Not on this desktop: it mixes all keyboards and mice together before one-mk sees them, so one-mk can't tell \
+             which one you used. This works in an X11 session, on Windows and on macOS."
+                .into()
+        }
+        Some(n) if !n.is_empty() => {
+            let mut c = n.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect::<String>() + ".").unwrap_or_default()
+        }
+        _ => "This computer can't tell its keyboards and mice apart.".into(),
+    }
+}
+
+/// What isn't tested about telling keyboards apart here, in plain words.
+pub fn devices_untested_text(note: &str) -> String {
+    let what = if note.contains("Windows") {
+        "on a real Windows PC"
+    } else if note.contains("Mac") {
+        "on a real Mac"
+    } else {
+        "on this kind of computer"
+    };
+    format!("Not yet tested {what}: treat this as a trial, and check that the rule works.")
+}
+
+impl SeenDevice {
+    /// "Connected · USB keyboard", "Asleep or unplugged · Bluetooth mouse":
+    /// what matters most first, as the line may be cut.
+    pub fn about(&self) -> String {
+        let kind = match (self.keyboard, self.pointer) {
+            (true, true) => "keyboard and mouse",
+            (true, false) => "keyboard",
+            (false, true) => "mouse",
+            (false, false) => "input device",
+        };
+        let state = if self.connected { "Connected" } else { "Asleep or unplugged" };
+        let how = match self.bus.as_str() {
+            "unknown" | "virtual" | "" => String::new(),
+            "internal" => "Built-in ".into(),
+            _ => format!("{} ", self.connection),
+        };
+        format!("{state} · {how}{kind}")
+    }
+
+    /// Made by software (X's XTEST devices): no one's keyboard or mouse.
+    pub fn is_virtual(&self) -> bool {
+        self.bus == "virtual"
+    }
 }
 
 /// A paired computer, as far as scopes care.
@@ -68,48 +157,66 @@ impl Scope {
             Scope::All => vec![],
             Scope::Os(o) => vec![format!("--os={}", os_word(*o))],
             Scope::Peer(p) => vec![format!("--peer={p}")],
+            Scope::Device(fp, on) => {
+                let mut a = vec![format!("--device={fp}")];
+                a.extend(on.args());
+                a
+            }
         }
     }
 
-    /// "All computers", "Only Macs", "Only Studio PC".
+    /// "All computers", "Only Macs", "Only Studio PC", "Only Travel
+    /// Keyboard", "Only Travel Keyboard, on Macs".
     pub fn label(&self) -> String {
         match self {
             Scope::All => "All computers".into(),
             Scope::Os(o) => format!("Only {}", os_plural(*o)),
             Scope::Peer(p) => format!("Only {p}"),
+            Scope::Device(fp, on) => match &**on {
+                Scope::All => format!("Only {}", device_name(fp)),
+                Scope::Os(o) => format!("Only {}, on {}", device_name(fp), os_plural(*o)),
+                on => format!("Only {}, on {}", device_name(fp), on.label().trim_start_matches("Only ")),
+            },
         }
     }
 
-    /// How specific the scope is for a computer (`None`: not for it): a
-    /// computer beats an OS beats everything, as in `one-mk`.
+    /// How specific the scope is for a computer and device (`None`: not
+    /// for them): a device beats a computer beats an OS beats everything,
+    /// as in `one-mk`.
     fn rank(&self, f: &Facts) -> Option<u8> {
         match self {
             Scope::All => Some(0),
             Scope::Os(o) => (*o == f.os).then_some(1),
             Scope::Peer(p) => peer_matches(p, &f.name, &f.id).then_some(2),
+            Scope::Device(fp, on) => {
+                let rule = fp.parse::<Fingerprint>().ok()?;
+                let device = f.device.as_deref()?.parse::<Fingerprint>().ok()?;
+                rule.matches(&device).then_some(())?;
+                Some(on.rank(f)? + 3)
+            }
         }
     }
 
     /// From `scope = ...` (a string or an inline table) or a
-    /// `[...scope]` table (`scope.os`, `scope.peer`).
+    /// `[...scope]` table (`scope.os`, `scope.peer`, `scope.device`).
     fn read(get: &dyn Fn(&str) -> Option<Val>) -> Scope {
         let from_pair = |k: &str, v: &Val| match (k, v.as_str()) {
             ("os", Some(o)) => parse_os(o).map(Scope::Os),
             ("peer", Some(p)) if !p.trim().is_empty() => Some(Scope::Peer(p.trim().to_owned())),
             _ => None,
         };
-        if let Some(Val::Table(kv)) = get("scope")
-            && let Some((k, v)) = kv.first()
-        {
-            return from_pair(k, v).unwrap_or_default();
+        let mut pairs: Vec<(String, Val)> = match get("scope") {
+            Some(Val::Table(kv)) => kv,
+            _ => ["os", "peer", "device"].iter().filter_map(|k| Some(((*k).to_owned(), get(&format!("scope.{k}"))?))).collect(),
+        };
+        let device = pairs.iter().position(|(k, _)| k == "device").map(|i| pairs.remove(i).1);
+        let on = pairs.first().and_then(|(k, v)| from_pair(k, v)).unwrap_or_default();
+        match device.as_ref().and_then(Val::as_str).map(str::trim) {
+            Some(d) if !d.is_empty() => Scope::Device(d.to_owned(), Box::new(on)),
+            _ => on,
         }
-        for k in ["os", "peer"] {
-            if let Some(v) = get(&format!("scope.{k}")) {
-                return from_pair(k, &v).unwrap_or_default();
-            }
-        }
-        Scope::All
     }
+
 }
 
 /// Like `one-mk`: the name, or at least 4 characters of the id.
@@ -125,6 +232,9 @@ pub struct Facts {
     pub name: String,
     pub id: String,
     pub os: u8,
+    /// The keyboard or mouse input comes from (a fingerprint), if one
+    /// was chosen: its rules apply on top.
+    pub device: Option<String>,
 }
 
 impl Facts {
@@ -132,12 +242,13 @@ impl Facts {
     /// the rules for every computer.
     pub fn of(scope: &Scope, peers: &[Peer]) -> Facts {
         match scope {
-            Scope::All => Facts { name: String::new(), id: String::new(), os: os::UNKNOWN },
-            Scope::Os(o) => Facts { name: String::new(), id: String::new(), os: *o },
+            Scope::All => Facts { name: String::new(), id: String::new(), os: os::UNKNOWN, device: None },
+            Scope::Os(o) => Facts { name: String::new(), id: String::new(), os: *o, device: None },
             Scope::Peer(p) => match peers.iter().find(|x| peer_matches(p, &x.name, &x.id)) {
-                Some(x) => Facts { name: x.name.clone(), id: x.id.clone(), os: x.os },
-                None => Facts { name: p.clone(), id: String::new(), os: os::UNKNOWN },
+                Some(x) => Facts { name: x.name.clone(), id: x.id.clone(), os: x.os, device: None },
+                None => Facts { name: p.clone(), id: String::new(), os: os::UNKNOWN, device: None },
             },
+            Scope::Device(fp, on) => Facts { device: Some(fp.clone()), ..Facts::of(on, peers) },
         }
     }
 }
@@ -953,7 +1064,7 @@ fn trim_num(x: f64) -> String {
 pub fn scroll_commands(input: &Input, scope: &Scope, device: Option<Device>, change: &ScrollChange) -> Vec<Vec<String>> {
     let base = |a: &mut Vec<String>| {
         if let Some(d) = device {
-            a.push(format!("--device={}", d.word()));
+            a.push(format!("--kind={}", d.word()));
         }
         a.extend(scope.args());
     };
@@ -1883,7 +1994,7 @@ os = "mac"
         assert_eq!(pointer_args(None, Some("system"), &Scope::Peer("Studio PC".into())), ["pointer", "--accel=system", "--peer=Studio PC"]);
         let i = input();
         let one = |c: ScrollChange, d: Option<Device>| scroll_commands(&i, &Scope::All, d, &c);
-        assert_eq!(one(ScrollChange::ReverseVertical(true), Some(Device::Touchpad)), [["scroll", "--reverse-vertical=on", "--device=touchpad"]]);
+        assert_eq!(one(ScrollChange::ReverseVertical(true), Some(Device::Touchpad)), [["scroll", "--reverse-vertical=on", "--kind=touchpad"]]);
         assert_eq!(one(ScrollChange::Modifier("shift", "unchanged"), None), [["scroll", "--modifier=shift=unchanged"]]);
         assert_eq!(one(ScrollChange::Speed(2.0), None), [["scroll", "--speed=2"]]);
         // Back to "as here": the rule is forgotten, and the rest written again.
@@ -2042,4 +2153,62 @@ os = "mac"
         t.clear();
         assert!(t.sent.chips.is_empty() && t.note.is_none());
     }
+    /// Rules for one keyboard or mouse, as `one-mk keymap add --device`
+    /// writes them (a `[...scope]` table) or by hand (inline, with a
+    /// computer too): read as such, never as rules for every computer.
+    #[test]
+    fn device_scopes_are_read_and_applied() {
+        const KB: &str = "bluetooth/04e8:7021/f4:73:35:aa:bb:cc/Travel Keyboard";
+        let text = format!(
+            r#"
+[[input.keymap.rule]]
+from = "capslock"
+to = "esc"
+
+[input.keymap.rule.scope]
+device = "{KB}"
+
+[[input.keymap.rule]]
+from = "capslock"
+to = "lctrl"
+scope = {{ peer = "Studio PC", device = "{KB}" }}
+
+[[input.keymap.rule]]
+from = "capslock"
+to = "f1"
+"#
+        );
+        let i = Input::read(&read_toml(&text));
+        let mine = Scope::Device(KB.into(), Box::new(Scope::All));
+        assert_eq!(i.keys[0].scope, mine);
+        assert_eq!(i.keys[1].scope, Scope::Device(KB.into(), Box::new(Scope::Peer("Studio PC".into()))));
+        assert_eq!(i.keys[2].scope, Scope::All);
+        assert_eq!(mine.label(), "Only Travel Keyboard");
+        assert_eq!(i.keys[1].scope.label(), "Only Travel Keyboard, on Studio PC");
+        assert_eq!(i.keys[1].scope.args(), [format!("--device={KB}"), "--peer=Studio PC".to_owned()]);
+        let caps = |f: &Facts| i.specs(f).into_iter().find(|(s, _)| s.from == "capslock".parse().unwrap()).map(|(_, at)| at);
+        let peers = [Peer { name: "Studio PC".into(), id: String::new(), os: os::WINDOWS }];
+        assert_eq!(caps(&Facts::of(&Scope::All, &peers)), Some(Ok(2)), "other keyboards: the rule for every keyboard");
+        assert_eq!(caps(&Facts::of(&mine, &peers)), Some(Ok(0)), "the travel keyboard, anywhere");
+        assert_eq!(caps(&Facts::of(&Scope::Device(KB.into(), Box::new(Scope::Peer("Studio PC".into()))), &peers)), Some(Ok(1)));
+        let other = Scope::Device("usb/0001:0002//Other".into(), Box::new(Scope::All));
+        assert_eq!(caps(&Facts::of(&other, &peers)), Some(Ok(2)), "another keyboard");
+    }
+
+    #[test]
+    fn devices_unavailable_reads_plainly() {
+        let merged = "per-device rules are not available on this desktop: the desktop merges all keyboards and mice before one-mk sees them";
+        assert!(devices_unavailable_text(Some(merged)).starts_with("Not on this desktop: it mixes all keyboards and mice together"));
+        assert_eq!(devices_unavailable_text(Some("the null input backend captures no keyboard or mouse")), "The null input backend captures no keyboard or mouse.");
+        assert!(!devices_unavailable_text(None).is_empty());
+        assert_eq!(devices_untested_text("untested on real Windows hardware (Raw Input, compile-checked only)"), "Not yet tested on a real Windows PC: treat this as a trial, and check that the rule works.");
+        let d = SeenDevice { bus: "bluetooth".into(), connection: "Bluetooth".into(), keyboard: true, ..Default::default() };
+        assert_eq!(d.about(), "Asleep or unplugged · Bluetooth keyboard");
+        let d = SeenDevice { bus: "unknown".into(), connection: "connection unknown".into(), pointer: true, connected: true, ..Default::default() };
+        assert_eq!(d.about(), "Connected · mouse");
+        let d = SeenDevice { bus: "internal".into(), connection: "built in".into(), keyboard: true, pointer: true, connected: true, ..Default::default() };
+        assert_eq!(d.about(), "Connected · Built-in keyboard and mouse");
+        assert!(SeenDevice { bus: "virtual".into(), ..Default::default() }.is_virtual());
+    }
+
 }

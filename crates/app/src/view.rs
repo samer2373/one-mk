@@ -436,6 +436,33 @@ pub fn parse_doctor(text: &str) -> Option<Vec<Check>> {
     Some(checks)
 }
 
+/// `one-mk input-devices --json`: the keyboards and mice seen here, and
+/// whether this computer can tell them apart.
+pub fn parse_input_devices(text: &str) -> Option<crate::tune::InputDevices> {
+    let json = Json::parse(text.trim())?;
+    let s = |j: &Json, k: &str| match j.get(k) {
+        Some(Json::Str(s)) => Some(s.clone()),
+        _ => None,
+    };
+    let b = |j: &Json, k: &str| matches!(j.get(k), Some(Json::Bool(true)));
+    let Json::Arr(list) = json.get("devices")? else { return None };
+    let devices = list
+        .iter()
+        .filter_map(|d| {
+            Some(crate::tune::SeenDevice {
+                fingerprint: s(d, "fingerprint")?,
+                name: s(d, "name")?,
+                bus: s(d, "bus").unwrap_or_default(),
+                connection: s(d, "connection").unwrap_or_default(),
+                keyboard: b(d, "keyboard"),
+                pointer: b(d, "pointer"),
+                connected: b(d, "connected"),
+            })
+        })
+        .collect();
+    Some(crate::tune::InputDevices { available: b(&json, "available"), note: s(&json, "note"), devices })
+}
+
 /// "2 problems, 1 warning" / "Everything checks out".
 pub fn doctor_summary(checks: &[Check]) -> String {
     let n = |v: Verdict| checks.iter().filter(|c| c.verdict == v).count();
@@ -808,4 +835,17 @@ name = "Café, 2nd floor"
         let t = TransferStatus { sending: true, files: 0, total: 0, done: 2_000_000, rate: 0, ..t };
         assert_eq!(transfer_lines(&t), ("Sending files to desk".into(), "2.0 MB · stalled".into(), None));
     }
+    #[test]
+    fn input_devices_are_read() {
+        let text = r#"{"available":true,"note":null,"running":true,"problem":null,"devices":[{"fingerprint":"usb/046d:c077//Mouse \"M\"","name":"Mouse \"M\"","bus":"usb","connection":"USB","ids":"046d:c077","serial":null,"keyboard":false,"pointer":true,"connected":true,"first_seen":1,"last_seen":2,"twins":false},{"name":"no fingerprint"}]}"#;
+        let d = parse_input_devices(text).unwrap();
+        assert!(d.available && d.note.is_none());
+        assert_eq!(d.devices.len(), 1, "an entry without a fingerprint is skipped");
+        assert_eq!((d.devices[0].name.as_str(), d.devices[0].pointer, d.devices[0].connected), ("Mouse \"M\"", true, true));
+        let off = parse_input_devices(r#"{"available":false,"note":"merged","devices":[]}"#).unwrap();
+        assert_eq!((off.available, off.note.as_deref()), (false, Some("merged")));
+        assert_eq!(parse_input_devices("one-mk: error"), None);
+        assert_eq!(parse_input_devices(r#"{"available":true}"#), None);
+    }
+
 }
