@@ -496,7 +496,8 @@ unless it is turned on.
 | 6A | Feasibility and design document `docs/WALLPAPER-DESIGN.md` (no code; on branch `t3/research-live-wallpaper-design`, 1151 lines, estimate 28 to 42 engineer-weeks for the full plan) | Codex | done; being reviewed by Claude |
 | 6B | Spike: GNOME 50 video behind windows and icons, in an ISOLATED headless session (never the live one) | Claude | running |
 | 6C | Spike: cross-computer clock sync (simulated Wi-Fi models plus a real loopback check) and one-decode-many-crops, reusable crate `one-mk-wall-sync` | Codex | running |
-| 6D | Implementation in phases, with the quality bar | tbd | blocked on the spikes and the owner's go/no-go |
+| 6E | Revise `docs/WALLPAPER-DESIGN.md` with the fixes in `docs/WALLPAPER-DESIGN-REVIEW.md` (codec and encoder path, source resolution versus canvas, GNOME bridge licence, sync rewritten around presentation latency, hybrid GPU, honest estimate, sandbox as a phase-1 gate) and with the spike results | Codex | blocked on 6B and 6C |
+| 6D | Implementation in phases, with the quality bar | tbd | blocked on 6E and the owner's go/no-go |
 
 Owner's decisions (2026-10-30): start by PROVING THE RISKY PARTS (6B and 6C), then decide the full scope with real results; GNOME is the one Linux desktop that must work in the first release (others are not promised); sync is best effort, about 50 ms on Wi-Fi, with a quality indicator; the gallery starts with Wikimedia Commons CC0 / public-domain items only (no videos bundled, author and licence shown, a takedown contact).
 
