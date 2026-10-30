@@ -235,10 +235,13 @@ async fn broadcast_types_clicks_and_scrolls_on_every_computer() {
     }
     assert!(!status(&t.a.dir).await.broadcast.is_empty());
 
-    // Off with Shift still held: both let go of it, A gets its pointer back.
+    // Off with Shift still held: both let go of it (told to, well before
+    // their lease would have), A gets its pointer back.
+    let asked = Instant::now();
     assert_eq!(ask(&t.a.dir, Request::Broadcast(Toggle::Off)).await, "ok\noff\n");
     assert_eq!(next_capture_skipping_edges(&mut t.a.h).await, CaptureCmd::Release { id: 7, pos: Some(CENTER_B) });
     assert_eq!(t.both().await, (key(LSHIFT, false), key(LSHIFT, false)));
+    assert!(asked.elapsed() < LEASE / 2, "released by the end of broadcast, not by a lease: {:?}", asked.elapsed());
     assert!(status(&t.a.dir).await.broadcast.is_empty());
     eventually_async("B to be let go", || async { status(&t.b.dir).await.controlled_by.is_none() }).await;
     // Shift's real release, after, goes nowhere.
@@ -434,6 +437,7 @@ async fn idle_emergency_and_lock_end_it_without_stuck_keys() {
     for code in [LCTRL, LALT, LSHIFT] {
         assert_eq!(t.both().await, (key(code, true), key(code, true)));
     }
+    let asked = Instant::now();
     t.a.send(Event::Key { code: ESC, down: true });
     assert_eq!(next_capture_skipping_edges(&mut t.a.h).await, CaptureCmd::Release { id: 2, pos: Some(CENTER_B) });
     let mut on_b: Vec<Inject> = Vec::new();
@@ -442,6 +446,7 @@ async fn idle_emergency_and_lock_end_it_without_stuck_keys() {
         assert_eq!(b, c);
         on_b.push(b);
     }
+    assert!(asked.elapsed() < LEASE / 2, "{:?}", asked.elapsed());
     on_b.sort_by_key(|i| format!("{i:?}"));
     let mut want = vec![key(LCTRL, false), key(LALT, false), key(LSHIFT, false)];
     want.sort_by_key(|i| format!("{i:?}"));

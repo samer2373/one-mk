@@ -146,6 +146,7 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 | `one-mk takeback` | Take this computer back from the one controlling it |
 | `one-mk switch <pc\|here\|next>` | Move the mouse and keyboard to another computer without crossing an edge (`here`: back to this one) |
 | `one-mk lock-pointer on\|off\|toggle` | Keep the pointer on this computer: edges lead nowhere |
+| `one-mk broadcast [on\|off\|toggle] [--idle-off MIN]` | Type on every connected computer at once (see below) |
 | `one-mk hotkeys [options]` | Show or change the keyboard shortcuts (see below) |
 | `one-mk edge [options]` | Rules for crossing edges (see below) |
 | `one-mk gaming on\|off\|auto` | Raw mouse movement for games on another computer |
@@ -350,6 +351,7 @@ as with any crossing. The keyboard shortcuts below do the same.
 | `Ctrl+Alt+PageDown` | The next computer (`one-mk switch next`) |
 | `Ctrl+Alt+P` | Lock the pointer to this computer, or unlock it |
 | `Ctrl+Alt+H` | Back to this computer (`one-mk switch here`) |
+| `Ctrl+Alt+B` (Windows: `Ctrl+Alt+Shift+B`) | Broadcast to every connected computer, or stop |
 
 Computers are numbered by name, this one included, so when every computer is
 paired with every other, `Ctrl+Alt+2` means the same computer on every
@@ -392,6 +394,25 @@ Linux the desktop still takes the chord, and one-mk ignores it.
   shortcut another program already uses is skipped and `one-mk status` names
   it.
 - Windows and macOS shortcuts are not tested on real hardware yet.
+
+**Broadcast: type on every computer at once.** `one-mk broadcast on` (or
+`Ctrl+Alt+B`, or the tray's or window's "Broadcast to all computers") sends
+everything you type, click and scroll here to every connected computer at
+the same time, for setting up several computers alike or running the same
+command on all of them. Each computer gets its own pointer, starting at the
+middle of its main screen, that moves by the same amount as your mouse and
+stops at that computer's own screen edges; each gets its own Ctrl/Cmd swap
+and key rules, as in a normal visit. It goes to the computers connected when
+it starts (one that connects later is not added), and stops with the
+shortcut, `one-mk broadcast off`, any switch, `Ctrl+Alt+Shift+Esc`, the screen
+locking, the last computer leaving, or after 15 minutes without input
+(`one-mk broadcast --idle-off 30` changes that; 0 = never). Nothing stays held
+on any computer when it stops or when one drops out. `one-mk status`, the
+tray, the window and a notification say it is on. The clipboard does not
+follow during broadcast, and gaming mode and rules for apps don't apply. All
+the details are in [docs/BROADCAST.md](docs/BROADCAST.md). Tested on Linux
+(X11 and the test backend); untested on Windows, macOS, wlroots and the
+GNOME/KDE portal.
 
 **Lock to this computer.** `one-mk lock-pointer on` (like Scroll Lock in
 Barrier) stops the edges from leading anywhere, for example while playing a
@@ -740,6 +761,8 @@ The menu shows:
 - **Switch to <computer>** and **Send clipboard to <computer>** for each
   connected computer (**Switch back here** while another one has control);
 - **Open one·mk…**, which opens the window;
+- **Broadcast to all computers** (a checkmark; while a computer is
+  connected), and the headline "Broadcasting to N computers" while it is on;
 - **Keep the pointer here** (a checkmark), **Lock every screen**, **Take
   back control**, **Start one·mk** (when it is not running), **Pair a
   computer…** (when none is paired; it opens the window) and **Start at
@@ -795,8 +818,8 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
 
 Start with `one-mk doctor`. It checks that one-mk is running and paired,
 the port, discovery, the firewall, the desktop permission (Linux), the
-keyboard shortcuts, the pointer drawn on a computer with no mouse and the
-network, and prints a plain fix for each problem.
+keyboard shortcuts, broadcast, the pointer drawn on a computer with no mouse
+and the network, and prints a plain fix for each problem.
 It only reads: it never changes your firewall or settings, needs no root,
 and exits with status 1 if something failed.
 
@@ -837,6 +860,16 @@ and exits with status 1 if something failed.
   the other computer's screens touch yours leads there (`one-mk status` and
   `one-mk devices` show the offset). `--offset none` makes all of the edge
   lead there again.
+- **What I type appears on every computer.** Broadcast is on: `one-mk status`
+  starts with "Broadcasting to ...". Stop it with `Ctrl+Alt+B`,
+  `Ctrl+Alt+Shift+Esc` or `one-mk broadcast off` (from another terminal or
+  over SSH: this computer's own mouse and keyboard are captured meanwhile, so
+  the window and tray can't be clicked). It also stops by itself after 15
+  minutes without input. If `Ctrl+Alt+B` does nothing, another shortcut may
+  already use it: `one-mk hotkeys` says so; set another with
+  `one-mk hotkeys --broadcast 'ctrl+alt+shift+b'`.
+- **Broadcast says no computer is connected.** It needs at least one paired
+  computer online (`one-mk status`); see "Computers don't find each other".
 - **Another computer already controls this one.** Only one computer can
   control another at a time. Take it back with `one-mk takeback` on the
   controlled computer (on Windows and macOS, using its mouse or keyboard

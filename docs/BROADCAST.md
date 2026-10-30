@@ -13,9 +13,10 @@ one-mk broadcast toggle    # what the keyboard shortcut does
 
 Default keyboard shortcut: **Ctrl+Alt+B** (**Ctrl+Alt+Shift+B** on Windows,
 see below). Change it with `one-mk hotkeys --broadcast <chord>` or turn it off
-with `one-mk hotkeys --broadcast none`. The tray has a "Broadcast to all
-computers" item with a checkmark; the window shows a banner on the Desk tab
-while it is on.
+with `one-mk hotkeys --broadcast none`. The tray and the window's Desk tab
+have a "Broadcast to all computers" checkmark/switch (shown while a computer
+is connected); while it is on, the Desk headline says so and the window's
+main button becomes "Stop broadcast".
 
 ## What happens
 
@@ -30,7 +31,7 @@ while it is on.
 ## Starting
 
 Broadcast starts only from this computer: `one-mk broadcast on|toggle`, the
-keyboard shortcut, or the tray. Nothing a connected computer sends can start
+keyboard shortcut, the tray or the window. Nothing a connected computer sends can start
 it.
 
 - With no other computer connected it does not start, and says so: "No other
@@ -130,7 +131,12 @@ idle_off_minutes = 15
 broadcast = "ctrl+alt+b"     # "none" turns the shortcut off
 ```
 
-A `settings.toml` from before broadcast existed gets both defaults.
+A `settings.toml` from before broadcast existed gets both defaults (checked
+with files written by the previous build; that build also still reads the
+new file). If such a file already gives Ctrl+Alt+B to another shortcut, that
+shortcut keeps it: broadcast then has no shortcut, `one-mk hotkeys` says so,
+and every other shortcut keeps working. (A broadcast chord you choose that
+clashes with another is refused, as for any shortcut.)
 
 **Why Ctrl+Alt+Shift+B on Windows:** Windows reports AltGr as Ctrl+Alt, and
 AltGr+B types `{` on Hungarian keyboards, so a Ctrl+Alt+B shortcut would take
@@ -148,16 +154,27 @@ Motion is applied to each computer's pointer from one reusable buffer: no
 allocation per event beyond what a single visit does. The auto-off is one
 deadline in the daemon's existing timer, not a separate timer.
 
+Measured (debug build, Linux, X11 backend in Xvfb, two computers, idle, 10 s
+samples): broadcast off, the controller used 10 to 30 ms of CPU per 10 s, the
+same as the previous build (30 ms per 20 s both); broadcast on, 260 ms per
+10 s on the controller and 170 ms on each controlled computer (the 20 ms
+keepalives); off again, back to 10 ms. Memory: 34 MB resident, against
+32.4 MB for the previous build after the same start (debug builds).
+
 ## Status and visibility
 
 - `one-mk status` starts with "Broadcasting to 3 computers: A, B and C.
   Everything you type, click and scroll goes to all of them."
 - The tray headline says "Broadcasting to 3 computers" and the item
   "Broadcast to all computers" is checked.
-- The window shows a banner on the Desk tab with a Stop button.
-- Notifications at start and end (Linux and macOS; on Windows one-mk has no
-  notifications yet, so only the status, tray and window show it).
-- `one-mk doctor` reports whether the broadcast shortcut is set.
+- The window: the Desk headline "Broadcasting to 3 computers" and to whom,
+  the main button "Stop broadcast", and the Desk switch on.
+- Notifications at start and end (checked on GNOME; macOS untested; on
+  Windows one-mk has no notifications yet, so only the status, tray and
+  window show it).
+- `one-mk doctor` has a Broadcast check: a warning while it is on (so typing
+  that goes everywhere is never a mystery), otherwise its shortcut and when
+  it stops by itself, and "untested" where it has not been tried.
 
 ## Known limitations
 
@@ -167,7 +184,20 @@ deadline in the daemon's existing timer, not a separate timer.
   terminal or over SSH. The button is there for input that isn't captured
   (a touch screen, accessibility tools) and as a visible state.
 - Broadcast was tested on Linux with the null input backend (three daemons on
-  loopback) and with X11 in a private Xvfb. **Windows, macOS, wlroots and the
-  GNOME/KDE portal are compile-checked only and untested** with broadcast.
+  loopback, in the tests and with the real binaries) and with real X11 capture
+  in a private Xvfb (keys, Shift+click, scrolling, movement, the shortcut and
+  Ctrl+Alt+Shift+Esc). **Windows, macOS, wlroots and the GNOME/KDE portal are
+  untested** with broadcast (the Windows and macOS parts of the window, tray
+  and input are compile-checked; the daemon's notification code for them is
+  not, as the daemon can't be cross-compiled here). `one-mk status` (on
+  Windows and macOS) and `one-mk doctor` say so.
+- A computer that is killed or loses the network drops out only when the
+  connection notices (a few seconds); until then it is still listed.
+- The other computers show no sign that it is a broadcast (by design).
+- A computer whose user takes control back 58 s or more after the last input
+  sent to it can't be told from its idle rule letting go, so it is entered
+  again with your next input (its user can take it back again, or stop the
+  broadcast). Telling the two apart needs a reason in the protocol's
+  `Revoked` message, which older versions would not send.
 - At most 9 computers make sense for the shortcuts; broadcast itself has no
   limit, but each computer adds a visit's traffic.

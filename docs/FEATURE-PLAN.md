@@ -412,7 +412,7 @@ tests, cross-review by the other model, full validation before merging.
 |---|---|---|---|
 | 5A | Clipboard history and a hotkey to paste from another computer's clipboard (must skip sensitive copies) | Codex | todo |
 | 5B | Live latency graph per computer in the window (event-driven; no polling when the window is closed) | Claude | todo |
-| 5C | Broadcast input to all connected computers (explicit, visible, auto-off, no stuck keys) | Claude | todo |
+| 5C | Broadcast input to all connected computers (explicit, visible, auto-off, no stuck keys). `one-mk broadcast`, Ctrl+Alt+B (Ctrl+Alt+Shift+B on Windows), tray, window, doctor; design and limits in docs/BROADCAST.md. Real runs: three daemons on loopback (null backend), X11 capture in a private Xvfb, notifications on GNOME. Windows, macOS, wlroots and the portal untested | Claude | done, awaiting cross-review |
 | 5D | Edge pushes where no computer sits: pointer wrap to the opposite edge, and push-toward-it layout learning | Claude | todo |
 | 5E | Keyboard layout and AltGr fix: send the typed character when layouts differ; starts after 5I (both change the key event) | Codex | blocked on 5I |
 | 5F | Autoscroll (middle-click) and gesture buttons | Claude | todo |
