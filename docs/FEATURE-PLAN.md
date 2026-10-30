@@ -75,6 +75,10 @@ origin's design won; what origin lacked was re-applied on top of it.
   a draft (a re-run reuses it, `--clobber`), checks the list and then
   publishes. Not run on GitHub; simulated locally with a stub `gh`
   (docs/PACKAGING.md, "The release workflow").
+- **The `.deb` ships the hidden `io.github.onemk.OneMk.desktop`** the
+  GlobalShortcuts portal needs, from `install::packaged_files` (single
+  source, via the `packaging-files` example); `bundle-deb.sh` and
+  `check-packaging.sh` both check it is there and hidden.
 
 ## Where things stand (updated 2026-10-29, end of the second batch)
 

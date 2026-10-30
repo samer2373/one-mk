@@ -37,7 +37,7 @@ if command -v dpkg-deb >/dev/null; then
     dpkg-deb -x "$deb" "$root"
     dpkg-deb -e "$deb" "$root/DEBIAN"
     for f in usr/bin/one-mk usr/bin/one-mk-tray usr/bin/one-mk-app usr/share/applications/one-mk.desktop \
-             usr/share/icons/hicolor/256x256/apps/one-mk.png; do
+             usr/share/applications/io.github.onemk.OneMk.desktop usr/share/icons/hicolor/256x256/apps/one-mk.png; do
         [ -e "$root/$f" ] && ok ".deb contains /$f" || bad ".deb is missing /$f"
     done
     [ -z "$(find "$root" -not -path "$root/DEBIAN*" \( -perm -002 -o -perm -4000 \) -not -type l)" ] && ok ".deb has no world-writable or setuid files" || bad ".deb has world-writable or setuid files"
@@ -45,8 +45,14 @@ if command -v dpkg-deb >/dev/null; then
     got=$("$root/usr/bin/one-mk" --version) && [ "$got" = "one-mk $VERSION" ] && ok "unpacked one-mk --version: $got" || bad "one-mk --version said '$got'"
     check "unpacked one-mk-app starts (prints its usage and refuses an unknown option)" sh -c "! '$root/usr/bin/one-mk-app' --help"
     check "unpacked one-mk-tray starts (prints its usage and refuses an unknown option)" sh -c "! '$root/usr/bin/one-mk-tray' --help"
+    # The hidden app-id entry the GlobalShortcuts portal needs, as `one-mk
+    # install` writes it (the packaging-files example prints the same text).
+    hidden=$root/usr/share/applications/io.github.onemk.OneMk.desktop
+    grep -qx 'NoDisplay=true' "$hidden" && grep -qx 'Exec="/usr/bin/one-mk" "run"' "$hidden" \
+        && ok ".deb app-id entry is hidden and runs /usr/bin/one-mk" || bad ".deb app-id entry"
     if command -v desktop-file-validate >/dev/null; then
         check ".deb desktop file validates" desktop-file-validate "$root/usr/share/applications/one-mk.desktop"
+        check ".deb app-id desktop file validates" desktop-file-validate "$hidden"
     else skip "desktop-file-validate not installed"; fi
 else skip ".deb checks: dpkg-deb not installed"; fi
 

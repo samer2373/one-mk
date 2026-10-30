@@ -133,13 +133,18 @@ adds the *Send to* entries. The installer is not code-signed, so SmartScreen wil
 `scripts/bundle-deb.sh <release dir> <out.deb>` uses `dpkg-deb` directly. The
 package (version exactly as in `Cargo.toml`, `amd64`) contains the three
 programs in `/usr/bin`, the window's launcher
-`/usr/share/applications/one-mk.desktop` (written inline by the script) and
-the 256 px icon. It has no maintainer scripts, starts and enables nothing,
-and ships no systemd unit or autostart entry: `one-mk install`, run as
-yourself, writes the user service, the tray's autostart entry and the hidden
-`io.github.onemk.OneMk.desktop` entry the GlobalShortcuts portal needs into
-the home folder. It is built on ubuntu-22.04 (glibc 2.35), the oldest
-distribution it is meant for.
+`/usr/share/applications/one-mk.desktop` (written inline by the script), the
+hidden `/usr/share/applications/io.github.onemk.OneMk.desktop` and the 256 px
+icon. The hidden entry names the app id: GNOME's GlobalShortcuts portal
+refuses a session to an app id with no installed desktop entry. It comes from
+`one_mk_ctl::install::packaged_files` (the script runs the `packaging-files`
+example with `cargo`, so building the `.deb` needs the checkout and cargo),
+the same text `one-mk install` writes, and the script checks the built
+package contains it, hidden. The package has no maintainer scripts, starts
+and enables nothing, and ships no systemd unit or autostart entry: `one-mk
+install`, run as yourself, writes the user service and the tray's autostart
+entry (and its own copy of the hidden entry) into the home folder. It is
+built on ubuntu-22.04 (glibc 2.35), the oldest distribution it is meant for.
 
 ## AppImage
 
@@ -294,7 +299,7 @@ file, the released, CI-tested one was kept:
 |---|---|---|
 | `scripts/package-windows.sh`, `packaging/windows/one-mk.iss`, `packaging/windows/path-entries.pas`, `scripts/check-windows-path.sh` | `installer/one-mk.iss` | an all-users install in Program Files, firewall rules for private networks, running `one-mk install` at setup and `one-mk uninstall` at removal, taking the folder out of `PATH` on uninstall |
 | `scripts/package-macos.sh`, `packaging/macos/Info.plist.in` | `scripts/bundle-mac.sh` | nothing of note (the released script also signs and notarizes) |
-| `scripts/package-deb.sh`, `packaging/linux/postinst`, `postrm`, `one-mk.1` | `scripts/bundle-deb.sh` | the packaged systemd user unit, tray autostart and hidden app-id entry (`one-mk install` writes them per user instead), the man page, the copyright file, the full hicolor icon set, the AppStream file, `Depends`/`Recommends`, a reproducible build, `~` for pre-release versions |
+| `scripts/package-deb.sh`, `packaging/linux/postinst`, `postrm`, `one-mk.1` | `scripts/bundle-deb.sh` | the packaged systemd user unit and tray autostart (`one-mk install` writes them per user instead; the hidden app-id entry is shipped again since the review of the merge), the man page, the copyright file, the full hicolor icon set, the AppStream file, `Depends`/`Recommends`, a reproducible build, `~` for pre-release versions |
 | `scripts/package-tarball.sh` | the workflow's "Package" step | a reproducible archive (sorted, time-clamped) |
 
 The AppImage, the Flatpak bundle, the Homebrew files and the checks were kept,
