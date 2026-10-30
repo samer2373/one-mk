@@ -889,6 +889,17 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
             checks.push(check("hooks", "Hooks", Outcome::fail(format!("Hooks REFUSED: {reason}"), "Fix settings.toml ownership and permissions and remove group/world write access from its folder; alternatively explicitly use `one-mk hooks --trust-permissions`.")));
         }
         checks.push(check("clipboard", "Clipboard", Outcome::pass(settings.clipboard.summary())));
+        let retention = if settings.clipboard.history_persist { "Plain text on disk (unencrypted), in clipboard-history.bin" } else { "Memory only; forgotten on shutdown" };
+        let coverage = if cfg!(target_os = "linux") { "Local changes use X11 notifications; native Wayland clipboard monitoring is untested" } else if cfg!(windows) { "Local changes are captured during clipboard access only; native Windows monitoring is untested. Windows fetch toast notifications are not implemented; results print to stderr" } else { "Local changes are captured during clipboard access only; native macOS monitoring is untested" };
+        let history_error = daemon.status().map(|status| &status.clipboard_history_note).filter(|note| note.starts_with("Could not"));
+        let history_outcome = match history_error {
+            Some(error) => Outcome::fail(error.clone(), "Check the settings folder is writable; use `one-mk clipboard history clear` to discard damaged saved history."),
+            None => Outcome::skip(format!(
+                "Up to {} items, {} MB. {retention}. {coverage}. Password markers are not detectable by arboard; focused-app skipping is best effort on X11.",
+                settings.clipboard.history_max.min(1000), settings.clipboard.history_max_mb.min(256)
+            )),
+        };
+        checks.push(check("clipboard-history", "Clipboard history", history_outcome));
     }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
     checks.push(tuning_check(probe_tuning(dir).as_ref()));

@@ -72,6 +72,9 @@ pub struct Status {
     /// from older daemons), and the details in words.
     pub hotkeys: String,
     pub hotkeys_detail: String,
+    pub clipboard_history: usize,
+    pub clipboard_history_revision: u64,
+    pub clipboard_history_note: String,
     /// What the input backend needs the user to know or do, one line each
     /// (e.g. approve the desktop's permission dialog); empty when it works.
     pub input: Vec<String>,
@@ -300,6 +303,9 @@ impl Status {
         if !self.hotkeys.is_empty() {
             out += &format!("hotkeys\t{}\t{}\n", self.hotkeys, self.hotkeys_detail);
         }
+        out += &format!("clipboard-history\t{}\n", self.clipboard_history);
+        out += &format!("clipboard-history-revision\t{}\n", self.clipboard_history_revision);
+        if !self.clipboard_history_note.is_empty() { out += &format!("clipboard-history-note\t{}\n", self.clipboard_history_note.replace(['\t', '\r', '\n'], " ")); }
         for line in &self.input {
             out += &format!("input\t{}\n", line.replace(['\t', '\n', '\r'], " "));
         }
@@ -355,6 +361,9 @@ impl Status {
                 ["pointer_overlay", v] => s.pointer_overlay = v == "1",
                 ["gaming", v] => s.gaming = v.into(),
                 ["edges", v] => s.edges = v.into(),
+                ["clipboard-history", count] => s.clipboard_history = count.parse().unwrap_or(0),
+                ["clipboard-history-revision", revision] => s.clipboard_history_revision = revision.parse().unwrap_or(0),
+                ["clipboard-history-note", note] => s.clipboard_history_note = note.to_string(),
                 ["hotkeys", state, detail] => (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into()),
                 ["profile", v] => s.layout.profile = Some(v.into()),
                 ["input", v] => s.input.push(v.into()),
@@ -435,6 +444,8 @@ impl Status {
         if let Some(line) = self.hotkeys_line() {
             out += &format!("{line}\n");
         }
+        out += &format!("Clipboard history: {} items.\n", self.clipboard_history);
+        if !self.clipboard_history_note.is_empty() { out += &format!("{}\n", self.clipboard_history_note); }
         if let Some(p) = &self.layout.profile {
             out += &format!("Layout profile: {p}.\n");
         }

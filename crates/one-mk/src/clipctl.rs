@@ -71,10 +71,34 @@ pub fn handle(dir: &Path, services: &Services, online: Vec<Online>, trust: &Trus
         }
         Request::ClipSend(to) => clip_request(services, &online, trust, to, true, reply),
         Request::ClipGet(from) => clip_request(services, &online, trust, from, false, reply),
+        Request::FetchClipboard => {
+            let local = services.clip.as_ref().map(|clip| clip.local_computer());
+            let target = next_clipboard_peer(&online, local).map(|peer| peer.fp.to_string());
+            clip_request(services, &online, trust, target, false, reply);
+        }
+        Request::ClipHistory { action, json } => {
+            let clip = services.clip.clone();
+            tokio::spawn(async move {
+                let result = match clip {
+                    Some(clip) => crate::history::handle(clip.clipboard(), action, json).await,
+                    None => Err(anyhow::anyhow!("Clipboard history is unavailable; restart one-mk without --no-clipboard")),
+                };
+                let _ = reply.send(match result { Ok(body) => format!("ok\n{body}"), Err(error) => format!("error {error}\n") });
+            });
+        }
         Request::Invitation | Request::Status | Request::Reload | Request::TakeBack | Request::Stop | Request::Switch(_) | Request::LockPointer(_) | Request::LockAll => {
             let _ = reply.send("error unexpected request\n".to_owned());
         }
     }
+}
+
+fn next_clipboard_peer<'a>(online: &'a [Online], local: Option<(&str, Fingerprint)>) -> Option<&'a Online> {
+    let key = |peer: &&Online| (peer.name.to_lowercase(), peer.fp);
+    let next = local.and_then(|(name, fingerprint)| {
+        let own = (name.to_lowercase(), fingerprint);
+        online.iter().filter(|peer| (peer.name.to_lowercase(), peer.fp) > own).min_by_key(key)
+    });
+    next.or_else(|| online.iter().min_by_key(key))
 }
 
 fn clip_request(
@@ -107,7 +131,7 @@ fn clip_request(
                 // name, what and size.
                 _ => format!("ok\n{name}\n{}\n{}\n", m.what, size(&m)),
             },
-            Err(e) if !send && e.to_string() == crate::clip::FETCH_DISABLED_MESSAGE => format!("error {name} does not allow fetching its clipboard; on {name} run `one-mk clipboard --allow-fetch on`\n"),
+            Err(e) if !send && e.to_string() == crate::clip::FETCH_DISABLED_MESSAGE => format!("error {name} does not allow fetching its clipboard; on {name} run: one-mk clipboard --allow-fetch on\n"),
             Err(e) => format!("error {e:#}\n"),
         };
         let _ = reply.send(text);
@@ -289,6 +313,15 @@ mod tests {
         let (tx, rx) = oneshot::channel();
         handle(dir, services, online, &trust(dir, &[]), req, tx);
         rx.await.unwrap()
+    }
+
+    #[test]
+    fn fetching_chooses_the_next_online_computer_and_wraps() {
+        let online = vec![online(3, "Zulu"), online(1, "Alpha"), online(2, "Middle")];
+        assert_eq!(next_clipboard_peer(&online, Some(("Beta", fp(9)))).unwrap().fp, fp(2));
+        assert_eq!(next_clipboard_peer(&online, Some(("zzzz", fp(9)))).unwrap().fp, fp(1));
+        assert_eq!(next_clipboard_peer(&online, None).unwrap().fp, fp(1));
+        assert!(next_clipboard_peer(&[], Some(("Beta", fp(9)))).is_none());
     }
 
     #[test]

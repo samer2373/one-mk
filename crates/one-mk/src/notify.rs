@@ -192,7 +192,7 @@ mod sys {
                 "org.freedesktop.Notifications",
             )
             .await?;
-            let success = title == "one-mk files sent";
+            let success = title == "one-mk files sent" || (title == "one-mk clipboard" && body.starts_with("Got "));
             let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from(if success { "transfer.complete" } else { "transfer.error" }))]);
             proxy
                 .call::<_, _, u32>(
@@ -205,7 +205,7 @@ mod sys {
         if let Err(e) = shown.await {
             tracing::debug!("notification over D-Bus failed ({e:#}); trying notify-send");
             let status = Command::new("notify-send")
-                .args(["--app-name=one-mk", "--icon=dialog-error", "--"])
+                .args(["--app-name=one-mk", if body.starts_with("Got ") { "--icon=edit-paste" } else { "--icon=dialog-error" }, "--"])
                 .arg(title)
                 .arg(escape_markup(body))
                 .stdin(Stdio::null())

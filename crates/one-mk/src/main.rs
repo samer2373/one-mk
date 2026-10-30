@@ -19,6 +19,7 @@ mod app;
 mod bench;
 mod clip;
 mod clipctl;
+mod history;
 mod control;
 mod doctor;
 mod hooks;
@@ -173,6 +174,8 @@ enum Cmd {
     },
     /// Show or change what the clipboard shares: which formats, and how much (applies at once).
     Clipboard {
+        #[command(subcommand)]
+        history: Option<history::ClipboardCommand>,
         /// Share plain text.
         #[arg(long, value_name = "on|off")]
         text: Option<OnOff>,
@@ -480,8 +483,14 @@ fn run(cli: Cli) -> Result<()> {
         match cmd {
             Cmd::Drag { on, off, zone } => drag::configure(&dir, on, off, zone).await,
             Cmd::Run(_) => unreachable!("handled above"),
-            Cmd::Clipboard { text, html, image, max_mb, skip_sensitive, allow_fetch } => {
-                clipctl::clipboard(&dir, clipctl::ClipChange { text, html, image, max_mb, skip_sensitive, allow_fetch }).await
+            Cmd::Clipboard { history, text, html, image, max_mb, skip_sensitive, allow_fetch } => {
+                if let Some(history) = history {
+                    if text.is_some() || html.is_some() || image.is_some() || max_mb.is_some() || skip_sensitive.is_some() || allow_fetch.is_some() {
+                        anyhow::bail!("Change clipboard settings and manage history in separate commands; see one-mk clipboard --help");
+                    }
+                    history.run(&dir).await
+                }
+                else { clipctl::clipboard(&dir, clipctl::ClipChange { text, html, image, max_mb, skip_sensitive, allow_fetch }).await }
             }
             Cmd::ClipSend { to } => clipctl::move_clipboard(&dir, to, true).await,
             Cmd::ClipGet { from } => clipctl::move_clipboard(&dir, from, false).await,
