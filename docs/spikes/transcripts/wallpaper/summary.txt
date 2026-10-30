@@ -1,0 +1,66 @@
+Selected simulation: probe=5s, cap=0.005, drift=200ppm, computers=4, anchors=32, seed=42
+{'model': 'wired', 'probe_s': '5', 'nudge_limit': '0.005', 'ppm': '200', 'computers': '4', 'seed': '42', 'mean_ms': '7.4204', 'p50_ms': '0.0000', 'p95_ms': '16.6667', 'p99_ms': '33.3333', 'max_ms': '33.3333', 'correction_jumps': '0', 'nudge_changes': '14211', 'seeks': '0', 'hard_resyncs': '4', 'convergence_s': '0.150', 'recovery_s': '0.000', 'start_max_ms': '16.667', 'offset_span_s': '8.1', 'filter_anchors': '32', 'warm_p95_ms': '16.6667', 'outage_max_ms': '16.6667', 'display_frame_jumps': '233'}
+Worst across sweep: wired {'p95_ms': 16.6667, 'p99_ms': 33.3333, 'max_ms': 33.3333, 'convergence_s': 0.15, 'recovery_s': 0.0, 'correction_jumps': 0.0}
+wired probe_s 1 worst P95 ms 16.6667 mean error ms 4.713
+wired probe_s 5 worst P95 ms 16.6667 mean error ms 4.7196
+wired probe_s 10 worst P95 ms 16.6667 mean error ms 4.6584
+wired probe_s 15 worst P95 ms 16.6667 mean error ms 4.6987
+wired nudge_limit 0.005 worst P95 ms 16.6667 mean error ms 4.6974
+wired nudge_limit 0.01 worst P95 ms 16.6667 mean error ms 4.6974
+wired nudge_limit 0.02 worst P95 ms 16.6667 mean error ms 4.6974
+wired filter_anchors 8 worst P95 ms 16.6667 mean error ms 4.713
+wired filter_anchors 32 worst P95 ms 16.6667 mean error ms 4.6818
+{'model': 'wifi', 'probe_s': '5', 'nudge_limit': '0.005', 'ppm': '200', 'computers': '4', 'seed': '42', 'mean_ms': '7.0700', 'p50_ms': '0.0000', 'p95_ms': '16.6667', 'p99_ms': '33.3333', 'max_ms': '33.3333', 'correction_jumps': '0', 'nudge_changes': '13992', 'seeks': '0', 'hard_resyncs': '4', 'convergence_s': '0.150', 'recovery_s': '0.000', 'start_max_ms': '16.667', 'offset_span_s': '8.1', 'filter_anchors': '32', 'warm_p95_ms': '16.6667', 'outage_max_ms': '33.3333', 'display_frame_jumps': '198'}
+Worst across sweep: wifi {'p95_ms': 16.6667, 'p99_ms': 33.3333, 'max_ms': 33.3333, 'convergence_s': 0.15, 'recovery_s': 0.0, 'correction_jumps': 0.0}
+wifi probe_s 1 worst P95 ms 16.6667 mean error ms 3.9463
+wifi probe_s 5 worst P95 ms 16.6667 mean error ms 4.0075
+wifi probe_s 10 worst P95 ms 16.6667 mean error ms 4.3339
+wifi probe_s 15 worst P95 ms 16.6667 mean error ms 4.4009
+wifi nudge_limit 0.005 worst P95 ms 16.6667 mean error ms 4.1722
+wifi nudge_limit 0.01 worst P95 ms 16.6667 mean error ms 4.1722
+wifi nudge_limit 0.02 worst P95 ms 16.6667 mean error ms 4.1722
+wifi filter_anchors 8 worst P95 ms 16.6667 mean error ms 4.2118
+wifi filter_anchors 32 worst P95 ms 16.6667 mean error ms 4.1325
+{'model': 'bad', 'probe_s': '5', 'nudge_limit': '0.005', 'ppm': '200', 'computers': '4', 'seed': '42', 'mean_ms': '8.1929', 'p50_ms': '0.0000', 'p95_ms': '16.6667', 'p99_ms': '16.6667', 'max_ms': '33.3333', 'correction_jumps': '0', 'nudge_changes': '16013', 'seeks': '0', 'hard_resyncs': '4', 'convergence_s': '0.200', 'recovery_s': '0.000', 'start_max_ms': '16.667', 'offset_span_s': '8.1', 'filter_anchors': '32', 'warm_p95_ms': '16.6667', 'outage_max_ms': '0.0000', 'display_frame_jumps': '138'}
+Worst across sweep: bad {'p95_ms': 16.6667, 'p99_ms': 33.3333, 'max_ms': 33.3333, 'convergence_s': 0.2, 'recovery_s': 0.0, 'correction_jumps': 0.0}
+bad probe_s 1 worst P95 ms 16.6667 mean error ms 2.4783
+bad probe_s 5 worst P95 ms 16.6667 mean error ms 2.4569
+bad probe_s 10 worst P95 ms 16.6667 mean error ms 2.6177
+bad probe_s 15 worst P95 ms 16.6667 mean error ms 2.8115
+bad nudge_limit 0.005 worst P95 ms 16.6667 mean error ms 2.5911
+bad nudge_limit 0.01 worst P95 ms 16.6667 mean error ms 2.5911
+bad nudge_limit 0.02 worst P95 ms 16.6667 mean error ms 2.5911
+bad filter_anchors 8 worst P95 ms 16.6667 mean error ms 2.5902
+bad filter_anchors 32 worst P95 ms 16.6667 mean error ms 2.5921
+{'model': 'adversarial', 'probe_s': '5', 'nudge_limit': '0.005', 'ppm': '200', 'computers': '4', 'seed': '42', 'mean_ms': '253.0248', 'p50_ms': '250.0000', 'p95_ms': '266.6667', 'p99_ms': '266.6667', 'max_ms': '266.6667', 'correction_jumps': '0', 'nudge_changes': '15804', 'seeks': '0', 'hard_resyncs': '4', 'convergence_s': '-1.000', 'recovery_s': '-1.000', 'start_max_ms': '266.667', 'offset_span_s': '8.1', 'filter_anchors': '32', 'warm_p95_ms': '266.6667', 'outage_max_ms': '250.0000', 'display_frame_jumps': '83'}
+Worst across sweep: adversarial {'p95_ms': 266.6667, 'p99_ms': 266.6667, 'max_ms': 266.6667, 'convergence_s': -1.0, 'recovery_s': -1.0, 'correction_jumps': 0.0}
+adversarial probe_s 1 worst P95 ms 266.6667 mean error ms 194.77
+adversarial probe_s 5 worst P95 ms 266.6667 mean error ms 194.9721
+adversarial probe_s 10 worst P95 ms 266.6667 mean error ms 194.7243
+adversarial probe_s 15 worst P95 ms 266.6667 mean error ms 194.9409
+adversarial nudge_limit 0.005 worst P95 ms 266.6667 mean error ms 194.8518
+adversarial nudge_limit 0.01 worst P95 ms 266.6667 mean error ms 194.8518
+adversarial nudge_limit 0.02 worst P95 ms 266.6667 mean error ms 194.8518
+adversarial filter_anchors 8 worst P95 ms 266.6667 mean error ms 194.8917
+adversarial filter_anchors 32 worst P95 ms 266.6667 mean error ms 194.812
+Decode: width,height,outputs,decoders,mean CPU percent at 60fps,mean RSS MiB,mean FPS
+1920 1080 1 1 18.5 115.07 391.96
+1920 1080 2 1 31.67 115.03 348.59
+1920 1080 2 2 52.17 115.05 243.76
+1920 1080 3 1 21.67 115.09 400.3
+1920 1080 3 3 73.83 130.33 253.7
+3840 2160 1 1 38.83 149.79 216.32
+3840 2160 2 1 65.67 162.0 192.52
+3840 2160 2 2 139.67 248.78 117.65
+3840 2160 3 1 81.83 161.76 163.45
+3840 2160 3 3 262.17 336.42 95.55
+7680 2160 1 1 102.17 244.52 88.23
+7680 2160 2 1 143.17 269.01 86.45
+7680 2160 2 2 263.5 438.65 66.63
+7680 2160 3 1 144.17 268.79 100.75
+7680 2160 3 3 544.33 609.11 47.81
+11520 2160 1 1 93.17 340.11 96.79
+11520 2160 2 1 209.5 376.17 46.09
+11520 2160 2 2 396.0 629.49 47.17
+11520 2160 3 1 255.83 376.26 38.81
+11520 2160 3 3 674.5 882.8 40.12

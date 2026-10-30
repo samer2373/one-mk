@@ -1,0 +1,7 @@
+crop 960x320, 2 windows: full-image difference bbox=None
+full-image max channel error=0
+boundary x=480: max channel error=0
+crop 1440x480, 3 windows: full-image difference bbox=None
+full-image max channel error=0
+boundary x=480: max channel error=0
+boundary x=960: max channel error=0

@@ -3285,6 +3285,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "one-mk-wall-sync"
+version = "0.1.13"
+dependencies = [
+ "libc",
+ "one-mk-net",
+ "tokio",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

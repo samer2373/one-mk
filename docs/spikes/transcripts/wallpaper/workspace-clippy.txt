@@ -1,0 +1,2 @@
+    Checking one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.60s

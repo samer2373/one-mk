@@ -1,0 +1,483 @@
+=== avdec_h265 ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                libav HEVC (High Efficiency Video Coding) decoder
+  Klass                    Codec/Decoder/Video
+  Description              libav hevc decoder
+  Author                   Wim Taymans <wim.taymans@gmail.com>, Ronald Bultje <rbultje@ronald.bitfreak.net>, Edward Hervey <bilboed@bilboed.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/libav/avdec_h265.html
+
+Plugin Details:
+  Name                     libav
+  Description              All libav codecs and formats (system install)
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlibav.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-libav
+  Documentation            https://gstreamer.freedesktop.org/documentation/libav/
+  Source release date      2026-04-07
+  Binary package           GStreamer libav Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-libav1.0
+
+GObject
+=== libde265dec ===
+Factory Details:
+  Rank                     secondary (128)
+  Long-name                HEVC/H.265 decoder
+  Klass                    Codec/Decoder/Video
+  Description              Decodes HEVC/H.265 video streams using libde265
+  Author                   struktur AG <opensource@struktur.de>
+  Documentation            https://gstreamer.freedesktop.org/documentation/de265/#libde265dec-page
+
+Plugin Details:
+  Name                     de265
+  Description              HEVC/H.265 decoder using libde265
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstde265.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-bad
+  Documentation            https://gstreamer.freedesktop.org/documentation/de265/
+  Source release date      2026-04-07
+  Binary package           GStreamer Bad Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-bad1.0
+
+GObject
+=== avdec_apng ===
+No such element or plugin 'avdec_apng'
+=== avdec_png ===
+Factory Details:
+  Rank                     marginal (64)
+  Long-name                libav PNG (Portable Network Graphics) image decoder
+  Klass                    Codec/Decoder/Video
+  Description              libav png decoder
+  Author                   Wim Taymans <wim.taymans@gmail.com>, Ronald Bultje <rbultje@ronald.bitfreak.net>, Edward Hervey <bilboed@bilboed.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/libav/avdec_png.html
+
+Plugin Details:
+  Name                     libav
+  Description              All libav codecs and formats (system install)
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlibav.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-libav
+  Documentation            https://gstreamer.freedesktop.org/documentation/libav/
+  Source release date      2026-04-07
+  Binary package           GStreamer libav Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-libav1.0
+
+GObject
+=== dav1ddec ===
+No such element or plugin 'dav1ddec'
+=== dav1ddec ===
+No such element or plugin 'dav1ddec'
+=== bin ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                Generic bin
+  Klass                    Generic/Bin
+  Description              Simple container object
+  Author                   Erik Walthinsen <omega@cse.ogi.edu>,Wim Taymans <wim.taymans@gmail.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/staticelements/bin.html
+
+Plugin Details:
+  Name                     staticelements
+  Description              core elements linked into the GStreamer library
+  Filename                 (null)
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gstreamer
+  Documentation            https://gstreamer.freedesktop.org/documentation/staticelements/
+  Binary package           GStreamer (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gstreamer1.0
+
+GObject
+=== playbin3 ===
+Factory Details:
+  Rank                     none (0)
+  Long-name                Player Bin 3
+  Klass                    Generic/Bin/Player
+  Description              Autoplug and play media from an uri
+  Author                   Wim Taymans <wim.taymans@gmail.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/playback/playbin3.html
+
+Plugin Details:
+  Name                     playback
+  Description              various playback elements
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstplayback.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-base
+  Documentation            https://gstreamer.freedesktop.org/documentation/playback/
+  Source release date      2026-04-07
+  Binary package           GStreamer Base Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-base1.0
+
+GObject
+=== decodebin3 ===
+Factory Details:
+  Rank                     none (0)
+  Long-name                Decoder Bin 3
+  Klass                    Generic/Bin/Decoder
+  Description              Autoplug and decode to raw media
+  Author                   Edward Hervey <edward@centricular.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/playback/decodebin3.html
+
+Plugin Details:
+  Name                     playback
+  Description              various playback elements
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstplayback.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-base
+  Documentation            https://gstreamer.freedesktop.org/documentation/playback/
+  Source release date      2026-04-07
+  Binary package           GStreamer Base Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-base1.0
+
+GObject
+=== appsink ===
+Factory Details:
+  Rank                     none (0)
+  Long-name                AppSink
+  Klass                    Generic/Sink
+  Description              Allow the application to get access to raw buffer
+  Author                   David Schleef <ds@schleef.org>, Wim Taymans <wim.taymans@gmail.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/app/appsink.html
+
+Plugin Details:
+  Name                     app
+  Description              Elements used to communicate with applications
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstapp.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-base
+  Documentation            https://gstreamer.freedesktop.org/documentation/app/
+  Source release date      2026-04-07
+  Binary package           GStreamer Base Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-base1.0
+
+GObject
+=== glimagesink ===
+Factory Details:
+  Rank                     secondary (128)
+  Long-name                GL Sink Bin
+  Klass                    Sink/Video
+  Description              Infrastructure to process GL textures
+  Author                   Matthew Waters <matthew@centricular.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/opengl/glimagesink.html
+
+Plugin Details:
+  Name                     opengl
+  Description              OpenGL plugin
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopengl.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-base
+  Documentation            https://gstreamer.freedesktop.org/documentation/opengl/
+  Source release date      2026-04-07
+  Binary package           GStreamer Base Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-base1.0
+
+GObject
+=== complete decoder factory inventory ===
+a52dec:  a52dec: ATSC A/52 audio decoder
+adpcmdec:  adpcmdec: ADPCM decoder
+aes:  aesdec: aesdec
+alaw:  alawdec: A Law audio decoder
+aom:  av1dec: AV1 Decoder
+basedebug:  fakevideodec: Fake Video Decoder
+bayer:  bayer2rgb: Bayer to RGB decoder for cameras
+bz2:  bz2dec: BZ2 decoder
+closedcaption:  line21decoder: Line 21 CC Decoder
+codecalpha:  vp8alphadecodebin: VP8 Alpha Decoder
+codecalpha:  vp9alphadecodebin: VP9 Alpha Decoder
+de265:  libde265dec: HEVC/H.265 decoder
+dtls:  dtlsdec: DTLS Decoder
+dtls:  dtlssrtpdec: DTLS-SRTP Decoder
+dtsdec:  dtsdec: DTS audio decoder
+dv:  dvdec: DV video decoder
+dvdlpcmdec:  dvdlpcmdec: DVD LPCM Audio decoder
+dvdsub:  dvdsubdec: DVD subtitle decoder
+faad:  faad: AAC audio decoder
+flac:  flacdec: FLAC audio decoder
+fluidsynthmidi:  fluiddec: Fluidsynth
+flxdec:  flxdec: FLX video decoder
+gdkpixbuf:  gdkpixbufdec: GdkPixbuf image decoder
+gme:  gmedec: Gaming console music file decoder
+gsm:  gsmdec: GSM audio decoder
+jpeg:  jpegdec: JPEG image decoder
+lc3:  lc3dec: LC3 Bluetooth Audio decoder
+libav:  avdec_4xm: libav 4X Movie decoder
+libav:  avdec_8bps: libav QuickTime 8BPS video decoder
+libav:  avdec_aac: libav AAC (Advanced Audio Coding) decoder
+libav:  avdec_aac_fixed: libav AAC (Advanced Audio Coding) decoder
+libav:  avdec_aac_latm: libav AAC LATM (Advanced Audio Coding LATM syntax) decoder
+libav:  avdec_aasc: libav Autodesk RLE decoder
+libav:  avdec_ac3: libav ATSC A/52A (AC-3) decoder
+libav:  avdec_ac3_fixed: libav ATSC A/52A (AC-3) decoder
+libav:  avdec_adpcm_4xm: libav ADPCM 4X Movie decoder
+libav:  avdec_adpcm_adx: libav SEGA CRI ADX ADPCM decoder
+libav:  avdec_adpcm_ct: libav ADPCM Creative Technology decoder
+libav:  avdec_adpcm_ea: libav ADPCM Electronic Arts decoder
+libav:  avdec_adpcm_ea_maxis_xa: libav ADPCM Electronic Arts Maxis CDROM XA decoder
+libav:  avdec_adpcm_ea_r1: libav ADPCM Electronic Arts R1 decoder
+libav:  avdec_adpcm_ea_r2: libav ADPCM Electronic Arts R2 decoder
+libav:  avdec_adpcm_ea_r3: libav ADPCM Electronic Arts R3 decoder
+libav:  avdec_adpcm_ea_xas: libav ADPCM Electronic Arts XAS decoder
+libav:  avdec_adpcm_ima_amv: libav ADPCM IMA AMV decoder
+libav:  avdec_adpcm_ima_dk3: libav ADPCM IMA Duck DK3 decoder
+libav:  avdec_adpcm_ima_dk4: libav ADPCM IMA Duck DK4 decoder
+libav:  avdec_adpcm_ima_ea_eacs: libav ADPCM IMA Electronic Arts EACS decoder
+libav:  avdec_adpcm_ima_ea_sead: libav ADPCM IMA Electronic Arts SEAD decoder
+libav:  avdec_adpcm_ima_iss: libav ADPCM IMA Funcom ISS decoder
+libav:  avdec_adpcm_ima_oki: libav ADPCM IMA Dialogic OKI decoder
+libav:  avdec_adpcm_ima_qt: libav ADPCM IMA QuickTime decoder
+libav:  avdec_adpcm_ima_smjpeg: libav ADPCM IMA Loki SDL MJPEG decoder
+libav:  avdec_adpcm_ima_wav: libav ADPCM IMA WAV decoder
+libav:  avdec_adpcm_ima_ws: libav ADPCM IMA Westwood decoder
+libav:  avdec_adpcm_ms: libav ADPCM Microsoft decoder
+libav:  avdec_adpcm_sbpro_2: libav ADPCM Sound Blaster Pro 2-bit decoder
+libav:  avdec_adpcm_sbpro_3: libav ADPCM Sound Blaster Pro 2.6-bit decoder
+libav:  avdec_adpcm_sbpro_4: libav ADPCM Sound Blaster Pro 4-bit decoder
+libav:  avdec_adpcm_swf: libav ADPCM Shockwave Flash decoder
+libav:  avdec_adpcm_thp: libav ADPCM Nintendo THP decoder
+libav:  avdec_adpcm_xa: libav ADPCM CDROM XA decoder
+libav:  avdec_adpcm_yamaha: libav ADPCM Yamaha decoder
+libav:  avdec_aic: libav Apple Intermediate Codec decoder
+libav:  avdec_alac: libav ALAC (Apple Lossless Audio Codec) decoder
+libav:  avdec_amrnb: libav AMR-NB (Adaptive Multi-Rate NarrowBand) decoder
+libav:  avdec_amrwb: libav AMR-WB (Adaptive Multi-Rate WideBand) decoder
+libav:  avdec_amv: libav AMV Video decoder
+libav:  avdec_ape: libav Monkey's Audio decoder
+libav:  avdec_aptx: libav aptX (Audio Processing Technology for Bluetooth) decoder
+libav:  avdec_aptx_hd: libav aptX HD (Audio Processing Technology for Bluetooth) decoder
+libav:  avdec_asv1: libav ASUS V1 decoder
+libav:  avdec_asv2: libav ASUS V2 decoder
+libav:  avdec_atrac1: libav ATRAC1 (Adaptive TRansform Acoustic Coding) decoder
+libav:  avdec_atrac3: libav ATRAC3 (Adaptive TRansform Acoustic Coding 3) decoder
+libav:  avdec_avs: libav AVS (Audio Video Standard) video decoder
+libav:  avdec_bmp: libav BMP (Windows and OS/2 bitmap) decoder
+libav:  avdec_camstudio: libav CamStudio decoder
+libav:  avdec_camtasia: libav TechSmith Screen Capture Codec decoder
+libav:  avdec_cavs: libav Chinese AVS (Audio Video Standard) (AVS1-P2, JiZhun profile) decoder
+libav:  avdec_cfhd: libav GoPro CineForm HD decoder
+libav:  avdec_cinepak: libav Cinepak decoder
+libav:  avdec_cljr: libav Cirrus Logic AccuPak decoder
+libav:  avdec_cook: libav Cook / Cooker / Gecko (RealAudio G2) decoder
+libav:  avdec_cyuv: libav Creative YUV (CYUV) decoder
+libav:  avdec_dca: libav DCA (DTS Coherent Acoustics) decoder
+libav:  avdec_dnxhd: libav VC3/DNxHD decoder
+libav:  avdec_dsd_lsbf: libav DSD (Direct Stream Digital), least significant bit first decoder
+libav:  avdec_dsd_lsbf_planar: libav DSD (Direct Stream Digital), least significant bit first, planar decoder
+libav:  avdec_dsd_msbf: libav DSD (Direct Stream Digital), most significant bit first decoder
+libav:  avdec_dsd_msbf_planar: libav DSD (Direct Stream Digital), most significant bit first, planar decoder
+libav:  avdec_dvaudio: libav Ulead DV Audio decoder
+libav:  avdec_dvvideo: libav DV (Digital Video) decoder
+libav:  avdec_eac3: libav ATSC A/52B (AC-3, E-AC-3) decoder
+libav:  avdec_ffv1: libav FFmpeg video codec #1 decoder
+libav:  avdec_ffvhuff: libav Huffyuv FFmpeg variant decoder
+libav:  avdec_flac: libav FLAC (Free Lossless Audio Codec) decoder
+libav:  avdec_flashsv: libav Flash Screen Video v1 decoder
+libav:  avdec_flashsv2: libav Flash Screen Video v2 decoder
+libav:  avdec_flic: libav Autodesk Animator Flic video decoder
+libav:  avdec_flv: libav FLV / Sorenson Spark / Sorenson H.263 (Flash Video) decoder
+libav:  avdec_fraps: libav Fraps decoder
+libav:  avdec_g722: libav G.722 ADPCM decoder
+libav:  avdec_g726: libav G.726 ADPCM decoder
+libav:  avdec_g729: libav G.729 decoder
+libav:  avdec_gif: libav GIF (Graphics Interchange Format) decoder
+libav:  avdec_gsm: libav GSM decoder
+libav:  avdec_gsm_ms: libav GSM Microsoft variant decoder
+libav:  avdec_h261: libav H.261 decoder
+libav:  avdec_h263: libav H.263 / H.263-1996, H.263+ / H.263-1998 / H.263 version 2 decoder
+libav:  avdec_h263i: libav Intel H.263 decoder
+libav:  avdec_h263p: libav H.263 / H.263-1996, H.263+ / H.263-1998 / H.263 version 2 decoder
+libav:  avdec_h264: libav H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 decoder
+libav:  avdec_h265: libav HEVC (High Efficiency Video Coding) decoder
+libav:  avdec_h266: libav VVC (Versatile Video Coding) decoder
+libav:  avdec_hap: libav Vidvox Hap decoder
+libav:  avdec_huffyuv: libav Huffyuv / HuffYUV decoder
+libav:  avdec_idcinvideo: libav id Quake II CIN video decoder
+libav:  avdec_imc: libav IMC (Intel Music Coder) decoder
+libav:  avdec_indeo2: libav Intel Indeo 2 decoder
+libav:  avdec_indeo3: libav Intel Indeo 3 decoder
+libav:  avdec_indeo4: libav Intel Indeo Video Interactive 4 decoder
+libav:  avdec_indeo5: libav Intel Indeo Video Interactive 5 decoder
+libav:  avdec_interplay_dpcm: libav DPCM Interplay decoder
+libav:  avdec_interplayvideo: libav Interplay MVE video decoder
+libav:  avdec_jpeg2000: libav JPEG 2000 decoder
+libav:  avdec_kmvc: libav Karl Morton's video codec decoder
+libav:  avdec_lagarith: libav Lagarith lossless decoder
+libav:  avdec_loco: libav LOCO decoder
+libav:  avdec_m101: libav Matrox Uncompressed SD decoder
+libav:  avdec_mace3: libav MACE (Macintosh Audio Compression/Expansion) 3:1 decoder
+libav:  avdec_mace6: libav MACE (Macintosh Audio Compression/Expansion) 6:1 decoder
+libav:  avdec_mdec: libav Sony PlayStation MDEC (Motion DECoder) decoder
+libav:  avdec_metasound: libav Voxware MetaSound decoder
+libav:  avdec_mimic: libav Mimic decoder
+libav:  avdec_mjpeg: libav MJPEG (Motion JPEG) decoder
+libav:  avdec_mjpegb: libav Apple MJPEG-B decoder
+libav:  avdec_mlp: libav MLP (Meridian Lossless Packing) decoder
+libav:  avdec_mmvideo: libav American Laser Games MM Video decoder
+libav:  avdec_mp1float: libav MP1 (MPEG audio layer 1) decoder
+libav:  avdec_mp2float: libav MP2 (MPEG audio layer 2) decoder
+libav:  avdec_mp3: libav MP3 (MPEG audio layer 3) decoder
+libav:  avdec_mp3adu: libav ADU (Application Data Unit) MP3 (MPEG audio layer 3) decoder
+libav:  avdec_mp3adufloat: libav ADU (Application Data Unit) MP3 (MPEG audio layer 3) decoder
+libav:  avdec_mp3float: libav MP3 (MPEG audio layer 3) decoder
+libav:  avdec_mp3on4: libav MP3onMP4 decoder
+libav:  avdec_mp3on4float: libav MP3onMP4 decoder
+libav:  avdec_mpc7: libav Musepack SV7 decoder
+libav:  avdec_mpc8: libav Musepack SV8 decoder
+libav:  avdec_mpeg2video: libav MPEG-2 video decoder
+libav:  avdec_mpeg4: libav MPEG-4 part 2 decoder
+libav:  avdec_mpegvideo: libav MPEG-1 video decoder
+libav:  avdec_msmpeg4: libav MPEG-4 part 2 Microsoft variant version 3 decoder
+libav:  avdec_msmpeg4v1: libav MPEG-4 part 2 Microsoft variant version 1 decoder
+libav:  avdec_msmpeg4v2: libav MPEG-4 part 2 Microsoft variant version 2 decoder
+libav:  avdec_msrle: libav Microsoft RLE decoder
+libav:  avdec_mss1: libav MS Screen 1 decoder
+libav:  avdec_mss2: libav MS Windows Media Video V9 Screen decoder
+libav:  avdec_msvideo1: libav Microsoft Video 1 decoder
+libav:  avdec_mszh: libav LCL (LossLess Codec Library) MSZH decoder
+libav:  avdec_mxpeg: libav Mobotix MxPEG video decoder
+libav:  avdec_nellymoser: libav Nellymoser Asao decoder
+libav:  avdec_nuv: libav NuppelVideo/RTJPEG decoder
+libav:  avdec_opus: libav Opus decoder
+libav:  avdec_pam: libav PAM (Portable AnyMap) image decoder
+libav:  avdec_pbm: libav PBM (Portable BitMap) image decoder
+libav:  avdec_pcx: libav PC Paintbrush PCX image decoder
+libav:  avdec_pgm: libav PGM (Portable GrayMap) image decoder
+libav:  avdec_pgmyuv: libav PGMYUV (Portable GrayMap YUV) image decoder
+libav:  avdec_png: libav PNG (Portable Network Graphics) image decoder
+libav:  avdec_ppm: libav PPM (Portable PixelMap) image decoder
+libav:  avdec_prores: libav Apple ProRes (iCodec Pro) decoder
+libav:  avdec_qcelp: libav QCELP / PureVoice decoder
+libav:  avdec_qdm2: libav QDesign Music Codec 2 decoder
+libav:  avdec_qdraw: libav Apple QuickDraw decoder
+libav:  avdec_qoi: libav QOI (Quite OK Image format) image decoder
+libav:  avdec_qpeg: libav Q-team QPEG decoder
+libav:  avdec_qtrle: libav QuickTime Animation (RLE) video decoder
+libav:  avdec_real_144: libav RealAudio 1.0 (14.4K) decoder
+libav:  avdec_real_288: libav RealAudio 2.0 (28.8K) decoder
+libav:  avdec_roq_dpcm: libav DPCM id RoQ decoder
+libav:  avdec_roqvideo: libav id RoQ video decoder
+libav:  avdec_rpza: libav QuickTime video (RPZA) decoder
+libav:  avdec_rv10: libav RealVideo 1.0 decoder
+libav:  avdec_rv20: libav RealVideo 2.0 decoder
+libav:  avdec_rv30: libav RealVideo 3.0 decoder
+libav:  avdec_rv40: libav RealVideo 4.0 decoder
+libav:  avdec_s302m: libav SMPTE 302M decoder
+libav:  avdec_sgi: libav SGI image decoder
+libav:  avdec_shorten: libav Shorten decoder
+libav:  avdec_sipr: libav RealAudio SIPR / ACELP.NET decoder
+libav:  avdec_smc: libav QuickTime Graphics (SMC) decoder
+libav:  avdec_sol_dpcm: libav DPCM Sol decoder
+libav:  avdec_sp5x: libav Sunplus JPEG (SP5X) decoder
+libav:  avdec_speedhq: libav NewTek SpeedHQ decoder
+libav:  avdec_sunrast: libav Sun Rasterfile image decoder
+libav:  avdec_svq1: libav Sorenson Vector Quantizer 1 / Sorenson Video 1 / SVQ1 decoder
+libav:  avdec_svq3: libav Sorenson Vector Quantizer 3 / Sorenson Video 3 / SVQ3 decoder
+libav:  avdec_targa: libav Truevision Targa image decoder
+libav:  avdec_tiff: libav TIFF image decoder
+libav:  avdec_truehd: libav TrueHD decoder
+libav:  avdec_truemotion1: libav Duck TrueMotion 1.0 decoder
+libav:  avdec_truemotion2: libav Duck TrueMotion 2.0 decoder
+libav:  avdec_truespeech: libav DSP Group TrueSpeech decoder
+libav:  avdec_tscc2: libav TechSmith Screen Codec 2 decoder
+libav:  avdec_tta: libav TTA (True Audio) decoder
+libav:  avdec_twinvq: libav VQF TwinVQ decoder
+libav:  avdec_ultimotion: libav IBM UltiMotion decoder
+libav:  avdec_vc1: libav SMPTE VC-1 decoder
+libav:  avdec_vcr1: libav ATI VCR1 decoder
+libav:  avdec_vmdaudio: libav Sierra VMD audio decoder
+libav:  avdec_vmdvideo: libav Sierra VMD video decoder
+libav:  avdec_vmnc: libav VMware Screen Codec / VMware Video decoder
+libav:  avdec_vp3: libav On2 VP3 decoder
+libav:  avdec_vp5: libav On2 VP5 decoder
+libav:  avdec_vp6: libav On2 VP6 decoder
+libav:  avdec_vp6a: libav On2 VP6 (Flash version, with alpha channel) decoder
+libav:  avdec_vp6f: libav On2 VP6 (Flash version) decoder
+libav:  avdec_vp8: libav On2 VP8 decoder
+libav:  avdec_vp9: libav Google VP9 decoder
+libav:  avdec_vqavideo: libav Westwood Studios VQA (Vector Quantized Animation) video decoder
+libav:  avdec_wmalossless: libav Windows Media Audio Lossless decoder
+libav:  avdec_wmapro: libav Windows Media Audio 9 Professional decoder
+libav:  avdec_wmav1: libav Windows Media Audio 1 decoder
+libav:  avdec_wmav2: libav Windows Media Audio 2 decoder
+libav:  avdec_wmavoice: libav Windows Media Audio Voice decoder
+libav:  avdec_wmv1: libav Windows Media Video 7 decoder
+libav:  avdec_wmv2: libav Windows Media Video 8 decoder
+libav:  avdec_wmv3: libav Windows Media Video 9 decoder
+libav:  avdec_wnv1: libav Winnov WNV1 decoder
+libav:  avdec_ws_snd1: libav Westwood Audio (SND1) decoder
+libav:  avdec_xan_dpcm: libav DPCM Xan decoder
+libav:  avdec_xan_wc3: libav Wing Commander III / Xan decoder
+libav:  avdec_xan_wc4: libav Wing Commander IV / Xxan decoder
+libav:  avdec_xl: libav Miro VideoXL decoder
+libav:  avdec_xma1: libav Xbox Media Audio 1 decoder
+libav:  avdec_xma2: libav Xbox Media Audio 2 decoder
+libav:  avdec_zmbv: libav Zip Motion Blocks Video decoder
+mpeg2dec:  mpeg2dec: mpeg1 and mpeg2 video decoder
+mpg123:  mpg123audiodec: mpg123 mp3 decoder
+mulaw:  mulawdec: Mu Law audio decoder
+musepack:  musepackdec: Musepack decoder
+nvcodec:  cudadownload: CUDA downloader
+nvcodec:  cudaipcsink: CUDA IPC Sink
+nvcodec:  cudaipcsrc: CUDA IPC Src
+nvcodec:  cudaupload: CUDA uploader
+nvcodec:  nvautogpuh264enc: NVENC H.264 Video Encoder Auto GPU select Mode
+nvcodec:  nvautogpuh265enc: NVENC H.265 Video Encoder Auto GPU select Mode
+nvcodec:  nvav1dec: NVDEC AV1 Decoder
+nvcodec:  nvh264dec: NVDEC H.264 Decoder
+nvcodec:  nvh264enc: NVENC H.264 Video Encoder CUDA Mode
+nvcodec:  nvh265dec: NVDEC H.265 Decoder
+nvcodec:  nvh265enc: NVENC H.265 Video Encoder CUDA Mode
+nvcodec:  nvjpegdec: NVDEC jpeg Video Decoder
+nvcodec:  nvmpeg2videodec: NVDEC mpeg2video Video Decoder
+nvcodec:  nvmpeg4videodec: NVDEC mpeg4video Video Decoder
+nvcodec:  nvmpegvideodec: NVDEC mpegvideo Video Decoder
+nvcodec:  nvvp8dec: NVDEC VP8 Decoder
+nvcodec:  nvvp9dec: NVDEC VP9 Decoder
+openaptx:  openaptxdec: Bluetooth aptX/aptX-HD audio decoder using libopenaptx
+openexr:  openexrdec: OpenEXR decoder
+openh264:  openh264dec: OpenH264 video decoder
+openjpeg:  openjpegdec: OpenJPEG JPEG2000 decoder
+openmpt:  openmptdec: OpenMPT-based module music decoder
+opus:  opusdec: Opus audio decoder
+playback:  decodebin: Decoder Bin
+playback:  decodebin3: Decoder Bin 3
+playback:  uridecodebin: URI Decoder
+playback:  uridecodebin3: URI Decoder
+png:  pngdec: PNG image decoder
+pnm:  pnmdec: PNM image decoder
+rsvg:  rsvgdec: SVG image decoder
+rtp:  rtpreddec: Redundant Audio Data (RED) Decoder
+rtp:  rtpulpfecdec: RTP FEC Decoder
+rtpmanager:  rtpst2022-1-fecdec: SMPTE 2022-1 FEC decoder
+rtsp:  rtpdec: RTP Decoder
+sbc:  sbcdec: Bluetooth SBC audio decoder
+sctp:  sctpdec: SCTP Decoder
+sid:  siddec: Sid decoder
+siren:  sirendec: Siren Decoder element
+sndfile:  sfdec: Sndfile decoder
+speex:  speexdec: Speex audio decoder
+srtp:  srtpdec: SRTP decoder
+teletext:  teletextdec: Teletext decoder
+tensordecoders:  classifiertensordecoder: Classification tensor decoder
+tensordecoders:  ioutracker: Intersection-over-Union (IoU) object tracker
+tensordecoders:  ssdobjectdetector: SSD MobileNet Object Detector tensor decoder (Deprecated)
+tensordecoders:  ssdtensordec: SSD MobileNet Object Detector tensor decoder
+tensordecoders:  tensordecodebin: tensordecodebin
+tensordecoders:  ultralightfacedetectortensordec: ultralightfacedetectortensordec
+tensordecoders:  yolosegv8tensordec: YOLO v8-11 segmentastion tensor decoder
+tensordecoders:  yolov8tensordec: YOLO v8-11 object detection tensor decoder
+theora:  theoradec: Theora video decoder
+vmnc:  vmncdec: VMnc video decoder
+vorbis:  vorbisdec: Vorbis audio decoder
+vpx:  vp8dec: On2 VP8 Decoder
+vpx:  vp9dec: On2 VP9 Decoder
+wavpack:  wavpackdec: Wavpack audio decoder
+webp:  webpdec: WebP image decoder
+wildmidi:  wildmididec: WildMidi-based MIDI music decoder
+y4m:  y4mdec: YUV4MPEG demuxer/decoder

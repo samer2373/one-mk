@@ -1,0 +1,2 @@
+crop 960x320, 2 windows: full-image difference bbox=(0, 0, 960, 320)
+full-image max channel error=255

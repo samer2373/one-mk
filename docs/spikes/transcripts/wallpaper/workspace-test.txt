@@ -1,0 +1,1584 @@
+   Compiling one-mk-wall-sync v0.1.13 (/home/samer/.t3/worktrees/one-mk/t3-5e2ad789/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.34s
+     Running unittests src/main.rs (target/debug/deps/one_mk-ab84541605e7de02)
+
+running 282 tests
+test app::shortcuts::tests::system_shortcuts_wait_while_controlled ... ok
+test app::tests::coalesces_queued_motion ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus disconnected; reconnecting automatically.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus disconnected; reconnecting automatically.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to raw (above).
+Connected to raw (above).
+raw is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::forgetting_a_computer_disconnects_it ... ok
+test app::tests::corners_and_fullscreen_refuse ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::ctrl_and_cmd_swap_consistently ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to raw (above).
+test app::tests::control_stream_survives_motion_flood ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::click_at_the_edge_leaves_no_button_held ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus's display went to sleep; putting this one to sleep too (sleep sync).
+The pointer is locked to this computer.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::focus_is_watched_only_for_gaming_auto ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::a_controlled_computer_ignores_its_own_shortcuts ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::gaming_auto_follows_the_peers_fullscreen_window ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::gaming_auto_hears_the_front_window_change ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+test app::tests::a_modifier_released_here_no_longer_crosses ... ok
+Connected to samer-Victus (on your left).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::a_computer_forgotten_during_its_handshake_is_not_let_in ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your left).
+Waiting for your approval: allow one-mk in the desktop's dialog.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+The pointer is locked to this computer.
+The pointer can cross edges again.
+test app::tests::input_problems_show_in_status ... ok
+test app::tests::keys_that_may_move_the_focus ... ok
+test app::tests::late_click_does_not_rewind_the_pointer ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::gaming_mode_sends_relative_motion ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your left).
+test app::tests::keyboard_shortcuts_switch_without_leaving_keys_held ... ok
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::layout::crossing_between_multi_monitor_desktops ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to raw (above).
+test app::tests::handing_back_at_the_edge_leaves_no_key_held ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+raw is now on your left.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::gaming_auto_unknown_focus_and_switching_it_off ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is now below, its (0,0) at 300,1080 of yours.
+samer-Victus is now above, its (0,0) at -300,-1080 of yours.
+samer-Victus is now above, its (0,0) at 0,-1080 of yours.
+samer-Victus is now below, its (0,0) at 0,1080 of yours.
+test app::tests::dwell_holds_the_pointer_at_the_edge ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::layout::no_overlap_warns_and_a_switch_still_comes_home ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Saved layout profile "desk" (1 computer).
+Saved layout profile "home" (1 computer).
+Switching to "desk" by itself on Wi-Fi "Desk WiFi".
+This network matches layout profile "desk"; using it.
+samer-Victus is now below, its (0,0) at 300,1080 of yours.
+samer-Victus is now above, its (0,0) at -300,-1080 of yours.
+samer-Victus is now below, its (0,0) at 100,1080 of yours.
+test app::tests::connections_being_set_up_are_limited ... ok
+samer-Victus is now above, its (0,0) at -100,-1080 of yours.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::layout::input_caught_at_a_wall_is_typed_here ... ok
+samer-Victus is now below, its (0,0) at 50,1080 of yours.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+samer-Victus is now above, its (0,0) at -50,-1080 of yours.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to raw (above).
+raw is now on your left.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::layout::offset_change_converges_as_a_mirror_image ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::gaming_auto_notices_alt_tab ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to raw (on your left).
+Connected to samer-Victus (on your right).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your left).
+samer-Victus is now on your left.
+samer-Victus is now on your right.
+samer-Victus is now above.
+samer-Victus is now below.
+test app::tests::layout::two_neighbours_share_one_edge ... ok
+test app::tests::layout_change_converges ... ok
+test app::tests::clipboard_follows_the_pointer ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+This network matches layout profile "desk"; using it.
+samer-Victus is now below, its (0,0) at 300,1080 of yours.
+samer-Victus is now above, its (0,0) at -300,-1080 of yours.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::layout::layout_from_a_peer_without_offset ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::layout::offset_crossing_maps_and_walls ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+The pointer is locked to this computer.
+test app::tests::layout::dwell_at_an_inner_edge ... ok
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+The pointer can cross edges again.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::layout::profile_switches_with_the_network ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Locking this computer and the connected ones.
+Locking this computer and the connected ones.
+samer-Victus asked to lock every computer (lock-all); locking this one.
+samer-Victus asked to lock every computer (lock-all); locking this one.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to raw (above).
+test app::tests::lock_pointer_disarms_edges ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::local_input_takes_control_back ... ok
+test app::tests::media_keys_cross_and_are_never_left_held ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+samer-Victus is now on your right.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::lock_all_says_when_this_computer_can_t_lock ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is now on your left, its (0,0) at -1920,-500 of yours.
+This computer locked; locking the connected ones too (lock sync).
+test app::tests::lock_and_unlock_release_held_keys ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::newer_layout_wins_on_connect ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+test app::tests::modifiers_released_after_a_switch_are_forgotten ... ok
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to raw (above).
+raw is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::only_real_input_counts_against_idle ... ok
+test app::tests::pending_limits_and_release ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::offset_syncs_mirrored ... ok
+test app::tests::relative_only_for_peers_that_support_it ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::offset_translates_the_pointer ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Received album/empty from samer-Victus (saved to /tmp/one-mk-test-send-b-2415119/downloads/album/empty).
+Received album/a.txt from samer-Victus (saved to /tmp/one-mk-test-send-b-2415119/downloads/album/a.txt).
+Received album/sub/deeper/c.txt from samer-Victus (saved to /tmp/one-mk-test-send-b-2415119/downloads/album/sub/deeper/c.txt).
+Received album/sub/b.bin from samer-Victus (saved to /tmp/one-mk-test-send-b-2415119/downloads/album/sub/b.bin).
+test app::tests::pointer_crosses_and_returns ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+This computer locked; locking the connected ones too (lock sync).
+samer-Victus locked its screen; locking this one too (lock sync).
+Received big.bin from samer-Victus (saved to /tmp/one-mk-test-send-b-2415119/downloads/big.bin).
+test app::tests::layout::tie_with_an_old_peer_converges_either_way ... ok
+test app::tests::swaps_only_between_a_mac_and_something_else ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Received album/a (1).txt from samer-Victus (saved to /tmp/one-mk-test-send-b-2415119/downloads/album/a (1).txt).
+test app::tests::layout::simultaneous_changes_converge ... ok
+Connected to samer-Victus (on your right).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::hooks_run_on_enter_and_leave ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Received other.bin from samer-Victus (saved to /tmp/one-mk-test-send-b-2415119/downloads/other.bin).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+test app::tests::modifier_to_cross ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::switch_moves_control_without_crossing_an_edge ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::send_folder_to_running_peer ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::takeback_command_takes_control_back ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+test app::tests::tuning::a_reload_mid_hold_keeps_the_pairing ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::displays_sleep_together_without_echo ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Locking this computer and the connected ones.
+samer-Victus asked to lock every computer (lock-all); locking this one.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+test app::tests::tuning::buttons_are_remapped_and_keys_can_switch ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::tuning::a_tap_hold_key_held_long_enough_holds ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::lock_sync_off_obeys_only_lock_all ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::tuning::a_visit_ending_mid_hold_releases_what_was_sent ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::lock_all_and_lock_sync_without_echo ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::tuning::pointer_speed_scales_the_remote_motion ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to raw (above).
+raw is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::tuning::remapped_keys_reach_the_peer ... ok
+test app::tune::tests::the_tap_hold_timer_fires_once_and_only_while_waiting ... ok
+test clip::tests::an_older_peer_neither_confirms_a_send_nor_answers_a_pull ... ok
+peer fetched this computer's clipboard (text).
+test app::tests::status_reports_the_open_backend_not_the_requested_kind ... ok
+samer-Victus disconnected; reconnecting automatically.
+test app::tests::tuning::scrolling_is_tuned_and_the_modifier_is_lifted ... ok
+peer fetched this computer's clipboard (text).
+peer fetched this computer's clipboard (text).
+test clip::tests::clip_get_respects_the_owners_and_the_askers_settings ... ok
+test clip::tests::clip_send_says_why_nothing_was_sent_or_taken ... ok
+test clip::tests::explicit_send_overrides_the_sensitive_skip ... ok
+test clip::tests::rejected_automatic_push_retries_the_same_clipboard ... ok
+test app::tests::tuning::per_app_rules_follow_a_switch_with_no_input ... ok
+test clip::tests::the_receiver_keeps_only_the_formats_it_allows ... ok
+test clip::tests::unknown_acknowledgement_is_not_cached_as_delivered ... ok
+test clip::tests::what_was_moved_reads_well ... ok
+test clipctl::tests::changes_touch_only_what_was_named ... ok
+test clipctl::tests::clipboard_requests_that_cannot_be_served_say_why ... ok
+test clipctl::tests::on_and_off_are_parsed_and_nothing_else ... ok
+Clipboard sharing: text on, html off, images on, size limit 7 MB, skip password managers on, others may fetch it off.
+Applied right away.
+A notification when files arrive: off.
+Applied right away.
+A notification when files arrive: on.
+Applied right away.
+Clipboard sharing: text off, html off, images on, size limit 7 MB, skip password managers on, others may fetch it off.
+one-mk is not running; this takes effect the next time it starts.
+test clipctl::tests::the_commands_apply_live_through_the_control_channel ... ok
+test clipctl::tests::the_daemon_applies_settings_and_shows_reported_sends ... ok
+test clipctl::tests::the_size_limit_must_be_sensible ... ok
+test clipctl::tests::the_target_computer_is_found_by_name_or_id_or_as_the_only_one_connected ... ok
+test control::tests::daemon_answers_and_is_private ... ok
+test control::tests::tcp_transport_checks_the_token ... ok
+test control::tests::unknown_requests_and_oversized_lines_are_refused ... ok
+test doctor::tests::a_settings_file_that_does_not_parse_is_reported ... ok
+test doctor::tests::config_fresh_machine_is_not_paired ... ok
+test doctor::tests::config_identity_without_peers ... ok
+test doctor::tests::config_paired_and_corrupt ... ok
+test doctor::tests::connect_advice_uses_the_real_port ... ok
+test doctor::tests::daemon_from_reply ... ok
+test doctor::tests::daemon_states ... ok
+test doctor::tests::firewall_firewalld ... ok
+test doctor::tests::firewall_none_active_passes ... ok
+test doctor::tests::firewall_other_os_is_a_hint ... ok
+test doctor::tests::firewall_ufw_rules_known ... ok
+test doctor::tests::firewall_unknown_degrades_to_warn ... ok
+test doctor::tests::firewalld_list_all_fields ... ok
+test doctor::tests::hotkey_decisions ... ok
+test doctor::tests::input_tuning ... ok
+test doctor::tests::mdns_decisions ... ok
+test doctor::tests::network_decisions ... ok
+test doctor::tests::peer_decisions ... ok
+test doctor::tests::port_decisions ... ok
+test doctor::tests::port_holder_from_proc_table ... ok
+test doctor::tests::port_lists ... ok
+test doctor::tests::portal_decisions ... ok
+test doctor::tests::probing_a_corrupt_settings_file ... ok
+test doctor::tests::render_json_escapes_and_reports ... ok
+test doctor::tests::render_text_lists_fixes_and_summary ... ok
+test doctor::tests::running_backend_overrides_session_inference ... ok
+test doctor::tests::summary_counts ... ok
+test doctor::tests::ufw_rule_parsing ... ok
+test doctor::tests::usable_addrs_skip_loopback_and_bridges ... ok
+test app::tests::the_screen_is_kept_awake_only_while_controlled ... ok
+test drag::tests::safety_bounds_counts_size_depth_and_empty_folders ... ok
+test drag::tests::safety_rejects_missing_special_and_symlink_paths ... ok
+test drag::tests::two_null_daemons_receive_a_simulated_edge_drop ... ignored, requires ONE_MK_TEST_BINARY and permission to bind private loopback sockets
+test hooks::tests::a_real_file_is_checked ... ok
+test hooks::tests::a_transition_without_a_hook_cancels_stale_opposite_work ... ok
+test hooks::tests::bad_commands_are_reported ... ok
+test hooks::tests::coalescing_preserves_the_newest_transition ... ok
+test hooks::tests::command_line_changes ... ok
+test hooks::tests::commands_read_from_toml_as_arrays_or_strings ... ok
+test hooks::tests::config_changes_discard_pending_work ... ok
+test hooks::tests::different_peers_are_not_coalesced ... ok
+test hooks::tests::each_event_runs_at_most_every_half_second ... ok
+test hooks::tests::engine_reports_enter_leave_and_peers_coming_and_going ... ok
+test hooks::tests::environment_names_the_event_and_the_peer ... ok
+test hooks::tests::group_and_world_writable_files_are_reported ... ok
+test hooks::tests::newest_peer_transition_cancels_the_opposite ... ok
+test hooks::tests::nothing_is_tracked_while_no_hook_is_set ... ok
+test hooks::tests::oversized_hook_commands_are_rejected ... ok
+test hooks::tests::pointer_and_peer_hooks_have_independent_serial_lanes ... ok
+test hooks::tests::quoting_round_trips_through_split ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test clip::tests::clip_get_fetches_that_computers_clipboard ... ok
+test hooks::tests::saturated_actions_do_not_drop_hooks ... ok
+test clip::tests::clip_send_reaches_only_the_chosen_computer_without_the_pointer ... ok
+test hooks::tests::shell_environment_has_no_interpreter_metacharacters ... ok
+test hooks::tests::shell_flips_reinterpret_existing_commands ... ok
+test hooks::tests::splits_like_a_shell_without_expanding ... ok
+test hooks::tests::symlink_target_directory_permissions ... ok
+test hooks::tests::timeout_is_bounded ... ok
+test hooks::tests::unsafe_directory_blocks_hooks_and_only_explicit_trust_overrides_it ... ok
+test hotkeys::tests::computers_are_numbered_by_name_then_id_with_this_one ... ok
+test hotkeys::tests::defaults_are_valid_and_distinct ... ok
+test hotkeys::tests::described_with_the_numbering ... ok
+test hotkeys::tests::jumps_only_to_computers_that_exist ... ok
+test hotkeys::tests::settings_file_roundtrip ... ok
+test hotkeys::tests::shortcuts_ask_what_the_commands_ask ... ok
+test hotkeys::tests::the_command_line_checks_and_normalizes ... ok
+test hotkeys::tests::the_jump_default_avoids_altgr_on_windows ... ok
+test invite::tests::bounded_expiry ... ok
+test invite::tests::cancellation_after_save_waits_for_commit ... ok
+test invite::tests::cancellation_before_save_saves_nothing ... ok
+Invitation from samer-Victus (652c407a2c43c1ff28e543e45a277afd18b7cbd93e7488fff3e39f4ad9ba428f)
+Expires at Unix time 1793377173. One use; closing this process cancels it.
+Treat this link like a password: whoever uses it first can request trust.
+onemk://pair?v=1&d=AWUsQHosQ8H_KOVD5Fonev0Yt8vZPnSI__Pjn0rZukKPAAAAAGrkw5VhRAAXb25lLW1rLTY1MmMtNDA3YS5sb2NhbC4DABMxMDAuODYuMTc0LjM5OjUyODc1ABIxOTIuMTY4LjEuMTg6NTI4NzUAIVtmZDdhOjExNWM6YTFlMDo6M2YwMTphZWY3XTo1Mjg3NWgoM-b93ZNgkwQ-h77LGy17Z0IRi3ynGhFK5ZixUrsU
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;40m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[97;40m▀[97;40m▀[97;40m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[97;40m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[97;40m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[97;40m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[97;40m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[97;40m▀[97;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[30;40m▀[97;40m▀[97;40m▀[30;107m▀[97;107m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[97;107m▀[97;107m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[97;107m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[97;40m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;107m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[97;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[97;40m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[30;40m▀[97;40m▀[30;107m▀[97;40m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[97;40m▀[97;40m▀[97;40m▀[30;40m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[97;107m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[97;40m▀[97;40m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[97;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[97;107m▀[97;40m▀[97;40m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[97;107m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[97;40m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[97;40m▀[97;40m▀[97;107m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[97;107m▀[97;107m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[30;40m▀[30;40m▀[97;40m▀[30;107m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;40m▀[97;40m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[97;40m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[97;107m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[30;40m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[97;40m▀[97;107m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[97;40m▀[97;40m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[97;40m▀[97;107m▀[30;40m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[97;40m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[97;40m▀[97;40m▀[97;40m▀[30;40m▀[97;40m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[97;40m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[30;107m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[97;40m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[30;40m▀[97;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[30;40m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[97;40m▀[97;40m▀[30;40m▀[97;40m▀[30;40m▀[30;107m▀[97;40m▀[97;40m▀[30;107m▀[97;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[30;107m▀[30;107m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[30;40m▀[97;107m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[97;40m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;107m▀[97;40m▀[97;107m▀[97;40m▀[97;40m▀[97;40m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;40m▀[97;40m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[97;40m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[30;40m▀[97;107m▀[97;40m▀[97;40m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[97;40m▀[97;107m▀[97;40m▀[30;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[30;40m▀[97;40m▀[97;40m▀[30;107m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;40m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[97;107m▀[97;40m▀[97;40m▀[97;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[97;107m▀[97;107m▀[97;40m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[97;40m▀[30;40m▀[97;107m▀[97;40m▀[97;40m▀[30;107m▀[97;107m▀[97;40m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[30;40m▀[97;40m▀[97;107m▀[97;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[97;40m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[97;40m▀[97;40m▀[30;40m▀[30;107m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[30;40m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[97;107m▀[97;107m▀[97;40m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;40m▀[97;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[97;107m▀[97;107m▀[97;40m▀[97;40m▀[97;107m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[30;40m▀[97;40m▀[97;40m▀[30;107m▀[30;107m▀[97;40m▀[97;40m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[97;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[97;40m▀[30;107m▀[97;40m▀[97;40m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[97;40m▀[97;40m▀[30;40m▀[30;40m▀[97;107m▀[97;40m▀[97;107m▀[97;40m▀[97;40m▀[30;107m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[30;40m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[97;40m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[97;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[97;40m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[97;40m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[97;40m▀[97;40m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[97;40m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[97;40m▀[30;40m▀[30;107m▀[97;107m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;40m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[97;107m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[97;40m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[30;107m▀[97;40m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[30;107m▀[97;107m▀[30;107m▀[97;40m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[97;40m▀[97;40m▀[30;40m▀[97;40m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[97;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[97;40m▀[97;107m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[30;40m▀[97;40m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;40m▀[97;40m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[97;40m▀[30;40m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;40m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;40m▀[97;40m▀[97;40m▀[30;40m▀[30;40m▀[97;40m▀[30;40m▀[97;40m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[97;40m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[30;40m▀[30;40m▀[30;40m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[97;40m▀[30;40m▀[30;40m▀[97;107m▀[97;40m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[97;40m▀[30;107m▀[30;40m▀[30;40m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[97;40m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[30;107m▀[97;40m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[30;40m▀[97;107m▀[30;40m▀[30;107m▀[30;40m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[97;40m▀[97;40m▀[30;40m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[30;40m▀[97;107m▀[30;107m▀[30;107m▀[97;107m▀[30;107m▀[30;107m▀[97;40m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[97;107m▀[97;107m▀[30;40m▀[97;40m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[97;40m▀[97;107m▀[97;107m▀[30;107m▀[30;40m▀[30;107m▀[30;107m▀[97;40m▀[30;40m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[30;107m▀[30;107m▀[30;40m▀[97;40m▀[97;107m▀[97;107m▀[97;40m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[97;107m▀[30;40m▀[30;40m▀[30;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[30;107m▀[97;107m▀[30;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[97;107m▀[0m
+WARNING: --no-confirm: the first valid joiner will be trusted automatically.
+test app::tests::click_at_the_edge_is_whole_whatever_follows ... ok
+test invite::tests::fingerprint_prompt_contains_all_grouped_hex_digits ... ok
+test invite::tests::flood_cli_invitation_listener ... ignored, manual CLI stress helper: set ONE_MK_TEST_INVITE_ADDR to the loopback pairing listener
+test invite::tests::global_reservation_stays_available_under_source_rotation ... ok
+
+>>> Joiner joined: certificate fdec 274e c11e 2813 f2f0 53ae cca7 39e9 36ca ced2 a2c9 1c6e df44 35a9 9847 cf09 <<<
+Invitation consumed. This device is NOT trusted yet.
+WARNING: --no-confirm skips comparing code 279650 and approves automatically.
+test hooks::tests::a_hook_runs_and_is_killed_at_the_timeout ... ok
+test invite::tests::ipv6_concurrent_cap_includes_pre_rotation_connections ... ok
+test invite::tests::ipv6_rotation_shares_a_subnet_budget ... ok
+test invite::tests::ordinary_ipv6_neighbors_have_independent_rate_budgets ... ok
+test invite::tests::pre_id_sources_cannot_fill_the_shared_slots ... ok
+test invite::tests::reserved_slots_require_a_fresh_idle_source ... ok
+test invite::tests::source_limits_are_bounded_and_do_not_change_invitations ... ok
+test invite::tests::source_rotation_does_not_lock_out_new_sources ... ok
+test link::tests::both_sides_keep_the_same_duplicate ... ok
+test manage::tests::a_change_after_receiving_is_above_the_peers_version ... ok
+test manage::tests::a_tie_goes_to_the_larger_fingerprint_on_both_ends ... ok
+test manage::tests::a_tie_with_the_same_layout_settles_nothing ... ok
+test manage::tests::newer_version_wins_whatever_the_fingerprints ... ok
+test manage::tests::parse_offset ... ok
+test netwatch::nm::tests::absent_system_bus_stops_retrying ... ok
+test netwatch::nm::tests::reconnect_backoff_is_bounded_and_resets_after_stability ... ok
+samer-Victus's display went to sleep; putting this one to sleep too (sleep sync).
+test clip::tests::the_automatic_push_honours_formats_and_sensitive_content ... ok
+test netwatch::tests::reads_the_default_router_and_its_mac ... ok
+test notify::tests::a_folder_counts_once ... ok
+test notify::tests::file_uris_are_percent_encoded ... ok
+test notify::tests::one_file_names_it ... ok
+test notify::tests::several_files_give_count_and_names ... ok
+test app::tests::one_controller_at_a_time ... ok
+test notify::tests::what_the_other_computer_chose_is_made_safe ... ok
+test pointeroverlay::tests::descriptions ... ok
+test pointeroverlay::tests::settings_default_and_round_trip ... ok
+test power::tests::settings_default_to_off_and_round_trip ... ok
+test power::tests::the_inhibitor_is_held_exactly_while_wanted ... ok
+test power::tests::the_peer_is_told_only_what_changed ... ok
+test profiles::tests::a_new_side_drops_the_offset ... ok
+Saved layout profile "home" (1 computer).
+Switching to "home" by itself on Wi-Fi "Home" or behind the router aa:bb:cc:00:11:22 or on 192.168.1.7/24.
+one-mk is not running; it starts watching the network when it starts.
+Switching to "home" by itself on Wi-Fi "Home" or on Wi-Fi "Office" or behind the router aa:bb:cc:00:11:22 or on 192.168.1.7/24 or on 10.0.0.0/8.
+one-mk is not running; it starts watching the network when it starts.
+Switching to "home" by itself on 172.16.0.0/12.
+one-mk is not running; it starts watching the network when it starts.
+"home" no longer switches by itself.
+test profiles::tests::auto_rules_are_checked ... ok
+test app::tests::sleep_sync_waits_while_a_visit_is_on ... ok
+test profiles::tests::profile_names_reject_paths_and_toml_syntax ... ok
+test profiles::tests::rules_parse_and_match ... ok
+test hooks::tests::shell_conversion_preserves_hostile_argv ... ok
+Saved layout profile "home" (2 computers).
+Saved layout profile "work" (2 computers).
+Deleted layout profile "home".
+test profiles::tests::save_and_use_round_trip ... ok
+Received f.txt from sender (saved to /tmp/one-mk-send-back-inbox-2415119/f.txt).
+test app::tests::tuning::per_app_rules_follow_a_switch_made_with_enter ... ok
+test settings::tests::a_failed_update_or_a_bad_file_changes_nothing ... ok
+test settings::tests::clipboard_defaults_share_everything_up_to_25_mb ... ok
+test settings::tests::clipboard_settings_roundtrip_next_to_the_edge_rules ... ok
+test settings::tests::command_line_is_well_formed ... ok
+test profiles::tests::concurrent_writes_all_land ... ok
+test settings::tests::edge_options_are_checked ... ok
+test settings::tests::explicit_clipboard_fetch_opt_in_survives_the_new_default ... ok
+test settings::tests::external_symlink_target_ancestors_must_be_private ... ok
+test settings::tests::fullscreen_lists ... ok
+test settings::tests::legacy_clipboard_fetch_is_migrated_but_explicit_v2_is_kept ... ok
+test settings::tests::partial_and_future_files_still_load ... ok
+test settings::tests::per_edge_rules_fall_back_to_every_edge ... ok
+test settings::tests::run_key_actions_are_refused_when_the_file_is_writable_by_others ... ok
+test settings::tests::saved_and_loaded ... ok
+test settings::tests::settings_replacement_keeps_private_permissions ... ok
+test settings::tests::symlink_target_directory_must_be_private ... ok
+test settings::tests::the_clipboard_size_limit_is_kept_sane ... ok
+test settings::tests::concurrent_updates_all_survive ... ok
+test tests::layout_offset_bounds_and_empty_values ... ok
+test tests::options_after_run_win_and_lists_add_up ... ok
+test tests::run_options_before_another_command_are_refused ... ok
+test tests::send_to_entries_parse_odd_file_names ... ok
+test track::tests::a_file_that_arrived_whole_is_all_done ... ok
+test tests::run_options_mean_the_same_before_and_after_run ... ok
+Trusted Joiner (fdec274ec11e2813f2f053aecca739e936caced2a2c91c6edf4435a99847cf09).
+test notify::tests::show_in_folder_on_a_private_bus ... ok
+test app::tests::tuning::per_app_rules_follow_the_peers_focused_app ... ok
+test track::tests::failures_count_toward_the_end_but_are_not_named ... ok
+test track::tests::files_in_parallel_streams_of_one_batch_are_one_transfer ... ok
+test track::tests::hostile_batches_are_refused_before_progress_accounting ... ok
+test track::tests::hostile_offer_totals_never_overflow ... ok
+Received f (1).txt from sender (saved to /tmp/one-mk-send-back-inbox-2415119/f (1).txt).
+test hooks::tests::reset_kills_hook_descendants ... ok
+test track::tests::notifications_can_be_switched_off_live ... ok
+
+>>> Joiner joined: certificate aa1e c8e2 261b 7b6c 1b2c 1448 4ab4 7e2a 3afd cde2 5064 c7ba d9e9 1461 dda4 3f24 <<<
+Invitation consumed. This device is NOT trusted yet.
+WARNING: --no-confirm skips comparing code 426790 and approves automatically.
+Trusted Joiner (aa1ec8e2261b7b6c1b2c14484ab47e2a3afdcde25064c7bad9e91461dda43f24).
+test invite::tests::invitation_pairs_across_expiry_and_persists_via_production_save ... ok
+test track::tests::send_reports_are_shown_and_expire ... ok
+test track::tests::speed_is_smoothed_and_stalls_to_zero ... ok
+test track::tests::the_rate_survives_a_count_that_goes_backwards ... ok
+test track::tests::two_senders_are_two_transfers ... ok
+test track::tests::undeclared_batches_cannot_accumulate_unlimited_offers ... ok
+test transfer::outgoing_handle_checks_size_and_clears_nonblocking ... ok
+test transfer::swapped_outgoing_fifo_is_rejected ... ok
+test transfer::swapped_outgoing_symlink_is_rejected ... ok
+Received photos/c.jpg from laptop (saved to /tmp/one-mk-notify-dst-2415119/photos/c.jpg).
+Received photos/a.jpg from laptop (saved to /tmp/one-mk-notify-dst-2415119/photos/a.jpg).
+Received notes.txt from laptop (saved to /tmp/one-mk-notify-dst-2415119/notes.txt).
+Received photos/sub/b.jpg from laptop (saved to /tmp/one-mk-notify-dst-2415119/photos/sub/b.jpg).
+Received notes (1).txt from laptop (saved to /tmp/one-mk-notify-dst-2415119/notes (1).txt).
+Received notes (2).txt from laptop (saved to /tmp/one-mk-notify-dst-2415119/notes (2).txt).
+test transfer::tests::a_received_folder_raises_one_notification ... ok
+test transfer::tests::concurrent_offers_cannot_exceed_the_quota ... ok
+test transfer::tests::full_disk_error_is_explained ... ok
+test transfer::tests::long_paths_get_the_extended_prefix ... ok
+test transfer::tests::numbered_names ... ok
+test transfer::tests::place_never_follows_symlinks ... ok
+Received f (2).txt from sender (saved to /tmp/one-mk-send-back-inbox-2415119/f (2).txt).
+test track::tests::a_known_batch_gives_one_notification_when_its_last_file_lands ... ok
+test transfer::tests::refuses_when_disk_is_too_small ... ok
+test app::tests::tuning::the_focused_app_goes_only_to_a_controller_that_asks ... ok
+test transfer::tests::sanitize_rejects_escapes ... ok
+test transfer::tests::sanitize_windows_and_unicode ... ok
+test transfer::tests::staging_is_capped_per_peer ... ok
+test transfer::tests::stream_and_connection_limits ... ok
+test transfer::tests::sweep_keeps_fresh_and_active_partials ... ok
+test tuning::tests::a_computer_beats_an_os_beats_everything ... ok
+Received one.bin from desk (saved to /tmp/one-mk-progress-2415119/one.bin).
+test track::tests::nothing_saved_means_no_notification ... ok
+test tuning::tests::button_rules_take_numbers_and_names ... ok
+Received f (3).txt from sender (saved to /tmp/one-mk-send-back-inbox-2415119/f (3).txt).
+test tuning::tests::check_reports_conflicts_typos_and_unreachable_rules ... ok
+test tuning::tests::local_cli_scope_is_only_for_keys_and_cannot_select_a_peer ... ok
+test tuning::tests::local_scope_is_explicit_and_never_reaches_a_peer ... ok
+test track::tests::a_send_that_stops_early_still_reports_what_arrived ... ok
+test tuning::tests::local_status_has_one_explicit_availability_line ... ok
+test tuning::tests::modifier_scroll_values ... ok
+test tuning::tests::natural_auto_flips_only_across_mac_and_the_rest ... ok
+test tuning::tests::local_validation_keeps_compile_warnings_and_rejects_invalid_rules ... ok
+test tuning::tests::per_app_rules_keep_scope_order ... ok
+test tuning::tests::scopes_parse_and_print ... ok
+test tuning::tests::summary_only_when_something_is_set ... ok
+test tuning::tests::the_documented_example_loads_and_resolves ... ok
+test tuning::tests::per_app_rules_apply_only_while_their_app_has_the_focus ... ok
+Received two.bin from desk (saved to /tmp/one-mk-progress-2415119/two.bin).
+test transfer::tests::progress_of_a_transfer_in_flight_is_visible ... ok
+Received f (4).txt from sender (saved to /tmp/one-mk-send-back-inbox-2415119/f (4).txt).
+test track::tests::progress_counts_bytes_resumes_and_speed ... ok
+test tuning::tests::app_changes_never_leave_a_key_stuck ... ok
+test send::tests::back_to_back_sends_all_get_through ... ok
+test app::tests::switch_here_takes_back_and_unanswered_switch_gives_up ... ok
+test transfer::tests::replacement_takes_over_a_stalled_transfer ... ok
+test track::tests::an_old_sender_is_grouped_by_quiet_time ... ok
+test app::tests::gaming_auto_rechecks_without_input ... ok
+raw disconnected; reconnecting automatically.
+raw disconnected; reconnecting automatically.
+samer-Victus disconnected; reconnecting automatically.
+Received g.txt from sender (saved to /tmp/one-mk-send-busy-inbox-2415119/g.txt).
+test app::tests::flood_does_not_delay_the_lease ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+
+>>> samer-Victus joined: certificate 5ca4 ba84 ca0f 4ce9 6744 a738 8b3a 8d46 e4d7 bc48 3856 a44d 576d 7ee6 ca84 794e <<<
+Invitation consumed. This device is NOT trusted yet.
+WARNING: --no-confirm skips comparing code 932467 and approves automatically.
+Authenticated samer-Victus (652c 407a 2c43 c1ff 28e5 43e4 5a27 7afd 18b7 cbd9 3e74 88ff f3e3 9f4a d9ba 428f).
+Your code: 932467 (the other computer will ask you to compare it)
+WARNING: --yes skips the host trust prompt; verify the code on the host unless it uses --no-confirm.
+Trusted samer-Victus (652c407a2c43c1ff28e543e45a277afd18b7cbd93e7488fff3e39f4ad9ba428f). Start `one-mk run` on both computers.
+Trusted samer-Victus (5ca4ba84ca0f4ce96744a7388b3a8d46e4d7bc483856a44d576d7ee6ca84794e).
+test netwatch::nm::tests::reconnects_when_a_private_bus_restarts ... ok
+test invite::tests::continuously_refilled_three_source_slowloris_allows_real_join ... ok
+test send::tests::a_busy_receiver_is_asked_again_once ... ok
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your right).
+test app::tests::a_missing_peer_is_dialed_until_it_is_there ... ok
+test app::tests::gaming_auto_ends_when_the_peer_goes_quiet ... ok
+
+test result: ok. 280 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 6.21s
+
+     Running tests/invitation_cli.rs (target/debug/deps/invitation_cli-7bfb2aedb5a84ab1)
+
+running 2 tests
+test noninteractive_join_requires_explicit_yes ... ok
+test positional_link_warns_about_arguments_and_history ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/main.rs (target/debug/deps/one_mk_app-0700e4a148a27095)
+
+running 45 tests
+test motion::tests::springs_settle_with_a_small_overshoot ... ok
+test motion::tests::tweens_retarget_from_where_they_are ... ok
+test app::tests::sentences_name_the_side ... ok
+test scene::tests::pairing_codes_reveal_in_one_rhythm ... ok
+test motion::tests::curves_start_at_zero_and_end_at_one ... ok
+test scene::tests::approach_settles ... ok
+test scene::tests::projection_puts_the_target_near_the_centre ... ok
+test scene::tests::arrivals_come_down_onto_their_place ... ok
+test app::tests::below_stands_beside_this_computer_not_in_front_of_it ... ok
+test app::tests::sides_become_places ... ok
+test scene::tests::everything_comes_to_rest ... ok
+test scene::tests::pixels_map_onto_the_desk_and_back ... ok
+test tune::tests::problems_read_without_table_names ... ok
+test pairing::tests::reads_events ... ok
+test daemon::tests::reads_bench_output ... ok
+test scene::tests::a_dropped_computer_snaps_to_the_monitor_it_is_near ... ok
+test tune::tests::capture_takes_a_chord_or_a_modifier_alone ... ok
+test tune::tests::speeds_slide_evenly_by_ratio_and_parse_when_typed ... ok
+test tune::tests::inactive_local_rules_do_not_appear_as_global_in_the_remote_editor ... ok
+test tune::tests::commands_for_buttons_pointer_and_scrolling ... ok
+test scene::tests::several_monitors_stand_apart_as_they_are_arranged ... ok
+test view::tests::chords_read_like_keys ... ok
+test scene::tests::every_monitor_lands_on_its_screen_in_its_shape ... ok
+test view::tests::toml_reader_handles_inline_tables_floats_and_tables_in_repeats ... ok
+test view::tests::reads_what_one_mk_writes ... ok
+test tune::tests::reads_the_input_tables_as_one_mk_writes_them ... ok
+test view::tests::doctor_report_is_read_worst_first ... ok
+test view::tests::transfers_read_as_two_lines_and_a_bar ... ok
+test view::tests::toml_reader_handles_strings_and_lists ... ok
+test widgets::tests::mixing_ends_at_each_colour ... ok
+test tune::tests::the_drawn_keyboard_has_every_main_key_once_and_no_overlaps ... ok
+test widgets::tests::even_cells_fill_the_track ... ok
+test tune::tests::rules_read_as_sentences ... ok
+test tune::tests::the_test_box_shows_taps_holds_and_what_is_sent ... ok
+test tune::tests::checks_say_what_one_mk_keymap_add_would_say ... ok
+test tune::tests::the_most_specific_scope_wins ... ok
+test tune::tests::mouse_settings_resolve_per_computer ... ok
+test scene::tests::devices_can_be_picked ... ok
+test widgets::tests::arrows_choose_along_a_row ... ok
+test scene::tests::a_desk_with_many_monitors_draws_picks_and_rests ... ok
+test tune::tests::egui_keys_become_evdev_codes ... ok
+test widgets::tests::dashes_in_mono_text_keep_their_room ... ok
+test tune::tests::the_list_finds_keys_by_any_name ... ok
+test tune::tests::quick_setups_expand_to_commands_and_show_when_on ... ok
+test style::tests::long_text_is_shortened_to_fit ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src/lib.rs (target/debug/deps/one_mk_clipboard-cd1f0cb8a19e0415)
+
+running 9 tests
+test tests::system_round_trip ... ignored
+test tests::filter_applies_to_received_data ... ok
+test tests::concealed_content_is_skipped_unless_asked_for ... ok
+test tests::formats_can_be_switched_off ... ok
+test tests::png_round_trip ... ok
+test tests::memory_read_write ... ok
+test tests::size_cap_is_configurable_and_live ... ok
+test tests::too_large_is_reported ... ok
+test tests::text_wins_over_huge_image ... ok
+
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running unittests src/lib.rs (target/debug/deps/one_mk_ctl-d167e4b5b68e1dc1)
+
+running 39 tests
+test client::invitation_tests::invitation_request_roundtrip ... ok
+test install::tests::quoting_escapes_specials ... ok
+test install::tests::files_live_where_the_systems_look ... ok
+test client::tests::nothing_running_is_none ... ok
+test install::tests::desktop_entry_launches_run ... ok
+test client::tests::requests_have_names ... ok
+test install::tests::launch_agent_is_valid_and_escaped ... ok
+test install::tests::packaged_files_match_what_install_writes ... ok
+test install::tests::windows_startup_ownership_is_folder_scoped ... ok
+test install::tests::systemd_unit_quotes_the_path ... ok
+test install::tests::hostile_paths_never_become_directives ... ok
+test install::tests::windows_login_entry_prefers_the_tray ... ok
+test install::tests::tray_entry_passes_home_but_not_start_daemon ... ok
+test integrate::tests::desktop_text_values_escape_control_characters ... ok
+test integrate::tests::ids_must_be_hex ... ok
+test client::tests::unix_client_talks_to_a_socket ... ok
+test integrate::tests::kde_menu_is_valid_desktop_text ... ok
+test integrate::tests::mac_quick_action_is_well_formed_and_carries_the_script ... ok
+test integrate::tests::one_computer_one_entry_several_get_a_generic_one ... ok
+test integrate::tests::names_never_reach_the_command ... ok
+test integrate::tests::a_collision_skips_only_that_entry ... ok
+test integrate::tests::script_quotes_the_program_and_separates_options ... ok
+test integrate::tests::same_name_twice_is_told_apart_and_names_are_file_safe ... ok
+test integrate::tests::newlines_and_nul_in_paths_are_refused ... ok
+test integrate::tests::windows_cmd_passes_everything_after_a_double_dash ... ok
+test client::tests::tcp_client_sends_token_then_request ... ok
+test status::invitation_tests::invitation_status_roundtrip ... ok
+test status::tests::every_backend_roundtrips ... ok
+test integrate::tests::symlinks_are_left_alone_and_not_written_through ... ok
+test status::tests::status_from_an_older_daemon_still_reads ... ok
+test status::tests::shortcut_state_survives_the_wire_and_reads_plainly ... ok
+test status::tests::layout_survives_the_wire_and_old_readers_skip_it ... ok
+test status::tests::status_reads_plainly ... ok
+test status::tests::status_shows_transfers_and_old_readers_skip_them ... ok
+test status::tests::transfers_read_plainly ... ok
+test status::tests::status_survives_the_wire ... ok
+test integrate::tests::a_users_own_file_at_our_path_is_never_overwritten ... ok
+test integrate::tests::write_refresh_and_remove_only_touch_our_files ... ok
+test integrate::tests::the_script_delivers_odd_file_names_intact ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/one_mk_input-ce5f6f16d82f8486)
+
+running 183 tests
+test common_logic::tests::local_input_only_while_controlled_and_throttled ... ok
+test common_logic::tests::media_keys_repeat_only_when_they_step ... ok
+test common_logic::tests::modifiers_and_locks_do_not_repeat_and_duplicates_are_dropped ... ok
+test common_logic::tests::backoff_steps ... ok
+test common_logic::tests::repeat_fires_after_delay_then_at_rate ... ok
+test cursoroverlay::tests::support_by_backend ... ok
+test common_logic::tests::controlled_follows_the_daemon ... ok
+test common_logic::tests::coalesce_keeps_last_move_before_each_barrier ... ok
+test cursoroverlay::tests::arrow_shapes ... ok
+test cursoroverlay::tests::auto_with_a_mouse_draws_nothing ... ok
+test hotkeys::linux::tests::real_portal_bind ... ignored
+test hotkeys::linux::tests::real_portal_session ... ignored
+test cursoroverlay::tests::auto_follows_a_mouse_plugged_in_and_out_within_a_visit ... ok
+test cursoroverlay::tests::a_mouse_arriving_keeps_always_visible ... ok
+test cursoroverlay::tests::relative_motion_hides_it ... ok
+test cursoroverlay::tests::without_a_platform_it_only_forwards ... ok
+test cursoroverlay::tests::created_on_control_destroyed_after ... ok
+test cursoroverlay::tests::reveal_first ... ok
+test hotkeys::tests::actions_have_stable_ids ... ok
+test cursoroverlay::tests::create_failure_is_not_retried_every_move ... ok
+test common_logic::tests::drain_coalesces_the_queue ... ok
+test hotkeys::tests::evdev_codes_are_the_physical_keys ... ok
+test cursoroverlay::tests::no_leak_over_many_cycles ... ok
+test hotkeys::tests::one_press_seen_twice_counts_once ... ok
+test hotkeys::tests::matcher_never_fires_mid_chord ... ok
+test hotkeys::tests::matcher_fires_on_exact_chords_and_swallows_the_key ... ok
+test linux_logic::tests::activation_stays_in_the_armed_segment ... ok
+test hotkeys::tests::modifiers_held_map_to_chord_mods ... ok
+test linux_logic::tests::axis_frames ... ok
+test linux_logic::tests::barriers_sit_on_the_edges ... ok
+test linux_logic::tests::edge_push_needs_outward_motion ... ok
+test linux_logic::tests::bitmaps ... ok
+test linux_logic::tests::edge_strips_follow_segments_and_preserve_output_origins ... ok
+test dropzone::x11::tests::device_filter_accepts_only_enabled_nonvirtual_slaves ... ok
+test linux_logic::tests::fixed_point ... ok
+test linux_logic::tests::absolute_motion_spans_the_layout ... ok
+test linux_logic::tests::notches_carry_remainders ... ok
+test linux_logic::tests::output_geometry ... ok
+test linux_logic::tests::held_lets_go_last_first ... ok
+test linux_logic::tests::scroll_valuators_to_120ths ... ok
+test hotkeys::tests::malformed_chords_are_refused ... ok
+test linux_logic::tests::virtual_keyboard_modifiers ... ok
+test linux_logic::tests::pressed_drops_repeats_and_strays ... ok
+test linux_logic::tests::x_buttons_round_trip ... ok
+test linux_logic::tests::inner_exposed_edges_get_strips ... ok
+test linux_logic::tests::keycodes_are_evdev_plus_8 ... ok
+test localmap::tests::health_expires_without_a_periodic_timer ... ok
+test linux_logic::tests::backend_choice ... ok
+test hotkeys::tests::bindings_refuse_duplicates_and_the_emergency_chord ... ok
+test hotkeys::tests::jump_template ... ok
+test macos_logic::tests::accum ... ok
+test localmap::tests::user_shortcuts_are_physical_and_repeats_do_not_fire_twice ... ok
+test dropzone::tests::uri_intake_is_local_bounded_and_strict ... ok
+test macos_logic::tests::buttons ... ok
+test macos_logic::tests::caps_lock_repeats_do_not_toggle ... ok
+test macos_logic::tests::captured_modifiers ... ok
+test localmap::tests::snapshot_swap_and_session_reset_release_the_previous_mapper ... ok
+test localmap::tests::fail_open_does_not_turn_an_old_press_into_a_new_mapping ... ok
+test localmap::tests::physical_emergency_survives_remapped_escape_and_modifiers ... ok
+test macos_logic::tests::click_counting ... ok
+test macos_logic::tests::extra_flags ... ok
+test hotkeys::tests::platform_forms ... ok
+test macos_logic::tests::keymap_covers_the_keyboard ... ok
+test macos_logic::tests::edges ... ok
+test macos_logic::tests::keypad_clear_is_not_num_lock ... ok
+test macos_logic::tests::media_key_events ... ok
+test macos_logic::tests::modifier_flags ... ok
+test macos_logic::tests::mac_repeat_settings ... ok
+test macos_logic::tests::relative_moves_stay_on_the_displays ... ok
+test localmap::tests::only_a_pending_dual_role_key_arms_the_local_timer ... ok
+test macos_logic::tests::segments ... ok
+test localmap::tests::a_key_works_again_after_disable_or_a_hidden_session_key_up ... ok
+test macos_logic::tests::shortcuts_ignore_injected_keys_and_controlled_time ... ok
+test macos_logic::tests::wheel_notch_scrolls_like_a_native_notch ... ok
+test macos_logic::tests::scroll_signs ... ok
+test macos_logic::tests::keymap_is_one_to_one ... ok
+test hotkeys::tests::chords_parse_in_any_case_and_print_canonically ... ok
+test localmap::tests::injected_input_never_changes_physical_shortcuts_or_ownership ... ok
+test portal::tests::held_keys_and_buttons_are_let_go_last_first ... ok
+test portal::tests::a_panic_is_an_error ... ok
+test portal::tests::refusals_and_rejected_tokens ... ok
+test portal::tests::retry_backs_off_and_starts_over_after_a_stable_session ... ok
+test portal::tests::input_capture_version_2_restores_its_permission_too ... ok
+test portal::tests::token_file_is_private_atomic_and_forgettable ... ok
+test system::linux::tests::connects_on_wayland_only_to_a_running_xwayland ... ok
+test system::linux::tests::display_power_state_is_readable ... ok
+test portal::tests::barriers_cover_only_the_armed_part_of_an_edge ... ok
+test system::linux::tests::idle_worker_is_replaced ... ok
+test dropzone::x11::tests::private_xvfb_xtest_cannot_arm_and_bad_enter_is_recoverable ... ok
+test cursoroverlay_x11::tests::always_draws_a_click_through_arrow_on_xvfb ... ok
+test dropzone::x11::tests::private_xvfb_scripted_physical_drag_selection_and_copy_drop ... ok
+test win_logic::tests::async_key_state_to_evdev ... ok
+test win_logic::tests::corner_picks_side_by_direction ... ok
+test win_logic::tests::edges_only_on_outer_boundary ... ok
+test win_logic::tests::every_key_round_trips ... ok
+test win_logic::tests::extended_keys_differ_from_plain ... ok
+test win_logic::tests::fullscreen_is_a_borderless_window_covering_its_monitor ... ok
+test win_logic::tests::function_keys_f1_to_f24 ... ok
+test win_logic::tests::heading_survives_a_pinned_axis ... ok
+test win_logic::tests::held_set ... ok
+test win_logic::tests::identity_keys ... ok
+test win_logic::tests::keyboard_repeat_settings ... ok
+test win_logic::tests::media_keys_match_the_canonical_table ... ok
+test win_logic::tests::modifiers_and_media ... ok
+test win_logic::tests::no_crossing_while_dragging ... ok
+test system::linux::tests::probe_degrades_gracefully ... ok
+test win_logic::tests::normalize_with_negative_origin ... ok
+test win_logic::tests::normalize_hits_every_pixel ... ok
+test win_logic::tests::odd_scales_keep_monitors_adjacent ... ok
+test win_logic::tests::park_point_is_screen_centre ... ok
+test win_logic::tests::pause_numlock_altgr ... ok
+test win_logic::tests::pen_touch_and_injected_mouse_input ... ok
+test win_logic::tests::refused_crossing_waits_for_the_pointer_to_leave ... ok
+test win_logic::tests::scaled_space_is_linear_and_round_trips ... ok
+test win_logic::tests::scan_codes_are_unique_in_receive_direction ... ok
+test win_logic::tests::scroll_signs ... ok
+test win_logic::tests::segments_in_a_scaled_space ... ok
+test win_logic::tests::sender_drops_key_repeats_including_caps_lock ... ok
+test win_logic::tests::watchdog_reinstalls_then_gives_up ... ok
+test windows_service_logic::auth::tests::abandon_rechallenge_and_reprovision_preserve_boot_limits ... ok
+test win_logic::tests::smooth_scroll_accumulates ... ok
+test windows_service_logic::auth::tests::bounded_attempts_survive_reconnects ... ok
+test windows_service_logic::auth::tests::authenticated_non_input_and_malformed_input_close_the_channel ... ok
+test windows_service_logic::auth::tests::every_transcript_field_is_bound_and_roles_are_separated ... ok
+test windows_service_logic::auth::tests::expired_handshake_can_reconnect ... ok
+test windows_service_logic::auth::tests::expiry_clock_rollback_and_terminal_states ... ok
+test windows_service_logic::auth::tests::input_before_authentication_and_wrong_peer_fail_closed ... ok
+test windows_service_logic::auth::tests::mutual_authentication_and_input_release ... ok
+test windows_service_logic::auth::tests::nonce_serial_boot_token_and_connection_replay_are_rejected ... ok
+test windows_service_logic::auth::tests::ready_challenge_does_not_evict_session ... ok
+test windows_service_logic::auth::tests::ready_connection_expires_and_failed_budget_is_not_reset_by_success ... ok
+test windows_service_logic::auth::tests::ready_refuses_new_challenges_and_unsigned_input ... ok
+test windows_service_logic::auth::tests::signed_input_rejects_tampering_replay_reordering_and_other_sessions ... ok
+test windows_service_logic::framing::tests::every_message_roundtrips_and_every_truncation_fails ... ok
+test windows_service_logic::framing::tests::floats_and_event_allowlist ... ok
+test windows_service_logic::auth::tests::every_mac_byte_and_every_proof_truncation_is_rejected ... ok
+test windows_service_logic::framing::tests::lengths_versions_flags_kinds_and_booleans_are_strict ... ok
+test windows_service_logic::hmac_sha256::tests::rfc_4231_test_vectors ... ok
+test windows_service_logic::hmac_sha256::tests::verify_accepts_only_the_right_tag ... ok
+test windows_service_logic::launch::tests::command_limits_are_utf16_and_nul_is_rejected ... ok
+test windows_service_logic::launch::tests::fixed_path_rejects_hostile_aliases_and_prefix_confusion ... ok
+test windows_service_logic::launch::tests::helper_command_has_only_fixed_fields_and_no_secret ... ok
+test windows_service_logic::launch::tests::known_windows_quoting_cases ... ok
+test windows_service_logic::launch::tests::program_name_uses_literal_backslashes_and_rejects_quotes ... ok
+test windows_service_logic::lifecycle::tests::another_console_session_revokes_the_current_helper ... ok
+test windows_service_logic::lifecycle::tests::clock_rollback_is_permanent_and_idle_has_no_timer ... ok
+test windows_service_logic::lifecycle::tests::crashes_back_off_cap_and_stable_minute_resets ... ok
+test windows_service_logic::lifecycle::tests::duplicate_stale_and_foreign_events_do_not_restart ... ok
+test windows_service_logic::lifecycle::tests::every_secure_policy_lock_and_desktop_combination ... ok
+test windows_service_logic::lifecycle::tests::first_snapshot_after_logon_is_authoritative_without_unlock ... ok
+test windows_service_logic::lifecycle::tests::lock_disconnect_logoff_and_source_failure_release_once ... ok
+test windows_service_logic::lifecycle::tests::rapid_desktop_changes_coalesce ... ok
+test windows_service_logic::lifecycle::tests::secure_desktop_is_off_by_default ... ok
+test windows_service_logic::lifecycle::tests::session_events_recover_only_with_known_facts ... ok
+test windows_service_logic::lifecycle::tests::startup_timeout_waits_for_exit_and_never_spins ... ok
+test windows_service_logic::lifecycle::tests::uac_switch_stops_immediately_but_starts_only_after_exit_and_debounce ... ok
+test windows_service_logic::lifecycle::tests::unknown_signin_disconnected_and_other_user_fail_closed ... ok
+test x11::tests::child_captures_and_waits ... ignored, run by kill_9_releases_the_grab
+test windows_service_logic::framing::tests::hostile_bytes_never_panic ... ok
+test system::linux::tests::inhibit_is_seen_by_the_session_manager_and_released ... ok
+test portal::tests::locking_and_sleeping_let_go_and_waking_reads_the_screens_again ... ok
+test portal::tests::a_closed_session_lets_go_and_comes_back ... ok
+test portal::tests::losing_the_session_bus_lets_go_and_reconnects ... ok
+test system::linux::tests::dropping_a_watched_probe_ends_its_thread ... ok
+xkbcommon: ERROR: [XKB-769] (input string):1:1: syntax error, unexpected identifier
+xkbcommon: ERROR: [XKB-822] Failed to parse input xkb string
+test xkb::tests::a_keymap_that_does_not_compile_falls_back ... ok
+test xkb::tests::a_new_keymap_starts_with_the_keys_held ... ok
+test xkb::tests::caps_lock_is_control_with_ctrl_nocaps ... ok
+test xkb::tests::system_keymaps ... ok
+test x11::tests::kill_9_releases_the_grab ... ok
+test x11::tests::monitor_changes_are_reported ... ok
+test portal::tests::declining_stops_with_a_clear_line_and_forgets_the_token ... ok
+test portal::tests::a_rejected_token_is_replaced_by_asking_again ... ok
+test x11::tests::injection_reaches_the_x_server ... ok
+test cursoroverlay::tests::a_real_mouse_ends_it ... ok
+test x11::tests::without_barriers_an_edge_window_captures ... ok
+test x11::tests::pushing_against_an_edge_captures_until_released ... ok
+test portal::tests::the_portal_going_away_lets_go_and_reconnects_when_it_is_back ... ok
+test x11::tests::partial_right_edge_does_not_capture_the_wall ... ok
+test system::linux::tests::watch_says_when_the_active_window_changes ... ok
+test portal::tests::first_start_waits_for_the_dialog_then_the_token_is_reused ... ok
+test portal::tests::a_hung_release_falls_back_to_disabling ... ok
+test localmap::tests::local_scope_preserves_the_shared_random_stream_invariant ... ok
+test portal::tests::a_hung_portal_ends_the_session ... ok
+
+test result: ok. 180 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 4.13s
+
+     Running unittests src/lib.rs (target/debug/deps/one_mk_net-7f78c0d2b763e521)
+
+running 22 tests
+test discovery::tests::virtual_interfaces ... ok
+test pairing::tests::sas_format ... ok
+test pairing::tests::transcript_is_versioned ... ok
+test discovery::tests::host_name_is_unique_ascii ... ok
+test pairing::tests::names_are_bound_into_commitment_and_code ... ok
+test node::tests::per_ip_limit_is_released_on_drop ... ok
+test trust::tests::an_ambiguous_query_finds_nothing ... ok
+test invite::tests::invitation_id_requires_the_secret ... ok
+test invite::tests::reject_non_unicast_invitation_addresses ... ok
+test trust::tests::hand_edited_offsets_are_normalized_on_load ... ok
+test invite::tests::expiry_single_use_and_guess_budget ... ok
+test invite::tests::public_attacker_cannot_burn_with_unknown_ids ... ok
+test invite::tests::racing_valid_proofs_have_exactly_one_winner ... ok
+test trust::tests::old_files_still_load ... ok
+test identity::tests::load_tightens_key_and_dir_permissions ... ok
+test tls::tests::pin_is_checked_before_the_server_receives_a_client_certificate ... ok
+test invite::tests::copied_link_impostor_with_same_name_has_a_different_code ... ok
+test invite::tests::mac_roles_and_every_transcript_field_are_bound ... ok
+test invite::tests::replayed_proof_fails_on_a_new_tls_connection_even_with_repeated_nonces ... ok
+test invite::tests::links_are_bounded_versioned_and_strict ... ok
+test invite::tests::two_thousand_public_only_wire_attempts_then_real_join ... ok
+test invite::tests::silent_clients_have_a_short_header_deadline ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s
+
+     Running tests/invitation.rs (target/debug/deps/invitation-3663c20561be38bc)
+
+running 10 tests
+test expired_invitation_is_rejected ... ok
+test lost_commit_ack_reports_uncertainty_instead_of_success ... ok
+test refusal_burns_invitation_without_confirming_either_side ... ok
+test proof_bound_to_a_different_client_certificate_is_rejected ... ok
+test copied_link_sessions_agree_on_codes_and_honor_refusal ... ok
+test wrong_secret_then_right_secret_and_reuse ... ok
+test wrong_secret_cannot_name_or_burn_the_invitation ... ok
+test invitation_pairs_without_human_input ... ok
+test impersonated_server_certificate_is_rejected_before_opening_stream ... ok
+test pinned_handshake_rejects_impostor_before_client_authentication ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/loopback.rs (target/debug/deps/loopback-58acb54312337344)
+
+running 7 tests
+test bind_any_picks_a_port ... ok
+test connecting_to_self_is_refused ... ok
+test pairing_names_are_sanitized ... ok
+test rejected_pairing_is_not_confirmed ... ok
+test pair_then_exchange_messages ... ok
+test connect_timeout_gives_up ... ok
+test stalled_handshake_does_not_block_accept ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running unittests src/lib.rs (target/debug/deps/one_mk_proto-1be8afec454c814e)
+
+running 142 tests
+test appmatch::tests::globs ... ok
+test codec::tests::hello_from_another_version ... ok
+test codec::tests::datagram_round_trip ... ok
+test codec::tests::layout_offset_is_optional_trailing_bytes ... ok
+test appmatch::tests::negation_and_unknown ... ok
+test codec::tests::rejects_garbage ... ok
+test codec::tests::layout_rejects_unknown_side ... ok
+test codec::tests::additive_messages_use_fresh_tags ... ok
+test codec::tests::control_round_trip ... ok
+test codec::tests::focus_app_names_from_a_peer_are_cleaned ... ok
+test codec::tests::stream_kind_round_trip ... ok
+test drag::tests::drop_is_single_use_and_cancel_latches_until_release ... ok
+test drag::tests::held_pointer_arms_once_and_leave_hides ... ok
+test edge::tests::dead_corners ... ok
+test appmatch::tests::names_that_cant_occur_on_an_os ... ok
+test codec::tests::rejects_out_of_range_values ... ok
+test appmatch::tests::patterns_that_cant_be_meant_are_refused ... ok
+test appmatch::tests::hostile_names_are_cleaned ... ok
+test appmatch::tests::names_ignore_case_and_extensions ... ok
+test edge::tests::dwell_and_modifier_both_needed ... ok
+test edge::tests::dead_corners_at_an_inner_edge ... ok
+test edge::tests::dwell_at_an_inner_edge ... ok
+test edge::tests::dwell_crosses_after_the_time_unless_moved_away ... ok
+test codec::tests::focus_app_names_round_trip_at_the_byte_limit ... ok
+test edge::tests::dwell_on_every_side ... ok
+test edge::tests::edge_beside_a_taller_monitor ... ok
+test edge::tests::fullscreen_guard ... ok
+test appmatch::tests::the_limit_is_bytes_on_both_sides ... ok
+test edge::tests::modifier_at_an_inner_edge ... ok
+test edge::tests::l_shaped_desktop ... ok
+test edge::tests::modifier_names ... ok
+test edge::tests::modifier_to_cross ... ok
+test edge::tests::no_guards_cross_at_once ... ok
+test edge::tests::sliding_into_a_corner_waits_until_out_of_it ... ok
+test edge::tests::switch_next_cycles_through_here ... ok
+test geometry::tests::clamp_avoids_gaps_between_monitors ... ok
+test geometry::tests::edge_fraction_follows_the_screens_on_that_edge ... ok
+test geometry::tests::edge_round_trip ... ok
+test geometry::tests::exposed_edges_include_inner_ones ... ok
+test geometry::tests::outer_edges ... ok
+test geometry::tests::primary_is_the_screen_at_the_origin ... ok
+test geometry::tests::side_parse ... ok
+test geometry::tests::touching_spans ... ok
+test geometry::tests::translation_round_trip ... ok
+test keynames::tests::buttons_by_number ... ok
+test keynames::tests::mod_bits_cover_the_modifier_codes ... ok
+test keys::tests::swaps_ctrl_and_meta_only ... ok
+test keys::tests::tracks_and_releases ... ok
+test lock::tests::a_chain_is_crossed_when_the_middle_syncs ... ok
+test lock::tests::a_user_lock_spreads_once_and_stops ... ok
+test lock::tests::duplicate_reports_and_late_causes ... ok
+test lock::tests::lock_all_reaches_peers_without_lock_sync_and_does_not_echo ... ok
+test lock::tests::sync_off_neither_announces_nor_follows_but_obeys_lock_all ... ok
+test lock::tests::unlocking_and_locking_again_is_a_new_event ... ok
+test mediakeys::tests::columns_are_unique_and_in_range ... ok
+test mediakeys::tests::every_key_round_trips_between_every_pair_of_oses ... ok
+test edge::tests::handing_back_leaves_nothing_held ... ok
+test mediakeys::tests::fallbacks_stand_in_only_when_needed ... ok
+test mediakeys::tests::only_stepping_keys_repeat ... ok
+test motion::tests::a_switch_with_no_touching_edge_still_leads_home ... ok
+test motion::tests::desktop_change_sends_a_new_position ... ok
+test motion::tests::enter_move_and_leave ... ok
+test motion::tests::jump_to_a_point ... ok
+test motion::tests::leaves_only_through_the_exits ... ok
+test mediakeys::tests::nothing_but_the_table_is_captured ... ok
+test motion::tests::leaves_only_through_the_outer_home_edge ... ok
+test keynames::tests::triggers_match_either_side_or_one ... ok
+test motion::tests::offset_leaves_only_where_the_screens_touch ... ok
+test motion::tests::receiver_drops_stale_and_reordered ... ok
+test motion::tests::relative_repeats_and_stale_datagrams_move_nothing ... ok
+test motion::tests::lost_relative_datagrams_are_made_up ... ok
+test motion::tests::relative_sum_wraps_without_a_jump ... ok
+test motion::tests::seq_wraps ... ok
+test motion::tests::switching_modes_mid_visit ... ok
+test overlay::tests::always_and_never ... ok
+test overlay::tests::auto_draws_only_when_the_os_does_not ... ok
+test overlay::tests::discrete_changes_are_immediate ... ok
+test keynames::tests::chords_parse_and_print ... ok
+test overlay::tests::modes_parse_and_print ... ok
+test overlay::tests::preconditions_win_over_the_setting ... ok
+test overlay::tests::probe_changes_settle ... ok
+test pointer::tests::acceleration_needs_raw_deltas ... ok
+test pointer::tests::speed_scales_and_is_clamped ... ok
+test motion::tests::relative_motion_rounds_without_drift ... ok
+test keynames::tests::bad_names_say_what_is_wrong ... ok
+test remap::tests::a_disabled_key_does_nothing ... ok
+test remap::tests::a_reload_while_undecided_holds ... ok
+test remap::tests::another_key_makes_it_a_hold_at_once ... ok
+test remap::tests::a_key_already_down_released_while_undecided_is_just_released ... ok
+test remap::tests::a_key_held_before_the_layer_stays_itself ... ok
+test remap::tests::a_click_makes_it_a_hold ... ok
+test remap::tests::a_late_release_is_a_hold ... ok
+test remap::tests::actions_fire_once_on_press ... ok
+test remap::tests::a_new_keymap_keeps_held_keys_until_they_come_up ... ok
+test remap::tests::combos_hide_their_modifiers ... ok
+test remap::tests::lifted_modifiers_come_back_only_after_release ... ok
+test remap::tests::bad_rules_are_errors ... ok
+test remap::tests::modifiers_released_during_a_combo_are_not_stuck ... ok
+test remap::tests::no_rules_passes_everything_through ... ok
+test remap::tests::chords_and_sequences ... ok
+test remap::tests::odd_rules_are_warnings ... ok
+test remap::tests::back_and_forward_follow_the_target ... ok
+test remap::tests::layers ... ok
+test remap::tests::nested_layers_end_with_their_parent ... ok
+test remap::tests::release_all_releases_what_was_emitted ... ok
+test remap::tests::tap_hold_holds_after_the_timeout ... ok
+test remap::tests::a_reload_runs_the_old_keymaps_action ... ok
+test remap::tests::tap_hold_taps_when_released_in_time ... ok
+test scroll::tests::discrete_mode_sends_whole_notches ... ok
+test remap::tests::two_sources_of_one_code_send_one_down_and_one_up ... ok
+test scroll::tests::modifiers_change_scrolling_and_say_so ... ok
+test remap::tests::the_most_specific_combo_wins_and_extra_modifiers_pass ... ok
+test scroll::tests::natural_follows_the_assumed_defaults ... ok
+test remap::tests::tap_hold_layer_key ... ok
+test scroll::tests::reverse_per_axis_and_per_device ... ok
+test scroll::tests::smooth_mode_turns_notches_into_pixels ... ok
+test scroll::tests::speed_keeps_partial_units ... ok
+test scroll::tests::unchanged_by_default ... ok
+test remap::tests::buttons_map_and_stay_paired ... ok
+test sleep::tests::a_peers_sleep_is_followed_once_and_never_announced_back ... ok
+test sleep::tests::already_asleep_is_still_passed_on ... ok
+test sleep::tests::sleep_sync_off_neither_follows_nor_announces ... ok
+test sleep::tests::spreads_over_a_triangle_once ... ok
+test transfer::tests::clip_ack_round_trip ... ok
+test remap::tests::taps_of_a_hidden_key_leave_it_hidden ... ok
+test remap::tests::taps_of_a_held_key_are_typed ... ok
+test tests::strips_terminal_escapes_and_invisible_characters ... ok
+test transfer::tests::clip_pull_is_additive ... ok
+test transfer::tests::clip_header_round_trip ... ok
+test transfer::tests::file_msg_round_trip ... ok
+test transfer::tests::long_paths_are_truncated_on_a_char_boundary ... ok
+test transfer::tests::rejects_garbage ... ok
+test transfer::tests::offer_batch_is_additive ... ok
+test keynames::tests::names_and_aliases ... ok
+test remap::tests::outputs_parse_and_print ... ok
+test remap::tests::simple_remaps_and_swaps ... ok
+test pointer::tests::no_drift_over_a_million_moves ... ok
+test geometry::tests::random_layouts_cross_and_return ... ok
+test motion::tests::random_walks_never_teleport ... ok
+test keynames::tests::every_name_is_unique_and_round_trips ... ok
+test scroll::tests::no_drift_over_a_million_events ... ok
+test remap::tests::no_stuck_keys_under_random_streams ... ok
+
+test result: ok. 142 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.96s
+
+     Running tests/remap_bench.rs (target/debug/deps/remap_bench-3c562383377d5bdb)
+
+running 1 test
+test key_mapper_does_over_5m_events_a_second_without_allocating ... ignored, a benchmark: run with --ignored --nocapture, best with --release
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/one_mk_tray-897a6f5ac2c63d8f)
+
+running 11 tests
+test model::tests::each_device_gets_a_side_submenu_with_the_current_one_checked ... ok
+test model::tests::icon_states ... ok
+test model::tests::a_running_transfer_shows_under_the_headline ... ok
+test model::tests::not_running_offers_to_start ... ok
+test model::tests::headlines ... ok
+test icon::tests::templates_are_black_with_alpha_only ... ok
+test icon::tests::states_differ_and_amber_means_connected ... ok
+test icon::tests::every_drawing_is_complete_and_transparent_in_the_corner ... ok
+test model::tests::online_computers_get_switch_and_clipboard_entries ... ok
+test model::tests::open_app_comes_right_after_the_headline ... ok
+test model::tests::pointer_lock_is_a_checkmark_that_flips ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/one_mk_wall_sync-4345f267ff932ba0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/core.rs (target/debug/deps/core-0f57159f55eb5394)
+
+running 12 tests
+test asymmetry_is_not_offset_identifiable ... ok
+test bounded_slew_and_consistent_liar_limitation ... ok
+test controller_late_join_hysteresis_boundary_sleep_and_clock_jump ... ok
+test high_rtt_majority_cannot_bias_low_rtt_selection ... ok
+test robust_reorder_duplicate_outlier_replay_and_generation ... ok
+test hostile_float_values_never_enter_state ... ok
+test timeline_loop_future_epoch_and_frame_dropping ... ok
+test stalled_presenter_does_not_cause_seek_storm ... ok
+test slow_decoder_drops_backlog_instead_of_accumulating_lag ... ok
+test offset_sign_drift_and_prediction ... ok
+test arbitrary_state_updates_are_finite_and_errors_are_atomic ... ok
+test deterministic_arbitrary_bits_property_and_wire_roundtrip ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+   Doc-tests one_mk_clipboard
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests one_mk_ctl
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests one_mk_input
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests one_mk_net
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests one_mk_proto
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests one_mk_wall_sync
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,501 @@
+gst-inspect-1.0 version 1.28.2
+GStreamer 1.28.2
+https://launchpad.net/ubuntu/+source/gstreamer1.0
+Linux samer-Victus 7.0.0-38-generic #38-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep  4 09:10:14 UTC 2026 x86_64 GNU/Linux
+=== avdec_h264 ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                libav H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 decoder
+  Klass                    Codec/Decoder/Video
+  Description              libav h264 decoder
+  Author                   Wim Taymans <wim.taymans@gmail.com>, Ronald Bultje <rbultje@ronald.bitfreak.net>, Edward Hervey <bilboed@bilboed.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/libav/avdec_h264.html
+
+Plugin Details:
+  Name                     libav
+  Description              All libav codecs and formats (system install)
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlibav.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-libav
+  Documentation            https://gstreamer.freedesktop.org/documentation/libav/
+  Source release date      2026-04-07
+  Binary package           GStreamer libav Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-libav1.0
+
+GObject
+=== avdec_hevc ===
+No such element or plugin 'avdec_hevc'
+=== vp8dec ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                On2 VP8 Decoder
+  Klass                    Codec/Decoder/Video
+  Description              Decode VP8 video streams
+  Author                   David Schleef <ds@entropywave.com>, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  Documentation            https://gstreamer.freedesktop.org/documentation/vpx/vp8dec.html
+
+Plugin Details:
+  Name                     vpx
+  Description              VP8/VP9 video encoding and decoding based on libvpx
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstvpx.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-good
+  Documentation            https://gstreamer.freedesktop.org/documentation/vpx/
+  Source release date      2026-04-07
+  Binary package           GStreamer Good Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-good1.0
+
+GObject
+=== vp9dec ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                On2 VP9 Decoder
+  Klass                    Codec/Decoder/Video
+  Description              Decode VP9 video streams
+  Author                   David Schleef <ds@entropywave.com>, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  Documentation            https://gstreamer.freedesktop.org/documentation/vpx/vp9dec.html
+
+Plugin Details:
+  Name                     vpx
+  Description              VP8/VP9 video encoding and decoding based on libvpx
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstvpx.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-good
+  Documentation            https://gstreamer.freedesktop.org/documentation/vpx/
+  Source release date      2026-04-07
+  Binary package           GStreamer Good Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-good1.0
+
+GObject
+=== av1dec ===
+Factory Details:
+  Rank                     secondary (128)
+  Long-name                AV1 Decoder
+  Klass                    Codec/Decoder/Video
+  Description              Decode AV1 video streams
+  Author                   Sean DuBois <sean@siobud.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/aom/av1dec.html
+
+Plugin Details:
+  Name                     aom
+  Description              AOM plugin library
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstaom.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-bad
+  Documentation            https://gstreamer.freedesktop.org/documentation/aom/
+  Source release date      2026-04-07
+  Binary package           GStreamer Bad Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-bad1.0
+
+GObject
+=== dav1ddec ===
+No such element or plugin 'dav1ddec'
+=== openh264dec ===
+Factory Details:
+  Rank                     marginal (64)
+  Long-name                OpenH264 video decoder
+  Klass                    Decoder/Video
+  Description              OpenH264 video decoder
+  Author                   Ericsson AB, http://www.ericsson.com
+  Documentation            https://gstreamer.freedesktop.org/documentation/openh264/openh264dec.html
+
+Plugin Details:
+  Name                     openh264
+  Description              OpenH264 encoder/decoder plugin
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopenh264.so
+  Version                  1.28.2
+  License                  BSD
+  Source module            gst-plugins-bad
+  Documentation            https://gstreamer.freedesktop.org/documentation/openh264/
+  Source release date      2026-04-07
+  Binary package           GStreamer Bad Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-bad1.0
+
+GObject
+=== pngdec ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                PNG image decoder
+  Klass                    Codec/Decoder/Image
+  Description              Decode a png video frame to a raw image
+  Author                   Wim Taymans <wim@fluendo.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/png/pngdec.html
+
+Plugin Details:
+  Name                     png
+  Description              PNG plugin library
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpng.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-good
+  Documentation            https://gstreamer.freedesktop.org/documentation/png/
+  Source release date      2026-04-07
+  Binary package           GStreamer Good Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-good1.0
+
+GObject
+=== webpdec ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                WebP image decoder
+  Klass                    Codec/Decoder/Image
+  Description              Decode images from WebP format
+  Author                   Sreerenj Balachandran <sreerenj.balachandran@intel.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/webp/webpdec.html
+
+Plugin Details:
+  Name                     webp
+  Description              WebP plugin
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstwebp.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-bad
+  Documentation            https://gstreamer.freedesktop.org/documentation/webp/
+  Source release date      2026-04-07
+  Binary package           GStreamer Bad Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-bad1.0
+
+GObject
+=== avdec_gif ===
+Factory Details:
+  Rank                     marginal (64)
+  Long-name                libav GIF (Graphics Interchange Format) decoder
+  Klass                    Codec/Decoder/Video
+  Description              libav gif decoder
+  Author                   Wim Taymans <wim.taymans@gmail.com>, Ronald Bultje <rbultje@ronald.bitfreak.net>, Edward Hervey <bilboed@bilboed.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/libav/avdec_gif.html
+
+Plugin Details:
+  Name                     libav
+  Description              All libav codecs and formats (system install)
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstlibav.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-libav
+  Documentation            https://gstreamer.freedesktop.org/documentation/libav/
+  Source release date      2026-04-07
+  Binary package           GStreamer libav Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-libav1.0
+
+GObject
+=== gdkpixbufdec ===
+Factory Details:
+  Rank                     none (0)
+  Long-name                GdkPixbuf image decoder
+  Klass                    Codec/Decoder/Image
+  Description              Decodes images in a video stream using GdkPixbuf
+  Author                   David A. Schleef <ds@schleef.org>, Renato Filho <renato.filho@indt.org.br>
+  Documentation            https://gstreamer.freedesktop.org/documentation/gdkpixbuf/gdkpixbufdec.html
+
+Plugin Details:
+  Name                     gdkpixbuf
+  Description              GdkPixbuf-based image decoder, overlay and sink
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstgdkpixbuf.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-good
+  Documentation            https://gstreamer.freedesktop.org/documentation/gdkpixbuf/
+  Source release date      2026-04-07
+  Binary package           GStreamer Good Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-good1.0
+
+GObject
+=== h264parse ===
+Factory Details:
+  Rank                     primary + 1 (257)
+  Long-name                H.264 parser
+  Klass                    Codec/Parser/Converter/Video
+  Description              Parses H.264 streams
+  Author                   Mark Nauwelaerts <mark.nauwelaerts@collabora.co.uk>
+  Documentation            https://gstreamer.freedesktop.org/documentation/videoparsersbad/h264parse.html
+
+Plugin Details:
+  Name                     videoparsersbad
+  Description              videoparsers
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstvideoparsersbad.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-bad
+  Documentation            https://gstreamer.freedesktop.org/documentation/videoparsersbad/
+  Source release date      2026-04-07
+  Binary package           GStreamer Bad Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-bad1.0
+
+GObject
+=== qtdemux ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                QuickTime demuxer
+  Klass                    Codec/Demuxer
+  Description              Demultiplex a QuickTime file into audio and video streams
+  Author                   David Schleef <ds@schleef.org>, Wim Taymans <wim@fluendo.com>
+  Documentation            https://gstreamer.freedesktop.org/documentation/isomp4/qtdemux.html
+
+Plugin Details:
+  Name                     isomp4
+  Description              ISO base media file format support (mp4, 3gpp, qt, mj2)
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstisomp4.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-good
+  Documentation            https://gstreamer.freedesktop.org/documentation/isomp4/
+  Source release date      2026-04-07
+  Binary package           GStreamer Good Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-good1.0
+
+GObject
+=== matroskademux ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                Matroska demuxer
+  Klass                    Codec/Demuxer
+  Description              Demuxes Matroska/WebM streams into video/audio/subtitles
+  Author                   GStreamer maintainers <gstreamer-devel@lists.freedesktop.org>
+  Documentation            https://gstreamer.freedesktop.org/documentation/matroska/matroskademux.html
+
+Plugin Details:
+  Name                     matroska
+  Description              Matroska and WebM stream handling
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmatroska.so
+  Version                  1.28.2
+  License                  LGPL
+  Source module            gst-plugins-good
+  Documentation            https://gstreamer.freedesktop.org/documentation/matroska/
+  Source release date      2026-04-07
+  Binary package           GStreamer Good Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-good1.0
+
+GObject
+=== x264enc ===
+Factory Details:
+  Rank                     primary (256)
+  Long-name                x264 H.264 Encoder
+  Klass                    Codec/Encoder/Video
+  Description              libx264-based H.264 video encoder
+  Author                   Josef Zlomek <josef.zlomek@itonis.tv>, Mark Nauwelaerts <mnauw@users.sf.net>
+  Documentation            https://gstreamer.freedesktop.org/documentation/x264/#x264enc-page
+
+Plugin Details:
+  Name                     x264
+  Description              libx264-based H.264 encoder plugin
+  Filename                 /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstx264.so
+  Version                  1.28.2
+  License                  GPL
+  Source module            gst-plugins-ugly
+  Documentation            https://gstreamer.freedesktop.org/documentation/x264/
+  Source release date      2026-04-07
+  Binary package           GStreamer Ugly Plugins (Ubuntu)
+  Origin URL               https://launchpad.net/ubuntu/+source/gst-plugins-ugly1.0
+
+GObject
+=== hardware factories ===
+nvcodec:  nvh264dec: NVDEC H.264 Decoder
+=== package versions ===
+gstreamer1.0-alsa:amd64	1.28.2-1ubuntu0.1
+gstreamer1.0-audiosink	
+gstreamer1.0-audiosource	
+gstreamer1.0-gl:amd64	1.28.2-1ubuntu0.1
+gstreamer1.0-libav:amd64	1.28.2-1
+gstreamer1.0-packagekit	1.3.4-3ubuntu1.2
+gstreamer1.0-pipewire:amd64	1.6.2-1ubuntu1.2
+gstreamer1.0-plugins-bad:amd64	1.28.2-1ubuntu1.2
+gstreamer1.0-plugins-bad-faad	
+gstreamer1.0-plugins-bad-videoparsers	
+gstreamer1.0-plugins-base:amd64	1.28.2-1ubuntu0.1
+gstreamer1.0-plugins-base-apps	1.28.2-1ubuntu0.1
+gstreamer1.0-plugins-extra:amd64	1.28.2-1ubuntu1.2
+gstreamer1.0-plugins-good:amd64	1.28.2-2ubuntu0.4
+gstreamer1.0-plugins-ugly:amd64	1.28.2-1
+gstreamer1.0-pulseaudio	
+gstreamer1.0-tools	1.28.2-1
+gstreamer1.0-videosink	
+gstreamer1.0-videosource	
+gstreamer1.0-visualization	
+gstreamer1.0-x:amd64	1.28.2-1ubuntu0.1
+libavcodec62:amd64	7:8.0.1-3ubuntu2
+libdav1d7:amd64	1.5.3-1
+libopenh264-8:amd64	2.6.0+dfsg-2build1
+libpng16-16	
+libpng16-16t64:amd64	1.6.57-1ubuntu0.1
+libvpx12:amd64	1.16.0-3
+libwebp7:amd64	1.5.0-0.1build1
+libwebpdemux2:amd64	1.5.0-0.1build1
+libwebpmux3:amd64	1.5.0-0.1build1
+=== libav linkage ===
+	linux-vdso.so.1 (0x00007461634a5000)
+	libavcodec.so.62 => /usr/lib/x86_64-linux-gnu/libavcodec.so.62 (0x0000746161200000)
+	libavfilter.so.11 => /usr/lib/x86_64-linux-gnu/libavfilter.so.11 (0x0000746160200000)
+	libavformat.so.62 => /usr/lib/x86_64-linux-gnu/libavformat.so.62 (0x000074615fe00000)
+	libavutil.so.60 => /usr/lib/x86_64-linux-gnu/libavutil.so.60 (0x000074615ec00000)
+	libgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x000074615ea93000)
+	libgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007461633dd000)
+	libglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x000074615e93b000)
+	libgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000746163359000)
+	libgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x000074616111a000)
+	libgstaudio-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstaudio-1.0.so.0 (0x0000746160175000)
+	libgstpbutils-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstpbutils-1.0.so.0 (0x000074616012c000)
+	libc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000074615e600000)
+	libswresample.so.6 => /usr/lib/x86_64-linux-gnu/libswresample.so.6 (0x000074616332a000)
+	libvpx.so.12 => /usr/lib/x86_64-linux-gnu/libvpx.so.12 (0x000074615e200000)
+	libm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x000074615e0da000)
+	libwebpmux.so.3 => /usr/lib/x86_64-linux-gnu/libwebpmux.so.3 (0x000074616110b000)
+	liblzma.so.5 => /usr/lib/x86_64-linux-gnu/liblzma.so.5 (0x000074615fdcb000)
+	libdav1d.so.7 => /usr/lib/x86_64-linux-gnu/libdav1d.so.7 (0x000074615deef000)
+	librsvg-2.so.2 => /usr/lib/x86_64-linux-gnu/librsvg-2.so.2 (0x000074615d800000)
+	libcairo.so.2 => /usr/lib/x86_64-linux-gnu/libcairo.so.2 (0x000074615dda0000)
+	libzvbi.so.0 => /usr/lib/x86_64-linux-gnu/libzvbi.so.0 (0x000074615e8aa000)
+	libz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x000074616010e000)
+	libsnappy.so.1 => /usr/lib/x86_64-linux-gnu/libsnappy.so.1 (0x00007461610fe000)
+	libaom.so.3 => /usr/lib/x86_64-linux-gnu/libaom.so.3 (0x000074615d200000)
+	libcodec2.so.1.2 => /usr/lib/x86_64-linux-gnu/libcodec2.so.1.2 (0x000074615c000000)
+	libgsm.so.1 => /usr/lib/x86_64-linux-gnu/libgsm.so.1 (0x000074615fdbb000)
+	libjxl.so.0.11 => /usr/lib/x86_64-linux-gnu/libjxl.so.0.11 (0x000074615bc00000)
+	libjxl_threads.so.0.11 => /usr/lib/x86_64-linux-gnu/libjxl_threads.so.0.11 (0x0000746163320000)
+	libmp3lame.so.0 => /usr/lib/x86_64-linux-gnu/libmp3lame.so.0 (0x000074615fd6c000)
+	libopenjp2.so.7 => /usr/lib/x86_64-linux-gnu/libopenjp2.so.7 (0x000074615e83a000)
+	libopus.so.0 => /usr/lib/x86_64-linux-gnu/libopus.so.0 (0x000074615b600000)
+	librav1e.so.0.8 => /usr/lib/x86_64-linux-gnu/librav1e.so.0.8 (0x000074615b200000)
+	libshine.so.3 => /usr/lib/x86_64-linux-gnu/libshine.so.3 (0x000074615fd60000)
+	libspeex.so.1 => /usr/lib/x86_64-linux-gnu/libspeex.so.1 (0x000074615fd40000)
+	libSvtAv1Enc.so.2 => /usr/lib/x86_64-linux-gnu/libSvtAv1Enc.so.2 (0x000074615a800000)
+	libtheoraenc.so.2 => /usr/lib/x86_64-linux-gnu/libtheoraenc.so.2 (0x000074615e5cb000)
+	libtheoradec.so.2 => /usr/lib/x86_64-linux-gnu/libtheoradec.so.2 (0x000074615dd85000)
+	libtwolame.so.0 => /usr/lib/x86_64-linux-gnu/libtwolame.so.0 (0x000074615d7da000)
+	libvorbis.so.0 => /usr/lib/x86_64-linux-gnu/libvorbis.so.0 (0x000074615d7ab000)
+	libvorbisenc.so.2 => /usr/lib/x86_64-linux-gnu/libvorbisenc.so.2 (0x000074615d155000)
+	libwebp.so.7 => /usr/lib/x86_64-linux-gnu/libwebp.so.7 (0x000074615d0c2000)
+	libx264.so.165 => /usr/lib/x86_64-linux-gnu/libx264.so.165 (0x000074615a400000)
+	libx265.so.215 => /usr/lib/x86_64-linux-gnu/libx265.so.215 (0x0000746159200000)
+	libxvidcore.so.4 => /usr/lib/x86_64-linux-gnu/libxvidcore.so.4 (0x000074615baf4000)
+	libstdc++.so.6 => /usr/lib/x86_64-linux-gnu/libstdc++.so.6 (0x0000746158e00000)
+	libva.so.2 => /usr/lib/x86_64-linux-gnu/libva.so.2 (0x000074615d08a000)
+	libvpl.so.2 => /usr/lib/x86_64-linux-gnu/libvpl.so.2 (0x000074615d027000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007461634a7000)
+	libswscale.so.9 => /usr/lib/x86_64-linux-gnu/libswscale.so.9 (0x000074615a27a000)
+	libbs2b.so.0 => /usr/lib/x86_64-linux-gnu/libbs2b.so.0 (0x000074615e832000)
+	liblilv-0.so.0 => /usr/lib/x86_64-linux-gnu/liblilv-0.so.0 (0x000074615dd6a000)
+	librubberband.so.3 => /usr/lib/x86_64-linux-gnu/librubberband.so.3 (0x000074615ba8f000)
+	libmysofa.so.1 => /usr/lib/x86_64-linux-gnu/libmysofa.so.1 (0x000074615e821000)
+	libflite_cmu_us_awb.so.1 => /usr/lib/x86_64-linux-gnu/libflite_cmu_us_awb.so.1 (0x0000746158a00000)
+	libflite_cmu_us_kal.so.1 => /usr/lib/x86_64-linux-gnu/libflite_cmu_us_kal.so.1 (0x000074615889b000)
+	libflite_cmu_us_kal16.so.1 => /usr/lib/x86_64-linux-gnu/libflite_cmu_us_kal16.so.1 (0x0000746158400000)
+	libflite_cmu_us_rms.so.1 => /usr/lib/x86_64-linux-gnu/libflite_cmu_us_rms.so.1 (0x0000746157e00000)
+	libflite_cmu_us_slt.so.1 => /usr/lib/x86_64-linux-gnu/libflite_cmu_us_slt.so.1 (0x0000746157a00000)
+	libflite.so.1 => /usr/lib/x86_64-linux-gnu/libflite.so.1 (0x000074615ba54000)
+	libharfbuzz.so.0 => /usr/lib/x86_64-linux-gnu/libharfbuzz.so.0 (0x000074615a6d5000)
+	libfribidi.so.0 => /usr/lib/x86_64-linux-gnu/libfribidi.so.0 (0x000074615bfe1000)
+	libplacebo.so.360 => /usr/lib/x86_64-linux-gnu/libplacebo.so.360 (0x0000746157000000)
+	libass.so.9 => /usr/lib/x86_64-linux-gnu/libass.so.9 (0x000074615b5bf000)
+	libvidstab.so.1.1 => /usr/lib/x86_64-linux-gnu/libvidstab.so.1.1 (0x000074615d796000)
+	libzmq.so.5 => /usr/lib/x86_64-linux-gnu/libzmq.so.5 (0x000074615b15d000)
+	libzimg.so.2 => /usr/lib/x86_64-linux-gnu/libzimg.so.2 (0x000074615b530000)
+	libOpenCL.so.1 => /usr/lib/x86_64-linux-gnu/libOpenCL.so.1 (0x000074615ba3d000)
+	libfontconfig.so.1 => /usr/lib/x86_64-linux-gnu/libfontconfig.so.1 (0x000074615b10a000)
+	libfreetype.so.6 => /usr/lib/x86_64-linux-gnu/libfreetype.so.6 (0x000074615912b000)
+	libxml2.so.16 => /usr/lib/x86_64-linux-gnu/libxml2.so.16 (0x000074615829d000)
+	libbz2.so.1.0 => /usr/lib/x86_64-linux-gnu/libbz2.so.1.0 (0x000074615ba28000)
+	libdvdnav.so.4 => /usr/lib/x86_64-linux-gnu/libdvdnav.so.4 (0x000074615b0f2000)
+	libdvdread.so.8 => /usr/lib/x86_64-linux-gnu/libdvdread.so.8 (0x000074615a255000)
+	libgme.so.0 => /usr/lib/x86_64-linux-gnu/libgme.so.0 (0x00007461587e8000)
+	libopenmpt.so.0 => /usr/lib/x86_64-linux-gnu/libopenmpt.so.0 (0x0000746156c00000)
+	libchromaprint.so.1 => /usr/lib/x86_64-linux-gnu/libchromaprint.so.1 (0x000074615ba17000)
+	libbluray.so.3 => /usr/lib/x86_64-linux-gnu/libbluray.so.3 (0x00007461590e5000)
+	libgnutls.so.30 => /usr/lib/x86_64-linux-gnu/libgnutls.so.30 (0x0000746156800000)
+	librabbitmq.so.4 => /usr/lib/x86_64-linux-gnu/librabbitmq.so.4 (0x000074615a23d000)
+	librist.so.4 => /usr/lib/x86_64-linux-gnu/librist.so.4 (0x00007461590ba000)
+	libsrt-gnutls.so.1.5 => /usr/lib/x86_64-linux-gnu/libsrt-gnutls.so.1.5 (0x0000746156f2c000)
+	libssh.so.4 => /usr/lib/x86_64-linux-gnu/libssh.so.4 (0x0000746157983000)
+	libva-drm.so.2 => /usr/lib/x86_64-linux-gnu/libva-drm.so.2 (0x000074615dd65000)
+	libva-x11.so.2 => /usr/lib/x86_64-linux-gnu/libva-x11.so.2 (0x000074615d01f000)
+	libvdpau.so.1 => /usr/lib/x86_64-linux-gnu/libvdpau.so.1 (0x000074615a6cf000)
+	libX11.so.6 => /usr/lib/x86_64-linux-gnu/libX11.so.6 (0x0000746156abe000)
+	libdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007461590a3000)
+	libgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x000074615a236000)
+	libffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000746156f1b000)
+	libatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x000074615a22b000)
+	libpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000746156e6f000)
+	libgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x0000746158df6000)
+	liborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007461566fd000)
+	libgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x0000746156e2d000)
+	libsoxr.so.0 => /usr/lib/x86_64-linux-gnu/libsoxr.so.0 (0x0000746156a56000)
+	libgio-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgio-2.0.so.0 (0x0000746156520000)
+	libgdk_pixbuf-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgdk_pixbuf-2.0.so.0 (0x0000746156a20000)
+	libgcc_s.so.1 => /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007461564f2000)
+	libcairo-gobject.so.2 => /usr/lib/x86_64-linux-gnu/libcairo-gobject.so.2 (0x00007461587dc000)
+	libpangocairo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libpangocairo-1.0.so.0 (0x0000746156e1c000)
+	libpango-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libpango-1.0.so.0 (0x0000746156481000)
+	libpng16.so.16 => /usr/lib/x86_64-linux-gnu/libpng16.so.16 (0x0000746156447000)
+	libXext.so.6 => /usr/lib/x86_64-linux-gnu/libXext.so.6 (0x0000746156433000)
+	libXrender.so.1 => /usr/lib/x86_64-linux-gnu/libXrender.so.1 (0x0000746156a14000)
+	libxcb.so.1 => /usr/lib/x86_64-linux-gnu/libxcb.so.1 (0x0000746156408000)
+	libxcb-render.so.0 => /usr/lib/x86_64-linux-gnu/libxcb-render.so.0 (0x00007461563f9000)
+	libxcb-shm.so.0 => /usr/lib/x86_64-linux-gnu/libxcb-shm.so.0 (0x000074615b0ed000)
+	libpixman-1.so.0 => /usr/lib/x86_64-linux-gnu/libpixman-1.so.0 (0x0000746156342000)
+	libjxl_cms.so.0.11 => /usr/lib/x86_64-linux-gnu/libjxl_cms.so.0.11 (0x000074615632a000)
+	libhwy.so.1 => /usr/lib/x86_64-linux-gnu/libhwy.so.1 (0x000074615631c000)
+	libbrotlidec.so.1 => /usr/lib/x86_64-linux-gnu/libbrotlidec.so.1 (0x000074615630d000)
+	libbrotlienc.so.1 => /usr/lib/x86_64-linux-gnu/libbrotlienc.so.1 (0x0000746156264000)
+	libmpg123.so.0 => /usr/lib/x86_64-linux-gnu/libmpg123.so.0 (0x0000746156205000)
+	libogg.so.0 => /usr/lib/x86_64-linux-gnu/libogg.so.0 (0x00007461561fb000)
+	libmvec.so.1 => /usr/lib/x86_64-linux-gnu/libmvec.so.1 (0x0000746156100000)
+	libsharpyuv.so.0 => /usr/lib/x86_64-linux-gnu/libsharpyuv.so.0 (0x0000746157df7000)
+	libnuma.so.1 => /usr/lib/x86_64-linux-gnu/libnuma.so.1 (0x00007461560f2000)
+	libserd-0.so.0 => /usr/lib/x86_64-linux-gnu/libserd-0.so.0 (0x00007461560d9000)
+	libsord-0.so.0 => /usr/lib/x86_64-linux-gnu/libsord-0.so.0 (0x00007461560d0000)
+	libsratom-0.so.0 => /usr/lib/x86_64-linux-gnu/libsratom-0.so.0 (0x00007461560c5000)
+	libzix-0.so.0 => /usr/lib/x86_64-linux-gnu/libzix-0.so.0 (0x00007461560b7000)
+	libfftw3.so.3 => /usr/lib/x86_64-linux-gnu/libfftw3.so.3 (0x0000746155e00000)
+	libsamplerate.so.0 => /usr/lib/x86_64-linux-gnu/libsamplerate.so.0 (0x0000746155c91000)
+	libflite_usenglish.so.1 => /usr/lib/x86_64-linux-gnu/libflite_usenglish.so.1 (0x000074615608d000)
+	libflite_cmulex.so.1 => /usr/lib/x86_64-linux-gnu/libflite_cmulex.so.1 (0x0000746155bfa000)
+	libasound.so.2 => /usr/lib/x86_64-linux-gnu/libasound.so.2 (0x0000746155adb000)
+	libgraphite2.so.3 => /usr/lib/x86_64-linux-gnu/libgraphite2.so.3 (0x0000746156067000)
+	libvulkan.so.1 => /usr/lib/x86_64-linux-gnu/libvulkan.so.1 (0x0000746155a4b000)
+	liblcms2.so.2 => /usr/lib/x86_64-linux-gnu/liblcms2.so.2 (0x00007461559e4000)
+	libunibreak.so.6 => /usr/lib/x86_64-linux-gnu/libunibreak.so.6 (0x0000746156045000)
+	libgomp.so.1 => /usr/lib/x86_64-linux-gnu/libgomp.so.1 (0x0000746155985000)
+	libbsd.so.0 => /usr/lib/x86_64-linux-gnu/libbsd.so.0 (0x000074615602f000)
+	libsodium.so.23 => /usr/lib/x86_64-linux-gnu/libsodium.so.23 (0x000074615592b000)
+	libpgm-5.3.so.0 => /usr/lib/x86_64-linux-gnu/libpgm-5.3.so.0 (0x00007461558df000)
+	libnorm.so.1 => /usr/lib/x86_64-linux-gnu/libnorm.so.1 (0x00007461557d1000)
+	libgssapi_krb5.so.2 => /usr/lib/x86_64-linux-gnu/libgssapi_krb5.so.2 (0x0000746155779000)
+	libexpat.so.1 => /usr/lib/x86_64-linux-gnu/libexpat.so.1 (0x000074615574b000)
+	libvorbisfile.so.3 => /usr/lib/x86_64-linux-gnu/libvorbisfile.so.3 (0x0000746156024000)
+	libudfread.so.3 => /usr/lib/x86_64-linux-gnu/libudfread.so.3 (0x0000746155741000)
+	libp11-kit.so.0 => /usr/lib/x86_64-linux-gnu/libp11-kit.so.0 (0x0000746155566000)
+	libidn2.so.0 => /usr/lib/x86_64-linux-gnu/libidn2.so.0 (0x0000746155544000)
+	libunistring.so.5 => /usr/lib/x86_64-linux-gnu/libunistring.so.5 (0x000074615535d000)
+	libtasn1.so.6 => /usr/lib/x86_64-linux-gnu/libtasn1.so.6 (0x0000746155346000)
+	libhogweed.so.6 => /usr/lib/x86_64-linux-gnu/libhogweed.so.6 (0x00007461552fb000)
+	libnettle.so.8 => /usr/lib/x86_64-linux-gnu/libnettle.so.8 (0x00007461552a4000)
+	libgmp.so.10 => /usr/lib/x86_64-linux-gnu/libgmp.so.10 (0x000074615521e000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x000074615510d000)
+	libcrypto.so.3 => /usr/lib/x86_64-linux-gnu/libcrypto.so.3 (0x0000746154a00000)
+	libmbedcrypto.so.16 => /usr/lib/x86_64-linux-gnu/libmbedcrypto.so.16 (0x000074615507a000)
+	libcjson.so.1 => /usr/lib/x86_64-linux-gnu/libcjson.so.1 (0x0000746155070000)
+	libXfixes.so.3 => /usr/lib/x86_64-linux-gnu/libXfixes.so.3 (0x0000746155068000)
+	libX11-xcb.so.1 => /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1 (0x000074615797c000)
+	libxcb-dri3.so.0 => /usr/lib/x86_64-linux-gnu/libxcb-dri3.so.0 (0x0000746155061000)
+	libmount.so.1 => /usr/lib/x86_64-linux-gnu/libmount.so.1 (0x00007461549ad000)
+	libselinux.so.1 => /usr/lib/x86_64-linux-gnu/libselinux.so.1 (0x000074615502e000)
+	libglycin-2.so.0 => /usr/lib/x86_64-linux-gnu/libglycin-2.so.0 (0x0000746154400000)
+	libpangoft2-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libpangoft2-1.0.so.0 (0x000074615498d000)
+	libthai.so.0 => /usr/lib/x86_64-linux-gnu/libthai.so.0 (0x0000746155022000)
+	libXau.so.6 => /usr/lib/x86_64-linux-gnu/libXau.so.6 (0x000074615501c000)
+	libXdmcp.so.6 => /usr/lib/x86_64-linux-gnu/libXdmcp.so.6 (0x0000746154985000)
+	libbrotlicommon.so.1 => /usr/lib/x86_64-linux-gnu/libbrotlicommon.so.1 (0x0000746154962000)
+	libmd.so.0 => /usr/lib/x86_64-linux-gnu/libmd.so.0 (0x0000746154953000)
+	libkrb5.so.3 => /usr/lib/x86_64-linux-gnu/libkrb5.so.3 (0x0000746154887000)
+	libk5crypto.so.3 => /usr/lib/x86_64-linux-gnu/libk5crypto.so.3 (0x000074615485b000)
+	libcom_err.so.2 => /usr/lib/x86_64-linux-gnu/libcom_err.so.2 (0x0000746154855000)
+	libkrb5support.so.0 => /usr/lib/x86_64-linux-gnu/libkrb5support.so.0 (0x0000746154848000)
+	libzstd.so.1 => /usr/lib/x86_64-linux-gnu/libzstd.so.1 (0x000074615433d000)
+	libblkid.so.1 => /usr/lib/x86_64-linux-gnu/libblkid.so.1 (0x000074615480c000)
+	libseccomp.so.2 => /usr/lib/x86_64-linux-gnu/libseccomp.so.2 (0x000074615430f000)
+	libdatrie.so.1 => /usr/lib/x86_64-linux-gnu/libdatrie.so.1 (0x0000746154803000)
+	libkeyutils.so.1 => /usr/lib/x86_64-linux-gnu/libkeyutils.so.1 (0x00007461547fc000)
+	libresolv.so.2 => /usr/lib/x86_64-linux-gnu/libresolv.so.2 (0x00007461542fc000)

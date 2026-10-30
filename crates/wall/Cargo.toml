@@ -1,0 +1,11 @@
+[package]
+name = "one-mk-wall-sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "I/O-free experimental monotonic wallpaper clock and playback synchronization"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2"
+one-mk-net = { path = "../net" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }

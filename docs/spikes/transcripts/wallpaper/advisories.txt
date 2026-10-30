@@ -1,0 +1,27 @@
+Primary advisory verification on 2026-10-30, using curl -fsSL --max-time 25.
+Web-tool opens returned no readable content; direct HTTPS retrieval succeeded
+after sandbox DNS restriction was lifted. Facts extracted from advisory tables:
+
+https://gstreamer.freedesktop.org/security/sa-2026-0022.html
+CVE-2026-39043, published 2026-04-07.
+Matroska heap corruption. Affected gst-plugins-good before 1.28.2.
+
+https://gstreamer.freedesktop.org/security/sa-2026-0047.html
+CVE-2026-12892, published 2026-06-24.
+H.264 NAL extension-header bounds violation, one byte past allocation.
+Affected gst-plugins-bad before 1.28.5.
+
+https://gstreamer.freedesktop.org/security/sa-2026-0052.html
+CVE-2026-18298, published 2026-07-08.
+GdkPixbuf dimensions changing during decode can corrupt heap storage.
+Affected gst-plugins-good before 1.28.5.
+Local good-package changelog lists matching backport and rank reduction.
+
+https://gstreamer.freedesktop.org/security/sa-2026-0079.html
+CVE-2026-88914, published 2026-09-07.
+MOV/MP4 caption parsing arithmetic/bounds failure.
+Affected gst-plugins-good before 1.28.7.
+Local good-package changelog lists matching backport.
+
+These are examples of relevant parser/decoder surface, NOT an exhaustive audit.
+Package changelog evidence does not independently verify installed binary bytes.
