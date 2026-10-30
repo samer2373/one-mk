@@ -237,7 +237,8 @@ impl App {
         let undo = format!("one-mk layout {} {}", self.arg_for(fp), before.side());
         let title = format!("{name} is now {}", on_your(side));
         let body = format!("You pushed the pointer against your {side} edge twice, so one-mk placed it there. To undo, run: {undo}");
-        println!("{title}. {body}");
+        // `sync_sides` has said where it is now.
+        println!("{body}");
         tokio::spawn(async move { crate::notify::note(&title, &body).await });
     }
 

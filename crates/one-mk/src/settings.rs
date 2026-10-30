@@ -347,6 +347,21 @@ impl EdgeSettings {
         }
     }
 
+    /// What edges with no computer do, in a sentence (for `one-mk edge`).
+    pub fn no_computer(&self) -> String {
+        let wrap = match self.wrap {
+            Wrap::Off => "the pointer stops there",
+            Wrap::On => "the pointer wraps round to the opposite edge on the left and right",
+            Wrap::All => "the pointer wraps round to the opposite edge",
+        };
+        let learn = match self.learn {
+            Learn::Off => "pushing toward a computer does nothing",
+            Learn::Suggest => "pushing twice toward a computer that isn't placed yet suggests where it is",
+            Learn::Auto => "pushing twice toward a computer that isn't placed yet places it there",
+        };
+        format!("Where no computer sits, {wrap}, and {learn} (`--wrap`, `--learn`).")
+    }
+
     /// In words, for `one-mk status`; empty if no rule is on.
     pub fn describe(&self) -> String {
         let mut parts = Vec::new();
@@ -650,6 +665,7 @@ pub async fn edge(dir: &Path, args: EdgeArgs) -> Result<()> {
         } else {
             println!("Edges: {d}.");
         }
+        println!("{}", e.no_computer());
     };
     if args.dismiss && !args.changes_anything() {
         return dismiss(dir).await;

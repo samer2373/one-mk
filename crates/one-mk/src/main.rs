@@ -286,7 +286,8 @@ enum Cmd {
         state: String,
     },
     /// Show or change the rules for crossing edges: dead corners, a dwell
-    /// time, a key to hold, and not leaving a fullscreen window.
+    /// time, a key to hold, not leaving a fullscreen window, and what edges
+    /// with no computer do (pointer wrap, layout learning).
     Edge(settings::EdgeArgs),
     /// Gaming mode: on another computer, send raw mouse movement (for games)
     /// instead of positions.
