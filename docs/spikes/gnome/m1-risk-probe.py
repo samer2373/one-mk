@@ -231,10 +231,20 @@ def main():
     parser.add_argument('--idle-only', action='store_true')
     parser.add_argument('--debug-shell', action='store_true')
     parser.add_argument('--security-only', action='store_true')
+    parser.add_argument('--stress-only', action='store_true')
+    parser.add_argument('--cycles', type=int, default=100)
+    parser.add_argument('--gc-stress', action='store_true')
+    parser.add_argument('--extension-source', type=Path)
     parser.add_argument('--baseline', action='store_true')
     parser.add_argument('--baseline-log', type=Path)
     parser.add_argument('--binary', type=Path, default=BINARY)
     args = parser.parse_args()
+    if not 1 <= args.cycles <= 1000:
+        parser.error('--cycles must be between 1 and 1000')
+    if args.stress_only and (args.matrix or args.baseline or args.security_only or args.idle_only):
+        parser.error('--stress-only is a separate lifecycle session')
+    if args.gc_stress and not args.stress_only:
+        parser.error('--gc-stress requires --stress-only')
     if args.idle_only and (not args.matrix or args.baseline):
         parser.error('--idle-only requires a candidate --matrix')
     if args.security_only and (args.matrix or args.baseline or args.idle_only):
@@ -267,6 +277,8 @@ def main():
             raise RuntimeError('unqualified Shell version: isolated M1 requires 50.1')
         started = True
         session_environment = clean_environment()
+        if args.extension_source:
+            session_environment['EXT_SRC'] = str(args.extension_source.resolve(strict=True))
         if args.debug_shell:
             session_environment['DEBUG_SHELL'] = '1'
         report["harness_start"] = command([str(HARNESS), "start", "3" if args.matrix else "2"], session_environment)
@@ -316,6 +328,10 @@ def main():
             runpy.run_path(str(HERE / 'm1a-security.py'))['run_security'](
                 evaluate, private, arguments, ROOT, HERE, HARNESS, clean_environment(), report)
             report['status'] = 'security-negative-tests-pass-not-M1-acceptance'
+        elif args.stress_only:
+            runpy.run_path(str(HERE / 'm1a-stress.py'))['run_stress'](
+                evaluate, private, snapshot, arguments, report, args.cycles, args.gc_stress)
+            report['status'] = 'stress-pass-not-M1-acceptance'
         elif args.matrix:
             report['measurements'] = runpy.run_path(str(HERE / 'm1a-matrix.py'))['run_matrix'](
                 evaluate, private, snapshot, arguments, ROOT, LAB, report)
@@ -379,8 +395,9 @@ def main():
                 shutil.copyfile(trace, LAB / f'{args.label}-renderer.strace')
                 report['idle_syscalls'] = {state: idle_trace_summary(trace.read_text(), window)
                     for state, window in report['measurements'].items()
-                    if state in ('cpu_paused', 'cpu_covered')}
-                if any(window['timer_returns'] for window in report['idle_syscalls'].values()):
+                    if state in ('cpu_on', 'cpu_paused', 'cpu_covered')}
+                if any(report['idle_syscalls'][state]['timer_returns']
+                       for state in ('cpu_paused', 'cpu_covered')):
                     report['status'] = 'failed'
                     report['idle_gate'] = 'FAILED: timer work during settled pause/coverage'
             elif args.idle_only:

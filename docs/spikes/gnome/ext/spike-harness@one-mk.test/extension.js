@@ -2,9 +2,15 @@
 // which has no such command-line flag in GNOME 50.
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import GLib from 'gi://GLib';
+import System from 'system';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 export default class SpikeHarness extends Extension {
+    collectGarbage() {
+        System.gc();
+        return true;
+    }
+
     timeUs() {
         return GLib.get_monotonic_time();
     }
