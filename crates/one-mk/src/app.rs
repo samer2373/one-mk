@@ -36,6 +36,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
+mod push;
 mod shortcuts;
 mod tune;
 
@@ -540,6 +541,8 @@ struct App {
     /// When to dial missing peers again, and the wait after that.
     dial_at: Option<Instant>,
     dial_backoff: Duration,
+    /// Edges where no computer sits: pointer wrap and layout learning.
+    push: push::EdgePush,
 }
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
@@ -663,6 +666,7 @@ pub async fn serve(
         focus_watched: false,
         dial_at: None,
         dial_backoff: DIAL_INTERVAL,
+        push: Default::default(),
     };
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
     if app.locked {
@@ -1114,10 +1118,13 @@ impl App {
             self.enter_peer_at_center(id, fp);
             return;
         }
-        let Some(local) = self.local.as_ref() else {
+        if self.local.is_none() {
             self.release_capture(id, None);
             return;
-        };
+        }
+        if self.on_free_edge(id, side, pos) {
+            return;
+        }
         let Some((armed, _)) = self.armed_at(side, pos) else {
             // Like the wall beside a real monitor: the neighbours on this
             // side are lined up elsewhere along it.
@@ -1131,23 +1138,31 @@ impl App {
             self.hand_back(id);
             return;
         }
-        let guard = self.settings.edge.guard(side);
-        let edge = &self.settings.edge;
-        let blocked = guard.fullscreen
-            && fullscreen_blocks(true, self.focus.focus().as_ref(), &edge.fullscreen_allow, &edge.fullscreen_block);
-        // The rules are measured against the armed piece of edge, which
-        // may lie inside the desktop's bounding box.
-        match Approach::start(guard, local, armed, pos, self.mods, blocked, std::time::Instant::now()) {
-            Start::Cross(p) => self.enter_peer(id, side, p),
-            Start::Refuse(why) => {
+        match self.approach_start(armed, pos) {
+            Some(Start::Cross(p)) => self.enter_peer(id, side, p),
+            Some(Start::Refuse(why)) => {
                 tracing::debug!(%side, "not crossing: {}", why.as_str());
                 self.hand_back(id);
             }
-            Start::Wait(a) => {
-                tracing::debug!(%side, ?guard, "holding the pointer at the edge");
+            Some(Start::Wait(a)) => {
+                tracing::debug!(%side, "holding the pointer at the edge");
                 self.approach = Some((id, a));
             }
+            None => self.release_capture(id, None),
         }
+    }
+
+    /// What the edge rules say about the pointer caught by the armed piece
+    /// of edge `armed` (which may lie inside the desktop's bounding box:
+    /// the rules are measured against it) at `pos`. None before our
+    /// monitors are known.
+    fn approach_start(&mut self, armed: Edge, pos: Pos) -> Option<Start> {
+        let local = self.local.as_ref()?;
+        let guard = self.settings.edge.guard(armed.side);
+        let edge = &self.settings.edge;
+        let blocked = guard.fullscreen
+            && fullscreen_blocks(true, self.focus.focus().as_ref(), &edge.fullscreen_allow, &edge.fullscreen_block);
+        Some(Approach::start(guard, local, armed, pos, self.mods, blocked, std::time::Instant::now()))
     }
 
     /// The pointer is held at an edge and something happened.
@@ -1158,7 +1173,11 @@ impl App {
             Next::Wait => {}
             Next::Cross(pos) => {
                 let Some((id, a)) = self.approach.take() else { return };
-                self.enter_peer(id, a.side(), pos);
+                if self.push.held_at_wrap(id) {
+                    self.wrap_round(id, a.side(), pos);
+                } else {
+                    self.enter_peer(id, a.side(), pos);
+                }
             }
             Next::Release { pos, around, keys } => {
                 let Some((id, _)) = self.approach.take() else { return };
@@ -1279,6 +1298,7 @@ impl App {
         };
         self.epoch = epoch;
         self.begin_visit(activation, fp, cursor);
+        self.confirm_place(fp);
     }
 
     /// `one-mk switch`: the pointer goes to the centre of `fp`'s main
@@ -1541,6 +1561,7 @@ impl App {
             println!("{} is controlling this computer. {}", peer.name, takeback_hint());
         }
         self.owner = Some(Owner::new(fp, id, epoch, pos));
+        self.update_sides(); // no wrapping or learning while controlled
     }
 
     /// Tells the owner whether a fullscreen window has the focus here (for
@@ -1631,6 +1652,7 @@ impl App {
                 clip.left(o.peer, p.conn.remote_address());
             }
         }
+        self.update_sides();
     }
 
     // ------------------------------------------------------------------ links
@@ -1727,6 +1749,7 @@ impl App {
         if let Some(old) = self.peers.insert(fp, Connected { id, name, os, rank, side, offset, conn, ctl, desktop, caps: 0 }) {
             old.conn.close(2u32.into(), b"duplicate");
         }
+        self.push.connected(fp);
         self.send_layout(fp);
         self.update_sides();
         if !self.any_missing() {
@@ -2180,6 +2203,7 @@ impl App {
                 }
                 None => "none\n".to_owned(),
             },
+            Request::DismissSuggestion => self.dismiss_suggestion(),
             Request::Stop => "ok\n".to_owned(),
         };
         let _ = reply.send(text);
@@ -2234,6 +2258,7 @@ impl App {
             input: self.input_problems.values().cloned().collect(),
             pointer_overlay: self.inject.overlay_active(),
             tuning: self.app_rule_notes(),
+            suggestion: self.suggestion(),
         }
     }
 
@@ -2507,9 +2532,14 @@ impl App {
             let keep: Vec<Fingerprint> = self.remote.as_ref().map(|r| r.peer).into_iter().chain(switching).collect();
             edges.retain(|(_, fp)| keep.contains(fp));
         }
-        if edges != self.edges {
-            let _ = self.capture.send(CaptureCmd::SetEdges(edges.iter().map(|(e, _)| *e).collect()));
+        // Beside them, the edges where no computer sits, if pointer wrap
+        // or layout learning wants them.
+        let free = self.free_edges(&edges);
+        if edges != self.edges || !self.push.is_armed(&free) {
+            let all = edges.iter().map(|(e, _)| *e).chain(free.iter().map(|(e, _)| *e));
+            let _ = self.capture.send(CaptureCmd::SetEdges(all.collect()));
             self.edges = edges;
+            self.push.arm(free);
         }
         self.sync_dropzones();
     }
@@ -2698,6 +2728,8 @@ mod tests {
         }
     }
 
+    /// Pairs `dir` with `other`, placed on `side` by the user (so layout
+    /// learning leaves it be; `app/tests/push.rs` tests a guessed place).
     fn trust(dir: &std::path::Path, other: &Identity, side: Side) {
         let mut t = TrustStore::load(dir).unwrap();
         t.upsert(Device {
@@ -2705,6 +2737,7 @@ mod tests {
             fingerprint: other.fingerprint.to_string(),
             side: side.to_string(),
             addrs: vec![],
+            placed_by: one_mk_net::PlacedBy::User,
             ..Device::default()
         });
         t.save().unwrap();
@@ -4723,6 +4756,10 @@ mod tests {
     /// Key mapper, button, scroll and pointer tuning between daemons (in
     /// `app/tests/tuning.rs`).
     mod tuning;
+
+    /// Pointer wrap and layout learning between daemons (in
+    /// `app/tests/push.rs`).
+    mod push;
 
     #[test]
     fn swaps_only_between_a_mac_and_something_else() {

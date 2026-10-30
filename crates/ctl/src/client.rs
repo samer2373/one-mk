@@ -45,6 +45,9 @@ pub enum Request {
     /// A running `one-mk send` reports how far it is, so `status` and the
     /// window can show it. `finished` ends the report.
     Transfer { t: TransferStatus, finished: bool },
+    /// Hide the layout suggestion shown now (`one-mk edge --dismiss`, the
+    /// window's "No"): that computer is not suggested again for a while.
+    DismissSuggestion,
     /// Shut the daemon down, as if it had been sent Ctrl-C.
     Stop,
 }
@@ -131,6 +134,7 @@ impl Request {
             Request::ClipSend(_) => "clip-send",
             Request::ClipGet(_) => "clip-get",
             Request::Transfer { .. } => "transfer",
+            Request::DismissSuggestion => "dismiss-suggestion",
             Request::Stop => "stop",
         }
     }
@@ -169,6 +173,7 @@ impl Request {
             "takeback" if arg.is_empty() => Some(Request::TakeBack),
             "lock-all" if arg.is_empty() => Some(Request::LockAll),
             "stop" if arg.is_empty() => Some(Request::Stop),
+            "dismiss-suggestion" if arg.is_empty() => Some(Request::DismissSuggestion),
             "switch" => SwitchTo::parse(arg).map(Request::Switch),
             "lock-pointer" => Toggle::parse(arg).map(Request::LockPointer),
             "settings" if arg.is_empty() => Some(Request::Settings),
@@ -306,6 +311,7 @@ mod tests {
             Request::TakeBack,
             Request::Stop,
             Request::LockAll,
+            Request::DismissSuggestion,
             Request::Switch(SwitchTo::Here),
             Request::Switch(SwitchTo::Next),
             Request::Switch(SwitchTo::Device("mac mini".into())),

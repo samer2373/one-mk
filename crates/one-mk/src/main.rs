@@ -26,6 +26,7 @@ mod hotkeys;
 mod install;
 mod integrate;
 mod invite;
+mod learn;
 mod link;
 mod manage;
 mod netwatch;
