@@ -2,16 +2,17 @@
 
 ## Status and safety boundary
 
-This is an **incomplete implementation**, not a claim of cross-layout support.
-The default remains physical keys. The typing preference, validated wire types,
-pure routing state machines, dlopen-based XKB resolution/reverse lookup, optional
-compose state and an explicit-display native X11 snapshot API are implemented.
+This is an **incomplete native implementation**, not a claim of desktop
+cross-layout support. The default remains physical keys. Slice 5E-3 wires
+descriptor exchange, per-visit negotiation, sender routing, receiver validation,
+reverse lookup and held-key cleanup through the real daemon control path.
+Debug test null backends provide per-instance fixture layouts and record Text.
 Native snapshots and compose are **not connected to capture events or visits**;
-layout descriptor exchange and native text injection are still missing.
-Native backends therefore continue sending physical keys, even when
-characters or auto is requested. Status, doctor, and the CLI must say so.
-Do not advertise TEXT until a backend can receive text correctly. No polling or
-background timer is introduced by the typing preference or routing engine.
+native text injection remains missing. Native and normal null backends therefore
+send physical keys, even when characters or auto is requested, and never
+advertise TEXT. Test support requires both `null-typing-tests` and debug
+assertions; release builds cannot construct fixture keyboards, even with that
+feature. No polling or background timer is introduced by character routing.
 
 ## Problem and alternatives
 
@@ -43,20 +44,24 @@ descriptors from both ends and proven resolution/injection support; missing or
 equal descriptors mean physical. Descriptors are informational, never shell
 commands or filenames to open. A custom map must not be inferred from a name.
 Preferences affect outgoing typing. The receiver accepts text only during the
-authenticated controlling visit, subject to its supported backend and rate
-limit once native routing is integrated. In this build text is never injected.
-A future preference change must take effect on the next visit, never mid-hold.
+authenticated controlling visit, subject to its supported backend, peer TEXT
+capability and rate limit. Only the debug null test path currently supports it.
+Preference changes take effect on the next visit, never mid-hold. Live status,
+doctor and the window report the effective mode, including the source and target
+layout (for example `characters (German to US)`).
 
-## Proposed additive protocol-2 wire format (implemented codec)
+## Additive protocol-2 wire format
 
 All fields are little endian, inside the existing u16-length-prefixed control
-frame. Existing `Key` tag 5 is unchanged. TEXT is capability bit 64, reserved
-but deliberately absent from LOCAL until native support is ready.
+frame. Existing `Key` tag 5 is unchanged. TEXT is capability bit 64, deliberately
+absent from LOCAL. A capable backend adds it per connection; only the debug
+null fixture backend currently qualifies. Descriptors are sent only after the
+other peer advertises TEXT; missing capability always preserves physical keys.
 
 | Tag | Fields | Rules |
 | --- | --- | --- |
 | 21 Text | u16 byte length, UTF-8 bytes | 1..8 bytes, exactly one extended grapheme cluster |
-| 22 CharacterKey | u32 evdev code, u8 down (0/1), u32 Unicode scalar | code 1..767; unmodified printable single scalar; repeat down uses original resolution |
+| 22 CharacterKey | u32 evdev code, u8 down (0/1), u32 Unicode scalar | printable main-block source code only; unmodified printable single scalar; repeat down uses original resolution |
 | 23 KeyboardLayout | four u16-length-prefixed UTF-8 strings: name, variant, rules, model | each <=128 bytes, no controls or format characters |
 
 Only send these messages to TEXT-capable peers. Unknown tags remain skippable
@@ -72,7 +77,10 @@ an untrusted controller safe. Decode rejects malformed UTF-8 and trailing bytes
 on new messages. The pure receiver budget permits 200 text messages per fixed
 one-second window, discards excess and has no idle timer; every repeat costs
 one token. This is not a sliding-window limit: adjacent windows can admit two
-bursts close together. The budget is not connected to the receive path yet.
+bursts close together. The enabled daemon receive path enforces this budget for
+Text and CharacterKey downs/repeats together. Matching releases are never rate
+limited. Physical/character source-kind mismatches and changed-character ups
+are refused; CharacterKey cannot spoof Enter, Tab, Escape or modifiers.
 Outbound invalid Text and descriptors encode an invalid empty value, not a
 truncated usable character or layout, and remain bounded even for oversized
 internal strings. Decoding refuses those empty values.
@@ -95,13 +103,18 @@ letter and required Shift/AltGr state once, remembers the resolved chord until
 up, and uses reference counts for shared target codes/modifiers. Visit end,
 disconnect, revoke, timeout and backend loss release all remembered keys. A
 layout change during a hold must never change the up code. The pure engine
-tests this; character resolution is not yet wired into daemon visits. The normal
+tests this; the null fixture daemon visits exercise the integrated path. The normal
 daemon key path now uses the receiver's same reference accounting via
 `Receiver::physical_key`, rather than keeping physical Shift/AltGr ownership
 separate from resolved chords. The daemon's `HeldKeys` mirrors actual injected
 keys/buttons for visit-end cleanup. Engine and daemon-adapter tests interleave
 forwarded Shift with a resolved shifted chord in both orders; neither releases
-the other's reference. The Text wire path still injects nothing.
+the other's reference. Text reaches `Inject::Text` only on capable backends.
+`Inject::CharacterKey` is an explicit primitive recorded by null; the daemon
+normally resolves it into accounted `Inject::Key` events before injection.
+Native backends explicitly treat CharacterKey as physical and refuse Text.
+Wire Text has no physical source code, so native physical fallback must happen
+at sender negotiation, not by guessing a key at the receiver.
 Source codes are bounded to the evdev range so the pure engine can remember at
 most 767 source keys. Reverse-lookup chords accept only Shift/AltGr modifiers;
 invalid resolver output falls back physically rather than injecting arbitrary
@@ -149,8 +162,8 @@ with later composed Text. IMEs are not supported by this compose primitive.
 
 ## Remaining native implementation requirements
 
-- Linux: connect the snapshot/compose APIs to capture and visit routing, including
-  the null backend's fake layouts and backend capability detection. X11 must subscribe
+- Linux: connect the snapshot/compose APIs to capture and visit routing. Null
+  fixture layouts and backend capability gating are wired. X11 must subscribe
   to XKB map/state changes, not assume `_XKB_RULES_NAMES` is authoritative.
   Portal/libei and wlroots must propagate their seat keymaps to resolution.
 - X11 injection: prefer an existing keysym mapping. Temporary spare-keycode
@@ -168,7 +181,61 @@ with later composed Text. IMEs are not supported by this compose primitive.
   input source. Permission loss must release the resolved held chords.
 - Null: explicit test layout/injector only. It must not claim native support.
 
-## 5E-2 follow-up verification (October 30, 2026)
+## 5E-3 daemon verification (October 30, 2026)
+
+The enabled path uses debug-only null fixture keyboards for US, German, French,
+Polish and Turkish layouts, including Shift and AltGr levels. These tables are
+deterministic test data, not a native layout implementation: lock state, IMEs,
+dead keys and custom variants remain outside this slice.
+
+- Paired daemon integration covers German Z/Y, AltGr+Q, French AZERTY/AltGr
+  symbols, Polish AltGr letters, Turkish dotless i, Ctrl+Z, repeats, mapper-before-
+  resolution, Ctrl/Cmd swap, layout changes mid-hold and physical emergency exit.
+- Three daemon tasks broadcast from German to US and French receivers; each
+  resolves the same shortcut in its own layout. Missing TEXT and equal-layout
+  auto visits retain physical routing. Compatibility uses a simulated old peer,
+  not a separately built historical executable.
+- Two independent OS processes run the real daemon on null with German/US
+  fixtures. Negotiation, Text, Ctrl+Z and SIGKILL of the sender verify receiver
+  release of both the resolved key and Ctrl. Separate disconnect and visit-end
+  tests cover cleanup. No native editor or native remapping is involved.
+- Enabled hostile-peer tests exercise ownership/link consent, capability,
+  invalid/control/format/bidi/oversized Text, printable source-code restrictions,
+  rate limits, pairing spoofing and releases after exhaustion. A deterministic
+  20,000-transition generated sequence checks the held-key invariant.
+- Six temporary mutations (routing disabled, capability/consent/source-code/
+  budget/pairing guards removed) were each caught by their regression test;
+  all source mutations were restored before the final checks.
+- Two connected enabled idle processes, after two seconds settling, measured
+  **zero process CPU ticks each over three seconds**. This is a bounded Linux
+  idle sample, not a universal CPU or native-injector performance guarantee.
+  A loaded workspace rerun observed one receiver tick; a subsequent isolated
+  rerun observed one tick on each process. Existing QUIC keepalives remain
+  active. Absolute zero connected-idle CPU is therefore **not established**.
+  CPU sampling is a separate, explicitly ignored manual measurement test
+  (`enabled_connected_idle_sample`), not a timing-sensitive zero-tick assertion
+  in the always-enabled two-process lifecycle test. No transport timer was
+  added or changed by this slice; see [existing idle budgets](IDLE-WAKEUPS.md).
+
+All processes use throwaway HOME/runtime/settings with no desktop or session
+bus inherited. Native X11 suites use private Xvfb only. Native text injection,
+crash-safe remapping and native capture integration remain unverified and
+unshipped. Historical verification sections below describe earlier slices,
+not the current null fixture path.
+
+Final clean-environment validation: `cargo test -j 2 --workspace` passed
+972 tests, zero failed, nine ignored (including the child fixture and manual
+CPU sampler). `cargo clippy -j 2 --workspace --all-targets -- -D warnings`
+passed. Both cross-clippy commands passed with `--all-targets -- -D warnings`,
+targets `x86_64-pc-windows-msvc` and `aarch64-apple-darwin`, packages
+`one-mk-input`, `one-mk-proto`, `one-mk-ctl`, `one-mk-app`, `one-mk-tray`.
+These are compile checks, not Windows/macOS runtime validation. The final
+separate `cargo test -j 2 -p one-mk enabled_connected_idle_sample -- --ignored
+--nocapture` again observed `(0, 0)` ticks; the nonzero samples above still
+preclude an absolute-zero claim. No `cargo fmt` was run. Window text is wired
+to live status but was not visually inspected in this slice.
+
+## Historical 5E-2 follow-up verification (October 30, 2026)
 
 This follow-up is a **verified partial deliverable, not working character mode**.
 The worktree was reset to local wave5 at `3389e12` before implementation.
@@ -207,7 +274,7 @@ and at most two Cargo jobs. Servers and daemons started by the checks were stopp
   or native XKB snapshot activity during typing. ELF dynamic dependencies have
   no link-time xkbcommon/xkbcommon-x11/xcb dependency.
 
-Still missing: native capture-event integration and notification-driven caching;
+At the end of 5E-2, still missing: native capture-event integration and notification-driven caching;
 null fake layouts/text injection; descriptors and per-visit auto negotiation;
 sender Text/CharacterKey routing and compose buffering; receiver text injection
 and enabled-path rate limiting; durable remap marker/journal, concurrency and
@@ -264,8 +331,8 @@ restoration was tested: those paths do not exist in this patch.
 
 ## Owner validation script (required before enabling TEXT)
 
-This is a future acceptance script, **not** a claim these paths work now. On
-the current build the characters/auto commands must explicitly report physical
+This is a future native acceptance script, **not** a claim these paths work now. On
+the production build the characters/auto commands must explicitly report physical
 fallback. Use dedicated test computers and a text editor, never a shell prompt,
 for native typing tests. On each machine save its existing settings first.
 
@@ -336,7 +403,7 @@ letter to repeat, change layouts while it is held, release and type again. Test
 Ctrl+Z undo, Ctrl+Plus versus keypad plus, held physical Shift alongside a
 shifted shortcut, visit end and peer termination mid-press; no key may stay down.
 Check `auto` with equal/different layouts and an old peer. On this patch all
-Windows/macOS and null/X11 daemon paths still report physical fallback, so a
+Windows/macOS and normal null/X11 daemon paths still report physical fallback, so a
 cross-layout mismatch is expected and must not be reported as a pass. Restore
 the original settings/input source after the exercise. Do remap/crash testing
 only on private Xvfb servers, not either machine's live desktop.
