@@ -378,7 +378,8 @@ impl App {
         let p = self.peers.get(&fp)?;
         let (desktop, side) = (p.desktop.clone()?, p.side);
         self.epoch = self.epoch.wrapping_add(1);
-        let r = self.visit(activation, fp, cursor_for(desktop, side, at, self.epoch));
+        let mut r = self.visit(activation, fp, cursor_for(desktop, side, at, self.epoch));
+        r.tune = r.tune.without_mouse_modes();
         tracing::debug!(peer = %self.name_for(fp), "broadcast: entered");
         Some(r)
     }

@@ -14,7 +14,7 @@ pub struct AutoscrollArgs {
     /// Scroll rate multiplier, from 0.1 to 10 (default 1).
     #[arg(long)]
     pub speed: Option<f64>,
-    /// Movement before scrolling starts, from 0 to 1000 pixels (default 8).
+    /// Movement before scrolling starts, 0 to 1000 backend motion units (default 8).
     #[arg(long)]
     pub dead_zone: Option<f64>,
     /// Scroll only up and down, or in both directions.
@@ -83,12 +83,12 @@ pub enum GesturesCmd {
     /// Hold BUTTON and swipe DIRECTION to type TO on the other computer.
     Add {
         button: String,
-        #[arg(value_parser = ["up", "down", "left", "right"])]
+        #[arg(value_parser = ["up", "down", "left", "right"], ignore_case = true)]
         direction: String,
         /// A key, chord, quoted action, or several chords for a sequence.
         #[arg(required = true, num_args = 1..)]
         to: Vec<String>,
-        /// Minimum swipe distance, from 1 to 10000 pixels (default 60).
+        /// Minimum swipe distance, 1 to 10000 backend motion units (default 60).
         #[arg(long, default_value_t = 60.0)]
         threshold: f64,
         #[command(flatten)]
@@ -97,7 +97,7 @@ pub enum GesturesCmd {
     /// Remove a button's gesture in this scope.
     Remove {
         button: String,
-        #[arg(value_parser = ["up", "down", "left", "right"])]
+        #[arg(value_parser = ["up", "down", "left", "right"], ignore_case = true)]
         direction: String,
         #[command(flatten)]
         scope: ScopeArgs,
@@ -185,6 +185,52 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removal_accepts_capitalized_config_direction() {
+        use clap::Parser;
+        #[derive(clap::Parser)]
+        struct Gestures {
+            #[command(subcommand)]
+            command: GesturesCmd,
+        }
+        assert!(Gestures::try_parse_from(["gestures", "remove", "button4", "Left"]).is_ok());
+    }
+
+    #[test]
+    fn unsafe_and_device_mouse_modes_warn_and_are_ignored() {
+        for button in ["button1", "button2"] {
+            let mut settings = TuningSettings::default();
+            settings.autoscroll.base.enabled = Some(true);
+            settings.autoscroll.base.button = Some(button.into());
+            settings.gesture.push(GestureRule { button: button.into(), direction: "left".into(),
+                to: To::One("back".into()), threshold_px: 60.0, scope: Scope::Global, app: None });
+            let facts = PeerFacts { name: "pc", id: "", os: os::LINUX, apps: &[], device: None };
+            let resolved = settings.resolve(&facts, false);
+            assert!(resolved.autoscroll.is_none());
+            assert!(resolved.gestures.is_empty());
+            assert!(settings.check(&[]).iter().any(|warning| warning.contains("primary")));
+        }
+        let settings: Settings = toml::from_str("[input.autoscroll]\nenabled=true\nscope={device='usb/1234:5678//test'}\n[[input.gesture]]\nbutton='button4'\ndirection='left'\nto='back'\nscope={device='usb/1234:5678//test'}\n").unwrap();
+        let warnings = settings.input.check(&[]);
+        assert!(warnings.iter().any(|warning| warning.contains("device") && warning.contains("autoscroll") && warning.contains("ignored")));
+        assert!(warnings.iter().any(|warning| warning.contains("device") && warning.contains("gesture") && warning.contains("ignored")));
+        let fingerprint = "usb/1234:5678//test".parse().unwrap();
+        for device in [None, Some(&fingerprint)] {
+            let resolved = settings.input.resolve(&PeerFacts { name: "pc", id: "", os: os::LINUX, apps: &[], device }, false);
+            assert!(resolved.autoscroll.is_none());
+            assert!(resolved.gestures.is_empty());
+        }
+    }
+
+    #[test]
+    fn inherited_autoscroll_button_does_not_warn_about_middle_mapping() {
+        let mut settings = TuningSettings::default();
+        settings.autoscroll.base.button = Some("button4".into());
+        settings.autoscroll.rule.push(AutoscrollRule { enabled: Some(true), scope: Scope::Os(os::WINDOWS), ..Default::default() });
+        settings.button.push(ButtonRule { from: ButtonFrom::Number(3), to: To::One("back".into()), scope: Scope::Global, app: None });
+        assert!(!settings.check(&[]).iter().any(|warning| warning.contains("autoscroll takes precedence")));
+    }
 
     #[test]
     fn existing_settings_migrate_without_changing_old_rules() {

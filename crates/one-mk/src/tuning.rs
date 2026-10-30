@@ -361,9 +361,12 @@ fn gesture_threshold() -> f64 { 60.0 }
 impl GestureRule {
     fn compile(&self, target: remap::Target) -> Result<one_mk_proto::gesture::Rule<Keymap>, String> {
         let button = mouse_button(&self.button)?;
+        if matches!(button, 0x110 | 0x111) {
+            return Err("primary left/right buttons must remain available for clicking; choose middle or button4 instead".into());
+        }
         let direction = self.direction.parse().map_err(str::to_owned)?;
         if !self.threshold_px.is_finite() || !(1.0..=10_000.0).contains(&self.threshold_px) {
-            return Err("gesture threshold must be between 1 and 10000 pixels".into());
+            return Err("gesture threshold must be between 1 and 10000 backend motion units".into());
         }
         let output = match &self.to {
             To::One(name) if name == "desktop-left" || name == "desktop-right" => {
@@ -858,7 +861,7 @@ impl TuningSettings {
         warnings.extend(w);
         let mut config = one_mk_proto::autoscroll::Config::default();
         let mut enabled = false;
-        let mut auto: Vec<_> = self.autoscroll.rules().filter_map(|rule| Some((rank_for(&rule.scope, &rule.app, peer)?, rule))).collect();
+        let mut auto: Vec<_> = self.autoscroll.rules().filter(|rule| rule.scope.device().is_none()).filter_map(|rule| Some((rank_for(&rule.scope, &rule.app, peer)?, rule))).collect();
         auto.sort_by_key(|(rank, _)| *rank);
         for (_, rule) in auto {
             if let Err(error) = rule.validate() { warnings.push(format!("autoscroll: {error}")); continue; }
@@ -868,7 +871,7 @@ impl TuningSettings {
             if let Some(value) = rule.vertical_only { config.vertical_only = value; }
             if let Some(value) = &rule.button && let Ok(button) = mouse_button(value) { config.button = button; }
         }
-        let mut candidates: Vec<_> = self.gesture.iter().filter_map(|rule| Some((rank_for(&rule.scope, &rule.app, peer)?, rule))).collect();
+        let mut candidates: Vec<_> = self.gesture.iter().filter(|rule| rule.scope.device().is_none()).filter_map(|rule| Some((rank_for(&rule.scope, &rule.app, peer)?, rule))).collect();
         candidates.sort_by_key(|(rank, _)| std::cmp::Reverse(*rank));
         let mut gestures: Vec<one_mk_proto::gesture::Rule<Keymap>> = Vec::new();
         for (_, rule) in candidates {
@@ -1057,13 +1060,14 @@ impl TuningSettings {
         let mut out = Vec::new();
         for rule in self.autoscroll.rules() {
             if let Err(error) = rule.validate() { out.push(format!("autoscroll: {error}")); }
-            let button = rule.button.as_deref().unwrap_or("middle");
-            if rule.enabled == Some(true) && let Ok(button) = mouse_button(button)
-                && self.button.iter().any(|other| other.from.trigger().is_ok_and(|trigger| u32::from(trigger.key) == button)) {
-                out.push("autoscroll takes precedence over buttons map for its toggle button; choose another button or remove that mapping".into());
+            if rule.scope.device().is_some() {
+                out.push("device-scoped autoscroll rules are ignored: choose a computer or OS scope, not a device".into());
             }
         }
         for (index, rule) in self.gesture.iter().enumerate() {
+            if rule.scope.device().is_some() {
+                out.push(format!("gesture #{}: device-scoped gestures are ignored: choose a computer or OS scope, not a device", index + 1));
+            }
             if let Err(error) = rule.compile(remap::Target { os: os::local(), swap: false }) { out.push(format!("gesture #{}: {error}", index + 1)); }
             if self.gesture.iter().take(index).any(|other| mouse_button(&other.button).ok().zip(mouse_button(&rule.button).ok()).is_some_and(|(left, right)| left == right)
                 && other.direction.trim().eq_ignore_ascii_case(rule.direction.trim()) && other.scope == rule.scope && same_app(&other.app, &rule.app)) {
