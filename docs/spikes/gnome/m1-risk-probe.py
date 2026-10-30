@@ -9,6 +9,7 @@ The host runtime is an explicitly UNQUALIFIED laboratory dependency.
 import ctypes
 import argparse
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,6 +38,35 @@ PLUGINS = ["coreelements", "matroska", "vpx", "videoconvertscale", "waylandsink"
 def shell_warnings(log):
     return [line for line in log.splitlines()
             if re.search(r'WARNING|CRITICAL|Gjs[- ](?:ERROR|error)|JS (?:ERROR|WARNING)', line)]
+
+
+def warning_identity(line):
+    line = re.sub(r':\d+\)', ':PID)', line)
+    line = re.sub(r'\b\d{2}:\d{2}:\d{2}\.\d+\b', 'TIME', line)
+    return re.sub(r'\b:1\.\d+\b', ':1.CONNECTION', line)
+
+
+def new_warnings(log, baseline):
+    identities = {warning_identity(record) for record in warning_records(baseline)}
+    return [record for record in warning_records(log) if warning_identity(record) not in identities]
+
+
+def warning_records(log):
+    lines = log.splitlines()
+    records = []
+    for index, line in enumerate(lines):
+        if not shell_warnings(line):
+            continue
+        record = [line]
+        for following in lines[index + 1:]:
+            if not following.strip():
+                continue
+            if following.startswith(('  ', '\t', 'Stack trace:')):
+                record.append(following.rstrip())
+            else:
+                break
+        records.append('\n'.join(record))
+    return records
 
 
 def clean_environment():
@@ -81,6 +111,9 @@ def snapshot():
             frame: frame ? [frame.x, frame.y, frame.width, frame.height] : null,
             buffer: buffer ? [buffer.x, buffer.y, buffer.width, buffer.height] : null,
             damage: bridge?.stats.damage ?? 0, stale: bridge?._stale ?? false,
+            fresh: renderer?.firstDamage ?? false,
+            watchdog: bridge?._watchdogId ?? 0,
+            restart: bridge?._restartId ?? 0,
             cloneCount: bridge?._clones.length ?? 0,
             events: bridge?.stats.events.slice(-15) ?? [],
             focus: global.display.focus_window?.get_title() ?? null}};
@@ -143,9 +176,15 @@ def main():
     parser.add_argument('--label', default='presentation')
     parser.add_argument('--sink', choices=['wayland', 'own'], default='own')
     parser.add_argument('--matrix', action='store_true')
+    parser.add_argument('--baseline', action='store_true')
+    parser.add_argument('--baseline-log', type=Path)
     parser.add_argument('--binary', type=Path, default=BINARY)
     args = parser.parse_args()
     args.binary = args.binary.resolve(strict=True)
+    if args.baseline and not args.matrix:
+        parser.error('--baseline requires the lifecycle matrix')
+    if args.baseline and args.baseline_log:
+        parser.error('a baseline cannot compare against another baseline')
     if ROOT.exists():
         raise RuntimeError("private session already exists; refusing to reuse or kill another run")
     if ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) != 0:
@@ -154,8 +193,13 @@ def main():
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         directory.chmod(0o700)
     report = {"date_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "baseline": args.baseline,
               "status": "failed", "runtime": "host GStreamer: UNQUALIFIED, trusted generated fixture only",
               "stages": [], "measurements": {}}
+    report['binary_sha256'] = hashlib.sha256(args.binary.read_bytes()).hexdigest()
+    if args.baseline_log:
+        report['baseline_log'] = {'file': str(args.baseline_log),
+                                 'sha256': hashlib.sha256(args.baseline_log.read_bytes()).hexdigest()}
     started = False
     try:
         started = True
@@ -190,7 +234,7 @@ def main():
         fixture_hash = command([str(args.binary), "--risk-hash-fixture"], media_environment)
         report["fixture"] = {"blake3": fixture_hash, "bytes": (ROOT / "fixture.webm").stat().st_size,
                              "dimensions": [3840, 1080], "frames": 1200, "fps": 30}
-        for extension in ["spike-harness@one-mk.test", "wallpaper-spike@one-mk.test"]:
+        for extension in ["spike-harness@one-mk.test"] + ([] if args.baseline else ["wallpaper-spike@one-mk.test"]):
             private(["gdbus", "call", "--session", "-d", "org.gnome.Shell.Extensions", "-o", "/org/gnome/Shell/Extensions",
                      "-m", "org.gnome.Shell.Extensions.EnableExtension", extension])
         evaluate('Main.overview.hide(); "hidden"')
@@ -252,9 +296,11 @@ def main():
                 report["shell_log_tail"] = log.splitlines()[-45:]
                 violations = [line for line in log.splitlines() if "Buggy client (one-mk-wall)" in line]
                 report['shell_warnings'] = shell_warnings(log)
-                if report['shell_warnings']:
+                report['new_warnings'] = (new_warnings(log, args.baseline_log.read_text())
+                                          if args.baseline_log else report['shell_warnings'])
+                if report['new_warnings'] and not args.baseline:
                     report['status'] = 'failed'
-                    report['warning_gate'] = 'FAILED: complete Shell log contains warnings/errors; no allowlist'
+                    report['warning_gate'] = 'FAILED: warnings absent from recorded baseline'
                 if violations:
                     report["presentation_gate"] = "FAILED: compositor required a protocol workaround for the Rust client"
                     report["protocol_violations"] = violations

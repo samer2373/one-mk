@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import signal
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 
 BRIDGE = 'Main.extensionManager.lookup("wallpaper-spike@one-mk.test").stateObj.bridge'
@@ -18,6 +19,8 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
     here = Path(__file__).resolve().parent
 
     def extension(action, uuid=UUID):
+        if args_baseline and uuid == UUID:
+            return 'wallpaper extension disabled for baseline'
         return private(['gdbus', 'call', '--session', '-d', 'org.gnome.Shell.Extensions',
                         '-o', '/org/gnome/Shell/Extensions', '-m',
                         f'org.gnome.Shell.Extensions.{action}Extension', uuid])
@@ -32,12 +35,25 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
         raise RuntimeError('no real renderer damage within deadline')
 
     def start():
+        if args_baseline:
+            time.sleep(0.1)
+            return {'pid': shell, 'first_damage_ms': None, 'snapshot': snapshot()}
         evaluate(f'{BRIDGE}.stats.damage = 0')
         before = time.monotonic()
         pid = evaluate(f'{BRIDGE}.startRenderer({__import__("json").dumps(arguments)})')
         current = wait_frame()
         return {'pid': pid, 'first_damage_ms': round((time.monotonic() - before) * 1000, 3),
                 'snapshot': current}
+
+    def automatic(previous_pid):
+        before = time.monotonic()
+        while time.monotonic() - before < 7:
+            current = snapshot()
+            pid = evaluate(f'{BRIDGE}?._pid ?? null')
+            if pid and pid != previous_pid and current['fresh'] and current['buffer']:
+                return {'pid': pid, 'observed_ms': round((time.monotonic() - before) * 1000, 2), 'snapshot': current}
+            time.sleep(0.025)
+        raise RuntimeError('automatic recovery did not produce fresh owned damage')
 
     def cpu(pid):
         fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
@@ -54,6 +70,7 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
                 pass
         return result
 
+    args_baseline = report.get('baseline', False)
     leader = int((root / 'leader.pid').read_text())
     shell = next(pid for pid in descendants(leader) if owned_shell(Path(f'/proc/{pid}'), root))
     measurements['shell_pid'] = shell
@@ -72,19 +89,25 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
 
     def burst(label, action):
         before = time.monotonic()
-        action()
+        measurements[label + '_origin_monotonic_ms'] = round(before * 1000, 3)
+        worker = ThreadPoolExecutor(max_workers=1)
+        transition = worker.submit(action)
         frames = []
-        for index in range(9):
-            target = before + index * 0.25
-            time.sleep(max(0, target - time.monotonic()))
-            shot = shots / f'{label}-{index:02}.png'
-            captured = time.monotonic()
-            reply = private(['gdbus', 'call', '--session', '-d', 'org.gnome.Shell.Screenshot',
-                '-o', '/org/gnome/Shell/Screenshot', '-m', 'org.gnome.Shell.Screenshot.Screenshot',
-                'false', 'false', str(shot)])
-            frames.append({'scheduled_ms': index * 250, 'requested_ms': round((captured - before) * 1000, 2),
-                'completed_ms': round((time.monotonic() - before) * 1000, 2),
-                'file': str(shot.relative_to(lab)), 'reply': reply, 'snapshot': snapshot()})
+        try:
+            for index in range(41):
+                target = before + index * 0.05
+                time.sleep(max(0, target - time.monotonic()))
+                shot = shots / f'{label}-{index:02}.png'
+                captured = time.monotonic()
+                reply = private(['gdbus', 'call', '--session', '-d', 'org.gnome.Shell.Screenshot',
+                    '-o', '/org/gnome/Shell/Screenshot', '-m', 'org.gnome.Shell.Screenshot.Screenshot',
+                    'false', 'false', str(shot)])
+                frames.append({'scheduled_ms': index * 50, 'requested_ms': round((captured - before) * 1000, 2),
+                    'completed_ms': round((time.monotonic() - before) * 1000, 2),
+                    'file': str(shot.relative_to(lab)), 'reply': reply, 'snapshot': snapshot()})
+            transition.result(timeout=10)
+        finally:
+            worker.shutdown(wait=True, cancel_futures=True)
         return frames
 
     def layout(count, scale=1):
@@ -142,63 +165,71 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
                      f'win.move_to_monitor({monitor}); win.make_fullscreen(); return "covered"; }})()')
         time.sleep(1)
         measurements['cpu_covered'] = measure_cpu(pid)
-        measurements['covered'] = evaluate(f'({{paused: {BRIDGE}._paused, reason: {BRIDGE}._reason}})')
+        measurements['covered'] = ({} if args_baseline else evaluate(f'({{paused: {BRIDGE}._paused, reason: {BRIDGE}._reason}})'))
     finally:
         cover.terminate()
         cover_second.terminate()
         cover.wait(timeout=5)
         cover_second.wait(timeout=5)
     time.sleep(0.5)
-    os.kill(pid, signal.SIGSTOP)
-    before = time.monotonic()
-    while time.monotonic() - before < 5 and not snapshot()['stale']:
-        time.sleep(0.05)
-    measurements['watchdog'] = {'observed_ms': round((time.monotonic() - before) * 1000, 2), 'snapshot': snapshot()}
-    old_damage = snapshot()['damage']
-    os.kill(pid, signal.SIGCONT)
-    before = time.monotonic()
-    while time.monotonic() - before < 65:
-        current = snapshot()
-        if current['damage'] > old_damage and current['cloneCount'] and not current['stale']:
-            break
-        time.sleep(0.05)
+    if args_baseline:
+        measurements['renderer_faults'] = 'not applicable: extension disabled, no renderer'
     else:
-        raise RuntimeError('renderer did not recover after SIGCONT within watchdog probe backoff')
-    measurements['kill9_before'] = current
-    measurements['kill9_shots'] = burst('kill9', lambda: os.kill(pid, signal.SIGKILL))
-    measurements['post_kill_restart'] = start()
+        renderer_faults(evaluate, snapshot, automatic, burst, measurements, pid)
+    pre_lock_pid = None if args_baseline else evaluate(f'{BRIDGE}._pid')
     measurements['lock_shots'] = burst('lock', lambda: evaluate('Main.screenShield.lock(false); "locked"'))
     measurements['locked_state'] = evaluate('({locked: Main.screenShield.locked, mode: Main.sessionMode.currentMode})')
     measurements['unlock_shots'] = burst('unlock', lambda: evaluate('Main.screenShield.deactivate(false); "unlock"'))
-    measurements['unlock_restart'] = start()
-    measurements['restart_limit'] = 'NOT IMPLEMENTED by the 6B bridge; harness starts are manual, not a production cap'
+    measurements['unlock_restart'] = start() if args_baseline else automatic(pre_lock_pid)
     measurements['cycles'] = []
     for index in range(100):
-        current_pid = evaluate(f'{BRIDGE}._pid')
+        current_pid = None if args_baseline else evaluate(f'{BRIDGE}._pid')
         extension('Disable')
-        gone = False
+        gone = args_baseline
         deadline = time.monotonic() + 3
+        disabled_windows = None
         while time.monotonic() < deadline:
             try:
                 status = Path(f'/proc/{current_pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
                 gone = status == 'Z'
             except FileNotFoundError:
                 gone = True
-            if gone:
+            disabled_windows = evaluate('global.display.list_all_windows().filter(w => w.get_title().includes("M1a isolated probe")).length')
+            if gone and disabled_windows == 0:
                 break
             time.sleep(0.02)
         extension('Enable')
         fresh = start()
         measurements['cycles'].append({'cycle': index + 1, 'old_pid': current_pid,
             'old_exited': gone, 'first_damage_ms': fresh['first_damage_ms'], 'pid': fresh['pid'],
-            'window_count': evaluate('global.display.list_all_windows().filter(w => w.get_title().includes("M1a isolated probe")).length')})
+            'disabled_window_count': disabled_windows,
+            'window_count': evaluate('global.display.list_all_windows().filter(w => w.get_title().includes("M1a isolated probe")).length'),
+            'windows': evaluate('global.display.list_all_windows().filter(w => w.get_title().includes("M1a isolated probe")).map(w => ({id: w.get_stable_sequence(), pid: w.get_pid(), actor: !!w.get_compositor_private(), hidden: w.is_hidden(), type: w.get_window_type()}))')})
+    if not args_baseline:
+        measurements['restart_cap'] = []
+        for index in range(4):
+            killed = evaluate(f'{BRIDGE}._pid')
+            os.kill(killed, signal.SIGKILL)
+            if index < 3:
+                recovered = automatic(killed)
+            else:
+                time.sleep(1)
+                recovered = evaluate(f'({{exhausted: {BRIDGE}._recovery.exhausted, pid: {BRIDGE}._pid, timer: {BRIDGE}._restartId}})')
+            measurements['restart_cap'].append(recovered)
+        extension('Disable')
+        extension('Enable')
+        time.sleep(1)
+        measurements['cap_after_reenable'] = evaluate(f'({{exhausted: {BRIDGE}._recovery.exhausted, pid: {BRIDGE}._pid ?? null, timer: {BRIDGE}._restartId}})')
     extension('Disable')
     time.sleep(1)
     measurements['ding_state'] = evaluate('({state: Main.extensionManager.lookup("ding@rastersoft.com")?.state, '
                                         'errors: Main.extensionManager.lookup("ding@rastersoft.com")?.errors})')
     measurements['final_leaks'] = evaluate((here / 'js/leaks.js').read_text())
     measurements['final_managed_windows'] = evaluate('global.display.list_all_windows().map(w => w.get_title())')
-    failures = ['6B restart budget not implemented; cascade qualification unavailable']
+    if args_baseline:
+        measurements['qualification_failures'] = []
+        return measurements
+    failures = []
     for layout_result in measurements['layouts']:
         if 'unavailable' in layout_result:
             failures.append(f'layout unavailable: {layout_result}')
@@ -212,12 +243,35 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
         failures.append('3-second watchdog deadline missed')
     if any('M1a isolated probe' in title for title in measurements['final_managed_windows']):
         failures.append('managed renderer windows retained after disable')
-    if not all(cycle['old_exited'] and cycle['window_count'] == 1 for cycle in measurements['cycles']):
+    if len(measurements['cycles']) != 100 or not all(cycle['old_exited'] and cycle['window_count'] == 1 and cycle['disabled_window_count'] == 0 for cycle in measurements['cycles']):
         failures.append('100-cycle process/window invariant failed')
     if not measurements['covered']['paused']:
         failures.append('all-monitor coverage did not pause playback')
+    if (len(measurements['restart_cap']) != 4
+            or not all(entry.get('snapshot', {}).get('fresh') for entry in measurements['restart_cap'][:3])
+            or measurements['restart_cap'][-1] != {'exhausted': True, 'pid': None, 'timer': 0}):
+        failures.append('bounded restart did not give up without timers')
+    if measurements['cap_after_reenable'] != {'exhausted': True, 'pid': None, 'timer': 0}:
+        failures.append('extension re-enable reset exhausted restart budget')
+    if measurements['paused_after']['watchdog'] or measurements['paused_after']['restart']:
+        failures.append('paused extension has a periodic/restart source')
     measurements['qualification_failures'] = failures
     return measurements
+
+
+def renderer_faults(evaluate, snapshot, automatic, burst, measurements, pid):
+    os.kill(pid, signal.SIGSTOP)
+    before = time.monotonic()
+    while time.monotonic() - before < 5 and not snapshot()['stale']:
+        time.sleep(0.05)
+    measurements['watchdog'] = {'observed_ms': round((time.monotonic() - before) * 1000, 2), 'snapshot': snapshot()}
+    recovered = automatic(pid)
+    measurements['post_hang_restart'] = recovered
+    pid = recovered['pid']
+    current = recovered['snapshot']
+    measurements['kill9_before'] = current
+    measurements['kill9_shots'] = burst('kill9', lambda: os.kill(pid, signal.SIGKILL))
+    measurements['post_kill_restart'] = automatic(pid)
 
 
 def owned_shell(path, root):
