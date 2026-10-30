@@ -22,6 +22,8 @@ pub enum Action {
     /// The mouse and keyboard to a peer (by id), or `here`.
     Switch(String),
     LockPointer(bool),
+    /// Start (true) or stop broadcast to every connected computer.
+    Broadcast(bool),
     LockAll,
     /// This clipboard to a peer, by id.
     ClipSend(String),
@@ -49,7 +51,7 @@ impl Snapshot {
     pub fn icon_state(&self) -> IconState {
         match &self.status {
             None => IconState::Off,
-            Some(s) if s.controlling.is_some() || s.controlled_by.is_some() => IconState::Controlling,
+            Some(s) if s.controlling.is_some() || s.controlled_by.is_some() || !s.broadcast.is_empty() => IconState::Controlling,
             Some(s) if s.peers.iter().any(|p| p.online) => IconState::Connected,
             Some(_) => IconState::Idle,
         }
@@ -58,6 +60,11 @@ impl Snapshot {
     /// The first line of the menu, and the icon's tooltip.
     pub fn headline(&self) -> String {
         let Some(s) = &self.status else { return "one·mk isn't running".into() };
+        match s.broadcast.len() {
+            0 => {}
+            1 => return format!("Broadcasting to {}", s.broadcast[0]),
+            n => return format!("Broadcasting to {n} computers"),
+        }
         if let Some(p) = &s.controlled_by {
             return format!("{p} is controlling this computer");
         }
@@ -162,6 +169,11 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
             m.push(Entry::Separator);
             let locked = s.pointer_locked;
             m.push(Entry::Item { label: "Keep the pointer here".into(), action: Action::LockPointer(!locked), checked: Some(locked) });
+            // Only with somewhere to broadcast to (or to stop it).
+            let broadcasting = !s.broadcast.is_empty();
+            if broadcasting || s.peers.iter().any(|p| p.online) {
+                m.push(Entry::Item { label: "Broadcast to all computers".into(), action: Action::Broadcast(!broadcasting), checked: Some(broadcasting) });
+            }
             m.push(Entry::Item { label: "Lock every screen".into(), action: Action::LockAll, checked: None });
             m.push(Entry::Item { label: "Take back control".into(), action: Action::TakeBack, checked: None });
             m.push(Entry::Item { label: "Stop one-mk".into(), action: Action::Stop, checked: None });
@@ -254,6 +266,28 @@ mod tests {
         assert!(menu(&s).contains(&Entry::Item { label: "Keep the pointer here".into(), action: Action::LockPointer(true), checked: Some(false) }));
         s.status.as_mut().unwrap().pointer_locked = true;
         assert!(menu(&s).contains(&Entry::Item { label: "Keep the pointer here".into(), action: Action::LockPointer(false), checked: Some(true) }));
+    }
+
+    /// Broadcast: offered only with a computer online, a checkmark while
+    /// on (which stops it), and said in the headline and the icon.
+    #[test]
+    fn broadcast_is_a_checkmark_said_in_the_headline() {
+        let item = |on: bool| Entry::Item { label: "Broadcast to all computers".into(), action: Action::Broadcast(!on), checked: Some(on) };
+        assert!(!menu(&snap(vec![peer("old", Side::Left, false)])).contains(&item(false)), "nobody to broadcast to");
+        assert!(!menu(&snap(vec![])).contains(&item(false)));
+        let mut s = snap(vec![peer("desk", Side::Right, true), peer("mac", Side::Left, true), peer("old", Side::Top, false)]);
+        assert!(menu(&s).contains(&item(false)));
+        assert_eq!(s.icon_state(), IconState::Connected);
+        s.status.as_mut().unwrap().broadcast = vec!["desk".into(), "mac".into()];
+        assert!(menu(&s).contains(&item(true)));
+        assert_eq!(s.headline(), "Broadcasting to 2 computers");
+        assert_eq!(s.icon_state(), IconState::Controlling);
+        s.status.as_mut().unwrap().broadcast = vec!["a computer with a very long name".into()];
+        assert_eq!(s.headline(), "Broadcasting to a computer with a very long name");
+        // Still stoppable if every computer went offline meanwhile.
+        let mut gone = snap(vec![peer("desk", Side::Right, false)]);
+        gone.status.as_mut().unwrap().broadcast = vec!["desk".into()];
+        assert!(menu(&gone).contains(&item(true)));
     }
 
     #[test]

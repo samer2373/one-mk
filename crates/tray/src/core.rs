@@ -81,6 +81,7 @@ impl Ctx {
                 self.ask(Request::Switch(to))
             }
             Action::LockPointer(on) => self.ask(Request::LockPointer(if *on { Toggle::On } else { Toggle::Off })),
+            Action::Broadcast(on) => self.ask(Request::Broadcast(if *on { Toggle::On } else { Toggle::Off })),
             Action::LockAll => self.ask(Request::LockAll),
             Action::ClipSend(to) => self.ask(Request::ClipSend(Some(to.clone()))),
             Action::ToggleAutostart => self.toggle_autostart(),
