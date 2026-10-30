@@ -416,7 +416,7 @@ tests, cross-review by the other model, full validation before merging.
 | 5D | Edge pushes where no computer sits: pointer wrap to the opposite edge, and push-toward-it layout learning | Claude | todo |
 | 5E | Keyboard layout and AltGr fix: send the typed character when layouts differ; starts after 5I (both change the key event) | Codex | blocked on 5I |
 | 5F | Autoscroll (middle-click) and gesture buttons | Claude | todo |
-| 5G | Auto-update from signed GitHub Releases (build on the owner's release workflow) | Codex | todo |
+| 5G | Auto-update from signed GitHub Releases (build on the owner's release workflow) | Codex | implemented but gated: docs/UPDATES.md records validation, unrelated portal test failure, owner signing setup and pending real-platform acceptance |
 | 5H | Activate local-only key remap on Windows and macOS (acknowledged handoff, no stuck keys); builds on 5I | Codex | blocked on 5I |
 | 5I | Per-device scope: key and mouse rules for ONE specific keyboard or mouse, saved on the computer the device is plugged into (owner request 2026-10-30). X11 via XI2 source ids; Windows Raw Input and macOS IOHID compile-checked only; NOT possible on GNOME/KDE/wlroots Wayland (the compositor merges devices): say so | Claude | todo |
 

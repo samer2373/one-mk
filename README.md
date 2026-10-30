@@ -887,6 +887,21 @@ background apps, so there it goes through XWayland.
    rules, lock sync, connection doctor (`one-mk doctor`), keyboard shortcuts
    (on Linux through the GlobalShortcuts portal). **Next:** auto-update
 
+## Updating
+
+`one-mk update --check` checks for a signed release; `one-mk update` explicitly
+installs it for a recognized portable installation. Package-managed installs
+show instructions instead; the updater never elevates or restarts the daemon.
+`one-mk update --rollback` restores the previous portable executable. Restart
+manually afterward with `one-mk stop && one-mk run`.
+
+Startup checks run at most daily, once at startup, with no background timer.
+Disable them with `one-mk update --check-on-start off`. The window shows cached
+availability and an Update / Release notes banner. **Publisher key setup is
+required before this feature can contact release servers or install anything**;
+the committed placeholder is deliberately disabled. See [signed updates](docs/UPDATES.md)
+for signing, safety, troubleshooting and platform validation limitations.
+
 ## Contributing and license
 
 Issues and pull requests are welcome. Run `cargo test` before you open a
