@@ -55,6 +55,11 @@ impl EdgePush {
         self.connected.insert(fp, Instant::now());
     }
 
+    /// A new capture began: an earlier hold at a wrap edge is over.
+    pub(super) fn new_capture(&mut self) {
+        self.held = None;
+    }
+
     /// Capture `id` is held at a wrap edge (and no longer will be).
     pub(super) fn held_at_wrap(&mut self, id: u32) -> bool {
         self.held.take() == Some(id)
@@ -117,7 +122,6 @@ impl App {
     /// count the push. False if it was not such an edge.
     pub(super) fn on_free_edge(&mut self, id: u32, side: Side, pos: Pos) -> bool {
         let Some((edge, kind)) = self.free_edge_at(side, pos) else { return false };
-        self.push.held = None;
         // Normally unreachable (nothing is armed then), but a capture
         // already on its way when that changed may still arrive.
         if self.locked || self.owner.is_some() || self.lock_sync.is_locked() {
@@ -243,6 +247,12 @@ impl App {
         if self.push.shown.is_some_and(|s| s.key == fp) {
             self.push.shown = None;
         }
+        if !self.trust.get(&fp).is_some_and(Device::learnable) {
+            return; // the usual case: nothing to read or write
+        }
+        // Saved from what is on disk now, so a change made meanwhile (a
+        // `one-mk layout` not yet applied) is not written over.
+        self.reload_trust();
         let Some(d) = self.trust.get_mut(&fp).filter(|d| d.learnable()) else { return };
         d.placed_by = PlacedBy::Confirmed;
         if let Err(e) = self.trust.save() {

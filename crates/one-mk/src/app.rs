@@ -1112,6 +1112,7 @@ impl App {
     fn on_activated(&mut self, id: u32, side: Side, pos: Pos) {
         self.end_visit(); // a new activation supersedes any visit in progress
         self.approach = None;
+        self.push.new_capture();
         self.handed_back = None;
         self.tapped.clear();
         if let Some((fp, _)) = self.switching.take() {
