@@ -40,9 +40,9 @@ def run_security(evaluate, private, arguments, root, here, harness, environment,
         assert checks['name_squatting'] == {'failure': 'bridge-name-unavailable',
             'ownsName': False, 'children': 0, 'restart': 0, 'refused': True}
         evaluate(f'''(() => {{ const bridge = {BRIDGE};
-            bridge._ownsName = true; bridge._bridgeFailure = null;
+            bridge._ownsName = true; bridge._bridgeReady = true; bridge._bridgeFailure = null;
             bridge._recovery.argv = {json.dumps(arguments)};
-            bridge._spawnRenderer(); bridge._ownsName = false;
+            bridge._spawnRenderer(); bridge._ownsName = false; bridge._bridgeReady = false;
             bridge._bridgeFailure = 'bridge-name-unavailable'; return true; }})()''')
         deadline = time.monotonic() + 5
         while evaluate(f'{BRIDGE}._recovery.children.size'):

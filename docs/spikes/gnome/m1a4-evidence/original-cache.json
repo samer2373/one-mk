@@ -1,0 +1,644 @@
+{
+  "date_utc": "2026-10-30T21:27:00.005791+00:00",
+  "baseline": false,
+  "idle_only": false,
+  "status": "failed",
+  "runtime": "host GStreamer: UNQUALIFIED, trusted generated fixture only",
+  "stages": [],
+  "measurements": {
+    "cycles": [
+      {
+        "cycle": 1,
+        "first_damage_ms": 242.923,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 2,
+        "first_damage_ms": 155.03,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 3,
+        "first_damage_ms": 153.926,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 4,
+        "first_damage_ms": 153.435,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 5,
+        "first_damage_ms": 154.13,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 6,
+        "first_damage_ms": 157.872,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 7,
+        "first_damage_ms": 152.197,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 8,
+        "first_damage_ms": 157.403,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 9,
+        "first_damage_ms": 152.361,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 10,
+        "first_damage_ms": 154.021,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 11,
+        "first_damage_ms": 154.157,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 12,
+        "first_damage_ms": 152.573,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 13,
+        "first_damage_ms": 156.812,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 14,
+        "first_damage_ms": 152.979,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 15,
+        "first_damage_ms": 160.33,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 16,
+        "first_damage_ms": 152.89,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 17,
+        "first_damage_ms": 152.274,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 18,
+        "first_damage_ms": 153.254,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 19,
+        "first_damage_ms": 153.038,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 20,
+        "first_damage_ms": 155.186,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 21,
+        "first_damage_ms": 154.216,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 22,
+        "first_damage_ms": 164.8,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 23,
+        "first_damage_ms": 153.835,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 24,
+        "first_damage_ms": 156.209,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 25,
+        "first_damage_ms": 153.746,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 26,
+        "first_damage_ms": 153.016,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 27,
+        "first_damage_ms": 154.102,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 28,
+        "first_damage_ms": 153.812,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 29,
+        "first_damage_ms": 153.591,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 30,
+        "first_damage_ms": 154.422,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 31,
+        "first_damage_ms": 152.5,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 32,
+        "first_damage_ms": 156.755,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 33,
+        "first_damage_ms": 151.37,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 34,
+        "first_damage_ms": 154.082,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 35,
+        "first_damage_ms": 165.919,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 36,
+        "first_damage_ms": 153.426,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 37,
+        "first_damage_ms": 156.867,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 38,
+        "first_damage_ms": 153.518,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 39,
+        "first_damage_ms": 154.142,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 40,
+        "first_damage_ms": 155.976,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 41,
+        "first_damage_ms": 154.381,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 42,
+        "first_damage_ms": 153.961,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 43,
+        "first_damage_ms": 152.421,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 44,
+        "first_damage_ms": 152.99,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 45,
+        "first_damage_ms": 154.87,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 46,
+        "first_damage_ms": 154.334,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 47,
+        "first_damage_ms": 154.195,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 48,
+        "first_damage_ms": 153.571,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 49,
+        "first_damage_ms": 154.11,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 50,
+        "first_damage_ms": 158.039,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 51,
+        "first_damage_ms": 155.878,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 52,
+        "first_damage_ms": 152.555,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 53,
+        "first_damage_ms": 155.276,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 54,
+        "first_damage_ms": 153.249,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 55,
+        "first_damage_ms": 154.002,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 56,
+        "first_damage_ms": 153.613,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 57,
+        "first_damage_ms": 152.988,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 58,
+        "first_damage_ms": 153.618,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 59,
+        "first_damage_ms": 156.709,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 60,
+        "first_damage_ms": 151.721,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 61,
+        "first_damage_ms": 153.269,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 62,
+        "first_damage_ms": 152.802,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 63,
+        "first_damage_ms": 153.429,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 64,
+        "first_damage_ms": 153.695,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 65,
+        "first_damage_ms": 156.956,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 66,
+        "first_damage_ms": 154.051,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 67,
+        "first_damage_ms": 155.878,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 68,
+        "first_damage_ms": 155.327,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 69,
+        "first_damage_ms": 154.453,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 70,
+        "first_damage_ms": 153.449,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 71,
+        "first_damage_ms": 153.961,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 72,
+        "first_damage_ms": 152.997,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 73,
+        "first_damage_ms": 153.616,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 74,
+        "first_damage_ms": 157.342,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 75,
+        "first_damage_ms": 153.545,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 76,
+        "first_damage_ms": 162.693,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 77,
+        "first_damage_ms": 153.182,
+        "old_exited": true,
+        "disabled_window_count": 0
+      },
+      {
+        "cycle": 78,
+        "first_damage_ms": 156.255,
+        "old_exited": true,
+        "disabled_window_count": 0
+      }
+    ],
+    "failed_lookup": {
+      "methods": [
+        "Hello"
+      ],
+      "lookup": null
+    },
+    "failed_introspection": "node /org/onemk/WallpaperBridgeSpike1 {\n  interface org.freedesktop.DBus.Properties {\n    methods:\n      Get(in  s interface_name,\n          in  s property_name,\n          out v value);\n      GetAll(in  s interface_name,\n             out a{sv} properties);\n      Set(in  s interface_name,\n          in  s property_name,\n          in  v value);\n    signals:\n      PropertiesChanged(s interface_name,\n                        a{sv} changed_properties,\n                        as invalidated_properties);\n    properties:\n  };\n  interface org.freedesktop.DBus.Introspectable {\n    methods:\n      Introspect(out s xml_data);\n    signals:\n    properties:\n  };\n  interface org.freedesktop.DBus.Peer {\n    methods:\n      Ping();\n      GetMachineId(out s machine_uuid);\n    signals:\n    properties:\n  };\n  interface org.onemk.WallpaperBridgeSpike1 {\n    methods:\n      Hello(in  u version,\n            out u version,\n            out a(iiii) monitors);\n    signals:\n      PauseHint(b paused,\n                s reason);\n      Layout(a(iiii) monitors);\n    properties:\n  };\n};"
+  },
+  "binary_sha256": "14409d9abaf92dd2c6ea4eb1cdaddaf7058f7a15d0349873099255f39c8f50c9",
+  "supervisor_before": {
+    "shell_processes": [],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "baseline_log": {
+    "file": "docs/spikes/gnome/m1a2-evidence/baseline-shell.log",
+    "sha256": "b0b3c293e1d88e8bc6dc1614b022f4302dae678831709d47221552527ddc9c52"
+  },
+  "shell_version": "GNOME Shell 50.1",
+  "harness_start": "isolated Shell up: leader 3512280 bus unix:path=/tmp/dbus-QnDTLMXQS8,guid=67f40633baf281aa21c127416ae50ba4",
+  "runtime_version": "gst-inspect-1.0 version 1.28.2\nGStreamer 1.28.2\nhttps://launchpad.net/ubuntu/+source/gstreamer1.0",
+  "native_dependencies": {
+    "coreelements": "linux-vdso.so.1 (0x00007ea2ae2a1000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007ea2ae0a7000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007ea2ae023000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007ea2adecb000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007ea2ade67000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007ea2adc00000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007ea2ade5e000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007ea2adada000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007ea2ade53000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007ea2ada2e000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007ea2ade42000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007ea2ae2a3000)",
+    "matroska": "linux-vdso.so.1 (0x0000770f98502000)\n\tlibgstpbutils-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstpbutils-1.0.so.0 (0x0000770f98441000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x0000770f9835b000)\n\tlibgstaudio-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstaudio-1.0.so.0 (0x0000770f982d0000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000770f9824c000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000770f980df000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000770f98079000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000770f97f21000)\n\tlibgstriff-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstriff-1.0.so.0 (0x0000770f97f10000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x0000770f97ece000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x0000770f97eb0000)\n\tlibbz2.so.1.0 => /usr/lib/x86_64-linux-gnu/libbz2.so.1.0 (0x0000770f97e9b000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000770f97d73000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000770f97a00000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x0000770f97d69000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x0000770f97c66000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000770f97c5f000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000770f97c4c000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000770f97c41000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000770f97954000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000770f98504000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x0000770f97c2a000)",
+    "vpx": "linux-vdso.so.1 (0x0000775cdf61f000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000775cdf47b000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000775cdf417000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000775cdf2bf000)\n\tlibgsttag-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgsttag-1.0.so.0 (0x0000775cdf27d000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x0000775cdf197000)\n\tlibvpx.so.12 => /usr/lib/x86_64-linux-gnu/libvpx.so.12 (0x0000775cdec00000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000775cde800000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000775cdf18e000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000775cdf068000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000775cdf057000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000775cdf04a000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000775cdeb54000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000775cdefc6000)\n\tlibz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x0000775cdeb36000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x0000775cdeb2c000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x0000775cdea29000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000775cdf621000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x0000775cde7e9000)",
+    "videoconvertscale": "linux-vdso.so.1 (0x00007f74218bd000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007f74217aa000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007f742163d000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007f74215d9000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007f7421481000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007f74213fb000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007f7421000000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007f74213f1000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007f74212ee000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007f7420eda000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007f74212e5000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007f74212d4000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007f74212c9000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007f7420e2e000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f74218bf000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007f74212b2000)",
+    "waylandsink": "linux-vdso.so.1 (0x00007b6f26584000)\n\tlibgstwayland-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstwayland-1.0.so.0 (0x00007b6f26541000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007b6f263d4000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007b6f26370000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007b6f26218000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007b6f26132000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007b6f26126000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007b6f25e00000)\n\tlibwayland-client.so.0 => /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 (0x00007b6f26113000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007b6f2610c000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007b6f25cda000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007b6f260f9000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007b6f260ee000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007b6f26042000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007b6f25c56000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007b6f25b53000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007b6f26029000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007b6f26586000)",
+    "videotestsrc": "linux-vdso.so.1 (0x00007e148afaa000)\n\tlibgstvideo-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstvideo-1.0.so.0 (0x00007e148ae95000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x00007e148ad28000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x00007e148acc4000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x00007e148ab6c000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x00007e148aae8000)\n\tliborc-0.4.so.0 => /usr/lib/x86_64-linux-gnu/liborc-0.4.so.0 (0x00007e148a9e3000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007e148a8bd000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007e148a600000)\n\tlibgstallocators-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstallocators-1.0.so.0 (0x00007e148a8b3000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x00007e148a8ac000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x00007e148a899000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x00007e148a88e000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x00007e148a554000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007e148afac000)\n\tlibdrm.so.2 => /usr/lib/x86_64-linux-gnu/libdrm.so.2 (0x00007e148a877000)",
+    "app": "linux-vdso.so.1 (0x0000796ea2d43000)\n\tlibgstapp-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstapp-1.0.so.0 (0x0000796ea2d07000)\n\tlibgstreamer-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstreamer-1.0.so.0 (0x0000796ea2b9a000)\n\tlibgstbase-1.0.so.0 => /usr/lib/x86_64-linux-gnu/libgstbase-1.0.so.0 (0x0000796ea2b16000)\n\tlibgobject-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgobject-2.0.so.0 (0x0000796ea2ab2000)\n\tlibglib-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libglib-2.0.so.0 (0x0000796ea295a000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x0000796ea2600000)\n\tlibgmodule-2.0.so.0 => /usr/lib/x86_64-linux-gnu/libgmodule-2.0.so.0 (0x0000796ea2951000)\n\tlibm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x0000796ea282b000)\n\tlibffi.so.8 => /usr/lib/x86_64-linux-gnu/libffi.so.8 (0x0000796ea25ef000)\n\tlibatomic.so.1 => /usr/lib/x86_64-linux-gnu/libatomic.so.1 (0x0000796ea25e4000)\n\tlibpcre2-8.so.0 => /usr/lib/x86_64-linux-gnu/libpcre2-8.so.0 (0x0000796ea2538000)\n\t/lib64/ld-linux-x86-64.so.2 (0x0000796ea2d45000)"
+  },
+  "fixture": {
+    "blake3": "20521c6350cbdba65dad996a00a1b91752fded82d19639dd8aa58365c419db2b",
+    "bytes": 312344,
+    "dimensions": [
+      3840,
+      1080
+    ],
+    "frames": 1200,
+    "fps": 30
+  },
+  "failure": "cycle 79: interface lookup disagrees with introspection: {'methods': ['Hello'], 'lookup': None}",
+  "failure_traceback": "Traceback (most recent call last):\n  File \"/home/samer/.t3/worktrees/one-mk/t3-c726a61d/docs/spikes/gnome/m1-risk-probe.py\", line 325, in main\n    runpy.run_path(str(HERE / 'm1a-stress.py'))['run_stress'](\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        evaluate, private, snapshot, arguments, report, args.cycles, args.gc_stress)\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/samer/.t3/worktrees/one-mk/t3-c726a61d/docs/spikes/gnome/m1a-stress.py\", line 26, in run_stress\n    raise RuntimeError(f'cycle {index + 1}: interface lookup disagrees with introspection: {lookup}')\nRuntimeError: cycle 79: interface lookup disagrees with introspection: {'methods': ['Hello'], 'lookup': None}\n",
+  "failure_bridge": {
+    "monitors": [
+      [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      [
+        1920,
+        0,
+        1920,
+        1080
+      ]
+    ],
+    "frame": null,
+    "buffer": null,
+    "damage": 0,
+    "stale": false,
+    "fresh": false,
+    "watchdog": 0,
+    "coverage": 0,
+    "pid": null,
+    "reason": "none",
+    "restart": 7078,
+    "cloneCount": 0,
+    "events": [
+      "809239025 restart scheduled 1000 ms"
+    ],
+    "focus": null
+  },
+  "failure_bus_owner": "(':1.0',)",
+  "supervisor_before_cleanup": {
+    "shell_processes": [
+      {
+        "pid": 3512305,
+        "stat": "3512305 (gnome-shell) S 3512295 3512305 3512280 0 -1 0 446632 2756134 10 78 336 113 332 432 20 0 23 0 80918260 8192921600 65098 18446744073709551615 93824992243712 93824992251769 140737488349056 0 0 0 0 16781316 16458 0 0 0 17 2 0 0 0 0 0 93824992258576 93824992260464 93824992264192 140737488349791 140737488349927 140737488349927 140737488351203 0"
+      }
+    ],
+    "memory_events": {
+      "low": "0",
+      "high": "0",
+      "max": "0",
+      "oom": "0",
+      "oom_kill": "0",
+      "oom_group_kill": "0",
+      "sock_throttled": "2960"
+    }
+  },
+  "shell_exit_before_cleanup": null,
+  "host_core_pattern": "|/usr/share/apport/apport -p%p -s%s -c%c -d%d -P%P -u%u -g%g -F%F -- %E",
+  "cleanup": "all owned children reaped; session directory and generated media removed",
+  "shell_log_tail": [
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3517545]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3517616]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3517687]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3517758]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3517829]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3517900]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3517972]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518043]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518114]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518185]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518256]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518327]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518398]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518469]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Thread 0x7fff7f7fb6c0 (LWP 3512448) exited]",
+    "[Detaching after fork from child process 3518541]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518612]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518683]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518754]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "[Detaching after fork from child process 3518825]",
+    "risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log",
+    "Exception ignored on threading shutdown:",
+    "Traceback (most recent call last):",
+    "  File \"/usr/lib/python3.14/threading.py\", line 1559, in _shutdown",
+    "    def _shutdown():",
+    "KeyboardInterrupt: "
+  ],
+  "shell_warnings": [
+    "(gnome-shell:3512305): libmutter-WARNING **: 00:27:00.830: Unknown experimental feature 'scale-monitor-framebuffer'",
+    "(gnome-shell:3512305): libmutter-WARNING **: 00:27:00.830: Unknown experimental feature 'xwayland-native-scaling'",
+    "(gnome-shell:3512305): libmutter-WARNING **: 00:27:01.119: There is no colord server available",
+    "(gnome-shell:3512305): GNOME Shell-WARNING **: 00:27:01.404: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3512305): GNOME Shell-CRITICAL **: 00:27:01.451: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files",
+    "(gnome-shell:3512305): GNOME Shell-CRITICAL **: 00:27:01.452: Could not get proxy for session null: Error: Argument string may not be null",
+    "(gnome-shell:3512305): GNOME Shell-WARNING **: 00:27:01.452: Failed to start state machine: can't access property \"connectObject\", this._loginUser is null",
+    "(gnome-shell:3512305): Gjs-WARNING **: 00:27:01.452: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:",
+    "(/usr/libexec/xdg-desktop-portal:3512733): xdg-desktop-portal-WARNING **: 00:27:01.648: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files",
+    "(gnome-shell:3512305): accountsservice-WARNING **: 00:27:01.674: ActUserManager: user (null) has no username (uid: -1)",
+    "(/usr/libexec/xdg-desktop-portal:3512733): xdg-desktop-portal-WARNING **: 00:27:01.821: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3512733): xdg-desktop-portal-WARNING **: 00:27:01.821: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3512733): xdg-desktop-portal-WARNING **: 00:27:01.821: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files",
+    "(/usr/libexec/xdg-desktop-portal:3512733): xdg-desktop-portal-WARNING **: 00:27:01.860: Failed to connect to PipeWire: Couldn't connect to PipeWire"
+  ],
+  "new_warnings": []
+}

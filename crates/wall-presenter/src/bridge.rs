@@ -203,7 +203,7 @@ impl Bridge {
                 ptr::null(), 0, signal_received, (&mut *bridge.inbox as *mut Inbox).cast(), ptr::null_mut());
             let mut reply = ptr::null_mut();
             let mut last_error = String::from("no D-Bus error supplied");
-            for _ in 0..10 {
+            for attempt in 0..10 {
                 let mut error = ptr::null_mut();
                 reply = call(connection, bridge.inbox.owner.as_ptr(), c"/org/onemk/WallpaperBridgeSpike1".as_ptr(),
                 c"org.onemk.WallpaperBridgeSpike1".as_ptr(), c"Hello".as_ptr(), new_variant(c"(u)".as_ptr(), 1_u32),
@@ -215,6 +215,7 @@ impl Bridge {
                     free_error(error);
                 }
                 if !reply.is_null() { break; }
+                if !retryable_hello(&last_error) || attempt == 9 { break; }
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
             if reply.is_null() { return Err(format!("private laboratory Hello failed: {last_error}")); }
@@ -239,6 +240,11 @@ impl Bridge {
     }
 }
 
+fn retryable_hello(error: &str) -> bool {
+    ["UnknownMethod", "UnknownObject", "Timeout", "NoReply"].iter()
+        .any(|name| error.contains(&format!("GDBus.Error:org.freedesktop.DBus.Error.{name}:")))
+}
+
 fn authenticate_peer(descriptor: i32, owner_pid: u32) -> Result<(), String> {
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
     let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
@@ -255,6 +261,17 @@ fn authenticate_peer(descriptor: i32, owner_pid: u32) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::os::fd::AsRawFd;
+
+    #[test]
+    fn hello_retries_only_transient_dispatch_errors() {
+        for name in ["UnknownMethod", "UnknownObject", "Timeout", "NoReply"] {
+            assert!(retryable_hello(&format!("GDBus.Error:org.freedesktop.DBus.Error.{name}: transient")));
+        }
+        for name in ["AccessDenied", "NotSupported", "Failed", "ServiceUnknown"] {
+            assert!(!retryable_hello(&format!("GDBus.Error:org.freedesktop.DBus.Error.{name}: refused")));
+        }
+        assert!(!retryable_hello("no D-Bus error supplied"));
+    }
 
     #[test]
     fn owner_must_match_wayland_peer() {

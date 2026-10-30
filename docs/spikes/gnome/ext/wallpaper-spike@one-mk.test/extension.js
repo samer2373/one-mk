@@ -41,6 +41,9 @@ const IFACE = `
       <arg type="u" direction="out" name="version"/>
       <arg type="a(iiii)" direction="out" name="monitors"/>
     </method>
+    <method name="Ready">
+      <arg type="u" direction="out" name="version"/>
+    </method>
     <signal name="PauseHint">
       <arg type="b" name="paused"/>
       <arg type="s" name="reason"/>
@@ -50,6 +53,7 @@ const IFACE = `
     </signal>
   </interface>
 </node>`;
+const BRIDGE_INFO = Gio.DBusInterfaceInfo.new_for_xml(IFACE);
 
 class Bridge {
     constructor(recovery) {
@@ -57,6 +61,7 @@ class Bridge {
         this._recovery.damageTimes ??= [];
         this._destroyed = false;
         this._ownsName = false;
+        this._bridgeReady = false;
         this._bridgeFailure = null;
         this._sender = null;
         this._retiring = new Set();
@@ -111,18 +116,27 @@ class Bridge {
             });
         }
 
-        this._dbus = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
+        this._dbus = new Gio.DBusExportedObject({g_interface_info: BRIDGE_INFO});
+        this._dbus.connect('handle-method-call', (_object, method, invocation, parameters) => {
+            if (method === 'Ready')
+                invocation.return_value(new GLib.Variant('(u)', [PROTOCOL]));
+            else if (method === 'Hello')
+                this.HelloAsync(parameters.deepUnpack(), invocation);
+            else
+                invocation.return_dbus_error('org.freedesktop.DBus.Error.UnknownMethod', 'unknown bridge method');
+        });
         this._dbus.export(Gio.DBus.session, OBJ_PATH);
         this._nameId = Gio.bus_own_name_on_connection(Gio.DBus.session, BUS_NAME,
             Gio.BusNameOwnerFlags.DO_NOT_QUEUE, () => {
                 if (this._destroyed || this._bridgeFailure)
                     return;
                 this._ownsName = true;
-                this._scheduleRestart();
+                this._checkReady();
             }, () => {
                 if (this._destroyed)
                     return;
                 this._ownsName = false;
+                this._bridgeReady = false;
                 this._bridgeFailure = 'bridge-name-unavailable';
                 this._cancelRestart();
                 this.stopRenderer();
@@ -139,6 +153,9 @@ class Bridge {
 
     destroy() {
         this._destroyed = true;
+        this._bridgeReady = false;
+        if (this._wc && this._renderer?.firstDamage && !this._stale)
+            this._recovery.resumePending = true;
         this._cancelRestart();
         this.stopRenderer();
         for (const retired of [...this._retiring])
@@ -150,9 +167,11 @@ class Bridge {
         for (const [obj, id] of this._signals)
             obj.disconnect(id);
         this._signals = [];
-        Gio.bus_unown_name(this._nameId);
         this._dbus?.unexport();
         this._dbus = null;
+        this._ownsName = false;
+        Gio.bus_unown_name(this._nameId);
+        this._nameId = 0;
         this._layer.destroy();
         this._layer = null;
         this._monitorBoxes = [];
@@ -161,6 +180,26 @@ class Bridge {
 
     _connect(obj, sig, fn) {
         this._signals.push([obj, obj.connect(sig, fn)]);
+    }
+
+    async _checkReady() {
+        try {
+            const reply = await Gio.DBus.session.call(Gio.DBus.session.get_unique_name(), OBJ_PATH,
+                BUS_NAME, 'Ready', null, new GLib.VariantType('(u)'),
+                Gio.DBusCallFlags.NONE, 500, null);
+            if (this._destroyed || !this._ownsName)
+                return;
+            if (reply.deepUnpack()[0] !== PROTOCOL)
+                throw new Error('readiness protocol mismatch');
+            this._bridgeReady = true;
+            this._event('bridge ready');
+            this._scheduleRestart();
+        } catch (error) {
+            if (this._destroyed)
+                return;
+            this._bridgeFailure = 'bridge-readiness-failed';
+            this._event(`${this._bridgeFailure}: ${error.message}`);
+        }
     }
 
     _event(s) {
@@ -185,11 +224,12 @@ class Bridge {
     }
 
     startRenderer(argv) {
-        if (!this._ownsName || this._bridgeFailure || this._destroyed)
+        if (!this._bridgeReady || !this._ownsName || this._bridgeFailure || this._destroyed)
             throw new Error(this._bridgeFailure ?? 'bridge name not acquired');
         this._recovery.argv = [...argv];
         this._recovery.attempts = [];
         this._recovery.exhausted = false;
+        this._recovery.resumePending = false;
         this._cancelRestart();
         this.stopRenderer();
         if (this._recovery.children.size)
@@ -198,7 +238,7 @@ class Bridge {
     }
 
     _spawnRenderer() {
-        if (!this._ownsName || this._bridgeFailure || this._destroyed)
+        if (!this._bridgeReady || !this._ownsName || this._bridgeFailure || this._destroyed)
             throw new Error('bridge name not owned');
         const argv = this._recovery.argv;
         const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
@@ -245,21 +285,24 @@ class Bridge {
     }
 
     _scheduleRestart() {
-        if (!this._ownsName || this._bridgeFailure || this._destroyed || this._paused || this._wc || this._restartId ||
+        if (!this._bridgeReady || !this._ownsName || this._bridgeFailure || this._destroyed || this._paused || this._wc || this._restartId ||
             !this._recovery.argv || this._recovery.children.size || this._recovery.exhausted)
             return;
         const now = GLib.get_monotonic_time();
         this._recovery.attempts = this._recovery.attempts.filter(at => now - at < 60 * GLib.USEC_PER_SEC);
-        if (this._recovery.attempts.length >= 3) {
+        const resume = this._recovery.resumePending === true;
+        if (!resume && this._recovery.attempts.length >= 3) {
             this._recovery.exhausted = true;
             this._event('failed-retry-limit: static wallpaper; explicit Retry required');
             return;
         }
-        const delay = [1000, 2000, 4000][this._recovery.attempts.length];
+        const delay = resume ? 0 : [1000, 2000, 4000][this._recovery.attempts.length];
         this._event(`restart scheduled ${delay} ms`);
-        this._restartId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+        const restart = () => {
             this._restartId = 0;
-            this._recovery.attempts.push(GLib.get_monotonic_time());
+            this._recovery.resumePending = false;
+            if (!resume)
+                this._recovery.attempts.push(GLib.get_monotonic_time());
             try {
                 this._spawnRenderer();
             } catch (error) {
@@ -267,7 +310,9 @@ class Bridge {
                 this._scheduleRestart();
             }
             return GLib.SOURCE_REMOVE;
-        });
+        };
+        this._restartId = resume ? GLib.idle_add(GLib.PRIORITY_DEFAULT, restart)
+            : GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, restart);
     }
 
     // ---------- renderer window adoption ----------

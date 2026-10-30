@@ -1,0 +1,30 @@
+{
+  "linux_tests": {
+    "command": "cargo test --offline --workspace --features one-mk-wall/gnome-risk-probe -j 2",
+    "passed": 1080,
+    "failed": 0,
+    "ignored": 14,
+    "environment": "env -i; private HOME; explicit CARGO_HOME/RUSTUP_HOME/CARGO_TARGET_DIR"
+  },
+  "linux_clippy": [
+    "cargo clippy --offline --workspace --all-targets --features one-mk-wall/gnome-risk-probe -j 2 -- -D warnings",
+    "cargo clippy --offline --workspace --all-targets -j 2 -- -D warnings"
+  ],
+  "cross_clippy": {
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "aarch64-apple-darwin"
+    ],
+    "command": "cargo clippy --offline --target TARGET --all-targets -p one-mk-input -p one-mk-proto -p one-mk-ctl -p one-mk-app -p one-mk-tray -p one-mk-wall -p one-mk-wall-sync -p one-mk-wall-canvas -p one-mk-wall-import --features one-mk-wall/gnome-risk-probe,blake3/pure -j 2 -- -D warnings",
+    "scope": "compile only, no native daemon link or host execution"
+  },
+  "python_gates": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s docs/spikes/gnome -p 'test_*.py'",
+    "passed": 6
+  },
+  "shell_syntax": "bash -n docs/spikes/gnome/qualify-m1a4.sh docs/spikes/gnome/isolated-session.sh",
+  "cargo_fmt_run": false,
+  "product_task_3": "undelivered; spike protocol/fixture argv are not product section 4",
+  "historical_shell_loss": "unattributed; no original signal/core; targeted journal empty",
+  "private_session_cleanup": "all final reports confirm child reaping and session/media removal; shared session path absent"
+}

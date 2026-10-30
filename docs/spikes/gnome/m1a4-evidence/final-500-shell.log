@@ -1,0 +1,2127 @@
+/home/samer/.t3/worktrees/one-mk/t3-c726a61d/docs/spikes/gnome/client/fake_gdm.py:15: DeprecationWarning: Gio.DBusConnection.register_object is deprecated
+  bus.register_object("/org/gnome/DisplayManager/Manager", info, call, prop, None)
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/x86_64-linux-gnu/libthread_db.so.1".
+[New Thread 0x7ffff201e6c0 (LWP 3611315)]
+[Thread 0x7ffff201e6c0 (LWP 3611315) exited]
+[New Thread 0x7ffff201e6c0 (LWP 3611316)]
+[New Thread 0x7ffff11ff6c0 (LWP 3611317)]
+[New Thread 0x7ffff09fe6c0 (LWP 3611318)]
+[New Thread 0x7fffe3fff6c0 (LWP 3611319)]
+[New Thread 0x7fffe37fe6c0 (LWP 3611320)]
+[New Thread 0x7fffe35ff6c0 (LWP 3611321)]
+[New Thread 0x7fffe34006c0 (LWP 3611322)]
+[New Thread 0x7fffe32016c0 (LWP 3611323)]
+[New Thread 0x7fffe30026c0 (LWP 3611324)]
+[New Thread 0x7fffe2e036c0 (LWP 3611325)]
+[New Thread 0x7fffe2c046c0 (LWP 3611326)]
+[New Thread 0x7fffe2a056c0 (LWP 3611327)]
+libmutter-Message: 00:40:19.577: Running GNOME Shell (using mutter 50.1) as a Wayland display server
+
+(gnome-shell:3611311): libmutter-WARNING **: 00:40:19.578: Unknown experimental feature 'scale-monitor-framebuffer'
+
+(gnome-shell:3611311): libmutter-WARNING **: 00:40:19.578: Unknown experimental feature 'xwayland-native-scaling'
+libmutter-Message: 00:40:19.772: Added device '/dev/dri/renderD129' (nvidia-drm) using no mode setting.
+[New Thread 0x7fffe15ff6c0 (LWP 3611331)]
+[New Thread 0x7fffe0dfe6c0 (LWP 3611332)]
+[New Thread 0x7fffc09ff6c0 (LWP 3611333)]
+[New Thread 0x7fffb3fff6c0 (LWP 3611334)]
+[Thread 0x7fffb3fff6c0 (LWP 3611334) exited]
+[Thread 0x7fffc09ff6c0 (LWP 3611333) exited]
+libmutter-Message: 00:40:19.789: Added device '/dev/dri/renderD128' (i915) using no mode setting.
+libmutter-Message: 00:40:19.790: Created gbm renderer for '/dev/dri/renderD129'
+[New Thread 0x7fffc09ff6c0 (LWP 3611335)]
+[New Thread 0x7fffb3fff6c0 (LWP 3611336)]
+libmutter-Message: 00:40:19.791: Created gbm renderer for '/dev/dri/renderD128'
+libmutter-Message: 00:40:19.791: Boot VGA GPU /dev/dri/renderD128 selected as primary
+[New Thread 0x7fffb37fe6c0 (LWP 3611337)]
+[New Thread 0x7fffb2ffd6c0 (LWP 3611338)]
+** Message: 00:40:19.793: Obtained a high priority EGL context
+[New Thread 0x7fffb27fc6c0 (LWP 3611339)]
+[New Thread 0x7fffb1ffb6c0 (LWP 3611340)]
+[New Thread 0x7fffb17fa6c0 (LWP 3611341)]
+[New Thread 0x7fffb0ff96c0 (LWP 3611342)]
+libmutter-Message: 00:40:19.807: Added virtual monitor Meta-0
+libmutter-Message: 00:40:19.807: Added virtual monitor Meta-1
+libmutter-Message: 00:40:19.813: Using Wayland display name 'spike-wl-0'
+
+(gnome-shell:3611311): libmutter-WARNING **: 00:40:19.881: There is no colord server available
+GNOME Shell-Message: 00:40:20.084: Unset XDG_SESSION_ID, getCurrentSessionProxy() called outside a user session. Asking logind directly.
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.Shell.Screencast' requested by ':1.0' (uid=1000 pid=3611311 comm="/usr/bin/gnome-shell --wayland --headless --no-x11" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.freedesktop.impl.portal.PermissionStore' requested by ':1.0' (uid=1000 pid=3611311 comm="/usr/bin/gnome-shell --wayland --headless --no-x11" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.Shell.CalendarServer' requested by ':1.0' (uid=1000 pid=3611311 comm="/usr/bin/gnome-shell --wayland --headless --no-x11" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.PermissionStore'
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.evolution.dataserver.Sources5' requested by ':1.2' (uid=1000 pid=3611363 comm="/usr/libexec/gnome-shell-calendar-server" label="t3code (unconfined)")
+GNOME Shell-Message: 00:40:20.156: Registering session with GDM
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.Shell.Notifications' requested by ':1.0' (uid=1000 pid=3611311 comm="/usr/bin/gnome-shell --wayland --headless --no-x11" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.OnlineAccounts' requested by ':1.3' (uid=1000 pid=3611374 comm="/usr/libexec/evolution-source-registry" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.Sources5'
+[New Thread 0x7fff9a5616c0 (LWP 3611397)]
+[New Thread 0x7fff99d606c0 (LWP 3611398)]
+[New Thread 0x7fff9955f6c0 (LWP 3611399)]
+GNOME Shell-Message: 00:40:20.173: Error registering session with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, “()”, does not match expected type “(a{sv})”
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.evolution.dataserver.Calendar8' requested by ':1.2' (uid=1000 pid=3611363 comm="/usr/libexec/gnome-shell-calendar-server" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.Shell.CalendarServer'
+[Detaching after fork from child process 3611404]
+goa-daemon-Message: 00:40:20.179: goa-daemon version 3.58.0 starting
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.Identity' requested by ':1.4' (uid=1000 pid=3611383 comm="/usr/libexec/goa-daemon" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.OnlineAccounts'
+
+(gnome-shell:3611311): GNOME Shell-WARNING **: 00:40:20.182: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.Identity'
+[New Thread 0x7fff98d5e6c0 (LWP 3611419)]
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.Shell.Notifications'
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.Calendar8'
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.evolution.dataserver.AddressBook10' requested by ':1.6' (uid=1000 pid=3611403 comm="/usr/libexec/evolution-calendar-factory" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.AddressBook10'
+
+(gnome-shell:3611311): GNOME Shell-CRITICAL **: 00:40:20.232: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files
+
+Stack trace:
+  asyncCallback@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:115:23
+  @resource:///org/gnome/shell/ui/init.js:20:20
+  
+GNOME Shell-Message: 00:40:20.232: Will monitor session null
+
+(gnome-shell:3611311): GNOME Shell-CRITICAL **: 00:40:20.232: Could not get proxy for session null: Error: Argument string may not be null
+
+Stack trace:
+  _packVariant@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:82:29
+  _packVariant@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:135:27
+  _init/this.Variant._new_internal@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:298:35
+  _proxyInvoker@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:103:23
+  _makeProxyMethod/<@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:148:30
+  @resource:///org/gnome/gjs/modules/core/overrides/Gio.js:202:30
+  @resource:///org/gnome/gjs/modules/core/overrides/Gio.js:193:20
+  getCurrentSessionProxy@resource:///org/gnome/shell/misc/loginManager.js:160:52
+  async*_getLoginSession@resource:///org/gnome/shell/ui/screenShield.js:164:55
+  ScreenShield@resource:///org/gnome/shell/ui/screenShield.js:114:14
+  _initializeUI@resource:///org/gnome/shell/ui/main.js:253:24
+  start@resource:///org/gnome/shell/ui/main.js:197:11
+  @resource:///org/gnome/shell/ui/init.js:12:47
+  @resource:///org/gnome/shell/ui/init.js:20:20
+  
+
+(gnome-shell:3611311): GNOME Shell-WARNING **: 00:40:20.232: Failed to start state machine: can't access property "connectObject", this._loginUser is null
+
+(gnome-shell:3611311): Gjs-WARNING **: 00:40:20.233: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:
+_getLoginSession@resource:///org/gnome/shell/ui/screenShield.js:163:27
+ScreenShield@resource:///org/gnome/shell/ui/screenShield.js:114:14
+_initializeUI@resource:///org/gnome/shell/ui/main.js:253:24
+start@resource:///org/gnome/shell/ui/main.js:197:11
+@resource:///org/gnome/shell/ui/init.js:12:47
+@resource:///org/gnome/shell/ui/init.js:20:20
+
+[New Thread 0x7fff7ffff6c0 (LWP 3611440)]
+[New Thread 0x7fff7f7fe6c0 (LWP 3611441)]
+[New Thread 0x7fff7effd6c0 (LWP 3611442)]
+GNOME Shell-Message: 00:40:20.243: Error looking up permission: GDBus.Error:org.freedesktop.portal.Error.NotFound: No entry for geolocation
+GNOME Shell-Message: 00:40:20.255: Failed to register AuthenticationAgent
+[New Thread 0x7fff7e7fc6c0 (LWP 3611449)]
+[New Thread 0x7fff7e5fb6c0 (LWP 3611450)]
+[New Thread 0x7fff7e3fa6c0 (LWP 3611451)]
+[New Thread 0x7fff7e1f96c0 (LWP 3611452)]
+[Detaching after fork from child process 3611454]
+[New Thread 0x7fff7dff86c0 (LWP 3611460)]
+[Detaching after fork from child process 3611461]
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.freedesktop.portal.IBus' requested by ':1.9' (uid=1000 pid=3611404 comm="ibus-daemon --panel disable" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.freedesktop.portal.IBus'
+[New Thread 0x7fff7dd616c0 (LWP 3611493)]
+** Message: 00:40:20.326: Failed to start camera monitor
+[New Thread 0x7fff7cbff6c0 (LWP 3611498)]
+[New Thread 0x7fff7c9fe6c0 (LWP 3611499)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611500)]
+[New Thread 0x7fff4fdfe6c0 (LWP 3611501)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611502)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611503)]
+[New Thread 0x7fff4f7fb6c0 (LWP 3611504)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3611505)]
+[New Thread 0x7fff4f3f96c0 (LWP 3611506)]
+[New Thread 0x7fff4f1f86c0 (LWP 3611507)]
+[New Thread 0x7fff4eff76c0 (LWP 3611508)]
+[New Thread 0x7fff4edf66c0 (LWP 3611509)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611510)]
+[New Thread 0x7fff4e9f46c0 (LWP 3611511)]
+[New Thread 0x7fff4e7f36c0 (LWP 3611512)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611513)]
+[Thread 0x7fff4e5f26c0 (LWP 3611513) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611512) exited]
+[Thread 0x7fff4e9f46c0 (LWP 3611511) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611510) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611509) exited]
+[Thread 0x7fff4eff76c0 (LWP 3611508) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3611507) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3611506) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3611505) exited]
+[Thread 0x7fff4f7fb6c0 (LWP 3611504) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611503) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611502) exited]
+[Thread 0x7fff4fdfe6c0 (LWP 3611501) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611500) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3611499) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611498) exited]
+[New Thread 0x7fff4e7f36c0 (LWP 3611515)]
+[New Thread 0x7fff4f1f86c0 (LWP 3611516)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611517)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611518)]
+[New Thread 0x7fff4fdfe6c0 (LWP 3611519)]
+[New Thread 0x7fff4edf66c0 (LWP 3611520)]
+[New Thread 0x7fff4eff76c0 (LWP 3611521)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611522)]
+[New Thread 0x7fff4f3f96c0 (LWP 3611523)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3611524)]
+[New Thread 0x7fff4e9f46c0 (LWP 3611525)]
+[New Thread 0x7fff4f7fb6c0 (LWP 3611526)]
+[New Thread 0x7fff7c9fe6c0 (LWP 3611527)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611528)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611529)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611530)]
+[Thread 0x7fff4fdfe6c0 (LWP 3611519) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611530) exited]
+[Thread 0x7fff4f7fb6c0 (LWP 3611526) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3611527) exited]
+[Thread 0x7fff4e9f46c0 (LWP 3611525) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3611524) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3611523) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611522) exited]
+[Thread 0x7fff4eff76c0 (LWP 3611521) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611520) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611518) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611517) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3611516) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611529) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611528) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611515) exited]
+[New Thread 0x7fff4e5f26c0 (LWP 3611532)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611533)]
+[New Thread 0x7fff7c9fe6c0 (LWP 3611534)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611535)]
+[New Thread 0x7fff4f3f96c0 (LWP 3611536)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611537)]
+[New Thread 0x7fff4edf66c0 (LWP 3611538)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611539)]
+[New Thread 0x7fff4f7fb6c0 (LWP 3611540)]
+[New Thread 0x7fff4f1f86c0 (LWP 3611541)]
+[New Thread 0x7fff4eff76c0 (LWP 3611542)]
+[New Thread 0x7fff4e9f46c0 (LWP 3611543)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3611544)]
+[New Thread 0x7fff4e7f36c0 (LWP 3611545)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611546)]
+[New Thread 0x7fff4fdfe6c0 (LWP 3611547)]
+[Thread 0x7fff4ebf56c0 (LWP 3611546) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3611544) exited]
+[Thread 0x7fff4eff76c0 (LWP 3611542) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3611541) exited]
+[Thread 0x7fff4f7fb6c0 (LWP 3611540) exited]
+[Thread 0x7fff4e9f46c0 (LWP 3611543) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611539) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611538) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611537) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3611536) exited]
+[Thread 0x7fff4fdfe6c0 (LWP 3611547) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611535) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3611534) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611533) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611532) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611545) exited]
+GNOME Shell-Message: 00:40:20.368: No permission to control network connections: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files
+GNOME Shell-Message: 00:40:20.370: Failed to get PolKit permission: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files
+GNOME Shell-Message: 00:40:20.376: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.GeoClue2 was not provided by any .service files
+[New Thread 0x7fff4fdfe6c0 (LWP 3611553)]
+[New Thread 0x7fff4e9f46c0 (LWP 3611554)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611555)]
+[New Thread 0x7fff4e7f36c0 (LWP 3611556)]
+[New Thread 0x7fff4eff76c0 (LWP 3611557)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611558)]
+[New Thread 0x7fff4f1f86c0 (LWP 3611559)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611560)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3611561)]
+[New Thread 0x7fff7c9fe6c0 (LWP 3611562)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611564)]
+[New Thread 0x7fff4edf66c0 (LWP 3611565)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611566)]
+[New Thread 0x7fff4f7fb6c0 (LWP 3611567)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611568)]
+[New Thread 0x7fff4f3f96c0 (LWP 3611569)]
+[Thread 0x7fff4f3f96c0 (LWP 3611569) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611568) exited]
+[Thread 0x7fff4f7fb6c0 (LWP 3611567) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611566) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611565) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611564) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3611562) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3611561) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3611559) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611558) exited]
+[Thread 0x7fff4eff76c0 (LWP 3611557) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611556) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611555) exited]
+[Thread 0x7fff4e9f46c0 (LWP 3611554) exited]
+[Thread 0x7fff4fdfe6c0 (LWP 3611553) exited]
+[New Thread 0x7fff7c9fe6c0 (LWP 3611570)]
+[New Thread 0x7fff4e7f36c0 (LWP 3611571)]
+[Thread 0x7fff4fbfd6c0 (LWP 3611560) exited]
+[New Thread 0x7fff4f1f86c0 (LWP 3611572)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611573)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611574)]
+[New Thread 0x7fff4f7fb6c0 (LWP 3611575)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611577)]
+[New Thread 0x7fff4edf66c0 (LWP 3611578)]
+[New Thread 0x7fff4e9f46c0 (LWP 3611579)]
+[New Thread 0x7fff4fdfe6c0 (LWP 3611580)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611581)]
+[New Thread 0x7fff4eff76c0 (LWP 3611582)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3611583)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611584)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611585)]
+[New Thread 0x7fff4f3f96c0 (LWP 3611586)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3611587)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3611588)]
+[New Thread 0x7fff7c3fb6c0 (LWP 3611589)]
+[New Thread 0x7fff4dbf16c0 (LWP 3611590)]
+[New Thread 0x7fff4d9f06c0 (LWP 3611591)]
+[Thread 0x7fff7c3fb6c0 (LWP 3611589) exited]
+[Thread 0x7fff7c7fd6c0 (LWP 3611587) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611585) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3611583) exited]
+[Thread 0x7fff4eff76c0 (LWP 3611582) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611581) exited]
+[Thread 0x7fff4fdfe6c0 (LWP 3611580) exited]
+[Thread 0x7fff4e9f46c0 (LWP 3611579) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611578) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611577) exited]
+[Thread 0x7fff4f7fb6c0 (LWP 3611575) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611574) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611573) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3611572) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611571) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3611570) exited]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611592)]
+[New Thread 0x7fff4eff76c0 (LWP 3611593)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3611594)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3611595)]
+[New Thread 0x7fff4fdfe6c0 (LWP 3611596)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611597)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611598)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611599)]
+[New Thread 0x7fff7c9fe6c0 (LWP 3611600)]
+[New Thread 0x7fff7c3fb6c0 (LWP 3611601)]
+[New Thread 0x7fff4f1f86c0 (LWP 3611603)]
+[Thread 0x7fff4f1f86c0 (LWP 3611603) exited]
+[Thread 0x7fff7c3fb6c0 (LWP 3611601) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3611600) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611599) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611598) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611597) exited]
+[Thread 0x7fff4fdfe6c0 (LWP 3611596) exited]
+[Thread 0x7fff7c7fd6c0 (LWP 3611595) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3611594) exited]
+[Thread 0x7fff4eff76c0 (LWP 3611593) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611592) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3611591) exited]
+[Thread 0x7fff4dbf16c0 (LWP 3611590) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3611588) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3611586) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611584) exited]
+[New Thread 0x7fff4eff76c0 (LWP 3611605)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3611606)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611607)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611609)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611610)]
+[New Thread 0x7fff4d9f06c0 (LWP 3611611)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611612)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3611613)]
+[New Thread 0x7fff4f1f86c0 (LWP 3611615)]
+[New Thread 0x7fff4fdfe6c0 (LWP 3611616)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611618)]
+[New Thread 0x7fff7c9fe6c0 (LWP 3611617)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3611620)]
+[New Thread 0x7fff7c3fb6c0 (LWP 3611619)]
+[New Thread 0x7fff4dbf16c0 (LWP 3611621)]
+[New Thread 0x7fff4f3f96c0 (LWP 3611622)]
+[New Thread 0x7fff4e9f46c0 (LWP 3611623)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611624)]
+[New Thread 0x7fff4e7f36c0 (LWP 3611625)]
+[New Thread 0x7fff4edf66c0 (LWP 3611627)]
+[New Thread 0x7fff4f7fb6c0 (LWP 3611626)]
+[New Thread 0x7fff4d5ee6c0 (LWP 3611629)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3611628)]
+[New Thread 0x7fff4d3ed6c0 (LWP 3611630)]
+[Thread 0x7fff7c7fd6c0 (LWP 3611613) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3611611) exited]
+[Thread 0x7fff4d5ee6c0 (LWP 3611629) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611624) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3611622) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3611620) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611627) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611618) exited]
+[Thread 0x7fff4fdfe6c0 (LWP 3611616) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3611615) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611612) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611610) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611609) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611607) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3611606) exited]
+[Thread 0x7fff4eff76c0 (LWP 3611605) exited]
+[New Thread 0x7fff4d1ec6c0 (LWP 3611631)]
+[New Thread 0x7fff4eff76c0 (LWP 3611632)]
+[New Thread 0x7fff4edf66c0 (LWP 3611633)]
+[New Thread 0x7fff4fdfe6c0 (LWP 3611634)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611635)]
+[New Thread 0x7fff4f3f96c0 (LWP 3611636)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611637)]
+[New Thread 0x7fff4d5ee6c0 (LWP 3611638)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611639)]
+[New Thread 0x7fff4f1f86c0 (LWP 3611641)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611642)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611643)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3611644)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3611646)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3611645)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611647)]
+[New Thread 0x7fff4d9f06c0 (LWP 3611648)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3611649)]
+[New Thread 0x7fff4cdea6c0 (LWP 3611650)]
+[New Thread 0x7fff4cbe96c0 (LWP 3611651)]
+[New Thread 0x7fff4c9e86c0 (LWP 3611652)]
+[New Thread 0x7fff4c7e76c0 (LWP 3611653)]
+[New Thread 0x7fff4c5e66c0 (LWP 3611654)]
+[New Thread 0x7ffed3fff6c0 (LWP 3611656)]
+[New Thread 0x7fff4c3e56c0 (LWP 3611655)]
+[New Thread 0x7ffed3bfd6c0 (LWP 3611658)]
+[New Thread 0x7ffed3dfe6c0 (LWP 3611657)]
+[Thread 0x7fff4c3e56c0 (LWP 3611655) exited]
+[Thread 0x7fff4c9e86c0 (LWP 3611652) exited]
+[Thread 0x7fff4cdea6c0 (LWP 3611650) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3611648) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3611645) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611643) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3611641) exited]
+[Thread 0x7fff4d5ee6c0 (LWP 3611638) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3611636) exited]
+[Thread 0x7fff4fdfe6c0 (LWP 3611634) exited]
+[Thread 0x7fff4eff76c0 (LWP 3611632) exited]
+[Thread 0x7fff4d3ed6c0 (LWP 3611630) exited]
+[Thread 0x7fff4f7fb6c0 (LWP 3611626) exited]
+[Thread 0x7fff4e9f46c0 (LWP 3611623) exited]
+[Thread 0x7fff4dbf16c0 (LWP 3611621) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3611617) exited]
+[New Thread 0x7fff4cdea6c0 (LWP 3611660)]
+[New Thread 0x7fff4c3e56c0 (LWP 3611659)]
+[New Thread 0x7fff4dbf16c0 (LWP 3611661)]
+[Thread 0x7fff4cdea6c0 (LWP 3611660) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3611644) exited]
+[Thread 0x7fff7c7fd6c0 (LWP 3611646) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611642) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611639) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611637) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611633) exited]
+[Thread 0x7fff4d1ec6c0 (LWP 3611631) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3611628) exited]
+[Thread 0x7fff4cbe96c0 (LWP 3611651) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611625) exited]
+[Thread 0x7ffed3dfe6c0 (LWP 3611657) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611647) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3611649) exited]
+[Thread 0x7fff4c5e66c0 (LWP 3611654) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611635) exited]
+[New Thread 0x7fff4c5e66c0 (LWP 3611662)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611663)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3611665)]
+[New Thread 0x7ffed3dfe6c0 (LWP 3611666)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611667)]
+[New Thread 0x7fff4cbe96c0 (LWP 3611668)]
+[New Thread 0x7fff4d1ec6c0 (LWP 3611669)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3611670)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611671)]
+[New Thread 0x7fff4e7f36c0 (LWP 3611672)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3611673)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611674)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3611675)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611676)]
+[Thread 0x7fff7c7fd6c0 (LWP 3611670) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611667) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3611675) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611671) exited]
+[Thread 0x7fff4d1ec6c0 (LWP 3611669) exited]
+[Thread 0x7ffed3dfe6c0 (LWP 3611666) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3611665) exited]
+[Thread 0x7fff4c5e66c0 (LWP 3611662) exited]
+[Thread 0x7fff4dbf16c0 (LWP 3611661) exited]
+[Thread 0x7fff4c3e56c0 (LWP 3611659) exited]
+[Thread 0x7ffed3bfd6c0 (LWP 3611658) exited]
+[Thread 0x7fff4cbe96c0 (LWP 3611668) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611663) exited]
+[Thread 0x7ffed3fff6c0 (LWP 3611656) exited]
+[Thread 0x7fff4c7e76c0 (LWP 3611653) exited]
+[New Thread 0x7fff4edf66c0 (LWP 3611677)]
+[Thread 0x7fff4d7ef6c0 (LWP 3611673) exited]
+[New Thread 0x7fff4d7ef6c0 (LWP 3611678)]
+[New Thread 0x7fff4cbe96c0 (LWP 3611679)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611680)]
+[New Thread 0x7ffed3dfe6c0 (LWP 3611681)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3611682)]
+[New Thread 0x7fff4c5e66c0 (LWP 3611683)]
+[New Thread 0x7fff4dbf16c0 (LWP 3611684)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3611685)]
+[New Thread 0x7fff4d1ec6c0 (LWP 3611686)]
+[New Thread 0x7fff4c3e56c0 (LWP 3611687)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611688)]
+[New Thread 0x7ffed3bfd6c0 (LWP 3611689)]
+[Thread 0x7ffed3bfd6c0 (LWP 3611689) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611688) exited]
+[Thread 0x7fff4c3e56c0 (LWP 3611687) exited]
+[Thread 0x7fff4d1ec6c0 (LWP 3611686) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3611685) exited]
+[Thread 0x7fff4dbf16c0 (LWP 3611684) exited]
+[Thread 0x7fff4c5e66c0 (LWP 3611683) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3611682) exited]
+[Thread 0x7ffed3dfe6c0 (LWP 3611681) exited]
+[Thread 0x7fff4cbe96c0 (LWP 3611679) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3611678) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611676) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611674) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611677) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611672) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611680) exited]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611691)]
+[New Thread 0x7fff4edf66c0 (LWP 3611692)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3611693)]
+[New Thread 0x7ffed3dfe6c0 (LWP 3611694)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3611695)]
+[New Thread 0x7fff4e7f36c0 (LWP 3611696)]
+[New Thread 0x7fff4cbe96c0 (LWP 3611697)]
+[New Thread 0x7fff4c5e66c0 (LWP 3611698)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3611699)]
+[New Thread 0x7fff4dbf16c0 (LWP 3611700)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611701)]
+[New Thread 0x7ffed3bfd6c0 (LWP 3611702)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611703)]
+[New Thread 0x7fff4d1ec6c0 (LWP 3611704)]
+[New Thread 0x7fff4c3e56c0 (LWP 3611705)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611706)]
+[Thread 0x7fff4ebf56c0 (LWP 3611706) exited]
+[Thread 0x7fff4d1ec6c0 (LWP 3611704) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611703) exited]
+[Thread 0x7ffed3bfd6c0 (LWP 3611702) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611701) exited]
+[Thread 0x7fff4dbf16c0 (LWP 3611700) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3611699) exited]
+[Thread 0x7fff4c5e66c0 (LWP 3611698) exited]
+[Thread 0x7fff4cbe96c0 (LWP 3611697) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611696) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3611695) exited]
+[Thread 0x7ffed3dfe6c0 (LWP 3611694) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3611693) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611692) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611691) exited]
+[Thread 0x7fff4c3e56c0 (LWP 3611705) exited]
+[New Thread 0x7fff4c5e66c0 (LWP 3611709)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611710)]
+[New Thread 0x7fff4d1ec6c0 (LWP 3611711)]
+[New Thread 0x7ffed3bfd6c0 (LWP 3611712)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3611713)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3611714)]
+[New Thread 0x7fff4c3e56c0 (LWP 3611715)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3611716)]
+[New Thread 0x7fff4cbe96c0 (LWP 3611717)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611718)]
+[New Thread 0x7ffed3dfe6c0 (LWP 3611719)]
+[New Thread 0x7fff4dbf16c0 (LWP 3611720)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611721)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611722)]
+[New Thread 0x7fff4e7f36c0 (LWP 3611723)]
+[New Thread 0x7fff4edf66c0 (LWP 3611724)]
+[New Thread 0x7fff4c7e76c0 (LWP 3611725)]
+[New Thread 0x7ffed3fff6c0 (LWP 3611726)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611727)]
+[New Thread 0x7fff7c9fe6c0 (LWP 3611728)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3611729)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611730)]
+[New Thread 0x7fff4fdfe6c0 (LWP 3611731)]
+[Thread 0x7fff7c7fd6c0 (LWP 3611729) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611727) exited]
+[Thread 0x7fff4c7e76c0 (LWP 3611725) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611723) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611721) exited]
+[Thread 0x7ffed3dfe6c0 (LWP 3611719) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611718) exited]
+[Thread 0x7fff4cbe96c0 (LWP 3611717) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3611716) exited]
+[Thread 0x7fff4c3e56c0 (LWP 3611715) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3611714) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3611713) exited]
+[Thread 0x7ffed3bfd6c0 (LWP 3611712) exited]
+[Thread 0x7fff4d1ec6c0 (LWP 3611711) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611710) exited]
+[Thread 0x7fff4c5e66c0 (LWP 3611709) exited]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611732)]
+[New Thread 0x7ffed3bfd6c0 (LWP 3611733)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3611734)]
+[New Thread 0x7fff4c7e76c0 (LWP 3611735)]
+[New Thread 0x7fff4c3e56c0 (LWP 3611736)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3611737)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611738)]
+[New Thread 0x7ffed3dfe6c0 (LWP 3611739)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611740)]
+[Thread 0x7fff7cbff6c0 (LWP 3611738) exited]
+[Thread 0x7fff4c3e56c0 (LWP 3611736) exited]
+[Thread 0x7fff4c7e76c0 (LWP 3611735) exited]
+[Thread 0x7fff7c7fd6c0 (LWP 3611734) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611740) exited]
+[Thread 0x7ffed3bfd6c0 (LWP 3611733) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611732) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611730) exited]
+[Thread 0x7ffed3dfe6c0 (LWP 3611739) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3611728) exited]
+[Thread 0x7fff4fdfe6c0 (LWP 3611731) exited]
+[Thread 0x7ffed3fff6c0 (LWP 3611726) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611724) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611722) exited]
+[Thread 0x7fff4dbf16c0 (LWP 3611720) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3611737) exited]
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.12' (uid=1000 pid=3611473 comm="/usr/libexec/ibus-extension-gtk3" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.freedesktop.portal.Documents' requested by ':1.15' (uid=1000 pid=3611742 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.freedesktop.portal.Documents'
+fusermount3: mount failed: Operation not permitted
+error: fuse init failed: Can't mount path /home/samer/.t3/worktrees/one-mk/t3-c726a61d/target/wall-m1-lab/wall-m1-session/run/doc
+
+(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.442: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gnome' requested by ':1.15' (uid=1000 pid=3611742 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+
+(gnome-shell:3611311): accountsservice-WARNING **: 00:40:20.468: ActUserManager: user (null) has no username (uid: -1)
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.Settings.GlobalShortcutsProvider' requested by ':1.17' (uid=1000 pid=3611758 comm="/usr/libexec/xdg-desktop-portal-gnome" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.Settings.GlobalShortcutsProvider'
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gnome'
+
+(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.617: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.617: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.617: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.15' (uid=1000 pid=3611742 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'
+
+(/usr/libexec/xdg-desktop-portal:3611742): xdg-desktop-portal-WARNING **: 00:40:20.654: Failed to connect to PipeWire: Couldn't connect to PipeWire
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.freedesktop.secrets' requested by ':1.15' (uid=1000 pid=3611742 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.freedesktop.portal.Desktop'
+** Message: 00:40:20.668: couldn't access control socket: /home/samer/.t3/worktrees/one-mk/t3-c726a61d/target/wall-m1-lab/wall-m1-session/run/keyring/control: No such file or directory
+discover_other_daemon: 0dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.freedesktop.secrets'
+[Thread 0x7fffb0ff96c0 (LWP 3611342) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3611451) exited]
+[Thread 0x7fff7e1f96c0 (LWP 3611452) exited]
+[Thread 0x7fff7f7fe6c0 (LWP 3611441) exited]
+[Thread 0x7fff7c3fb6c0 (LWP 3611619) exited]
+[Thread 0x7fff9a5616c0 (LWP 3611397) exited]
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.Shell.Screencast'
+GNOME Shell-Message: 00:40:21.425: GNOME Shell started at Sat Oct 31 2026 00:40:20 GMT+0300 (GMT+03:00)
+GNOME Shell-Message: 00:40:21.426: Registering display with GDM
+GNOME Shell-Message: 00:40:21.427: Error registering display with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, “()”, does not match expected type “(a{ss})”
+[Thread 0x7ffff09fe6c0 (LWP 3611318) exited]
+[Thread 0x7fffb17fa6c0 (LWP 3611341) exited]
+[Thread 0x7fff7ffff6c0 (LWP 3611440) exited]
+[Thread 0x7fffb1ffb6c0 (LWP 3611340) exited]
+[Thread 0x7fff7effd6c0 (LWP 3611442) exited]
+[Thread 0x7fff9955f6c0 (LWP 3611399) exited]
+[Thread 0x7fff99d606c0 (LWP 3611398) exited]
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.25' (uid=1000 pid=3611870 comm="gdbus call --session -d org.gnome.Shell.Extensions" label="t3code (unconfined)")
+dbus-daemon[3611236]: [session uid=1000 pid=3611236 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'
+[New Thread 0x7fff99d606c0 (LWP 3611895)]
+[New Thread 0x7fff9955f6c0 (LWP 3611901)]
+[New Thread 0x7fff7effd6c0 (LWP 3611907)]
+[New Thread 0x7fffb1ffb6c0 (LWP 3611908)]
+[New Thread 0x7ffff09fd6c0 (LWP 3611909)]
+[New Thread 0x7ffff07fc6c0 (LWP 3611910)]
+[New Thread 0x7ffff05fb6c0 (LWP 3611911)]
+[New Thread 0x7fffb17fa6c0 (LWP 3611912)]
+[New Thread 0x7fffb15f96c0 (LWP 3611913)]
+[New Thread 0x7fffb13f86c0 (LWP 3611914)]
+[New Thread 0x7fffb11f76c0 (LWP 3611915)]
+[New Thread 0x7fffb0ff66c0 (LWP 3611916)]
+[New Thread 0x7fffb0df56c0 (LWP 3611917)]
+[New Thread 0x7fffb0bf46c0 (LWP 3611918)]
+[New Thread 0x7fff9a5616c0 (LWP 3611919)]
+[New Thread 0x7fff9a3606c0 (LWP 3611920)]
+[New Thread 0x7fff9a15f6c0 (LWP 3611921)]
+[New Thread 0x7fff7ffff6c0 (LWP 3611922)]
+[Thread 0x7fff7ffff6c0 (LWP 3611922) exited]
+[Thread 0x7fffb0bf46c0 (LWP 3611918) exited]
+[Thread 0x7fffb0df56c0 (LWP 3611917) exited]
+[Thread 0x7fffb0ff66c0 (LWP 3611916) exited]
+[Thread 0x7fffb11f76c0 (LWP 3611915) exited]
+[Thread 0x7fffb13f86c0 (LWP 3611914) exited]
+[Thread 0x7fff9a15f6c0 (LWP 3611921) exited]
+[Thread 0x7fffb15f96c0 (LWP 3611913) exited]
+[Thread 0x7fffb17fa6c0 (LWP 3611912) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3611911) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3611910) exited]
+[Thread 0x7ffff09fd6c0 (LWP 3611909) exited]
+[Thread 0x7fffb1ffb6c0 (LWP 3611908) exited]
+[Thread 0x7fff7effd6c0 (LWP 3611907) exited]
+[Thread 0x7fff9a5616c0 (LWP 3611919) exited]
+[Thread 0x7fff9a3606c0 (LWP 3611920) exited]
+[New Thread 0x7fff9a15f6c0 (LWP 3611924)]
+[New Thread 0x7fffb0bf46c0 (LWP 3611925)]
+[New Thread 0x7fffb15f96c0 (LWP 3611926)]
+[New Thread 0x7ffff07fc6c0 (LWP 3611927)]
+[New Thread 0x7ffff05fb6c0 (LWP 3611928)]
+[New Thread 0x7fffb0df56c0 (LWP 3611929)]
+[New Thread 0x7fffb13f86c0 (LWP 3611931)]
+[New Thread 0x7fffb1ffb6c0 (LWP 3611930)]
+[New Thread 0x7fff9a5616c0 (LWP 3611932)]
+[New Thread 0x7ffff09fd6c0 (LWP 3611933)]
+[New Thread 0x7fffb0ff66c0 (LWP 3611934)]
+[New Thread 0x7fffb11f76c0 (LWP 3611935)]
+[New Thread 0x7fff7effd6c0 (LWP 3611936)]
+[New Thread 0x7fff7ffff6c0 (LWP 3611937)]
+[New Thread 0x7fffb17fa6c0 (LWP 3611938)]
+[New Thread 0x7fff9a3606c0 (LWP 3611939)]
+[New Thread 0x7fff7f7fe6c0 (LWP 3611940)]
+[New Thread 0x7fff7f5fd6c0 (LWP 3611941)]
+[New Thread 0x7fff7f3fc6c0 (LWP 3611942)]
+[Thread 0x7fff7f5fd6c0 (LWP 3611941) exited]
+[Thread 0x7fff7f7fe6c0 (LWP 3611940) exited]
+[Thread 0x7fff7effd6c0 (LWP 3611936) exited]
+[Thread 0x7fffb11f76c0 (LWP 3611935) exited]
+[Thread 0x7fffb0ff66c0 (LWP 3611934) exited]
+[Thread 0x7ffff09fd6c0 (LWP 3611933) exited]
+[Thread 0x7fff9a5616c0 (LWP 3611932) exited]
+[Thread 0x7fffb13f86c0 (LWP 3611931) exited]
+[Thread 0x7fffb0df56c0 (LWP 3611929) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3611928) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3611927) exited]
+[Thread 0x7fffb15f96c0 (LWP 3611926) exited]
+[Thread 0x7fffb0bf46c0 (LWP 3611925) exited]
+[Thread 0x7fff9a15f6c0 (LWP 3611924) exited]
+[Thread 0x7fff9a3606c0 (LWP 3611939) exited]
+[Thread 0x7fff7f3fc6c0 (LWP 3611942) exited]
+[New Thread 0x7fff9a3606c0 (LWP 3611948)]
+[New Thread 0x7fff7f3fc6c0 (LWP 3611947)]
+[New Thread 0x7fff7f5fd6c0 (LWP 3611950)]
+[New Thread 0x7ffff05fb6c0 (LWP 3611952)]
+[New Thread 0x7fff7f7fe6c0 (LWP 3611951)]
+[New Thread 0x7fff7effd6c0 (LWP 3611949)]
+[New Thread 0x7ffff07fc6c0 (LWP 3611953)]
+[New Thread 0x7fffb0ff66c0 (LWP 3611955)]
+[New Thread 0x7fff9a5616c0 (LWP 3611954)]
+[New Thread 0x7fffb13f86c0 (LWP 3611956)]
+[New Thread 0x7fffb11f76c0 (LWP 3611957)]
+[New Thread 0x7fffb0bf46c0 (LWP 3611959)]
+[New Thread 0x7ffff09fd6c0 (LWP 3611958)]
+[New Thread 0x7fffb15f96c0 (LWP 3611960)]
+[New Thread 0x7fff9a15f6c0 (LWP 3611962)]
+[New Thread 0x7fffb0df56c0 (LWP 3611961)]
+[New Thread 0x7fff7e3fa6c0 (LWP 3611963)]
+[New Thread 0x7fff7cbff6c0 (LWP 3611965)]
+[New Thread 0x7fff7e1f96c0 (LWP 3611964)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3611967)]
+[New Thread 0x7fff7c9fe6c0 (LWP 3611966)]
+[New Thread 0x7fff7c3fb6c0 (LWP 3611970)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3611968)]
+[New Thread 0x7fff4ffff6c0 (LWP 3611971)]
+[New Thread 0x7fff4fdfe6c0 (LWP 3611972)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3611974)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3611973)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3611976)]
+[New Thread 0x7fff4f7fb6c0 (LWP 3611975)]
+[New Thread 0x7fff4f1f86c0 (LWP 3611978)]
+[New Thread 0x7fff4f3f96c0 (LWP 3611977)]
+[New Thread 0x7fff4eff76c0 (LWP 3611979)]
+[New Thread 0x7fff4edf66c0 (LWP 3611980)]
+[New Thread 0x7fff4e9f46c0 (LWP 3611982)]
+[New Thread 0x7fff4ebf56c0 (LWP 3611981)]
+[New Thread 0x7fff4e5f26c0 (LWP 3611984)]
+[New Thread 0x7fff4e7f36c0 (LWP 3611983)]
+[New Thread 0x7fff4d9f06c0 (LWP 3611986)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3611987)]
+[New Thread 0x7fff4dbf16c0 (LWP 3611985)]
+[New Thread 0x7fff4d5ee6c0 (LWP 3611988)]
+[New Thread 0x7fff4d3ed6c0 (LWP 3611989)]
+[New Thread 0x7fff4d1ec6c0 (LWP 3611990)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3611991)]
+[New Thread 0x7fff4cdea6c0 (LWP 3611992)]
+[New Thread 0x7fff4c5e66c0 (LWP 3611996)]
+[New Thread 0x7fff4c7e76c0 (LWP 3611995)]
+[New Thread 0x7fff4cbe96c0 (LWP 3611993)]
+[New Thread 0x7fff4c9e86c0 (LWP 3611994)]
+[Thread 0x7fff4c5e66c0 (LWP 3611996) exited]
+[Thread 0x7fff4cdea6c0 (LWP 3611992) exited]
+[Thread 0x7fff4d5ee6c0 (LWP 3611988) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3611983) exited]
+[Thread 0x7fff4eff76c0 (LWP 3611979) exited]
+[Thread 0x7fff4f7fb6c0 (LWP 3611975) exited]
+[Thread 0x7fff7c3fb6c0 (LWP 3611970) exited]
+[Thread 0x7fff7c7fd6c0 (LWP 3611967) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3611965) exited]
+[Thread 0x7fff9a15f6c0 (LWP 3611962) exited]
+[Thread 0x7fffb0bf46c0 (LWP 3611959) exited]
+[Thread 0x7fffb13f86c0 (LWP 3611956) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3611953) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3611952) exited]
+[Thread 0x7fff7f3fc6c0 (LWP 3611947) exited]
+[New Thread 0x7ffed3fff6c0 (LWP 3611997)]
+[New Thread 0x7fffb0bf46c0 (LWP 3611998)]
+[New Thread 0x7fff4cdea6c0 (LWP 3611999)]
+[Thread 0x7fff4fdfe6c0 (LWP 3611972) exited]
+[New Thread 0x7ffff05fb6c0 (LWP 3612000)]
+[Thread 0x7ffff09fd6c0 (LWP 3611958) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3611971) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3611976) exited]
+[New Thread 0x7fff4eff76c0 (LWP 3612002)]
+[Thread 0x7fff4cdea6c0 (LWP 3611999) exited]
+[Thread 0x7fff4c9e86c0 (LWP 3611994) exited]
+[Thread 0x7fff4d1ec6c0 (LWP 3611990) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3611987) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3611984) exited]
+[Thread 0x7fff4edf66c0 (LWP 3611980) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3611978) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3611974) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3611966) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3611963) exited]
+[Thread 0x7fff9a5616c0 (LWP 3611954) exited]
+[Thread 0x7fff7f7fe6c0 (LWP 3611951) exited]
+[Thread 0x7fff9a3606c0 (LWP 3611948) exited]
+[New Thread 0x7fff4edf66c0 (LWP 3612003)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3612004)]
+[New Thread 0x7fff4c9e86c0 (LWP 3612005)]
+[New Thread 0x7fff7c9fe6c0 (LWP 3612006)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3612008)]
+[New Thread 0x7fff9a5616c0 (LWP 3612007)]
+[New Thread 0x7fff4d1ec6c0 (LWP 3612011)]
+[New Thread 0x7fff7f7fe6c0 (LWP 3612009)]
+[New Thread 0x7fff4f1f86c0 (LWP 3612013)]
+[New Thread 0x7fff7e3fa6c0 (LWP 3612012)]
+[New Thread 0x7fff4cdea6c0 (LWP 3612015)]
+[New Thread 0x7fff4e5f26c0 (LWP 3612014)]
+[New Thread 0x7fff9a3606c0 (LWP 3612016)]
+[New Thread 0x7fff4ffff6c0 (LWP 3612019)]
+[New Thread 0x7fff4f5fa6c0 (LWP 3612018)]
+[New Thread 0x7ffff09fd6c0 (LWP 3612020)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3612021)]
+[New Thread 0x7fff7cbff6c0 (LWP 3612023)]
+[New Thread 0x7fff4e7f36c0 (LWP 3612022)]
+[New Thread 0x7ffff07fc6c0 (LWP 3612024)]
+[Thread 0x7ffff09fd6c0 (LWP 3612020) exited]
+[Thread 0x7fff4e5f26c0 (LWP 3612014) exited]
+[Thread 0x7fff7f7fe6c0 (LWP 3612009) exited]
+[Thread 0x7fff7c9fe6c0 (LWP 3612006) exited]
+[Thread 0x7fff4edf66c0 (LWP 3612003) exited]
+[Thread 0x7fff4c7e76c0 (LWP 3611995) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3611991) exited]
+[Thread 0x7fff4dbf16c0 (LWP 3611985) exited]
+[Thread 0x7fff4e9f46c0 (LWP 3611982) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3611977) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3611973) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3611968) exited]
+[Thread 0x7fff7e1f96c0 (LWP 3611964) exited]
+[Thread 0x7fffb15f96c0 (LWP 3611960) exited]
+[Thread 0x7fffb11f76c0 (LWP 3611957) exited]
+[Thread 0x7fffb0ff66c0 (LWP 3611955) exited]
+[New Thread 0x7fff4fbfd6c0 (LWP 3612027)]
+[New Thread 0x7fff4dbf16c0 (LWP 3612025)]
+[New Thread 0x7fffb15f96c0 (LWP 3612026)]
+[New Thread 0x7fff7e1f96c0 (LWP 3612029)]
+[New Thread 0x7fff4edf66c0 (LWP 3612028)]
+[New Thread 0x7fff4f3f96c0 (LWP 3612030)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3612031)]
+[New Thread 0x7fff4c7e76c0 (LWP 3612033)]
+[New Thread 0x7fff4e9f46c0 (LWP 3612032)]
+[New Thread 0x7fffb11f76c0 (LWP 3612034)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3612036)]
+[Thread 0x7fff4e9f46c0 (LWP 3612032) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3612027) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3612024) exited]
+[Thread 0x7fff7c7fd6c0 (LWP 3612021) exited]
+[Thread 0x7fff9a3606c0 (LWP 3612016) exited]
+[Thread 0x7fff9a5616c0 (LWP 3612007) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3612004) exited]
+[Thread 0x7fff4eff76c0 (LWP 3612002) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3612000) exited]
+[Thread 0x7fffb0bf46c0 (LWP 3611998) exited]
+[Thread 0x7fff4cbe96c0 (LWP 3611993) exited]
+[Thread 0x7fff4d3ed6c0 (LWP 3611989) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3611986) exited]
+[Thread 0x7fff4ebf56c0 (LWP 3611981) exited]
+[New Thread 0x7ffff07fc6c0 (LWP 3612037)]
+[New Thread 0x7fff4eff76c0 (LWP 3612038)]
+[New Thread 0x7fff4d9f06c0 (LWP 3612040)]
+[Thread 0x7fff4edf66c0 (LWP 3612028) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3612012) exited]
+[New Thread 0x7fff7c7fd6c0 (LWP 3612044)]
+[New Thread 0x7ffff05fb6c0 (LWP 3612041)]
+[New Thread 0x7fff4edf66c0 (LWP 3612042)]
+[New Thread 0x7fff4d3ed6c0 (LWP 3612046)]
+[New Thread 0x7fff9a3606c0 (LWP 3612047)]
+[New Thread 0x7fffb0bf46c0 (LWP 3612045)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3612048)]
+[New Thread 0x7fff4cbe96c0 (LWP 3612049)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3612052)]
+[New Thread 0x7fff9a5616c0 (LWP 3612050)]
+[Thread 0x7fff7c5fc6c0 (LWP 3612031) exited]
+[Thread 0x7fff4edf66c0 (LWP 3612042) exited]
+[Thread 0x7fff4cbe96c0 (LWP 3612049) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3612037) exited]
+[Thread 0x7fff7e1f96c0 (LWP 3612029) exited]
+[Thread 0x7fff4dbf16c0 (LWP 3612025) exited]
+[Thread 0x7fffb11f76c0 (LWP 3612034) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3612040) exited]
+[Thread 0x7fff7cbff6c0 (LWP 3612023) exited]
+[Thread 0x7fff4f5fa6c0 (LWP 3612018) exited]
+[Thread 0x7fff4cdea6c0 (LWP 3612015) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3612013) exited]
+[Thread 0x7fff4d1ec6c0 (LWP 3612011) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3612008) exited]
+[Thread 0x7fff4c9e86c0 (LWP 3612005) exited]
+[New Thread 0x7fff4d9f06c0 (LWP 3612054)]
+[New Thread 0x7fff7e3fa6c0 (LWP 3612053)]
+[Thread 0x7fff9a3606c0 (LWP 3612047) exited]
+[New Thread 0x7fff9a3606c0 (LWP 3612056)]
+[New Thread 0x7fffb11f76c0 (LWP 3612057)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3612058)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3612059)]
+[New Thread 0x7fff4cbe96c0 (LWP 3612060)]
+[New Thread 0x7fff4c9e86c0 (LWP 3612061)]
+[New Thread 0x7fff4edf66c0 (LWP 3612062)]
+[New Thread 0x7fff4f1f86c0 (LWP 3612064)]
+[New Thread 0x7ffff07fc6c0 (LWP 3612065)]
+[Thread 0x7fff4c9e86c0 (LWP 3612061) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3612059) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3612052) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3612048) exited]
+[Thread 0x7fff4d3ed6c0 (LWP 3612046) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3612041) exited]
+[Thread 0x7fff4eff76c0 (LWP 3612038) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3612036) exited]
+[Thread 0x7fff4c7e76c0 (LWP 3612033) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3612064) exited]
+[Thread 0x7fffb15f96c0 (LWP 3612026) exited]
+[Thread 0x7fff4e7f36c0 (LWP 3612022) exited]
+[Thread 0x7fffb11f76c0 (LWP 3612057) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3612019) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3612053) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3612030) exited]
+[New Thread 0x7fff4f3f96c0 (LWP 3612066)]
+[New Thread 0x7fff7e3fa6c0 (LWP 3612067)]
+[New Thread 0x7fffb11f76c0 (LWP 3612068)]
+[New Thread 0x7fff4f1f86c0 (LWP 3612069)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3612070)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3612071)]
+[New Thread 0x7fff4eff76c0 (LWP 3612072)]
+[New Thread 0x7fff4c9e86c0 (LWP 3612074)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3612075)]
+[New Thread 0x7ffff05fb6c0 (LWP 3612076)]
+[New Thread 0x7fff4d3ed6c0 (LWP 3612077)]
+[New Thread 0x7fff4ffff6c0 (LWP 3612078)]
+[Thread 0x7ffff05fb6c0 (LWP 3612076) exited]
+[Thread 0x7fff4c9e86c0 (LWP 3612074) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3612071) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3612069) exited]
+[Thread 0x7fffb11f76c0 (LWP 3612068) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3612067) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3612066) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3612065) exited]
+[Thread 0x7fff4edf66c0 (LWP 3612062) exited]
+[Thread 0x7fff4cbe96c0 (LWP 3612060) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3612058) exited]
+[Thread 0x7fff9a3606c0 (LWP 3612056) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3612054) exited]
+[Thread 0x7fff9a5616c0 (LWP 3612050) exited]
+[Thread 0x7fffb0bf46c0 (LWP 3612045) exited]
+[Thread 0x7fff7c7fd6c0 (LWP 3612044) exited]
+[New Thread 0x7fff4f3f96c0 (LWP 3612079)]
+[New Thread 0x7fff9a5616c0 (LWP 3612080)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3612081)]
+[New Thread 0x7fff4f1f86c0 (LWP 3612082)]
+[New Thread 0x7fff9a3606c0 (LWP 3612085)]
+[New Thread 0x7fff4cbe96c0 (LWP 3612084)]
+[New Thread 0x7fff4edf66c0 (LWP 3612086)]
+[New Thread 0x7fff4c9e86c0 (LWP 3612087)]
+[New Thread 0x7fffb11f76c0 (LWP 3612088)]
+[New Thread 0x7ffff05fb6c0 (LWP 3612089)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3612090)]
+[New Thread 0x7fff7c7fd6c0 (LWP 3612091)]
+[New Thread 0x7fff7e3fa6c0 (LWP 3612092)]
+[New Thread 0x7fffb0bf46c0 (LWP 3612093)]
+[New Thread 0x7fff4d9f06c0 (LWP 3612094)]
+[New Thread 0x7fff4c7e76c0 (LWP 3612097)]
+[New Thread 0x7ffff07fc6c0 (LWP 3612095)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3612096)]
+[Thread 0x7fff4c7e76c0 (LWP 3612097) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3612094) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3612092) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3612090) exited]
+[Thread 0x7fffb11f76c0 (LWP 3612088) exited]
+[Thread 0x7fff4edf66c0 (LWP 3612086) exited]
+[Thread 0x7fff9a3606c0 (LWP 3612085) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3612082) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3612081) exited]
+[Thread 0x7fff9a5616c0 (LWP 3612080) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3612079) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3612078) exited]
+[Thread 0x7fff4d3ed6c0 (LWP 3612077) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3612075) exited]
+[Thread 0x7fff4eff76c0 (LWP 3612072) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3612070) exited]
+[New Thread 0x7fffb11f76c0 (LWP 3612098)]
+[New Thread 0x7fff4d9f06c0 (LWP 3612099)]
+[New Thread 0x7fff4edf66c0 (LWP 3612100)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3612101)]
+[New Thread 0x7fff9a3606c0 (LWP 3612102)]
+[New Thread 0x7fff4c7e76c0 (LWP 3612103)]
+[New Thread 0x7fff7c5fc6c0 (LWP 3612104)]
+[New Thread 0x7fff4f1f86c0 (LWP 3612105)]
+[New Thread 0x7fff4d3ed6c0 (LWP 3612106)]
+[New Thread 0x7fff9a5616c0 (LWP 3612107)]
+[New Thread 0x7fff4eff76c0 (LWP 3612108)]
+[New Thread 0x7fff4ffff6c0 (LWP 3612109)]
+[New Thread 0x7fff4f3f96c0 (LWP 3612110)]
+[New Thread 0x7fff7e3fa6c0 (LWP 3612111)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3612112)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3612113)]
+[New Thread 0x7fffb15f96c0 (LWP 3612114)]
+[New Thread 0x7fffb13f86c0 (LWP 3612115)]
+[New Thread 0x7fffb0ff66c0 (LWP 3612116)]
+[New Thread 0x7fff9a15f6c0 (LWP 3612117)]
+[Thread 0x7fffb0ff66c0 (LWP 3612116) exited]
+[Thread 0x7fffb15f96c0 (LWP 3612114) exited]
+[Thread 0x7fff4f3f96c0 (LWP 3612110) exited]
+[Thread 0x7fff4eff76c0 (LWP 3612108) exited]
+[Thread 0x7fff4d3ed6c0 (LWP 3612106) exited]
+[Thread 0x7fff7c5fc6c0 (LWP 3612104) exited]
+[Thread 0x7fff9a3606c0 (LWP 3612102) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3612112) exited]
+[Thread 0x7fff4edf66c0 (LWP 3612100) exited]
+[Thread 0x7fffb11f76c0 (LWP 3612098) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3612095) exited]
+[Thread 0x7fff7c7fd6c0 (LWP 3612091) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3612089) exited]
+[Thread 0x7fff4c9e86c0 (LWP 3612087) exited]
+[Thread 0x7fff4cbe96c0 (LWP 3612084) exited]
+[New Thread 0x7fff7f7fe6c0 (LWP 3612118)]
+[Thread 0x7fffb0bf46c0 (LWP 3612093) exited]
+[New Thread 0x7fff4f9fc6c0 (LWP 3612119)]
+[New Thread 0x7ffff07fc6c0 (LWP 3612120)]
+[New Thread 0x7ffff05fb6c0 (LWP 3612121)]
+[New Thread 0x7fffb15f96c0 (LWP 3612122)]
+[Thread 0x7ffff07fc6c0 (LWP 3612120) exited]
+[Thread 0x7fff9a15f6c0 (LWP 3612117) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3612113) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3612111) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3612109) exited]
+[Thread 0x7fffb13f86c0 (LWP 3612115) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3612105) exited]
+[Thread 0x7fff4c7e76c0 (LWP 3612103) exited]
+[Thread 0x7fffb15f96c0 (LWP 3612122) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3612101) exited]
+[Thread 0x7fff7f7fe6c0 (LWP 3612118) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3612099) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3612096) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3612121) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3612119) exited]
+[Thread 0x7fff9a5616c0 (LWP 3612107) exited]
+[New Thread 0x7fff4f9fc6c0 (LWP 3612127)]
+[New Thread 0x7fff9a5616c0 (LWP 3612128)]
+[New Thread 0x7ffff05fb6c0 (LWP 3612129)]
+[New Thread 0x7fff7f7fe6c0 (LWP 3612130)]
+[New Thread 0x7fffb15f96c0 (LWP 3612131)]
+[New Thread 0x7fffb13f86c0 (LWP 3612132)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3612133)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3612134)]
+[New Thread 0x7fff4ffff6c0 (LWP 3612135)]
+[New Thread 0x7fff4c7e76c0 (LWP 3612136)]
+[New Thread 0x7fff4d9f06c0 (LWP 3612137)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3612138)]
+[New Thread 0x7fff9a15f6c0 (LWP 3612139)]
+[New Thread 0x7fff7e3fa6c0 (LWP 3612140)]
+[New Thread 0x7ffff07fc6c0 (LWP 3612141)]
+[New Thread 0x7fff4f1f86c0 (LWP 3612142)]
+[Thread 0x7fff4f1f86c0 (LWP 3612142) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3612141) exited]
+[Thread 0x7fff9a15f6c0 (LWP 3612139) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3612138) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3612137) exited]
+[Thread 0x7fff4c7e76c0 (LWP 3612136) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3612135) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3612134) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3612133) exited]
+[Thread 0x7fffb13f86c0 (LWP 3612132) exited]
+[Thread 0x7fffb15f96c0 (LWP 3612131) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3612129) exited]
+[Thread 0x7fff9a5616c0 (LWP 3612128) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3612127) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3612140) exited]
+[Thread 0x7fff7f7fe6c0 (LWP 3612130) exited]
+[New Thread 0x7fff7f7fe6c0 (LWP 3612144)]
+[New Thread 0x7ffff07fc6c0 (LWP 3612145)]
+[New Thread 0x7fff7e3fa6c0 (LWP 3612146)]
+[New Thread 0x7fffb13f86c0 (LWP 3612147)]
+[New Thread 0x7fffb15f96c0 (LWP 3612148)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3612149)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3612150)]
+[New Thread 0x7ffff05fb6c0 (LWP 3612151)]
+[New Thread 0x7fff4ffff6c0 (LWP 3612152)]
+[New Thread 0x7fff9a15f6c0 (LWP 3612153)]
+[New Thread 0x7fff4f1f86c0 (LWP 3612154)]
+[New Thread 0x7fff4d9f06c0 (LWP 3612155)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3612156)]
+[New Thread 0x7fff9a5616c0 (LWP 3612157)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3612158)]
+[New Thread 0x7fff4c7e76c0 (LWP 3612159)]
+[Thread 0x7fff4c7e76c0 (LWP 3612159) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3612158) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3612156) exited]
+[Thread 0x7fff4d9f06c0 (LWP 3612155) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3612154) exited]
+[Thread 0x7fff9a15f6c0 (LWP 3612153) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3612152) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3612151) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3612150) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3612149) exited]
+[Thread 0x7fffb13f86c0 (LWP 3612147) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3612146) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3612145) exited]
+[Thread 0x7fff7f7fe6c0 (LWP 3612144) exited]
+[Thread 0x7fff9a5616c0 (LWP 3612157) exited]
+[Thread 0x7fffb15f96c0 (LWP 3612148) exited]
+[New Thread 0x7fff7e3fa6c0 (LWP 3612161)]
+[New Thread 0x7ffff07fc6c0 (LWP 3612162)]
+[New Thread 0x7fff4c7e76c0 (LWP 3612163)]
+[New Thread 0x7fff4f1f86c0 (LWP 3612164)]
+[New Thread 0x7ffff05fb6c0 (LWP 3612165)]
+[New Thread 0x7fff9a5616c0 (LWP 3612166)]
+[New Thread 0x7fff9a15f6c0 (LWP 3612167)]
+[New Thread 0x7fffb15f96c0 (LWP 3612168)]
+[New Thread 0x7fffb13f86c0 (LWP 3612169)]
+[New Thread 0x7fff4fbfd6c0 (LWP 3612170)]
+[New Thread 0x7fff4ffff6c0 (LWP 3612171)]
+[New Thread 0x7fff4cfeb6c0 (LWP 3612172)]
+[New Thread 0x7fff7f7fe6c0 (LWP 3612173)]
+[New Thread 0x7fff4f9fc6c0 (LWP 3612174)]
+[New Thread 0x7fff4d9f06c0 (LWP 3612175)]
+[New Thread 0x7fff4d7ef6c0 (LWP 3612176)]
+[Thread 0x7fff4d9f06c0 (LWP 3612175) exited]
+[Thread 0x7fff4d7ef6c0 (LWP 3612176) exited]
+[Thread 0x7fff4f9fc6c0 (LWP 3612174) exited]
+[Thread 0x7fff7f7fe6c0 (LWP 3612173) exited]
+[Thread 0x7fff4cfeb6c0 (LWP 3612172) exited]
+[Thread 0x7fff4ffff6c0 (LWP 3612171) exited]
+[Thread 0x7fff4fbfd6c0 (LWP 3612170) exited]
+[Thread 0x7fffb13f86c0 (LWP 3612169) exited]
+[Thread 0x7fffb15f96c0 (LWP 3612168) exited]
+[Thread 0x7fff9a15f6c0 (LWP 3612167) exited]
+[Thread 0x7fff9a5616c0 (LWP 3612166) exited]
+[Thread 0x7ffff05fb6c0 (LWP 3612165) exited]
+[Thread 0x7fff4f1f86c0 (LWP 3612164) exited]
+[Thread 0x7fff4c7e76c0 (LWP 3612163) exited]
+[Thread 0x7ffff07fc6c0 (LWP 3612162) exited]
+[Thread 0x7fff7e3fa6c0 (LWP 3612161) exited]
+[Detaching after fork from child process 3612209]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Thread 0x7fff7f5fd6c0 (LWP 3611950) exited]
+[Thread 0x7fffb0df56c0 (LWP 3611961) exited]
+[Thread 0x7fffb17fa6c0 (LWP 3611938) exited]
+[Thread 0x7fff9955f6c0 (LWP 3611901) exited]
+[Detaching after fork from child process 3612261]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612332]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612403]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612475]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612546]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612619]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612690]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612761]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612833]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612904]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3612975]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3613046]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3613117]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3613188]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3613259]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3613331]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3613422]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3613568]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3613715]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3613862]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614010]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614156]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614304]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614449]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614557]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614628]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614699]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614771]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614842]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614913]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3614985]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615081]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615152]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615223]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615294]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615365]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Thread 0x7ffed3fff6c0 (LWP 3611997) exited]
+[Thread 0x7fff7ffff6c0 (LWP 3611937) exited]
+[Thread 0x7fff7effd6c0 (LWP 3611949) exited]
+[Thread 0x7fff99d606c0 (LWP 3611895) exited]
+[Thread 0x7fffb1ffb6c0 (LWP 3611930) exited]
+[Detaching after fork from child process 3615438]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615569]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615653]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615731]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615802]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615873]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3615946]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616018]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616090]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616161]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616232]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616303]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616376]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616447]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616518]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616590]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616661]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616736]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616918]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3616990]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3617061]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3617132]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3617203]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3617275]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3617944]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618158]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618238]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618309]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618380]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618454]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Thread 0x7fff7dff86c0 (LWP 3611460) exited]
+[Detaching after fork from child process 3618525]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618596]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618667]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618783]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618854]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618925]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3618996]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619086]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619350]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619421]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619493]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619564]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619635]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619706]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619777]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619849]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619920]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3619992]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620063]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620134]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620205]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620276]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620348]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620419]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620491]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620562]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620633]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620716]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620788]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620859]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3620930]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621001]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621072]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621143]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621214]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621294]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621365]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621436]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621507]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621579]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621650]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621722]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621793]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621864]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3621935]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622006]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622115]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622205]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622306]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622411]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622493]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622585]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622659]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622739]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622813]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622886]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3622957]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623028]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623123]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623215]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623287]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623362]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623439]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623538]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623638]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623720]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623800]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623871]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3623967]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624041]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624112]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624212]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624295]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624372]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624458]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624533]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624613]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624684]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624757]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624828]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624899]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3624970]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625042]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625113]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625184]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625255]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625326]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625397]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625507]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625624]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625695]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625766]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625837]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625908]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3625979]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626050]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626121]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626193]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626264]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626335]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626406]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626477]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626548]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626627]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626699]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626770]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626841]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626912]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3626983]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627054]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627125]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627197]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627268]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627339]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627410]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627481]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627552]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627623]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627694]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627766]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627837]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627908]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3627979]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3628050]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3628121]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3628192]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3628265]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3628336]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3628407]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3628507]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3628795]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629067]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629138]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629319]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629390]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629461]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629532]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629604]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629675]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629746]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629817]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629889]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3629960]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630031]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630102]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630225]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630296]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630367]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630451]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630522]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630603]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630674]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630746]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630818]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630890]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3630972]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631052]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631123]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631194]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631266]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631337]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631408]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631480]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631551]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631623]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631704]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631775]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631848]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631919]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3631990]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632062]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632133]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632204]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632275]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632353]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632424]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632495]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632567]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632638]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632709]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632780]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632851]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632922]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3632993]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633065]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633136]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633207]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633278]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633349]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633420]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633491]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633562]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633634]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633705]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633776]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633847]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633918]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3633989]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634070]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634142]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634213]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634284]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634355]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634426]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634497]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634568]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634640]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634711]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634782]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634853]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634924]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3634995]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635066]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635139]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635224]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635295]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635366]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635437]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635508]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635579]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635654]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635725]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635796]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635867]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3635938]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636009]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636080]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636151]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636223]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636294]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636367]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636438]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636557]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636664]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636735]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636807]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636878]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3636949]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637020]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637091]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637162]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637233]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637305]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637376]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637447]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637525]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637596]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637667]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637738]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637811]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637882]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3637953]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638024]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638095]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638166]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638237]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638308]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638405]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638476]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638547]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638618]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638689]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638760]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638831]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638903]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3638974]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639045]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639116]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639187]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639258]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639329]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639400]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639478]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639549]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639620]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639691]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639763]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639834]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639905]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3639977]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640048]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640119]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640190]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640261]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640332]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640403]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640475]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640546]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640617]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640688]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640759]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640830]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640901]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3640972]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641044]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641115]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641186]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641257]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641328]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641399]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641470]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641542]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641613]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641684]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641755]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641826]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641897]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3641968]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642053]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642124]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642196]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642284]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642355]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642426]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642497]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642568]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642640]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642718]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642789]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642860]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3642931]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643002]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643073]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643145]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643216]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643287]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643358]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643429]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643500]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643571]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643643]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643714]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643785]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643856]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643927]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3643998]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644069]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644140]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644223]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644298]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644369]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644440]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644511]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644582]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644653]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644725]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644796]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644867]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3644938]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645009]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645080]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645152]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645225]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645296]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645367]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645438]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645509]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645580]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645651]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645722]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645794]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645865]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3645936]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646007]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646078]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646149]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646234]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646306]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646377]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646448]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646530]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646601]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646672]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646743]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646814]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646886]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3646957]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647050]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647190]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647298]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647369]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647440]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647512]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647583]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647654]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647725]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647796]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647867]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3647938]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648017]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648089]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648160]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648231]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648302]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648373]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648444]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648516]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648587]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648658]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648729]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648800]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648880]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3648951]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649022]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649094]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649165]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649236]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649307]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649378]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649449]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649520]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649592]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649663]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649734]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649805]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649876]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3649947]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650018]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650089]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650161]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650232]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650303]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650380]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650451]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650522]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650593]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650665]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650737]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650808]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650879]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3650950]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3651022]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log
+[Detaching after fork from child process 3651093]
+risk probe: PLAYING requested; first damage must be measured by the isolated Shell, not this log

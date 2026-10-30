@@ -35,11 +35,12 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
         if args_baseline:
             time.sleep(0.1)
             return {'pid': shell, 'first_damage_ms': None, 'snapshot': snapshot()}
-        evaluate(f'{BRIDGE}.stats.damage = 0')
         before = time.monotonic()
-        pid = evaluate(f'{BRIDGE}.startRenderer({__import__("json").dumps(arguments)})')
+        configured = evaluate(f'!!{BRIDGE}._recovery.argv')
+        if not configured:
+            evaluate(f'{BRIDGE}.startRenderer({__import__("json").dumps(arguments)})')
         current = wait_frame()
-        return {'pid': pid, 'first_damage_ms': round((time.monotonic() - before) * 1000, 3),
+        return {'pid': current['pid'], 'first_damage_ms': round((time.monotonic() - before) * 1000, 3),
                 'snapshot': current}
 
     def automatic(previous_pid):
@@ -118,7 +119,7 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
     measurements['cpu_on'] = measure_cpu(pid)
     measurements['layouts'] = []
     for count, scale in ([] if report.get('idle_only') else
-                        [(1, 1), (2, 1), (3, 1), (1, 2), (2, 2), (3, 2), (3, 1.25)]):
+                        [(count, scale) for scale in (1, 2, 1.25) for count in (1, 2, 3)]):
         try:
             layout(count, scale)
             time.sleep(0.5)
@@ -217,6 +218,7 @@ def run_matrix(evaluate, private, snapshot, arguments, root, lab, report):
             'window_count': evaluate('global.display.list_all_windows().filter(w => w.get_title().includes("M1a isolated probe")).length'),
             'windows': evaluate('global.display.list_all_windows().filter(w => w.get_title().includes("M1a isolated probe")).map(w => ({id: w.get_stable_sequence(), pid: w.get_pid(), actor: !!w.get_compositor_private(), hidden: w.is_hidden(), type: w.get_window_type()}))')})
     if not args_baseline:
+        evaluate(f'{BRIDGE}._recovery.attempts = []')
         measurements['restart_cap'] = []
         for index in range(4):
             killed = evaluate(f'{BRIDGE}._pid')
