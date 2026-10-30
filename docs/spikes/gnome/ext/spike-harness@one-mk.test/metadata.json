@@ -1,0 +1,12 @@
+{
+  "uuid": "spike-harness@one-mk.test",
+  "name": "one-mk spike harness (ISOLATED TEST SESSIONS ONLY)",
+  "description": "Turns on unsafe mode so the spike can use Eval/Screenshot on the private bus. Never install on a real desktop.",
+  "shell-version": [
+    "50"
+  ],
+  "session-modes": [
+    "user",
+    "unlock-dialog"
+  ]
+}
