@@ -22,6 +22,7 @@ isolated_env() {
 	echo env -i \
 		PATH=/usr/bin:/bin \
 		HOME="$SPIKE/home" \
+		ONE_MK_HOME="$SPIKE/one-mk" \
 		USER="$USER" LOGNAME="$USER" \
 		LANG=C.UTF-8 \
 		XDG_RUNTIME_DIR="$SPIKE/run" \

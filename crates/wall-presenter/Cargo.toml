@@ -1,0 +1,15 @@
+[package]
+name = "one-mk-wall"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Default-disabled wallpaper presentation stop-gate probe (not a media importer)"
+
+[features]
+default = []
+gnome-risk-probe = ["dep:libloading", "dep:libc", "dep:blake3"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = { version = "=0.8.9", optional = true }
+libc = { version = "0.2.191", optional = true }
+blake3 = { version = "1.8.7", optional = true }
