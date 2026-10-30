@@ -12,6 +12,10 @@ pub fn valid_key_code(code: u32) -> bool {
     (1..=MAX_KEY_CODE).contains(&code)
 }
 
+pub fn character_key_code(code: u32) -> bool {
+    matches!(code, 2..=13 | 16..=27 | 30..=41 | 43..=53 | 57 | 86)
+}
+
 pub fn printable(character: char) -> bool {
     !matches!(
         get_general_category(character),

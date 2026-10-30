@@ -55,8 +55,13 @@ struct Daemon {
 
 impl Daemon {
     fn spawn(dir: &std::path::Path, port: u16, connect: Vec<SocketAddr>, desk: Desktop) -> Daemon {
+        Self::spawn_keyboard(dir, port, connect, desk, None)
+    }
+
+    fn spawn_keyboard(dir: &std::path::Path, port: u16, connect: Vec<SocketAddr>, desk: Desktop, keyboard: Option<one_mk_input::typing::KeyboardLayout>) -> Daemon {
         let fp = Identity::load_or_create(dir).unwrap().fingerprint.to_string();
-        let (backend, h) = one_mk_input::null(desk);
+        let (mut backend, h) = one_mk_input::null(desk);
+        backend.keyboard = keyboard;
         let (stop, mut rx) = watch::channel(false);
         let (power, _) = one_mk_input::fake_power();
         let opts = Options {
@@ -123,6 +128,10 @@ impl Trio {
     /// A, B and C running, B and C connected to A; `setup` edits A's
     /// settings folder first.
     async fn start(tag: &str, swap_c: Swap, setup: impl FnOnce(&std::path::Path)) -> Trio {
+        Self::start_keyboards(tag, swap_c, setup, [None, None, None]).await
+    }
+
+    async fn start_keyboards(tag: &str, swap_c: Swap, setup: impl FnOnce(&std::path::Path), keyboards: [Option<one_mk_input::typing::KeyboardLayout>; 3]) -> Trio {
         let dirs = ["a", "b", "c"].map(|x| temp_dir(&format!("bc-{tag}-{x}")));
         let ids = dirs.each_ref().map(|d| Identity::load_or_create(d).unwrap());
         pair(&dirs[0], &ids[1], "bee", Side::Right, Swap::Auto);
@@ -131,10 +140,11 @@ impl Trio {
         pair(&dirs[2], &ids[0], "ay", Side::Right, Swap::Auto);
         setup(&dirs[0]);
         let pa = free_port();
-        let a = Daemon::spawn(&dirs[0], pa, vec![], Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]));
+        let [keyboard_a, keyboard_b, keyboard_c] = keyboards;
+        let a = Daemon::spawn_keyboard(&dirs[0], pa, vec![], Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]), keyboard_a);
         let to_a = vec![SocketAddr::from(([127, 0, 0, 1], pa))];
-        let b = Daemon::spawn(&dirs[1], free_port(), to_a.clone(), desk_b());
-        let c = Daemon::spawn(&dirs[2], free_port(), to_a, desk_c());
+        let b = Daemon::spawn_keyboard(&dirs[1], free_port(), to_a.clone(), desk_b(), keyboard_b);
+        let c = Daemon::spawn_keyboard(&dirs[2], free_port(), to_a, desk_c(), keyboard_c);
         let mut trio = Trio { a, b, c };
         trio.settle(2).await;
         trio
@@ -199,6 +209,29 @@ async fn next_capture_skipping_edges(h: &mut NullHandles) -> CaptureCmd {
             other => return other,
         }
     }
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn characters_resolve_independently_on_each_broadcast_receiver() {
+    let keyboards = ["de", "us", "fr"].map(|name| Some(one_mk_input::typing::KeyboardLayout::fake(name)));
+    let mut trio = Trio::start_keyboards("typing", Swap::Off, |dir| {
+        Settings::update(dir, |settings| { settings.typing.keys = crate::typing::Mode::Auto; Ok(()) }).unwrap();
+    }, keyboards).await;
+    eventually_async("typing descriptors", || async {
+        let reply = control::request(&trio.a.dir, Request::Status).await.unwrap().unwrap();
+        Status::decode(&reply).unwrap().typing.contains("German to French")
+    }).await;
+    trio.on(1).await;
+    trio.a.keys(&[(29, true), (21, true)]);
+    assert_eq!(trio.both().await, (Inject::Key { code: 29, down: true }, Inject::Key { code: 29, down: true }));
+    assert_eq!(trio.both().await, (Inject::Key { code: 44, down: true }, Inject::Key { code: 17, down: true }));
+    trio.a.keys(&[(21, false), (29, false), (100, true), (16, true), (16, false)]);
+    assert_eq!(trio.both().await, (Inject::Key { code: 44, down: false }, Inject::Key { code: 17, down: false }));
+    assert_eq!(trio.both().await, (Inject::Key { code: 29, down: false }, Inject::Key { code: 29, down: false }));
+    assert_eq!(trio.both().await, (Inject::Key { code: 100, down: true }, Inject::Key { code: 100, down: true }));
+    assert_eq!(trio.both().await, (Inject::Text { text: "@".into() }, Inject::Text { text: "@".into() }));
+    trio.stop().await;
 }
 
 fn key(code: u32, down: bool) -> Inject {

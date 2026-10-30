@@ -1085,10 +1085,13 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
             )),
         };
         checks.push(check("clipboard-history", "Clipboard history", history_outcome));
-        checks.push(check("typing", "Typing", if settings.typing.has_character_request() {
-            Outcome::warn(settings.typing.summary(), "Use matching OS keyboard layouts; character mode is not implemented yet. Set `one-mk typing --keys physical` globally and for each configured --peer override.")
+        let typing = daemon.status().map(|status| status.typing.clone()).filter(|typing| !typing.is_empty()).unwrap_or_else(|| settings.typing.summary());
+        checks.push(check("typing", "Typing", if typing.starts_with("characters (") {
+            Outcome::pass(typing)
+        } else if settings.typing.has_character_request() {
+            Outcome::warn(typing, "Native character injection is not implemented yet. Use matching OS keyboard layouts or set `one-mk typing --keys physical`.")
         } else {
-            Outcome::pass(settings.typing.summary())
+            Outcome::pass(typing)
         }));
     }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));

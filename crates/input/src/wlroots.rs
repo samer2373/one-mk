@@ -89,7 +89,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let (cap_tx, cap_rx) = mpsc::unbounded_channel();
     let (inj_tx, inj_rx) = mpsc::unbounded_channel();
     spawn_thread("one-mk-wlroots", move || run(first, ev_tx, cap_rx, inj_rx, locked))?;
-    Ok(Backend { name: "wlroots", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { keyboard: None, name: "wlroots", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 /// The compositor's global interface names, for choosing a backend.
@@ -748,7 +748,8 @@ impl State {
                 v.axis_stop(t, wl_pointer::Axis::HorizontalScroll);
                 v.frame();
             }
-            Inject::Key { code, down } => {
+            Inject::Text { .. } => tracing::warn!("text unsupported; sender must use physical fallback"),
+            Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
                 if self.vkeyboard().is_none() {
                     return;
                 }
