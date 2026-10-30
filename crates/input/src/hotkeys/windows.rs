@@ -71,7 +71,7 @@ pub(super) fn start(bindings: Bindings, events: mpsc::UnboundedSender<Event>) ->
         // SAFETY: as above; `msg` is valid for every call.
         while unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) } > 0 {
             match msg.message {
-                WM_HOTKEY if !paused && !crate::windows_localmap::PHYSICAL_HOTKEYS.load(std::sync::atomic::Ordering::Acquire) => {
+                WM_HOTKEY if !paused && !physical_hotkeys() => {
                     let action = registered.get(msg.wParam).copied().flatten();
                     if let Some(a) = action
                         && events.send(Event::Hotkey(a)).is_err()
@@ -101,6 +101,13 @@ pub(super) fn start(bindings: Bindings, events: mpsc::UnboundedSender<Event>) ->
     }
     let id = id_rx.recv().ok()?;
     Some(Thread { id, bindings })
+}
+
+fn physical_hotkeys() -> bool {
+    #[cfg(feature = "native-local-remap")]
+    { crate::windows_localmap::PHYSICAL_HOTKEYS.load(std::sync::atomic::Ordering::Acquire) }
+    #[cfg(not(feature = "native-local-remap"))]
+    { false }
 }
 
 /// Registers every binding; the result's index is the hotkey id (`None`:

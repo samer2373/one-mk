@@ -57,8 +57,16 @@ fn set_device(ev: &mut Event, d: Option<DeviceRef>) {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct Correlated {
+    pub event: Event,
+    #[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+    pub local: Option<u64>,
+}
+
 struct Waiting {
     ev: Event,
+    local: Option<u64>,
     /// Still looking for this.
     want: Option<Token>,
     until: u64,
@@ -66,6 +74,7 @@ struct Waiting {
 
 #[derive(Default)]
 pub(crate) struct Correlator {
+    enabled: bool,
     seen: VecDeque<(Token, DeviceRef, u64)>,
     motion: VecDeque<(DeviceRef, u64)>,
     waiting: VecDeque<Waiting>,
@@ -73,8 +82,21 @@ pub(crate) struct Correlator {
 }
 
 impl Correlator {
+    pub(crate) fn configure(&mut self, enabled: bool, out: &mut Vec<Correlated>) {
+        if self.enabled == enabled { return; }
+        self.finish(out);
+        self.misses = 0;
+        self.enabled = enabled;
+    }
+
+    #[cfg(any(feature = "native-local-remap", test))]
+    pub(crate) fn local_key(&mut self, key: crate::localmap_runtime::Key, now: u64, out: &mut Vec<Correlated>) {
+        self.enqueue(Event::Key { code: key.code, down: key.down, device: None }, Some(key.sequence), now, out);
+    }
+
     /// A device said `token` happened on it.
-    pub(crate) fn device_event(&mut self, token: Token, device: DeviceRef, now: u64, out: &mut Vec<Event>) {
+    pub(crate) fn device_event(&mut self, token: Token, device: DeviceRef, now: u64, out: &mut Vec<Correlated>) {
+        if !self.enabled { return; }
         self.prune(now);
         if let Some(w) = self.waiting.iter_mut().find(|w| w.want == Some(token)) {
             set_device(&mut w.ev, Some(device));
@@ -91,6 +113,7 @@ impl Correlator {
 
     /// A device said it moved.
     pub(crate) fn device_motion(&mut self, device: DeviceRef, now: u64) {
+        if !self.enabled { return; }
         self.prune(now);
         if self.motion.len() == RING {
             self.motion.pop_front();
@@ -99,7 +122,15 @@ impl Correlator {
     }
 
     /// The hook's event; what may be sent now comes out, in order.
-    pub(crate) fn hook(&mut self, mut ev: Event, now: u64, out: &mut Vec<Event>) {
+    pub(crate) fn hook(&mut self, ev: Event, now: u64, out: &mut Vec<Correlated>) {
+        self.enqueue(ev, None, now, out);
+    }
+
+    fn enqueue(&mut self, mut ev: Event, local: Option<u64>, now: u64, out: &mut Vec<Correlated>) {
+        if !self.enabled {
+            out.push(Correlated { event: ev, local });
+            return;
+        }
         self.prune(now);
         let mut want = None;
         if let Event::Motion { .. } = ev {
@@ -116,12 +147,12 @@ impl Correlator {
                 None => {}
             }
         }
-        self.waiting.push_back(Waiting { ev, want, until: now + WAIT_MS });
+        self.waiting.push_back(Waiting { ev, local, want, until: now + WAIT_MS });
         self.flush(now, out);
     }
 
     /// Time passed: events waited long enough go on unknown.
-    pub(crate) fn tick(&mut self, now: u64, out: &mut Vec<Event>) {
+    pub(crate) fn tick(&mut self, now: u64, out: &mut Vec<Correlated>) {
         self.flush(now, out);
     }
 
@@ -132,8 +163,8 @@ impl Correlator {
 
     /// Capture ends: everything waiting goes now (unknown where unmatched),
     /// and old device events are forgotten.
-    pub(crate) fn finish(&mut self, out: &mut Vec<Event>) {
-        out.extend(self.waiting.drain(..).map(|w| w.ev));
+    pub(crate) fn finish(&mut self, out: &mut Vec<Correlated>) {
+        out.extend(self.waiting.drain(..).map(|w| Correlated { event: w.ev, local: w.local }));
         self.seen.clear();
         self.motion.clear();
     }
@@ -142,8 +173,8 @@ impl Correlator {
     /// waits goes to `out` first, unknown where unmatched, so that the removal
     /// that follows can release it (a press let out later would be held with
     /// nothing left to release it).
-    pub(crate) fn forget(&mut self, device: DeviceRef, out: &mut Vec<Event>) {
-        out.extend(self.waiting.drain(..).map(|w| w.ev));
+    pub(crate) fn forget(&mut self, device: DeviceRef, out: &mut Vec<Correlated>) {
+        out.extend(self.waiting.drain(..).map(|w| Correlated { event: w.ev, local: w.local }));
         self.seen.retain(|s| s.1 != device);
         self.motion.retain(|m| m.0 != device);
     }
@@ -158,7 +189,7 @@ impl Correlator {
         }
     }
 
-    fn flush(&mut self, now: u64, out: &mut Vec<Event>) {
+    fn flush(&mut self, now: u64, out: &mut Vec<Correlated>) {
         while let Some(w) = self.waiting.front() {
             if w.want.is_some() && w.until > now {
                 return;
@@ -167,7 +198,7 @@ impl Correlator {
                 self.misses = self.misses.saturating_add(1);
             }
             if let Some(w) = self.waiting.pop_front() {
-                out.push(w.ev);
+                out.push(Correlated { event: w.ev, local: w.local });
             }
         }
     }
@@ -249,9 +280,9 @@ mod tests {
     fn press(code: u32, down: bool) -> Token {
         Token::Press { code, down }
     }
-    fn devices(out: &[Event]) -> Vec<Option<DeviceRef>> {
+    fn devices(out: &[Correlated]) -> Vec<Option<DeviceRef>> {
         out.iter()
-            .map(|e| match e {
+            .map(|e| match &e.event {
                 Event::Key { device, .. } | Event::Button { device, .. } | Event::Motion { device, .. } => *device,
                 _ => None,
             })
@@ -259,24 +290,77 @@ mod tests {
     }
 
     #[test]
+    fn default_attribution_has_no_latency_or_deadline() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.hook(key(30, true), 0, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(corr.deadline(), None);
+        corr.device_event(press(30, false), A, 1, &mut out);
+        corr.device_motion(A, 1);
+        for event in [key(30, false), Event::Button { button: 0x110, down: true, device: None }, Event::Motion { dx: 1.0, dy: 0.0, device: None }] {
+            let before = out.len();
+            corr.hook(event, 1, &mut out);
+            assert_eq!(out.len(), before + 1);
+            assert_eq!(corr.deadline(), None);
+        }
+        assert_eq!(devices(&out), [None, None, None, None]);
+    }
+
+    #[test]
+    fn disabling_flushes_in_order_and_device_arrivals_do_not_rearm() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.configure(true, &mut out);
+        corr.hook(key(30, true), 0, &mut out);
+        assert!(out.is_empty());
+        corr.configure(false, &mut out);
+        assert_eq!(out.len(), 1);
+        corr.device_event(press(30, false), A, 1, &mut out);
+        corr.hook(key(30, false), 1, &mut out);
+        assert_eq!(out.len(), 2);
+        assert_eq!(corr.deadline(), None);
+        assert_eq!(devices(&out), [None, None]);
+    }
+
+    #[test]
+    fn mixed_local_and_remote_envelopes_keep_origin_even_for_identical_keys() {
+        for remote_code in [30, 48] {
+            let mut corr = Correlator::default();
+            let mut out = Vec::new();
+            corr.configure(true, &mut out);
+            corr.hook(key(remote_code, false), 0, &mut out);
+            corr.local_key(crate::localmap_runtime::Key {
+                sequence: 7, code: 30, down: false, at: std::time::Instant::now(), keyboard_type: 0,
+            }, 1, &mut out);
+            corr.device_event(press(remote_code, false), A, 2, &mut out);
+            corr.finish(&mut out);
+            assert_eq!(out.iter().map(|event| event.local).collect::<Vec<_>>(), [None, Some(7)]);
+            assert_eq!(devices(&out), [Some(A), None]);
+        }
+    }
+
+    #[test]
     fn a_device_event_before_or_after_the_hook_names_its_device() {
         let mut c = Correlator::default();
+        c.configure(true, &mut Vec::new());
         let mut out = Vec::new();
         c.device_event(press(30, true), A, 100, &mut out);
         c.hook(key(30, true), 101, &mut out);
-        assert_eq!(out, [Event::Key { code: 30, down: true, device: Some(A) }], "device event first");
+        assert_eq!(out.iter().map(|item| item.event.clone()).collect::<Vec<_>>(), [Event::Key { code: 30, down: true, device: Some(A) }], "device event first");
         out.clear();
         c.hook(key(30, false), 102, &mut out);
         assert!(out.is_empty(), "waits for its device");
         assert_eq!(c.deadline(), Some(102 + WAIT_MS));
         c.device_event(press(30, false), B, 103, &mut out);
-        assert_eq!(out, [Event::Key { code: 30, down: false, device: Some(B) }], "hook first");
+        assert_eq!(out.iter().map(|item| item.event.clone()).collect::<Vec<_>>(), [Event::Key { code: 30, down: false, device: Some(B) }], "hook first");
         assert_eq!(c.deadline(), None, "no timer while nothing waits");
     }
 
     #[test]
     fn unmatched_events_go_on_unknown_in_order() {
         let mut c = Correlator::default();
+        c.configure(true, &mut Vec::new());
         let mut out = Vec::new();
         c.hook(key(30, true), 100, &mut out);
         c.hook(Event::Motion { dx: 1.0, dy: 0.0, device: None }, 101, &mut out);
@@ -285,12 +369,13 @@ mod tests {
         c.tick(100 + WAIT_MS - 1, &mut out);
         assert!(out.is_empty());
         c.tick(100 + WAIT_MS, &mut out);
-        assert_eq!(out, [key(30, true), Event::Motion { dx: 1.0, dy: 0.0, device: None }, Event::ScrollStop]);
+        assert_eq!(out.iter().map(|item| item.event.clone()).collect::<Vec<_>>(), [key(30, true), Event::Motion { dx: 1.0, dy: 0.0, device: None }, Event::ScrollStop]);
     }
 
     #[test]
     fn two_keyboards_pressing_one_key_are_matched_in_order() {
         let mut c = Correlator::default();
+        c.configure(true, &mut Vec::new());
         let mut out = Vec::new();
         c.hook(key(30, true), 100, &mut out);
         c.hook(key(30, true), 101, &mut out);
@@ -302,6 +387,7 @@ mod tests {
     #[test]
     fn a_system_that_never_says_stops_costing_latency() {
         let mut c = Correlator::default();
+        c.configure(true, &mut Vec::new());
         let mut out = Vec::new();
         let mut t = 0;
         for _ in 0..MAX_MISSES {
@@ -311,7 +397,7 @@ mod tests {
         }
         out.clear();
         c.hook(key(31, true), t, &mut out);
-        assert_eq!(out, [key(31, true)], "no waiting any more");
+        assert_eq!(out.iter().map(|item| item.event.clone()).collect::<Vec<_>>(), [key(31, true)], "no waiting any more");
         c.device_event(press(32, true), A, t, &mut out);
         c.hook(key(32, true), t, &mut out);
         assert_eq!(devices(&out)[1..], [Some(A)], "a match brings waiting back");
@@ -320,6 +406,7 @@ mod tests {
     #[test]
     fn motion_is_attributed_only_when_one_device_moves() {
         let mut c = Correlator::default();
+        c.configure(true, &mut Vec::new());
         let mut out = Vec::new();
         let m = || Event::Motion { dx: 1.0, dy: 1.0, device: None };
         c.hook(m(), 0, &mut out);
@@ -338,6 +425,7 @@ mod tests {
     #[test]
     fn a_press_waiting_behind_another_goes_out_before_its_device_is_removed() {
         let mut c = Correlator::default();
+        c.configure(true, &mut Vec::new());
         let mut out = Vec::new();
         // An unmatched event at the head holds a matched press back.
         c.hook(key(31, true), 0, &mut out);
@@ -357,6 +445,7 @@ mod tests {
     #[test]
     fn old_device_events_never_match() {
         let mut c = Correlator::default();
+        c.configure(true, &mut Vec::new());
         let mut out = Vec::new();
         c.device_event(press(30, true), A, 0, &mut out);
         c.hook(key(30, true), MOTION_MS + 1, &mut out);
@@ -375,6 +464,7 @@ mod tests {
         let mut rng = Rng(0x5eed_1234_abcd_0001);
         for _ in 0..2000 {
             let mut c = Correlator::default();
+            c.configure(true, &mut Vec::new());
             let mut out = Vec::new();
             let mut sent = Vec::new();
             let mut t = 0u64;
@@ -395,8 +485,8 @@ mod tests {
                 }
             }
             c.finish(&mut out);
-            let codes = |v: &[Event]| v.iter().map(|e| if let Event::Key { code, down, .. } = e { (*code, *down) } else { (0, false) }).collect::<Vec<_>>();
-            assert_eq!(codes(&out), codes(&sent));
+            let codes = |v: &[Correlated]| v.iter().map(|e| if let Event::Key { code, down, .. } = &e.event { (*code, *down) } else { (0, false) }).collect::<Vec<_>>();
+            assert_eq!(codes(&out), sent.iter().map(|event| if let Event::Key { code, down, .. } = event { (*code, *down) } else { (0, false) }).collect::<Vec<_>>());
         }
     }
 

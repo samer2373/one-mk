@@ -1,0 +1,165 @@
+    fn on_mouse(&mut self, msg: u32, info: &MSLLHOOKSTRUCT) -> (bool, Effect) {
+        if info.dwExtraInfo == OUR_INPUT {
+            return (false, Effect::None);
+        }
+        let synthetic = is_synthetic_mouse(info.flags, info.dwExtraInfo);
+        let injected = info.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) != 0;
+        let hi = (info.mouseData >> 16) as u16;
+        let button = match msg {
+            WM_LBUTTONDOWN | WM_LBUTTONUP => Some(BTN_LEFT),
+            WM_RBUTTONDOWN | WM_RBUTTONUP => Some(BTN_RIGHT),
+            WM_MBUTTONDOWN | WM_MBUTTONUP => Some(BTN_MIDDLE),
+            WM_XBUTTONDOWN | WM_XBUTTONUP => match hi {
+                XBUTTON1 => Some(BTN_SIDE),
+                XBUTTON2 => Some(BTN_EXTRA),
+                _ => None,
+            },
+            _ => None,
+        };
+        let down = matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN);
+        let (x, y) = (info.pt.x, info.pt.y);
+
+        let Some(cap) = self.captured else {
+            if let Some(b) = button {
+                self.local.set(b, down);
+            }
+            if !injected {
+                self.local_input();
+            }
+            if msg != WM_MOUSEMOVE {
+                return (false, Effect::None);
+            }
+            if synthetic {
+                // Pen, touch or software: never a crossing.
+                self.heading.reset();
+                return (false, Effect::None);
+            }
+            let (dx, dy) = self.heading.update(x, y);
+            // Only the armed segments: the parts of edges that face a peer.
+            let hit = self.space.edge_hit(&self.edges, x, y, dx, dy);
+            // Only asked at an edge: a drag must not cross machines.
+            let dragging = hit.is_some() && async_any_button();
+            return match self.gate.check(hit, dragging) {
+                Some(side) => self.activate(side, x, y),
+                None => (false, Effect::None),
+            };
+        };
+
+        if synthetic {
+            // Pen, touch or another program: not ours to forward, and it
+            // must not move the parked cursor either.
+            return (true, Effect::None);
+        }
+        let effect = match msg {
+            WM_MOUSEMOVE => {
+                let (dx, dy) = (x - cap.park.0, y - cap.park.1);
+                if dx == 0 && dy == 0 {
+                    Effect::None
+                } else {
+                    let (dx, dy) = self.space.delta_to_logical(dx, dy);
+                    self.send(Event::Motion { dx, dy })
+                }
+            }
+            WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+                let (dx, dy) = wheel_to_wire(hi as i16, msg == WM_MOUSEHWHEEL);
+                self.send(Event::ScrollDiscrete { dx, dy })
+            }
+            _ => match button {
+                // A button held before the pointer left: release it here.
+                Some(b) if !down && self.local.has(b) => {
+                    self.local.set(b, false);
+                    return (false, Effect::None);
+                }
+                Some(b) => self.send(Event::Button { button: b, down }),
+                None => Effect::None,
+            },
+        };
+        (true, effect)
+    }
+
+    fn on_key(&mut self, info: &KBDLLHOOKSTRUCT) -> (bool, Effect) {
+        if info.dwExtraInfo == OUR_INPUT {
+            return (false, Effect::None);
+        }
+        let injected = info.flags & LLKHF_INJECTED != 0;
+        let down = info.flags & LLKHF_UP == 0;
+        let code = hook_key_to_evdev(info.vkCode, info.scanCode, info.flags & LLKHF_EXTENDED != 0);
+        if self.captured.is_none() {
+            if let Some(c) = code {
+                self.local.set(c, down);
+            }
+            if !injected {
+                self.local_input();
+            }
+            return (false, Effect::None);
+        }
+        if injected {
+            // Another program's keystrokes: leave them to this machine.
+            return (false, Effect::None);
+        }
+        let Some(code) = code else {
+            // Unmapped, or AltGr's fake Ctrl: keep it from both machines.
+            return (true, Effect::None);
+        };
+        if self.local.has(code) {
+            // Held since before the pointer left: auto-repeat stays
+            // swallowed, the release goes to this machine. The daemon
+            // counted a modifier as held (`Event::Modifiers` at activation),
+            // so it hears that it no longer is.
+            if down {
+                return (true, Effect::None);
+            }
+            self.local.set(code, false);
+            if Mods::is_modifier(code) {
+                let _ = self.tx.send(Event::LocalKeyUp { code });
+            }
+            return (false, Effect::None);
+        }
+        // Auto-repeat (Caps Lock's too) is dropped; the peer repeats.
+        if !self.fwd.forward(code, down) {
+            return (true, Effect::None);
+        }
+        (true, self.send(Event::Key { code, down }))
+    }
+
+    fn local_input(&mut self) {
+        if self.local_gate.check(now_ms(), self.controlled.get()) {
+            let _ = self.tx.send(Event::LocalInput);
+        }
+    }
+
+    fn guard_tick(&mut self, cursor: Option<(i32, i32)>) -> Option<Guard> {
+        let cap = self.captured?;
+        if self.foreground_elevated() {
+            tracing::warn!("an elevated window is in front; giving the pointer back");
+            let effect = self.end();
+            let _ = self.tx.send(Event::Error(
+                "A program running as administrator is in front on this PC, and Windows hides its \
+                 keyboard and mouse from one-mk, so the pointer was brought back here. Switch to \
+                 another window (or run one-mk as administrator) to control your other computers."
+                    .into(),
+            ));
+            return Some(Guard::Ended(effect));
+        }
+        // Something else (an app, a remote tool) may have moved the cursor;
+        // if it keeps happening our hooks are probably gone.
+        let moved = cursor.is_some_and(|c| c != cap.park);
+        match self.watchdog.tick(moved) {
+            Watch::Fine => None,
+            Watch::Rewarp => Some(Guard::Rewarp(cap.park)),
+            Watch::Reinstall => {
+                tracing::warn!("the parked cursor keeps moving; reinstalling the input hooks");
+                Some(Guard::Reinstall(self.hooks, cap.park))
+            }
+            Watch::GiveUp => {
+                tracing::warn!("lost the input hooks; giving the pointer back");
+                let effect = self.end();
+                let _ = self.tx.send(Event::Error(
+                    "Windows stopped passing this PC's mouse and keyboard to one-mk (this can happen \
+                     when the computer is very busy), so the pointer was brought back here."
+                        .into(),
+                ));
+                Some(Guard::GaveUp(self.hooks, effect))
+            }
+        }
+    }

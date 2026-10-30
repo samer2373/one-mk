@@ -372,7 +372,9 @@ impl<I: Injector> Engine<I> {
             }
         }
         let sent = self.injector.inject(&keys);
-        for &(code, down) in keys.iter().take(sent) { self.held.update(code, down); }
+        for &(code, down) in keys.iter().take(sent) {
+            if down || self.injector.settled() { self.held.update(code, down); }
+        }
         sent == keys.len() && self.injector.settled()
     }
 
@@ -383,7 +385,9 @@ impl<I: Injector> Engine<I> {
         self.mapper.release_all(&mut |_| {});
         let releases: Vec<_> = self.held.iter().map(|code| (code, false)).collect();
         let sent = self.injector.inject(&releases);
-        for &(code, _) in releases.iter().take(sent) { self.held.update(code, false); }
+        if self.injector.settled() {
+            for &(code, _) in releases.iter().take(sent) { self.held.update(code, false); }
+        }
         self.held.is_empty() && self.injector.settled()
     }
 
@@ -418,6 +422,12 @@ impl<I: Injector> Engine<I> {
         self.mapper.timer(now, &mut |event| events.push(event));
         if !self.emit(events) { self.fail(); return false; }
         true
+    }
+
+    pub fn baseline(&mut self, held: impl Iterator<Item = u32>) {
+        let mut physical = HeldKeys::new();
+        for code in held { physical.update(code, true); }
+        self.mapper.reconcile_physical(&physical, &mut |_| {});
     }
 
     pub fn recover_fence(&mut self, watermark: u64, destination: Destination, rules: Option<&Rules>, feedback: &Feedback, health: u64) -> bool {
@@ -1027,5 +1037,46 @@ mod tests {
         });
         assert!(unwind.is_err());
         assert!(outside.lock().unwrap().held.is_empty());
+    }
+
+    #[test]
+    fn unconfirmed_releases_retain_obligations_until_recovery() {
+        struct LostUp { confirmed: bool }
+        impl Injector for LostUp {
+            fn inject(&mut self, keys: &[(u32, bool)]) -> usize { keys.len() }
+            fn settled(&self) -> bool { self.confirmed }
+        }
+        let mut engine = Engine::new(LostUp { confirmed: false });
+        engine.held.update(29, true);
+        assert!(!engine.fail());
+        assert!(engine.held.is_held(29));
+        assert!(!engine.fence(0, Destination::Remote, None));
+        assert_ne!(engine.handoff.state(), State::Remote);
+        engine.injector.confirmed = true;
+        assert!(engine.fence(0, Destination::Remote, None));
+        assert!(!engine.held.is_held(29));
+        assert_eq!(engine.handoff.state(), State::Remote);
+    }
+
+    #[test]
+    fn missed_up_baseline_retires_only_absent_tombstones() {
+        let record = Arc::new(Mutex::new(Record::default()));
+        let mut engine = Engine::new(Fake(record.clone()));
+        let rules = rules();
+        assert!(engine.fence(0, Destination::Local, Some(&rules)));
+        let now = Instant::now();
+        assert!(engine.key(Key { code: 58, down: true, at: now, sequence: 1, keyboard_type: 0 }, None));
+        assert!(engine.fail());
+        engine.baseline(std::iter::once(58));
+        assert!(engine.fence(1, Destination::Local, Some(&rules)));
+        let downs = record.lock().unwrap().downs;
+        assert!(engine.key(Key { code: 58, down: true, at: now, sequence: 2, keyboard_type: 0 }, None));
+        assert_eq!(record.lock().unwrap().downs, downs, "held tombstone must not be repressed");
+        assert!(engine.fail());
+        engine.baseline(std::iter::empty());
+        assert!(engine.fence(2, Destination::Local, Some(&rules)));
+        let downs = record.lock().unwrap().downs;
+        assert!(engine.key(Key { code: 58, down: true, at: now, sequence: 3, keyboard_type: 0 }, None));
+        assert!(record.lock().unwrap().downs > downs, "fresh press must not be an old repeat");
     }
 }

@@ -15,7 +15,7 @@ use std::time::Instant;
 
 enum Work {
     Key(Key, Option<DeviceRef>),
-    Fence { serial: u64, watermark: u64, health: u64, destination: Destination, rules: Arc<Rules> },
+    Fence { serial: u64, watermark: u64, health: u64, destination: Destination, rules: Arc<Rules>, baseline: Option<Vec<u32>> },
     Fail,
     Stop,
 }
@@ -64,19 +64,19 @@ impl Injector for Native {
             self.sequence = sequence;
             let keyboard_type = if down { self.keyboard_type }
                 else { self.held_types.get(usize::from(kc)).copied().flatten().unwrap_or(self.keyboard_type) };
-            if let Some(slot) = self.held_types.get_mut(usize::from(kc)) { *slot = down.then_some(keyboard_type); }
-            self.held.update(code, down);
+            if down && let Some(slot) = self.held_types.get_mut(usize::from(kc)) { *slot = Some(keyboard_type); }
+            if down { self.held.update(code, true); }
             self.receipts.held.store(!self.held.is_empty(), Ordering::Release);
-            self.mods.update(code, down);
-            let flags = self.mods.flags();
-            self.receipts.output_flags.store(flags, Ordering::Release);
+            let mut mods = self.mods;
+            mods.update(code, down);
+            let flags = mods.flags();
+            if down { self.mods = mods; self.receipts.output_flags.store(flags, Ordering::Release); }
             if crate::macos_logic::is_mac_modifier(kc) { CGEvent::set_type(Some(&event), CGEventType::FlagsChanged); }
             CGEvent::set_flags(Some(&event), CGEventFlags(flags | self.receipts.physical_flags.load(Ordering::Acquire)));
             CGEvent::set_integer_value_field(Some(&event), CGEventField::EventSourceUserData, (logic::TAG | u64::from(sequence)) as i64);
             CGEvent::set_integer_value_field(Some(&event), CGEventField::KeyboardEventKeyboardType, i64::from(keyboard_type));
             self.receipts.receipt.arm(sequence);
             CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
-            if !down { self.settled = true; continue; }
             let deadline = Instant::now() + LEASE;
             while !self.receipts.receipt.seen(sequence) {
                 let remaining = deadline.saturating_duration_since(Instant::now());
@@ -85,6 +85,13 @@ impl Injector for Native {
                     return index + usize::from(down);
                 }
                 std::thread::park_timeout(remaining);
+            }
+            if !down {
+                self.held.update(code, false);
+                if let Some(slot) = self.held_types.get_mut(usize::from(kc)) { *slot = None; }
+                self.receipts.held.store(!self.held.is_empty(), Ordering::Release);
+                self.mods = mods;
+                self.receipts.output_flags.store(flags, Ordering::Release);
             }
             self.settled = true;
         }
@@ -123,9 +130,11 @@ impl Dispatch {
 
     pub fn queue(&mut self, key: Key) { self.waiting.push_back(key); }
 
-    pub fn forward(&mut self, event: &Event) -> bool {
+    pub fn forward(&mut self, event: &Event, sequence: Option<u64>) -> bool {
+        let Some(sequence) = sequence else { return false };
         let Event::Key { code, down, device } = *event else { return false };
-        let Some(key) = self.waiting.pop_front() else { return false };
+        let Some(key) = self.waiting.pop_front() else { self.fail(); return true };
+        if key.sequence != sequence { self.fail(); return true; }
         if key.code != code || key.down != down || self.work.send(Work::Key(key, device)).is_err() {
             self.feedback.fail();
             let _ = self.work.send(Work::Fail);
@@ -144,6 +153,7 @@ pub(crate) struct Local {
     pub activation: Option<(crate::Side, one_mk_proto::Pos)>,
     pub pending: Option<(u64, Instant, u64)>,
     physical: Physical,
+    baseline: Option<Vec<u32>>,
     down: one_mk_proto::HeldKeys,
     flags: Flags,
     receipts: Arc<Receipts>,
@@ -220,7 +230,7 @@ impl Local {
         Ok((Self {
             admission, gate, snapshots: Snapshots::default(), enabled: false, paused: false,
             inactive: "preference off".into(), activation: None, pending: None,
-            physical: Physical::default(), down: one_mk_proto::HeldKeys::new(), flags: Flags::default(), receipts, actions: ArrayQueue::new(16),
+            physical: Physical::default(), baseline: None, down: one_mk_proto::HeldKeys::new(), flags: Flags::default(), receipts, actions: ArrayQueue::new(16),
             serial: 0, work, completions, thread: Some(thread), watchdog: Some(watchdog), stopped, failed: false,
         }, dispatch))
     }
@@ -233,7 +243,8 @@ impl Local {
         self.down = one_mk_proto::HeldKeys::new();
         for &code in &held { self.flags.key(code, true, false); self.down.update(code, true); }
         self.receipts.physical_held.store(self.enabled && !self.paused && !self.down.is_empty(), Ordering::Release);
-        self.physical.baseline(held.into_iter());
+        self.physical.baseline(held.iter().copied());
+        self.baseline = Some(held);
     }
 
     pub fn receipt(&self, sequence: u32) {
@@ -293,12 +304,13 @@ impl Local {
     }
 
     pub fn fence(&mut self, destination: Destination) {
+        if let Some(held) = &self.baseline { self.physical.baseline(held.iter().copied()); }
         let Some(serial) = self.serial.checked_add(1) else { self.fail(); return };
         self.serial = serial;
         let health = self.admission.feedback().token();
         self.pending = Some((serial, Instant::now(), health));
         self.failed = false;
-        if self.work.send(Work::Fence { serial, watermark: self.admission.watermark(), health, destination, rules: self.snapshots.load() }).is_err() { self.fail(); }
+        if self.work.send(Work::Fence { serial, watermark: self.admission.watermark(), health, destination, rules: self.snapshots.load(), baseline: self.baseline.take() }).is_err() { self.fail(); }
     }
 
     pub fn completion(&mut self) -> Option<Completion> {
@@ -340,7 +352,8 @@ fn run(engine: &mut Engine<Native>, feedback: &Feedback, receiver: mpsc::Receive
         };
         match next {
             Some(Work::Key(key, device)) => { engine.admitted_key(key, device, feedback); }
-            Some(Work::Fence { serial, watermark, health, destination, rules }) => {
+            Some(Work::Fence { serial, watermark, health, destination, rules, baseline }) => {
+                if let Some(held) = baseline { engine.baseline(held.into_iter()); }
                 let success = engine.recover_fence(watermark, destination, Some(&rules), feedback, health);
                 complete(Completion { serial, destination, success, health: health & !1 });
             }

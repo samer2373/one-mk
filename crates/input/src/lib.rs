@@ -30,24 +30,27 @@ mod null;
 pub mod typing;
 pub mod system;
 #[cfg(target_os = "macos")]
+#[cfg_attr(feature = "native-local-remap", path = "macos_experimental.rs")]
 mod macos;
 #[cfg(target_os = "macos")]
+#[cfg_attr(feature = "native-local-remap", path = "macos_devices_experimental.rs")]
 mod macos_devices;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "native-local-remap"))]
 mod macos_localmap;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "native-local-remap"))]
 mod macos_localmap_power;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(all(target_os = "macos", feature = "native-local-remap"), test))]
 mod macos_localmap_logic;
 #[cfg(any(target_os = "macos", test))]
 mod macos_logic;
 #[cfg(target_os = "linux")]
 mod portal;
 #[cfg(windows)]
+#[cfg_attr(feature = "native-local-remap", path = "windows_experimental.rs")]
 mod windows;
 #[cfg(windows)]
 mod windows_devices;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "native-local-remap"))]
 mod windows_localmap;
 #[cfg(target_os = "linux")]
 mod wlroots;
@@ -174,6 +177,8 @@ pub enum Event {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CaptureCmd {
     #[cfg(any(windows, target_os = "macos"))]
+    DeviceRules(bool),
+    #[cfg(all(feature = "native-local-remap", any(windows, target_os = "macos")))]
     LocalRules { rules: Option<std::sync::Arc<localmap_runtime::Rules>>, inactive: Option<String> },
     /// Edge segments that lead to a connected peer, in the coordinates of
     /// the last `Event::Desktop`; replaces the previous ones. Only these

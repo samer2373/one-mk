@@ -1,0 +1,147 @@
+    fn on_event(&self, ty: CGEventType, ev: &CGEvent) -> bool {
+        if ty == CGEventType::TapDisabledByTimeout || ty == CGEventType::TapDisabledByUserInput {
+            tracing::debug!(?ty, "event tap disabled by macOS; re-enabling");
+            if let Ok(st) = self.st.try_borrow()
+                && let Some(tap) = &st.tap
+            {
+                CGEvent::tap_enable(tap, true);
+            }
+            return true;
+        }
+        let e = Some(ev);
+        if CGEvent::integer_value_field(e, CGEventField::EventSourceUserData) == OUR_EVENTS {
+            return true;
+        }
+        let Ok(mut st) = self.st.try_borrow_mut() else { return true };
+        if st.active {
+            return self.on_active(&mut st, ty, ev);
+        }
+        // Real input (from the HID system, not posted by software) while a
+        // peer is in control here.
+        if CGEvent::integer_value_field(e, CGEventField::EventSourceStateID)
+            == i64::from(CGEventSourceStateID::HIDSystemState.0)
+            && st.local_gate.check(now_ms(), self.controlled.get())
+        {
+            let _ = self.tx.send(Event::LocalInput);
+        }
+        self.on_idle(&mut st, ty, ev)
+    }
+
+    fn on_idle(&self, st: &mut State, ty: CGEventType, ev: &CGEvent) -> bool {
+        let e = Some(ev);
+        match ty {
+            CGEventType::KeyDown | CGEventType::KeyUp => st.set_local_key(keycode(ev), ty == CGEventType::KeyDown),
+            CGEventType::FlagsChanged => {
+                let kc = keycode(ev);
+                if let Some(down) = logic::modifier_down(kc, CGEvent::flags(e).0) {
+                    st.set_local_key(kc, down);
+                }
+            }
+            // Only plain moves: never switch in the middle of a drag.
+            CGEventType::MouseMoved => {
+                let Some(desktop) = &st.desktop else { return true };
+                let loc = CGEvent::location(e);
+                let p = Pos::new(loc.x, loc.y);
+                let (dx, dy) = mouse_delta(ev);
+                // Only the armed segments: the parts of edges that face a peer.
+                match logic::edge_hit(&st.edges, p, dx, dy) {
+                    Some(_) if st.armed && secure_input() => {
+                        // Keys wouldn't reach the peer; don't cross.
+                        st.armed = false;
+                        if !std::mem::replace(&mut st.secure_reported, true) {
+                            let _ = self.tx.send(Event::Error(SECURE_INPUT_MESSAGE.into()));
+                        }
+                    }
+                    Some(side) if st.armed => {
+                        let pos = desktop.clamp(p);
+                        if self.start(st, side, pos) {
+                            return false;
+                        }
+                    }
+                    Some(_) => {}
+                    None => st.armed = true,
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn on_active(&self, st: &mut State, ty: CGEventType, ev: &CGEvent) -> bool {
+        let e = Some(ev);
+        let send = |event: Event| {
+            let _ = self.tx.send(event);
+        };
+        use CGEventType as T;
+        match ty {
+            T::MouseMoved | T::LeftMouseDragged | T::RightMouseDragged | T::OtherMouseDragged => {
+                let (dx, dy) = mouse_delta(ev);
+                if dx != 0.0 || dy != 0.0 {
+                    send(Event::Motion { dx, dy });
+                }
+            }
+            T::LeftMouseDown | T::LeftMouseUp | T::RightMouseDown | T::RightMouseUp | T::OtherMouseDown | T::OtherMouseUp => {
+                let n = match ty {
+                    T::LeftMouseDown | T::LeftMouseUp => 0,
+                    T::RightMouseDown | T::RightMouseUp => 1,
+                    _ => CGEvent::integer_value_field(e, CGEventField::MouseEventButtonNumber) as u32,
+                };
+                let down = matches!(ty, T::LeftMouseDown | T::RightMouseDown | T::OtherMouseDown);
+                if let Some(button) = logic::mac_to_evdev_button(n) {
+                    send(Event::Button { button, down });
+                }
+            }
+            T::ScrollWheel => {
+                for event in logic::scroll_to_wire(&read_scroll(ev)).into_iter().flatten() {
+                    send(event);
+                }
+            }
+            T::KeyDown => {
+                // The receiving side does its own key repeat.
+                let repeat = CGEvent::integer_value_field(e, CGEventField::KeyboardEventAutorepeat) != 0;
+                if !repeat && let Some(code) = logic::mac_to_evdev(keycode(ev)) {
+                    send(Event::Key { code, down: true });
+                }
+            }
+            T::KeyUp => {
+                let kc = keycode(ev);
+                if st.take_local_key(kc) {
+                    return true;
+                }
+                if let Some(code) = logic::mac_to_evdev(kc) {
+                    send(Event::Key { code, down: false });
+                }
+            }
+            T::FlagsChanged => {
+                let kc = keycode(ev);
+                if kc == logic::MAC_CAPS_LOCK {
+                    // macOS reports caps lock as a toggle: one event per press.
+                    send(Event::Key { code: KEY_CAPSLOCK, down: true });
+                    send(Event::Key { code: KEY_CAPSLOCK, down: false });
+                } else if let Some(down) = logic::modifier_down(kc, CGEvent::flags(e).0) {
+                    if !down && st.take_local_key(kc) {
+                        // Held since before the capture: released here, but
+                        // the daemon counted it as held (`Event::Modifiers`).
+                        if let Some(code) = logic::mac_to_evdev(kc) {
+                            send(Event::LocalKeyUp { code });
+                        }
+                        return true;
+                    }
+                    if let Some(code) = logic::mac_to_evdev(kc) {
+                        send(Event::Key { code, down });
+                    }
+                }
+            }
+            t if t.0 == NX_SYSDEFINED => {
+                if let Some(media) = read_media(ev) {
+                    // Everything else system-defined (power button, ...) is swallowed
+                    // with the rest; so is a repeat, as the receiver repeats by itself.
+                    if let Some((code, down)) = logic::media_to_evdev(media) {
+                        send(Event::Key { code, down });
+                    }
+                }
+            }
+            _ => {}
+        }
+        false
+    }
