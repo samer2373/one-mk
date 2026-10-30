@@ -46,6 +46,7 @@ mod transfer;
 mod tuning;
 mod update;
 mod update_key;
+mod typing;
 
 use anyhow::{Context, Result};
 use clipctl::OnOff;
@@ -254,6 +255,13 @@ enum Cmd {
         /// Remove the entries instead.
         #[arg(long)]
         remove: bool,
+    },
+    /// Show or save a typing preference (native character mode is not implemented yet).
+    Typing {
+        #[arg(long, value_enum, help = "Requested outgoing typing mode (characters/auto are not yet supported by native backends)")]
+        keys: Option<typing::Mode>,
+        #[arg(long, value_name = "NAME_OR_ID", help = "Change or show only this paired computer's preference")]
+        peer: Option<String>,
     },
     /// Say which side of this computer a paired computer is on, and
     /// optionally exactly where (applies at once if one-mk is running), and
@@ -552,6 +560,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Layout { device, side, offset, swap_ctrl_cmd } => {
                 manage::layout(&dir, &device, side, offset.as_deref(), swap_ctrl_cmd).await
             }
+            Cmd::Typing { keys, peer } => typing::run(&dir, keys, peer.as_deref()).await,
             Cmd::Profile { cmd } => profiles::run(&dir, cmd).await,
             Cmd::Forget { device } => {
                 forget(&dir, &device)?;

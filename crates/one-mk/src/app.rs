@@ -2304,6 +2304,7 @@ impl App {
             pointer_locked: self.locked,
             screen_locked: self.lock_sync.is_locked(),
             gaming: self.settings.gaming.to_string(),
+            typing: self.settings.typing.summary(),
             relative: self.remote.as_ref().is_some_and(|r| r.cursor.is_relative()),
             lock_sync: self.settings.lock_sync,
             edges: self.edges_status(),

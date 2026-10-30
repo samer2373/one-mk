@@ -19,6 +19,7 @@ mod motion;
 pub mod overlay;
 pub mod pointer;
 pub mod remap;
+pub mod typing;
 pub mod scroll;
 mod sleep;
 mod transfer;

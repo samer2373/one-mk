@@ -108,6 +108,7 @@ pub struct Status {
     pub screen_locked: bool,
     /// Gaming mode: `off`, `on` or `auto` (empty from older daemons).
     pub gaming: String,
+    pub typing: String,
     /// Relative motion is in use right now (gaming mode).
     pub relative: bool,
     /// Locking one computer locks the others.
@@ -371,6 +372,9 @@ impl Status {
         if !self.broadcast_hotkey.is_empty() {
             out += &format!("broadcast_hotkey\t{}\n", self.broadcast_hotkey.replace(['\t', '\n', '\r'], " "));
         }
+        if !self.typing.is_empty() {
+            out += &format!("typing\t{}\n", self.typing.replace(['\t', '\n', '\r'], " "));
+        }
         for p in &self.peers {
             out += &format!("peer\t{}\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.swap, p.name);
         }
@@ -493,6 +497,7 @@ impl Status {
                 ["lock_sync", v] => s.lock_sync = v == "1",
                 ["pointer_overlay", v] => s.pointer_overlay = v == "1",
                 ["gaming", v] => s.gaming = v.into(),
+                ["typing", v] => s.typing = v.into(),
                 ["edges", v] => s.edges = v.into(),
                 ["clipboard-history", count] => s.clipboard_history = count.parse().unwrap_or(0),
                 ["clipboard-history-revision", revision] => s.clipboard_history_revision = revision.parse().unwrap_or(0),
@@ -560,6 +565,9 @@ impl Status {
         let mut out = format!("one-mk is running on {} (id {}).\n", self.name, self.id);
         if !self.backend.as_str().is_empty() {
             out += &format!("Input backend: {}.\n", self.backend.as_str());
+        }
+        if !self.typing.is_empty() {
+            out += &format!("Typing: {}.\n", self.typing);
         }
         if let Some(line) = self.broadcast_line() {
             out += &format!("{line}\n");
@@ -631,6 +639,19 @@ impl Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typing_status_is_additive_and_cannot_add_wire_fields() {
+        let old = Status::decode("ok\nname\tdesk\nid\tabcd\nport\t24900\n").unwrap();
+        assert!(old.typing.is_empty());
+        assert!(!old.encode().contains("typing\t"));
+        let current = Status { typing: "physical (same keys)".into(), ..old.clone() };
+        assert_eq!(Status::decode(&current.encode()).unwrap(), current);
+        let hostile = Status { typing: "characters\ncontrolled_by\tevil\r".into(), ..old };
+        let decoded = Status::decode(&hostile.encode()).unwrap();
+        assert_eq!(decoded.typing, "characters controlled_by evil ");
+        assert!(decoded.controlled_by.is_none());
+    }
 
     #[test]
     fn suggestions_name_the_computer_safely() {

@@ -1085,6 +1085,11 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
             )),
         };
         checks.push(check("clipboard-history", "Clipboard history", history_outcome));
+        checks.push(check("typing", "Typing", if settings.typing.has_character_request() {
+            Outcome::warn(settings.typing.summary(), "Use matching OS keyboard layouts; character mode is not implemented yet. Set `one-mk typing --keys physical` globally and for each configured --peer override.")
+        } else {
+            Outcome::pass(settings.typing.summary())
+        }));
     }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
     checks.push(broadcast_check(&daemon, crate::settings::Settings::load(dir).ok().map(|s| s.broadcast).as_ref(), os));

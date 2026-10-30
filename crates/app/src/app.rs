@@ -9,6 +9,7 @@ mod keys;
 mod links;
 mod pages;
 mod place;
+mod typing;
 
 use crate::daemon::{Event, Job, Latency, Link};
 use crate::motion::{self, tween};

@@ -50,6 +50,7 @@ pub struct Settings {
     pub pointer: crate::pointeroverlay::PointerSettings,
     /// Broadcast to every connected computer (see `docs/BROADCAST.md`).
     pub broadcast: BroadcastSettings,
+    pub typing: crate::typing::TypingSettings,
 }
 
 impl Default for Settings {
@@ -69,6 +70,7 @@ impl Default for Settings {
             input: Default::default(),
             pointer: Default::default(),
             broadcast: Default::default(),
+            typing: Default::default(),
         }
     }
 }

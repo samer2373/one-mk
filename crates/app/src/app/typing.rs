@@ -1,0 +1,28 @@
+use super::*;
+use super::pages::card;
+
+impl App {
+    pub(super) fn typing_card(&mut self, ui: &mut Ui, area: Rect) {
+        let content = card(ui, area, "Typing on the other computer");
+        let choices = [("physical", "Same keys"), ("characters", "Same letters"), ("auto", "Auto")];
+        let track = Rect::from_min_size(pos2(content.left(), content.top()), vec2(content.width(), 28.0));
+        let labels: Vec<_> = choices.iter().map(|(_, label)| *label).collect();
+        let pills = Pills {
+            id: Id::unique("typing-mode"),
+            track,
+            cells: Pills::even(track, 3, 2.0),
+            labels: &labels,
+            names: choices.iter().map(|(_, label)| format!("Typing preference: {label}")).collect(),
+            chosen: choices.iter().position(|(value, _)| *value == self.prefs.typing),
+            enabled: vec![true; 3],
+            role: Role::RadioButton,
+            font: T_META,
+            radius: 6,
+        };
+        if let Some(index) = pills.show(ui, self.arrowed) {
+            let mode = choices[index].0;
+            self.set_pref("typing preference", &["typing", "--keys", mode], |prefs| prefs.typing = mode);
+        }
+        para(ui, pos2(content.left(), content.top() + 40.0), content.width(), "Saved preference only. Same letters and Auto are not available yet. Effective mode: Same keys. Use matching keyboard layouts on both computers.", regular(T_META), INK2);
+    }
+}

@@ -9,6 +9,12 @@ traditionally on the PC.
 
 ## Where it runs
 
+Keyboard-layout translation (Wave 5E) is a separate, unfinished feature: see
+[KEYBOARD-LAYOUT.md](KEYBOARD-LAYOUT.md). The new typing preference currently
+falls back to physical keys on every backend. Its future resolver must consume
+the output of `Mapper::key_from`, after physical local hotkeys and before the
+Ctrl/Cmd swap; it must retain each press's routing decision through its release.
+
 Everything runs on the **controller** (the computer the mouse and keyboard
 are plugged into), in the send path of a visit, before anything reaches
 the network. The computer being controlled receives ordinary keys,

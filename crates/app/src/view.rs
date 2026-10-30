@@ -250,6 +250,7 @@ pub struct Prefs {
     pub notify_files: bool,
     /// Gaming mode: `off`, `on` or `auto`.
     pub gaming: String,
+    pub typing: &'static str,
     pub lock_sync: bool,
     /// The edge rules for every edge.
     pub edge_corner: u32,
@@ -325,6 +326,11 @@ impl Prefs {
             history_persist: flag("clipboard", "history_persist", false),
             notify_files: flag("", "notify_files", true),
             gaming: text("", "gaming", "off"),
+            typing: match text("typing", "keys", "physical").as_str() {
+                "characters" => "characters",
+                "auto" => "auto",
+                _ => "physical",
+            },
             lock_sync: flag("", "lock_sync", false),
             edge_corner: num("edge", "corner", 0).max(0) as u32,
             edge_dwell_ms: num("edge", "dwell_ms", 0).max(0) as u32,
@@ -692,6 +698,19 @@ pub fn transfer_lines(t: &TransferStatus) -> (String, String, Option<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typing_preferences_default_and_parse_only_known_modes() {
+        for (settings, expected) in [
+            ("", "physical"),
+            ("[typing]\nkeys = 'physical'", "physical"),
+            ("[typing]\nkeys = 'characters'", "characters"),
+            ("[typing]\nkeys = 'auto'", "auto"),
+            ("[typing]\nkeys = 'unknown'", "physical"),
+        ] {
+            assert_eq!(Prefs::read(settings, "").typing, expected);
+        }
+    }
 
     const SETTINGS: &str = r#"notify_files = false
 gaming = "auto"
