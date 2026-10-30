@@ -3133,7 +3133,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "one-mk"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3164,7 +3164,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-app"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "directories",
@@ -3176,7 +3176,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-clipboard"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3188,7 +3188,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-ctl"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "directories",
@@ -3198,7 +3198,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-input"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -3231,7 +3231,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-net"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "base64",
@@ -3255,11 +3255,11 @@ dependencies = [
 
 [[package]]
 name = "one-mk-proto"
-version = "0.1.12"
+version = "0.1.13"
 
 [[package]]
 name = "one-mk-tray"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "anyhow",
  "ksni",
