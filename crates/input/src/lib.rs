@@ -16,6 +16,7 @@ mod cursoroverlay_windows;
 #[cfg(target_os = "linux")]
 mod cursoroverlay_x11;
 pub mod localmap;
+pub mod localmap_handoff;
 pub mod dropzone;
 pub mod hotkeys;
 #[cfg(any(target_os = "linux", test))]
