@@ -56,8 +56,9 @@ impl Showing {
 }
 
 pub enum Event {
-    /// `None`: one-mk is not running.
-    Status(Option<Status>),
+    /// `None`: one-mk is not running. Boxed: a status is large, and every
+    /// other event would otherwise be as large too.
+    Status(Box<Option<Status>>),
     /// A round-trip sample of every connected computer, while a graph shows.
     Links(Vec<(String, one_mk_ctl::status::LinkStats)>),
     Autostart(bool),
@@ -221,7 +222,7 @@ impl Link {
                 }
                 let same = now.as_ref().map(Status::without_links);
                 if last.as_ref() != Some(&same) {
-                    if link.tx.send(Event::Status(now)).is_err() {
+                    if link.tx.send(Event::Status(Box::new(now))).is_err() {
                         return;
                     }
                     link.ctx.request_repaint();

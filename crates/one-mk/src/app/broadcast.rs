@@ -14,7 +14,7 @@
 use super::tune::ScrollIn;
 use super::{App, ENTER_TIMEOUT, IDLE, KEY_ESC, MAX_COALESCE, Remote, SWITCH_TIMEOUT};
 use one_mk_ctl::client::Toggle;
-use one_mk_input::{CaptureCmd, Event};
+use one_mk_input::{CaptureCmd, DeviceRef, Event};
 use one_mk_net::Fingerprint;
 use one_mk_proto::remap::Action;
 use one_mk_proto::{Control, Datagram, Desktop, Modifier, Pos, RemoteCursor, Step};
@@ -58,9 +58,9 @@ pub(super) struct On {
     last_input: Instant,
     /// Key mapper actions asked for during one event, run once after it.
     actions: Vec<Action>,
-    /// A run of motion, applied to every computer's pointer in turn
-    /// (reused, so motion doesn't allocate).
-    deltas: Vec<(f64, f64)>,
+    /// A run of motion and the device of each, applied to every
+    /// computer's pointer in turn (reused, so motion doesn't allocate).
+    deltas: Vec<(f64, f64, Option<DeviceRef>)>,
 }
 
 /// Why broadcast ended.
@@ -119,10 +119,14 @@ enum Out {
 /// that computer and clamped to its screens in turn (deltas can't simply be
 /// summed: the pointer stops at edges). The last position reached, if it
 /// moved: the only one worth sending.
-fn advance(cursor: &mut RemoteCursor, tune: impl Fn(f64, f64) -> (f64, f64), deltas: &[(f64, f64)]) -> Option<Datagram> {
+fn advance(
+    cursor: &mut RemoteCursor,
+    tune: impl Fn(f64, f64, Option<DeviceRef>) -> (f64, f64),
+    deltas: &[(f64, f64, Option<DeviceRef>)],
+) -> Option<Datagram> {
     let mut moved = None;
-    for &(dx, dy) in deltas {
-        let (dx, dy) = tune(dx, dy);
+    for &(dx, dy, device) in deltas {
+        let (dx, dy) = tune(dx, dy, device);
         // There are no exits, so `Leave` can't happen.
         if let Step::Move(d) = cursor.motion(dx, dy) {
             moved = Some(d);
@@ -437,7 +441,7 @@ impl App {
             self.stop_broadcast(End::CaptureLost);
             return;
         }
-        if let Event::Key { code, down } = ev {
+        if let Event::Key { code, down, .. } = ev {
             let m = self.mods;
             if down && code == KEY_ESC && [Modifier::Ctrl, Modifier::Alt, Modifier::Shift].into_iter().all(|k| m.has(k)) {
                 tracing::info!("emergency shortcut: broadcast stops, pointer is home");
@@ -451,34 +455,41 @@ impl App {
             on.last_input = Instant::now();
         }
         match ev {
-            Event::Motion { dx, dy } => {
-                if let Some(next) = self.broadcast_motion(dx, dy, events) {
+            Event::Motion { dx, dy, device } => {
+                if let Some(next) = self.broadcast_motion(dx, dy, device, events) {
                     self.on_input(next, events);
                 }
             }
-            Event::Key { code, down } | Event::Button { button: code, down } => self.each_visit(|app| {
-                // Remapped (then Ctrl/Cmd swapped) per computer in `tune.rs`.
-                if app.remote.as_mut().is_some_and(|r| r.held.update(code, down)) {
-                    app.tuned_key(code, down);
-                }
-            }),
-            Event::Scroll { dx, dy } => self.each_visit(|app| app.tuned_scroll(ScrollIn::Smooth(dx, dy))),
-            Event::ScrollDiscrete { dx, dy } => self.each_visit(|app| app.tuned_scroll(ScrollIn::Discrete(dx, dy))),
-            Event::ScrollStop => self.each_visit(|app| app.tuned_scroll(ScrollIn::Stop)),
+            // Remapped (then Ctrl/Cmd swapped) per computer in `tune.rs`,
+            // with the rules of the device it came from.
+            Event::Key { code, down, device } | Event::Button { button: code, down, device } => {
+                self.each_visit(|app| app.tuned_key(code, down, device));
+            }
+            Event::Scroll { dx, dy, device } => self.each_visit(|app| app.tuned_scroll(ScrollIn::Smooth(dx, dy), device)),
+            Event::ScrollDiscrete { dx, dy, device } => {
+                self.each_visit(|app| app.tuned_scroll(ScrollIn::Discrete(dx, dy), device));
+            }
+            Event::ScrollStop => self.each_visit(|app| app.tuned_scroll(ScrollIn::Stop, None)),
             _ => {}
         }
     }
 
     /// Moves every computer's pointer by a run of motion (what queued up
     /// meanwhile included). Returns the event that ended the run.
-    fn broadcast_motion(&mut self, dx: f64, dy: f64, events: &mut mpsc::UnboundedReceiver<Event>) -> Option<Event> {
+    fn broadcast_motion(
+        &mut self,
+        dx: f64,
+        dy: f64,
+        device: Option<DeviceRef>,
+        events: &mut mpsc::UnboundedReceiver<Event>,
+    ) -> Option<Event> {
         let Some(Broadcast::On(on)) = self.broadcast.as_mut() else { return None };
         on.deltas.clear();
-        on.deltas.push((dx, dy));
+        on.deltas.push((dx, dy, device));
         let mut next = None;
         while on.deltas.len() < MAX_COALESCE {
             match events.try_recv() {
-                Ok(Event::Motion { dx, dy }) => on.deltas.push((dx, dy)),
+                Ok(Event::Motion { dx, dy, device }) => on.deltas.push((dx, dy, device)),
                 Ok(ev) => {
                     next = Some(ev);
                     break;
@@ -488,7 +499,7 @@ impl App {
         }
         for r in &mut on.visits {
             let tune = &r.tune;
-            if let Some(d) = advance(&mut r.cursor, |dx, dy| tune.motion(dx, dy), &on.deltas)
+            if let Some(d) = advance(&mut r.cursor, |dx, dy, device| tune.motion(dx, dy, device), &on.deltas)
                 && r.acked
             {
                 r.send_motion(&self.peers, d);
@@ -768,27 +779,27 @@ mod tests {
         let mut b = cursor_for(small, Side::Left, None, 2);
         let mut c = cursor_for(two, Side::Top, None, 3);
         assert_eq!((a.pos(), b.pos(), c.pos()), (Pos::new(1280.0, 720.0), Pos::new(640.0, 400.0), Pos::new(960.0, 540.0)));
-        let same = |dx, dy| (dx, dy);
-        let run = [(100.0, 50.0), (-30.0, 10.0)];
+        let same = |dx, dy, _| (dx, dy);
+        let run = [(100.0, 50.0, None), (-30.0, 10.0, None)];
         assert_eq!(pos(advance(&mut a, same, &run)), Some(Pos::new(1350.0, 780.0)));
         assert_eq!(pos(advance(&mut b, same, &run)), Some(Pos::new(710.0, 460.0)));
         // A huge push right: each stops at its own right edge, never leaves.
-        let far = [(10_000.0, 0.0)];
+        let far = [(10_000.0, 0.0, None)];
         let at_edge = |p: Option<Pos>, right: f64| p.is_some_and(|p| (right - 1.0..right).contains(&p.x));
         assert!(at_edge(pos(advance(&mut a, same, &far)), 2560.0));
         assert!(at_edge(pos(advance(&mut b, same, &far)), 1280.0));
         assert!(at_edge(pos(advance(&mut c, same, &far)), 3840.0), "across both monitors");
         // Through the side facing home too (left for a computer on our right).
-        assert_eq!(pos(advance(&mut a, same, &[(-99_999.0, -99_999.0)])), Some(Pos::new(0.0, 0.0)));
-        assert_eq!(advance(&mut a, same, &[(-5.0, -5.0)]), None, "pinned in the corner: nothing to send");
+        assert_eq!(pos(advance(&mut a, same, &[(-99_999.0, -99_999.0, None)])), Some(Pos::new(0.0, 0.0)));
+        assert_eq!(advance(&mut a, same, &[(-5.0, -5.0, None)]), None, "pinned in the corner: nothing to send");
         // Applied in order, clamping in between (not summed): 0 -> 0 -> 100.
-        assert_eq!(pos(advance(&mut a, same, &[(-50.0, 0.0), (100.0, 0.0)])).map(|p| p.x), Some(100.0));
+        assert_eq!(pos(advance(&mut a, same, &[(-50.0, 0.0, None), (100.0, 0.0, None)])).map(|p| p.x), Some(100.0));
         // Each computer's own pointer speed applies.
         let mut d = cursor_for(Desktop::new(vec![Rect::new(0, 0, 1000, 1000)]), Side::Right, None, 4);
-        assert_eq!(pos(advance(&mut d, |dx, dy| (dx * 2.0, dy * 2.0), &[(10.0, 10.0)])), Some(Pos::new(520.0, 520.0)));
+        assert_eq!(pos(advance(&mut d, |dx, dy, _| (dx * 2.0, dy * 2.0), &[(10.0, 10.0, None)])), Some(Pos::new(520.0, 520.0)));
         // Motion keeps its epoch, and every move a new seq.
         let (Some(Datagram::Motion { epoch, seq: s1, .. }), Some(Datagram::Motion { seq: s2, .. })) =
-            (advance(&mut d, same, &[(1.0, 0.0)]), advance(&mut d, same, &[(1.0, 0.0)]))
+            (advance(&mut d, same, &[(1.0, 0.0, None)]), advance(&mut d, same, &[(1.0, 0.0, None)]))
         else {
             panic!()
         };
@@ -802,8 +813,8 @@ mod tests {
     fn a_pointer_never_ends_up_between_monitors() {
         let odd = Desktop::new(vec![Rect::new(0, 0, 1920, 1080), Rect::new(1920, 0, 1280, 720)]);
         let mut c = cursor_for(odd.clone(), Side::Right, None, 1);
-        for run in [[(1500.0, 0.0)], [(0.0, 400.0)], [(-5000.0, 5000.0)], [(9000.0, -9000.0)]] {
-            if let Some(p) = pos(advance(&mut c, |dx, dy| (dx, dy), &run)) {
+        for run in [[(1500.0, 0.0, None)], [(0.0, 400.0, None)], [(-5000.0, 5000.0, None)], [(9000.0, -9000.0, None)]] {
+            if let Some(p) = pos(advance(&mut c, |dx, dy, _| (dx, dy), &run)) {
                 assert!(odd.screens.iter().any(|s| s.contains(p)), "{p:?} is off every screen");
             }
         }

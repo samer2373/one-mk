@@ -62,7 +62,7 @@ impl Daemon {
 
     fn keys(&self, keys: &[(u32, bool)]) {
         for &(code, down) in keys {
-            self.send(Event::Key { code, down });
+            self.send(Event::Key { code, down, device: None });
         }
     }
 }
@@ -204,7 +204,7 @@ async fn broadcast_types_clicks_and_scrolls_on_every_computer() {
     assert_eq!(ask(&t.a.dir, Request::Broadcast(Toggle::On)).await, "already\non\nbee\tsea\n");
 
     // Movement: the same amount from each centre.
-    t.a.send(Event::Motion { dx: 100.0, dy: -40.0 });
+    t.a.send(Event::Motion { dx: 100.0, dy: -40.0, device: None });
     assert_eq!(next_inject(&mut t.b.h).await, Inject::MoveTo(Pos::new(1060.0, 500.0)));
     assert_eq!(next_inject(&mut t.c.h).await, Inject::MoveTo(Pos::new(740.0, 360.0)));
     // Keys.
@@ -213,20 +213,20 @@ async fn broadcast_types_clicks_and_scrolls_on_every_computer() {
         assert_eq!(t.both().await, (want, want));
     }
     // A click, where each pointer is.
-    t.a.send(Event::Button { button: LEFT_BUTTON, down: true });
+    t.a.send(Event::Button { button: LEFT_BUTTON, down: true, device: None });
     assert_eq!(next_inject(&mut t.b.h).await, Inject::MoveTo(Pos::new(1060.0, 500.0)));
     assert_eq!(next_inject(&mut t.c.h).await, Inject::MoveTo(Pos::new(740.0, 360.0)));
     let click = Inject::Button { button: LEFT_BUTTON, down: true };
     assert_eq!(t.both().await, (click, click));
-    t.a.send(Event::Button { button: LEFT_BUTTON, down: false });
+    t.a.send(Event::Button { button: LEFT_BUTTON, down: false, device: None });
     let up = Inject::Button { button: LEFT_BUTTON, down: false };
     assert_eq!(t.both().await, (up, up));
     // Scrolling.
-    t.a.send(Event::ScrollDiscrete { dx: 0, dy: -1 });
+    t.a.send(Event::ScrollDiscrete { dx: 0, dy: -1, device: None });
     let wheel = Inject::ScrollDiscrete { dx: 0, dy: -1 };
     assert_eq!(t.both().await, (wheel, wheel));
     // A long push right: each stops at its own edge; neither leaves.
-    t.a.send(Event::Motion { dx: 99_999.0, dy: 0.0 });
+    t.a.send(Event::Motion { dx: 99_999.0, dy: 0.0, device: None });
     for (h, right, y) in [(&mut t.b.h, 1920.0, 500.0), (&mut t.c.h, 1280.0, 360.0)] {
         match next_inject(h).await {
             Inject::MoveTo(p) => assert!((right - 1.0..right).contains(&p.x) && p.y == y, "{p:?}"),
@@ -245,7 +245,7 @@ async fn broadcast_types_clicks_and_scrolls_on_every_computer() {
     assert!(status(&t.a.dir).await.broadcast.is_empty());
     eventually_async("B to be let go", || async { status(&t.b.dir).await.controlled_by.is_none() }).await;
     // Shift's real release, after, goes nowhere.
-    t.a.send(Event::Key { code: LSHIFT, down: false });
+    t.a.send(Event::Key { code: LSHIFT, down: false, device: None });
     assert_eq!(ask(&t.a.dir, Request::Broadcast(Toggle::Off)).await, "already\noff\n");
     tokio::time::sleep(Duration::from_millis(100)).await;
     nothing_but_moves(&mut t.b.h);
@@ -278,7 +278,7 @@ async fn broadcast_starts_and_stops_every_way() {
     assert_eq!(next_capture(&mut t.a.h).await, CaptureCmd::Activate { side: Side::Right });
     t.a.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 3.0) });
     assert_eq!(next_inject(&mut t.b.h).await, Inject::MoveTo(CENTER_B));
-    t.a.send(Event::Key { code: LSHIFT, down: true });
+    t.a.send(Event::Key { code: LSHIFT, down: true, device: None });
     assert_eq!(next_non_move(&mut t.b.h).await, key(LSHIFT, true));
     assert_eq!(ask(&t.a.dir, Request::Broadcast(Toggle::On)).await, "ok\non\nbee\tsea\n");
     assert_eq!(next_non_move(&mut t.b.h).await, key(LSHIFT, false), "the visit let go first");
@@ -293,7 +293,7 @@ async fn broadcast_starts_and_stops_every_way() {
     t.a.keys(&[(LCTRL, true), (LALT, true)]);
     assert_eq!(t.both().await, (key(LCTRL, true), key(LCTRL, true)));
     assert_eq!(t.both().await, (key(LALT, true), key(LALT, true)));
-    t.a.send(Event::Key { code: KEY_B, down: true });
+    t.a.send(Event::Key { code: KEY_B, down: true, device: None });
     assert_eq!(next_capture_skipping_edges(&mut t.a.h).await, CaptureCmd::Release { id: 3, pos: Some(CENTER_B) });
     assert_eq!(t.both().await, (key(LCTRL, false), key(LCTRL, false)));
     assert_eq!(t.both().await, (key(LALT, false), key(LALT, false)));
@@ -339,8 +339,8 @@ async fn broadcast_starts_and_stops_every_way() {
 async fn a_computer_that_drops_out_lets_go_and_the_rest_carry_on() {
     let mut t = Trio::start("drop", Swap::Auto, |_| {}).await;
     t.on(1).await;
-    t.a.send(Event::Key { code: KEY_A, down: true });
-    t.a.send(Event::Button { button: LEFT_BUTTON, down: true });
+    t.a.send(Event::Key { code: KEY_A, down: true, device: None });
+    t.a.send(Event::Button { button: LEFT_BUTTON, down: true, device: None });
     assert_eq!(t.both().await, (key(KEY_A, true), key(KEY_A, true)));
     let click = Inject::Button { button: LEFT_BUTTON, down: true };
     assert_eq!(t.both().await, (click, click));
@@ -351,9 +351,9 @@ async fn a_computer_that_drops_out_lets_go_and_the_rest_carry_on() {
     released.sort_by_key(|i| format!("{i:?}"));
     assert_eq!(released, [Inject::Button { button: LEFT_BUTTON, down: false }, key(KEY_A, false)]);
     eventually_async("C to drop out", || async { status(&t.a.dir).await.broadcast == ["bee"] }).await;
-    t.a.send(Event::Key { code: KEY_X, down: true });
+    t.a.send(Event::Key { code: KEY_X, down: true, device: None });
     assert_eq!(next_non_move(&mut t.b.h).await, key(KEY_X, true));
-    t.a.send(Event::Key { code: KEY_X, down: false });
+    t.a.send(Event::Key { code: KEY_X, down: false, device: None });
     assert_eq!(next_non_move(&mut t.b.h).await, key(KEY_X, false));
     tokio::time::sleep(Duration::from_millis(50)).await;
     nothing_but_moves(&mut t.c.h);
@@ -366,7 +366,7 @@ async fn a_computer_that_drops_out_lets_go_and_the_rest_carry_on() {
     t.c = Daemon::spawn(&dc, free_port(), vec![SocketAddr::from(([127, 0, 0, 1], t.a.port))], desk_c());
     eventually_async("C back online", || async { status(&t.a.dir).await.peers.iter().filter(|p| p.online).count() == 2 }).await;
     assert_eq!(status(&t.a.dir).await.broadcast, ["bee"], "a computer that connects later is not added");
-    t.a.send(Event::Key { code: KEY_X, down: true });
+    t.a.send(Event::Key { code: KEY_X, down: true, device: None });
     assert_eq!(next_non_move(&mut t.b.h).await, key(KEY_X, true));
 
     // B goes away (its daemon stops, letting go of what it held), and with
@@ -389,9 +389,9 @@ async fn a_computer_that_drops_out_lets_go_and_the_rest_carry_on() {
 async fn idle_let_go_enters_again_with_the_next_input() {
     let mut t = Trio::start("rest", Swap::Auto, |da| testing::set(da, None, Some(Duration::ZERO))).await;
     t.on(1).await;
-    t.a.send(Event::Motion { dx: 10.0, dy: 10.0 });
+    t.a.send(Event::Motion { dx: 10.0, dy: 10.0, device: None });
     assert_eq!(next_inject(&mut t.b.h).await, Inject::MoveTo(Pos::new(970.0, 550.0)));
-    t.a.send(Event::Key { code: KEY_X, down: true });
+    t.a.send(Event::Key { code: KEY_X, down: true, device: None });
     assert_eq!(t.both().await, (key(KEY_X, true), key(KEY_X, true)));
     // B lets go (as its idle rule would).
     assert!(ask(&t.b.dir, Request::TakeBack).await.starts_with("ok\n"));
@@ -399,7 +399,7 @@ async fn idle_let_go_enters_again_with_the_next_input() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(status(&t.a.dir).await.broadcast, ["bee", "sea"], "resting, still in");
     // The next key enters B again where its pointer was, then types there.
-    t.a.send(Event::Key { code: KEY_A, down: true });
+    t.a.send(Event::Key { code: KEY_A, down: true, device: None });
     assert_eq!(next_inject(&mut t.b.h).await, Inject::MoveTo(Pos::new(970.0, 550.0)));
     assert_eq!(t.both().await, (key(KEY_A, true), key(KEY_A, true)));
     t.a.keys(&[(KEY_A, false), (KEY_X, false)]);
@@ -417,19 +417,19 @@ async fn idle_emergency_and_lock_end_it_without_stuck_keys() {
     let idle = Duration::from_millis(600);
     let mut t = Trio::start("end", Swap::Auto, |da| testing::set(da, Some(Some(idle)), None)).await;
     t.on(1).await;
-    t.a.send(Event::Key { code: LSHIFT, down: true });
+    t.a.send(Event::Key { code: LSHIFT, down: true, device: None });
     assert_eq!(t.both().await, (key(LSHIFT, true), key(LSHIFT, true)));
     // Input every 200 ms for a second keeps it on.
     for _ in 0..5 {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        t.a.send(Event::Motion { dx: 1.0, dy: 0.0 });
+        t.a.send(Event::Motion { dx: 1.0, dy: 0.0, device: None });
     }
     assert!(!status(&t.a.dir).await.broadcast.is_empty());
     let quiet = Instant::now();
     assert_eq!(next_capture_skipping_edges(&mut t.a.h).await, CaptureCmd::Release { id: 1, pos: Some(CENTER_B) });
     assert!(quiet.elapsed() >= idle - Duration::from_millis(250), "{:?}", quiet.elapsed());
     assert_eq!(t.both().await, (key(LSHIFT, false), key(LSHIFT, false)));
-    t.a.send(Event::Key { code: LSHIFT, down: false });
+    t.a.send(Event::Key { code: LSHIFT, down: false, device: None });
 
     // Ctrl+Alt+Shift+Esc: everything held is released, Esc reaches no one.
     t.on(2).await;
@@ -438,7 +438,7 @@ async fn idle_emergency_and_lock_end_it_without_stuck_keys() {
         assert_eq!(t.both().await, (key(code, true), key(code, true)));
     }
     let asked = Instant::now();
-    t.a.send(Event::Key { code: ESC, down: true });
+    t.a.send(Event::Key { code: ESC, down: true, device: None });
     assert_eq!(next_capture_skipping_edges(&mut t.a.h).await, CaptureCmd::Release { id: 2, pos: Some(CENTER_B) });
     let mut on_b: Vec<Inject> = Vec::new();
     for _ in 0..3 {
@@ -455,7 +455,7 @@ async fn idle_emergency_and_lock_end_it_without_stuck_keys() {
 
     // The screen locking here.
     t.on(3).await;
-    t.a.send(Event::Key { code: KEY_A, down: true });
+    t.a.send(Event::Key { code: KEY_A, down: true, device: None });
     assert_eq!(t.both().await, (key(KEY_A, true), key(KEY_A, true)));
     t.a.send(Event::ScreenLocked(true));
     assert_eq!(next_capture_skipping_edges(&mut t.a.h).await, CaptureCmd::Release { id: 3, pos: Some(CENTER_B) });
@@ -551,10 +551,10 @@ async fn random_presses_drops_and_returns_never_leave_a_key_held() {
                     let code = pool[next(pool.len() as u64) as usize];
                     let down = !held.contains(&code);
                     if down { held.push(code) } else { held.retain(|&c| c != code) }
-                    t.a.send(if code >= LEFT_BUTTON { Event::Button { button: code, down } } else { Event::Key { code, down } });
+                    t.a.send(if code >= LEFT_BUTTON { Event::Button { button: code, down, device: None } } else { Event::Key { code, down, device: None } });
                 }
-                4 => t.a.send(Event::Motion { dx: next(41) as f64 - 20.0, dy: next(41) as f64 - 20.0 }),
-                5 => t.a.send(Event::ScrollDiscrete { dx: 0, dy: 1 }),
+                4 => t.a.send(Event::Motion { dx: next(41) as f64 - 20.0, dy: next(41) as f64 - 20.0, device: None }),
+                5 => t.a.send(Event::ScrollDiscrete { dx: 0, dy: 1, device: None }),
                 6 if next(4) == 0 => {
                     let peer = if next(2) == 0 { &t.b.dir } else { &t.c.dir };
                     let _ = ask(peer, Request::TakeBack).await;
@@ -587,7 +587,7 @@ async fn random_presses_drops_and_returns_never_leave_a_key_held() {
             assert!(down.is_empty(), "seed {seed:x}: {who} still holds {down:?}");
         }
         for code in held {
-            t.a.send(if code >= LEFT_BUTTON { Event::Button { button: code, down: false } } else { Event::Key { code, down: false } });
+            t.a.send(if code >= LEFT_BUTTON { Event::Button { button: code, down: false, device: None } } else { Event::Key { code, down: false, device: None } });
         }
         t.stop().await;
     }

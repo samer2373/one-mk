@@ -57,10 +57,10 @@ async fn wrap_comes_in_at_the_opposite_edge_and_keeps_input_here() {
     duo.ha.events.send(Event::Activated { id: 5, side: Side::Left, pos: Pos::new(0.0, 300.0) }).unwrap();
     // Caught by that capture before the release took effect: a key and a click.
     for ev in [
-        Event::Key { code: 30, down: true },
-        Event::Key { code: 30, down: false },
-        Event::Button { button: 272, down: true },
-        Event::Button { button: 272, down: false },
+        Event::Key { code: 30, down: true, device: None },
+        Event::Key { code: 30, down: false, device: None },
+        Event::Button { button: 272, down: true, device: None },
+        Event::Button { button: 272, down: false, device: None },
     ] {
         duo.ha.events.send(ev).unwrap();
     }
@@ -140,12 +140,12 @@ async fn guards_lock_and_control_apply_to_wrap() {
     // A dwell: held at the edge, then round.
     let started = Instant::now();
     duo.ha.events.send(Event::Activated { id: 2, side: Side::Left, pos: Pos::new(0.0, 500.0) }).unwrap();
-    duo.ha.events.send(Event::Motion { dx: -30.0, dy: 10.0 }).unwrap(); // pushing, sliding down
+    duo.ha.events.send(Event::Motion { dx: -30.0, dy: 10.0, device: None }).unwrap(); // pushing, sliding down
     assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: Some(Pos::new(1917.0, 510.0)) });
     assert!(started.elapsed() >= Duration::from_millis(200), "{:?}", started.elapsed());
     // Pulled back during the dwell: no wrap.
     duo.ha.events.send(Event::Activated { id: 3, side: Side::Left, pos: Pos::new(0.0, 500.0) }).unwrap();
-    duo.ha.events.send(Event::Motion { dx: 30.0, dy: 0.0 }).unwrap();
+    duo.ha.events.send(Event::Motion { dx: 30.0, dy: 0.0, device: None }).unwrap();
     assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 3, pos: Some(Pos::new(30.0, 500.0)) });
     // A fullscreen window has the focus.
     *duo.ha.focus.lock().unwrap() = Some(Focus { fullscreen: true, apps: vec!["game".into()] });

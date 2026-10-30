@@ -476,6 +476,7 @@ impl App {
         while let Ok(e) = self.rx.try_recv() {
             match e {
                 Event::Status(s) => {
+                    let s = *s;
                     // Round trips: what the daemon says now, or nothing once it is gone.
                     match (&s, self.rtt_frozen) {
                         (Some(st), None) => self.rtts.record(now, &st.links),
