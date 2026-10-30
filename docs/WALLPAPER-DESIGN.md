@@ -189,6 +189,16 @@ the group. No sleeping member holds a group-wide barrier.
 
 ## 4. Native presentation and bounded GNOME bridge
 
+**October 31 production-component checkpoint (partial, not playback acceptance):**
+Repository extension, exact protocol XML/Rust client, Shell-version guard,
+explicit install/uninstall/status and a non-publishing dry-run artifact now exist.
+The authorization gate remains closed: daemon presentation-plan IPC and the
+production media/surface pipeline are not integrated. The normal renderer refuses
+`--present=gnome` without opening a surface. See the [component checkpoint and
+explicit protocol/lifecycle gaps](spikes/gnome/production-component.md), including
+validation and owner-machine acceptance. The contract below remains the target;
+these partial components do not supersede it or inherit spike qualification.
+
 ### GNOME architecture proved only in an isolated session
 
 6B MEASURED on **headless GNOME 50.1/Mutter 18**: extension spawns fixed installed
