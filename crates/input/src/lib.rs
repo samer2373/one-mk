@@ -6,6 +6,8 @@
 //! Key and button codes are Linux evdev codes on all platforms.
 
 mod common_logic;
+#[cfg(any(windows, target_os = "macos", test))]
+mod devcorr;
 pub mod cursoroverlay;
 #[cfg(target_os = "macos")]
 mod cursoroverlay_macos;
@@ -26,12 +28,16 @@ mod null;
 pub mod system;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_devices;
 #[cfg(any(target_os = "macos", test))]
 mod macos_logic;
 #[cfg(target_os = "linux")]
 mod portal;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_devices;
 #[cfg(target_os = "linux")]
 mod wlroots;
 #[cfg(target_os = "linux")]

@@ -21,6 +21,10 @@
 //! notices if the hooks were removed anyway (the parked cursor keeps
 //! moving), reinstalls them, and gives the pointer back if that doesn't help.
 //!
+//! Which keyboard or mouse each event came from (per-device rules) is read
+//! with Raw Input while capturing, and matched to the hooks' events (see
+//! `windows_devices`; compile-checked only).
+//!
 //! Pen, touch and injected mouse input never starts a crossing and is never
 //! forwarded; injected keys are left alone. Real input while a peer is in
 //! control here is reported as `Event::LocalInput`.
@@ -76,7 +80,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP,
     WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
     WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
-    WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
+    WM_SETTINGCHANGE, WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT,
     WTS_SESSION_LOCK, WTS_SESSION_LOGOFF, WTS_SESSION_UNLOCK,
 };
@@ -94,6 +98,11 @@ const WM_APP_OVERLAY: u32 = WM_APP + 2;
 const TIMER_GUARD: usize = 1;
 /// Monitor changes arrive in bursts; re-read the layout once they settle.
 const TIMER_DISPLAY: usize = 2;
+/// An event waits for Raw Input to say its device; runs only while one does.
+const TIMER_DEVICES: usize = 3;
+/// Posted when capture starts: read Raw Input from now on (not in the hook,
+/// which must return quickly).
+const WM_APP_DEVICES: u32 = WM_APP + 3;
 
 /// Side of the cursor-hiding window, in physical pixels.
 const OVERLAY: i32 = 64;
@@ -222,6 +231,8 @@ struct State {
     self_elevated: bool,
     /// Foreground window and whether it is elevated, to avoid asking twice.
     elevated_cache: Option<(usize, bool)>,
+    /// Raw Input: the devices, and the matching of events to them.
+    raw: crate::windows_devices::RawDevices,
 }
 
 #[derive(Clone, Copy)]
@@ -444,8 +455,10 @@ fn capture_thread(
             watchdog: HookWatchdog::default(),
             self_elevated,
             elevated_cache: None,
+            raw: Default::default(),
         })
     });
+    with_state(State::devices_changed);
     tracing::info!("input capture ready");
 
     // The daemon's command channel is async; forward it into the message
@@ -562,10 +575,43 @@ enum Guard {
 impl State {
     /// Sends to the daemon; if it is gone while captured, gives the pointer back.
     fn send(&mut self, ev: Event) -> Effect {
+        if self.captured.is_some() {
+            // In order, once Raw Input has said (or not) which device it was.
+            let mut out = Vec::new();
+            self.raw.corr.hook(ev, now_ms(), &mut out);
+            return self.send_all(out);
+        }
         if self.tx.send(ev).is_err() {
             return self.release(None);
         }
         Effect::None
+    }
+
+    /// Sends what the device matching let through; its timer runs only
+    /// while an event waits.
+    fn send_all(&mut self, out: Vec<Event>) -> Effect {
+        for ev in out {
+            if self.tx.send(ev).is_err() {
+                return self.release(None);
+            }
+        }
+        let wait = u32::try_from(crate::devcorr::WAIT_MS).unwrap_or(8);
+        // SAFETY: our own window and timer.
+        unsafe {
+            if self.raw.corr.deadline().is_some() {
+                SetTimer(self.hwnd, TIMER_DEVICES, wait, None);
+            } else {
+                KillTimer(self.hwnd, TIMER_DEVICES);
+            }
+        }
+        Effect::None
+    }
+
+    /// Says which keyboards and mice are connected, if that changed.
+    fn devices_changed(&mut self) {
+        if let Some(list) = self.raw.enumerate() {
+            let _ = self.tx.send(Event::Devices(list));
+        }
     }
 
     /// Ends capture. Without a position the pointer goes back to where it
@@ -573,6 +619,14 @@ impl State {
     fn release(&mut self, to: Option<(i32, i32)>) -> Effect {
         match self.captured.take() {
             Some(c) => {
+                // Events still waiting for their device go now, unknown.
+                let mut out = Vec::new();
+                self.raw.unregister(&mut out);
+                for ev in out {
+                    let _ = self.tx.send(ev);
+                }
+                // SAFETY: our own window and timer.
+                unsafe { KillTimer(self.hwnd, TIMER_DEVICES) };
                 self.fwd.clear();
                 self.heading.reset();
                 if to.is_none() {
@@ -618,6 +672,8 @@ impl State {
         let park = self.space.park_point(x, y);
         let entry = self.space.to_phys(pos);
         self.captured = Some(Captured { id, park, entry });
+        // SAFETY: posting to our own window.
+        unsafe { PostMessageW(self.hwnd, WM_APP_DEVICES, 0, 0) };
         (true, Effect::Park(park))
     }
 
@@ -942,6 +998,42 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     reinstall_hooks(hooks);
                 }
                 Some(Guard::Ended(effect)) => apply(effect, hwnd),
+            }
+            0
+        }
+        WM_APP_DEVICES => {
+            with_state(|s| {
+                if s.captured.is_some() {
+                    s.raw.register(s.hwnd);
+                    s.devices_changed();
+                }
+            });
+            0
+        }
+        WM_INPUT => {
+            let effect = with_state(|s| {
+                let mut out = Vec::new();
+                s.raw.on_input(lparam, &mut out);
+                s.send_all(out)
+            });
+            if let Some(e) = effect {
+                apply(e, hwnd);
+            }
+            // SAFETY: default handling (it frees the input's data).
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        WM_INPUT_DEVICE_CHANGE => {
+            with_state(State::devices_changed);
+            0
+        }
+        WM_TIMER if wparam == TIMER_DEVICES => {
+            let effect = with_state(|s| {
+                let mut out = Vec::new();
+                s.raw.corr.tick(now_ms(), &mut out);
+                s.send_all(out)
+            });
+            if let Some(e) = effect {
+                apply(e, hwnd);
             }
             0
         }

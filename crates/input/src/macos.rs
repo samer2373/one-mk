@@ -239,6 +239,8 @@ struct Ctx {
     controlled: Arc<Controlled>,
     inbox: Arc<Inbox>,
     st: RefCell<State>,
+    /// Which keyboard or mouse input came from (IOHIDManager).
+    hid: &'static crate::macos_devices::Hid,
 }
 
 struct State {
@@ -351,8 +353,9 @@ fn capture_thread(
     let modes = unsafe { kCFRunLoopCommonModes };
 
     let inbox = Arc::new(Inbox::default());
+    let hid = crate::macos_devices::Hid::start(tx.clone(), &run_loop);
     let ctx: &'static Ctx =
-        Box::leak(Box::new(Ctx { tx, trusted, controlled, inbox: inbox.clone(), st: RefCell::new(State::new()) }));
+        Box::leak(Box::new(Ctx { tx, trusted, controlled, inbox: inbox.clone(), st: RefCell::new(State::new()), hid }));
     let info = ctx as *const Ctx as *mut c_void;
 
     // Commands arrive through a custom run loop source.
@@ -479,6 +482,7 @@ impl Ctx {
     fn end(&self, st: &mut State) {
         if st.active {
             st.deactivate(None);
+            self.hid.capture(false);
             let _ = self.tx.send(Event::Deactivated { id: st.id });
         }
         self.update_timer(st);
@@ -587,6 +591,7 @@ impl Ctx {
                 // A release for an earlier activation is stale.
                 if st.active && st.id == id {
                     st.deactivate(pos);
+                    self.hid.capture(false);
                     self.update_timer(&mut st);
                 }
             }
@@ -610,6 +615,7 @@ impl Ctx {
             Msg::Quit => {
                 if st.active || st.cursor_hidden {
                     st.deactivate(None);
+                    self.hid.capture(false);
                 }
                 if let Some(rl) = CFRunLoop::current() {
                     rl.stop();
@@ -701,6 +707,7 @@ impl Ctx {
         st.id = id;
         st.secure_reported = false;
         st.activate();
+        self.hid.capture(true);
         self.update_timer(st);
         true
     }
@@ -708,9 +715,8 @@ impl Ctx {
     /// Pointer is on a peer: forward everything, swallow everything.
     fn on_active(&self, st: &mut State, ty: CGEventType, ev: &CGEvent) -> bool {
         let e = Some(ev);
-        let send = |event: Event| {
-            let _ = self.tx.send(event);
-        };
+        // In order, once IOHID has said (or not) which device it was.
+        let send = |event: Event| self.hid.send(event);
         use CGEventType as T;
         match ty {
             T::MouseMoved | T::LeftMouseDragged | T::RightMouseDragged | T::OtherMouseDragged => {
