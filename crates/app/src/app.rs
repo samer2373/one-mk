@@ -5,6 +5,7 @@
 
 mod cells;
 mod keys;
+mod links;
 mod pages;
 mod place;
 
@@ -193,6 +194,10 @@ pub struct App {
     sheet_key: String,
     toast: Option<Toast>,
     latency: HashMap<String, Measured>,
+    /// Round trips of the connected computers, while a graph is on screen.
+    rtts: crate::rtt::Rtts,
+    /// Set while a screenshot's scripted history stands in for live samples.
+    rtt_frozen: Option<f64>,
     failed_measure: HashSet<String>,
     measuring: Option<String>,
     /// Sides (and offsets) chosen here and not yet reported back by the
@@ -407,6 +412,8 @@ impl App {
             sheet_key: String::new(),
             toast: None,
             latency: HashMap::new(),
+            rtts: Default::default(),
+            rtt_frozen: None,
             failed_measure: HashSet::new(),
             measuring: None,
             pending_side: HashMap::new(),
@@ -461,6 +468,12 @@ impl App {
         while let Ok(e) = self.rx.try_recv() {
             match e {
                 Event::Status(s) => {
+                    // Round trips: what the daemon says now, or nothing once it is gone.
+                    match (&s, self.rtt_frozen) {
+                        (Some(st), None) => self.rtts.record(now, &st.links),
+                        (None, None) => self.rtts = Default::default(),
+                        _ => {}
+                    }
                     self.status = Some(s);
                     let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).collect());
                     self.fonts.cover(&self.ctx, names.iter().map(String::as_str));
@@ -471,6 +484,8 @@ impl App {
                     self.failed_measure.retain(|id| online.contains(id));
                     self.sync_scene();
                 }
+                Event::Links(links) if self.rtt_frozen.is_none() => self.rtts.record(now, &links),
+                Event::Links(_) => {}
                 Event::Autostart(on) => self.autostart = Some(on),
                 Event::Latency(l) => {
                     self.measuring = None;
@@ -1656,9 +1671,12 @@ impl App {
             info_row(ui, c, y0, "Status", "Not found on the network", false, 1.0);
             let hint = fit(ui.painter(), "Start one·mk on it, on the same Wi-Fi.", &regular(T_META), c.width());
             ui.painter().text(pos2(c.left(), y1), Align2::LEFT_CENTER, hint, regular(T_META), INK2);
+            // No graph of a connection that isn't there.
+            info_row(ui, c, c.top() + 116.0, "Latency", "offline", false, 1.0);
             return;
         }
         self.quick_actions(ui, c, c.top() + 116.0, Some(&peer));
+        self.latency_card(ui, c, c.top() + links::CARD_Y, &peer);
         match self.latency.get(&peer.id) {
             Some(m) => {
                 // New numbers count over from the old ones, in fixed-width digits.
@@ -2134,7 +2152,7 @@ impl eframe::App for App {
         self.shortcuts(ui);
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, GROUND);
-        let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - PANEL_H), full.max);
+        let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - self.panel_h()), full.max);
         let desk = Rect::from_min_max(full.min, pos2(full.right(), panel.top()));
         let top = Rect::from_min_size(full.min, vec2(full.width(), TOP_H));
         // Files let go over a page without the desk: ask where they go.
@@ -2185,6 +2203,10 @@ impl eframe::App for App {
         // what is being paired.
         self.sheet(ui, full, now);
         self.toast_view(ui, desk, now);
+        // Tell the link whether a graph was drawn: it asks the daemon for
+        // round trips only then (a minimised window draws nothing).
+        let hidden = ui.input(|i| i.viewport().minimized == Some(true));
+        self.link.showing.frame(self.graph_wanted() && !hidden);
         #[cfg(debug_assertions)]
         debug::shot(ui.ctx(), now);
     }
@@ -2199,6 +2221,9 @@ impl eframe::App for App {
 ///   `ONE_MK_APP_SHOT_AFTER` seconds (default 3) and quits;
 /// - `ONE_MK_APP_PAIR=1` starts pairing; `ONE_MK_APP_TAB=files|keyboard`
 ///   opens a tab; `ONE_MK_APP_SELECT=name` selects a computer (`me`: this one);
+/// - `ONE_MK_APP_RTT="ID=4,5,6+2;ID2=..."` fills the latency graphs with a
+///   history, one reading a second in ms (`+n`: n packets lost), and stops
+///   live samples; the id is the computer's id in the status;
 /// - `ONE_MK_APP_DROP=n` drops n files where it's unclear who gets them;
 /// - `ONE_MK_APP_DRAG=1` carries the first other computer across this one;
 /// - `ONE_MK_APP_FOCUS=1` puts the keyboard on the position control;
@@ -2241,6 +2266,14 @@ mod debug {
         let ready = app.running().is_some();
         if app.status.is_some() && var("ONE_MK_APP_PAIR").is_some() && once(&ctx, "pair") {
             app.start_pairing(now);
+        }
+        if ready && let Some(script) = var("ONE_MK_APP_RTT") && once(&ctx, "rtt") {
+            for part in script.split(';') {
+                if let Some((id, series)) = part.split_once('=') {
+                    app.rtts.set(id, crate::rtt::scripted(now, series));
+                }
+            }
+            app.rtt_frozen = Some(now);
         }
         if ready && let Some(name) = var("ONE_MK_APP_SELECT") {
             let id = if name == "me" { Some(name) } else { app.running().and_then(|s| s.peers.iter().find(|p| p.name == name)).map(|p| p.id.clone()) };

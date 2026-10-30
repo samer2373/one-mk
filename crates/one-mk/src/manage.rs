@@ -15,7 +15,7 @@ use crate::control::{self, Request};
 use anyhow::{Result, bail};
 use one_mk_net::{Device, Fingerprint, Swap, TrustStore};
 use one_mk_proto::Side;
-pub use one_mk_ctl::status::{LayoutStatus, PeerStatus, Status, on_your, placement, takeback_hint};
+pub use one_mk_ctl::status::{LayoutStatus, LinkStats, PeerStatus, Status, on_your, placement, takeback_hint};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 

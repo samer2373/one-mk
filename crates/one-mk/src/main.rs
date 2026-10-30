@@ -226,7 +226,8 @@ enum Cmd {
     },
     /// List paired computers.
     Devices,
-    /// Show whether one-mk is running, who is connected and who controls whom.
+    /// Show whether one-mk is running, who is connected (with how long each
+    /// answer takes, "rtt 4 ms") and who controls whom.
     Status,
     /// Take this computer back from the computer controlling it (on Linux,
     /// where using this computer's own mouse or keyboard can't be noticed;
