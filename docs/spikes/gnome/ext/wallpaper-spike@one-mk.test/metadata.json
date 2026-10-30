@@ -1,0 +1,7 @@
+{
+  "uuid": "wallpaper-spike@one-mk.test",
+  "name": "one-mk live wallpaper bridge (feasibility spike)",
+  "description": "Throwaway spike: presents an external renderer's window behind all windows and desktop icons. Not product code.",
+  "shell-version": ["50"],
+  "url": "https://github.com/samer2373/one-mk"
+}
