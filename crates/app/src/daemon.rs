@@ -69,7 +69,7 @@ pub enum Event {
     Done { what: Job, error: Option<String> },
     Latency(Latency),
     /// `settings.toml` or `profiles.toml` as they are now.
-    Prefs(Prefs),
+    Prefs(Box<Prefs>),
     /// `one-mk doctor --json`: the checks, or why they couldn't be run.
     Doctor(Result<Vec<Check>, String>),
     /// `one-mk keymap check`: the problems with the input tuning (none:
@@ -241,7 +241,7 @@ impl Link {
                 let now = link.prefs_stamp();
                 if stamp != Some(now) {
                     stamp = Some(now);
-                    link.send(Event::Prefs(link.prefs()));
+                    link.send(Event::Prefs(Box::new(link.prefs())));
                     link.send(Event::UpdateAvailable(one_mk_ctl::update_logic::cached_version(&link.dir, env!("CARGO_PKG_VERSION"))));
                 }
                 let Ok(now) = link.status() else {

@@ -528,7 +528,7 @@ impl App {
                     self.finished(what, error, now);
                 }
                 Event::Prefs(p) => {
-                    self.prefs = p;
+                    self.prefs = *p;
                     self.keys.check_due = true;
                     // What was being dragged or typed is saved now.
                     if !self.busy.iter().any(|j| matches!(j, Job::Tune { .. })) {
