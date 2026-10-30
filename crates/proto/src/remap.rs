@@ -418,6 +418,22 @@ impl Keymap {
         self.rules.is_empty()
     }
 
+    /// Validate native local output before admitting any original key.
+    pub fn supports_local_keys(&self, supported: impl Fn(u32) -> bool) -> bool {
+        let chord = |chord: Chord| supported(u32::from(chord.key))
+            && MOD_CODES.iter().enumerate().all(|(index, &code)| chord.mods & (1 << index) == 0 || supported(u32::from(code)));
+        let output = |output: Out| match output {
+            Out::Chord(value) => chord(value),
+            Out::Action(_) => false,
+            _ => true,
+        };
+        self.actions.is_empty() && self.chords.iter().all(|&value| chord(value))
+            && self.rules.iter().all(|rule| supported(u32::from(rule.trigger.key)) && match rule.kind {
+                Kind::Plain(value) => output(value),
+                Kind::Dual { tap, hold, .. } => output(tap) && output(hold),
+            })
+    }
+
     /// The rule for `code` in `layer` with the modifiers `held`.
     fn find(&self, layer: u8, code: u32, held: u8) -> Option<usize> {
         let (start, len) = *self.slots.get(usize::from(layer) * KEYS + code as usize)?;
@@ -463,6 +479,10 @@ impl KeymapSet {
 
     pub fn base(&self) -> &Keymap {
         &self.maps[0]
+    }
+
+    pub fn supports_local_keys(&self, supported: impl Fn(u32) -> bool) -> bool {
+        self.maps.iter().all(|map| map.supports_local_keys(&supported))
     }
 
     /// Which keymap input from `device` uses.

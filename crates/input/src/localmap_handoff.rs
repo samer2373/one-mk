@@ -77,6 +77,11 @@ pub struct HookGate {
 }
 
 impl HookGate {
+    /// Close admission before submitting a serialized worker fence.
+    pub fn close(&self) {
+        self.publish(GateState::Closed);
+    }
+
     fn publish(&self, state: GateState) {
         self.state.store(state as u8, Ordering::Release);
     }

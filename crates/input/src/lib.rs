@@ -17,6 +17,7 @@ mod cursoroverlay_windows;
 mod cursoroverlay_x11;
 pub mod localmap;
 pub mod localmap_handoff;
+pub mod localmap_runtime;
 pub mod dropzone;
 pub mod hotkeys;
 #[cfg(any(target_os = "linux", test))]
@@ -39,6 +40,8 @@ mod portal;
 mod windows;
 #[cfg(windows)]
 mod windows_devices;
+#[cfg(windows)]
+mod windows_localmap;
 #[cfg(target_os = "linux")]
 mod wlroots;
 #[cfg(target_os = "linux")]
@@ -160,6 +163,8 @@ pub enum Event {
 /// From the daemon to the capture side.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CaptureCmd {
+    #[cfg(windows)]
+    LocalRules { rules: Option<std::sync::Arc<localmap_runtime::Rules>>, inactive: Option<String> },
     /// Edge segments that lead to a connected peer, in the coordinates of
     /// the last `Event::Desktop`; replaces the previous ones. Only these
     /// capture: the rest of an edge is a wall, as beside a real monitor.

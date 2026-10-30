@@ -3219,8 +3219,10 @@ name = "one-mk-input"
 version = "0.1.13"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "ashpd",
  "block2 0.6.2",
+ "crossbeam-queue",
  "dispatch2",
  "futures",
  "libc",
