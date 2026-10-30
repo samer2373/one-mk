@@ -182,6 +182,9 @@ pub struct App {
     /// `None` until the first look at the daemon.
     status: Option<Option<Status>>,
     clipboard_history: Option<Result<Vec<crate::daemon::HistoryItem>, String>>,
+    clipboard_reveal: Option<(u64, String)>,
+    clipboard_clear_confirm: bool,
+    clipboard_reveal_epoch: u64,
     autostart: Option<bool>,
     scene: Scene,
     tab: Tab,
@@ -411,6 +414,9 @@ impl App {
             rx,
             status: None,
             clipboard_history: None,
+            clipboard_reveal: None,
+            clipboard_clear_confirm: false,
+            clipboard_reveal_epoch: 0,
             autostart: None,
             update_available: None,
             update_output: None,
@@ -485,8 +491,18 @@ impl App {
         while let Ok(e) = self.rx.try_recv() {
             match e {
                 Event::ClipboardHistory(history) => {
+                    self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
+                    self.clipboard_reveal = None;
                     if let Ok(items) = &history { self.fonts.cover(&self.ctx, items.iter().map(|item| item.preview.as_str())); }
                     self.clipboard_history = Some(history);
+                }
+                Event::ClipboardReveal(id, epoch, content) => {
+                    if self.clipboard_reveal_epoch == epoch && self.tab == Tab::Files
+                        && self.clipboard_history.as_ref().and_then(|items| items.as_ref().ok()).is_some_and(|items| items.iter().any(|item| item.id == id))
+                        && let Ok(content) = content {
+                        self.fonts.cover(&self.ctx, std::iter::once(content.as_str()));
+                        self.clipboard_reveal = Some((id, content));
+                    }
                 }
                 Event::Status(s) => {
                     let s = *s;

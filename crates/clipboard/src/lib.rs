@@ -27,8 +27,10 @@ use std::sync::{Arc, Mutex, mpsc};
 use tokio::sync::oneshot;
 
 pub mod history;
+mod history_save;
 #[cfg(target_os = "linux")]
 mod history_watch;
+mod sensitivity;
 
 /// Default for the largest clipboard content we send or accept, in bytes
 /// (all formats together).
@@ -127,6 +129,7 @@ pub struct Clipboard {
     tx: mpsc::Sender<Cmd>,
     filter: Arc<Mutex<Filter>>,
     history: Arc<Mutex<history::History>>,
+    history_status: Arc<history::Status>,
     history_apps: Arc<Mutex<Vec<String>>>,
     #[cfg(target_os = "linux")]
     _watch: Option<Arc<std::os::unix::net::UnixStream>>,
@@ -136,7 +139,7 @@ enum Cmd {
     Read { skip: Vec<Digest>, explicit: bool, reply: oneshot::Sender<Result<Read>> },
     Digest { reply: oneshot::Sender<Result<Option<Digest>>> },
     #[cfg(target_os = "linux")]
-    Capture { skip_history: bool },
+    Capture { skip_history: bool, owner: u32, timestamp: u32 },
     Write { data: ClipData, origin: String, record: bool, reply: oneshot::Sender<Result<Digest>> },
 }
 
@@ -164,12 +167,18 @@ impl Clipboard {
         let filter = Arc::new(Mutex::new(Filter::default()));
         let shared = filter.clone();
         let history = Arc::new(Mutex::new(history::History::default()));
+        let history_status = history.lock().unwrap().status();
         let worker_history = history.clone();
+        let history_apps = Arc::new(Mutex::new(Vec::new()));
+        let worker_apps = history_apps.clone();
         std::thread::Builder::new()
             .name("one-mk-clipboard".into())
-            .spawn(move || Worker { backend, cache: None, filter: shared, history: worker_history, history_skip: false }.run(rx))
+            .spawn(move || Worker { backend, cache: None, filter: shared, history: worker_history, excluded: VecDeque::new(), restored: None,
+                #[cfg(target_os = "linux")]
+                restored_owner: None,
+                history_apps: worker_apps }.run(rx))
             .expect("spawn clipboard thread");
-        Self { tx, filter, history, history_apps: Arc::new(Mutex::new(Vec::new())),
+        Self { tx, filter, history, history_status, history_apps,
             #[cfg(target_os = "linux")]
             _watch: None,
         }
@@ -209,6 +218,13 @@ impl Clipboard {
     }
 
     pub fn history(&self) -> &Arc<Mutex<history::History>> { &self.history }
+    pub fn history_status(&self) -> &history::Status { &self.history_status }
+
+    pub async fn flush_history(&self) -> Result<()> {
+        let saver = self.history.lock().unwrap_or_else(|error| error.into_inner()).saver();
+        if let Some(saver) = saver { tokio::task::spawn_blocking(move || saver.flush()).await??; }
+        Ok(())
+    }
 
     pub fn history_skip_apps(&self, apps: Vec<String>) {
         *self.history_apps.lock().unwrap_or_else(|error| error.into_inner()) = apps;
@@ -235,12 +251,8 @@ pub struct Raw {
     /// `x-kde-passwordManagerHint` on Linux, `org.nspasteboard.ConcealedType`
     /// on macOS, `ExcludeClipboardContentFromMonitorProcessing` on Windows).
     ///
-    /// **Limitation:** [arboard](https://docs.rs/arboard) does not let us
-    /// read which formats or MIME types a clipboard offers (it can only set
-    /// the exclusion hints, not see them), so the system clipboard never
-    /// reports this and the skip does not trigger on a real clipboard yet.
-    /// The rest is in place: set this where a backend can learn it, and the
-    /// content is neither digested, encoded nor sent.
+    /// Native markers are queried separately from arboard. Unmarked secrets
+    /// cannot be identified reliably; app exclusion is X11-only.
     pub concealed: bool,
 }
 
@@ -411,7 +423,11 @@ struct Worker {
     cache: Option<(Digest, Arc<ClipData>)>,
     filter: Arc<Mutex<Filter>>,
     history: Arc<Mutex<history::History>>,
-    history_skip: bool,
+    excluded: VecDeque<Digest>,
+    restored: Option<Digest>,
+    #[cfg(target_os = "linux")]
+    restored_owner: Option<u32>,
+    history_apps: Arc<Mutex<Vec<String>>>,
 }
 
 impl Worker {
@@ -423,9 +439,14 @@ impl Worker {
             while let Some(cmd) = queue.pop_front() {
                 match cmd {
                     #[cfg(target_os = "linux")]
-                    Cmd::Capture { skip_history } => {
-                        self.history_skip = skip_history;
-                        let _ = self.read(&[], false);
+                    Cmd::Capture { skip_history, owner, timestamp } => {
+                        if matches!(self.backend, Backend::System(_)) && (timestamp == 0 || sensitivity::owner().ok() != Some(owner)) { continue; }
+                        if let Ok(raw) = self.backend_read() {
+                            if matches!(self.backend, Backend::System(_)) && sensitivity::owner().ok() != Some(owner) { continue; }
+                            let digest = raw.digest();
+                            if self.restored != Some(digest) && skip_history { self.exclude(digest); }
+                            let _ = self.read_raw(raw, &[], false);
+                        }
                     }
                     Cmd::Read { skip, explicit, reply } => {
                         let r = self.read(&skip, explicit);
@@ -439,7 +460,8 @@ impl Worker {
                         let saved = record.then(|| Arc::new(data.clone()));
                         let r = self.write(data);
                         if r.is_ok() && let Some(saved) = saved {
-                            self.history.lock().unwrap_or_else(|error| error.into_inner()).record(saved, self.history_skip, &origin);
+                            let digest = history::digest(&saved);
+                            self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(saved, digest, false, &origin);
                         }
                         let _ = reply.send(r);
                     }
@@ -454,7 +476,27 @@ impl Worker {
 
     fn backend_read(&mut self) -> Result<Raw> {
         let filter = self.filter();
-        let r = self.backend.read(&filter).map(Raw::prefer_text);
+        #[cfg(target_os = "linux")]
+        let owner = if matches!(self.backend, Backend::System(_)) && std::env::var_os("WAYLAND_DISPLAY").is_none() { Some(sensitivity::owner()?) } else { None };
+        #[cfg(any(windows, target_os = "macos"))]
+        let generation = sensitivity::generation();
+        let concealed = if matches!(self.backend, Backend::System(_)) {
+            let apps = self.history_apps.lock().unwrap_or_else(|error| error.into_inner());
+            #[cfg(target_os = "linux")]
+            let skip_apps = if owner.is_some() && owner == self.restored_owner { &[][..] } else { apps.as_slice() };
+            #[cfg(not(target_os = "linux"))]
+            let skip_apps = apps.as_slice();
+            sensitivity::concealed(skip_apps)?
+        } else { false };
+        let r = self.backend.read(&filter).map(|raw| {
+            let mut raw = raw.prefer_text();
+            raw.concealed |= concealed;
+            raw
+        });
+        #[cfg(target_os = "linux")]
+        if let Some(owner) = owner && sensitivity::owner()? != owner { bail!("clipboard owner changed during read; retry"); }
+        #[cfg(any(windows, target_os = "macos"))]
+        if matches!(self.backend, Backend::System(_)) && sensitivity::generation() != generation { bail!("clipboard changed during sensitivity check; retry"); }
         if r.is_err()
             && let Backend::System(cb) = &mut self.backend
         {
@@ -464,24 +506,40 @@ impl Worker {
     }
 
     fn read(&mut self, skip: &[Digest], explicit: bool) -> Result<Read> {
+        let raw = self.backend_read()?;
+        self.read_raw(raw, skip, explicit)
+    }
+
+    fn exclude(&mut self, digest: Digest) {
+        if !self.excluded.contains(&digest) {
+            if self.excluded.len() == 32 { self.excluded.pop_front(); }
+            self.excluded.push_back(digest);
+        }
+        let cached = self.cache.as_ref().filter(|(cached, _)| *cached == digest).map(|(_, data)| history::digest(data));
+        let mut history = self.history.lock().unwrap_or_else(|error| error.into_inner());
+        for entry in history.list() {
+            if cached == Some(entry.digest) { history.delete(entry.id); }
+        }
+    }
+
+    fn read_raw(&mut self, raw: Raw, skip: &[Digest], explicit: bool) -> Result<Read> {
         let max = self.filter().max_bytes();
         let skip_concealed = self.filter().skip_concealed;
-        let raw = self.backend_read()?;
         if raw.is_empty() {
             return Ok(Read::Empty);
         }
-        let concealed = raw.concealed || self.history_skip;
         let digest = raw.digest();
+        if raw.concealed { self.exclude(digest); }
+        let concealed = raw.concealed || self.excluded.contains(&digest);
         if skip.contains(&digest) {
             return Ok(Read::Unchanged(digest));
         }
-        if raw.concealed && skip_concealed && !explicit {
+        if concealed && skip_concealed && !explicit {
             return Ok(Read::Concealed(digest));
         }
         if let Some((d, data)) = &self.cache
             && *d == digest
         {
-            if data.len() <= max { self.history.lock().unwrap_or_else(|error| error.into_inner()).record(data.clone(), concealed, "this computer"); }
             return Ok(sized(digest, data.clone(), max));
         }
         let text_len = raw.text.as_ref().map_or(0, String::len) + raw.html.as_ref().map_or(0, String::len);
@@ -491,12 +549,16 @@ impl Worker {
         }
         let png = raw.image.as_ref().map(encode_png).transpose()?;
         let data = Arc::new(ClipData { text: raw.text, html: raw.html, png });
-        if data.len() <= max { self.history.lock().unwrap_or_else(|error| error.into_inner()).record(data.clone(), concealed, "this computer"); }
+        if data.len() <= max {
+            let history_digest = history::digest(&data);
+            self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(data.clone(), history_digest, concealed, "this computer");
+        }
         self.cache = Some((digest, data.clone()));
         Ok(sized(digest, data, max))
     }
 
     fn write(&mut self, data: ClipData) -> Result<Digest> {
+        let saved = Arc::new(data.clone());
         let image = data.png.as_deref().map(decode_png).transpose()?;
         let raw = Raw { text: data.text, html: data.html, image, concealed: false };
         if let Err(e) = self.backend.write(raw) {
@@ -506,7 +568,12 @@ impl Worker {
             return Err(e);
         }
         let back = self.backend_read()?;
-        Ok(back.digest())
+        let digest = back.digest();
+        self.cache = Some((digest, saved));
+        self.restored = Some(digest);
+        #[cfg(target_os = "linux")]
+        if matches!(self.backend, Backend::System(_)) { self.restored_owner = sensitivity::owner().ok(); }
+        Ok(digest)
     }
 }
 
@@ -555,6 +622,54 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn excluded_copy_is_concealed_but_not_sticky_for_peer_writes() {
+        let (clipboard, memory) = Clipboard::memory();
+        memory.set_text("excluded secret");
+        clipboard.tx.send(Cmd::Capture { skip_history: true, owner: 0, timestamp: 0 }).unwrap();
+        assert!(matches!(clipboard.read(vec![]).await.unwrap(), Read::Concealed(_)));
+        assert!(clipboard.history().lock().unwrap().is_empty());
+        clipboard.write_from(ClipData { text: Some("peer copy".into()), ..Default::default() }, "peer".into(), true).await.unwrap();
+        assert_eq!(clipboard.history().lock().unwrap().len(), 1);
+        memory.set_text("unrelated");
+        assert!(matches!(clipboard.read(vec![]).await.unwrap(), Read::Changed { .. }));
+        assert_eq!(clipboard.history().lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn restored_item_survives_a_later_read_without_duplicate_or_new_origin() {
+        let (clipboard, _) = Clipboard::memory();
+        let data = ClipData { text: Some("original".into()), ..Default::default() };
+        clipboard.write_from(data.clone(), "peer".into(), true).await.unwrap();
+        clipboard.write(ClipData { text: Some("other".into()), ..Default::default() }).await.unwrap();
+        clipboard.write_from(data, "peer".into(), false).await.unwrap();
+        clipboard.read(vec![]).await.unwrap();
+        let history = clipboard.history().lock().unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.get(1).unwrap().origin, "peer");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires an explicitly private X11 display"]
+    async fn real_x11_restore_does_not_duplicate_after_selection_notifications() {
+        assert_eq!(std::env::var("ONE_MK_PRIVATE_X11").as_deref(), Ok("1"));
+        assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
+        let clipboard = Clipboard::system();
+        clipboard.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let first = ClipData { text: Some("real X11 original".into()), ..Default::default() };
+        clipboard.write_from(first.clone(), "peer".into(), true).await.unwrap();
+        clipboard.write(ClipData { text: Some("real X11 second".into()), ..Default::default() }).await.unwrap();
+        clipboard.write_from(first, "peer".into(), false).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        clipboard.read(vec![]).await.unwrap();
+        let history = clipboard.history().lock().unwrap();
+        assert_eq!(history.len(), 2, "own XFixes selection events must not re-record restores");
+        assert_eq!(history.get(1).unwrap().origin, "peer");
+    }
 
     #[tokio::test]
     async fn history_never_records_concealed_even_for_explicit_send_or_skip_off() {
@@ -705,7 +820,7 @@ mod tests {
         assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
         cb.set_filter(Filter::default());
         mem.set_concealed(false);
-        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)), "a known excluded digest stays private even when the source drops its hint");
     }
 
     #[tokio::test]

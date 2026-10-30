@@ -94,15 +94,24 @@ impl HotkeySettings {
         if let Some(j) = chord_or_none::<JumpChords>(&self.jump)? {
             list.extend((1..=9).map(|n| (Action::Jump(n), j.chord(n))));
         }
-        for (s, a) in [(&self.cycle, Action::Cycle), (&self.lock_pointer, Action::LockPointer), (&self.home, Action::Home), (&self.fetch_clipboard, Action::FetchClipboard)] {
+        for (s, a) in [(&self.cycle, Action::Cycle), (&self.lock_pointer, Action::LockPointer), (&self.home, Action::Home)] {
             if let Some(c) = chord_or_none::<Chord>(s)? {
                 list.push((a, c));
             }
         }
-        if let Some(c) = chord_or_none::<Chord>(&self.broadcast)?
-            && !self.broadcast_yields(&list, c)
-        {
-            list.push((Action::Broadcast, c));
+        let additions = [
+            (&self.broadcast, Action::Broadcast, [default_broadcast(false), default_broadcast(true)]),
+            (&self.fetch_clipboard, Action::FetchClipboard, ["ctrl+alt+v", "ctrl+alt+shift+v"]),
+        ];
+        let mut update_defaults = Vec::new();
+        for (setting, action, defaults) in additions {
+            if let Some(chord) = chord_or_none::<Chord>(setting)? {
+                if defaults.iter().any(|default| default.parse::<Chord>().ok() == Some(chord)) { update_defaults.push((action, chord, defaults)); }
+                else { list.push((action, chord)); }
+            }
+        }
+        for (action, chord, defaults) in update_defaults {
+            if !Self::update_default_yields(&list, chord, defaults) { list.push((action, chord)); }
         }
         Bindings::new(list)
     }
@@ -111,9 +120,8 @@ impl HotkeySettings {
     /// gives way to a chord the user already gave something else (a file
     /// from before it, or a shortcut changed since), instead of making every
     /// shortcut unusable. A chord chosen for broadcast clashes as usual.
-    fn broadcast_yields(&self, others: &[(Action, Chord)], c: Chord) -> bool {
-        let default = default_broadcast(cfg!(windows)).parse::<Chord>().ok();
-        default == Some(c) && others.iter().any(|(_, d)| *d == c)
+    fn update_default_yields(others: &[(Action, Chord)], chord: Chord, defaults: [&str; 2]) -> bool {
+        defaults.iter().any(|default| default.parse::<Chord>().ok() == Some(chord)) && others.iter().any(|(_, existing)| *existing == chord)
     }
 
     /// The broadcast shortcut's default, if it gave way to another (see
@@ -274,6 +282,9 @@ pub fn describe(s: &HotkeySettings, order: &[Numbered]) -> String {
     if let Some(c) = s.broadcast_gave_way() {
         rows.push((String::new(), format!("Broadcast has no shortcut: {} does something else here (`one-mk hotkeys --broadcast CHORD` sets one).", c.label())));
     }
+    if let Ok(Some(chord)) = chord_or_none::<Chord>(&s.fetch_clipboard)
+        && s.enabled && s.bindings().is_ok_and(|bindings| bindings.action(chord).is_some_and(|action| action != Action::FetchClipboard))
+    { rows.push((String::new(), format!("Fetch has no shortcut: {} does something else here (`one-mk hotkeys --fetch-clipboard CHORD` sets one).", chord.label()))); }
     let width = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     let mut out = "Keyboard shortcuts:\n".to_owned();
     for (k, what) in rows {
@@ -310,6 +321,13 @@ pub async fn hotkeys(dir: &Path, args: HotkeyArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn custom_fetch_wins_over_broadcast_update_default() {
+        for chord in [default_broadcast(false), default_broadcast(true)] {
+            let settings = HotkeySettings { broadcast: chord.into(), fetch_clipboard: chord.into(), ..Default::default() };
+            assert_eq!(settings.bindings().unwrap().action(chord.parse().unwrap()), Some(Action::FetchClipboard));
+        }
+    }
     use super::*;
 
     fn order() -> Vec<Numbered> {
@@ -403,6 +421,17 @@ mod tests {
         let mut u = HotkeySettings::default();
         assert!(HotkeyArgs { broadcast: Some("ctrl+alt+p".into()), ..HotkeyArgs::default() }.apply(&mut u).is_err());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fetch_update_default_yields_to_existing_home_chord() {
+        for default in ["ctrl+alt+v", "ctrl+alt+shift+v"] {
+            let settings = HotkeySettings { home: default.into(), fetch_clipboard: default.into(), ..HotkeySettings::default() };
+            let bindings = settings.bindings().unwrap();
+            assert_eq!(bindings.action(default.parse().unwrap()), Some(Action::Home));
+            assert_eq!(bindings.action(settings.cycle.parse().unwrap()), Some(Action::Cycle));
+            assert!(describe(&settings, &[]).contains("Fetch has no shortcut"));
+        }
     }
 
     /// Broadcast is Ctrl+Alt+B, plus Shift on Windows (AltGr+B types `{`

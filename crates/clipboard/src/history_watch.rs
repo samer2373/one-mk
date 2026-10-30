@@ -10,7 +10,7 @@ pub(super) fn start(tx: mpsc::Sender<Cmd>, history: Arc<Mutex<History>>, apps: A
     let report = history.clone();
     let spawned = std::thread::Builder::new().name("one-mk-history-events".into()).spawn(move || {
         if let Err(error) = watch(wake, tx, history, apps) {
-            report.lock().unwrap_or_else(|error| error.into_inner()).monitoring_unavailable = true;
+            report.lock().unwrap_or_else(|error| error.into_inner()).status().monitoring_unavailable.store(true, std::sync::atomic::Ordering::Relaxed);
             tracing::debug!("Clipboard history change notifications unavailable: {error}");
         }
     });
@@ -33,14 +33,16 @@ fn watch(wake: UnixStream, tx: mpsc::Sender<Cmd>, history: Arc<Mutex<History>>, 
         libc::pollfd { fd: wake.as_raw_fd(), events: libc::POLLIN, revents: 0 },
     ];
     loop {
-        let mut changed = false;
+        let mut changed = None;
         while let Some(event) = connection.poll_for_event()? {
-            changed |= matches!(event, Event::XfixesSelectionNotify(_));
+            if let Event::XfixesSelectionNotify(event) = event { changed = Some(event); }
         }
-        if changed && !history.lock().unwrap_or_else(|error| error.into_inner()).disabled() {
+        if let Some(event) = changed {
             let skip_apps = apps.lock().unwrap_or_else(|error| error.into_inner()).clone();
+            if connection.get_selection_owner(clipboard)?.reply()?.owner != event.owner { continue; }
             let skip = focused_apps(&connection, root, active).iter().any(|name| skip_apps.iter().any(|app| name.eq_ignore_ascii_case(app)));
-            if tx.send(Cmd::Capture { skip_history: skip }).is_err() { return Ok(()); }
+            if history.lock().unwrap_or_else(|error| error.into_inner()).disabled() && !skip { continue; }
+            if tx.send(Cmd::Capture { skip_history: skip, owner: event.owner, timestamp: event.selection_timestamp }).is_err() { return Ok(()); }
         }
         let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as libc::nfds_t, -1) };
         if ready < 0 {
@@ -53,7 +55,7 @@ fn watch(wake: UnixStream, tx: mpsc::Sender<Cmd>, history: Arc<Mutex<History>>, 
     }
 }
 
-fn focused_apps(connection: &x11rb::rust_connection::RustConnection, root: u32, active: u32) -> Vec<String> {
+pub(super) fn focused_apps(connection: &x11rb::rust_connection::RustConnection, root: u32, active: u32) -> Vec<String> {
     let query = || -> anyhow::Result<Vec<String>> {
         let reply = connection.get_property(false, root, active, AtomEnum::WINDOW, 0, 1)?.reply()?;
         let Some(window) = reply.value32().and_then(|mut values| values.next()) else { return Ok(Vec::new()); };

@@ -2334,13 +2334,13 @@ impl App {
             transfers: self.services.inbox.transfers().snapshot(),
             hotkeys,
             hotkeys_detail,
-            clipboard_history: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history().lock().unwrap_or_else(|error| error.into_inner()).len()),
-            clipboard_history_revision: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history().lock().unwrap_or_else(|error| error.into_inner()).revision()),
+            clipboard_history: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history_status().len.load(std::sync::atomic::Ordering::Relaxed)),
+            clipboard_history_revision: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history_status().revision.load(std::sync::atomic::Ordering::Relaxed)),
             clipboard_history_note: self.services.clip.as_ref().map_or_else(|| "Clipboard sharing and history are off (--no-clipboard).".into(), |clip| {
-                let history = clip.clipboard().history().lock().unwrap_or_else(|error| error.into_inner());
-                history.error.clone().unwrap_or_else(|| {
-                    let retention = if history.disabled() { "Clipboard history is off." } else if self.settings.clipboard.history_persist { "Clipboard history is saved as unencrypted plain text on disk." } else { "Clipboard history is kept in memory only." };
-                    let coverage = if history.monitoring_unavailable { "Local copy notifications are unavailable; clipboard access still records items. Check X11 access and restart one-mk. Native Wayland monitoring is untested." } else if cfg!(target_os = "linux") { "Local change monitoring uses X11; native Wayland monitoring is untested." } else if cfg!(windows) { "Local changes are captured during clipboard access; native Windows monitoring is untested. Fetch results print to stderr; Windows toast notifications are not implemented." } else { "Local changes are captured during clipboard access; native macOS monitoring is untested." };
+                let history = clip.clipboard().history_status();
+                history.note().unwrap_or_else(|| {
+                    let retention = if history.disabled.load(std::sync::atomic::Ordering::Relaxed) { "Clipboard history is off by default for privacy, including upgrades. Enable it explicitly to retain copies." } else if self.settings.clipboard.history_persist { "Clipboard history is saved as unencrypted plain text on disk." } else { "Clipboard history is kept in memory only." };
+                    let coverage = if history.monitoring_unavailable.load(std::sync::atomic::Ordering::Relaxed) { "Local copy notifications are unavailable. X11 app skipping cannot identify Wayland-native windows; unmarked secrets cannot be detected." } else if cfg!(target_os = "linux") { "Native X11 sensitivity markers are checked; app skipping cannot identify Wayland-native windows. Unmarked secrets cannot be detected." } else if cfg!(windows) { "Native Windows sensitivity markers are compile-checked, not runtime-tested; app skipping is unavailable. Unmarked secrets cannot be detected." } else { "Native macOS sensitivity markers are compile-checked, not runtime-tested; app skipping is unavailable. Unmarked secrets cannot be detected." };
                     format!("{retention} {coverage}")
                 })
             }),
@@ -3195,6 +3195,48 @@ mod tests {
         duo.enter_b().await;
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(mb.writes(), 1);
+        duo.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "256 MiB on-disk save and real loopback input-forwarding measurement"]
+    async fn input_forwarding_during_maximum_history_save() {
+        use one_mk_clipboard::{ClipData, Clipboard, history};
+        let (clipboard, _) = Clipboard::memory();
+        let (other, _) = Clipboard::memory();
+        let mut duo = Duo::start("history-save-latency", Some((clipboard.clone(), other))).await;
+        duo.enter_b().await;
+        let directory = tempfile::tempdir_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target")).unwrap();
+        let path = directory.path().join("clipboard-history.bin");
+        clipboard.history().lock().unwrap().configure(20, 256 << 20, 256 << 20, Some(path.clone()));
+        let data = Arc::new(ClipData { text: Some("x".repeat(256 << 20)), ..Default::default() });
+        let digest = history::digest(&data);
+        let started = std::time::Instant::now();
+        clipboard.history().lock().unwrap().record_hashed(data, digest, false, "benchmark");
+        let snapshot = started.elapsed();
+        let flushing = tokio::spawn(async move { clipboard.flush_history().await.unwrap(); });
+        let mut samples = Vec::new();
+        let mut during_write = 0;
+        while !flushing.is_finished() || samples.len() < 100 {
+            let writing = std::fs::read_dir(directory.path()).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".clipboard-history-"));
+            let start = std::time::Instant::now();
+            duo.ha.events.send(Event::Key { code: 30, down: true, device: None }).unwrap();
+            assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 30, down: true });
+            duo.ha.events.send(Event::Key { code: 30, down: false, device: None }).unwrap();
+            assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 30, down: false });
+            let status = control::request(&duo.da, Request::Status).await.unwrap().unwrap();
+            assert_eq!(Status::decode(&status).unwrap().clipboard_history, 1);
+            samples.push(start.elapsed());
+            during_write += usize::from(writing);
+            assert!(samples.len() < 100000, "history save never finished");
+        }
+        flushing.await.unwrap();
+        assert!(during_write > 0, "measurement did not overlap an actual file write");
+        assert!(std::fs::metadata(path).unwrap().len() > 256 << 20);
+        samples.sort();
+        eprintln!("256 MiB save: snapshot={snapshot:?}, samples={}, during_write={during_write}, p50={:?}, p99={:?}, maximum={:?}", samples.len(), samples[samples.len()/2], samples[samples.len()*99/100], samples.last().unwrap());
+        assert!(snapshot < Duration::from_millis(50), "snapshot unexpectedly blocked");
+        assert!(*samples.last().unwrap() < Duration::from_millis(250), "input/status stalled during save");
         duo.stop().await;
     }
 
