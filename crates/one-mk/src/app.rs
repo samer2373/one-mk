@@ -600,6 +600,7 @@ struct App {
 
 pub async fn run(dir: PathBuf, opts: Options) -> Result<()> {
     let backend = one_mk_input::open(opts.backend, dir.clone()).await?;
+    crate::update::startup(dir.clone());
     serve(dir, opts, backend, shutdown_signal()).await
 }
 

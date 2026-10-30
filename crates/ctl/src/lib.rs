@@ -8,6 +8,7 @@ pub mod install;
 pub mod integrate;
 pub mod proc;
 pub mod status;
+pub mod update_logic;
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;

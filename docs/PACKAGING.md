@@ -39,6 +39,23 @@ LTO can run out of it; for a local check build with
 `CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`, or
 check a debug build: `BIN_DIR=target/debug sh scripts/check-packaging.sh`.
 
+## Signed update assets
+
+The build job also stages `one-mk-<target>.bin` (Unix) or `.exe` (Windows)
+for portable CLI/daemon replacement without unpacking an archive. The publish
+job generates `update-manifest.json`, signs it with Ed25519 when
+`ONE_MK_UPDATE_SIGNING_KEY` is configured, verifies the signature against the
+compiled public key and includes manifest/signature in SHA256SUMS before
+uploading to the draft. A published release cannot be overwritten by a rerun.
+Unsigned publication is explicitly reported and refused by the client.
+Owner key setup, rotation and the installation safety rules are in
+[UPDATES.md](UPDATES.md). `bash scripts/check-updates.sh` tests this pipeline
+with local stand-in assets and a stub `gh`; it publishes nothing.
+
+The companion app/tray binaries are not replaced separately: reinstall the
+complete release to update them. Windows/macOS self-replacement is untested on
+real operating systems, irrespective of cross-target compilation results.
+
 ## One version
 
 The version is `[workspace.package] version` in the root `Cargo.toml`; every

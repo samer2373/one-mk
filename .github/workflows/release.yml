@@ -37,9 +37,11 @@ jobs:
           name=one-mk-${{ matrix.target }}
           mkdir "$name"
           if [ "${{ runner.os }}" = Windows ]; then
+            cp "$d/one-mk.exe" "one-mk-${{ matrix.target }}.exe"
             cp $d/one-mk.exe $d/one-mk-tray.exe $d/one-mk-app.exe "$name"/
             7z a "$name.zip" "$name" >/dev/null
           else
+            cp "$d/one-mk" "one-mk-${{ matrix.target }}.bin"
             cp $d/one-mk $d/one-mk-tray $d/one-mk-app "$name"/
             tar czf "$name.tar.gz" "$name"
           fi
@@ -133,6 +135,14 @@ jobs:
         run: |
           mkdir assets
           cp dist/one-mk-* dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb assets/
+      - name: Generate and sign update manifest
+        env:
+          ONE_MK_UPDATE_SIGNING_KEY: ${{ secrets.ONE_MK_UPDATE_SIGNING_KEY }}
+        run: |
+          bash scripts/make-update-manifest.sh assets "$GITHUB_RUN_NUMBER"
+          bash scripts/sign-update-manifest.sh assets
+      - name: Checksum all staged assets including the signed manifest
+        run: |
           cd assets && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - name: Notes
         run: |
@@ -156,7 +166,7 @@ jobs:
           For packagers: `one-mk.rb` (Homebrew cask), `one-mk-source.rb` (Homebrew formula, builds from source) and `one-mk-flatpak-sources.tar.gz` (Flatpak manifest and the files it names) are attached too.
           MD
       # Published only once every asset is up: a draft first (a re-run
-      # finds it, or the release, and uploads over it), then every file,
+      # can replace a draft, never a published release), then every file,
       # checked against what the release lists, then made public.
       - name: Publish
         env:
@@ -167,6 +177,10 @@ jobs:
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
               --title "$tag" --notes-file notes.md --generate-notes
+          fi
+          if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != true ]; then
+            echo 'Refusing to overwrite a published release. Publish a new version with a higher sequence.' >&2
+            exit 1
           fi
           gh release upload "$tag" assets/* --repo "$GITHUB_REPOSITORY" --clobber
           export LC_ALL=C   # one collation for sort and comm
