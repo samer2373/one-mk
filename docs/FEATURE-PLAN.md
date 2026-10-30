@@ -404,6 +404,31 @@ the PC, with one mouse), plus a keyboard mapper for any key.
 
 ## Wave 5 (chosen by the owner from a checklist, 2026-10-30)
 
+**Quality bar (owner, 2026-10-30): enterprise level, polished, no known issues.**
+The owner found very major bugs and unpolished work in earlier features, so
+"tests pass" is not the bar. A feature is done only when ALL of these hold:
+
+1. Built, then run end to end through the real binaries (two real daemons, the
+   real CLI, window screenshots), including failure paths, restart, `kill -9`
+   mid-operation, sleep/disconnect, and upgrading from settings files written
+   by the previous build.
+2. Commands: clear `--help`, actionable errors, right exit codes, no panics.
+3. UI: every state (empty, error, offline, long names, narrow, HiDPI),
+   keyboard, reduced motion, contrast; screenshots looked at and fixed.
+4. Idle CPU and memory measured with the feature on and off; no timer unless
+   documented.
+5. No stuck key, button, pointer, window, process or temp file after any
+   failure; tests fail when the fix is removed.
+6. Property or fuzz tests for parsers and state machines, including hostile
+   input.
+7. README, `--help`, troubleshooting entry and a `doctor` check.
+8. Anything not run on a real OS (Windows, macOS, wlroots, Bluetooth hardware)
+   is labelled untested in docs, `status`, `doctor` and the report.
+9. The author self-reviews as a hostile reviewer; the OTHER model reviews;
+   then an independent end-to-end QA pass written from a user's point of view
+   finds nothing left; the report includes a manual test script for real
+   hardware and the known limitations.
+
 Branch `wave5` (worktree `.claude/worktrees/wave5`), from `main` at d7b8c6b
 (which includes origin's release 0.1.12). Same rules as before: failing-first
 tests, cross-review by the other model, full validation before merging.
