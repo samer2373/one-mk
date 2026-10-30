@@ -22,6 +22,13 @@ UAC opt-in carries a local-malware elevation risk. No service ships yet; see
 
 ## Quick start
 
+**Live wallpaper is not available.** M1 stopped at a compositor protocol-warning
+gate; no importer, peer control or production wallpaper CLI ships. The separate
+developer-only `one-mk-wall` probe defaults off, is not linked into or launched
+by the daemon, and reports unavailable via `status` / `doctor` (doctor exits 3).
+See [the stop report and troubleshooting](docs/spikes/wallpaper-m1-stop.md);
+do not run the risk probe on your real desktop.
+
 Get it first. Every release has a file for each system (the
 [latest release](https://github.com/samer2373/one-mk/releases/latest)):
 
