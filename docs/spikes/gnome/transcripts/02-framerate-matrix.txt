@@ -1,0 +1,5 @@
+A: source hidden + clone painted             client fps 59.8 (min 58.0 over 9 s)   shell CPU  10.2%  client CPU  15.1%  damage  59.6/s
+B: source opacity 0 + clone                  client fps 59.1 (min 56.0 over 9 s)   shell CPU  13.0%  client CPU  18.8%  damage  59.3/s
+C: source visible at bottom + clone          client fps 59.9 (min 59.0 over 10 s)  shell CPU   6.8%  client CPU  13.1%  damage  59.8/s
+D: source hidden, NO clone (control)         client fps 0.1 (min 0.0 over 9 s)     shell CPU   0.2%  client CPU   0.1%  damage   0.1/s
+A2: source hidden + clone again              client fps 60.0 (min 60.0 over 9 s)   shell CPU   4.6%  client CPU   9.0%  damage  59.9/s

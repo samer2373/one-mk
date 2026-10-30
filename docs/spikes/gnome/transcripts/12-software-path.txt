@@ -1,0 +1,4 @@
+## step 2c: software frame path (file read + St.ImageContent.set_bytes) (2026-10-30T19:06:14+03:00)
+baseline (no renderer, static wallpaper): shell CPU 0.0%
+software path 1920x1080 RGBA @ 15 fps requested: shell CPU 20.0% (one core = 100%); [frames, mean us per frame in Shell main thread] = "[195,14661]"
+software path 1920x1080 RGBA @ 30 fps requested: shell CPU 36.5% (one core = 100%); [frames, mean us per frame in Shell main thread] = "[391,10265]"

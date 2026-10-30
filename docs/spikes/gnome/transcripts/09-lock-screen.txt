@@ -1,0 +1,29 @@
+## lock screen, run 1: spike extension WITHOUT unlock-dialog session mode (2026-10-30T19:02:14+03:00)
+(true,)
+2344726
+before lock                                  client fps 60.0 (min 60.0 over 2 s)   shell CPU   3.6%  client CPU   5.8%  damage  59.9/s
+"locking"
+"{\"locked\":true,\"mode\":\"unlock-dialog\",\"spikeState\":2,\"layerVisible\":null,\"hints\":null}"
+renderer 2344726 alive? no
+"unlocking"
+"{\"locked\":false,\"mode\":\"user\",\"spikeState\":1,\"layerVisible\":true,\"hints\":[]}"
+"{\"oneMkActors\":[\"one-mk-wallpaper-layer\"],\"clonesOnStage\":[],\"extState\":1,\"bridge\":true,\"windows\":[]}"
+## lock screen, run 2: spike extension WITH session-modes [user, unlock-dialog] (variant made only in the isolated copy)
+2347750
+before lock                                  client fps 59.5 (min 59.0 over 2 s)   shell CPU   6.4%  client CPU  10.9%  damage  59.7/s
+"locking"
+"{\"locked\":true,\"mode\":\"unlock-dialog\",\"spikeState\":2,\"layerVisible\":null,\"hints\":null}"
+locked (extension kept, layer hidden, renderer told to pause) client fps n/a                        shell CPU   1.2%  client CPU   0.0%  damage   0.0/s
+"unlocking"
+"{\"locked\":false,\"mode\":\"user\",\"spikeState\":1,\"layerVisible\":true,\"hints\":[]}"
+after unlock                                 client fps n/a                        shell CPU   0.0%  client CPU   0.0%  damage   0.0/s
+## lock screen, run 2 (retry): spike extension WITH session-modes [user, unlock-dialog]
+"[\"user\",\"unlock-dialog\"]"
+2354393
+before lock                                  client fps 59.5 (min 59.0 over 2 s)   shell CPU   5.8%  client CPU   9.3%  damage  59.5/s
+"locking"
+"{\"locked\":true,\"mode\":\"unlock-dialog\",\"spikeState\":1,\"layerVisible\":true,\"hints\":[\"789788765 true locked\"]}"
+locked (extension kept)                      client fps n/a                        shell CPU   1.4%  client CPU   0.0%  damage   0.0/s
+"unlocking"
+"{\"locked\":false,\"mode\":\"user\",\"spikeState\":1,\"layerVisible\":true,\"hints\":[\"789788765 true locked\",\"789797512 false none\"]}"
+after unlock                                 client fps n/a                        shell CPU   0.2%  client CPU   0.0%  damage   0.0/s

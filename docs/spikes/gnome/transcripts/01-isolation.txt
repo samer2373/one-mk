@@ -1,0 +1,57 @@
+## isolation check 2026-10-30T18:40:34+03:00
+isolated DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-nwZeE6F57x,guid=ba77f0fdacf07390279dceaa6ae4ba65
+isolated DBUS_SYSTEM_BUS_ADDRESS=unix:path=/tmp/omk-gs-spike/run/system_bus
+isolated XDG_RUNTIME_DIR=/tmp/omk-gs-spike/run WAYLAND_DISPLAY=spike-wl-0 HOME=/tmp/omk-gs-spike/home
+--- names on isolated session bus:
+(['org.freedesktop.DBus'
+ 'org.freedesktop.Notifications'
+ 'org.freedesktop.portal.Desktop'
+ 'org.freedesktop.background.Monitor'
+ 'org.gnome.Mutter.DisplayConfig'
+ 'org.gnome.Mutter.IdleMonitor'
+ 'org.gnome.evolution.dataserver.AddressBook10'
+ 'org.gnome.Shell.Brightness'
+ 'org.gnome.Settings.GlobalShortcutsProvider'
+ 'org.gnome.Mutter.ColorManager'
+ 'org.gnome.Mutter.ScreenCast'
+ 'org.gnome.Mutter.ServiceChannel'
+ 'org.freedesktop.impl.portal.desktop.gtk'
+ 'org.gnome.evolution.dataserver.Sources5'
+ 'org.gnome.Mutter.RemoteDesktop'
+ 'org.gnome.Shell.AudioDeviceSelection'
+ 'org.gnome.Identity'
+ 'org.gnome.keyring'
+ 'org.gnome.Shell.CalendarServer'
+ 'org.gnome.Shell'
+ 'org.gnome.Shell.Wacom.PadOsd'
+ 'org.gnome.Shell.Screenshot'
+ 'org.gnome.Mutter.InputCapture'
+ 'org.gtk.MountOperationHandler'
+ 'org.gnome.Shell.Introspect'
+ 'org.gnome.evolution.dataserver.Calendar8'
+ 'org.gnome.Mutter.InputMapping'
+ 'org.gtk.Notifications'
+ 'org.gnome.OnlineAccounts'
+ 'org.freedesktop.portal.IBus'
+ 'org.freedesktop.impl.portal.desktop.gnome'
+ 'org.gnome.Shell.Notifications'
+ 'org.freedesktop.impl.portal.PermissionStore'
+ 'org.gnome.keyring.SystemPrompter'
+ 'org.freedesktop.secrets'
+ 'org.freedesktop.IBus.Panel.Extension.Gtk3'
+ 'org.freedesktop.a11y.Manager'
+ 'org.freedesktop.IBus'
+)
+--- names on isolated system bus:
+(['org.freedesktop.DBus', ':1.8', ':1.9', ':1.10', ':1.11', ':1.12', ':1.0', ':1.13', ':1.1', ':1.15', ':1.16', ':1.3', ':1.6'],)
+--- live session bus has (for comparison, count of well-known names):
+99
+--- isolated shell pid vs live:
+52867 /usr/bin/gnome-shell --mode=ubuntu
+2209627 gnome-shell --wayland --headless --no-x11 --wayland-display spike-wl-0 --virtual-monitor 1920x1080
+org.freedesktop.systemd1 on live: (true,)
+org.freedesktop.systemd1 on isolated: (false,)
+org.gnome.SettingsDaemon.Power on live: (true,)
+org.gnome.SettingsDaemon.Power on isolated: (false,)
+org.gnome.SessionManager on live: (true,)
+org.gnome.SessionManager on isolated: (false,)

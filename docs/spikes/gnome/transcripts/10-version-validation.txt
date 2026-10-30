@@ -1,0 +1,16 @@
+## version validation (2026-10-30T19:05:08+03:00)
+isolated disable-extension-version-validation: false (memory backend default; never changed)
+(true,)
+ 'shell-version': <[<'49'>]>
+ 'state': <4.0>
+ 'error': <''>
+EVAL FAILED: SyntaxError: import declarations may only appear at top level of a module
+ 'state': <1.0>
+ 'error': <''>
+409:    _isOutOfDate(extension) {
+420:        if (this._checkVersion && this._isOutOfDate(extension)) {
+421:            extension.state = ExtensionState.OUT_OF_DATE;
+16:    ACTIVE: 1,
+17:    INACTIVE: 2,
+18:    ERROR: 3,
+19:    OUT_OF_DATE: 4,

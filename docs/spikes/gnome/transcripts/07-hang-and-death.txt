@@ -1,0 +1,13 @@
+## renderer hang (SIGSTOP) and death (SIGKILL) (2026-10-30T18:58:04+03:00)
+"2"
+SIGSTOP sent 18:58:04.114661090
+"{\"title\":\"one-mk wallpaper spike renderer\",\"frame\":[0,0,3840,1080],\"buffer\":[0,0,3840,1080],\"actorVisible\":false,\"opacity\":255,\"mapped\":false,\"damage\":2839,\"focus\":\"Desktop Icons 1\",\"type\":1,\"paused\":false,\"reason\":\"none\",\"stale\":true,\"events\":[\"789407708 renderer dropped: replaced by new renderer window\",\"789407708 adopted window \\\"null\\\" pid=2318322\",\"789416411 monitors-changed\",\"789416423 renderer dropped: replaced by new renderer window\",\"789416424 adopted window \\\"null\\\" pid=2318322\",\"789449171 renderer stale for 3068 ms: static fallback\"],\"hints\":[]}"
+"0"
+SIGCONT sent 18:58:10.723953180
+"{\"title\":\"one-mk wallpaper spike renderer\",\"frame\":[0,0,3840,1080],\"buffer\":[0,0,3840,1080],\"actorVisible\":false,\"opacity\":255,\"mapped\":false,\"damage\":3564,\"focus\":\"Desktop Icons 1\",\"type\":1,\"paused\":false,\"reason\":\"none\",\"stale\":false,\"events\":[\"789407708 adopted window \\\"null\\\" pid=2318322\",\"789416411 monitors-changed\",\"789416423 renderer dropped: replaced by new renderer window\",\"789416424 adopted window \\\"null\\\" pid=2318322\",\"789449171 renderer stale for 3068 ms: static fallback\",\"789452727 renderer fresh again\"],\"hints\":[]}"
+after SIGCONT + probe                        client fps 60.0 (min 60.0 over 3 s)   shell CPU   5.1%  client CPU  10.3%  damage  60.0/s
+SIGKILL sent 18:58:27.007351009
+"no renderer; events=[\"789416423 renderer dropped: replaced by new renderer window\",\"789416424 adopted window \\\"null\\\" pid=2318322\",\"789449171 renderer stale for 3068 ms: static fallback\",\"789452727 renderer fresh again\",\"789469017 renderer dropped: unmanaged\",\"789469059 renderer exited pid=2318322\"]"
+Meta_BackgroundGroup [Shell _backgroundGroup: Meta_BackgroundActor, Meta_BackgroundActor, one-mk-wallpaper-layer]
+unknown_MetaWindowActorWayland "Desktop Icons 1" type=1 skip_taskbar=true visible=true opacity=255
+unknown_MetaWindowActorWayland "Desktop Icons 2" type=1 skip_taskbar=true visible=true opacity=255

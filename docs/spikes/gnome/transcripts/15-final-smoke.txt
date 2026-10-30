@@ -1,0 +1,12 @@
+## final smoke run with the committed extension (+ unlock-dialog variant), 2 monitors (2026-10-30T19:10:00+03:00)
+2387632
+hello reply (1, [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)])
+2 monitors live                              client fps 60.0 (min 60.0 over 5 s)   shell CPU   5.8%  client CPU  11.0%  damage  60.0/s
+"locking"
+"{\"locked\":true,\"mode\":\"unlock-dialog\",\"spikeState\":1,\"layerVisible\":false,\"hints\":[\"790173715 true locked\"]}"
+"unlocking"
+"{\"locked\":false,\"mode\":\"user\",\"spikeState\":1,\"layerVisible\":true,\"hints\":[\"790173715 true locked\",\"790177106 false none\"]}"
+"[\"790173614 locked-changed true\",\"790176788 session-mode user locked=false\",\"790177064 locked-changed false\"]"
+(true,)
+"{\"oneMkActors\":[],\"clonesOnStage\":[],\"extState\":2,\"bridge\":false,\"windows\":[]}"
+spike-related lines in Shell log: 0

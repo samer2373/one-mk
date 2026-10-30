@@ -1,0 +1,17 @@
+## security probes (2026-10-30T19:05:26+03:00)
+-- 1. foreign process calls Hello (not the spawned renderer):
+Error: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: not our renderer
+-- 2. foreign process calls FrameReady:
+Error: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: not our renderer
+-- 3. foreign process tries to take the bridge name while the Shell owns it:
+RequestName reply 3 EXISTS
+-- 4. foreign process emits a forged PauseHint from its own connection:
+renderer hint lines since: 0
+-- 5. an ordinary client with the SAME title and app-id as the renderer:
+"[[\"one-mk wallpaper spike renderer\",2366026,1,false,true],[\"one-mk wallpaper spike renderer\",2366332,0,true,false]]"
+"2366026"
+-- 6. the real renderer calls Hello (spawned via Meta.WaylandClient):
+hello reply (1, [(0, 0, 1920, 1080)])
+
+## restart latency: spawn -> adopted -> first frame (python GTK test client)
+"[\"789919542 spawned renderer pid=2369011\",\"789919796 adopted window \\\"null\\\" pid=2369011\",\"789919816 first frame from renderer\"]"
