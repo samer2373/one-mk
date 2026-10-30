@@ -160,8 +160,8 @@ Mapper::set_keymap (as a reload)
 ### Local keyboard scope: experimental native adapters (5H incomplete)
 
 Windows/macOS are EXPERIMENTAL, **COMPILE-CHECKED ONLY, native UNTESTED**. The
-acknowledged handoff model and held-key matrix are in `LOCAL-REMAP.md`;
-native activation is still incomplete. `[input] local_rules = false` is the
+worker ownership model and held-key matrix are in `LOCAL-REMAP.md`;
+native delivery acceptance is still incomplete. `[input] local_rules = false` is the
 default, including when upgrading old files. `one-mk keymap local on|off`
 opts in on native Windows/macOS backends; a healthy acknowledged worker fence
 is required before status says `active (N)`. macOS integration is partial:
@@ -179,8 +179,18 @@ The hook-visible gate is now an acquire/release atomic handle; the worker's
 ticket state remains private to that worker. Shortcut flags cannot divert an
 OS-owned key-up, even during handoff or failure. Native adapters now consume
 these primitives; native delivery, modifier flags, no-stuck-keys and idle CPU
-acceptance have NOT passed. macOS requires tagged tap receipts after posting;
-CGEventPost enqueueing alone cannot acknowledge release delivery.
+acceptance have NOT passed. macOS downs use tagged tap receipts after posting;
+CGEventPost enqueueing alone cannot acknowledge release delivery. macOS release
+posts are best-effort without receipt waits; neither missing receipts nor a
+failed worker may gate core capture or shutdown. Windows retains failed release
+cleanup separately from the disabled interceptor and retries on desktop/unlock/
+foreground events. These mechanisms do not establish native no-stuck-keys.
+
+**Core invariant:** off, empty, unsupported, and `keymap local off` preserve
+main's physical input/capture/crossing/switch/hotkey/power/repeat behavior.
+No experimental worker health/fence may gate these paths. Closed-home repeat,
+disabled modifier flags and pinned main activation bodies have Linux regression
+contracts, not a native OS differential execution result.
 
 `one-mk keymap add capslock esc --local` stores a local rule; `one-mk
 keymap remove capslock --local` removes it, and `one-mk keymap` labels it
@@ -205,9 +215,12 @@ local rules through the CLI or file for now.
 `one-mk keymap check` reports the native UNTESTED limitation. With local rules configured,
 Linux `status` adds exactly one availability line:
 `local key rules are not available on Linux`. Windows/macOS instead report
-`active (N)` or the reason inactive, always labelled native UNTESTED. On macOS,
+`active (N)` or the reason inactive, labelled native UNTESTED when configured;
+off/empty clears the local problem line and does not add a local doctor WARN. On macOS,
 tap-disable/session/sleep/wake/Secure Input failures request release-all and
-pause until all physical keys are released and settings explicitly reloaded.
+pause mapping. Held keyboard keys are baselined as OS-owned on re-enable rather
+than refusing the Enter-down enable command; mouse buttons are excluded.
+Settings/device reloads can automatically resume mapping after transitions.
 Accessibility and Input Monitoring permissions are independently required.
 See `LOCAL-REMAP.md` for manual acceptance and recovery from another computer.
 Remote rules keep their existing

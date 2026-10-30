@@ -817,9 +817,13 @@ Good to know:
   `--local --device NAME` stores a rule for one attached keyboard;
   local+device rules override local rules, never peer rules. The default-off
   `[input] local_rules` preference (`one-mk keymap local on|off`) opts in;
-  runtime status requires a healthy acknowledged fence, not just the preference.
+  local runtime status requires a healthy worker fence, not just the preference.
+  That worker never gates core crossing/switching/hotkeys or repeat; off/empty/
+  unsupported rules detach interception, and off/empty status is silent.
   macOS refuses Caps Lock/Fn/media/function-key rules; its CGEventPost receipt
-  path and modifier flags are natively UNTESTED. See `docs/LOCAL-REMAP.md` for
+  down-receipt path and modifier flags are natively UNTESTED. Release posts and
+  capture handoff are best-effort, not proof of native delivery. Settings/device
+  reloads can resume mapping; it is not explicit-reload-only. See `docs/LOCAL-REMAP.md` for
   platform restrictions, manual acceptance and emergency/SSH/permission recovery.
   Linux status says `local key rules are not available on Linux`; its
   Wayland portal only supplies keys while forwarding. Local rules never
