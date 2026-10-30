@@ -257,10 +257,11 @@ impl App {
             48.0 + 44.0 + 22.0 * keys as f32 + if note { 40.0 } else { 0.0 } + 14.0,
             48.0 + 22.0 + (SWAP_ROW * peers as f32).max(40.0) + 14.0,
             48.0 + if hooks == 0 { 44.0 } else { 22.0 * hooks as f32 + 20.0 } + 14.0,
+            48.0 + 132.0 + 14.0,
         ];
         // Two columns: crossing, power and games on the left; keys and
         // commands on the right. One column below 700 points.
-        let mut at = [(0usize, 0.0f32); 6];
+        let mut at = [(0usize, 0.0f32); 7];
         let mut ys = [0.0f32; 2];
         for (k, h) in heights.iter().enumerate() {
             let col = if two { usize::from(k >= 3) } else { 0 };
@@ -282,6 +283,7 @@ impl App {
             ui.painter().text(pos2(c.left(), c.top() + 2.0), Align2::LEFT_CENTER, fit(ui.painter(), "Auto swaps them only between a Mac and a PC.", &regular(T_META), c.width()), regular(T_META), INK2);
             self.swaps(ui, Rect::from_min_max(pos2(c.left(), c.top() + 18.0), c.max));
             self.hooks_card(ui, r(5));
+            self.typing_card(ui, r(6));
         });
     }
 

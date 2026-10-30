@@ -118,6 +118,21 @@ including after re-arming.
   `zwp_pointer_constraints_v1` keeps the pointer still while it is away.
   Typing uses this computer's keyboard layout.
 
+### Different keyboard layouts or missing AltGr characters
+
+Typing currently forwards physical keys: the receiving OS chooses the letters.
+For German/US Z/Y, French AZERTY, or AltGr symbols that come out wrong, select
+the same keyboard layout on both computers and check the receiving OS's Right
+Alt/AltGr mapping. `one-mk layout` places computers; it does not set a keyboard
+layout. Japanese kana and IME composition are not translated between computers.
+
+`one-mk typing --keys physical|characters|auto [--peer NAME_OR_ID]` saves a
+preference in `[typing]`; the default is `physical`. **Characters and auto are
+not operational yet**: they currently fall back to physical, explicitly reported
+by the command, status and doctor. The Advanced tab shows the saved preference
+and this limitation. No clipboard paste or live keyboard-map rewriting is used.
+See [keyboard layout design and remaining work](docs/KEYBOARD-LAYOUT.md).
+
 ## Pair without sitting at both computers
 
 On computer A, run `one-mk invite --expires 10m`. Privately transfer its
