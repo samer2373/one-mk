@@ -750,6 +750,9 @@ Good to know:
   `[input] local_rules` preference (`one-mk keymap local on|off`) is stored
   but cannot activate the unfinished native integration. See
   `docs/LOCAL-REMAP.md` for the handoff design and native acceptance script.
+  The tested groundwork includes an atomic hook-visible routing gate and
+  ownership-preserving releases even when a shortcut matcher flags key-ups;
+  neither is wired to a native local-rule interceptor yet.
   Linux status says `local key rules are not available on Linux`; its
   Wayland portal only supplies keys while forwarding. Local rules never
   change keys sent to a peer. See `docs/INPUT-TUNING.md` for the safety gates.
