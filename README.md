@@ -177,6 +177,13 @@ character mode remains disabled; a crash-recovery marker alone does not fix
 that delivery race. The private-Xvfb reproducer is
 `bash scripts/test-x11-typing-safety.sh` (success confirms the blocker, not
 working character injection).
+The 5E-5 portal keysym helper passes private fake-portal protocol tests, but real
+GNOME/KDE editor delivery and cross-session shortcut ordering are **UNTESTED**;
+native TEXT remains disabled. The owner-only Text probe is
+`bash scripts/test-portal-typing-manual.sh --owner-desktop de` (also `fr`, `pl`,
+`tr`); it requires explicit desktop access and a disposable editor. A retained
+X11 pool experiment still loses text when a client resumes after its retirement
+deadline: `bash scripts/test-x11-typing-safety.sh --pool-retention`.
 See [keyboard layout design and remaining work](docs/KEYBOARD-LAYOUT.md).
 
 ## Pair without sitting at both computers

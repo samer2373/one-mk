@@ -65,6 +65,8 @@ pub use null::{NullHandles, fake_keyboard};
 pub use system::{DisplaySleeper, FocusProbe, Inhibitor, Power, PowerEvent, PowerHandles, ScreenLocker, fake_power};
 #[cfg(target_os = "linux")]
 pub use portal::{PortalProbe, probe_portals};
+#[cfg(all(target_os = "linux", feature = "portal-typing-probe"))]
+pub use portal::portal_typing_probe;
 #[cfg(target_os = "linux")]
 pub use linux_logic::{LinuxBackend, SessionFacts, choose as choose_linux_backend};
 

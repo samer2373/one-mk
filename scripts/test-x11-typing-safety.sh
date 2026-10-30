@@ -19,10 +19,14 @@ trap 'exit 143' TERM
 mkdir -m 700 "$scratch/home" "$scratch/runtime" "$scratch/state"
 clean=(env -i "PATH=$PATH" "HOME=$scratch/home" "XDG_RUNTIME_DIR=$scratch/runtime" "ONE_MK_HOME=$scratch/state"
     "CARGO_HOME=$cargo_home" "RUSTUP_HOME=$rustup_home")
-if [[ "${1:-}" == --require-delivery ]]; then
-    clean+=(ONE_MK_REQUIRE_X11_TEXT_DELIVERY=1)
-    shift
-fi
+test_name=x11::tests::temporary_remap_restoration_races_a_delayed_client
+while (( $# )); do
+    case "$1" in
+        --require-delivery) clean+=(ONE_MK_REQUIRE_X11_TEXT_DELIVERY=1); shift ;;
+        --pool-retention) test_name=x11::tests::retained_pool_delivers_only_before_retirement; shift ;;
+        *) break ;;
+    esac
+done
 command -v Xvfb >/dev/null
 command -v xkbcomp >/dev/null
 command -v xev >/dev/null
@@ -36,5 +40,5 @@ if (( $# )); then
     "${clean[@]}" "DISPLAY=:$display" "$@"
 else
     "${clean[@]}" "DISPLAY=:$display" cargo test --offline -j 2 -p one-mk-input \
-        x11::tests::temporary_remap_restoration_races_a_delayed_client -- --ignored --exact --nocapture
+        "$test_name" -- --ignored --exact --nocapture
 fi

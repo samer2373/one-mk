@@ -7,19 +7,179 @@ cross-layout support. The default remains physical keys. Slice 5E-3 wires
 descriptor exchange, per-visit negotiation, sender routing, receiver validation,
 reverse lookup and held-key cleanup through the real daemon control path.
 Debug test null backends provide per-instance fixture layouts and record Text.
-Native snapshots and compose are **not connected to capture events or visits**;
-native text injection remains missing. Native and normal null backends therefore
+Native snapshots and compose are **not connected to capture events or visits**.
+Slice 5E-5 adds a fake-portal-tested, unadvertised keysym injector and an
+owner-only manual probe; native end-to-end text delivery remains unqualified.
+Native and normal null backends therefore
 send physical keys, even when characters or auto is requested, and never
 advertise TEXT. Test support requires both `null-typing-tests` and debug
 assertions; release builds cannot construct fixture keyboards, even with that
 feature. No polling or background timer is introduced by character routing.
 
+## 5E-5 verified partial delivery (October 30, 2026)
+
+**Not a completed AltGr fix or enterprise runtime sign-off. Production TEXT
+advertisement stays off for every native backend.** The requested condition
+that both native injection paths pass was not met, so capture snapshot/descriptor
+wiring and the two-real-daemon native layout matrix were deliberately not added.
+
+### Portal: protocol implementation, not desktop qualification
+
+The Linux portal injection worker now routes bounded printable `Inject::Text`
+through `NotifyKeyboardKeysym` press/release pairs. Latin-1 uses the legacy
+keysym value; other Unicode scalars use `0x01000000 | scalar`. Direct
+`Inject::CharacterKey` uses the same path with source-code/character pairing,
+repeat handling, alias ownership, mismatched-release refusal and physical
+key-up cleanup. No keymap is rewritten and no clipboard is involved. Invalid
+character/source combinations are rejected before opening a permission dialog;
+Text while a physical Ctrl, shortcut Alt or Super is held is refused.
+
+The helper requires RemoteDesktop version >= 1, the advertised keyboard device
+bit, the exact introspected `NotifyKeyboardKeysym(o, a{sv}, i, u)` method, and
+the keyboard bit actually granted by `Start`. These are necessary protocol
+checks, **not sufficient grounds for capability advertisement**. There is no
+verified portal-keymap reverse lookup/unambiguous physical-code shortcut yet.
+
+The upstream RemoteDesktop interface forbids `Notify*` after `ConnectToEIS`
+on the same session. Consequently the existing libei physical/pointer session
+is preserved, and the helper creates a separate, keyboard-only Notify session
+lazily on the same dedicated injection connection. This can require another
+permission dialog; it does not save another restore token. Physical-only visits
+create no extra session, poller or periodic timer. Separate sessions do **not**
+prove ordering between libei modifiers and Notify symbols.
+
+The fake portal rejects Notify on EIS sessions and records exact symbol/state
+pairs. Tests verify Unicode, combining scalars, 200 ordered mixed characters,
+pairing/repeat/aliases, hostile input refusal, visit end, shutdown, lock/sleep,
+symbolic session Closed, failed press/release compensation, failed visit
+cleanup, cancellation of an unacknowledged press on lock, and cancellation of
+a pending permission dialog on physical-session loss. Visit end, injection
+channel disconnect and physical key-up also cancel pending permission;
+visit end/disconnect interrupt an unacknowledged press. Already-ended queued
+visits do not open a keyboard dialog. New input buffered while awaiting the
+portal is bounded to 256 queued messages before failing closed. Physical
+key-up during an unacknowledged symbol send fails closed rather than delaying
+modifier cleanup. Cleanup preserves held
+state after failed releases until the session is closed; it is bounded by the
+existing call timeout. Main/symbolic Closed, portal owner loss and power changes
+interrupt symbol sends. On panic or a lost bus the dedicated connection is
+dropped; release then depends on the compositor's session/client teardown.
+Actual compositor teardown on bus/service loss is **not** established by these
+fake tests; existing physical bus/owner-loss regressions are not symbolic
+hardware acceptance.
+
+One clean fake-portal test run measured Text press+release acknowledgement
+P50 **748 microseconds**, P95 **1,019 microseconds** over 200 scalars. This is
+local fake D-Bus acknowledgement only, not editor delivery latency, native
+character-mode overhead or a network/desktop benchmark. Native character-mode
+P50/P95 and on/off idle CPU ticks were **not measured**. No zero-tick claim is
+made for this change.
+
+The daemon receiver still resolves CharacterKey through its existing reverse
+lookup/physical-key route, and native backends still expose no keyboard
+descriptor for TEXT negotiation. Thus passing backend tests is **not** a
+two-daemon portal text/shortcut result. Real GNOME and KDE are **UNTESTED**.
+
+### X11: finite retention still fails delivery acceptance
+
+The new private-Xvfb experiment reserves four unused, unheld, non-modifier
+keycodes, retains one mapping for each of `ı`, `ł`, `@`, `z`, and reuses each
+slot for a burst of 200 characters. Both an independent XKB reader and a real
+SIGSTOP-delayed xev/Xlib client translate the burst. The real xev check verifies
+ordered presses and matching following releases, ignoring surplus XTest
+pre-press releases; the independent reader verifies exactly 200 presses.
+The xev assertions inspect keysyms, not XIM commit strings or editor output.
+
+| Mapping lifetime | Characters resolved, in order | Full core/XKB maps restored | Other client's held key preserved |
+| --- | --- | --- | --- |
+| Retained until both test readers translate | 200/200 | yes | yes |
+| Restored after 1.6 seconds, before readers resume | 0/200 | yes | yes |
+
+`XSync` and minimum mapping age do not acknowledge destination application
+translation. A busy/stopped client may outlive any finite quiet/LRU deadline.
+This is a counterexample to the proposed finite-retention safety claim, not
+proof that a longer timeout fixes it. Keeping mappings until these *known test
+readers* finish does not provide a production acknowledgement mechanism for
+arbitrary GTK/Qt/Xlib clients. It also does not establish all 200 distinct
+characters: the burst deliberately reuses four slots.
+
+Reproduce only on private X servers (the script supplies a clean environment):
+
+```sh
+bash scripts/test-x11-typing-safety.sh --pool-retention
+bash scripts/test-x11-typing-safety.sh --pool-retention --require-delivery
+```
+
+The first command passes by asserting both results. The second **fails as
+expected**, after reporting retained delivery 200/200 and retired delivery
+0/200. The original single/32 immediate-restore regression remains unchanged
+in meaning and passes by reproducing zero delivered characters.
+
+No production pool, quiet timer, LRU eviction or root-property recovery journal
+is shipped. Therefore SIGKILL-during/after-remap restart recovery is **missing**,
+not verified by unwinding test guards. No arbitrary other-application keymap
+compatibility or delivery guarantee is claimed. A journal alone would recover
+global state but would not repair already-lost characters. Native TEXT remains
+off rather than masking the acceptance failure with timing assumptions.
+
+### Owner-only GNOME/KDE manual probe
+
+Never run this against the owner's desktop during automated QA. The owner may
+run these explicitly from their GNOME/KDE Wayland terminal, choosing the named
+layout manually first and using a disposable editor with no valuable content:
+
+```sh
+bash scripts/test-portal-typing-manual.sh --owner-desktop de
+bash scripts/test-portal-typing-manual.sh --owner-desktop fr
+bash scripts/test-portal-typing-manual.sh --owner-desktop pl
+```
+
+Turkish is also available as `tr`. The script refuses without the explicit flag
+and a Wayland session bus, builds the opt-in `portal-typing-probe` example in a
+clean environment without a desktop bus, then passes only the explicitly
+authorized bus into the isolated probe. It never changes layouts/config,
+starts a daemon or accesses the clipboard. Approve the keyboard portal dialog,
+then focus the disposable editor within five seconds. Compare the displayed
+expected string exactly, including case, spaces, Euro/AltGr symbols and Polish
+letters. An acknowledged method call or successful exit is **not** a pass if
+the editor differs. The script cleans up its own child and temporary state.
+
+This probe tests **Text only**, not capture, CharacterKey shortcuts, repeats,
+layout switching or disconnect cleanup through a real daemon. Record compositor
+and portal versions, layout/variant, editor, actual text and permission-dialog
+behavior. Do not enable TEXT based on this probe alone. Before native sign-off,
+complete German Z/Y and AltGr+Q, French AZERTY/AltGr, Polish letters, Turkish
+dotless i, Ctrl+Z, repeat, layout-switch-mid-hold, peer SIGKILL, old-peer
+fallback, unchanged full keymaps, native P50/P95 and zero-idle-tick checks from
+the acceptance matrix. Those results are **absent** in 5E-5.
+
+Hostile self-review: a fake portal proves protocol ordering, not compositor
+layout semantics, editor composition or grapheme behavior. Two sessions may
+break shortcut modifier ordering. A direct Unicode keysym need not be handled
+identically by GNOME and KDE. Finite X11 retention remains falsified even if
+ordinary apps happen to consume quickly. No snapshot or production-capability
+wiring is justified by the present evidence.
+
+Validation for this slice: clean-environment `cargo test --offline -j 2
+--workspace` passed (1,054 passed, zero failed, 14 ignored). The portal-only
+selection passed 34 tests. Strict workspace/all-target Clippy, input
+all-features/all-target Clippy, and the requested input/proto/ctl/app/tray
+all-target cross-Clippy checks for `x86_64-pc-windows-msvc` and
+`aarch64-apple-darwin` passed with `-D warnings`. Cross checks are compile-only.
+The retained-pool experiment passed its positive/counterexample assertions;
+strict `--require-delivery` failed specifically on retired delivery 0/200.
+Shell syntax and manual-script refusal paths passed. A final process audit
+found no remaining private Xvfb/xev/dbus-daemon processes with this run's test
+environment. Runtime tests used private fake portals/Xvfb only, with throwaway
+HOME/runtime/state; the owner's desktop, clipboard, settings and daemon were
+not used. No cargo fmt was run.
+
 ## 5E-4 release blocker: restored mapping is not delivered text
 
 The October 30, 2026 failing-first X11 experiment **did not implement 5E-4**.
 It found a correctness blocker in immediate temporary-remap/XTest/restore
-injection. Production capability advertisement and injection remain unchanged;
-X11, portal/GNOME, wlroots, Windows and macOS still use physical fallback.
+injection. At that slice, production capability advertisement and injection
+were unchanged. X11, portal/GNOME, wlroots, Windows and macOS still use physical fallback.
 The native sender snapshot is still not wired to the daemon. Do not describe
 this experiment as working X11 character mode.
 
@@ -195,7 +355,8 @@ forwarded Shift with a resolved shifted chord in both orders; neither releases
 the other's reference. Text reaches `Inject::Text` only on capable backends.
 `Inject::CharacterKey` is an explicit primitive recorded by null; the daemon
 normally resolves it into accounted `Inject::Key` events before injection.
-Native backends explicitly treat CharacterKey as physical and refuse Text.
+Native backends normally treat CharacterKey as physical and refuse Text;
+the unadvertised portal helper described above is the experimental exception.
 Wire Text has no physical source code, so native physical fallback must happen
 at sender negotiation, not by guessing a key at the receiver.
 Source codes are bounded to the evdev range so the pure engine can remember at
@@ -251,11 +412,15 @@ with later composed Text. IMEs are not supported by this compose primitive.
   Portal/libei and wlroots must propagate their seat keymaps to resolution.
 - X11 injection: prefer an existing keysym mapping. Temporary spare-keycode
   remapping requires a durable original-map journal, synchronization with other
-  clients and restoration on every error and at startup. RAII alone cannot
-  survive SIGKILL. Do not ship a remapping injector until SIGKILL recovery is
-  exercised on a private X server. Never alter the owner's live map.
-- Portal: NotifyKeyboardKeysym where actually supported; wlroots: safely
-  regenerated virtual keymap or explicit physical fallback.
+  clients and restoration on every error and at startup, **plus a delivery-safe
+  lifetime**. Neither XSync nor finite quiet/LRU ages establish client
+  translation. RAII alone cannot survive SIGKILL. Do not ship a remapping
+  injector until both delayed-reader delivery and SIGKILL recovery pass on a
+  private X server. Never alter the owner's live map.
+- Portal: the unadvertised NotifyKeyboardKeysym helper exists; qualify real
+  GNOME/KDE delivery, cross-session modifiers, keymap reverse lookup and
+  session-loss cleanup before enabling native negotiation. Wlroots still needs
+  a safely regenerated virtual keymap or explicit physical fallback.
 - Windows: ToUnicodeEx with non-state-mutating flags and the foreground hook
   HKL; KEYEVENTF_UNICODE for text, VkKeyScanEx for reverse lookup. Dead-key and
   synthesized Ctrl handling need native tests.

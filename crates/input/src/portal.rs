@@ -59,6 +59,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 
+#[path = "portal_keyboard.rs"]
+mod keyboard;
+use keyboard::KeysymKeyboard;
+
 /// A session that lasted at least this long starts the backoff over.
 const STABLE: Duration = Duration::from_secs(60);
 /// Portal calls that need no answer from the user get this long. Their
@@ -1095,7 +1099,8 @@ async fn run_inject(
         let request = retry.asking(portal.start(session, None, Default::default())).await?;
         request.response().context("permission to control this computer was not granted")
     };
-    with_token(tokens, retry, start, |s| s.restore_token()).await?;
+    let granted = with_token(tokens, retry, start, |s| s.restore_token()).await?;
+    let keyboard_granted = granted.devices().contains(DeviceType::Keyboard);
     let fd = timeout("connecting to libei", portal.connect_to_eis(session, Default::default())).await?;
     let context = ei::Context::new(UnixStream::from(fd))?;
     let handshake = context.handshake_tokio("one-mk", ei::handshake::ContextType::Sender);
@@ -1112,6 +1117,8 @@ async fn run_inject(
         warned_relative: false,
         held: Held::default(),
     };
+    let mut keyboard: Option<KeysymKeyboard> = None;
+    let mut keyboard_closed = futures::stream::pending::<()>().boxed();
     let mut batch = Vec::new();
     let mut power = env.power.clone();
     power.mark_unchanged();
@@ -1157,8 +1164,12 @@ async fn run_inject(
             now = power_changed(&mut power) => {
                 if now.paused() {
                     inj.let_go();
+                    if let Some(keyboard) = &mut keyboard
+                        && let Err(error) = timeout("releasing keyboard symbols", keyboard.let_go(portal)).await
+                    { break Err(error); }
                 }
             }
+            _ = keyboard_closed.next() => break Err(anyhow!("the keyboard symbol session was closed")),
             _ = closed.next() => break Err(anyhow!("the remote desktop session was closed")),
             owner = portal_owner.next() => {
                 let how = if owner.flatten().is_some() { "restarted" } else { "went away" };
@@ -1169,11 +1180,130 @@ async fn run_inject(
                 // Apply everything already queued (stale moves dropped),
                 // then send one frame.
                 drain_coalesced(first, rx, &mut batch);
-                inj.send(batch.drain(..));
+                if power.borrow().paused() { batch.clear(); continue; }
+                let symbolic = batch.iter().any(|message| match message {
+                    Inject::Text { .. } | Inject::CharacterKey { .. } | Inject::Controlled(false) => true,
+                    Inject::Key { code, .. } => keyboard.as_ref().is_some_and(|keyboard| keyboard.owns(*code)),
+                    _ => false,
+                });
+                if !symbolic { inj.send(batch.drain(..)); continue; }
+                let sent: Result<()> = async {
+                    let mut physical = Vec::new();
+                    let mut queued: std::collections::VecDeque<_> = batch.drain(..).collect();
+                    while let Some(message) = queued.pop_front() {
+                        let owned = match message {
+                            Inject::Key { code, .. } => keyboard.as_ref().is_some_and(|keyboard| keyboard.owns(code)),
+                            _ => false,
+                        };
+                        let symbolic = matches!(message, Inject::Text { .. } | Inject::CharacterKey { .. }) || owned;
+                        if symbolic || matches!(message, Inject::Controlled(false)) {
+                            if !physical.is_empty() { inj.send(physical.drain(..)); }
+                            if matches!(message, Inject::Controlled(false)) {
+                                inj.let_go();
+                                if let Some(keyboard) = &mut keyboard {
+                                    timeout("releasing keyboard symbols", keyboard.let_go(portal)).await?;
+                                }
+                                continue;
+                            }
+                            if let Inject::CharacterKey { code, character, .. } = message
+                                && (!one_mk_proto::typing::character_key_code(code)
+                                    || !one_mk_proto::typing::printable(character) || inj.held.keys.contains(&code))
+                            { continue; }
+                            if matches!(message, Inject::Text { .. })
+                                && inj.held.keys.iter().any(|code| matches!(code, 29 | 97 | 56 | 125 | 126))
+                            { continue; }
+                            if !keyboard_granted { bail!("RemoteDesktop did not grant keyboard access"); }
+                            if keyboard.is_none() && matches!(message, Inject::CharacterKey { down: false, .. }) { continue; }
+                            if keyboard.is_none() {
+                                if queued.iter().any(|message| matches!(message, Inject::Controlled(false))) { continue; }
+                                let opening = KeysymKeyboard::open(portal);
+                                tokio::pin!(opening);
+                                let mut opened = loop {
+                                    tokio::select! {
+                                        opened = &mut opening => break opened?,
+                                        incoming = rx.recv() => {
+                                            let Some(incoming) = incoming else { bail!("input disconnected during keyboard setup"); };
+                                            if matches!(incoming, Inject::Controlled(false) | Inject::Key { down: false, .. }) {
+                                                bail!("input released during keyboard setup");
+                                            }
+                                            if queued.len() >= 256 { bail!("input backlog during keyboard setup"); }
+                                            queued.push_back(incoming);
+                                        }
+                                        _ = closed.next() => bail!("the remote desktop session closed during keyboard setup"),
+                                        _ = portal_owner.next() => bail!("the desktop portal changed during keyboard setup"),
+                                        _ = power_changed(&mut power) => bail!("power state changed during keyboard setup"),
+                                        _ = ei_events.next() => bail!("libei changed during keyboard setup"),
+                                    }
+                                };
+                                keyboard_closed = opened.take_closed();
+                                keyboard = Some(opened);
+                            }
+                            let sending = timeout("injecting text", keyboard.as_mut().expect("keyboard session opened").send(portal, message));
+                            tokio::pin!(sending);
+                            loop {
+                                tokio::select! {
+                                    sent = &mut sending => { sent?; break; }
+                                    incoming = rx.recv() => {
+                                        let Some(incoming) = incoming else { bail!("input disconnected during text injection"); };
+                                        if matches!(incoming, Inject::Controlled(false)) { bail!("visit ended during text injection"); }
+                                        if let Inject::Key { code, down: false } = incoming
+                                            && inj.held.keys.contains(&code)
+                                        { bail!("physical key released during text injection"); }
+                                        if queued.len() >= 256 { bail!("input backlog during text injection"); }
+                                        queued.push_back(incoming);
+                                    }
+                                    _ = keyboard_closed.next() => bail!("the keyboard symbol session was closed"),
+                                    _ = closed.next() => bail!("the remote desktop session was closed"),
+                                    _ = portal_owner.next() => bail!("the desktop portal changed"),
+                                    _ = power_changed(&mut power) => bail!("power state changed during text injection"),
+                                }
+                            }
+                        } else {
+                            physical.push(message);
+                        }
+                    }
+                    if !physical.is_empty() { inj.send(physical); }
+                    Ok(())
+                }.await;
+                if let Err(error) = sent { break Err(error); }
             }
         }
     };
     inj.let_go();
+    if let Some(keyboard) = keyboard { keyboard.stop(portal).await; }
+    result
+}
+
+#[cfg(feature = "portal-typing-probe")]
+pub async fn portal_typing_probe(text: &str) -> Result<()> {
+    if text.is_empty() || text.chars().count() > 200 || !text.chars().all(one_mk_proto::typing::printable) {
+        bail!("probe requires 1 to 200 printable characters");
+    }
+    let (_power, power) = watch::channel(Power::default());
+    let env = Env { bus: None, unit: Duration::from_secs(1), power };
+    let conn = env.connect().await?;
+    let portal = timeout("RemoteDesktop", RemoteDesktop::with_connection(conn)).await?;
+    let mut keyboard = KeysymKeyboard::open(&portal).await?;
+    let mut owner = portal.receive_owner_changed().await?;
+    eprintln!("Keyboard permission granted. Focus a disposable editor within five seconds.");
+    let result = guarded("portal typing probe", async {
+        let mut closed = keyboard.take_closed();
+        let send = async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            for character in text.chars() {
+                let text = crate::typing::Text::new(&character.to_string()).context("invalid probe character")?;
+                keyboard.send(&portal, Inject::Text { text }).await?;
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Ok(())
+        };
+        tokio::select! {
+            result = send => result,
+            _ = closed.next() => Err(anyhow!("keyboard session closed")),
+            _ = owner.next() => Err(anyhow!("desktop portal changed")),
+        }
+    }).await;
+    keyboard.stop(&portal).await;
     result
 }
 
