@@ -153,7 +153,7 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     if r.hovered() && enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    let (name, enabled) = (label.to_owned(), r.enabled());
+    let (name, enabled) = (label.to_owned(), enabled && r.enabled());
     r.widget_info(move || egui::WidgetInfo::selected(Role::CheckBox, enabled, on, &name));
     r
 }
@@ -1311,18 +1311,88 @@ impl App {
         let two = w >= 700.0;
         let col_w = if two { (w - GAP) / 2.0 } else { w };
         let h = |k: &str| self.keys.heights.get(k).copied().unwrap_or(300.0);
-        let total = if two { h("buttons").max(h("pointer") + GAP + h("scroll")) } else { h("buttons") + h("pointer") + h("scroll") + 2.0 * GAP };
+        let body_height = if two { h("buttons").max(h("pointer") + GAP + h("scroll")) } else { h("buttons") + h("pointer") + h("scroll") + 2.0 * GAP };
+        let total = body_height + GAP + h("mouse-modes");
         let (all, _) = ui.allocate_exact_size(vec2(w, total), Sense::hover());
         let bh = self.buttons_card(ui, all.min, col_w, &input, &facts);
         let right = if two { pos2(all.left() + col_w + GAP, all.top()) } else { pos2(all.left(), all.top() + bh + GAP) };
         let ph = self.pointer_card(ui, right, col_w, &input, &facts);
         let sh = self.scroll_card(ui, right + vec2(0.0, ph + GAP), col_w, &input, &facts);
-        for (k, v) in [("buttons", bh), ("pointer", ph), ("scroll", sh)] {
+        let modes_top = if two { bh.max(ph + GAP + sh) } else { bh + ph + sh + 2.0 * GAP };
+        let mh = self.mouse_modes_card(ui, all.min + vec2(0.0, modes_top + GAP), w, &input, &facts);
+        for (k, v) in [("buttons", bh), ("pointer", ph), ("scroll", sh), ("mouse-modes", mh)] {
             if (self.keys.heights.get(k).copied().unwrap_or(0.0) - v).abs() > 0.5 {
                 self.keys.heights.insert(k, v);
                 ui.ctx().request_repaint();
             }
         }
+    }
+
+    fn mouse_modes_card(&mut self, ui: &mut Ui, at: Pos2, width: f32, input: &Input, facts: &Facts) -> f32 {
+        let card = card_begin(ui, at, width, "Autoscroll & gestures");
+        let content = card.inner;
+        let mut top = content.top();
+        let busy = self.tuning_busy();
+        let mut rows: Vec<_> = input.autoscroll.iter().filter(|row| row.app.is_none())
+            .filter_map(|row| Some((row.scope.rank(facts)?, row))).collect();
+        rows.sort_by_key(|(rank, _)| *rank);
+        let mut enabled = false;
+        let mut speed = 1.0;
+        let mut button = "middle";
+        for (_, row) in rows { enabled = row.enabled.unwrap_or(enabled); speed = row.speed.unwrap_or(speed); button = row.button.as_deref().unwrap_or(button); }
+        let rect = Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), 30.0));
+        if chip(ui, rect, Id::unique("autoscroll-toggle"), if enabled { "Autoscroll: on" } else { "Autoscroll: off" }, enabled, !busy).clicked() {
+            let mut args = vec!["autoscroll".into(), if enabled { "--off".into() } else { "--on".into() }];
+            args.extend(self.keys.scope.args());
+            self.tune_cmds("autoscroll", "mouse-modes", vec![args], None);
+        }
+        top += 38.0;
+        let instructions = format!("Click {}, then move away to scroll the other computer. Click again or press Esc to stop.", tune::mouse_button_label(button));
+        let height = para(ui, pos2(content.left(), top), content.width(), &instructions, regular(T_BODY), INK2);
+        a11y_text(ui, Id::unique("autoscroll-instructions"), Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), height)), Role::Label, &instructions, None);
+        top += height;
+        let rect = Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), ROW));
+        if let Some(value) = ui.add_enabled_ui(!busy, |ui| self.speed_row(ui, rect, "autoscroll-speed", "Autoscroll speed", speed)).inner {
+            let mut args = vec!["autoscroll".into(), format!("--speed={value}")];
+            args.extend(self.keys.scope.args());
+            self.tune_cmds("autoscroll speed", "mouse-modes", vec![args], Some("autoscroll-speed".into()));
+        }
+        top += ROW + 8.0;
+        top += para(ui, pos2(content.left(), top), content.width(), "Gestures", regular(T_BODY), INK);
+        let rect = Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), 30.0));
+        let preset = ui.add_enabled_ui(!busy, |ui| chip(ui, rect, Id::unique("gesture-side-swipe"), "Set up side-button desktop swipes", false, true)).inner;
+        widgets::a11y(&preset, Role::Button, "Set up side-button desktop swipes", None);
+        if preset.clicked() {
+            let mut args = vec!["gestures".into(), "preset".into(), "side-swipe".into()];
+            args.extend(self.keys.scope.args());
+            self.tune_cmds("gestures", "mouse-modes", vec![args], None);
+        }
+        top += 38.0;
+        let gestures: Vec<_> = input.gestures.iter().filter(|row| row.scope.rank(facts).is_some()).collect();
+        if gestures.is_empty() {
+            top += para(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add a gesture with one-mk gestures add.", regular(T_BODY), INK2);
+        }
+        for row in gestures {
+            let description = format!("Hold {} and swipe {} to {}{}.", tune::mouse_button_label(&row.button), row.direction, row.to.describe(), row.app.as_ref().map_or(String::new(), |app| format!(" in app {app}")));
+            let height = para(ui, pos2(content.left(), top), content.width(), &description, regular(T_BODY), INK);
+            a11y_text(ui, Id::unique(("gesture-description", &row.button, &row.direction, row.scope.label(), &row.app)),
+                Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), height)), Role::Label, &description, None);
+            top += height;
+            let rect = Rect::from_min_size(pos2(content.left(), top), vec2(100.0_f32.min(content.width()), 30.0));
+            let remove = ui.add_enabled_ui(!busy, |ui| chip(ui, rect, Id::unique(("remove-gesture", &row.button, &row.direction, row.scope.label(), &row.app)), "Remove", false, true)).inner;
+            widgets::a11y(&remove, Role::Button, &format!("Remove gesture: {description}"), None);
+            if remove.clicked() {
+                let mut args = vec!["gestures".into(), "remove".into(), row.button.clone(), row.direction.clone()];
+                args.extend(row.scope.args());
+                if let Some(app) = &row.app { args.push(format!("--app={app}")); }
+                self.tune_cmds("the gesture", "mouse-modes", vec![args], None);
+            }
+            top += 38.0;
+        }
+        if let Some((_, error)) = self.keys.error.clone().filter(|(area, _)| *area == "mouse-modes") {
+            top += error_line(ui, content.left(), top, content.width(), &error);
+        }
+        card.end(ui, top)
     }
 
     fn buttons_card(&mut self, ui: &mut Ui, at: Pos2, w: f32, input: &Input, facts: &Facts) -> f32 {
@@ -1489,7 +1559,7 @@ impl App {
                     self.keys.drafts.insert(key, x);
                     out = Some(x);
                 }
-                Err(e) => self.keys.error = Some((if key.starts_with("pointer") { "pointer" } else { "scroll" }, e)),
+                Err(e) => self.keys.error = Some((if key.starts_with("pointer") { "pointer" } else if key.starts_with("autoscroll") { "mouse-modes" } else { "scroll" }, e)),
             }
         }
         out

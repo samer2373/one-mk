@@ -14,6 +14,8 @@ use one_mk_input::{DeviceRef, InputDevice};
 use one_mk_net::Fingerprint;
 use one_mk_proto::keynames::is_button;
 use one_mk_proto::pointer::PointerTune;
+use one_mk_proto::autoscroll::Autoscroll;
+use one_mk_proto::gesture::{ButtonResult, Gesture};
 use one_mk_proto::remap::{Action, Emit, KeymapSet, Mapper};
 use one_mk_proto::scroll::{ScrollOut, ScrollTune};
 use one_mk_proto::{Control, swap_ctrl_meta};
@@ -30,6 +32,8 @@ pub(super) struct Tune {
     by_device: Vec<(DeviceRef, PointerTune, ScrollTune)>,
     /// The device whose scrolling came last: a `ScrollStop` is for it.
     last_scroll: Option<DeviceRef>,
+    autoscroll: Autoscroll,
+    gestures: Gesture<one_mk_proto::remap::Keymap>,
     /// What the mapper emitted and is still to be sent; kept between
     /// events so its capacity is reused.
     out: Vec<Emit>,
@@ -42,6 +46,8 @@ impl Tune {
             mapper: Mapper::with_set(keymaps),
             pointer: r.base.pointer,
             scroll: ScrollTune::new(r.base.scroll),
+            autoscroll: Autoscroll::new(r.base.autoscroll),
+            gestures: Gesture::new(r.base.gestures),
             by_device,
             last_scroll: None,
             out: Vec::new(),
@@ -62,7 +68,7 @@ impl Tune {
 
     /// When the mapper's timer must fire: only while a tap/hold key is undecided.
     pub(super) fn deadline(&self) -> Option<std::time::Instant> {
-        self.mapper.deadline()
+        self.mapper.deadline().into_iter().chain(self.autoscroll.deadline()).min()
     }
 
     /// One motion report from `device`, before the remote cursor adds it up.
@@ -83,6 +89,8 @@ impl Tune {
     /// `Mapper::set_keymaps`), scrolling keeps its remainders where its
     /// rules stay the same.
     fn replace(&mut self, new: Tune, out: &mut Vec<Emit>) {
+        self.autoscroll = new.autoscroll;
+        self.gestures = new.gestures;
         self.pointer = new.pointer;
         if self.scroll.config() != new.scroll.config() {
             self.scroll = new.scroll;
@@ -237,6 +245,7 @@ impl App {
     /// its focus (an older one-mk), or said it can't tell.
     pub(super) fn app_rule_notes(&self) -> Vec<String> {
         let mut out = Vec::new();
+        out.extend(self.settings.input.mouse_mode_note());
         for (fp, p) in &self.peers {
             let apps = self.app_rules_for(*fp);
             let visit = self.remote.as_ref().filter(|r| r.peer == *fp);
@@ -266,10 +275,12 @@ impl App {
         let Some(r) = self.remote.as_ref() else { return };
         let new = self.tune_for(r.peer, r.swap, &r.peer_apps);
         let Some(r) = self.remote.as_mut() else { return };
+        let stopped = r.tune.autoscroll.active();
         let mut out = std::mem::take(&mut r.tune.out);
         r.tune.replace(new, &mut out);
         r.tune.out = out;
         self.send_tuned();
+        if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
     }
 
     /// A physical key or button transition during a visit, from `device`
@@ -279,6 +290,31 @@ impl App {
         let Some(r) = self.remote.as_mut() else { return };
         let now = tokio::time::Instant::now().into_std();
         let t = &mut r.tune;
+        let active = t.autoscroll.active();
+        let swallowed = t.autoscroll.key(code, down, now);
+        let stopped = active && !t.autoscroll.active();
+        if !down { t.mapper.key_from(code, false, device, now, &mut |event| t.out.push(event)); }
+        if swallowed {
+            if down { t.gestures.cancel(); }
+            self.send_tuned();
+            if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
+            return;
+        }
+        if code == 1 && down { t.gestures.cancel(); }
+        match t.gestures.button(code, down) {
+            ButtonResult::Swallow => {
+                self.send_tuned();
+                if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
+                return;
+            }
+            ButtonResult::Replay(button) => {
+                t.mapper.click(button, &mut |event| t.out.push(event));
+                self.send_tuned();
+                if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
+                return;
+            }
+            ButtonResult::Pass => {}
+        }
         let out = &mut t.out;
         t.mapper.key_from(code, down, device, now, &mut |e| out.push(e));
         // Held here from any device: what shortcuts and focus watching see.
@@ -286,6 +322,18 @@ impl App {
             r.held.update(code, down);
         }
         self.send_tuned();
+        if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
+    }
+
+    pub(super) fn mouse_mode_motion(&mut self, dx: f64, dy: f64) -> bool {
+        let Some(remote) = self.remote.as_mut() else { return false };
+        let tune = &mut remote.tune;
+        if tune.autoscroll.motion(dx, dy) { return true; }
+        let swallowed = tune.gestures.motion(dx, dy, &mut |binding| {
+            tune.mapper.pulse_binding(binding, &mut |event| tune.out.push(event));
+        });
+        self.send_tuned();
+        swallowed
     }
 
     /// The mapper's timer (a tap/hold key held long enough).
@@ -297,16 +345,31 @@ impl App {
         let t = &mut r.tune;
         let out = &mut t.out;
         t.mapper.timer(now, &mut |e| out.push(e));
+        let scroll = t.autoscroll.tick(now);
         self.send_tuned();
+        if let Some((dx, dy)) = scroll { self.tuned_scroll(ScrollIn::Smooth(dx, dy), None); }
+    }
+
+    /// Stops mouse modes when this display sleeps, without ending the visit.
+    pub(super) fn cancel_mouse_modes(&mut self) {
+        let Some(remote) = self.remote.as_mut() else { return };
+        let stopped = remote.tune.autoscroll.active();
+        remote.tune.autoscroll.stop();
+        remote.tune.gestures.cancel();
+        if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
     }
 
     /// Lets go of everything the mapper sent (the visit ends).
     pub(super) fn release_tuned(&mut self) {
         let Some(r) = self.remote.as_mut() else { return };
         let t = &mut r.tune;
+        let stopped = t.autoscroll.active();
+        t.autoscroll.stop();
+        t.gestures.cancel();
         let out = &mut t.out;
         t.mapper.release_all(&mut |e| out.push(e));
         self.send_tuned();
+        if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
     }
 
     /// Scrolling during a visit: a pending tap/hold key counts as held,
@@ -424,6 +487,27 @@ mod tests {
             vec![KeyRule { from: "capslock".into(), tap: Some("esc".into()), hold: Some("lctrl".into()), ..Default::default() }];
         let base = s.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX, apps: &[], device: None }, false);
         Tune::new(ResolvedSet { base, devices: Vec::new() })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn autoscroll_deadline_exists_only_during_the_mode() {
+        let mut settings = TuningSettings::default();
+        settings.autoscroll.base.enabled = Some(true);
+        let base = settings.resolve(&PeerFacts { name: "b", id: "", os: os::LINUX, apps: &[], device: None }, false);
+        let mut tune = Tune::new(ResolvedSet { base, devices: Vec::new() });
+        assert!(tune.deadline().is_none());
+        let now = Instant::now().into_std();
+        tune.autoscroll.key(0x112, true, now);
+        tune.autoscroll.key(0x112, false, now);
+        tune.autoscroll.motion(108.0, -108.0);
+        tokio::time::sleep_until(Instant::from_std(tune.deadline().unwrap())).await;
+        assert_eq!(Instant::now().into_std() - now, one_mk_proto::autoscroll::TICK);
+        let (dx, dy) = tune.autoscroll.tick(Instant::now().into_std()).unwrap();
+        assert!(dx > 0.0 && dy < 0.0);
+        tune.autoscroll.stop();
+        assert!(tune.deadline().is_none());
+        tokio::time::advance(Duration::from_secs(600)).await;
+        assert_eq!(tune.autoscroll.tick(Instant::now().into_std()), None);
     }
 
     /// The daemon's loop sleeps until `Tune::deadline` (as `next_deadline`

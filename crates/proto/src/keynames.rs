@@ -162,7 +162,7 @@ const KEYS: &[Key] = &[
     k(0x1d0, "KEY_FN", &["fn"]),
     k(0x110, "BTN_LEFT", &["button1", "leftbutton", "lbutton", "mouse1"]),
     k(0x111, "BTN_RIGHT", &["button2", "rightbutton", "rbutton", "mouse2"]),
-    k(0x112, "BTN_MIDDLE", &["button3", "middlebutton", "mbutton", "mouse3"]),
+    k(0x112, "BTN_MIDDLE", &["button3", "middlebutton", "mbutton", "mouse3", "middle"]),
     k(0x113, "BTN_SIDE", &["button4", "sidebutton", "mouse4", "xbutton1"]),
     k(0x114, "BTN_EXTRA", &["button5", "extrabutton", "mouse5", "xbutton2"]),
     k(0x115, "BTN_FORWARD", &["button6", "mouse6"]),

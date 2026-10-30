@@ -25,6 +25,9 @@ use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
+mod mouse;
+pub use mouse::{AutoscrollArgs, GesturesCmd, autoscroll_command, gestures_command};
+
 /// Whether this computer's input backend reports unaccelerated motion.
 /// None does yet (see `docs/INPUT-TUNING.md`): acceleration `off` and
 /// `curve` then fall back to the system's.
@@ -284,6 +287,96 @@ pub struct TuningSettings {
     pub scroll: Vec<ScrollRule>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub button: Vec<ButtonRule>,
+    #[serde(skip_serializing_if = "AutoscrollSettings::is_empty")]
+    pub autoscroll: AutoscrollSettings,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gesture: Vec<GestureRule>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoscrollRule {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub button: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dead_zone: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vertical_only: Option<bool>,
+    #[serde(skip_serializing_if = "Scope::is_global")]
+    pub scope: Scope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoscrollSettings {
+    #[serde(flatten)]
+    pub base: AutoscrollRule,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rule: Vec<AutoscrollRule>,
+}
+
+impl AutoscrollSettings {
+    fn is_empty(&self) -> bool { *self == Self::default() }
+    fn rules(&self) -> impl Iterator<Item = &AutoscrollRule> { std::iter::once(&self.base).chain(&self.rule) }
+}
+
+fn mouse_button(text: &str) -> Result<u32, String> {
+    let trigger = ButtonFrom::Name(text.into()).trigger()?;
+    if trigger.has_mods() { return Err("choose a mouse button without modifier keys".into()); }
+    Ok(u32::from(trigger.key))
+}
+
+impl AutoscrollRule {
+    fn validate(&self) -> Result<(), String> {
+        let mut config = one_mk_proto::autoscroll::Config::default();
+        if let Some(button) = &self.button { config.button = mouse_button(button)?; }
+        if let Some(speed) = self.speed { config.speed = speed; }
+        if let Some(dead_zone) = self.dead_zone { config.dead_zone = dead_zone; }
+        config.validate().map_err(str::to_owned)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GestureRule {
+    pub button: String,
+    pub direction: String,
+    pub to: To,
+    #[serde(default = "gesture_threshold")]
+    pub threshold_px: f64,
+    #[serde(default, skip_serializing_if = "Scope::is_global")]
+    pub scope: Scope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+}
+
+fn gesture_threshold() -> f64 { 60.0 }
+
+impl GestureRule {
+    fn compile(&self, target: remap::Target) -> Result<one_mk_proto::gesture::Rule<Keymap>, String> {
+        let button = mouse_button(&self.button)?;
+        let direction = self.direction.parse().map_err(str::to_owned)?;
+        if !self.threshold_px.is_finite() || !(1.0..=10_000.0).contains(&self.threshold_px) {
+            return Err("gesture threshold must be between 1 and 10000 pixels".into());
+        }
+        let output = match &self.to {
+            To::One(name) if name == "desktop-left" || name == "desktop-right" => {
+                let direction = if name == "desktop-left" { "left" } else { "right" };
+                let modifiers = match target.os { os::MACOS => "ctrl", os::WINDOWS => "ctrl+super", _ => "ctrl+alt" };
+                format!("{modifiers}+{direction}").parse::<remap::Output>().map_err(|error| error.to_string())?
+            }
+            _ => self.to.parse()?,
+        };
+        if matches!(output, remap::Output::Layer(_)) { return Err("gestures cannot hold a layer; choose a key, chord, sequence or action".into()); }
+        let spec = RuleSpec { from: Trigger::key(button as u16), layer: None, what: What::To(output) };
+        let output = Keymap::compile(&[spec], target, remap::DEFAULT_TAP).map_err(|error| error.to_string())?.map;
+        Ok(one_mk_proto::gesture::Rule { button, direction, threshold_px: self.threshold_px, output })
+    }
 }
 
 /// `[input.keymap]`.
@@ -309,7 +402,7 @@ impl TuningSettings {
         };
         self.keymap.rule.iter().any(|r| {
             r.to.as_ref().is_some_and(to) || r.tap.as_deref().is_some_and(run) || r.hold.as_deref().is_some_and(run)
-        }) || self.button.iter().any(|b| to(&b.to))
+        }) || self.button.iter().any(|b| to(&b.to)) || self.gesture.iter().any(|rule| to(&rule.to))
     }
 }
 
@@ -630,6 +723,8 @@ pub struct Resolved {
     pub keymap: Keymap,
     pub pointer: PointerTune,
     pub scroll: ScrollConfig,
+    pub autoscroll: Option<one_mk_proto::autoscroll::Config>,
+    pub gestures: Vec<one_mk_proto::gesture::Rule<Keymap>>,
     /// Rules that were skipped or are odd, for the log.
     pub warnings: Vec<String>,
 }
@@ -651,6 +746,7 @@ fn place(table: &str, i: usize) -> String {
 impl TuningSettings {
     pub fn is_empty(&self) -> bool {
         self.keymap.rule.is_empty() && self.pointer.is_empty() && self.scroll.is_empty() && self.button.is_empty()
+            && self.autoscroll.is_empty() && self.gesture.is_empty()
     }
 
     /// Key and button rules that apply to `peer`, most specific scope
@@ -737,7 +833,30 @@ impl TuningSettings {
         warnings.extend(w);
         let (scroll, w) = self.scroll_for(peer);
         warnings.extend(w);
-        Resolved { keymap, pointer, scroll, warnings }
+        let mut config = one_mk_proto::autoscroll::Config::default();
+        let mut enabled = false;
+        let mut auto: Vec<_> = self.autoscroll.rules().filter_map(|rule| Some((rank_for(&rule.scope, &rule.app, peer)?, rule))).collect();
+        auto.sort_by_key(|(rank, _)| *rank);
+        for (_, rule) in auto {
+            if let Err(error) = rule.validate() { warnings.push(format!("autoscroll: {error}")); continue; }
+            if let Some(value) = rule.enabled { enabled = value; }
+            if let Some(value) = rule.speed { config.speed = value; }
+            if let Some(value) = rule.dead_zone { config.dead_zone = value; }
+            if let Some(value) = rule.vertical_only { config.vertical_only = value; }
+            if let Some(value) = &rule.button && let Ok(button) = mouse_button(value) { config.button = button; }
+        }
+        let mut candidates: Vec<_> = self.gesture.iter().filter_map(|rule| Some((rank_for(&rule.scope, &rule.app, peer)?, rule))).collect();
+        candidates.sort_by_key(|(rank, _)| std::cmp::Reverse(*rank));
+        let mut gestures: Vec<one_mk_proto::gesture::Rule<Keymap>> = Vec::new();
+        for (_, rule) in candidates {
+            match rule.compile(target) {
+                Ok(compiled) if enabled && compiled.button == config.button => warnings.push(format!("gesture {} {} is reserved by autoscroll; choose another button or turn autoscroll off", rule.button, rule.direction)),
+                Ok(compiled) if !gestures.iter().any(|other| other.button == compiled.button && other.direction == compiled.direction) => gestures.push(compiled),
+                Ok(_) => {},
+                Err(error) => warnings.push(format!("gesture: {error}")),
+            }
+        }
+        Resolved { keymap, pointer, scroll, autoscroll: enabled.then_some(config), gestures, warnings }
     }
 
     /// What applies to `peer` for input from each of `devices` (the ones
@@ -880,7 +999,9 @@ impl TuningSettings {
         let pointer = self.pointer.iter().enumerate().map(|(i, r)| (place("input.pointer", i), &r.scope, &r.app));
         let scroll = self.scroll.iter().enumerate().map(|(i, r)| (place("input.scroll", i), &r.scope, &r.app));
         let buttons = self.button.iter().enumerate().map(|(i, r)| (place("input.button", i), &r.scope, &r.app));
-        keys.chain(pointer).chain(scroll).chain(buttons)
+        let auto = self.autoscroll.rules().enumerate().map(|(index, rule)| (place("input.autoscroll", index), &rule.scope, &rule.app));
+        let gestures = self.gesture.iter().enumerate().map(|(index, rule)| (place("input.gesture", index), &rule.scope, &rule.app));
+        keys.chain(pointer).chain(scroll).chain(buttons).chain(auto).chain(gestures)
     }
 
     /// Whether any rule names an app.
@@ -911,6 +1032,25 @@ impl TuningSettings {
     /// `paired` are the paired computers' names, ids and OSes.
     pub fn check(&self, paired: &[(String, String, u8)]) -> Vec<String> {
         let mut out = Vec::new();
+        for rule in self.autoscroll.rules() {
+            if let Err(error) = rule.validate() { out.push(format!("autoscroll: {error}")); }
+            let button = rule.button.as_deref().unwrap_or("middle");
+            if rule.enabled == Some(true) && let Ok(button) = mouse_button(button)
+                && self.button.iter().any(|other| other.from.trigger().is_ok_and(|trigger| u32::from(trigger.key) == button)) {
+                out.push("autoscroll takes precedence over buttons map for its toggle button; choose another button or remove that mapping".into());
+            }
+        }
+        for (index, rule) in self.gesture.iter().enumerate() {
+            if let Err(error) = rule.compile(remap::Target { os: os::local(), swap: false }) { out.push(format!("gesture #{}: {error}", index + 1)); }
+            if self.gesture.iter().take(index).any(|other| mouse_button(&other.button).ok().zip(mouse_button(&rule.button).ok()).is_some_and(|(left, right)| left == right)
+                && other.direction.trim().eq_ignore_ascii_case(rule.direction.trim()) && other.scope == rule.scope && same_app(&other.app, &rule.app)) {
+                out.push(format!("gesture #{} repeats a button and direction; remove the duplicate", index + 1));
+            }
+            if let Ok(button) = mouse_button(&rule.button)
+                && self.button.iter().any(|other| other.from.trigger().is_ok_and(|trigger| u32::from(trigger.key) == button)) {
+                out.push(format!("gesture {} takes precedence over buttons map; a short click replays the original button", rule.button));
+            }
+        }
         // Every scope in use, checked as a computer it would apply to, and
         // every app named plainly, as the focused app there.
         let mut scopes: Vec<&Scope> = Vec::new();
@@ -994,6 +1134,17 @@ impl TuningSettings {
                     Some(a) => format!("{s}, in app {a}"),
                     None => s.to_string(),
                 };
+                let resolved = self.resolve(&facts, false);
+                out.extend(resolved.warnings.into_iter().filter(|warning| warning.contains("reserved by autoscroll")));
+                if let Some(config) = resolved.autoscroll
+                    && specs.iter().any(|spec| u32::from(spec.from.key) == config.button) {
+                    out.push(format!("for {what}: autoscroll takes precedence over button/key mappings for its toggle button; choose another button or remove that mapping"));
+                }
+                for gesture in resolved.gestures {
+                    if specs.iter().any(|spec| u32::from(spec.from.key) == gesture.button) {
+                        out.push(format!("for {what}: gesture {} takes precedence over button/key mappings; a short click replays the original button", keynames::key_name(gesture.button)));
+                    }
+                }
                 match Keymap::compile(&specs, target, self.keymap.tap()) {
                     Ok(c) => out.extend(c.warnings),
                     Err(e) => out.push(format!("for {what}: {e}")),
@@ -1004,8 +1155,10 @@ impl TuningSettings {
         if self.button.iter().any(|rule| rule.scope == Scope::Local)
             || self.pointer.iter().any(|rule| rule.scope == Scope::Local)
             || self.scroll.iter().any(|rule| rule.scope == Scope::Local)
+            || self.autoscroll.rules().any(|rule| rule.scope == Scope::Local)
+            || self.gesture.iter().any(|rule| rule.scope == Scope::Local)
         {
-            out.push("local scope is reserved for input.keymap.rule; local button, pointer and scroll rules are ignored".into());
+            out.push("local scope is reserved for input.keymap.rule; local button, pointer, scroll, autoscroll and gesture rules are ignored".into());
         }
         for (i, r) in self.pointer.iter().enumerate() {
             if r.acceleration.is_some_and(|a| a != AccelMode::System) && !RAW_MOTION {
@@ -1035,6 +1188,11 @@ impl TuningSettings {
     }
 
     /// Summary for `one-mk status`, with a separate local availability line.
+    pub fn mouse_mode_note(&self) -> Option<String> {
+        (!self.autoscroll.is_empty() || !self.gesture.is_empty()).then(||
+            "Autoscroll and gestures: Linux null-backend tests only; native Linux (GNOME/wlroots), Windows, macOS and Bluetooth hardware are untested. Windows and macOS are compile-checked only.".into())
+    }
+
     pub fn summary(&self) -> Option<String> {
         if self.is_empty() {
             return None;
@@ -1053,6 +1211,8 @@ impl TuningSettings {
         if !self.scroll.is_empty() {
             parts.push(n(self.scroll.len(), "scroll setting", "scroll settings"));
         }
+        if !self.autoscroll.is_empty() { parts.push("autoscroll settings".into()); }
+        if !self.gesture.is_empty() { parts.push(n(self.gesture.len(), "gesture", "gestures")); }
         let local = if cfg!(target_os = "linux") && self.keymap.rule.iter().any(|rule| rule.scope == Scope::Local) {
             "\nlocal key rules are not available on Linux"
         } else if self.keymap.rule.iter().any(|rule| rule.scope == Scope::Local) {
@@ -1060,7 +1220,7 @@ impl TuningSettings {
         } else {
             ""
         };
-        Some(format!("Input tuning: {} (one-mk keymap, buttons, pointer, scroll).{local}", parts.join(", ")))
+        Some(format!("Input tuning: {} (one-mk keymap, buttons, pointer, scroll, autoscroll, gestures).{local}", parts.join(", ")))
     }
 }
 
@@ -2302,7 +2462,7 @@ acceleration = "off"
     fn summary_only_when_something_is_set() {
         assert_eq!(TuningSettings::default().summary(), None);
         let t = load("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\n[[input.button]]\nfrom = 4\nto = \"back\"\n");
-        assert_eq!(t.summary().unwrap(), "Input tuning: 1 key rule, 1 button rule (one-mk keymap, buttons, pointer, scroll).");
+        assert_eq!(t.summary().unwrap(), "Input tuning: 1 key rule, 1 button rule (one-mk keymap, buttons, pointer, scroll, autoscroll, gestures).");
     }
     const TRAVEL: &str = "bluetooth/04e8:7021/f4:73:35:aa:bb:cc/Travel Keyboard";
     const BIG: &str = "usb/046d:c31c//Logitech USB Keyboard";

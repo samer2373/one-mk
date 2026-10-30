@@ -632,8 +632,8 @@ convention: 1 left, 2 right, 3 middle, 4 back (side), 5 forward (extra),
 6 to 8 the evdev `BTN_FORWARD`, `BTN_BACK`, `BTN_TASK`. A button can become
 another button, a key, chord or sequence, an action, `back`/`forward`
 (resolved per target OS: the preset `one-mk buttons preset
-side-back-forward` maps 4 and 5 so), or `none`. Middle-click autoscroll
-("scroll lock") is not implemented.
+side-back-forward` maps 4 and 5 so), or `none`. Opt-in middle-click
+autoscroll is described in [5F](#autoscroll-and-gesture-buttons-5f).
 
 ## Configuration
 
@@ -730,6 +730,145 @@ never apply, conflicting rules for one key in one scope, unknown computers
 in scopes, apps that can't match, and acceleration modes this computer
 can't do; with rules for apps and a Linux computer paired, it notes that
 Wayland windows there don't say which app they are).
+
+## Autoscroll and gesture buttons (5F)
+
+These optional modes affect **only input sent to another computer**. Both
+are off until configured. Physical hotkeys, including Ctrl+Alt+Shift+Esc,
+run first. There is no protocol change.
+
+```
+one-mk autoscroll --on
+one-mk autoscroll --speed 1.5 --dead-zone 8 --vertical-only off
+one-mk autoscroll --on --button middle --os windows
+one-mk autoscroll --off --app 'code*'
+one-mk autoscroll --off
+one-mk gestures list
+one-mk gestures add button4 left back --threshold 60
+one-mk gestures add button5 right 'switch next'
+one-mk gestures add middle up 'ctrl+super+left' --os windows
+one-mk gestures add button4 down ctrl+a ctrl+c --app 'code*'
+one-mk gestures preset side-swipe
+one-mk gestures remove button4 left
+one-mk gestures clear
+```
+
+**Autoscroll:** click middle once to start. Moving away from the anchor
+scrolls continuously; the target pointer stays at the anchor. Return inside
+the dead zone to pause. Click again, press Esc or any other button, or leave
+the visit to stop. The toggle click is never sent as a middle click; other
+buttons stop scrolling and still work normally. Speed is a multiplier
+(0.1–10); dead zone is logical pixels (0–1000). Both axes work unless
+`vertical_only` is on. Per-axis rate is
+`min((max(abs(displacement) - dead_zone, 0) / 20)^1.5, 100) * speed`
+pixels per 16 ms tick, with the displacement's sign. Speed/dead-zone
+configure its response; the exponent is fixed. Late ticks never catch up
+in bursts.
+
+```toml
+[input.autoscroll]
+enabled = true
+button = "middle"
+speed = 1.0
+dead_zone = 8.0
+vertical_only = false
+
+[[input.autoscroll.rule]]
+scope = { os = "windows" }
+speed = 1.5
+
+[[input.autoscroll.rule]]
+app = "code*"
+enabled = false
+
+[[input.gesture]]
+button = "button4"
+direction = "left"
+to = "back"
+threshold_px = 60.0
+scope = { peer = "Studio PC" }
+app = "firefox*"
+```
+
+Autoscroll overrides use `[[input.autoscroll.rule]]`, with the same `scope`
+and `app` machinery as other tuning: computer beats OS beats global; app
+matches outrank rules without apps. Fields inherit independently. CLI
+selectors write overrides; no selector writes the base table. Gesture
+rules resolve per button/direction, most specific first. `remove`/`clear`
+affect only the selected scope/app, global by default. `add` replaces the
+same button/direction in that scope/app.
+
+**Gestures:** hold the configured button, then move beyond its threshold in
+a configured direction. The action fires once per press. Release before
+any configured direction reaches its threshold to replay exactly one
+normal, **unmapped** click at the unchanged target pointer position. Other
+configured gesture-button presses and all movement while holding them are swallowed.
+Esc, reload, focus-rule changes, display sleep, locking, disconnect and visit end cancel
+without replay. Threshold is 1–10000 logical pixels (default 60).
+Diagonal movement selects the larger axis, vertical on a tie.
+
+Outputs reuse the key mapper's parser and dispatch: keys, chords,
+sequences (`to = ["ctrl+a", "ctrl+c"]`), media keys, `back`/`forward`,
+`switch next`, `lock-all`, and `run: COMMAND`. Command outputs have the
+same file-permission checks as key actions. Layer holds are rejected:
+gestures pulse actions rather than hold layers. Navigation, modifiers and
+Ctrl/Cmd swapping follow the target OS. The side-swipe preset uses button4
+and `desktop-left`/`desktop-right`: Ctrl+Super+arrow on Windows, Ctrl+arrow
+on macOS, Ctrl+Alt+arrow on Linux. If the target desktop uses different
+shortcuts, configure those chords instead.
+
+Precedence is **autoscroll toggle → gesture button → button/key mapping**.
+Autoscroll owns its button completely; gestures on that button are skipped.
+Gesture ownership also overrides modifier/layer button mappings. Checks
+warn about overlaps. Short clicks replay the original button, not its
+`buttons map` output. Gesture pulses share the key mapper's held-state
+accounting, so they cannot release another key's held output.
+
+The existing visit deadline scheduler arms one 16 ms wakeup **only while
+autoscroll is active**, including pauses inside the dead zone. No extra
+task/thread/idle interval is created. `ScrollTune` applies smooth/notched
+conversion, direction, speed and modifiers; fractional notches accumulate
+until stop and are then discarded. Reload/visit end cancels the timer;
+restart/reconnect never restores active modes. A controller display-sleep
+notification cancels both modes without changing the existing sleep-sync
+policy or ending the visit.
+
+The **Keys & mouse → Mouse** view adds an Autoscroll toggle/speed, a
+gesture list with Remove controls and the side-swipe preset. Existing focus
+rings, keyboard-operable controls, contrast palette and reduced-motion
+policy apply. Advanced button, threshold, app and output editing uses the
+CLI/config.
+
+### Troubleshooting and acceptance
+
+Run `one-mk keymap check` and `one-mk doctor`. If a button stops clicking,
+check autoscroll/gesture ownership before `buttons map`. If scrolling
+continues, press Esc or switch here. If nothing scrolls, ensure you're
+visiting a peer, move beyond the dead zone, and check that its app scrolls.
+
+**Not hardware-qualified:** automated tests use Linux null backends and
+real loopback links. Windows/macOS are compile-checked only. Native
+GNOME/wlroots capture/injection, Windows/macOS runtime, Bluetooth devices
+and real desktop shortcuts are untested. Status/doctor repeat this boundary.
+The [5F verification record](5F-VERIFICATION.md) lists real executable and
+window checks, measurements, and the pre-existing portal-test blocker.
+
+Manual hardware acceptance, using disposable settings on each target OS:
+
+1. Enable autoscroll, visit a page, click middle and move on both axes.
+   Expect scrolling, no target pointer movement, no middle-click action.
+   Return to the anchor: no drift. Stop separately with middle/Esc/another
+   button; the other button must still click.
+2. Use discrete scroll mode and tiny displacements: complete notches
+   accumulate; no delayed notch after stop or another visit.
+3. Configure a swipe. A short click must click once; a long swipe must
+   fire once and never click. Hold other mapped keys while swiping, release
+   in either order, and test the emergency chord. Nothing stays held.
+4. Mid-mode, switch here, reload (including changing the reserved button),
+   lock, sleep, disconnect, and kill the sender. The target must release
+   everything; reconnect must not resume old modes.
+5. Check the Mouse view narrow/HiDPI, reduced motion, many/long rules,
+   offline/errors, and Tab/Enter/arrow-key operation and focus labels.
 
 ## Limits per OS
 
