@@ -199,6 +199,31 @@ One local spanning window feeds clipped `Clutter.Clone`s above native static
 wallpaper in private `Main.layoutManager._backgroundGroup`, below DING/windows.
 No normal pinned-below fallback: it stole focus and missed required layering.
 
+**M1a presentation finding (2026-10-30; still STOPPED):** GStreamer 1.28.2
+`waylandsink` acknowledges the initial xdg configure, but commits empty root
+state before attaching its first root buffer. On Mutter 50.1 that consumes the
+pending acknowledgement without establishing the window's last acknowledged
+configuration; first content then triggers Mutter's workaround warning. A
+NORMAL-window control reproduces it too: DESKTOP conversion is not required
+for this particular warning. Do not describe this as an absent wire ack, or
+as proof that all compositors reject the sequence.
+
+The feature-gated trusted-fixture diagnostic now uses `appsink` plus a Rust
+`wayland-client` xdg toplevel: initial empty commit, receive configure, then
+acknowledge once immediately before attaching/committing the first nonempty
+buffer, without an intervening empty commit. Later serials belong only to the
+current surface; released buffers and frame callbacks bound presentation.
+The extension still adopts by connection ownership, sets DESKTOP before map,
+and clones one decoder's output per monitor. Empty input regions avoid source
+window input. This removes the initial-content warning in isolated runs,
+**not** the complete lifecycle warning gate: stack/allocation warnings and
+retained managed windows remain. `gtk4paintablesink` is unavailable in this
+lab and has not been runtime-qualified. See the [resolution and continued
+stop](spikes/wallpaper-m1-stop.md) for primary evidence and the next experiment.
+CPU shared-memory copies, fixed-fixture scaling, broadcast spike signals and
+manual test restarts are not the production GPU/HiDPI/bounded bridge design.
+No live-desktop deployment or shipping presenter is authorized by this result.
+
 No decoder/native module in Shell. No JS DMA-BUF import (NO-GO in 6B); no live
 software frame uploads (10–15 ms/frame on Shell's main thread). Wayland window
 buffers allow Mutter to handle textures, but actual hardware zero-copy/HiDPI/
@@ -752,7 +777,7 @@ M2 includes two authenticated “computers”, not a public single-PC-only phase
 
 | ID / remaining effort | Gated increment | Exit criteria and tests |
 |---|---|---|
-| 6D-M1 / 12–18 engineer-weeks | Optional safe package/import/poster + capability/consent scaffolding | Prove sandbox filesystem/network/GPU constraints on all OSes and LGPL replacement/artifact negative tests. Re-run GNOME with real renderer/scale/lifecycle; prototype WorkerW/Mac host. Geometry/fuzz, bombs/cancel, off-state no timers. Stop/re-estimate if isolation/presentation fails. |
+| 6D-M1 / revised remaining 16–26 engineer-weeks | Optional safe package/import/poster + capability/consent scaffolding; M1a diagnostic is not acceptance | Prove sandbox filesystem/network/GPU constraints on all OSes and LGPL replacement/artifact negative tests. Resolve retained windows/stack warnings and qualify the full real-renderer lifecycle; prototype WorkerW/Mac host. Geometry/fuzz, bombs/cancel, off-state no timers. Stop/re-estimate if isolation/presentation fails. |
 | 6D-M2 / 10–16 | GNOME multi-computer local video/images | Two real daemons/private sessions, transfer/rehash/epoch/N crops/one decode, all fits/image timing. Datagrams/old-v2 compatibility, fake clocks/asymmetry/outage/revoke/replay. Warm loopback presented-PTS ≤20 ms P95, crop goldens, kill/focus/input cleanup. Other OSes remain static/unsupported-labelled. |
 | 6D-M3 / 16–24 | Windows/macOS + sync quality/power | Physical native layering/focus/Spaces/Explorer matrix, actual VP9/AV1/iGPU paths/ladder, union coverage, calibration, sleep/rebase/hot-plug. Zero off/paused periodic work, budgets including compositor. Compilation alone fails gate. |
 | 6D-M4 / 10–16 | URL/gallery/native controls/CLI/doctor | SSRF/limits/metadata rotation/freeze/rollback/takedown tests, ≥10 cleared compatible Commons items for gallery-ready. UI all states/screenshots/accessibility; settings migrations/cancel/failures. |

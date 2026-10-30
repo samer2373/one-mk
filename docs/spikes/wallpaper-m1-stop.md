@@ -1,175 +1,199 @@
-# 6D-M1: stopped at real-renderer presentation gate
+# 6D-M1a: configure warning resolved in a diagnostic; lifecycle still STOPPED
 
-Date: 2026-10-30. Author: Codex. Branch: `t3/wallpaper-import-scaffolding`.
-Baseline: `7f331c9` (`Merge wallpaper design revision 2 (6E) into wave5`).
-Owner authorized all milestones; this records **M1 incomplete**, not a release.
-The frozen revision-2 contracts and receiver authority remain unchanged.
+Date: 2026-10-30. Branch: `t3/wallpaper-mutter-presentation`.
+Baseline: `76534af` (`Merge wallpaper M1 probe and stop evidence into wave5`).
+Owner authorized all milestones. **Neither M1a qualification nor M1 delivery
+is complete. Do not deploy this binary into the owner's desktop.**
 
-## Decision and evidence
+## Decision and primary evidence
 
-Exercise the risky native integration first, before implementing an untrusted
-media path or granting a peer any new authority. The real Rust `one-mk-wall`
-binary decoded a generated VP9 fixture with GStreamer into the original 6B
-private headless Mutter harness. It produced frames, but Mutter reported:
+Retain the own-xdg-surface/appsink path as the next presentation experiment,
+not a shipping renderer. It removes the original initial-content warning,
+but the strict full-session gate still fails: Mutter stack/allocation warnings,
+retained managed windows, a late watchdog, and no bounded restart cascade.
+Do not suppress these warnings or mark qualification complete. No decoder
+sandbox, untrusted importer, production bridge or new receiver authority is added.
 
-```text
-(gnome-shell:2645131): libmutter-WARNING **: 20:32:43.556: Buggy client (one-mk-wall) committed initial non-empty content without acknowledging configuration, working around.
+The [original M1 report](gnome/m1-presentation-original.json) is unchanged.
+New evidence: [final matrix](gnome/m1a-evidence/matrix.json),
+[complete final log](gnome/m1a-evidence/shell.txt),
+[comparison runs](gnome/m1a-evidence/comparison.json),
+[wire trace](gnome/m1a-evidence/configure-trace.txt),
+[45-capture contact sheet](gnome/m1a-evidence/contact-sheet.webp).
+Individual captures are downscaled lossless WebP; JSON retains original PNG
+dimensions, SHA-256, scheduled/request/completion times and sampled pixels.
+Generated full-size PNGs, fixture, plugins and session files are removed.
+
+## Root cause and candidate paths
+
+Host GNOME/Mutter 50.1, GStreamer 1.28.2. The extension's DESKTOP window and a
+NORMAL-window control both reproduce the warning. DESKTOP conversion is
+**not necessary** for this initial-content warning.
+
+The wire trace shows `xdg_surface.configure(1)`, `ack_configure(1)`, then
+multiple **empty root commits**, followed by the first video-subsurface and
+root-border buffer commits. There really is an ack on the wire; saying
+"waylandsink never acknowledges configure" would be incorrect.
+
+Matching upstream sources inspected during diagnosis (not vendored):
+
+- GStreamer tag `1.28.2`, `gst-libs/gst/wayland/gstwlwindow.c`,
+  `handle_xdg_surface_configure` (line 185): acknowledges, marks configured,
+  calls `gst_wl_window_update_geometry` (line 1006), which commits root state
+  before the first root buffer is attached.
+- Mutter tag `50.1`, `src/wayland/meta-wayland-xdg-shell.c`,
+  `meta_wayland_xdg_toplevel_post_apply_state` (around line 1036): window
+  finish-move/resize processing needs a surface buffer.
+- Mutter tag `50.1`, `src/wayland/meta-window-wayland.c`,
+  `acquire_acked_configuration` (around line 1360): first nonempty state has
+  no pending ack, pending configurations exist, and no last-acked configuration
+  exists, so it warns and works around the missing state.
+- Stable `xdg-shell.xml`: initial empty commit precedes configure; acknowledge
+  before content commit; never acknowledge a serial twice. This identifies
+  the installed Mutter/GStreamer state interaction, not a conclusive protocol
+  conformance verdict about every compositor.
+
+| Candidate | Actual experiment | Decision |
+|---|---|---|
+| `waylandsink` | Warning reproduced with DESKTOP and NORMAL controls | Reject standalone path on measured stack |
+| `gtk4paintablesink` in GtkWindow | [No such plugin](gnome/m1a-evidence/gtk4-availability.txt) in this lab; no GtkWindow playback test possible | **Not runtime-tested**; provision privately for subsequent comparison |
+| Rust `wayland-client` xdg root + GStreamer appsink | Real renderer, one VP9 decoder; initial empty commit → configure → ack immediately with first nonempty root commit | Original warning absent; retain diagnostic only; complete log still fails |
+
+The extension owns the connection through `Meta.WaylandClient`, identifies
+windows using `owns_window`, sets DESKTOP before initial map/configure, hides
+the source actor, and clones above native wallpaper/below DING. NORMAL windows
+are not a shipping fallback: work-area constraints break the spanning extent.
+The Rust prototype uses an empty input region, two release-tracked memfd
+buffers, current-surface configure serials and frame callbacks. Layout changes
+destroy the old role before replacement; this is not seamless hot-plug.
+
+New dependencies `wayland-client 0.31.15` and `wayland-protocols 0.32.13`
+declare MIT. GStreamer/appsink and GLib/GIO remain dynamically linked LGPL
+laboratory dependencies; no GPL upstream implementation is copied into this
+repo. Selected plugins and forbidden-library string checks are still **not**
+a release SBOM/licence audit. Fixed 3840×1080 BGRx fixture, CPU nearest-neighbor
+scaling, copies and dynamic FFI are unqualified: no GPU zero-copy, physical
+HiDPI, hostile-media security or production unicast/PID-binding claim follows.
+The feature remains default-off and Linux-only.
+
+## Final measured lifecycle
+
+Run began `2026-10-30T18:47:01.029908+00:00`, optimized real Rust binary,
+three headless virtual 1920×1080 outputs. First-frame figures mean **supervisor
+observation of Shell damage**, including IPC/polling, not panel scanout.
+CPU is process tick delta over three seconds, percent of **one core**; short
+windows/host contention limit interpretation. Shell PID is found only among
+this run's private leader descendants, not by a reused global runtime path.
+
+| Case | Measurement | Qualification |
+|---|---|---|
+| Startup, three outputs | First damage **159.947 ms**; 5760×1080 buffer, three clones; DING rather than source has focus | Narrow startup pass |
+| Scale 1, 1/2/3 outputs | 1920/3840/5760×1080 buffers, 1/2/3 clones | Logical extent observed |
+| Scale 2, 1/2/3 outputs | 960/1920/2880×540 buffers, 1/2/3 clones | Not physical sharpness qualification |
+| Fractional scale 1.25, three outputs | 4608×864 buffer, three clones | Rotation/mixed scales not tested |
+| Unplug | Video in first capture, request 82.41 ms / completion 176.80 ms | No static gap sampled; not proof of zero gap |
+| Replug | Static in first capture (89.48–347.95 ms request/completion); video next (425.32–530.64 ms) | Visible still gap; exact duration not recoverable from IPC captures |
+| Overview pause, two outputs | Renderer **1.00%**, Shell **1.33%** | Actual PAUSED pipeline; residual polling is not zero-work |
+| All-covered, two fullscreen windows | `paused:true`, `reason:covered`; renderer **0.67%**, Shell **0.67%** | Coverage actually triggered |
+| Playing, three outputs | Renderer **60.99%**, Shell **9.67%** | Software copies/scale; not an efficiency pass |
+| Hang (`SIGSTOP`) | Static fallback observed **3732.27 ms**; Shell event stale 3617 ms | **Fails 3 s**; one-second watchdog sampling overshoots |
+| Live `SIGKILL` | Fresh damage/two clones verified after SIGCONT, then killed; static first capture completed 255.55 ms through last at 2925.54 ms | Fallback observed; manual next start **185.579 ms** to damage, not automatic recovery |
+| Lock/unlock | `locked:true`, mode `unlock-dialog`; clones removed; lock frames through 2093.18 ms; static desktop unlock captures completed 370.32–2926.48 ms | Manual restart after burst **170.501 ms**; not an automatic-unlock gap measurement |
+| Restart cascade/cap | 6B has no automatic bounded restart implementation | **Not qualified**; manual starts are not a cap test |
+| Disable/enable ×100 | 100 old renderer PIDs exited; damage min/median/max **154.560 / 164.570 / 279.350 ms** | Managed wallpaper-window count **1–24**, not invariant one |
+| Final leak census | No named one-mk actors/stage clones, bridge absent; **four managed wallpaper windows remain after one second** | **Fails window-leak gate**, not dismissed as animation |
+| DING | Enabled state 1; `Desktop Icons 1/2` in final managed-window list | Runs; private missing GVfs trash/metadata support still logged |
+| Complete Shell log including teardown | **31** WARNING/CRITICAL/Gjs-error matching lines; **zero** original initial-content warnings | **Fails strict gate**, no allowlist |
+| Process/session cleanup | Children reaped; private media/files/socket removed; host-namespace exact-runtime scan found **zero processes** | No remaining private processes; does not erase retained-window failure |
+
+Screenshot targets are 0/250/…/2000 ms. Screenshot/snapshot IPC sometimes
+exceeds 250 ms: kill/unlock bursts finish about 2.9 s. JSON retains actual
+request/completion times, not fictitious exact intervals. Pixel (500,700)
+distinguishes this fixture's black video background from blue wallpaper;
+black lock-screen pixels are **not** called video. These are coarse visible
+observations, not presentation-time feedback or precise gap bounds.
+
+Earlier CPU values sampled a stale private Shell PID and are excluded. Earlier
+kill-9 captures taken while already stale are not the live test above. Early
+baseline cleanup permission failures left private processes; they were later
+matched by UID/exact private runtime and terminated. No live owner Shell or
+one-mk was touched. Earlier DING failures coincided with UID inotify exhaustion;
+DING runs in the final session after cleanup, without claiming all GVfs works.
+
+## Strict harness and reproduction
+
+`m1-risk-probe.py` fails on **all** WARNING/CRITICAL/Gjs-error/JS-error lines,
+including startup services and teardown; `test_m1_gate.py` tests classification
+without an allowlist. Matrix invariants independently fail late watchdog,
+retained windows and absent restart cap. Final exit **1**, explicit failures
+in JSON. GTK comparison is an explicitly missing test, never a mock pass.
+
+```sh
+env -i HOME=/home/samer PATH=/home/samer/.cargo/bin:/usr/bin:/bin \
+  cargo build --offline -j 2 --profile bench-opt -p one-mk-wall \
+  --features gnome-risk-probe
+env -i HOME=/home/samer PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
+  python3 docs/spikes/gnome/m1-risk-probe.py --matrix --sink own \
+  --binary target/bench-opt/one-mk-wall --label matrix-qualified-attempt
+# Original sink comparison; add --normal-window for the type control:
+env -i HOME=/home/samer PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 \
+  python3 docs/spikes/gnome/m1-risk-probe.py --sink wayland --trace \
+  --label desktop-trace --binary target/bench-opt/one-mk-wall
 ```
 
-Design §11's lifecycle criterion requires no Shell warnings. This run therefore
-does not pass presentation; the compositor workaround is not an acceptable
-success. Apply §10's **stop/re-estimate** instruction. No importer, decoder
-sandbox, consent protocol, production presenter, or platform host was built
-after finding this failure. This does not establish that the architecture is
-impossible, or diagnose whether the fault is in waylandsink, our integration,
-the extension, or their interaction. A fresh investigation is required.
+Only the existing isolated harness is used: clean environments, private session
+and system buses, HOME/XDG, memory settings, headless/no-X11 Mutter and private
+extension copies. Restricted CLI environments may need private-socket approval.
+Never target the live session or owner's extension directory. Generated fixture
+hash/private-peer guards are laboratory guardrails, **not** a hostile-media sandbox.
 
-The [original machine-readable report](gnome/m1-presentation-original.json)
-is preserved unchanged. Its `status: failed` originally resulted from a cleanup
-exception; its stage strings describe narrow frame/extent observations, **not**
-M1 acceptance. The protocol warning in its `shell_log_tail` independently fails
-the gate. The harness now explicitly classifies that warning as a failure;
-that updated classification was not rerun against Mutter after the stop.
+## Next-best design and re-estimate
 
-Run began `2026-10-30T17:32:17.084752+00:00`, using host GStreamer 1.28.2,
-Linux 7.0.0-38-generic, bubblewrap 0.11.1, two virtual 1920×1080 monitors.
-The host runtime is **UNQUALIFIED**, not pinned/release-audited. Six selected
-host plugins and their `ldd` closures are recorded; the string scan is not a
-licence gate, SBOM, or proof that the complete runtime is acceptable.
+**Stop qualification here: no warning-free complete path demonstrated.** This
+does not prove such a path impossible. Next-best design is the owned xdg root
+with acknowledged first buffer, still one decoded scene/N Shell clones, with
+native static wallpaper as default/failure state. Before product work resumes:
 
-| Observation | Result and limitation |
+1. Diagnose retained managed windows and `meta_window_set_stack_position_no_sync`
+   assertion with Meta.WaylandClient/window/actor lifetimes; add minimal own-root
+   close/destroy control, distinguish Shell stack bugs from extension operations.
+   Do not hide/delete ghosts to fake a passing census.
+2. Privately provision `gtk4paintablesink`; compare real GtkWindow with the same
+   connection-owned DESKTOP adoption, licence and one-decoder checks. Toolkit
+   lifecycle management remains a candidate, not evidence.
+3. Give the private lab required services/settings **without** attaching to the
+   live system bus; resolve rather than filter AccountsService/logind,
+   experimental-setting, portal and Clutter warnings. Fake GDM alone is not a
+   representative lock/session environment.
+4. Implement/test the design's bounded restart budget and 3 s damage deadline;
+   rerun lock/unlock cascades, live crash, captures, leak census and 100 cycles.
+   Investigate residual paused polling, then GPU copies/physical HiDPI/power.
+5. Only after warning-free lifecycle qualify hostile-media isolation, native
+   hosts, LGPL replacement/artifacts and all physical design §11 acceptance.
+
+Planning allowance: **M1 remaining 16–26 engineer-weeks**, versus 14–22 after
+the original stop. M2 10–16, M3 16–24, M4 10–16, M5 14–22, reserve 8–14:
+**74–118 remaining engineer-weeks total**, not elapsed calendar dates. Extra
+2–4 weeks cover lifecycle/toolkit/lab uncertainty, not a promise of a small fix.
+Frozen receiver authority, default-off and physical acceptance remain unchanged.
+
+## Validation
+
+Clean environments, offline Cargo with `-j 2`; no formatter. [Transcript](gnome/m1a-evidence/validation.txt).
+
+| Check | Result |
 |---|---|
-| Generated original fixture | VP9 WebM, 312,344 bytes; 3840×1080, 1,200 frames at 30 fps; BLAKE3 `b851b8199da653d839c7a5191bc2a9c280d1c9adf387ff833c21ae9ccbfa06b6` |
-| First damage observed by supervisor | 164.978 ms; includes polling/IPC, **not** panel latency |
-| Shell event delta | Spawn 795125520 → first frame 795125559 ms (39 ms); not physical presentation feedback |
-| Initial / active | 3840×1080 buffer, two clones; damage count 2 → 62 over roughly two seconds; no focused window |
-| Virtual unplug / replug | One then two clones; buffer still 3840×1080; damage counts 98 / 163 |
-| Visible gap / scale / lock-restart | **Not measured**; retaining buffer extent is not gap-free rendering |
-| Physical GPU / power / sync | **Untested**; no owner desktop or real clipboard accessed |
+| Feature-enabled `one-mk-wall` tests | Pass: 2 unit + 3 real-binary tests |
+| Default `one-mk-wall` / `one-mk-wall-sync` | Pass: 3 binary + 12 sync integration tests |
+| Workspace clippy, all targets, `-D warnings` | Pass |
+| Feature-enabled wallpaper clippy, all targets, `-D warnings` | Pass |
+| Windows MSVC / Apple ARM cross clippy | Pass, including wallpaper crates and enabled risk feature; native hosts untested |
+| Python strict-log gate tests | Pass: 2 tests |
+| Real final private Mutter matrix | **FAIL**, as detailed above; not green acceptance |
 
-## Isolation and cleanup
-
-All test processes use clean environments and throwaway directories in ignored
-`target/wall-m1-lab`; GNOME uses the existing 6B harness's private session bus,
-private system bus, HOME/XDG directories, memory settings and no Xwayland.
-Only private extensions were enabled. The Rust risk probe checks the inherited
-Wayland peer's UID, headless/no-X11 command and private runtime before loading
-native libraries; ambiguous/live environments refuse with exit 3.
-
-Linux namespace smoke outside the CLI sandbox passed both `unshare --user
---map-root-user --net --mount --pid --fork /usr/bin/true` and bubblewrap
-`--unshare-all` with read-only `/usr`, private `/proc`, `/dev`, `/tmp` and an
-empty environment. The earlier CLI-sandbox EPERM is **not** a host-isolation
-failure. These are smoke tests only: no hostile-file, seccomp, Landlock,
-filesystem/network escape, resource-limit or GPU-device sandbox qualification.
-
-The original cleanup reported `[Errno 13] Permission denied` without a
-traceback. Do not infer its exact source. All four recorded private process IDs
-(2645089, 2645131, 2645098, 2649206), and PIDs extracted from the private log,
-were subsequently checked absent. The private session/generated media were
-removed manually; the exact owned stale `/tmp/dbus-g0mr0itTB5` socket was
-verified as a socket belonging to the test UID and unlinked. Cleanup now handles
-inaccessible child listings, repeatedly reaps adopted children, removes the
-recorded private bus socket and records exception tracebacks. A synthetic owned
-sleep child was terminated/reaped and its generated session files removed using
-the revised cleanup. **The revised cleanup has not passed another GNOME run.**
-
-## Exit criteria accounting
-
-Only the stop/re-estimate criterion is met; the six delivery criteria remain
-incomplete.
-
-| Criterion | Status |
-|---|---|
-| Optional package, daemon/CLI, zero off-state work | **Partial:** separate default-disabled probe crate, no daemon linkage/startup, finite status/help/doctor and refusal paths. No main `one-mk wallpaper` surface, 6C integration, release package, or ten-minute idle/resource comparison |
-| Safe import/poster | **Not implemented:** no untrusted imports accepted; no worker sandbox, all-format validation, caps/cancel/poster, malicious fixtures or fuzz campaign |
-| Licence/SBOM/packaging | **Not implemented:** no pinned isolated distribution, replacement test, artifact/dependency negative test, SBOM or new cargo-deny/audit policy |
-| Capability and receiver consent/revoke | **Not implemented:** daemon/wire capability and authority unchanged; no content/command peer path added; hostile peer consent tests still required |
-| Geometry | **Not implemented:** no canvas/crops/property tests/goldens; reserved missing/asleep spaces remain a requirement |
-| Native presentation | **Failed Linux risk gate:** real binary produced damage but protocol warning; scale/lock/kill-9/lifecycle/visible gaps unqualified. WorkerW/macOS hosts not implemented, not compile-qualified |
-| Stop and re-estimate | **Done:** this report and updated feature-plan row; M1 remains blocked on presentation investigation, not complete |
-
-## Reproduction and troubleshooting
-
-Do not run the probe against a live GNOME session. Normal/default builds accept
-only finite `status`, `doctor`, and `--help`; doctor and unavailable operations
-exit 3. There is no production import/playback fallback. Do not enable host
-codec discovery, install a real-user extension, or substitute FFmpeg/libav.
-
-For a separately authorized follow-up investigation, create owned mode-0700
-`target/wall-m1-lab/{home,run,one-mk}` directories and use this environment for
-every command (including builds; use the actual checkout's absolute path):
-
-```bash
-env -i PATH="$PATH" HOME="$PWD/target/wall-m1-lab/home" \
-  XDG_RUNTIME_DIR="$PWD/target/wall-m1-lab/run" \
-  ONE_MK_HOME="$PWD/target/wall-m1-lab/one-mk" \
-  CARGO_HOME=/home/samer/.cargo RUSTUP_HOME=/home/samer/.rustup \
-  TMPDIR="$PWD/target/wall-m1-lab" \
-  cargo build --offline -j 2 -p one-mk-wall --features gnome-risk-probe
-```
-
-Then invoke `python3 docs/spikes/gnome/m1-risk-probe.py` through the same clean
-environment. It refuses an existing session rather than reusing/killing it.
-Namespace operations may need permission outside a restricted CLI sandbox.
-Logs remain in ignored lab storage; generated session media/plugins are removed.
-This is a future diagnostic recipe, **not** a recommendation to resume the
-stopped implementation or a safe general-purpose media runner.
-
-## Hostile self-review and next estimate
-
-The dynamic FFI loader and trusted-fixture hash are laboratory conveniences,
-not a security boundary: same-UID mutation/TOCTOU, transitive native library
-loading, resource exhaustion and host-library replacement are not addressed.
-No untrusted media may enter this code. Default feature-off is not a measured
-ten-minute daemon/compositor idle proof. Successful cross compilation is not
-native host behavior. Synthetic cleanup is not a 100-cycle lifecycle test.
-No independent reviewer, legal audit, fuzz coverage, or hardware acceptance
-has been substituted by this self-review.
-
-Planning judgment, not measured delivery throughput or calendar dates:
-
-| Remaining work | Engineer-weeks |
-|---|---:|
-| M1 including native presenter investigation/qualification | 14–22 |
-| M2 GNOME multi-computer playback | 10–16 |
-| M3 Windows/macOS and power | 16–24 |
-| M4 HTTPS/gallery/UI | 10–16 |
-| M5 release qualification | 14–22 |
-| Integration/security reserve | 8–14 |
-| **Total remaining** | **72–114** |
-
-The extra 2–4 M1 weeks are an uncertainty allowance, not a promise that the
-protocol issue is small. Re-estimate again after root-cause reproduction and
-warning-free lifecycle runs, then after real sandbox/codec replacement gates.
-Real-hardware owner acceptance remains design §11: GNOME HiDPI/rotation/lock/
-sleep/DING/hot-plug/Overview layering and gaps; Windows WorkerW/Explorer and
-macOS Spaces/desktop levels; iGPU/hardware decode, VRAM/wakeups/power and input
-latency; filmed multi-machine wired/Wi-Fi P95/P99, pause/off and 24-hour soak.
-**Do not ask the owner to exercise this failed risk binary on their desktop.**
-
-## Validation record
-
-All commands used clean environments, throwaway HOME/XDG/ONE_MK_HOME, offline
-Cargo with `-j 2`, and disk-backed worktree scratch. No formatter was run.
-
-| Check | Actual result |
-|---|---|
-| Failing-first unsafe-root guard | Initial permissive guard failed the rejection test; implemented guard passed. The original failing transcript was not retained |
-| `cargo test --offline -j 2 -p one-mk-wall --features gnome-risk-probe` | **Pass:** one guard and three real-binary integration tests; refusal/status/help/doctor; every invocation gets a fresh private environment, is reaped, and leaves no files |
-| `cargo test --offline -j 2 -p one-mk-wall -p one-mk-wall-sync` | **Pass:** three default-binary tests and twelve existing sync integration tests; no production sync integration claimed |
-| `cargo clippy --offline -j 2 --workspace --all-targets -- -D warnings` | **Pass** |
-| Feature-enabled probe clippy, all targets, `-D warnings` | **Pass** |
-| Windows/macOS cross clippy, all targets, `-D warnings` | **Pass** for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin`, each with `one-mk-input`, `one-mk-proto`, `one-mk-ctl`, `one-mk-app`, `one-mk-tray`, `one-mk-wall`, `one-mk-wall-sync`. Native host implementations remain absent; runtime **UNTESTED** |
-| `cargo test --offline -j 2 --workspace` inside CLI sandbox | **Fail:** daemon 231 passed / 129 failed / 2 ignored; first failure loopback bind `EPERM`, then poisoned locks and other failures |
-| Same full workspace command outside CLI sandbox | **Fail:** daemon 302 passed / 58 failed / 2 ignored; failures include control/capture expectations, connection timeouts, hook/settings privacy checks. One concrete diagnostic: `target is writable by its group`. No unrelated application code was changed to suppress these failures |
-| Private disk-backed short `/tmp` retry | **Unable to execute tests:** bubblewrap mount/PID namespace starts, but Cargo's rustc subprocess returns `Permission denied`; not a passing workspace run |
-| Default binary smoke measurement | `status` exit 0, `/usr/bin/time -v`: 0.00 s user/system/wall at printed resolution, peak RSS 2,240 KiB, one voluntary context switch, zero filesystem output. This is a **finite command**, not a ten-minute idle measurement or claim of literally zero execution CPU |
-| Daemon dependency tree | `cargo tree --offline -p one-mk` contains no `one-mk-wall` package; default binary `ldd` lists only libc/libgcc/loader (no GStreamer) |
-| Cleanup smoke | Revised cleanup terminated/reaped one owned synthetic sleep child and removed its generated session files; original recorded GNOME PIDs absent, exact stale private bus socket removed manually |
-
-Small diagnostic logs remain under ignored `target/wall-m1-lab`. The original
-presentation report above is the committed primary evidence. **Full workspace
-tests are not green**, so the quality bar is not satisfied independently of
-the native presentation stop. No kill-9 end-to-end media path, sandbox escape
-suite, ten-minute off-state trace or physical acceptance was completed.
+Cross targets: `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`; packages
+`one-mk-input`, `one-mk-proto`, `one-mk-ctl`, `one-mk-app`, `one-mk-tray`,
+`one-mk-wall`, `one-mk-wall-sync`. Earlier full-workspace runtime tests had
+unrelated daemon/environment failures (see prior revision); not rerun or
+claimed green here. No physical multi-host sync, sleep, 24 h soak or independent
+security/legal review is supplied by this work.
