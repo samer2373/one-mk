@@ -33,7 +33,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 const BUS_NAME = 'org.onemk.WallpaperBridgeSpike1';
 const OBJ_PATH = '/org/onemk/WallpaperBridgeSpike1';
 const PROTOCOL = 1;
-const STALE_US = 3 * GLib.USEC_PER_SEC;
+const STALE_US = 2500 * 1000;
 const IFACE = `
 <node>
   <interface name="${BUS_NAME}">
@@ -60,7 +60,10 @@ const IFACE = `
 const IMG_W = 1920, IMG_H = 1080, IMG_BYTES = IMG_W * IMG_H * 4;
 
 class Bridge {
-    constructor() {
+    constructor(recovery) {
+        this._recovery = recovery;
+        this._destroyed = false;
+        this._restartId = 0;
         this._mode = 'clone';      // 'color' | 'clone' | 'image'
         this._hideMode = 'hide';   // 'hide' | 'opacity' | 'none'
         this._setType = true;
@@ -117,9 +120,13 @@ class Bridge {
             Gio.BusNameOwnerFlags.DO_NOT_QUEUE, null, () => this._event('lost bus name'));
 
         this._rebuild();
+        this._updateCoverage();
+        this._scheduleRestart();
     }
 
     destroy() {
+        this._destroyed = true;
+        this._cancelRestart();
         this.stopRenderer();
         if (this._coverageId)
             GLib.source_remove(this._coverageId);
@@ -161,17 +168,41 @@ class Bridge {
     }
 
     startRenderer(argv) {
+        this._recovery.argv = [...argv];
+        this._recovery.attempts = [];
+        this._recovery.exhausted = false;
+        this._cancelRestart();
         this.stopRenderer();
+        if (this._recovery.children.size)
+            throw new Error('previous renderer has not exited');
+        return this._spawnRenderer();
+    }
+
+    _spawnRenderer() {
+        const argv = this._recovery.argv;
         const launcher = new Gio.SubprocessLauncher({flags: Gio.SubprocessFlags.NONE});
-        this._wc = Meta.WaylandClient.new_subprocess(global.context, launcher, argv);
+        try {
+            this._wc = Meta.WaylandClient.new_subprocess(global.context, launcher, argv);
+        } finally {
+            launcher.close();
+        }
         const proc = this._wc.get_subprocess();
         const pid = Number(proc.get_identifier());
         this._pid = pid;
+        this._stale = false;
+        this._recovery.children.add(proc);
         this._event(`spawned renderer pid=${pid}`);
-        proc.wait_async(null, () => {
+        proc.wait_async(null, (source, result) => {
+            source.wait_finish(result);
+            this._recovery.children.delete(proc);
             this._event(`renderer exited pid=${pid}`);
-            if (this._wc && this._wc.get_subprocess() === proc)
+            if (this._wc && this._wc.get_subprocess() === proc) {
+                this._wc = null;
+                this._pid = null;
                 this._dropRenderer('exited');
+            }
+            this._scheduleRestart();
+            this._recovery.wake?.();
         });
         return this._pid;
     }
@@ -180,7 +211,40 @@ class Bridge {
         const proc = this._wc?.get_subprocess();
         this._dropRenderer('stopped');
         this._wc = null;
-        proc?.send_signal(15);
+        this._pid = null;
+        proc?.force_exit();
+    }
+
+    _cancelRestart() {
+        if (this._restartId)
+            GLib.source_remove(this._restartId);
+        this._restartId = 0;
+    }
+
+    _scheduleRestart() {
+        if (this._destroyed || this._paused || this._wc || this._restartId ||
+            !this._recovery.argv || this._recovery.children.size || this._recovery.exhausted)
+            return;
+        const now = GLib.get_monotonic_time();
+        this._recovery.attempts = this._recovery.attempts.filter(at => now - at < 60 * GLib.USEC_PER_SEC);
+        if (this._recovery.attempts.length >= 3) {
+            this._recovery.exhausted = true;
+            this._event('failed-retry-limit: static wallpaper; explicit Retry required');
+            return;
+        }
+        const delay = [1000, 2000, 4000][this._recovery.attempts.length];
+        this._event(`restart scheduled ${delay} ms`);
+        this._restartId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+            this._restartId = 0;
+            this._recovery.attempts.push(GLib.get_monotonic_time());
+            try {
+                this._spawnRenderer();
+            } catch (error) {
+                this._event(`spawn failed: ${error.message}`);
+                this._scheduleRestart();
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     // ---------- renderer window adoption ----------
@@ -221,7 +285,6 @@ class Bridge {
                     this._event('renderer fresh again');
                     this._rebuild();
                 }
-                this._probeBackoff = 5;
             },
             // Re-assert after Shell's map animation or any later show().
             'notify::visible', () => this._applyHide(),
@@ -231,19 +294,10 @@ class Bridge {
         win.connectObject(
             'unmanaged', () => this._dropRenderer('unmanaged'),
             'notify::is-alive', () => this._event(`is-alive ${win.is_alive}`),
-            'raised', () => win.lower(),
             // Geometry changes (our own resize, hot-plug): re-crop the clones.
             'size-changed', () => this._rebuild(),
             'position-changed', () => this._rebuild(),
             r);
-        // Stack operations only once Mutter has put the window in the stack.
-        global.compositor.get_laters().add(Meta.LaterType.BEFORE_REDRAW, () => {
-            if (this._renderer === r) {
-                win.stick();
-                win.lower();
-            }
-            return GLib.SOURCE_REMOVE;
-        });
         this._placeRenderer();
         this._applyHide();
         this._event(`adopted window "${win.get_title()}" pid=${win.get_pid()}`);
@@ -292,34 +346,20 @@ class Bridge {
         this._rebuild();
     }
 
-    // Damage watchdog: runs only while a renderer is adopted. A clone that
-    // is not painted gets no frame callbacks, so a stale renderer can never
-    // prove it recovered unless we show it again: re-probe with back-off
-    // (5 s, 10 s, ... 60 s), and ask Mutter's xdg_wm_base ping (check_alive)
-    // whether the client is hung.
     _startWatchdog() {
-        if (this._watchdogId)
+        if (this._watchdogId || this._paused || !this._renderer || this._destroyed)
             return;
-        this._probeBackoff = 5;
-        this._watchdogId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
+        this._watchdogId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
             const r = this._renderer;
             if (!r)
                 return GLib.SOURCE_CONTINUE;
             const now = GLib.get_monotonic_time();
-            if (this._stale) {
-                if (now >= this._nextProbe) {
-                    this._event(`probe renderer (backoff ${this._probeBackoff} s)`);
-                    this._probeBackoff = Math.min(this._probeBackoff * 2, 60);
-                    this._stale = false;
-                    r.lastDamage = now;
-                    this._rebuild();
-                }
-            } else if (!this._paused && now - r.lastDamage > STALE_US) {
+            if (now - r.lastDamage > STALE_US) {
                 this._stale = true;
-                this._nextProbe = now + this._probeBackoff * GLib.USEC_PER_SEC;
-                r.win.check_alive(global.display.get_current_time_roundtrip());
                 this._event(`renderer stale for ${(now - r.lastDamage) / 1000 | 0} ms: static fallback`);
-                this._rebuild();
+                this._watchdogId = 0;
+                this.stopRenderer();
+                return GLib.SOURCE_REMOVE;
             }
             return GLib.SOURCE_CONTINUE;
         });
@@ -417,6 +457,13 @@ class Bridge {
             return;
         this._paused = paused;
         this._reason = reason;
+        if (paused) {
+            this._stopWatchdog();
+            this._cancelRestart();
+        } else {
+            this._startWatchdog();
+            this._scheduleRestart();
+        }
         if (this._renderer)
             this._renderer.lastDamage = GLib.get_monotonic_time();
         this.stats.hints.push(`${GLib.get_monotonic_time() / 1000 | 0} ${paused} ${reason}`);
@@ -487,10 +534,13 @@ class Bridge {
 
 export default class WallpaperSpike extends Extension {
     enable() {
-        this.bridge = new Bridge();
+        this._recovery ??= {argv: null, attempts: [], exhausted: false, children: new Set()};
+        this.bridge = new Bridge(this._recovery);
+        this._recovery.wake = () => this.bridge?._scheduleRestart();
     }
 
     disable() {
+        this._recovery.wake = null;
         this.bridge?.destroy();
         this.bridge = null;
     }
