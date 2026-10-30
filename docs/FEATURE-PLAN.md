@@ -414,10 +414,11 @@ tests, cross-review by the other model, full validation before merging.
 | 5B | Live latency graph per computer in the window (event-driven; no polling when the window is closed) | Claude | todo |
 | 5C | Broadcast input to all connected computers (explicit, visible, auto-off, no stuck keys) | Claude | todo |
 | 5D | Edge pushes where no computer sits: pointer wrap to the opposite edge, and push-toward-it layout learning | Claude | todo |
-| 5E | Keyboard layout and AltGr fix: send the typed character when layouts differ | Codex | todo |
+| 5E | Keyboard layout and AltGr fix: send the typed character when layouts differ; starts after 5I (both change the key event) | Codex | blocked on 5I |
 | 5F | Autoscroll (middle-click) and gesture buttons | Claude | todo |
 | 5G | Auto-update from signed GitHub Releases (build on the owner's release workflow) | Codex | todo |
-| 5H | Activate local-only key remap on Windows and macOS (acknowledged handoff, no stuck keys) | Codex | todo |
+| 5H | Activate local-only key remap on Windows and macOS (acknowledged handoff, no stuck keys); builds on 5I | Codex | blocked on 5I |
+| 5I | Per-device scope: key and mouse rules for ONE specific keyboard or mouse, saved on the computer the device is plugged into (owner request 2026-10-30). X11 via XI2 source ids; Windows Raw Input and macOS IOHID compile-checked only; NOT possible on GNOME/KDE/wlroots Wayland (the compositor merges devices): say so | Claude | todo |
 
 ## Out of scope for now
 
