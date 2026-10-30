@@ -1,18 +1,28 @@
 # Local keyboard remapping: safety design (5H)
 
-**EXPERIMENTAL; OFF by default. Windows and macOS are COMPILE-CHECKED ONLY,
-UNTESTED on native hardware. 5H is incomplete, not production accepted.**
+**NOT INCLUDED in default/released builds.** Native integration requires the
+owner-only Cargo feature `native-local-remap`, which is OFF by default in
+`one-mk-input` and forwarded by `one-mk`. CI/release builds do not enable it.
+**EXPERIMENTAL; Windows and macOS are COMPILE-CHECKED ONLY, UNTESTED on native
+hardware. 5H is incomplete, not production accepted.**
 `[input] local_rules = false` remains the default, including upgrades.
 Linux local remapping is unavailable. Native release delivery, no-stuck-keys,
 latency, idle CPU and memory acceptance have **not** passed.
 
 ## Non-negotiable core KVM invariant
 
-With local rules off, none configured, unsupported, or after
-`one-mk keymap local off`, the Windows and macOS backends must behave exactly
-like `main` for physical input. An experimental worker must **never gate
-remote capture, crossing, switching, hotkeys, power handling or key repeat**.
-Failing local remapping is not permission to break the KVM.
+Without the Cargo feature, the Windows and macOS backends contain no local
+worker, snapshot, receipt, fence, tombstone adapter or hook/tap integration.
+`one-mk keymap local on` says plainly **this build does not include the
+experimental native local remap**; storing a preference cannot enable code
+that was not compiled. Physical behavior follows main except the independent
+changes enumerated below. Pure localmap/handoff/runtime tests always compile.
+
+The default files are `windows.rs`, `macos.rs`, `macos_devices.rs`.
+`lib.rs` selects separate `*_experimental.rs` files only with the feature;
+native worker/power modules and hotkey receipt/interception glue are similarly
+gated. The app/tray launch the daemon and do not link the input backend; build
+the daemon explicitly with the feature for owner tests, not a UI-only binary.
 
 Disabled/empty/unsupported snapshots remove the local interceptor, rather than
 leaving an unhealthy `Local` instance on the capture path. No local flag rewrite
@@ -30,14 +40,36 @@ recognizes its previously issued local-output tags after disable so delayed
 cleanup cannot become remote input. These tags, like the normal injector tag,
 are routing markers, not authentication against another local process.
 
-`tests/native_localmap_contract.rs` pins the capture activation bodies from
-`main` (`96436057bd1a303159e07953d29c2d254eb7314d`), allowing only the earlier
-per-device Raw Input/IOHID metadata additions. It checks that capture wrappers
-have no worker-health precondition and that disable/quit/timeout wiring remains
-fail-open. Random pure tests compare closed-home routing/repeats/unowned ups
+`tests/native_localmap_contract.rs` pins capture activation and physical event
+callbacks from `main` (`96436057bd1a303159e07953d29c2d254eb7314d`), allowing only
+the documented per-device metadata additions. It checks default source isolation
+and experimental completion wiring in both feature builds.
+Random pure tests compare closed-home routing/repeats/unowned ups
 and disabled modifier flags against main's pass-through behavior. These are
 **bounded differential/source contracts, not an OS execution proof**: the full
 native event-loop behavior still needs the manual acceptance below.
+
+### Differential audit against main (feature absent)
+
+`git diff main -- crates/input/src/windows.rs crates/input/src/macos.rs
+crates/input/src/win_logic.rs` was inspected hunk by hunk. The first two were
+restored to the pre-5H implementation (`67cafc4`), retaining only these
+independent differences; `win_logic.rs` is byte-identical to main:
+
+| Difference | Reason |
+| --- | --- |
+| Windows Raw Input imports, message/timer IDs, `State.raw`, startup enumeration, registration on activation, unregister/flush on release, device-change/input/timer dispatch, device-aware send path | 5I device discovery/attribution, not local remapping |
+| macOS `Ctx.hid`, IOHID startup, capture enable/disable on start/end/release/quit, correlated remote send path | 5I equivalent; queued events flush before unplug notification |
+| `device: None` on captured keys/buttons/motion/scroll | 5I event-schema metadata; disabled correlator forwards immediately without a deadline |
+| `CaptureCmd::DeviceRules` and correlator opt-in; lazy macOS timer allocation | R6 removes unconditional 5I delay/timer; only per-device rules opt in while the backend captures input |
+| `Backend.keyboard: None`, unsupported `Inject::Text`, `CharacterKey` physical fallback including repeat | Independent typing integration; native character composition is not claimed |
+| `macos::ax_trusted` visibility only | Existing permission query in `lib.rs`; no permission behavior change |
+
+There are no remaining 5H native-local hooks in these default files. The
+5I/typing exceptions mean this is **not a byte-identical whole backend** or a
+native execution equivalence proof. Both configurations run the same pinned-main
+differential contracts. CI/release commands enable neither this feature nor
+workspace-wide `--all-features`.
 
 ## Ownership and worker contract
 
@@ -56,24 +88,29 @@ replacements and ask to return home, while allowing emergency Esc through. A
 previously rewritten modifier is not retroactively delivered to the OS; do not
 claim that the OS receives the full physical emergency chord.
 
-Capture submits a **best-effort** Remote fence and immediately uses main's
-capture activation path: zero worker wait, including with a dead worker or
-missing receipt. It never waits for local completion to publish `Activated`.
-This favors core KVM availability; it does **not** establish that native local
-ups have arrived before remote activation. Failed releases are reported/retried
-where possible; native ordering across the boundary is an acceptance blocker.
+**Inside the experimental build only**, an installed local interceptor closes
+admission and serializes a Remote fence before activation. Capture starts only
+after the matching successful completion, never while releases are outstanding.
+The callback does not block: a failed/expired fence cancels activation and
+reports local failure (400 ms watchdog); recover/disable local mapping before
+retrying. This deliberately sacrifices experimental crossing availability rather
+than overlapping local replacement downs with remote capture. Without an
+interceptor, activation immediately follows main. Without the Cargo feature,
+no experimental fence can gate the core KVM at all.
 Returning home closes the gate in every case, then requests Local only if
 mapping remains enabled and unpaused. Thus paused/off Backspace repeat stays
 with the OS instead of being suppressed by a stale Remote gate.
 
 Fences release outputs and update keymaps on the **existing mapper**, preserving
-release-all tombstones. A held key must come up before being interpreted under
+release-all tombstones only for physically held keys. Recovery snapshots retire
+absent source keys after the admitted queue drains, before reopening admission;
+a missed up cannot swallow the next fresh press. A held key must come up before being interpreted under
 a new map: no repeat-induced re-press or spurious dual-role tap. Owned ups while
 closed/failed/remote retire source bookkeeping without injecting new downs.
 Only a failed, drained engine may resynchronize a sequence gap to its fence
 watermark; a healthy fence cannot skip undrained work. Recovery generation
-checks reject stale completions. Acknowledging local mapping readiness is
-separate from authorizing core capture.
+checks reject stale completions. Local readiness and Remote capture require
+their respective successful fence completions in the experimental build.
 
 | Original down owner | Repeats after crossing | Original key-up |
 | --- | --- | --- |
@@ -138,13 +175,13 @@ is not a hard latency guarantee.
 
 The existing HID event tap and IOHID correlator feed the shared worker. Supported
 physical keys are posted using a private CGEventSource and tagged sequence.
-Downs wait at most 100 ms for their exact outstanding tap receipt; an uncertain
-down triggers failure/release. Ups are **best-effort posts without receipt
-wait**. The pure mapper releases its bookkeeping, so missing up receipts cannot
-wedge capture or shutdown. CGEventPost has no successful-delivery return:
-posting an up is **not proof that an application or OS consumed it**, and there
-is no guaranteed retry for an undelivered macOS up. Do not describe this as
-acknowledged native release delivery or established no-stuck-keys.
+Downs and ups wait at most 100 ms on the worker for their exact outstanding
+tap receipt. An uncertain down triggers failure/release; an uncertain up retains
+its held-key, keyboard-type and modifier release obligations for a later fence.
+Capture never blocks on the receipt. CGEventPost has no delivery result; even
+an observed tap receipt is **not proof an application consumed the event**.
+Missing receipts keep experimental Remote activation closed; they do not become
+false release acknowledgements. Native no-stuck-keys is not established.
 
 Ordinary reposts carry KeyboardEventKeyboardType from admission; a held output's
 up retains its down's type. Mixed keyboard types interrupting an undecided
@@ -158,8 +195,8 @@ a fresh HID key baseline. Tap timeout/user-disable pauses/release-all when local
 mapping exists, but ends remote capture only if local output was held. With no
 Local, it only re-enables the tap as main did. Quit stops the capture run loop
 without requiring any fence completion; cleanup detaches IOHID dispatch before
-joining the bounded worker. An arbitrarily blocked OS call is still outside
-this shutdown bound.
+joining the worker. Each receipt wait is bounded, but a batch can require
+multiple serial waits; an arbitrarily blocked OS call can still prevent shutdown.
 
 Power notifications use IORegisterForSystemPower on the **capture run loop**,
 not NSWorkspace delivery on the tokio main thread. Registration exists only
@@ -194,6 +231,22 @@ Never install a hook/tap in an owner's real login for this checklist. Use a
 disposable login, record original settings and arrange recovery from another
 computer. Run each OS separately; record actual OS key state, not just logs.
 
+Build on the actual test OS, with the owner's explicit approval:
+
+```sh
+# Baseline release: experimental adapter excluded, even with local_rules=true.
+cargo build -j 2 --release -p one-mk
+# Owner-only test binary; never upload this artifact to a release.
+cargo build -j 2 --release -p one-mk --features native-local-remap
+```
+
+Keep the baseline binary separately before the second build overwrites it.
+Use an isolated settings directory/account and install no autostart entry.
+For Windows PowerShell use the same Cargo commands without the shell comments.
+The feature alone does not opt in: add a supported local rule and run the
+feature-built daemon plus its `one-mk keymap local on` command in that account.
+Do not test native hooks/taps on this Linux validation host or in a real login.
+
 ### Windows
 
 1. With local off and with no rules/unsupported rules, exercise edge/switch/
@@ -216,7 +269,8 @@ computer. Run each OS separately; record actual OS key state, not just logs.
    unowned Alt/Enter up must pass. Repeat foreground elevation without UAC.
 6. Exercise lock/unlock, sleep/wake, worker exit, denied/partial SendInput,
    queue/sequence failure, unplug/replug and daemon loss while keys are held.
-   Core crossing/switch must remain available; report local delivery failures.
+   Experimental capture must not activate before cleanup succeeds; failure
+   cancels crossing. Disable/recover, then verify core crossing works again.
 7. Measure on/off RSS, callback/ordering latency and truly idle wakeups/CPU.
    Confirm no armed local/correlation timer remains with no obligations.
 
@@ -230,7 +284,8 @@ computer. Run each OS separately; record actual OS key state, not just logs.
    Shift -> Ctrl, typing/clicking, both release orders, unknown/device rules,
    two keyboards, reload mid-hold, layer/none/sequence and supported tap/hold.
 3. Hold replacements across all capture/return paths. Delay/drop down/up
-   receipts and stop the worker: crossing still works and Quit stops. Verify
+   receipts and stop the worker: crossing must wait/cancel, never fail open;
+   Quit must stop. Verify
    actual OS release; record any post that failed to reach the destination.
 4. Test tap timeout/user-disable, Secure Keyboard Entry (Cmd+Tab while a
    modifier is held), lock/unlock, fast-user-switch, sleep/wake, permission
@@ -261,3 +316,18 @@ keys or ZERO idle CPU acceptance until these scripts actually pass.
 
 See `reviews/WAVE5-NATIVE-REMEDIATION.md` for the finding-by-finding ledger,
 mutation evidence, consciously incomplete items and verification scope.
+
+## Exit criteria before any release enablement
+
+The default Cargo feature and CI/release policy must remain OFF until the owner
+explicitly accepts separate Windows/macOS hardware results and an independent
+hostile review. Record OS/device/layout versions, exact commit/features,
+baseline comparison, callback latency distributions, idle wakeups/CPU/RSS and
+actual down/up traces for every script above. Exercise lost receipts, partial
+injection, delayed/dead workers, mixed local/remote identical keys, takeover,
+missed physical ups, unplug ordering and stale fence completions. Every emitted
+down must have a verified up or a documented out-of-process recovery outcome;
+no stuck keys, phantom modifiers, first-press loss or premature activation may
+remain. Resolve mixed keyboard-type deferred provenance and macOS source
+restrictions or explicitly narrow the accepted scope. Compile checks and pure
+tests alone never satisfy these criteria; no bug-free certification is claimed.

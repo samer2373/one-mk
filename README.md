@@ -812,17 +812,20 @@ Good to know:
   (natural on a Mac); otherwise use `--reverse-vertical on`.
 - Remote rules change only input sent to other computers. Local keyboard rules
   (`scope = { local = true }`, or `one-mk keymap add capslock esc --local`)
-  have experimental Windows and partial macOS native adapters: **COMPILE-CHECKED
-  ONLY, native Windows/macOS UNTESTED**, not production-accepted (5H incomplete).
+  are **not shipped in default/release Windows/macOS binaries**. Owner-only
+  builds require `cargo build -j 2 --release -p one-mk --features native-local-remap`.
+  These experimental adapters are **COMPILE-CHECKED ONLY, native UNTESTED**,
+  not production-accepted (5H incomplete).
   `--local --device NAME` stores a rule for one attached keyboard;
   local+device rules override local rules, never peer rules. The default-off
   `[input] local_rules` preference (`one-mk keymap local on|off`) opts in;
   local runtime status requires a healthy worker fence, not just the preference.
-  That worker never gates core crossing/switching/hotkeys or repeat; off/empty/
-  unsupported rules detach interception, and off/empty status is silent.
-  macOS refuses Caps Lock/Fn/media/function-key rules; its CGEventPost receipt
-  down-receipt path and modifier flags are natively UNTESTED. Release posts and
-  capture handoff are best-effort, not proof of native delivery. Settings/device
+  Without the Cargo feature, `local on` reports that this build does not include
+  the experimental native local remap; no worker/hooks/fences are compiled.
+  In an experimental build with local interception active, crossing waits
+  asynchronously for confirmed release cleanup and cancels on failure.
+  macOS refuses Caps Lock/Fn/media/function-key rules; its down/up receipt path
+  and modifier flags are natively UNTESTED, not proof of application delivery. Settings/device
   reloads can resume mapping; it is not explicit-reload-only. See `docs/LOCAL-REMAP.md` for
   platform restrictions, manual acceptance and emergency/SSH/permission recovery.
   Linux status says `local key rules are not available on Linux`; its

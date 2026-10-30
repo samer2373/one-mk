@@ -159,7 +159,11 @@ Mapper::set_keymap (as a reload)
 
 ### Local keyboard scope: experimental native adapters (5H incomplete)
 
-Windows/macOS are EXPERIMENTAL, **COMPILE-CHECKED ONLY, native UNTESTED**. The
+Windows/macOS local integration is **absent from default/release builds**.
+Only owner-built `one-mk --features native-local-remap` includes it; the feature
+is OFF by default and is not enabled by CI/release commands. `local on` without
+it says `this build does not include the experimental native local remap`.
+Feature builds are EXPERIMENTAL, **COMPILE-CHECKED ONLY, native UNTESTED**. The
 worker ownership model and held-key matrix are in `LOCAL-REMAP.md`;
 native delivery acceptance is still incomplete. `[input] local_rules = false` is the
 default, including when upgrading old files. `one-mk keymap local on|off`
@@ -179,16 +183,19 @@ The hook-visible gate is now an acquire/release atomic handle; the worker's
 ticket state remains private to that worker. Shortcut flags cannot divert an
 OS-owned key-up, even during handoff or failure. Native adapters now consume
 these primitives; native delivery, modifier flags, no-stuck-keys and idle CPU
-acceptance have NOT passed. macOS downs use tagged tap receipts after posting;
-CGEventPost enqueueing alone cannot acknowledge release delivery. macOS release
-posts are best-effort without receipt waits; neither missing receipts nor a
-failed worker may gate core capture or shutdown. Windows retains failed release
+acceptance have NOT passed. macOS downs and ups use tagged tap receipts after
+posting; unobserved releases remain cleanup obligations. CGEventPost enqueueing
+alone cannot acknowledge release delivery, nor does a tap receipt prove delivery
+to an application. Experimental Remote activation waits asynchronously for
+successful cleanup and cancels on failure/timeout. Windows retains failed release
 cleanup separately from the disabled interceptor and retries on desktop/unlock/
 foreground events. These mechanisms do not establish native no-stuck-keys.
 
-**Core invariant:** off, empty, unsupported, and `keymap local off` preserve
-main's physical input/capture/crossing/switch/hotkey/power/repeat behavior.
-No experimental worker health/fence may gate these paths. Closed-home repeat,
+**Release invariant:** without the Cargo feature no experimental worker,
+receipt, fence or native-local interception can affect the core KVM. Default
+physical callbacks match main except documented independent 5I/typing changes
+(see `LOCAL-REMAP.md`). Experimental installed interceptors intentionally gate
+crossing until cleanup completes. Closed-home repeat,
 disabled modifier flags and pinned main activation bodies have Linux regression
 contracts, not a native OS differential execution result.
 
@@ -361,6 +368,13 @@ Windows and macOS see an event twice: once in the hook or event tap (which
 can swallow it and is what one-mk forwards) and once from Raw Input or
 IOHIDManager (which says the device), on different paths, in either order,
 a few milliseconds apart. `crates/input/src/devcorr.rs` pairs them:
+
+Correlation is disabled until at least one per-device rule uses this native
+backend. With no such rules, every event forwards immediately with unknown
+device: **no waiting, deadline, or correlation timer**. Local-only device rules
+do not opt in unless the Cargo feature and local preference are both enabled.
+Removing the last applicable rule flushes queued events in order and cancels
+the timer; unplug still flushes before the device-table notification.
 
 * a key or button event is matched **in order** with the device events of
   the same key and direction: the oldest one waiting (kept at most 16, for
