@@ -149,6 +149,12 @@ and this limitation. No clipboard paste or live keyboard-map rewriting is used.
 The Linux follow-up adds tested X11 keymap snapshots and compose primitives,
 but does not yet connect them to typing visits. It does not fix cross-layout
 AltGr typing in the daemon; do not enable characters expecting that fix.
+An isolated X11 remap/restore experiment also reproduces lost characters in a
+delayed destination client, even with byte-identical keymap restoration. X11
+character mode remains disabled; a crash-recovery marker alone does not fix
+that delivery race. The private-Xvfb reproducer is
+`bash scripts/test-x11-typing-safety.sh` (success confirms the blocker, not
+working character injection).
 See [keyboard layout design and remaining work](docs/KEYBOARD-LAYOUT.md).
 
 ## Pair without sitting at both computers
