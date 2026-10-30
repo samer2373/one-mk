@@ -28,14 +28,22 @@ pub fn inspect(bytes: &[u8]) -> Result<Media, String> {
     } else {
         return Err("unsupported media: convert first to VP9/AV1 WebM, GIF, APNG or animated WebP".into());
     };
+    validate_media(&media)?;
+    Ok(media)
+}
+
+pub(crate) fn validate_media(media: &Media) -> Result<(), String> {
     dimensions(media.width, media.height)?;
     if media.frames < 2 || media.frames > MAX_FRAMES || media.duration_ms > MAX_DURATION_MS {
         return Err("animation requires 2..36000 frames and duration <=600 seconds; convert first".into());
     }
-    if u64::from(media.frames) * 1000 > media.duration_ms * 60 {
+    if media.duration_ms == 0 || u64::from(media.frames) * 1000 > media.duration_ms * 60 {
         return Err("source exceeds 60 fps; convert first".into());
     }
-    Ok(media)
+    if u64::from(media.width) * u64::from(media.height) * u64::from(media.frames) > crate::MAX_DECODED_PIXELS {
+        return Err("decoded pixel budget exceeds 1,000,000,000; convert first to fewer frames, shorter duration or lower resolution".into());
+    }
+    Ok(())
 }
 
 struct Cursor<'a> { bytes: &'a [u8], position: usize }
@@ -105,7 +113,8 @@ fn add_frame(media: &mut Media, delay: u64) -> Result<(), String> {
     if delay < 17 { return Err("source exceeds 60 fps; convert first".into()); }
     media.frames += 1;
     media.duration_ms = media.duration_ms.checked_add(delay).ok_or("duration overflow")?;
-    if media.frames > MAX_FRAMES || media.duration_ms > MAX_DURATION_MS { return Err("frame/duration limit exceeded".into()); }
+    if media.frames > MAX_FRAMES || media.duration_ms > MAX_DURATION_MS { return Err("frame/duration limit exceeded; convert first".into()); }
+    if u64::from(media.width) * u64::from(media.height) * u64::from(media.frames) > crate::MAX_DECODED_PIXELS { return Err("decoded pixel budget exceeded; convert first to fewer frames or lower resolution".into()); }
     Ok(())
 }
 
@@ -324,4 +333,26 @@ fn webm(bytes: &[u8]) -> Result<Media, String> {
     }
     media.duration_ms = duration.round() as u64;
     Ok(media)
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn independent_admission_limits_reach_their_boundaries() {
+        let mut media = Media { format: Format::Gif, width: 1, height: 1, frames: MAX_FRAMES, duration_ms: MAX_DURATION_MS };
+        assert!(validate_media(&media).is_ok());
+        media.frames += 1;
+        assert!(validate_media(&media).unwrap_err().contains("36000"));
+        media.frames = MAX_FRAMES;
+        media.duration_ms += 1;
+        assert!(validate_media(&media).unwrap_err().contains("600 seconds"));
+        media.duration_ms = MAX_DURATION_MS - 1;
+        assert!(validate_media(&media).unwrap_err().contains("60 fps"));
+        media = Media { format: Format::Gif, width: 1000, height: 1000, frames: 1000, duration_ms: 100_000 };
+        assert!(validate_media(&media).is_ok());
+        media.frames += 1;
+        assert!(validate_media(&media).unwrap_err().contains("pixel budget"));
+    }
 }

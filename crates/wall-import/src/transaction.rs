@@ -67,8 +67,7 @@ pub fn import(options: ImportOptions<'_>) -> Result<ImportRecord, String> {
         let entry = entry.map_err(|error| error.to_string())?;
         if !entry.file_name().as_encoded_bytes().starts_with(b".import-") { continue; }
         let metadata = std::fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
-        if metadata.is_dir() && metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o777 == 0o700
-            && metadata.modified().ok().and_then(|time| time.elapsed().ok()).is_some_and(|elapsed| elapsed.as_secs() > 24 * 60 * 60) {
+        if metadata.is_dir() && metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o777 == 0o700 {
             std::fs::remove_dir_all(entry.path()).map_err(|error| format!("stale partial cleanup: {error}"))?;
         }
     }
@@ -95,8 +94,7 @@ pub fn import(options: ImportOptions<'_>) -> Result<ImportRecord, String> {
     let source_blake3 = hash.finalize().to_hex().to_string();
     let response = sandbox::run(&runtime, Some(&staging.path().join("source")), "--worker", options.cancel, options.timeout)?;
     let decoded: Decoded = serde_json::from_slice(&response).map_err(|error| format!("invalid worker record: {error}"))?;
-    crate::dimensions(decoded.media.width, decoded.media.height)?;
-    if !(2..=crate::MAX_FRAMES).contains(&decoded.media.frames) || decoded.media.duration_ms == 0 || decoded.media.duration_ms > crate::MAX_DURATION_MS || decoded.poster.len() > 320 * 180 * 3 + 32 || !decoded.poster.starts_with(b"P6\n") { return Err("worker returned out-of-bounds record".into()); }
+    validate_decoded(&decoded)?;
     let verified = hash_file(&staging.path().join("source"))?;
     if verified != source_blake3 { return Err("snapshot changed during import".into()); }
     let record = ImportRecord {
@@ -115,6 +113,46 @@ pub fn import(options: ImportOptions<'_>) -> Result<ImportRecord, String> {
     if unsafe { libc::renameat2(output.as_raw_fd(), old_name.as_ptr(), output.as_raw_fd(), new_name.as_ptr(), libc::RENAME_NOREPLACE) } != 0 { return Err(format!("atomic commit refused (existing object/symlink is never replaced): {}", std::io::Error::last_os_error())); }
     output.sync_all().map_err(|error| format!("committed, directory sync failed: {error}"))?;
     Ok(record)
+}
+
+#[cfg(target_os = "linux")]
+fn validate_decoded(decoded: &Decoded) -> Result<(), String> {
+    crate::admission::validate_media(&decoded.media)?;
+    let (width, height) = crate::decode::poster_dimensions(decoded.media.width, decoded.media.height);
+    let header = format!("P6\n{width} {height}\n255\n");
+    if !decoded.poster.starts_with(header.as_bytes()) || decoded.poster.len() != header.len() + width as usize * height as usize * 3 { return Err("worker returned invalid poster header/dimensions/payload".into()); }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    fn record() -> Decoded {
+        Decoded { media: Media { format: crate::Format::Gif, width: 2, height: 2, frames: 2, duration_ms: 200 }, poster: b"P6\n2 2\n255\nabcdefghijkl".to_vec() }
+    }
+
+    #[test]
+    fn parent_rejects_forged_poster_headers_and_lengths() {
+        assert!(validate_decoded(&record()).is_ok());
+        for poster in [b"P6\n".as_slice(), b"P6\n99999 2\n255\n", b"P6\n2 2\n256\nabcdefghijkl", b"P6\n2 2\n255\nabcdefghijk", b"P6\n2 2\n255\nabcdefghijklm", b"P6\n1 1\n255\nabc"] {
+            let mut decoded = record();
+            decoded.poster = poster.to_vec();
+            assert!(validate_decoded(&decoded).is_err(), "{poster:?}");
+        }
+    }
+
+    #[test]
+    fn parent_rejects_worker_fps_and_pixel_budget() {
+        let mut decoded = record();
+        decoded.media.duration_ms = 1;
+        assert!(validate_decoded(&decoded).is_err());
+        decoded.media.duration_ms = 60_000;
+        decoded.media.width = 4096;
+        decoded.media.height = 2160;
+        decoded.media.frames = 114;
+        assert!(validate_decoded(&decoded).is_err());
+    }
 }
 
 #[cfg(target_os = "linux")]

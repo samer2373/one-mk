@@ -105,3 +105,15 @@ fn eight_byte_ebml_sizes_do_not_overflow() {
     let bytes = b"\x1a\x45\xdf\xa3\x01\0\0\0\0\0\0\0";
     assert!(inspect(bytes).is_err());
 }
+
+#[test]
+fn decoded_pixel_budget_is_rejected_before_decoding() {
+    let mut bytes = b"GIF89a".to_vec();
+    bytes.extend_from_slice(&[0, 16, 112, 8, 0, 0, 0]);
+    for _ in 0..114 {
+        bytes.extend_from_slice(b"\x2c\0\0\0\0\x01\0\x01\0\0\x02\x02\x44\x01\0");
+    }
+    bytes.push(b';');
+    let error = inspect(&bytes).unwrap_err();
+    assert!(error.contains("pixel budget") && error.contains("convert first"), "{error}");
+}
