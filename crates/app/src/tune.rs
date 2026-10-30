@@ -82,7 +82,7 @@ impl Scope {
 
     /// How specific the scope is for a computer (`None`: not for it): a
     /// computer beats an OS beats everything, as in `one-mk`.
-    fn rank(&self, f: &Facts) -> Option<u8> {
+    pub(crate) fn rank(&self, f: &Facts) -> Option<u8> {
         match self {
             Scope::All => Some(0),
             Scope::Os(o) => (*o == f.os).then_some(1),
@@ -152,6 +152,16 @@ pub enum To {
 }
 
 impl To {
+    pub fn describe(&self) -> String {
+        match self {
+            To::One(text) if text.trim().eq_ignore_ascii_case("back") => "go back".into(),
+            To::One(text) if text.trim().eq_ignore_ascii_case("forward") => "go forward".into(),
+            To::One(text) if text == "desktop-left" => "go to the desktop on the left".into(),
+            To::One(text) if text == "desktop-right" => "go to the desktop on the right".into(),
+            To::One(text) => text.clone(),
+            To::Many(steps) => steps.join(", then "),
+        }
+    }
     fn parse(&self) -> Result<Output, String> {
         match self {
             To::One(s) => s.parse().map_err(|e: keynames::NameError| e.0),
@@ -307,6 +317,26 @@ pub struct Input {
     pub pointer: Vec<PointerRule>,
     pub scroll: Vec<ScrollRule>,
     pub buttons: Vec<ButtonRule>,
+    pub autoscroll: Vec<AutoscrollRow>,
+    pub gestures: Vec<GestureRow>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutoscrollRow {
+    pub enabled: Option<bool>,
+    pub speed: Option<f64>,
+    pub button: Option<String>,
+    pub scope: Scope,
+    pub app: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GestureRow {
+    pub button: String,
+    pub direction: String,
+    pub to: To,
+    pub scope: Scope,
+    pub app: Option<String>,
 }
 
 /// The repeats of an `[[array]]` table, each as a lookup by key (`scope.os`
@@ -335,6 +365,29 @@ impl Input {
     pub fn read(e: &[Entry]) -> Input {
         let tap_ms = e.iter().find(|x| x.table == "input.keymap" && x.key == "tap_ms").and_then(|x| x.val.as_int()).map(|n| n.clamp(0, 60_000) as u32);
         let mut input = Input { tap_ms, ..Default::default() };
+        let get = |key: &str| e.iter().find(|entry| {
+            (entry.table == "input.autoscroll" && entry.key == key)
+                || entry.table.strip_prefix("input.autoscroll.").is_some_and(|suffix| format!("{suffix}.{}", entry.key) == key)
+        }).map(|entry| entry.val.clone());
+        let local = get("scope.local").is_some() || matches!(get("scope"), Some(Val::Table(fields)) if fields.iter().any(|(name, _)| name == "local"));
+        if !local && e.iter().any(|entry| entry.table == "input.autoscroll") {
+            input.autoscroll.push(AutoscrollRow { enabled: get("enabled").and_then(|value| value.as_bool()),
+                speed: get("speed").and_then(|value| value.as_f64()), button: get("button").and_then(|value| value.as_str().map(str::to_owned)), scope: Scope::read(&get),
+                app: get("app").and_then(|value| value.as_str().map(str::to_owned)) });
+        }
+        for entries in repeats(e, "input.autoscroll.rule") {
+            let get = |key: &str| entries.iter().find(|(name, _)| name == key).map(|(_, value)| (*value).clone());
+            input.autoscroll.push(AutoscrollRow { enabled: get("enabled").and_then(|value| value.as_bool()),
+                speed: get("speed").and_then(|value| value.as_f64()), button: get("button").and_then(|value| value.as_str().map(str::to_owned)), scope: Scope::read(&get),
+                app: get("app").and_then(|value| value.as_str().map(str::to_owned)) });
+        }
+        for entries in repeats(e, "input.gesture") {
+            let get = |key: &str| entries.iter().find(|(name, _)| name == key).map(|(_, value)| (*value).clone());
+            if let (Some(Val::Str(button)), Some(Val::Str(direction)), Some(to)) = (get("button"), get("direction"), get("to").as_ref().and_then(To::read)) {
+                input.gestures.push(GestureRow { button, direction, to, scope: Scope::read(&get),
+                    app: get("app").and_then(|value| value.as_str().map(str::to_owned)) });
+            }
+        }
         for r in repeats(e, "input.keymap.rule") {
             let get = |k: &str| r.iter().find(|(key, _)| key == k).map(|(_, v)| (*v).clone());
             let text = |k: &str| get(k).and_then(|v| v.as_str().map(str::to_owned));
@@ -460,6 +513,12 @@ pub fn meta_word() -> &'static str {
         "Super"
     }
 }
+pub fn mouse_button_label(name: &str) -> String {
+    keynames::parse_key(name).ok().filter(|code| keynames::is_button(*code))
+        .map(|code| format!("the {}", key_label(code).replace(" click", " button").to_lowercase()))
+        .unwrap_or_else(|| name.to_owned())
+}
+
 fn alt_word() -> &'static str {
     if cfg!(target_os = "macos") { "Option" } else { "Alt" }
 }
@@ -1714,6 +1773,19 @@ os = "mac"
         assert_eq!(i.buttons[0], ButtonRule { from: "4".into(), to: To::One("back".into()), scope: Scope::All, app: None });
         assert_eq!(i.buttons[1].scope, Scope::Os(os::MACOS));
         assert_eq!(Input::read(&read_toml("")), Input::default());
+    }
+
+    #[test]
+    fn mouse_modes_read_scopes_and_describe_actions_in_plain_language() {
+        let input = Input::read(&read_toml("[input.autoscroll]\nenabled=true\nbutton='middle'\n[[input.autoscroll.rule]]\nspeed=2.0\nscope={os='windows'}\n[[input.gesture]]\nbutton='button4'\ndirection='left'\nto='back'\napp='code*'\nscope={peer='Studio PC'}\n"));
+        assert_eq!(input.autoscroll.len(), 2);
+        assert_eq!(input.autoscroll[0].button.as_deref(), Some("middle"));
+        assert_eq!(input.autoscroll[1].scope, Scope::Os(os::WINDOWS));
+        assert_eq!(input.autoscroll[1].speed, Some(2.0));
+        assert_eq!(input.gestures[0].scope, Scope::Peer("Studio PC".into()));
+        assert_eq!(input.gestures[0].app.as_deref(), Some("code*"));
+        assert_eq!(input.gestures[0].to.describe(), "go back");
+        assert_eq!(mouse_button_label("button4"), "the back button");
     }
 
     #[test]
