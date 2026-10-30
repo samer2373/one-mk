@@ -1,7 +1,8 @@
 //! Local injection ownership fence. This is not a native hook implementation.
 //! See `docs/LOCAL-REMAP.md` for the required native acknowledgement contract.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 static TICKETS: AtomicU64 = AtomicU64::new(0);
 
@@ -57,11 +58,48 @@ pub enum Route {
 
 pub struct Handoff {
     state: State,
+    hook: Arc<HookGate>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum GateState {
+    Closed,
+    Local,
+    Remote,
+}
+
+/// Hook-visible routing only. Tickets and injection acknowledgements remain
+/// exclusively owned by the serialized worker. Clone the handle off-hook.
+/// Reading this gate never allocates, locks, or drops a snapshot reference.
+pub struct HookGate {
+    state: AtomicU8,
+}
+
+impl HookGate {
+    fn publish(&self, state: GateState) {
+        self.state.store(state as u8, Ordering::Release);
+    }
+
+    pub fn decide(&self, key: PhysicalKey) -> Route {
+        let state = match self.state.load(Ordering::Acquire) {
+            1 => GateState::Local,
+            2 => GateState::Remote,
+            _ => GateState::Closed,
+        };
+        decide(state, key)
+    }
 }
 
 impl Default for Handoff {
     fn default() -> Self {
-        Self { state: State::Disabled }
+        Self { state: State::Disabled, hook: Arc::new(HookGate { state: AtomicU8::new(GateState::Closed as u8) }) }
+    }
+}
+
+impl Drop for Handoff {
+    fn drop(&mut self) {
+        self.hook.publish(GateState::Closed);
     }
 }
 
@@ -70,11 +108,16 @@ impl Handoff {
         self.state
     }
 
+    pub fn hook_gate(&self) -> Arc<HookGate> {
+        Arc::clone(&self.hook)
+    }
+
     /// Close both gates before releasing any local output. The caller submits
     /// a fence after these releases through the same serialized injector.
     /// Exhausting the ticket namespace leaves interception disabled forever.
     #[must_use]
     pub fn begin(&mut self, destination: Destination, release: impl FnOnce()) -> Option<Ticket> {
+        self.hook.publish(GateState::Closed);
         self.state = State::Disabled;
         release();
         let ticket = Ticket::next(&TICKETS)?;
@@ -93,12 +136,17 @@ impl Handoff {
             Destination::Local => State::Local,
             Destination::Remote => State::Remote,
         };
+        self.hook.publish(match destination {
+            Destination::Local => GateState::Local,
+            Destination::Remote => GateState::Remote,
+        });
         true
     }
 
     /// Invalidate the outstanding fence before cleanup. Recovery requires a
     /// fresh begin/ack pair; a late acknowledgement cannot re-enable input.
     pub fn fail(&mut self, release: impl FnOnce()) {
+        self.hook.publish(GateState::Closed);
         self.state = State::Disabled;
         release();
     }
@@ -107,32 +155,36 @@ impl Handoff {
     /// down's owner, retained per device and device-table generation until up.
     /// Local/Shortcut mean queue work, not permission to block in the callback.
     pub fn decide(&self, key: PhysicalKey) -> Route {
-        if key.injected {
-            return Route::Pass;
+        self.hook.decide(key)
+    }
+}
+
+fn decide(state: GateState, key: PhysicalKey) -> Route {
+    if key.injected {
+        return Route::Pass;
+    }
+    if key.shortcut && key.down {
+        return Route::Shortcut;
+    }
+    match key.owner {
+        Owner::Os => {
+            if key.down && state == GateState::Remote { Route::Suppress } else { Route::Pass }
         }
-        if key.shortcut {
-            return Route::Shortcut;
+        Owner::Local => {
+            if state == GateState::Local && key.healthy { Route::Local } else { Route::Suppress }
         }
-        match key.owner {
-            Owner::Os => {
-                if key.down && self.state == State::Remote { Route::Suppress } else { Route::Pass }
-            }
-            Owner::Local => {
-                if self.state == State::Local && key.healthy { Route::Local } else { Route::Suppress }
-            }
-            Owner::Remote => {
-                if self.state == State::Remote { Route::Remote } else { Route::Suppress }
-            }
-            Owner::Unknown => {
-                if !key.down {
-                    Route::Pass
-                } else if self.state == State::Remote {
-                    Route::Remote
-                } else if self.state == State::Local && key.healthy && key.eligible {
-                    Route::Local
-                } else {
-                    Route::Pass
-                }
+        Owner::Remote => {
+            if state == GateState::Remote { Route::Remote } else { Route::Suppress }
+        }
+        Owner::Unknown => {
+            if !key.down {
+                Route::Pass
+            } else if state == GateState::Remote {
+                Route::Remote
+            } else if state == GateState::Local && key.healthy && key.eligible {
+                Route::Local
+            } else {
+                Route::Pass
             }
         }
     }
@@ -150,6 +202,31 @@ mod tests {
         PhysicalKey { owner, down, injected: false, shortcut: false, eligible: true, healthy: true }
     }
 
+    fn at(state: State) -> Handoff {
+        let mut gate = Handoff::default();
+        gate.state = state;
+        gate.hook.publish(match state {
+            State::Local => GateState::Local,
+            State::Remote => GateState::Remote,
+            _ => GateState::Closed,
+        });
+        gate
+    }
+
+    #[test]
+    fn worker_exit_closes_surviving_hook_handle() {
+        for destination in [Destination::Local, Destination::Remote] {
+            let mut worker = Handoff::default();
+            let hook = worker.hook_gate();
+            let ticket = worker.begin(destination, || {}).unwrap();
+            assert!(worker.acknowledge(ticket));
+            drop(worker);
+            assert_eq!(hook.decide(key(Owner::Unknown, true)), Route::Pass);
+            assert_eq!(hook.decide(key(Owner::Local, false)), Route::Suppress);
+            assert_eq!(hook.decide(key(Owner::Os, false)), Route::Pass);
+        }
+    }
+
     #[test]
     fn every_state_and_transition_event() {
         for initial in [State::Disabled, State::Local, State::Remote,
@@ -157,7 +234,7 @@ mod tests {
             State::Handoff { ticket: Ticket(7), destination: Destination::Remote }]
         {
             for destination in [Destination::Local, Destination::Remote] {
-                let mut gate = Handoff { state: initial };
+                let mut gate = at(initial);
                 assert!(!gate.acknowledge(Ticket(u64::MAX)));
                 assert_eq!(gate.state(), initial);
                 let mut releases = 0;
@@ -173,7 +250,7 @@ mod tests {
                 assert_eq!(releases, 2);
                 assert!(!gate.acknowledge(ticket));
             }
-            let mut gate = Handoff { state: initial };
+            let mut gate = at(initial);
             gate.fail(|| {});
             assert_eq!(gate.state(), State::Disabled);
             assert!(!gate.acknowledge(Ticket(7)));
@@ -182,30 +259,40 @@ mod tests {
 
     #[test]
     fn held_key_matrix_and_all_bypass_combinations() {
-        for state in [State::Local, State::Remote, State::Disabled,
-            State::Handoff { ticket: Ticket(1), destination: Destination::Remote }]
-        {
-            let gate = Handoff { state };
+        let states = [State::Local, State::Remote, State::Disabled,
+            State::Handoff { ticket: Ticket(1), destination: Destination::Remote },
+            State::Handoff { ticket: Ticket(2), destination: Destination::Local }];
+        let releases = [
+            (Owner::Unknown, [Route::Pass; 5]),
+            (Owner::Os, [Route::Pass; 5]),
+            (Owner::Local, [Route::Local, Route::Suppress, Route::Suppress, Route::Suppress, Route::Suppress]),
+            (Owner::Remote, [Route::Suppress, Route::Remote, Route::Suppress, Route::Suppress, Route::Suppress]),
+        ];
+        let presses = [
+            (Owner::Unknown, [Route::Local, Route::Remote, Route::Pass, Route::Pass, Route::Pass]),
+            (Owner::Os, [Route::Pass, Route::Suppress, Route::Pass, Route::Pass, Route::Pass]),
+            (Owner::Local, [Route::Local, Route::Suppress, Route::Suppress, Route::Suppress, Route::Suppress]),
+            (Owner::Remote, [Route::Suppress, Route::Remote, Route::Suppress, Route::Suppress, Route::Suppress]),
+        ];
+        for (index, state) in states.into_iter().enumerate() {
+            let gate = at(state);
             for owner in [Owner::Unknown, Owner::Os, Owner::Local, Owner::Remote] {
                 for down in [false, true] {
                     for healthy in [false, true] {
                         for eligible in [false, true] {
                             let event = PhysicalKey { healthy, eligible, ..key(owner, down) };
-                            let expected = match owner {
-                                Owner::Os if down && state == State::Remote => Route::Suppress,
-                                Owner::Os => Route::Pass,
-                                Owner::Local if state == State::Local && healthy => Route::Local,
-                                Owner::Local => Route::Suppress,
-                                Owner::Remote if state == State::Remote => Route::Remote,
-                                Owner::Remote => Route::Suppress,
-                                Owner::Unknown if !down => Route::Pass,
-                                Owner::Unknown if state == State::Remote => Route::Remote,
-                                Owner::Unknown if state == State::Local && healthy && eligible => Route::Local,
-                                Owner::Unknown => Route::Pass,
-                            };
+                            let table = if down { &presses } else { &releases };
+                            let mut expected = table.iter().find(|row| row.0 == owner).unwrap().1[index];
+                            if expected == Route::Local && !healthy {
+                                expected = if owner == Owner::Unknown { Route::Pass } else { Route::Suppress };
+                            }
+                            if expected == Route::Local && owner == Owner::Unknown && !eligible {
+                                expected = Route::Pass;
+                            }
                             assert_eq!(gate.decide(event), expected, "{state:?} {event:?}");
-                            assert_eq!(gate.decide(PhysicalKey { shortcut: true, ..event }), Route::Shortcut);
+                            assert_eq!(gate.decide(PhysicalKey { shortcut: true, ..event }), if down { Route::Shortcut } else { expected });
                             assert_eq!(gate.decide(PhysicalKey { injected: true, ..event }), Route::Pass);
+                            assert_eq!(gate.decide(PhysicalKey { injected: true, shortcut: true, ..event }), Route::Pass);
                         }
                     }
                 }
@@ -214,13 +301,51 @@ mod tests {
     }
 
     #[test]
+    fn hook_gate_closes_before_cleanup_and_publishes_only_after_acknowledgement() {
+        let mut worker = Handoff::default();
+        let hook = worker.hook_gate();
+        let event = key(Owner::Unknown, true);
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(0);
+        let (continue_tx, continue_rx) = std::sync::mpsc::sync_channel(0);
+        let injected = Arc::new(AtomicU64::new(0));
+        let injection_result = injected.clone();
+        let initial = worker.begin(Destination::Local, || {}).unwrap();
+        assert!(worker.acknowledge(initial));
+        assert_eq!(hook.decide(event), Route::Local);
+        let thread = std::thread::spawn(move || {
+            let ticket = worker.begin(Destination::Remote, || {
+                entered_tx.send(()).unwrap();
+                continue_rx.recv().unwrap();
+            }).unwrap();
+            injection_result.store(1, Ordering::Relaxed);
+            assert!(worker.acknowledge(ticket));
+            worker
+        });
+        entered_rx.recv().unwrap();
+        assert_eq!(hook.decide(event), Route::Pass, "closed while release is blocked");
+        continue_tx.send(()).unwrap();
+        let timeout = Instant::now() + Duration::from_secs(5);
+        while hook.decide(event) != Route::Remote {
+            assert!(Instant::now() < timeout, "worker never published the acknowledged gate");
+            std::thread::yield_now();
+        }
+        assert_eq!(injected.load(Ordering::Relaxed), 1);
+        let mut worker = thread.join().unwrap();
+        worker.fail(|| assert_eq!(hook.decide(event), Route::Pass));
+        assert_eq!(hook.decide(event), Route::Pass);
+    }
+
+    #[test]
     fn superseded_failed_and_exhausted_tickets_never_open_the_gate() {
         let mut gate = Handoff::default();
+        let hook = gate.hook_gate();
         let old = gate.begin(Destination::Remote, || {}).unwrap();
         let current = gate.begin(Destination::Local, || {}).unwrap();
         assert!(!gate.acknowledge(old));
+        assert_eq!(hook.decide(key(Owner::Unknown, true)), Route::Pass);
         gate.fail(|| {});
         assert!(!gate.acknowledge(current));
+        assert_eq!(hook.decide(key(Owner::Unknown, true)), Route::Pass);
         assert_eq!(Ticket::next(&AtomicU64::new(u64::MAX)), None);
         assert_eq!(gate.state(), State::Disabled);
         let mut other = Handoff::default();
@@ -235,10 +360,13 @@ mod tests {
     fn cleanup_panic_keeps_gate_closed() {
         let mut gate = Handoff::default();
         let ticket = gate.begin(Destination::Local, || {}).unwrap();
+        assert!(gate.acknowledge(ticket));
+        let hook = gate.hook_gate();
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = gate.begin(Destination::Remote, || panic!("injection worker failed"));
         })).is_err());
         assert_eq!(gate.state(), State::Disabled);
+        assert_eq!(hook.decide(key(Owner::Unknown, true)), Route::Pass);
         assert!(!gate.acknowledge(ticket));
     }
 
@@ -298,7 +426,7 @@ mod tests {
             let identity = (device, 30);
             let owner = self.owners.get(&identity).copied().unwrap_or(Owner::Unknown);
             let route = self.gate.decide(PhysicalKey { healthy, shortcut, ..key(owner, down) });
-            if shortcut {
+            if shortcut && down {
                 assert_eq!(route, Route::Shortcut);
                 self.fail();
             }
