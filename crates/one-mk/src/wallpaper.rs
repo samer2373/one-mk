@@ -83,6 +83,7 @@ pub struct Runtime {
     receivers: BTreeMap<Fingerprint,Receiver>,
     accepted: u64,
     rejected: u64,
+    rejection_reasons: BTreeMap<&'static str,u64>,
 }
 
 impl Runtime {
@@ -120,7 +121,11 @@ impl Runtime {
     pub fn receive(&mut self, peer: Fingerprint, message: Message, now_ms: u64) -> std::result::Result<(),&'static str> {
         let result = self.admit(peer,message,now_ms);
         if result.is_ok() { self.accepted = self.accepted.saturating_add(1); }
-        else { self.rejected = self.rejected.saturating_add(1); }
+        else if let Err(reason) = result {
+            self.rejected = self.rejected.saturating_add(1);
+            let count = self.rejection_reasons.entry(reason).or_default();
+            *count = count.saturating_add(1);
+        }
         result
     }
 
@@ -136,7 +141,8 @@ impl Runtime {
         }
         if receiver.budget == 0 { return Err("wallpaper rate limit"); }
         receiver.budget -= 1;
-        if message.coordinator != peer.0 || message.epoch != receiver.epoch { return Err("wrong receiver epoch or identity"); }
+        if message.coordinator != peer.0 { return Err("wrong receiver identity"); }
+        if message.epoch != receiver.epoch { return Err("wrong receiver epoch"); }
         if message.sequence <= receiver.sequence { return Err("replayed or stale sequence"); }
         if message.kind == Kind::ConsentGrant { return Err("only the receiving owner can grant consent"); }
         receiver.sequence = message.sequence;
@@ -150,9 +156,10 @@ impl Runtime {
 
     pub fn status(&self) -> String {
         serde_json::json!({"accepted": self.accepted,"rejected": self.rejected,
+            "rejection_reasons": self.rejection_reasons,
             "receivers": self.receivers.values().filter(|receiver| !receiver.revoked).count(),
             "pending_canvases": self.receivers.values().filter(|receiver| receiver.canvas.is_some()).count(),
-            "renderer": "unavailable", "timers": 0, "children": 0}).to_string()
+            "renderer": "unavailable"}).to_string()
     }
 }
 
@@ -274,6 +281,12 @@ async fn apply(dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn status_does_not_invent_resource_measurements() {
+        let status: serde_json::Value = serde_json::from_str(&super::Runtime::default().status()).unwrap();
+        assert!(status.get("timers").is_none());
+        assert!(status.get("children").is_none());
+    }
     use super::*;
 
     fn message(epoch: [u8;16], sequence: u64) -> Message {
@@ -294,7 +307,7 @@ mod tests {
         let epoch = runtime.epoch(peer).unwrap();
         assert!(runtime.receive(peer,message(epoch,1),0).is_ok());
         assert_eq!(runtime.receive(peer,message(epoch,1),0),Err("replayed or stale sequence"));
-        assert_eq!(runtime.receive(peer,message([9;16],2),0),Err("wrong receiver epoch or identity"));
+        assert_eq!(runtime.receive(peer,message([9;16],2),0),Err("wrong receiver epoch"));
         let mut spoof = message(epoch,2); spoof.coordinator = [8;32];
         assert!(runtime.receive(peer,spoof,0).is_err());
         let mut self_grant = message(epoch,2); self_grant.kind = Kind::ConsentGrant;

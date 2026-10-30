@@ -7,12 +7,9 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
 
 PERMISSIVE = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0", "Unicode-DFS-2016", "CC0-1.0", "BSL-1.0", "0BSD", "bzip2-1.0.6", "Apache-2.0 WITH LLVM-exception", "CDLA-Permissive-2.0"}
-DYNAMIC = PERMISSIVE | {"LGPL-2.0-or-later", "LGPL-2.1-or-later", "GPL-3.0-or-later WITH GCC-exception-3.1"}
 FORBIDDEN = re.compile(r"ffmpeg|libav(?:codec|format|filter|device|util)|libsw(?:scale|resample)|(?:^|[-_])(?:x264|x265)(?:$|[-_.])|libx26[45]|libmpv|gstlibav|gstx26[45]", re.I)
-PLUGINS = {f"libgst{name}.so" for name in ("coreelements", "matroska", "vpx", "aom", "videoconvertscale")}
 
 
 def normalized(expression):
@@ -93,42 +90,33 @@ def cargo_components(metadata, package):
     return components
 
 
-def runtime_components(root):
-    manifest = json.loads((root / "runtime.json").read_text())
-    if manifest.get("schema") != 1 or manifest.get("gstreamer") != "1.28.2":
-        raise ValueError("runtime pin mismatch")
-    actual = {}
-    for path in root.rglob("*"):
-        if path.is_symlink() or not (path.is_file() or path.is_dir()):
-            raise ValueError(f"symlink/device forbidden: {path}")
-        if path.stat().st_mode & 0o022:
-            raise ValueError(f"writable runtime member: {path}")
-        if path.is_file() and path != root / "runtime.json":
-            actual[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
-    if not actual or actual != manifest["files"] or set(actual) != set(manifest["licenses"]):
-        raise ValueError("unlisted, modified or unlicensed runtime member")
-    plugins = {Path(name).name for name in actual if name.startswith("plugins/")}
-    if plugins != PLUGINS:
-        raise ValueError(f"plugin closure must exactly match the explicit allowlist, got {sorted(plugins)}")
-    names = {Path(name).name for name in actual}
+def runtime_components(root, helper):
+    result = subprocess.run([str(helper.resolve()), "--runtime-inventory", str(root.absolute())], env={}, timeout=30, capture_output=True, text=True, check=False)
+    manifest = json.loads(result.stdout)
+    if result.returncode:
+        raise ValueError(f"shared runtime policy: {manifest.get('error', 'validation failed')}")
     components = []
-    for name, digest in sorted(actual.items()):
+    for name, digest in sorted(manifest["files"].items()):
         license_expression = manifest["licenses"][name]
-        if FORBIDDEN.search(name) or not allowed(license_expression, DYNAMIC):
-            raise ValueError(f"forbidden/unknown runtime library: {name}: {license_expression}")
-        path = root / name
-        if path.read_bytes()[:4] == b"\x7fELF":
-            dynamic = subprocess.check_output(["readelf", "-d", str(path)], text=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
-            for dependency in re.findall(r"\(NEEDED\).*?\[(.*?)\]", dynamic):
-                if FORBIDDEN.search(dependency) or dependency not in names:
-                    raise ValueError(f"forbidden/unbundled dynamic edge: {name} -> {dependency}")
-            if "RPATH" in dynamic or "RUNPATH" in dynamic:
-                raise ValueError(f"unreviewed ELF loader search path: {name}")
         components.append({"type": "file", "bom-ref": "runtime:" + name, "name": name, "version": "1.28.2" if "gst" in name else "inventory-sha256", "licenses": [{"expression": license_expression}], "hashes": [{"alg": "SHA-256", "content": digest}]})
     return components
 
 
+def daemon_features(features):
+    for feature in re.findall(r'image feature "([^"]+)"', features):
+        if feature != "png":
+            raise ValueError(f"unexpected daemon image decoder feature: {feature}")
+
+
 def self_test():
+    daemon_features('image feature "png"')
+    for feature in ("gif", "webp", "avif", "jpeg", "tiff", "exr", "default", "bmp"):
+        try:
+            daemon_features(f'image feature "{feature}"')
+        except ValueError as error:
+            assert str(error) == f"unexpected daemon image decoder feature: {feature}", error
+        else:
+            raise AssertionError(f"daemon decoder injection passed: {feature}")
     for expression in ("GPL-3.0-only", "AGPL-3.0-only", "GPL-2.0-only AND MIT", "LicenseRef-Unknown", "", "MIT OR", "LGPL-2.1-or-later"):
         assert not allowed(expression, PERMISSIVE), expression
     for expression in ("MIT OR Apache-2.0", "BSD-3-Clause AND MIT", "(MIT OR GPL-3.0-only) AND Apache-2.0"):
@@ -138,29 +126,11 @@ def self_test():
     bad = {"packages": [{"id": "bad", "name": "ffmpeg-sys-next", "version": "1", "license": "MIT"}], "resolve": {"nodes": [{"id": "bad", "dependencies": []}]}}
     try:
         cargo_components(bad, "ffmpeg-sys-next")
-    except ValueError:
-        pass
+    except ValueError as error:
+        assert str(error) == "forbidden/unknown Cargo dependency ffmpeg-sys-next: MIT", error
     else:
         raise AssertionError("negative dependency injection passed")
-    with tempfile.TemporaryDirectory(prefix="wallpaper-gate-") as directory:
-        root = Path(directory)
-        files = {"plugins/" + name: b"fixture" for name in PLUGINS}
-        files["lib/libavcodec.so.62"] = b"forbidden negative artifact"
-        for name, content in files.items():
-            path = root / name
-            path.parent.mkdir(exist_ok=True)
-            path.parent.chmod(0o700)
-            path.write_bytes(content)
-            path.chmod(0o600)
-        (root / "runtime.json").write_text(json.dumps({"schema": 1, "gstreamer": "1.28.2", "files": {name: hashlib.sha256(content).hexdigest() for name, content in files.items()}, "licenses": {name: "MIT" for name in files}}))
-        (root / "runtime.json").chmod(0o600)
-        try:
-            runtime_components(root)
-        except ValueError as error:
-            assert "forbidden/unknown runtime library" in str(error), error
-        else:
-            raise AssertionError("negative FFmpeg artifact injection passed")
-    print("PASS: injected FFmpeg Cargo dependency and on-disk runtime artifact rejected; GPL/invalid SPDX/plugin checks passed")
+    print("PASS: injected FFmpeg Cargo dependency rejected for intended reason; GPL/invalid SPDX checks passed. Runtime policy regressions live in the Rust helper tests.")
 
 
 def main():
@@ -171,6 +141,7 @@ def main():
     parser.add_argument("--runtime", type=Path)
     parser.add_argument("--sbom", type=Path)
     parser.add_argument("--helper", type=Path)
+    parser.add_argument("--daemon-features", type=Path)
     arguments = parser.parse_args()
     if arguments.self_test:
         self_test()
@@ -178,13 +149,18 @@ def main():
     if not arguments.metadata:
         parser.error("--metadata required (cargo metadata --locked --format-version 1)")
     components = cargo_components(json.loads(arguments.metadata.read_text()), arguments.package)
+    if not arguments.daemon_features:
+        parser.error("--daemon-features required (cargo tree --locked -p one-mk -e features)")
+    daemon_features(arguments.daemon_features.read_text())
     if arguments.helper:
         info = json.loads(subprocess.check_output([str(arguments.helper.resolve()), "--build-info"], env={}, timeout=5))
         if info.get("schema") != 1 or info.get("test_faults") is not False:
             raise ValueError("test-faults/unknown helper build cannot ship")
         components.append({"type": "file", "bom-ref": "helper", "name": arguments.helper.name, "hashes": [{"alg": "SHA-256", "content": hashlib.sha256(arguments.helper.read_bytes()).hexdigest()}]})
     if arguments.runtime:
-        components.extend(runtime_components(arguments.runtime))
+        if not arguments.helper:
+            parser.error("--runtime requires --helper for shared runtime validation")
+        components.extend(runtime_components(arguments.runtime, arguments.helper))
     if arguments.sbom:
         arguments.sbom.write_text(json.dumps({"bomFormat": "CycloneDX", "specVersion": "1.5", "version": 1, "metadata": {"component": {"type": "application", "name": arguments.package}, "properties": [{"name": "one-mk:publication", "value": "dry-run; not a qualification or licence/source audit"}]}, "components": sorted(components, key=lambda item: item["bom-ref"])}, indent=2) + "\n")
     print(f"PASS: {len(components)} dependency/closure records; dry-run only, no artifact published")

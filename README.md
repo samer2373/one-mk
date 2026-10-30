@@ -1145,7 +1145,8 @@ crates/one-mk     the daemon and CLI
 ## Building
 
 ```bash
-cargo build --release      # target/release/one-mk, one-mk-tray and one-mk-app
+cargo build --release --locked -j 2 -p one-mk -p one-mk-tray -p one-mk-app
+# Build the optional importer separately: workspace-wide builds unify decoder features.
 cargo test
 ```
 

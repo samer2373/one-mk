@@ -12,7 +12,18 @@ allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Un
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-deny = [{ name = "ffmpeg-next" }, { name = "ffmpeg-sys-next" }, { name = "libmpv" }, { name = "x264" }, { name = "x265" }]
+deny = [
+    { name = "ffmpeg" }, { name = "ffmpeg-sys" }, { name = "ffmpeg-next" }, { name = "ffmpeg-sys-next" },
+    { name = "ffmpeg-sidecar" }, { name = "ffmpeg-the-third" }, { name = "ffmpeg-sys-the-third" },
+    { name = "ffmpeg4" }, { name = "ffmpeg4-sys" }, { name = "ffmpeg5" }, { name = "ffmpeg5-sys" },
+    { name = "ffmpeg6" }, { name = "ffmpeg6-sys" }, { name = "ffmpeg7" }, { name = "ffmpeg7-sys" },
+    { name = "ac-ffmpeg" }, { name = "ac-ffmpeg-build" },
+    { name = "rusty_ffmpeg" }, { name = "rsmpeg" }, { name = "video-rs" },
+    { name = "libav" }, { name = "libav-sys" }, { name = "libavcodec" }, { name = "libavcodec-sys" },
+    { name = "libmpv" }, { name = "libmpv-sys" }, { name = "libmpv2" }, { name = "libmpv2-sys" },
+    { name = "mpv" }, { name = "mpv-sys" }, { name = "x264" }, { name = "x264-sys" },
+    { name = "x265" }, { name = "x265-sys" }, { name = "xvid" }, { name = "xvid-sys" },
+]
 
 [sources]
 unknown-registry = "deny"
