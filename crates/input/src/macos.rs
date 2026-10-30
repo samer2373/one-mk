@@ -42,7 +42,7 @@ use objc2_core_graphics::{
     CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventTapOptions,
     CGEventTapPlacement, CGEventTapProxy, CGEventType, CGGetActiveDisplayList, CGMouseButton,
     CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGSessionCopyCurrentDictionary,
-    CGWarpMouseCursorPosition, kCGNullDirectDisplay,
+    CGSetLocalEventsSuppressionInterval, CGWarpMouseCursorPosition, kCGNullDirectDisplay,
 };
 use one_mk_proto::{Desktop, Edge, Mods, Pos, Rect, Side, mediakeys};
 use std::cell::RefCell;
@@ -312,6 +312,9 @@ impl State {
 
     fn deactivate(&mut self, pos: Option<Pos>) {
         if let Some(p) = pos {
+            // macOS drops the mouse for 0.25 s after a warp (the pause and the
+            // jump when the pointer comes back); no freeze.
+            let _ = CGSetLocalEventsSuppressionInterval(0.0);
             let _ = CGWarpMouseCursorPosition(CGPoint::new(p.x, p.y));
         }
         // Re-associating also ends the short input freeze that follows a warp.
