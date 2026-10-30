@@ -3,13 +3,13 @@ use anyhow::{Result, bail};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering}};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_BYTES: usize = 64 << 20;
 const MAX_ITEMS: usize = 1000;
 const MAX_BYTES: usize = 256 << 20;
-const SAVE_PREFIX: &str = ".clipboard-history-";
+pub(crate) const SAVE_PREFIX: &str = ".clipboard-history-";
 
 pub fn clean_unfinished(directory: &std::path::Path) -> Result<()> {
     for entry in std::fs::read_dir(directory)? {
@@ -50,9 +50,29 @@ impl Entry {
 }
 
 pub fn safe_preview(text: &str) -> String {
-    text.chars().filter(|ch| !ch.is_control() && !matches!(*ch,
-        '\u{061c}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}'
-    )).take(80).collect()
+    text.chars().filter(|ch| !invisible(*ch)).take(80).collect()
+}
+
+pub fn invisible(ch: char) -> bool {
+    use unicode_general_category::{get_general_category, GeneralCategory};
+    matches!(get_general_category(ch), GeneralCategory::Control | GeneralCategory::Format | GeneralCategory::LineSeparator | GeneralCategory::ParagraphSeparator)
+        || matches!(ch, '\u{034f}' | '\u{115f}'..='\u{1160}' | '\u{17b4}'..='\u{17b5}' | '\u{180b}'..='\u{180f}' | '\u{2065}' | '\u{3164}' | '\u{fe00}'..='\u{fe0f}' | '\u{ffa0}' | '\u{fff0}'..='\u{fff8}' | '\u{1bca0}'..='\u{1bca3}' | '\u{1d173}'..='\u{1d17a}' | '\u{e0000}'..='\u{e0fff}')
+}
+
+#[derive(Default)]
+pub struct Status {
+    pub len: AtomicUsize,
+    pub revision: AtomicU64,
+    pub disabled: AtomicBool,
+    pub monitoring_unavailable: AtomicBool,
+    note: Mutex<Option<String>>,
+    saver: Mutex<Option<crate::history_save::Saver>>,
+}
+
+impl Status {
+    pub fn note(&self) -> Option<String> {
+        self.note.try_lock().ok().and_then(|note| note.clone()).or_else(|| self.saver.try_lock().ok().and_then(|saver| saver.as_ref().and_then(|saver| saver.error())))
+    }
 }
 
 pub fn digest(data: &ClipData) -> Digest {
@@ -78,12 +98,19 @@ pub struct History {
     path: Option<PathBuf>,
     pub error: Option<String>,
     pub monitoring_unavailable: bool,
+    status: Arc<Status>,
+    saver: Option<crate::history_save::Saver>,
+    last_saved: Option<(Option<PathBuf>, u64)>,
+    blocked: bool,
+    remove_path: Option<PathBuf>,
+    removed_path: Option<PathBuf>,
 }
 
 impl Default for History {
     fn default() -> Self {
         Self { entries: VecDeque::new(), bytes: 0, max: 20, byte_cap: DEFAULT_BYTES,
-            item_cap: crate::DEFAULT_MAX_BYTES, next: 1, revision: 0, path: None, error: None, monitoring_unavailable: false }
+            item_cap: crate::DEFAULT_MAX_BYTES, next: 1, revision: 0, path: None, error: None, monitoring_unavailable: false,
+            status: Arc::default(), saver: None, last_saved: None, blocked: false, remove_path: None, removed_path: None }
     }
 }
 
@@ -92,20 +119,19 @@ impl History {
         self.max = max.min(MAX_ITEMS);
         self.byte_cap = bytes.min(MAX_BYTES);
         self.item_cap = item_cap.min(crate::CEILING_BYTES);
-        let load = self.path.is_none() && path.is_some() && self.entries.is_empty();
-        if self.path != path && let Some(old) = self.path.take() {
-            match std::fs::remove_file(old) {
-                Ok(()) => {},
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
-                Err(_) => self.error = Some("Could not remove saved clipboard history; remove clipboard-history.bin from the settings folder.".into()),
-            }
-        }
+        let load = !self.disabled() && self.path.is_none() && path.is_some() && self.entries.is_empty() && self.saver.is_none();
+        if self.disabled() { self.blocked = false; self.error = None; }
+        if self.path != path { self.remove_path = self.path.take(); self.blocked = false; self.error = None; }
         self.path = path;
+        if self.path.is_some() { self.removed_path = None; }
         if load && let Err(error) = self.load() {
             self.error = Some(format!("Could not load clipboard history: {error}; clear it with one-mk clipboard history clear."));
+            self.blocked = true;
             self.trim();
+            self.publish();
             return;
         }
+        if load && !self.disabled() { self.last_saved = Some((self.path.clone(), self.revision)); }
         self.trim();
         self.save_checked();
     }
@@ -116,10 +142,32 @@ impl History {
     pub fn is_empty(&self) -> bool { self.entries.is_empty() }
     pub fn disabled(&self) -> bool { self.max == 0 || self.byte_cap == 0 }
     pub fn get(&self, id: u64) -> Option<Entry> { self.entries.iter().find(|item| item.id == id).cloned() }
+    pub fn status(&self) -> Arc<Status> { self.status.clone() }
+    pub fn remove_saved_file(&mut self, path: PathBuf) {
+        if self.path.is_none() && self.removed_path.as_ref() == Some(&path) && self.saver.as_ref().is_none_or(|saver| saver.error().is_none()) { return; }
+        if self.saver.is_some() || path.exists() { self.remove_path = Some(path.clone()); }
+        self.removed_path = Some(path);
+    }
+    pub(crate) fn saver(&self) -> Option<crate::history_save::Saver> { self.saver.clone() }
+
+    fn publish(&self) {
+        self.status.len.store(self.len(), Ordering::Relaxed);
+        self.status.revision.store(self.revision, Ordering::Relaxed);
+        self.status.disabled.store(self.disabled(), Ordering::Relaxed);
+        if self.monitoring_unavailable { self.status.monitoring_unavailable.store(true, Ordering::Relaxed); }
+        *self.status.note.lock().unwrap_or_else(|error| error.into_inner()) = self.error.clone();
+    }
+
+    #[cfg(test)]
+    fn flush(&self) { if let Some(saver) = &self.saver { saver.flush().unwrap(); } }
 
     pub fn record(&mut self, data: Arc<ClipData>, concealed: bool, origin: &str) {
-        if concealed || self.max == 0 || self.next == u64::MAX || data.is_empty() || data.len() > self.item_cap || data.len() > self.byte_cap { return; }
         let digest = digest(&data);
+        self.record_hashed(data, digest, concealed, origin);
+    }
+
+    pub fn record_hashed(&mut self, data: Arc<ClipData>, digest: Digest, concealed: bool, origin: &str) {
+        if concealed || self.max == 0 || self.next == u64::MAX || data.is_empty() || data.len() > self.item_cap || data.len() > self.byte_cap { return; }
         if self.entries.back().is_some_and(|entry| entry.digest == digest) { return; }
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
         self.bytes += data.len();
@@ -158,38 +206,20 @@ impl History {
         self.bytes = 0;
         self.revision = self.revision.wrapping_add(1);
         self.error = None;
+        self.blocked = false;
         self.save_checked();
     }
 
     fn save_checked(&mut self) {
-        if self.error.is_some() { return; }
-        if self.path.is_some() && let Err(error) = self.save() {
-            self.error = Some(format!("Could not save clipboard history: {error}; check the settings folder is writable."));
-        }
-    }
-
-    fn save(&self) -> Result<()> {
-        let Some(path) = &self.path else { return Ok(()); };
-        let directory = path.parent().ok_or_else(|| anyhow::anyhow!("missing settings folder"))?;
-        let mut temporary = tempfile::Builder::new().prefix(SAVE_PREFIX).tempfile_in(directory)?;
-        {
-            let file = temporary.as_file_mut();
-            file.write_all(b"OMKH1")?;
-            file.write_all(&(self.entries.len() as u64).to_le_bytes())?;
-            for entry in &self.entries {
-                file.write_all(&entry.id.to_le_bytes())?;
-                file.write_all(&entry.timestamp.to_le_bytes())?;
-                write_field(file, Some(entry.origin.as_bytes()))?;
-                write_field(file, entry.data.text.as_deref().map(str::as_bytes))?;
-                write_field(file, entry.data.html.as_deref().map(str::as_bytes))?;
-                write_field(file, entry.data.png.as_deref())?;
-            }
-            file.sync_all()?;
-        }
-        temporary.persist(path)?;
-        #[cfg(unix)]
-        std::fs::File::open(directory)?.sync_all()?;
-        Ok(())
+        self.publish();
+        if self.blocked { return; }
+        let state = (self.path.clone(), self.revision);
+        if self.remove_path.is_none() && self.last_saved.as_ref() == Some(&state) && self.saver.as_ref().is_none_or(|saver| saver.error().is_none()) { return; }
+        if self.path.is_none() && self.remove_path.is_none() && self.saver.is_none() { return; }
+        let saver = self.saver.get_or_insert_with(crate::history_save::Saver::new);
+        *self.status.saver.lock().unwrap_or_else(|error| error.into_inner()) = Some(saver.clone());
+        saver.submit(crate::history_save::Snapshot { path: self.path.clone(), entries: self.entries.iter().cloned().collect() }, self.remove_path.take());
+        self.last_saved = Some(state);
     }
 
     fn load(&mut self) -> Result<()> {
@@ -230,7 +260,7 @@ impl History {
     }
 }
 
-fn write_field(file: &mut impl Write, bytes: Option<&[u8]>) -> Result<()> {
+pub(crate) fn write_field(file: &mut impl Write, bytes: Option<&[u8]>) -> Result<()> {
     file.write_all(&bytes.map_or(u64::MAX, |bytes| bytes.len() as u64).to_le_bytes())?;
     if let Some(bytes) = bytes { file.write_all(bytes)?; }
     Ok(())
@@ -254,6 +284,27 @@ fn read_field(file: &mut impl Read, max: usize) -> Result<Option<Vec<u8>>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn disabled_history_removes_corrupt_container_without_loading() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clipboard-history.bin");
+        std::fs::write(&path, b"corrupt").unwrap();
+        let mut history = History::default();
+        history.configure(0, DEFAULT_BYTES, 1024, Some(path.clone()));
+        history.flush();
+        assert!(!path.exists());
+        assert!(history.error.is_none());
+    }
+    #[test]
+    fn disabled_history_removes_existing_empty_container() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clipboard-history.bin");
+        std::fs::write(&path, [b"OMKH1".as_slice(), &0u64.to_le_bytes()].concat()).unwrap();
+        let mut history = History::default();
+        history.configure(0, DEFAULT_BYTES, 1024, Some(path.clone()));
+        history.flush();
+        assert!(!path.exists());
+    }
     use super::*;
     fn text(value: &str) -> Arc<ClipData> { Arc::new(ClipData { text: Some(value.into()), ..ClipData::default() }) }
 
@@ -299,6 +350,7 @@ mod tests {
 
     #[test]
     fn previews_strip_controls_bidi_and_bound_unicode() {
+        assert_eq!(safe_preview("a\u{e0001}\u{e007f}\u{fff9}\u{180e}\u{ad}\u{34f}\u{115f}\u{1160}\u{3164}\u{ffa0}\u{fe0f}b"), "ab");
         assert_eq!(safe_preview("a\n\r\t\u{1b}\u{202e}\u{2066}b"), "ab");
         assert_eq!(safe_preview(&"🦀".repeat(10000)).chars().count(), 80);
         assert!(String::from_utf8(vec![0xff]).is_err());
@@ -306,8 +358,65 @@ mod tests {
             if let Some(ch) = char::from_u32(code) {
                 let preview = safe_preview(&ch.to_string());
                 assert!(preview.chars().all(|ch| !ch.is_control()));
+                if matches!(unicode_general_category::get_general_category(ch), unicode_general_category::GeneralCategory::Format | unicode_general_category::GeneralCategory::LineSeparator | unicode_general_category::GeneralCategory::ParagraphSeparator) {
+                    assert!(preview.is_empty(), "format scalar U+{code:04X} escaped filtering");
+                }
             }
         }
+    }
+
+    #[test]
+    fn disabled_persistence_removes_file_and_clears_load_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clipboard-history.bin");
+        std::fs::write(&path, b"corrupt").unwrap();
+        let mut history = History::default();
+        history.configure(20, DEFAULT_BYTES, 1024, Some(path.clone()));
+        assert!(history.error.is_some());
+        history.configure(0, DEFAULT_BYTES, 1024, None);
+        history.flush();
+        assert!(history.error.is_none());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn disabled_history_does_not_leave_an_empty_container() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clipboard-history.bin");
+        let mut history = History::default();
+        history.configure(0, DEFAULT_BYTES, 1024, Some(path.clone()));
+        history.flush();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn unchanged_configuration_does_not_rewrite_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clipboard-history.bin");
+        let mut history = History::default();
+        history.configure(20, DEFAULT_BYTES, 1024, Some(path.clone()));
+        history.record(text("retained"), false, "peer");
+        history.flush();
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        history.configure(20, DEFAULT_BYTES, 1024, Some(path.clone()));
+        history.flush();
+        assert_eq!(before, std::fs::metadata(path).unwrap().modified().unwrap());
+    }
+
+    #[test]
+    fn transient_save_failure_retries_after_the_next_change() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("later");
+        let path = parent.join("clipboard-history.bin");
+        let mut history = History::default();
+        history.configure(20, DEFAULT_BYTES, 1024, Some(path.clone()));
+        history.record(text("first"), false, "peer");
+        assert!(history.saver.as_ref().unwrap().flush().is_err());
+        std::fs::create_dir(&parent).unwrap();
+        history.record(text("second"), false, "peer");
+        history.flush();
+        assert!(path.exists());
     }
 
     #[test]
@@ -318,21 +427,25 @@ mod tests {
         history.record(text("in memory"), false, "here");
         assert!(!path.exists());
         history.configure(20, DEFAULT_BYTES, 1024, Some(path.clone()));
+        history.flush();
         assert!(history.error.is_none(), "{:?}", history.error);
         #[cfg(unix)]
         { use std::os::unix::fs::PermissionsExt; assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600); }
         history.record(text("second"), false, "peer");
+        history.flush();
         assert!(history.error.is_none());
         let mut loaded = History::default();
         loaded.configure(20, DEFAULT_BYTES, 1024, Some(path.clone()));
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded.list()[0].origin, "peer");
         loaded.clear();
+        loaded.flush();
         let mut empty = History::default();
         empty.configure(20, DEFAULT_BYTES, 1024, Some(path.clone()));
         assert!(empty.is_empty());
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
         loaded.configure(20, DEFAULT_BYTES, 1024, None);
+        loaded.flush();
         assert!(!path.exists());
     }
 
@@ -348,6 +461,7 @@ mod tests {
             history.record(text("later"), false, "here");
             assert_eq!(std::fs::read(&path).unwrap(), bytes);
             history.clear();
+            history.flush();
             assert!(history.error.is_none());
         }
         let mut encoded = Vec::new();
@@ -371,6 +485,7 @@ mod tests {
         let mut original = History::default();
         original.configure(20, 1024, 1024, Some(path.clone()));
         original.record(text("sample 日本語"), false, "peer");
+        original.flush();
         let bytes = std::fs::read(&path).unwrap();
         for position in 0..bytes.len() {
             for candidate in [bytes[..position].to_vec(), {
