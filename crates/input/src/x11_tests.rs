@@ -16,11 +16,25 @@ const H: i16 = 800;
 #[ignore = "explicit private-Xvfb remapping safety regression"]
 fn temporary_remap_restoration_races_a_delayed_client() {
     for count in [1, 32] {
-        delayed_remap_client(count);
+        delayed_remap_client(count, MappingLifetime::Immediate);
     }
 }
 
-fn delayed_remap_client(repetitions: usize) {
+#[test]
+#[ignore = "explicit private-Xvfb retained-pool delivery experiment"]
+fn retained_pool_delivers_only_before_retirement() {
+    delayed_remap_client(200, MappingLifetime::UntilTranslated);
+    delayed_remap_client(200, MappingLifetime::QuietDeadline);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MappingLifetime {
+    Immediate,
+    UntilTranslated,
+    QuietDeadline,
+}
+
+fn delayed_remap_client(repetitions: usize, lifetime: MappingLifetime) {
     let server = Xvfb::start().expect("this acceptance experiment requires Xvfb");
     let injector = server.observer();
     let reader = server.observer();
@@ -31,15 +45,16 @@ fn delayed_remap_client(repetitions: usize) {
     let width = usize::from(before.keysyms_per_keycode);
     let modifiers = injector.conn.get_modifier_mapping().unwrap().reply().unwrap();
     let down = injector.conn.query_keymap().unwrap().reply().unwrap();
-    let offset = before.keysyms.chunks_exact(width).enumerate().rev().find_map(|(index, symbols)| {
+    let offsets: Vec<_> = before.keysyms.chunks_exact(width).enumerate().rev().filter_map(|(index, symbols)| {
         let keycode = first + u8::try_from(index).unwrap();
         (symbols.iter().all(|symbol| *symbol == 0)
             && !modifiers.keycodes.contains(&keycode)
             && down.keys[usize::from(keycode / 8)] & (1 << (keycode % 8)) == 0)
             .then_some(index)
-    }).expect("an unused, unheld, non-modifier keycode");
-    let keycode = first + u8::try_from(offset).unwrap();
-    let original = before.keysyms[offset * width..(offset + 1) * width].to_vec();
+    }).take(if lifetime == MappingLifetime::Immediate { 1 } else { 4 }).collect();
+    assert_eq!(offsets.len(), if lifetime == MappingLifetime::Immediate { 1 } else { 4 }, "unused, unheld, non-modifier keycodes");
+    let keycodes: Vec<_> = offsets.iter().map(|offset| first + u8::try_from(*offset).unwrap()).collect();
+    let observed_keycodes = keycodes.clone();
     let mut xev = TestXev(Command::new("stdbuf").args(["-oL", "xev", "-display", &server.display, "-root", "-event", "keyboard"])
         .stdout(Stdio::piped()).stderr(Stdio::null()).spawn().expect("xev and stdbuf are required"));
     eventually("Xlib observer ready", || reader.conn.get_window_attributes(reader.root).unwrap().reply().unwrap()
@@ -52,9 +67,12 @@ fn delayed_remap_client(repetitions: usize) {
     let output = xev.0.stdout.take().unwrap();
     let (lines, translated) = std::sync::mpsc::channel();
     let xlib_reader = std::thread::spawn(move || {
+        let mut pressed = false;
         for line in std::io::BufReader::new(output).lines() {
             let Ok(line) = line else { break };
-            if line.contains(&format!("keycode {keycode} (keysym")) && lines.send(line).is_err() {
+            if line.starts_with("KeyPress event,") { pressed = true; }
+            if line.starts_with("KeyRelease event,") { pressed = false; }
+            if observed_keycodes.iter().any(|keycode| line.contains(&format!("keycode {keycode} (keysym"))) && lines.send((pressed, line)).is_err() {
                 break;
             }
         }
@@ -72,31 +90,41 @@ fn delayed_remap_client(repetitions: usize) {
     let held = 38;
     injector.fake(xproto::KEY_PRESS_EVENT, held, injector.root, 0, 0);
     let mut expected = Vec::new();
-    for wanted in ['ı', 'ł', '@', 'z'].into_iter().cycle().take(repetitions) {
-        let mut restore = TestMapping { conn: &injector.conn, keycode, original: &original, active: true };
+    let mut retained = Vec::new();
+    for (index, wanted) in ['ı', 'ł', '@', 'z'].into_iter().cycle().take(repetitions).enumerate() {
+        let slot = if lifetime == MappingLifetime::Immediate { 0 } else { index % 4 };
+        let offset = offsets[slot];
+        let keycode = keycodes[slot];
         let symbols = vec![0x0100_0000 | u32::from(wanted); width];
-        injector.conn.change_keyboard_mapping(1, keycode, before.keysyms_per_keycode, &symbols).unwrap().check().unwrap();
+        let mut restore = None;
+        if lifetime == MappingLifetime::Immediate || index < 4 {
+            let guard = TestMapping { conn: &injector.conn, keycode,
+                original: &before.keysyms[offset * width..(offset + 1) * width], active: true };
+            injector.conn.change_keyboard_mapping(1, keycode, before.keysyms_per_keycode, &symbols).unwrap().check().unwrap();
+            if lifetime == MappingLifetime::Immediate { restore = Some(guard); }
+            else { retained.push(guard); }
+        }
         let during = keyboard.snapshot().unwrap();
         assert_eq!(during.resolver.resolve(u32::from(keycode) - 8, during.masks), Some(wanted.to_string()));
         injector.fake(xproto::KEY_PRESS_EVENT, keycode, injector.root, 0, 0);
         injector.fake(xproto::KEY_RELEASE_EVENT, keycode, injector.root, 0, 0);
-        restore.restore().unwrap();
+        if let Some(mut restore) = restore { restore.restore().unwrap(); }
         expected.push(u32::from(wanted));
     }
-    let after = injector.conn.get_keyboard_mapping(first, count).unwrap().reply().unwrap();
-    assert_eq!(after.keysyms_per_keycode, before.keysyms_per_keycode);
-    assert_eq!(after.keysyms, before.keysyms, "the entire core map must be restored");
-    assert!(!injector.key_down(keycode));
+    if lifetime == MappingLifetime::QuietDeadline {
+        std::thread::sleep(Duration::from_millis(1600));
+        for mapping in &mut retained { mapping.restore().unwrap(); }
+    }
+    for keycode in &keycodes { assert!(!injector.key_down(*keycode)); }
     assert!(injector.key_down(held), "a different client's held key must not be disturbed");
     injector.fake(xproto::KEY_RELEASE_EVENT, held, injector.root, 0, 0);
-    let native_restored = native_before == dump();
     let mut presses = 0;
     let mut notifications = 0;
     let mut symbols = Vec::new();
     while let Some(event) = reader.conn.poll_for_event().unwrap() {
         match event {
             x11rb::protocol::Event::MappingNotify(_) => notifications += 1,
-            x11rb::protocol::Event::KeyPress(event) if event.detail == keycode => {
+            x11rb::protocol::Event::KeyPress(event) if keycodes.contains(&event.detail) => {
                 presses += 1;
                 let snapshot = keyboard.snapshot().unwrap();
                 if let Some(text) = snapshot.resolver.resolve(u32::from(event.detail) - 8, snapshot.masks) {
@@ -109,14 +137,38 @@ fn delayed_remap_client(repetitions: usize) {
     assert_eq!(presses, repetitions, "the reader must receive every actual XTest press");
     assert!(notifications > 0, "the reader must receive MappingNotify");
     assert_eq!(unsafe { libc::kill(xev_pid, libc::SIGCONT) }, 0);
-    for _ in 0..2 * repetitions {
-        let line = translated.recv_timeout(Duration::from_secs(5)).expect("Xlib must translate every press and release");
-        assert!(line.contains("(keysym 0x0, NoSymbol)"), "Xlib observer: {line}");
+    let mut xlib_presses = 0;
+    let mut awaiting_release = None;
+    while xlib_presses < repetitions || awaiting_release.is_some() {
+        let (pressed, line) = translated.recv_timeout(Duration::from_secs(5)).expect("Xlib must translate every press and release");
+        if !pressed && awaiting_release.is_none() { continue; }
+        let index = if pressed { xlib_presses } else { xlib_presses - 1 };
+        let keycode = keycodes[if lifetime == MappingLifetime::Immediate { 0 } else { index % 4 }];
+        assert!(line.contains(&format!("keycode {keycode} (keysym")), "Xlib key order: {line}");
+        if pressed {
+            assert!(awaiting_release.is_none(), "Xlib must release before the next press");
+            awaiting_release = Some(keycode);
+            xlib_presses += 1;
+        } else {
+            assert_eq!(awaiting_release.take(), Some(keycode));
+        }
+        if lifetime == MappingLifetime::UntilTranslated {
+            let symbol = 0x0100_0000 | expected[index];
+            assert!(line.contains(&format!("(keysym {symbol:#x},")), "Xlib event={index} expected={symbol:#x}: {line}");
+        } else {
+            assert!(line.contains("(keysym 0x0, NoSymbol)"), "Xlib observer: {line}");
+        }
     }
     drop(xev);
     xlib_reader.join().unwrap();
-    eprintln!("remaps={repetitions} presses={presses} MappingNotify={notifications} core_restored=true XKB_restored={native_restored} held_key_preserved=true Xlib_NoSymbol={} delivered={symbols:?}", 2 * repetitions);
-    if std::env::var_os("ONE_MK_REQUIRE_X11_TEXT_DELIVERY").is_some() {
+    for mapping in &mut retained { mapping.restore().unwrap(); }
+    let after = injector.conn.get_keyboard_mapping(first, count).unwrap().reply().unwrap();
+    assert_eq!(after.keysyms_per_keycode, before.keysyms_per_keycode);
+    assert_eq!(after.keysyms, before.keysyms, "the entire core map must be restored");
+    let native_restored = native_before == dump();
+    assert!(native_restored, "the full XKB map must be restored");
+    eprintln!("lifetime={lifetime:?} presses={presses} MappingNotify={notifications} core_restored=true XKB_restored={native_restored} held_key_preserved=true delivered={}/{}", symbols.len(), repetitions);
+    if lifetime == MappingLifetime::UntilTranslated || std::env::var_os("ONE_MK_REQUIRE_X11_TEXT_DELIVERY").is_some() {
         assert_eq!(symbols, expected, "a delayed client refreshes from the already-restored map");
     } else {
         assert!(symbols.is_empty(), "revisit the remap safety blocker if a delayed reader now receives text");
