@@ -346,8 +346,7 @@ mod tests {
     }
 
     /// Random interleavings: every hook event comes out exactly once, in
-    /// the order it went in, and only with a device a matching device
-    /// event named.
+    /// the order it went in.
     #[test]
     fn every_event_comes_out_once_in_order() {
         let mut rng = Rng(0x5eed_1234_abcd_0001);

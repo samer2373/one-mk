@@ -418,7 +418,7 @@ tests, cross-review by the other model, full validation before merging.
 | 5F | Autoscroll (middle-click) and gesture buttons | Claude | todo |
 | 5G | Auto-update from signed GitHub Releases (build on the owner's release workflow) | Codex | todo |
 | 5H | Activate local-only key remap on Windows and macOS (acknowledged handoff, no stuck keys); builds on 5I | Codex | blocked on 5I |
-| 5I | Per-device scope: key and mouse rules for ONE specific keyboard or mouse, saved on the computer the device is plugged into (owner request 2026-10-30). X11 via XI2 source ids; Windows Raw Input and macOS IOHID compile-checked only; NOT possible on GNOME/KDE/wlroots Wayland (the compositor merges devices): say so | Claude | todo |
+| 5I | Per-device scope: key and mouse rules for ONE specific keyboard or mouse, saved on the computer the device is plugged into (owner request 2026-10-30). X11 via XI2 source ids; Windows Raw Input and macOS IOHID compile-checked only; NOT possible on GNOME/KDE/wlroots Wayland (the compositor merges devices): say so | Claude | done: X11 tested; Windows and macOS compile-checked only |
 
 ## Out of scope for now
 

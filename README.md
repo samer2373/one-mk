@@ -156,6 +156,7 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 | `one-mk keymap [list\|add\|remove\|clear\|check]` | Change what keys do on the other computers: remaps, combos, tap/hold, layers, actions (see below) |
 | `one-mk buttons [list\|map N TO\|preset side-back-forward\|clear]` | Remap mouse buttons on the other computers |
 | `one-mk pointer [--speed X]` / `one-mk scroll [options]` | Pointer speed; scroll direction, natural scrolling, speed, notches, Shift-scroll |
+| `one-mk input-devices [--json]` | The keyboards and mice this computer has seen, for rules for one of them (`--device`, see below) |
 | `one-mk pointer-overlay [auto\|always\|never]` | Draw the pointer here while another computer controls this one and it has no mouse (see below) |
 | `one-mk install` / `uninstall` | Start automatically at login (and add the file manager's "Send to" entries) / stop doing that |
 | `one-mk integrate [--remove]` | Add or remove "Send to <computer>" in the file manager only (see below) |
@@ -629,6 +630,23 @@ Good to know:
   doesn't apply and `one-mk status` says so: Wayland windows on GNOME and
   KDE can't be named (X11 windows can), and older one-mk versions don't
   say.
+- `--device NAME` rules are for **one keyboard or mouse** (on `keymap
+  add/remove`, `buttons`, `pointer`, `scroll`): `one-mk keymap add capslock
+  esc --device "Travel Keyboard"` makes Caps Lock Esc on that keyboard only,
+  wherever it types; add `--peer laptop` for "that keyboard, when it types
+  on the laptop". The rule is saved on the computer the device is plugged
+  into (cable, Bluetooth or USB receiver) and applied there. `one-mk
+  input-devices` lists the devices seen, also ones asleep right now, with
+  the name or fingerprint to use. A device is known by what it is (vendor,
+  product, name, serial or Bluetooth address), so its rules survive sleep,
+  reconnecting and another USB port; two identical keyboards without a
+  serial share their rules. This works in an **X11 session** (tested);
+  on **Windows and macOS it is built but untested** on real hardware; on
+  **GNOME, KDE and wlroots Wayland it is not available**: the desktop
+  mixes all keyboards and mice together before one-mk sees them, and
+  `input-devices`, `doctor` and the window say so. Input whose device
+  isn't known only ever gets the rules without a device. A keyboard that
+  falls asleep or is unplugged mid-press lets go of what it was pressing.
 - Pointer acceleration: one-mk sends positions computed on this computer,
   so this computer's acceleration applies once. Turning it off or a custom
   curve needs raw mouse motion, which no backend reads yet; turn
@@ -829,6 +847,16 @@ and exits with status 1 if something failed.
   of the pointer and keyboard; on X11, keys a killed one-mk was pressing on
   a peer's behalf stay down until one-mk starts again, which lets go of
   them.
+- **A rule for one keyboard or mouse does nothing.** Run `one-mk doctor`:
+  its "Per-device rules" check says whether this desktop can tell devices
+  apart (not on GNOME, KDE or wlroots Wayland: log in to an X11 session to
+  use them). Then `one-mk input-devices`: the device must be listed as
+  connected, and `keymap list` must show the rule for it ("for the device
+  ..."). Two devices that can't be told apart (same model, no serial; on
+  Windows, devices on one USB receiver) share their rules; the list says
+  so. A one-mk older than this feature can't read a `settings.toml` with
+  such rules: remove them (`--device ...` on `keymap remove` and the
+  others) before going back to an older version.
 - **macOS.** Allow one-mk under System Settings > Privacy & Security >
   Accessibility and Input Monitoring, then start it again. (Not yet tested on
   real hardware.)

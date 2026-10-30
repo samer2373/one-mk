@@ -657,8 +657,7 @@ impl Mapper {
     /// and its layers end. Other sources keep their state.
     pub fn device_gone(&mut self, device: DeviceRef, out: &mut impl FnMut(Emit)) {
         let Some(s) = self.find(Some(device)) else { return };
-        if self.pending.is_some_and(|p| p.src == s) {
-            let p = self.pending.take().expect("checked");
+        if let Some(p) = self.pending.take_if(|p| p.src == s) {
             self.sources[s].recs[usize::from(p.code)] = Rec::Up;
         }
         let phys = std::mem::take(&mut self.sources[s].phys);

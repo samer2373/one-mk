@@ -55,9 +55,14 @@ buttons) or per field (pointer and scroll):
 | one computer | `scope = { peer = "laptop" }` | a paired computer, by name or id (prefix) |
 | local keyboard (inactive groundwork) | `scope = { local = true }` | separate rule set, never a remote target; native integration is not implemented yet |
 
-`peer` beats `os` beats `global`. Rules are resolved when a visit starts
-and again when `settings.toml` is reloaded. Any rule may also carry `app =
-"..."` (next section): it then applies only while that app has the focus.
+| one keyboard or mouse | `scope = { device = "usb/046d:c52b//Logitech USB Receiver" }` | input from that physical device only (see "Per-device rules"); may be combined with `os` or `peer` |
+
+`device` beats `peer` beats `os` beats `global`; a device rule combined
+with `peer` or `os` beats the device rule alone. Rules are resolved when a
+visit starts, again when `settings.toml` is reloaded, and again when a
+keyboard or mouse is plugged in, unplugged, falls asleep or wakes. Any rule
+may also carry `app = "..."` (next section): it then applies only while
+that app has the focus.
 
 ## Per-app rules (plan 4D)
 
@@ -226,6 +231,215 @@ Groundwork validation (2026-10-29): `cargo test -j 2 --workspace` passed
 `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` (each with `-j 2`).
 No Windows/macOS-specific code was run, no live input backend was started,
 and no release build or `cargo fmt` was used.
+
+## Per-device rules (plan 5I)
+
+A rule may be for **one physical keyboard or mouse**: "Caps Lock is Esc on
+the small travel keyboard, but stays Caps Lock on the big one", "the
+trackball moves at 2x, the mouse at 1x". The rules live in the
+`settings.toml` of **the computer the device is plugged into** (by cable,
+Bluetooth or a USB receiver) and are applied there, before anything is
+sent; the computer being controlled never sees or stores them, and needs
+no new version.
+
+```toml
+[[input.keymap.rule]]
+from = "capslock"
+to = "esc"
+scope = { device = "bluetooth/04e8:7021/f4:73:35:aa:bb:cc/Travel Keyboard" }
+
+[[input.keymap.rule]]                     # that keyboard, only when it types on the laptop
+from = "lalt"
+to = "lmeta"
+scope = { device = "bluetooth/04e8:7021/f4:73:35:aa:bb:cc/Travel Keyboard", peer = "laptop" }
+
+[[input.pointer]]
+speed = 2.0
+scope = { device = "usb/047d:2041//Kensington Slimblade Trackball" }
+```
+
+### Which devices one-mk can tell apart
+
+| desktop | per-device rules | how | status |
+|---|---|---|---|
+| Linux, X11 session | yes | XInput2 raw events carry the slave device (`sourceid`); names from `XIQueryDevice`; vendor, product, bus and serial from the XI property `Device Node` and `/sys/class/input/eventN/device/{name,uniq,phys,id/*}` (readable without root); hot-plug from XI hierarchy events | runs; tested against a private Xvfb (only XTEST devices exist there) |
+| Linux, GNOME/KDE Wayland (portals), wlroots (Sway, Hyprland, ...) | **no** | the desktop merges every keyboard and mouse before one-mk sees them (libei and the wlroots virtual-input protocols carry no device); one-mk does not read `/dev/input` as root and adds no privileged helper to get around it | not available: says so in `input-devices`, `doctor`, `status` and the window |
+| Linux, X11 backend forced under XWayland | **no** | XWayland has only its own merged virtual devices | not available, as above |
+| Windows | yes, by correlation | Raw Input (`RIDEV_INPUTSINK`, a message-only window on the hook thread): `WM_INPUT` names the device (`hDevice`), its interface path gives `VID_xxxx&PID_xxxx`, Bluetooth (`BTHENUM`, the HID service `{00001124-...}`) and the interface (`MI_xx`); product and serial from `HidD_GetProductString`/`HidD_GetSerialNumberString`; matched to the hook's event by key/button and time (see below); hot-plug from `WM_INPUT_DEVICE_CHANGE` | **compile-checked only, untested** |
+| macOS | yes, by correlation | IOHIDManager on keyboards and mice (VendorID, ProductID, Product, Transport, SerialNumber), input value callbacks matched to the event tap's events by usage and time; needs Input Monitoring, which one-mk already asks for | **compile-checked only, untested** |
+
+### Identity: the fingerprint
+
+A device is known by **what it is**, never by a number the OS hands out
+for this session (that changes each time a Bluetooth keyboard sleeps and
+reconnects): `bus/vendor:product/serial/name`, for example
+`usb/046d:c52b//Logitech USB Receiver` (no serial) or
+`bluetooth/04e8:7021/f4:73:35:aa:bb:cc/Travel Keyboard` (the Bluetooth
+address as serial). `bus` is `usb`, `bluetooth`, `receiver` (a device
+paired to a USB receiver, where the OS shows it as its own device),
+`internal` (a laptop's own keyboard and touchpad), `virtual` (made by
+software, such as X11's XTEST devices) or `unknown`. A `/` or `%` in the
+serial is written `%2F`/`%25`; the name is everything after the third `/`.
+
+**Matching**: a rule whose fingerprint has a serial matches a device with
+the same vendor:product and the same serial, whatever its name or bus now.
+A rule without a serial matches every device with the same vendor:product
+and name (letter case ignored). Hence, honestly:
+
+* **Two identical keyboards without a serial share one rule**: one-mk
+  can't tell them apart, and `one-mk input-devices` says so beside them.
+* **USB receivers (dongles)**: on Linux each device paired to a Logitech
+  style receiver is an input device of its own, with its own name, so a
+  rule for the mouse and one for the keyboard on the same receiver work.
+  Windows may show every device on a receiver under the receiver's own
+  vendor and product (and name): two devices on one dongle may then be
+  impossible to tell apart, and `input-devices` says so.
+* Plugging a keyboard into another USB port, waking it from sleep, or
+  restarting the computer keeps its rules.
+
+### How each event is attributed, and fail-safe
+
+Every key, button, motion and scroll event from the input backend carries
+`device: Option<DeviceRef>`: a small number into the table of connected
+devices the backend sends as `Event::Devices` at start and on every
+change. `None` means **unknown**, and an unknown event gets **only the
+rules without a device**, never a device's: a device rule never applies to
+an event that might be from another device. Unknown happens on desktops
+that merge devices (always), and on Windows and macOS when the two halves
+of an event can't be matched in time (see below).
+
+Windows and macOS see an event twice: once in the hook or event tap (which
+can swallow it and is what one-mk forwards) and once from Raw Input or
+IOHIDManager (which says the device), on different paths, in either order,
+a few milliseconds apart. `crates/input/src/devcorr.rs` pairs them:
+
+* a key or button event is matched **in order** with the device events of
+  the same key and direction: the oldest one waiting (kept at most 16, for
+  50 ms), or the next one to arrive within **8 ms**. Later events wait
+  behind it, so nothing is reordered; the only timer runs while one waits;
+* unmatched in time, it goes on unknown; after 8 misses in a row nothing
+  waits any more (a system that never says costs no latency) until a match
+  comes;
+* motion is attributed, without waiting, to the one device that moved in
+  the last 50 ms; two devices moving, or none, is unknown;
+* the race, honestly: two keyboards pressing the same key within a few
+  milliseconds are matched in the order the OS delivered each side. If an
+  OS delivered the two sides in different orders, they could be swapped;
+  if Windows doesn't give Raw Input the events a low-level hook swallows,
+  nothing ever matches and all input is unknown (safe, and after 8 misses
+  without delay). With the mouse buttons swapped in Windows, clicks may
+  stay unknown. None of this has run on real hardware.
+
+On Windows, Raw Input is registered on the capture window only while
+capturing (`RIDEV_INPUTSINK`, `RIDEV_DEVNOTIFY`), so nothing extra runs
+the rest of the time: the list of devices is read at start, at each
+capture start and on `WM_INPUT_DEVICE_CHANGE` while capturing. A device
+unplugged while nothing is shared shows as connected in `input-devices`
+until the next capture. On macOS, IOHIDManager watches devices come and go
+all the time (that costs nothing between events) and their input values
+are read only while capturing.
+
+### The mapper with several devices
+
+One `Mapper` engine (no second implementation) holds one compiled keymap
+per distinct set of device rules plus the base keymap, chosen per event:
+a device with rules of its own uses the base rules with its own rules on
+top (per key, as scopes always work); a device without, or an unknown
+event, uses the base. The engine keeps one record per **physical key**,
+which is a (source, code) pair, a source being one connected device or
+"unknown":
+
+* **Every down has exactly one up.** Each physical key remembers the codes
+  it emitted (as before) and which source pressed it; its release undoes
+  exactly that. The wire state is still derived (holders and hiders per
+  code), so two keyboards holding Shift send one Shift down and one up.
+* **Modifiers are global**: Shift on keyboard A plus a key on keyboard B is
+  Shift+key, and a `ctrl+h` rule fires with Ctrl from either keyboard. A
+  tap/hold key on A is decided as held by a key pressed on B.
+* **Layers belong to the device that holds the layer key**: holding the
+  `nav` layer key on keyboard A changes the keys of A, not of B.
+* **Tap/hold timers are per physical key**; there is still at most one
+  undecided key at a time (a second press decides the first), so one
+  timer at most.
+* **Repeats and stray releases**: a press of a key the same source holds is
+  a repeat; a press of a key held by the unknown source is that key's
+  repeat, whoever it is attributed to now; an unknown press of a key some
+  device holds is its repeat. A release goes to the source named if it
+  holds the key, else to the unknown source, else to any source holding
+  it. So a press and release attributed differently (Windows/macOS) never
+  leave a key down.
+* **A device disconnects or sleeps mid-hold** (Bluetooth!): everything its
+  keys emitted is released at once, its undecided tap/hold key is dropped
+  (it had sent nothing), its layers end. Keys whose source was unknown
+  are not touched (they might be another keyboard's): they come up with
+  their key, at the end of the visit, or with Ctrl+Alt+Shift+Esc.
+* **A device appearing or going away changes no other device's state**,
+  and a reload only touches the sources whose rules changed: their
+  undecided key counts as held and their layers end (as a reload always
+  did); other sources keep everything.
+* **Visit end, lock, release all**: everything emitted is released, every
+  physical key still down is swallowed until it comes up (as before).
+
+Buttons go through the same engine with the same sources. A `Motion`
+event's device selects the pointer rules, a scroll event's device the
+scroll rules (each device with scroll rules of its own keeps its own
+remainders, so notches from that wheel never carry into another's).
+
+### What was tested where
+
+* Pure logic, on Linux: the fingerprint parser (with 200,000 random and
+  hostile strings), the mapper with several devices (unit tests and a
+  random-stream test over 10,000 streams with three devices, unknown
+  attribution, disconnects and per-device reloads, shown to fail with the
+  release-on-disconnect or the release fallback removed), the resolution
+  of device rules, the remembered list, the Windows path parser, the HID
+  usage table and the correlator (with random interleavings).
+* Two daemons on loopback (null backends, `app::tests::tuning::per_device_
+  rules_follow_the_keyboard_they_come_from`): a rule for keyboard A changes
+  A's keys only, unknown input gets only the base rules, A falling asleep
+  mid-press releases A's keys on the peer and nothing of B's, A waking with
+  another number keeps its rule, pointer speed per device.
+* X11 on a private Xvfb (`x11::tests::devices_are_listed_and_input_says_
+  which_one`, and the real binaries by hand): only XTEST devices and
+  Xvfb's own two exist there, so a second XInput master (with its own
+  XTEST keyboard and pointer) stands in for a second keyboard; it is
+  listed when added, its keys carry its id, and it leaves the list when
+  removed while a key is down (the peer got that key's release).
+* Windows and macOS: compile-checked only (`cargo clippy --target
+  x86_64-pc-windows-msvc|aarch64-apple-darwin`). Untested, and labelled so
+  in `input-devices`, `doctor`, `status` and the window.
+* Bluetooth and USB receivers: not tried with real hardware; the sysfs
+  reading is tested with a fake sysfs tree.
+
+### Command line and files
+
+* `one-mk input-devices [--json]` lists the keyboards and mice this
+  computer has seen: kind, bus, vendor:product, name, serial or address,
+  connected now or not and when last seen, and the fingerprint to use. It
+  says when per-device rules are not available here and why, and marks
+  devices one-mk can't tell apart.
+* The list is remembered in `input-devices.toml` in the config folder (at
+  most 64 devices, the least recently seen go first; written atomically,
+  and only when a device appears or goes away), so a rule can be made for
+  a keyboard that is asleep right now. The running daemon writes it; the
+  command only reads it.
+* `--device NAME|FINGERPRINT` on `keymap add/remove`, `buttons
+  map/unmap/preset`, `pointer` and `scroll`: a fingerprint as listed, or a
+  name (or a part of one, letter case ignored) that picks exactly one
+  device seen; several matches are refused with the candidates listed.
+  `--device` combines with `--peer` or `--os` ("this keyboard, when it
+  types on the laptop"); with `--local` it is refused (local rules have no
+  devices yet). On `scroll`, `--device wheel` and `--device touchpad` keep
+  their old meaning (the kind of scrolling, now also `--kind`); any other
+  value names a device. Changing a device rule where devices can't be told
+  apart prints a note saying so (the rule is kept).
+* Going back to a one-mk from before 5I: it can't read a `settings.toml`
+  with rules for one device (its scopes know no `device`), and ignores the
+  whole file. Remove them first (`--device` on the remove commands).
+* `one-mk doctor` has a **Per-device rules** check: pass where devices can
+  be told apart (Windows and macOS say untested), skip with the reason on
+  desktops that merge them. `one-mk status` says when device rules are set
+  but can't apply here.
 
 ## The key mapper (`crates/proto/src/remap.rs`)
 
@@ -488,10 +702,12 @@ reported by `one-mk keymap check` and `one-mk doctor`.
   [--peer P | --os O] [--app NAME]`, `keymap remove FROM [--layer L]
   [--peer P | --os O] [--app NAME]`, `keymap clear`, `keymap check`.
 * `one-mk pointer [--speed X] [--accel system|off|curve] [--peer P | --os O]
-  [--app NAME]`.
+  [--app NAME] [--device D]`; `--device D` (a keyboard or mouse, see
+  "Per-device rules") works on every command here and combines with
+  `--peer` or `--os`.
 * `one-mk scroll [--reverse-vertical on|off] [--reverse-horizontal on|off]
   [--speed X] [--mode auto|smooth|discrete] [--natural on|off|auto]
-  [--modifier shift=horizontal]... [--device wheel|touchpad] [--peer P |
+  [--modifier shift=horizontal]... [--kind wheel|touchpad] [--peer P |
   --os O] [--app NAME]`.
 * `one-mk buttons [list]`, `buttons map N TO [--peer P | --os O] [--app
   NAME]`, `buttons unmap N [...]`, `buttons preset side-back-forward`,
@@ -557,6 +773,14 @@ line can't disagree. It uses:
   the key's rule to that app, or, with no rule yet, makes the next change
   for that app. The drawn keyboard and the Test it box show the rules for
   every app (the focused app isn't known in the window);
+* per-device rules (5I): **For:** has a section **One keyboard or mouse**
+  listing the devices from `one-mk input-devices --json` (name, then
+  "Connected" or "Asleep or unplugged", connection and kind; devices made
+  by software are left out), fetched each time the menu opens. Where the
+  desktop merges devices it says so in plain words instead; with none seen
+  yet it says how they appear. Rules for a device with a computer too
+  (from the command line) are read and shown as such ("Only Travel
+  Keyboard, on laptop");
 * the **Test it** box: the rules that apply to the computers chosen in
   **For:**, resolved like the daemon does (a computer beats an OS beats
   everything) and compiled with `remap::Keymap::compile`, go through a

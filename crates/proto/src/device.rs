@@ -122,11 +122,6 @@ impl Fingerprint {
         }
     }
 
-    /// Whether a rule could never tell `self` and `other` apart.
-    pub fn indistinguishable(&self, other: &Fingerprint) -> bool {
-        self.matches(other) && other.matches(self)
-    }
-
     /// `046d:c52b`.
     pub fn ids(&self) -> String {
         format!("{:04x}:{:04x}", self.vendor, self.product)
@@ -311,8 +306,7 @@ mod tests {
         assert!(!rule.matches(&fp("usb/046d:c52b//Logitech USB Receiver Mouse")));
         assert!(!rule.matches(&fp("usb/046d:c52c//Logitech USB Receiver")));
         let twin = fp("usb/046d:c52b//Logitech USB Receiver");
-        assert!(rule.indistinguishable(&twin), "two identical models without a serial");
-        assert!(!rule.indistinguishable(&fp("usb/046d:c52b/1/Logitech USB Receiver")));
+        assert!(rule.matches(&twin) && twin.matches(&rule), "two identical models without a serial share a rule");
     }
 
     #[test]
