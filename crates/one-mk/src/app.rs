@@ -4027,7 +4027,9 @@ mod tests {
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
         duo.ha.events.send(Event::Activated { id: 6, side: Side::Right, pos: Pos::new(1919.0, 3.0) }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
-        duo.ha.events.send(Event::Modifiers(Mods::from_keys([CTRL, ALT]))).unwrap();
+        // Windows' jump chord carries Shift (AltGr is Ctrl+Alt there).
+        let held: &[u32] = if cfg!(windows) { &[CTRL, ALT, 42] } else { &[CTRL, ALT] };
+        duo.ha.events.send(Event::Modifiers(Mods::from_keys(held.iter().copied()))).unwrap();
         duo.ha.events.send(Event::Key { code: 1 + u32::from(n(&duo.fa)), down: true }).unwrap();
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 6, pos: Some(CENTER) });
         assert!(injected(&mut duo.hb).iter().all(|i| !matches!(i, Inject::Key { .. })), "no key reached B");
