@@ -445,6 +445,26 @@ tests, cross-review by the other model, full validation before merging.
 | 5H | Activate local-only key remap on Windows and macOS (acknowledged handoff, no stuck keys); builds on 5I | Codex | blocked on 5I |
 | 5I | Per-device scope: key and mouse rules for ONE specific keyboard or mouse, saved on the computer the device is plugged into (owner request 2026-10-30). X11 via XI2 source ids; Windows Raw Input and macOS IOHID compile-checked only; NOT possible on GNOME/KDE/wlroots Wayland (the compositor merges devices): say so | Claude | todo |
 
+## Wave 6: live wallpapers on one continuous canvas (owner request, 2026-10-30)
+
+Like Muro (macOS) and Aura (Linux), but the video or animation runs as ONE
+continuous picture across ALL monitors, and across the owner's computers too
+(each computer plays its slice, in sync, placed by one-mk's shared layout).
+Licensing rule: no code is copied from Muro (PolyForm Shield) or Aura (GPL-3.0);
+one-mk is MIT OR Apache-2.0 and every dependency's licence must be checked.
+
+Owner's choices: platforms Linux, Windows and macOS; content video files and
+animated images (no shaders, no web pages); multi-computer from the start;
+sources: own files, URL import and a built-in download gallery (free-to-use
+sources only, after reading their terms; we host at most a small index, never
+the videos). The wallpaper engine is a separate optional process: nothing runs
+unless it is turned on.
+
+| ID | Task | Author | Status |
+|---|---|---|---|
+| 6A | Feasibility and design document `docs/WALLPAPER-DESIGN.md` (no code) | Codex | running |
+| 6B | Implementation, in phases agreed from 6A, with the quality bar | tbd | blocked on 6A |
+
 ## Out of scope for now
 
 Chosen NOT to build (owner, 2026-10-30): audio switching, the Windows
