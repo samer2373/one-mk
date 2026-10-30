@@ -44,9 +44,25 @@ impl App {
         }
     }
 
-    /// This computer: start at login, the pointer kept here, and locking
-    /// every screen. Until another computer is paired (or while one·mk is
-    /// off) only Start at login means anything, so only it shows.
+    /// Broadcast is on, or asked to be (shown so until the daemon says).
+    pub(super) fn broadcasting(&self) -> bool {
+        match self.pending_broadcast {
+            Some((on, _)) => on,
+            None => self.running().is_some_and(|s| !s.broadcast.is_empty()),
+        }
+    }
+
+    /// Starts or stops broadcast, showing it at once.
+    pub(super) fn ask_broadcast(&mut self, on: bool) {
+        self.pending_broadcast = Some((on, self.now));
+        self.busy.push(Job::Broadcast(on));
+        self.link.broadcast(on);
+    }
+
+    /// This computer: start at login, the pointer kept here, broadcast and
+    /// locking every screen. Until another computer is paired (or while
+    /// one·mk is off) only Start at login means anything, so only it shows;
+    /// broadcast shows while a computer is connected (or it is on).
     pub(super) fn controls(&mut self, ui: &mut Ui, c: Rect) {
         let row_h = 36.0;
         let top = c.top() - 8.0;
@@ -73,11 +89,25 @@ impl App {
             self.link.lock_pointer(!locked);
         }
         r.on_hover_text("Edges lead nowhere while this is on.");
-        for k in 1..3 {
+        let mut next = 2;
+        let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
+        let on = self.broadcasting();
+        if online || on {
+            let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
+            let r = switch(ui, row(next), Id::unique("broadcast"), "Broadcast to all computers", on, !busy);
+            if r.clicked() {
+                self.ask_broadcast(!on);
+            }
+            let key = self.running().map(|s| s.broadcast_hotkey.clone()).filter(|k| !k.is_empty());
+            let key = key.map_or_else(String::new, |k| format!(" {k} starts and stops it."));
+            r.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}"));
+            next += 1;
+        }
+        for k in 1..next + 1 {
             ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
         }
         // Every screen, locked at once.
-        let l = row(2);
+        let l = row(next);
         ui.painter().text(l.left_center(), Align2::LEFT_CENTER, "Lock every screen", regular(T_BODY), INK);
         let label = "Lock all";
         let bw = button_width(ui, label) - 4.0;
