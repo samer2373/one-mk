@@ -3292,6 +3292,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "one-mk-wall"
+version = "0.1.13"
+dependencies = [
+ "blake3",
+ "libc",
+ "libloading",
+]
+
+[[package]]
 name = "one-mk-wall-sync"
 version = "0.1.13"
 dependencies = [
