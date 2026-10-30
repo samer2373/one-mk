@@ -1,5 +1,9 @@
 #[cfg(all(target_os = "linux", feature = "gnome-risk-probe"))]
 mod probe;
+#[cfg(all(target_os = "linux", feature = "gnome-risk-probe"))]
+mod surface;
+#[cfg(all(target_os = "linux", feature = "gnome-risk-probe"))]
+mod bridge;
 
 fn main() -> std::process::ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
