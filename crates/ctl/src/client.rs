@@ -45,6 +45,8 @@ pub enum Request {
     ClipSend(Option<String>),
     /// Fetch one paired computer's clipboard into this one now.
     ClipGet(Option<String>),
+    ClipHistory { action: HistoryAction, json: bool },
+    FetchClipboard,
     /// A running `one-mk send` reports how far it is, so `status` and the
     /// window can show it. `finished` ends the report.
     Transfer { t: TransferStatus, finished: bool },
@@ -53,6 +55,31 @@ pub enum Request {
     DismissSuggestion,
     /// Shut the daemon down, as if it had been sent Ctrl-C.
     Stop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryAction { List, Show(u64), Copy(u64), Delete(u64), Clear }
+
+impl HistoryAction {
+    fn line(self) -> String {
+        match self {
+            Self::List => "list".into(), Self::Clear => "clear".into(),
+            Self::Show(id) => format!("show {id}"), Self::Copy(id) => format!("copy {id}"), Self::Delete(id) => format!("delete {id}"),
+        }
+    }
+
+    fn parse(arg: &str) -> Option<Self> {
+        match arg {
+            "list" => Some(Self::List), "clear" => Some(Self::Clear),
+            _ => {
+                let (verb, number) = arg.split_once(' ')?;
+                if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) { return None; }
+                let id: u64 = number.parse().ok()?;
+                if id == 0 || id == u64::MAX { return None; }
+                match verb { "show" => Some(Self::Show(id)), "copy" => Some(Self::Copy(id)), "delete" => Some(Self::Delete(id)), _ => None }
+            }
+        }
+    }
 }
 
 /// Where `one-mk switch` sends the mouse and keyboard.
@@ -137,6 +164,8 @@ impl Request {
             Request::Settings => "settings",
             Request::ClipSend(_) => "clip-send",
             Request::ClipGet(_) => "clip-get",
+            Request::ClipHistory { .. } => "clip-history",
+            Request::FetchClipboard => "fetch-clipboard",
             Request::Transfer { .. } => "transfer",
             Request::DismissSuggestion => "dismiss-suggestion",
             Request::Stop => "stop",
@@ -146,6 +175,7 @@ impl Request {
     /// The request line (without its newline).
     pub fn line(&self) -> String {
         match self {
+            Request::ClipHistory { action, json } => format!("clip-history {}{}", action.line(), if *json { " --json" } else { "" }),
             Request::Switch(to) => format!("switch {}", to.as_str()),
             Request::LockPointer(t) => format!("lock-pointer {}", t.as_str()),
             Request::Broadcast(t) => format!("broadcast {}", t.as_str()),
@@ -168,10 +198,16 @@ impl Request {
     }
 
     pub fn parse(s: &str) -> Option<Self> {
+        if s.len() > 4096 || s.chars().any(char::is_control) { return None; }
         let (word, arg) = s.split_once(' ').unwrap_or((s, ""));
         let arg = arg.trim();
         let device = || (!arg.is_empty()).then(|| arg.to_owned());
         match word {
+            "fetch-clipboard" if arg.is_empty() => Some(Request::FetchClipboard),
+            "clip-history" => {
+                let (arg, json) = arg.strip_suffix(" --json").map_or((arg, false), |arg| (arg, true));
+                Some(Request::ClipHistory { action: HistoryAction::parse(arg)?, json })
+            }
             "status" if arg.is_empty() => Some(Request::Status),
             "invitation" if arg.is_empty() => Some(Request::Invitation),
             "reload" if arg.is_empty() => Some(Request::Reload),
@@ -209,7 +245,8 @@ impl Request {
     /// while to cross a slow link.
     pub fn reply_timeout(&self) -> Duration {
         match self {
-            Request::ClipSend(_) | Request::ClipGet(_) => Duration::from_secs(45),
+            Request::ClipSend(_) | Request::ClipGet(_) | Request::FetchClipboard
+                | Request::ClipHistory { action: HistoryAction::Copy(_), .. } => Duration::from_secs(45),
             _ => Duration::from_secs(5),
         }
     }
@@ -302,6 +339,27 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
 
+    #[test]
+    fn history_requests_and_hostile_arguments() {
+        for action in [HistoryAction::List, HistoryAction::Show(1), HistoryAction::Copy(13), HistoryAction::Delete(u64::MAX - 1), HistoryAction::Clear] {
+            for json in [false, true] {
+                let request = Request::ClipHistory { action, json };
+                assert_eq!(Request::parse(&request.line()), Some(request));
+            }
+        }
+        assert_eq!(Request::parse(&Request::FetchClipboard.line()), Some(Request::FetchClipboard));
+        for argument in ["show 0", "show -1", "show +1", "copy 18446744073709551615", "delete 18446744073709551616", "clear extra", "list --json --json", "show 1\nstop", "copy 1\0", "show 1 2", "show ١"] {
+            assert_eq!(Request::parse(&format!("clip-history {argument}")), None, "{argument:?}");
+        }
+        assert!(Request::parse(&format!("clip-history {}", "x".repeat(10000))).is_none());
+        let mut state = 123456u64;
+        for _ in 0..10000 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let candidate = format!("clip-history show {}", state);
+            if let Some(request) = Request::parse(&candidate) { assert_eq!(Request::parse(&request.line()), Some(request)); }
+        }
+    }
+
     fn temp_dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("one-mk-ctl-client-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -367,6 +425,8 @@ mod tests {
         assert_eq!(Request::parse("transfer 1 2 3"), None);
         assert_eq!(Request::parse("transfer x 1 2 3 4 0 peer"), None);
         assert!(Request::ClipGet(None).reply_timeout() > Request::Status.reply_timeout());
+        assert_eq!(Request::FetchClipboard.reply_timeout(), Request::ClipGet(None).reply_timeout());
+        assert_eq!(Request::ClipHistory { action: HistoryAction::Copy(1), json: false }.reply_timeout(), Request::ClipGet(None).reply_timeout());
         assert_eq!(Request::parse("format c:"), None);
         assert_eq!(Request::parse("status now"), None);
         assert_eq!(Request::parse("switch"), None);

@@ -66,6 +66,9 @@ impl App {
     /// The panel under the desk: tall enough for the inspector with the
     /// latency card, on the Desk tab once a computer is paired.
     pub(super) fn panel_h(&self) -> f32 {
+        if self.tab == Tab::Files {
+            return 390.0;
+        }
         let with_card = self.tab == Tab::Desk && self.running().is_some_and(|s| !s.peers.is_empty());
         if with_card { PANEL_H.max(CARD_Y + CARD_H + 2.0 * PAD) } else { PANEL_H }
     }

@@ -31,6 +31,7 @@ pub struct HotkeySettings {
     pub home: String,
     /// Start or stop broadcast (`one-mk broadcast toggle`).
     pub broadcast: String,
+    pub fetch_clipboard: String,
 }
 
 impl Default for HotkeySettings {
@@ -44,6 +45,7 @@ impl Default for HotkeySettings {
             lock_pointer: "ctrl+alt+p".into(),
             home: "ctrl+alt+h".into(),
             broadcast: default_broadcast(cfg!(windows)).into(),
+            fetch_clipboard: if cfg!(windows) { "ctrl+alt+shift+v" } else { "ctrl+alt+v" }.into(),
         }
     }
 }
@@ -92,7 +94,7 @@ impl HotkeySettings {
         if let Some(j) = chord_or_none::<JumpChords>(&self.jump)? {
             list.extend((1..=9).map(|n| (Action::Jump(n), j.chord(n))));
         }
-        for (s, a) in [(&self.cycle, Action::Cycle), (&self.lock_pointer, Action::LockPointer), (&self.home, Action::Home)] {
+        for (s, a) in [(&self.cycle, Action::Cycle), (&self.lock_pointer, Action::LockPointer), (&self.home, Action::Home), (&self.fetch_clipboard, Action::FetchClipboard)] {
             if let Some(c) = chord_or_none::<Chord>(s)? {
                 list.push((a, c));
             }
@@ -164,6 +166,7 @@ pub fn request(action: Action, order: &[Numbered]) -> Result<Request, String> {
         Action::LockPointer => Request::LockPointer(Toggle::Toggle),
         Action::Home => Request::Switch(SwitchTo::Here),
         Action::Broadcast => Request::Broadcast(Toggle::Toggle),
+        Action::FetchClipboard => Request::FetchClipboard,
     })
 }
 
@@ -187,6 +190,9 @@ pub struct HotkeyArgs {
     /// Start or stop broadcast to every connected computer, like 'ctrl+alt+b' (none: off).
     #[arg(long, value_name = "CHORD")]
     pub broadcast: Option<String>,
+    /// Get the next online computer's clipboard here; press Ctrl+V yourself (none: off).
+    #[arg(long, value_name = "CHORD")]
+    pub fetch_clipboard: Option<String>,
     /// Turn every shortcut off.
     #[arg(long, conflicts_with = "on")]
     pub off: bool,
@@ -201,7 +207,7 @@ impl HotkeyArgs {
     }
 
     fn sets_a_chord(&self) -> bool {
-        self.jump.is_some() || self.cycle.is_some() || self.lock_pointer.is_some() || self.home_key.is_some() || self.broadcast.is_some()
+        self.jump.is_some() || self.cycle.is_some() || self.lock_pointer.is_some() || self.home_key.is_some() || self.broadcast.is_some() || self.fetch_clipboard.is_some()
     }
 
     /// Applies these options to `s`, writing chords in their canonical form.
@@ -221,6 +227,7 @@ impl HotkeyArgs {
             (&self.lock_pointer, &mut s.lock_pointer, "--lock-pointer"),
             (&self.home_key, &mut s.home, "--home-key"),
             (&self.broadcast, &mut s.broadcast, "--broadcast"),
+            (&self.fetch_clipboard, &mut s.fetch_clipboard, "--fetch-clipboard"),
         ] {
             if let Some(v) = v {
                 *field = canonical::<Chord>(v).map_err(|e| format!("{flag}: {e}"))?;
@@ -258,6 +265,7 @@ pub fn describe(s: &HotkeySettings, order: &[Numbered]) -> String {
             Action::Cycle => "the next computer",
             Action::LockPointer => "lock the pointer to this computer (or unlock it)",
             Action::Broadcast => "type on every connected computer at once (or stop)",
+            Action::FetchClipboard => "get the next online computer's clipboard here (then press paste)",
             _ => "bring the mouse and keyboard back here",
         };
         rows.push((c.label(), what.into()));
@@ -342,7 +350,7 @@ mod tests {
         assert!(HotkeyArgs { jump: Some(String::new()), ..Default::default() }.apply(&mut HotkeySettings::default()).is_err());
         assert!(HotkeyArgs { cycle: Some(" ".into()), ..Default::default() }.apply(&mut HotkeySettings::default()).is_err());
         let b = HotkeySettings::default().bindings().unwrap();
-        assert_eq!(b.iter().count(), 13);
+        assert_eq!(b.iter().count(), 14);
         let jump: JumpChords = HotkeySettings::default().jump.parse().unwrap();
         assert_eq!(b.action(jump.chord(5)), Some(Action::Jump(5)));
         assert_eq!(b.action("ctrl+alt+h".parse().unwrap()), Some(Action::Home));
@@ -351,7 +359,7 @@ mod tests {
         let off = HotkeySettings { enabled: false, ..HotkeySettings::default() };
         assert!(off.bindings().unwrap().is_empty());
         let some = HotkeySettings { jump: "none".into(), cycle: String::new(), ..HotkeySettings::default() };
-        assert_eq!(some.bindings().unwrap().iter().count(), 3);
+        assert_eq!(some.bindings().unwrap().iter().count(), 4);
     }
 
     /// Windows can't tell AltGr from Ctrl+Alt, so its jump default adds
@@ -365,6 +373,9 @@ mod tests {
         assert_eq!(win.chord(7), "ctrl+alt+shift+7".parse().unwrap());
         assert_eq!(win.to_string(), "ctrl+alt+shift+{n}", "printed as written");
         assert_eq!(HotkeySettings::default().jump, default_jump(cfg!(windows)));
+        let fetch: one_mk_input::hotkeys::Chord = HotkeySettings::default().fetch_clipboard.parse().unwrap();
+        assert_eq!(HotkeySettings::default().bindings().unwrap().action(fetch), Some(Action::FetchClipboard));
+        assert_eq!(fetch.mods.contains(ChordMods::SHIFT), cfg!(windows));
     }
 
     /// Upgrading with Ctrl+Alt+B (the broadcast default) already given to
@@ -405,7 +416,7 @@ mod tests {
         assert_eq!(HotkeySettings::default().broadcast, default_broadcast(cfg!(windows)));
         for windows in [true, false] {
             let s = HotkeySettings { jump: default_jump(windows).into(), broadcast: default_broadcast(windows).into(), ..HotkeySettings::default() };
-            assert_eq!(s.bindings_for(9).unwrap().iter().count(), 13, "windows: {windows}");
+            assert_eq!(s.bindings_for(9).unwrap().iter().count(), 14, "windows: {windows}");
         }
         // Changed, turned off, and refused when it clashes.
         let mut s = HotkeySettings::default();
@@ -433,7 +444,7 @@ mod tests {
         assert_eq!(two.action(jump.chord(3)), None, "no third computer");
         assert_eq!(jumps(&s.bindings_for(1).unwrap()), 1);
         assert_eq!(jumps(&s.bindings_for(30).unwrap()), 9);
-        assert_eq!(two.iter().count(), 6, "and cycle, lock, home, broadcast");
+        assert_eq!(two.iter().count(), 7, "and cycle, lock, home, broadcast, fetch clipboard");
         let clash = HotkeySettings { home: jump.chord(7).to_string(), ..s };
         assert!(clash.bindings_for(2).is_err());
     }

@@ -63,6 +63,7 @@ pub enum Event {
     Status(Box<Option<Status>>),
     /// A round-trip sample of every connected computer, while a graph shows.
     Links(Vec<(String, one_mk_ctl::status::LinkStats)>),
+    ClipboardHistory(Result<Vec<HistoryItem>, String>),
     Autostart(bool),
     /// A command finished: what it was for, and its error if it failed.
     Done { what: Job, error: Option<String> },
@@ -77,6 +78,14 @@ pub enum Event {
     /// `one-mk input-devices --json`: the keyboards and mice seen here, or
     /// why they couldn't be listed.
     InputDevices(Result<crate::tune::InputDevices, String>),
+}
+
+#[derive(Clone, Debug)]
+pub struct HistoryItem {
+    pub id: u64,
+    pub preview: String,
+    pub detail: String,
+    pub timestamp: u64,
 }
 
 /// A command the window started, with what it needs to report on it.
@@ -149,6 +158,27 @@ pub struct Link {
 }
 
 impl Link {
+    pub fn history(&self) {
+        let link = self.clone();
+        std::thread::spawn(move || {
+            let read = || -> Result<Vec<HistoryItem>, String> {
+                let response = client::request(&link.dir, Request::ClipHistory { action: client::HistoryAction::List, json: false }, Duration::from_secs(5))
+                    .map_err(|_| "Could not read history. Try Refresh when one·mk is running.".to_owned())?
+                    .ok_or_else(|| "Start one·mk to see clipboard history.".to_owned())?;
+                let body = response.strip_prefix("ok\n").ok_or_else(|| response.trim_start_matches("error ").trim().to_owned())?;
+                parse_history(body)
+            };
+            link.send(Event::ClipboardHistory(read()));
+        });
+    }
+
+    pub fn history_change(&self, id: Option<u64>) {
+        self.job(Job::Set { what: "clipboard history".into(), args: Vec::new() }, move |link| {
+            link.ask(Request::ClipHistory { action: id.map_or(client::HistoryAction::Clear, client::HistoryAction::Copy), json: false })?;
+            link.history();
+            Ok(())
+        });
+    }
     pub fn new(home: Option<PathBuf>, tx: Sender<Event>, ctx: egui::Context) -> anyhow::Result<Self> {
         let custom_home = home.is_some();
         let dir = match home {
@@ -631,6 +661,24 @@ impl Link {
     }
 }
 
+fn parse_history(body: &str) -> Result<Vec<HistoryItem>, String> {
+    let bad = || "Could not read history. Update one·mk and try Refresh.".to_owned();
+    if body == "Clipboard history is empty.\n" { return Ok(Vec::new()); }
+    if body.len() > 512 * 1024 || body.lines().count() > 1000 { return Err(bad()); }
+    body.lines().map(|line| {
+        if line.chars().any(|ch| ch.is_control() && ch != '\t') { return Err(bad()); }
+        let mut fields = line.splitn(6, '\t');
+        let id: u64 = fields.next().and_then(|field| field.parse().ok()).ok_or_else(bad)?;
+        let kind = fields.next().ok_or_else(bad)?;
+        let size = fields.next().ok_or_else(bad)?;
+        let timestamp = fields.next().and_then(|field| field.parse().ok()).ok_or_else(bad)?;
+        let origin = fields.next().ok_or_else(bad)?;
+        let preview = fields.next().ok_or_else(bad)?.to_owned();
+        if id == 0 || id == u64::MAX || !matches!(kind, "text" | "html" | "image") || preview.chars().count() > 80 || preview.contains('\t') || origin.chars().count() > 85 || size.len() > 32 { return Err(bad()); }
+        Ok(HistoryItem { id, preview, detail: format!("{kind} · {size} · {origin}"), timestamp })
+    }).collect()
+}
+
 /// Reads `one-mk bench` output: "round trip  p50 312 µs  p99 520 µs ..."
 /// and "lost  0 of 400".
 pub fn parse_bench(out: &str, peer: &str) -> Option<Latency> {
@@ -649,6 +697,28 @@ pub fn parse_bench(out: &str, peer: &str) -> Option<Latency> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_metadata_and_hostile_generated_lines() {
+        let valid = "7\ttext\t12 B\t123\tfrom desk\thello\n";
+        let parsed = parse_history(valid).unwrap();
+        assert_eq!(parsed[0].id, 7);
+        assert_eq!(parsed[0].preview, "hello");
+        assert!(parse_history(&valid.repeat(1001)).is_err());
+        assert!(parse_history("1\timage\t12 B\t123\tfrom desk\t\u{1b}[2J\n").is_err());
+        assert!(parse_history("1\ttext\t12 B\t123\tfrom desk\ttoo\tmany\n").is_err());
+        for cut in 1..valid.len() - 1 {
+            let _ = parse_history(&valid[..cut]);
+        }
+        let mut state = 7u32;
+        for length in 0..10000usize {
+            let generated: String = (0..length % 200).map(|_| {
+                state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                char::from_u32(state % 0x110000).unwrap_or('\u{fffd}')
+            }).collect();
+            if let Ok(items) = parse_history(&generated) { assert!(items.len() <= 1000); }
+        }
+    }
 
     #[test]
     fn reads_bench_output() {

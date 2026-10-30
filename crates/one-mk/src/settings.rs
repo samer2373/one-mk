@@ -111,6 +111,10 @@ impl BroadcastSettings {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ClipSettings {
+    pub history_max: usize,
+    pub history_max_mb: u32,
+    pub history_persist: bool,
+    pub history_skip_apps: Vec<String>,
     /// Share plain text.
     pub text: bool,
     /// Share HTML (rich text).
@@ -135,6 +139,10 @@ fn is_false(value: &bool) -> bool { !*value }
 impl Default for ClipSettings {
     fn default() -> Self {
         Self {
+            history_max: 20,
+            history_max_mb: 64,
+            history_persist: false,
+            history_skip_apps: vec!["keepassxc".into(), "keepass".into(), "1password".into(), "bitwarden".into(), "org.keepassxc.KeePassXC".into()],
             text: true,
             html: true,
             image: true,
@@ -164,13 +172,13 @@ impl ClipSettings {
     pub fn summary(&self) -> String {
         let on = |b: bool| if b { "on" } else { "off" };
         let summary = format!(
-            "text {}, html {}, images {}, size limit {} MB, skip password managers {}, others may fetch it {}",
+            "text {}, html {}, images {}, size limit {} MB, skip password managers {}, others may fetch it {}, history {} items ({})",
             on(self.text),
             on(self.html),
             on(self.image),
             self.max_mb.clamp(1, Self::MAX_MB_LIMIT),
             on(self.skip_sensitive),
-            on(self.allow_pull)
+            on(self.allow_pull), self.history_max.min(1000), if self.history_persist { "plain text on disk" } else { "memory only" }
         );
         let show_notice = self.fetch_migrated && !self.allow_pull && self.fetch_notice.as_ref().is_none_or(|path| {
             let mut options = std::fs::OpenOptions::new();
@@ -793,6 +801,20 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[test]
+    fn existing_clipboard_settings_gain_memory_only_history() {
+        let dir = temp_dir("history-migration");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "settings_version = 2\n[clipboard]\ntext = false\nmax_mb = 5\nallow_pull = true\n").unwrap();
+        let settings = Settings::load(&dir).unwrap();
+        assert!(!settings.clipboard.text);
+        assert_eq!(settings.clipboard.max_mb, 5);
+        assert!(settings.clipboard.allow_pull);
+        assert_eq!(settings.clipboard.history_max, 20);
+        assert!(!settings.clipboard.history_persist);
+        assert!(!dir.join("clipboard-history.bin").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn legacy_clipboard_fetch_is_migrated_but_explicit_v2_is_kept() {
         let dir = temp_dir("clipboard-version");

@@ -165,6 +165,22 @@ impl App {
         };
         let (tx, mut rx) = oneshot::channel();
         self.on_request(req, tx);
+        if action == Action::FetchClipboard {
+            tokio::spawn(async move {
+                let Ok(reply) = rx.await else { return; };
+                let body = if let Some(error) = reply.strip_prefix("error ") {
+                    error.trim().to_owned()
+                } else {
+                    let mut lines = reply.lines().skip(1);
+                    let name = lines.next().unwrap_or("another computer");
+                    let kind = lines.next().unwrap_or("clipboard");
+                    format!("Got {kind} from {name}")
+                };
+                tracing::info!("{body}");
+                crate::notify::failure("one-mk clipboard", &body).await;
+            });
+            return;
+        }
         let reply = rx.try_recv().unwrap_or_default();
         match reply.strip_prefix("error ") {
             Some(e) => tracing::warn!("keyboard shortcut ({}): {}", action.describe().to_lowercase(), e.trim()),

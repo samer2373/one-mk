@@ -47,6 +47,7 @@ pub struct ClipSync {
     state: Mutex<State>,
     /// Whether peers may fetch our clipboard.
     allow_pull: AtomicBool,
+    history_dir: Mutex<Option<std::path::PathBuf>>,
 }
 
 /// What an explicit send or fetch moved.
@@ -99,8 +100,21 @@ struct State {
 
 impl ClipSync {
     pub fn new(cb: Clipboard, node: Node) -> Arc<Self> {
-        Arc::new(Self { cb, node, state: Mutex::default(), allow_pull: AtomicBool::new(false) })
+        Arc::new(Self { cb, node, state: Mutex::default(), allow_pull: AtomicBool::new(false), history_dir: Mutex::default() })
     }
+
+    pub fn set_history_dir(&self, dir: &std::path::Path) {
+        *self.history_dir.lock().unwrap_or_else(|error| error.into_inner()) = Some(dir.to_owned());
+        if one_mk_clipboard::history::clean_unfinished(dir).is_err() {
+            self.cb.history().lock().unwrap_or_else(|error| error.into_inner()).error = Some(
+                "Could not remove an unfinished clipboard-history save; check the settings folder is writable, then restart one-mk.".into()
+            );
+        }
+    }
+
+    pub fn clipboard(&self) -> &Clipboard { &self.cb }
+
+    pub fn local_computer(&self) -> (&str, Fingerprint) { (&self.node.identity().name, self.node.identity().fingerprint) }
 
     #[cfg(test)]
     pub fn filter_for_test(&self) -> one_mk_clipboard::Filter {
@@ -110,6 +124,20 @@ impl ClipSync {
     /// Applies the user's clipboard settings, from now on.
     pub fn apply(&self, s: &crate::settings::ClipSettings) {
         self.cb.set_filter(s.filter());
+        self.cb.history_skip_apps(s.history_skip_apps.clone());
+        let path = self.history_dir.lock().unwrap_or_else(|error| error.into_inner()).as_ref().map(|dir| dir.join("clipboard-history.bin"));
+        if !s.history_persist && let Some(path) = &path {
+            match std::fs::remove_file(path) {
+                Ok(()) => {},
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                Err(_) => self.cb.history().lock().unwrap_or_else(|error| error.into_inner()).error = Some(
+                    "Could not remove saved clipboard history; remove clipboard-history.bin from the settings folder.".into()
+                ),
+            }
+        }
+        self.cb.history().lock().unwrap_or_else(|error| error.into_inner()).configure(
+            s.history_max, (s.history_max_mb.min(256) as usize) << 20, s.filter().max_bytes(), s.history_persist.then_some(path).flatten()
+        );
         self.allow_pull.store(s.allow_pull, Ordering::Relaxed);
         // What was skipped (too large, sensitive) may be sendable now.
         self.state().known.clear();
@@ -290,7 +318,7 @@ impl ClipSync {
                     anyhow::anyhow!("it did not answer: it may be running an older one-mk, or not sharing its clipboard ({error:#})")
                 }
             })?;
-            self.read_snapshot(fp, &header, &mut recv).await
+            self.read_snapshot(fp, &self.peer_name(fp), &header, &mut recv).await
         })
         .await
         .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")))?;
@@ -340,7 +368,7 @@ impl ClipSync {
             self.answer_pull(name, send).await?;
             return Ok(None);
         }
-        let (ack, stored) = match self.read_snapshot(fp, &header, recv).await? {
+        let (ack, stored) = match self.read_snapshot(fp, name, &header, recv).await? {
             Received::Stored { bytes, .. } => (Some(ClipAck::Stored), Some(bytes)),
             Received::FormatsOff => (Some(ClipAck::FormatsOff), None),
             Received::TooLarge(_) => (Some(ClipAck::TooLarge), None),
@@ -381,7 +409,7 @@ impl ClipSync {
 
     /// Reads the payloads `header` announces and puts what the settings
     /// allow on the clipboard, remembering that `fp` has it.
-    async fn read_snapshot(&self, fp: Fingerprint, header: &ClipHeader, recv: &mut quinn::RecvStream) -> anyhow::Result<Received> {
+    async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream) -> anyhow::Result<Received> {
         let filter = self.cb.filter();
         let wanted = |f: ClipFormat| match f {
             ClipFormat::Text => filter.text,
@@ -422,9 +450,16 @@ impl ClipSync {
             return Ok(Received::Nothing);
         }
         let (bytes, what) = (data.len(), describe(&data));
-        let digest = self.cb.write(data).await?;
+        let digest = self.cb.write_from(data, name.into(), true).await?;
         self.state().known.insert(fp, digest);
         Ok(Received::Stored { bytes, what })
+    }
+
+    fn peer_name(&self, fp: Fingerprint) -> String {
+        self.history_dir.lock().unwrap_or_else(|error| error.into_inner()).as_ref()
+            .and_then(|dir| one_mk_net::TrustStore::load(dir).ok())
+            .and_then(|trust| trust.devices().iter().find(|device| device.fingerprint() == Some(fp)).map(|device| device.name.clone()))
+            .unwrap_or_else(|| fp.short())
     }
 }
 
@@ -685,6 +720,7 @@ mod tests {
         let m = a.clip.pull(b.fp(), b.addr()).await.unwrap();
         assert_eq!((m.what.as_str(), m.bytes), ("text", 6));
         assert_eq!(a.mem.text().as_deref(), Some("from b"));
+        assert_eq!(a.clip.clipboard().history().lock().unwrap().list()[0].data.text.as_deref(), Some("from b"));
         assert_eq!(b.mem.writes(), 0, "B was only read");
         // A's pointer crossing to B later does not send it back.
         b.clip.push(a.fp(), "a", a.addr());

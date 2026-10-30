@@ -3193,9 +3193,12 @@ dependencies = [
  "anyhow",
  "arboard",
  "blake3",
+ "libc",
  "png",
+ "tempfile",
  "tokio",
  "tracing",
+ "x11rb",
 ]
 
 [[package]]

@@ -629,6 +629,7 @@ pub async fn serve(
         inbox: Inbox::new(opts.downloads.clone()),
         trusted: watch::channel(trusted_set(&trust)).0,
     };
+    if let Some(clip) = &services.clip { clip.set_history_dir(&dir); }
     tracing::debug!(
         clipboard = services.clip.is_some(),
         downloads = %opts.downloads.display(),
@@ -2237,7 +2238,7 @@ impl App {
                     Err(e) => format!("ok\n{n}\n{}\n", format!("{e:#}").replace('\n', " ")),
                 }
             }
-            req @ (Request::ClipSend(_) | Request::ClipGet(_) | Request::Transfer { .. }) => {
+            req @ (Request::ClipSend(_) | Request::ClipGet(_) | Request::ClipHistory { .. } | Request::FetchClipboard | Request::Transfer { .. }) => {
                 let online = self.peers.iter().map(|(fp, p)| crate::clipctl::Online { fp: *fp, name: p.name.clone(), addr: canonical(p.conn.remote_address()) });
                 crate::clipctl::handle(&self.dir, &self.services, online.collect(), &self.trust, req, reply);
                 return false;
@@ -2309,6 +2310,16 @@ impl App {
             transfers: self.services.inbox.transfers().snapshot(),
             hotkeys,
             hotkeys_detail,
+            clipboard_history: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history().lock().unwrap_or_else(|error| error.into_inner()).len()),
+            clipboard_history_revision: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history().lock().unwrap_or_else(|error| error.into_inner()).revision()),
+            clipboard_history_note: self.services.clip.as_ref().map_or_else(|| "Clipboard sharing and history are off (--no-clipboard).".into(), |clip| {
+                let history = clip.clipboard().history().lock().unwrap_or_else(|error| error.into_inner());
+                history.error.clone().unwrap_or_else(|| {
+                    let retention = if history.disabled() { "Clipboard history is off." } else if self.settings.clipboard.history_persist { "Clipboard history is saved as unencrypted plain text on disk." } else { "Clipboard history is kept in memory only." };
+                    let coverage = if history.monitoring_unavailable { "Local copy notifications are unavailable; clipboard access still records items. Check X11 access and restart one-mk. Native Wayland monitoring is untested." } else if cfg!(target_os = "linux") { "Local change monitoring uses X11; native Wayland monitoring is untested." } else if cfg!(windows) { "Local changes are captured during clipboard access; native Windows monitoring is untested. Fetch results print to stderr; Windows toast notifications are not implemented." } else { "Local changes are captured during clipboard access; native macOS monitoring is untested." };
+                    format!("{retention} {coverage}")
+                })
+            }),
             layout: Box::new(LayoutStatus {
                 profiles: profiles.names(),
                 profile: profiles.active,

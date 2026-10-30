@@ -76,6 +76,7 @@ async fn serve_conn<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, token: Option<S
             line.clear();
         }
         r.read_line(&mut line).await?;
+        if !line.ends_with('\n') { line.clear(); }
         Ok(Some(line))
     })
     .await;
@@ -294,5 +295,19 @@ mod tests {
         let mut out = String::new();
         client.read_to_string(&mut out).await.unwrap();
         assert_eq!(out, "error unknown request\n");
+    }
+
+    #[tokio::test]
+    async fn oversized_history_clear_never_dispatches_a_truncated_prefix() {
+        let (mut client, server) = duplex(8192);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tokio::spawn(serve_conn(server, None, tx));
+        client.write_all(format!("clip-history clear{}bad\n", " ".repeat(2000)).as_bytes()).await.unwrap();
+        client.shutdown().await.unwrap();
+        match tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
+            Ok(Some(_)) => panic!("oversized request was dispatched"),
+            Ok(None) => {},
+            Err(_) => panic!("oversized request was not rejected promptly"),
+        }
     }
 }

@@ -207,6 +207,70 @@ there, or over its limit). Others can only fetch yours if
 `one-mk clipboard --allow-fetch on` **on the computer being read**. Fetching is
 **off by default**; existing settings with `allow_pull = true` keep their opt-in.
 `clip-send` still works without enabling fetching: the owner chooses to push.
+
+### Clipboard history (memory only by default)
+
+History remembers the last 20 items this computer held or received. Open
+**Clipboard & files → History** to restore an item here, or use:
+
+```sh
+one-mk clipboard history                  # newest first, stable item numbers
+one-mk clipboard history list --json      # metadata only, not full content
+one-mk clipboard history show 7           # full text; terminal controls escaped
+one-mk clipboard history show 7 --json    # exact text in JSON
+one-mk clipboard history copy 7           # restore here only; no network send
+one-mk clipboard history delete 7
+one-mk clipboard history clear
+one-mk hotkeys --fetch-clipboard 'ctrl+alt+v'
+```
+
+The fetch shortcut gets the next online computer's clipboard (name order,
+wrapping after this computer), then reports **Got text/html/image from NAME**.
+Windows currently prints this result to stderr: the existing notifier does
+not implement Windows toast notifications.
+It does **not** type Ctrl+V: press your normal paste shortcut afterward.
+Linux/macOS default to Ctrl+Alt+V; Windows uses Ctrl+Alt+Shift+V to avoid
+AltGr conflicts. Fetching stays **off by default** on every source computer;
+enable it there with `one-mk clipboard --allow-fetch on`. `clip-get --from NAME`
+selects a particular computer instead.
+
+Configure retention in the existing `settings.toml` (restart or run
+`one-mk clipboard --text on` to apply changes while keeping text enabled):
+
+```toml
+[clipboard]
+history_max = 20           # 0 disables history; hard maximum 1000
+history_max_mb = 64        # total retained bytes; hard maximum 256 MB
+history_persist = false   # opt in only if you accept the disk privacy risk
+history_skip_apps = ["keepassxc", "keepass", "1password", "bitwarden", "org.keepassxc.KeePassXC"]
+```
+
+Each item also obeys the clipboard size limit. Consecutive identical content
+is deduplicated. Oldest images are evicted before text when a cap is reached.
+History is **not written to disk by default** and is forgotten at shutdown.
+With `history_persist = true`, text and HTML are **plain text on disk,
+unencrypted**, alongside PNG images in `clipboard-history.bin` under the
+settings folder. Saves replace the file atomically with mode 0600 on Unix.
+Clear removes retained contents, not secure-erases disk blocks or backups.
+Turning persistence off removes that saved file.
+
+Sensitive/concealed copies are never retained, even with sharing's
+`skip_sensitive` disabled. However, **arboard cannot read the system password
+markers**: do not rely on history to protect secrets. X11 focus-based app
+exclusion is best effort, without hooks; it requires the desktop to identify
+the focused app. Native Wayland monitoring and Windows/macOS runtime behavior
+are **untested**; those platforms must not be treated as verified. Windows/macOS
+currently capture local contents on clipboard access, not every copy event.
+Contents already held when one-mk starts enter history on the next access
+or clipboard change, not immediately at startup.
+See [validation and manual tests](docs/CLIPBOARD-HISTORY-QA.md).
+
+**Troubleshooting:** missing items can mean a disabled format, size cap,
+password-manager focus, or `history_max = 0`. Run `one-mk status` and
+`one-mk doctor` for retention and platform coverage. If saved history is
+corrupt, inspect the reported error, then run `one-mk clipboard history clear`
+to discard it; the damaged file is not silently overwritten. If fetch is
+refused, run `one-mk clipboard --allow-fetch on` on the named source computer.
 Content a password manager
 marks as sensitive is skipped (`--skip-sensitive on`, the default), and never
 handed out by `clip-get`; `clip-send` is you asking for it, so it sends.

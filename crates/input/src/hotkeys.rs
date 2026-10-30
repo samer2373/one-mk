@@ -52,6 +52,7 @@ pub enum Action {
     /// Send what is typed here to every connected computer, or stop
     /// (`one-mk broadcast toggle`).
     Broadcast,
+    FetchClipboard,
 }
 
 impl Action {
@@ -64,6 +65,7 @@ impl Action {
             Action::LockPointer => "lock-pointer".into(),
             Action::Home => "home".into(),
             Action::Broadcast => "broadcast".into(),
+            Action::FetchClipboard => "fetch-clipboard".into(),
         }
     }
 
@@ -73,6 +75,7 @@ impl Action {
             "lock-pointer" => Some(Action::LockPointer),
             "home" => Some(Action::Home),
             "broadcast" => Some(Action::Broadcast),
+            "fetch-clipboard" => Some(Action::FetchClipboard),
             _ => {
                 let n: u8 = id.strip_prefix("jump-")?.parse().ok()?;
                 (1..=9).contains(&n).then_some(Action::Jump(n))
@@ -88,6 +91,7 @@ impl Action {
             Action::LockPointer => "Lock the pointer to this computer (or unlock it)".into(),
             Action::Home => "Bring the mouse and keyboard back to this computer".into(),
             Action::Broadcast => "Type on every connected computer at once (or stop)".into(),
+            Action::FetchClipboard => "Get the next online computer's clipboard here (then press paste)".into(),
         }
     }
 }
@@ -485,6 +489,7 @@ fn describe_short(a: Action) -> String {
         Action::LockPointer => "lock the pointer".into(),
         Action::Home => "come back here".into(),
         Action::Broadcast => "broadcast to every computer".into(),
+        Action::FetchClipboard => "get another computer's clipboard".into(),
     }
 }
 

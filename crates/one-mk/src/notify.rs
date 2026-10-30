@@ -202,8 +202,10 @@ mod sys {
 
     /// A plain error notification: D-Bus, else `notify-send`, else stderr.
     pub async fn failure(title: &str, body: &str) {
-        let success = title == "one-mk files sent";
-        let (icon, category) = if success { ("document-send", "transfer.complete") } else { ("dialog-error", "transfer.error") };
+        let clipboard = title == "one-mk clipboard" && body.starts_with("Got ");
+        let success = title == "one-mk files sent" || clipboard;
+        let icon = if clipboard { "edit-paste" } else if success { "document-send" } else { "dialog-error" };
+        let category = if success { "transfer.complete" } else { "transfer.error" };
         if !message(title, body, icon, category).await {
             eprintln!("one-mk: {title}: {body}");
         }

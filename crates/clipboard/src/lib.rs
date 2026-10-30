@@ -26,6 +26,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use tokio::sync::oneshot;
 
+pub mod history;
+#[cfg(target_os = "linux")]
+mod history_watch;
+
 /// Default for the largest clipboard content we send or accept, in bytes
 /// (all formats together).
 pub const DEFAULT_MAX_BYTES: usize = 25 << 20;
@@ -122,19 +126,30 @@ pub enum Read {
 pub struct Clipboard {
     tx: mpsc::Sender<Cmd>,
     filter: Arc<Mutex<Filter>>,
+    history: Arc<Mutex<history::History>>,
+    history_apps: Arc<Mutex<Vec<String>>>,
+    #[cfg(target_os = "linux")]
+    _watch: Option<Arc<std::os::unix::net::UnixStream>>,
 }
 
 enum Cmd {
     Read { skip: Vec<Digest>, explicit: bool, reply: oneshot::Sender<Result<Read>> },
     Digest { reply: oneshot::Sender<Result<Option<Digest>>> },
-    Write { data: ClipData, reply: oneshot::Sender<Result<Digest>> },
+    #[cfg(target_os = "linux")]
+    Capture { skip_history: bool },
+    Write { data: ClipData, origin: String, record: bool, reply: oneshot::Sender<Result<Digest>> },
 }
 
 impl Clipboard {
     /// The system clipboard. The platform clipboard is opened on the worker
     /// thread (and reopened after errors), so this never fails.
     pub fn system() -> Self {
-        Self::spawn(Backend::System(None))
+        #[allow(unused_mut)]
+        let mut clipboard = Self::spawn(Backend::System(None));
+        clipboard.history.lock().unwrap_or_else(|error| error.into_inner()).configure(0, history::DEFAULT_BYTES, DEFAULT_MAX_BYTES, None);
+        #[cfg(target_os = "linux")]
+        { clipboard._watch = history_watch::start(clipboard.tx.clone(), clipboard.history.clone(), clipboard.history_apps.clone()); }
+        clipboard
     }
 
     /// An in-process clipboard, for tests. The returned [`MemoryClipboard`]
@@ -148,11 +163,16 @@ impl Clipboard {
         let (tx, rx) = mpsc::channel();
         let filter = Arc::new(Mutex::new(Filter::default()));
         let shared = filter.clone();
+        let history = Arc::new(Mutex::new(history::History::default()));
+        let worker_history = history.clone();
         std::thread::Builder::new()
             .name("one-mk-clipboard".into())
-            .spawn(move || Worker { backend, cache: None, filter: shared }.run(rx))
+            .spawn(move || Worker { backend, cache: None, filter: shared, history: worker_history, history_skip: false }.run(rx))
             .expect("spawn clipboard thread");
-        Self { tx, filter }
+        Self { tx, filter, history, history_apps: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(target_os = "linux")]
+            _watch: None,
+        }
     }
 
     /// Changes what is shared, from the next read on.
@@ -185,7 +205,17 @@ impl Clipboard {
     /// Replaces the clipboard content. Returns the digest of the content as
     /// read back afterwards, which is what later [`read`](Self::read)s see.
     pub async fn write(&self, data: ClipData) -> Result<Digest> {
-        self.call(|reply| Cmd::Write { data, reply }).await
+        self.write_from(data, "this computer".into(), true).await
+    }
+
+    pub fn history(&self) -> &Arc<Mutex<history::History>> { &self.history }
+
+    pub fn history_skip_apps(&self, apps: Vec<String>) {
+        *self.history_apps.lock().unwrap_or_else(|error| error.into_inner()) = apps;
+    }
+
+    pub async fn write_from(&self, data: ClipData, origin: String, record: bool) -> Result<Digest> {
+        self.call(|reply| Cmd::Write { data, origin, record, reply }).await
     }
 
     async fn call<T>(&self, cmd: impl FnOnce(oneshot::Sender<Result<T>>) -> Cmd) -> Result<T> {
@@ -380,6 +410,8 @@ struct Worker {
     /// encode it only once.
     cache: Option<(Digest, Arc<ClipData>)>,
     filter: Arc<Mutex<Filter>>,
+    history: Arc<Mutex<history::History>>,
+    history_skip: bool,
 }
 
 impl Worker {
@@ -390,6 +422,11 @@ impl Worker {
             queue.extend(rx.try_iter());
             while let Some(cmd) = queue.pop_front() {
                 match cmd {
+                    #[cfg(target_os = "linux")]
+                    Cmd::Capture { skip_history } => {
+                        self.history_skip = skip_history;
+                        let _ = self.read(&[], false);
+                    }
                     Cmd::Read { skip, explicit, reply } => {
                         let r = self.read(&skip, explicit);
                         let _ = reply.send(r);
@@ -398,8 +435,12 @@ impl Worker {
                         let r = self.backend_read().map(|raw| (!raw.is_empty()).then(|| raw.digest()));
                         let _ = reply.send(r);
                     }
-                    Cmd::Write { data, reply } => {
+                    Cmd::Write { data, origin, record, reply } => {
+                        let saved = record.then(|| Arc::new(data.clone()));
                         let r = self.write(data);
+                        if r.is_ok() && let Some(saved) = saved {
+                            self.history.lock().unwrap_or_else(|error| error.into_inner()).record(saved, self.history_skip, &origin);
+                        }
                         let _ = reply.send(r);
                     }
                 }
@@ -429,6 +470,7 @@ impl Worker {
         if raw.is_empty() {
             return Ok(Read::Empty);
         }
+        let concealed = raw.concealed || self.history_skip;
         let digest = raw.digest();
         if skip.contains(&digest) {
             return Ok(Read::Unchanged(digest));
@@ -439,6 +481,7 @@ impl Worker {
         if let Some((d, data)) = &self.cache
             && *d == digest
         {
+            if data.len() <= max { self.history.lock().unwrap_or_else(|error| error.into_inner()).record(data.clone(), concealed, "this computer"); }
             return Ok(sized(digest, data.clone(), max));
         }
         let text_len = raw.text.as_ref().map_or(0, String::len) + raw.html.as_ref().map_or(0, String::len);
@@ -448,6 +491,7 @@ impl Worker {
         }
         let png = raw.image.as_ref().map(encode_png).transpose()?;
         let data = Arc::new(ClipData { text: raw.text, html: raw.html, png });
+        if data.len() <= max { self.history.lock().unwrap_or_else(|error| error.into_inner()).record(data.clone(), concealed, "this computer"); }
         self.cache = Some((digest, data.clone()));
         Ok(sized(digest, data, max))
     }
@@ -511,6 +555,26 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn history_never_records_concealed_even_for_explicit_send_or_skip_off() {
+        let (clipboard, memory) = Clipboard::memory();
+        memory.set(Raw { text: Some("password".into()), concealed: true, ..Raw::default() });
+        clipboard.read(vec![]).await.unwrap();
+        assert!(clipboard.history().lock().unwrap().is_empty());
+        clipboard.read_explicit(vec![]).await.unwrap();
+        assert!(clipboard.history().lock().unwrap().is_empty());
+        clipboard.set_filter(Filter { skip_concealed: false, ..Filter::default() });
+        clipboard.read(vec![]).await.unwrap();
+        assert!(clipboard.history().lock().unwrap().is_empty());
+        memory.set_text("ordinary");
+        clipboard.read(vec![]).await.unwrap();
+        assert_eq!(clipboard.history().lock().unwrap().len(), 1);
+        clipboard.write_from(ClipData { text: Some("peer text".into()), ..ClipData::default() }, "desk".into(), true).await.unwrap();
+        let history = clipboard.history().lock().unwrap().list();
+        assert_eq!(history[0].origin, "desk");
+        assert_eq!(history[0].preview(), "peer text");
+    }
 
     fn image() -> Image {
         let rgba = (0..4 * 3 * 4).map(|i| (i * 7) as u8).collect();

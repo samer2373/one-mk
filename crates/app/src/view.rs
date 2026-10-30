@@ -246,6 +246,7 @@ pub struct Prefs {
     pub clip_image: bool,
     pub clip_max_mb: u32,
     pub clip_allow_fetch: bool,
+    pub history_persist: bool,
     pub notify_files: bool,
     /// Gaming mode: `off`, `on` or `auto`.
     pub gaming: String,
@@ -321,6 +322,7 @@ impl Prefs {
             // Off unless the file says so: one·mk writes `allow_pull` only when it is on, and
             // a file from before `settings_version = 2` has its old `true` switched off.
             clip_allow_fetch: num("", "settings_version", 1) >= 2 && flag("clipboard", "allow_pull", false),
+            history_persist: flag("clipboard", "history_persist", false),
             notify_files: flag("", "notify_files", true),
             gaming: text("", "gaming", "off"),
             lock_sync: flag("", "lock_sync", false),
