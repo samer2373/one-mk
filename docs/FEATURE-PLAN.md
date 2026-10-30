@@ -79,6 +79,9 @@ origin's design won; what origin lacked was re-applied on top of it.
   GlobalShortcuts portal needs, from `install::packaged_files` (single
   source, via the `packaging-files` example); `bundle-deb.sh` and
   `check-packaging.sh` both check it is there and hidden.
+- **The Windows uninstaller removes the Send-to entries** (`[UninstallRun]`
+  `one-mk integrate --remove`, as the user, before files go, failure
+  ignored). Not compiled here (no Inno Setup).
 
 ## Where things stand (updated 2026-10-29, end of the second batch)
 

@@ -40,6 +40,15 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 [Run]
 Filename: "{app}\one-mk-app.exe"; Description: "Open one·mk"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+; Takes out the Explorer "Send to" entries `one-mk integrate` wrote (only
+; files carrying its marker; a user's own are left alone), which would
+; otherwise point at the deleted one-mk.exe. [UninstallRun] runs before any
+; file is removed, as the user who installed (this installer never asks for
+; administrator rights), hidden. Its exit code is not checked, so a failure
+; here never stops the uninstall.
+Filename: "{app}\one-mk.exe"; Parameters: "integrate --remove"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "RemoveSendTo"
+
 [Code]
 function NeedsPath(Dir: string): Boolean;
 var

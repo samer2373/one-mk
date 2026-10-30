@@ -123,6 +123,13 @@ checkout; then it installs it silently into a scratch folder and runs
   if that exact entry is not there yet;
 - offers to open the window at the end.
 
+On uninstall, before any file is removed, it runs `one-mk integrate --remove`
+as the user (hidden; its exit code is ignored, so it never stops the
+uninstall), which deletes the *Send to* entries `one-mk integrate` wrote, only
+the files carrying its marker; without it they would point at the deleted
+`one-mk.exe`. This hook is syntax-reviewed only: Inno Setup is not available
+here, and CI builds and installs the installer but does not uninstall it.
+
 It does not open the firewall, run `one-mk install` (start at sign-in, the
 *Send to* entries) or take the folder out of `PATH` on uninstall. Start at
 sign-in is turned on from the window (or `one-mk install`); `one-mk integrate`
