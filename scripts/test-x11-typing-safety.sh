@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+scratch=$(mktemp -d /tmp/one-mk-x11-typing.XXXXXX)
+cargo_home=${CARGO_HOME:-$HOME/.cargo}
+rustup_home=${RUSTUP_HOME:-$HOME/.rustup}
+server_pid=
+cleanup() {
+    if [[ -n "$server_pid" ]]; then
+        kill -TERM "$server_pid" 2>/dev/null || true
+        wait "$server_pid" 2>/dev/null || true
+    fi
+    rm -rf -- "$scratch"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -m 700 "$scratch/home" "$scratch/runtime" "$scratch/state"
+clean=(env -i "PATH=$PATH" "HOME=$scratch/home" "XDG_RUNTIME_DIR=$scratch/runtime" "ONE_MK_HOME=$scratch/state"
+    "CARGO_HOME=$cargo_home" "RUSTUP_HOME=$rustup_home")
+if [[ "${1:-}" == --require-delivery ]]; then
+    clean+=(ONE_MK_REQUIRE_X11_TEXT_DELIVERY=1)
+    shift
+fi
+command -v Xvfb >/dev/null
+command -v xkbcomp >/dev/null
+command -v xev >/dev/null
+command -v stdbuf >/dev/null
+coproc PRIVATE_XVFB { exec "${clean[@]}" Xvfb -displayfd 1 -screen 0 1280x800x24 -nolisten tcp -noreset 2>/dev/null; }
+server_pid=$PRIVATE_XVFB_PID
+read -r -t 15 display <&"${PRIVATE_XVFB[0]}"
+[[ "$display" =~ ^[0-9]+$ ]] || { printf 'Xvfb returned an invalid display\n' >&2; exit 1; }
+cd -- "$repo"
+if (( $# )); then
+    "${clean[@]}" "DISPLAY=:$display" "$@"
+else
+    "${clean[@]}" "DISPLAY=:$display" cargo test --offline -j 2 -p one-mk-input \
+        x11::tests::temporary_remap_restoration_races_a_delayed_client -- --ignored --exact --nocapture
+fi

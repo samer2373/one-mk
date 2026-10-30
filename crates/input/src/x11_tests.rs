@@ -13,6 +13,150 @@ const W: i16 = 1280;
 const H: i16 = 800;
 
 #[test]
+#[ignore = "explicit private-Xvfb remapping safety regression"]
+fn temporary_remap_restoration_races_a_delayed_client() {
+    for count in [1, 32] {
+        delayed_remap_client(count);
+    }
+}
+
+fn delayed_remap_client(repetitions: usize) {
+    let server = Xvfb::start().expect("this acceptance experiment requires Xvfb");
+    let injector = server.observer();
+    let reader = server.observer();
+    let setup = injector.conn.setup();
+    let first = setup.min_keycode;
+    let count = setup.max_keycode - first + 1;
+    let before = injector.conn.get_keyboard_mapping(first, count).unwrap().reply().unwrap();
+    let width = usize::from(before.keysyms_per_keycode);
+    let modifiers = injector.conn.get_modifier_mapping().unwrap().reply().unwrap();
+    let down = injector.conn.query_keymap().unwrap().reply().unwrap();
+    let offset = before.keysyms.chunks_exact(width).enumerate().rev().find_map(|(index, symbols)| {
+        let keycode = first + u8::try_from(index).unwrap();
+        (symbols.iter().all(|symbol| *symbol == 0)
+            && !modifiers.keycodes.contains(&keycode)
+            && down.keys[usize::from(keycode / 8)] & (1 << (keycode % 8)) == 0)
+            .then_some(index)
+    }).expect("an unused, unheld, non-modifier keycode");
+    let keycode = first + u8::try_from(offset).unwrap();
+    let original = before.keysyms[offset * width..(offset + 1) * width].to_vec();
+    let mut xev = TestXev(Command::new("stdbuf").args(["-oL", "xev", "-display", &server.display, "-root", "-event", "keyboard"])
+        .stdout(Stdio::piped()).stderr(Stdio::null()).spawn().expect("xev and stdbuf are required"));
+    eventually("Xlib observer ready", || reader.conn.get_window_attributes(reader.root).unwrap().reply().unwrap()
+        .all_event_masks.contains(xproto::EventMask::KEY_PRESS));
+    let xev_pid = i32::try_from(xev.0.id()).unwrap();
+    assert_eq!(unsafe { libc::kill(xev_pid, libc::SIGSTOP) }, 0);
+    let mut stopped = 0;
+    assert_eq!(unsafe { libc::waitpid(xev_pid, &mut stopped, libc::WUNTRACED) }, xev_pid);
+    assert!(libc::WIFSTOPPED(stopped));
+    let output = xev.0.stdout.take().unwrap();
+    let (lines, translated) = std::sync::mpsc::channel();
+    let xlib_reader = std::thread::spawn(move || {
+        for line in std::io::BufReader::new(output).lines() {
+            let Ok(line) = line else { break };
+            if line.contains(&format!("keycode {keycode} (keysym")) && lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    reader.conn.change_window_attributes(reader.root, &xproto::ChangeWindowAttributesAux::new()
+        .event_mask(xproto::EventMask::KEY_PRESS | xproto::EventMask::KEY_RELEASE)).unwrap().check().unwrap();
+    reader.conn.set_input_focus(xproto::InputFocus::POINTER_ROOT, reader.root, CURRENT_TIME).unwrap().check().unwrap();
+    let mut keyboard = crate::X11Keyboard::connect(&server.display).unwrap();
+    let dump = || {
+        let output = Command::new("xkbcomp").args(["-xkb", &server.display, "-"]).output().expect("xkbcomp is required");
+        assert!(output.status.success(), "xkbcomp: {}", String::from_utf8_lossy(&output.stderr));
+        output.stdout
+    };
+    let native_before = dump();
+    let held = 38;
+    injector.fake(xproto::KEY_PRESS_EVENT, held, injector.root, 0, 0);
+    let mut expected = Vec::new();
+    for wanted in ['ı', 'ł', '@', 'z'].into_iter().cycle().take(repetitions) {
+        let mut restore = TestMapping { conn: &injector.conn, keycode, original: &original, active: true };
+        let symbols = vec![0x0100_0000 | u32::from(wanted); width];
+        injector.conn.change_keyboard_mapping(1, keycode, before.keysyms_per_keycode, &symbols).unwrap().check().unwrap();
+        let during = keyboard.snapshot().unwrap();
+        assert_eq!(during.resolver.resolve(u32::from(keycode) - 8, during.masks), Some(wanted.to_string()));
+        injector.fake(xproto::KEY_PRESS_EVENT, keycode, injector.root, 0, 0);
+        injector.fake(xproto::KEY_RELEASE_EVENT, keycode, injector.root, 0, 0);
+        restore.restore().unwrap();
+        expected.push(u32::from(wanted));
+    }
+    let after = injector.conn.get_keyboard_mapping(first, count).unwrap().reply().unwrap();
+    assert_eq!(after.keysyms_per_keycode, before.keysyms_per_keycode);
+    assert_eq!(after.keysyms, before.keysyms, "the entire core map must be restored");
+    assert!(!injector.key_down(keycode));
+    assert!(injector.key_down(held), "a different client's held key must not be disturbed");
+    injector.fake(xproto::KEY_RELEASE_EVENT, held, injector.root, 0, 0);
+    let native_restored = native_before == dump();
+    let mut presses = 0;
+    let mut notifications = 0;
+    let mut symbols = Vec::new();
+    while let Some(event) = reader.conn.poll_for_event().unwrap() {
+        match event {
+            x11rb::protocol::Event::MappingNotify(_) => notifications += 1,
+            x11rb::protocol::Event::KeyPress(event) if event.detail == keycode => {
+                presses += 1;
+                let snapshot = keyboard.snapshot().unwrap();
+                if let Some(text) = snapshot.resolver.resolve(u32::from(event.detail) - 8, snapshot.masks) {
+                    symbols.extend(text.chars().map(u32::from));
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(presses, repetitions, "the reader must receive every actual XTest press");
+    assert!(notifications > 0, "the reader must receive MappingNotify");
+    assert_eq!(unsafe { libc::kill(xev_pid, libc::SIGCONT) }, 0);
+    for _ in 0..2 * repetitions {
+        let line = translated.recv_timeout(Duration::from_secs(5)).expect("Xlib must translate every press and release");
+        assert!(line.contains("(keysym 0x0, NoSymbol)"), "Xlib observer: {line}");
+    }
+    drop(xev);
+    xlib_reader.join().unwrap();
+    eprintln!("remaps={repetitions} presses={presses} MappingNotify={notifications} core_restored=true XKB_restored={native_restored} held_key_preserved=true Xlib_NoSymbol={} delivered={symbols:?}", 2 * repetitions);
+    if std::env::var_os("ONE_MK_REQUIRE_X11_TEXT_DELIVERY").is_some() {
+        assert_eq!(symbols, expected, "a delayed client refreshes from the already-restored map");
+    } else {
+        assert!(symbols.is_empty(), "revisit the remap safety blocker if a delayed reader now receives text");
+    }
+}
+
+struct TestXev(Child);
+
+impl Drop for TestXev {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+struct TestMapping<'a> {
+    conn: &'a RustConnection,
+    keycode: u8,
+    original: &'a [u32],
+    active: bool,
+}
+
+impl TestMapping<'_> {
+    fn restore(&mut self) -> Result<()> {
+        self.conn.change_keyboard_mapping(1, self.keycode, u8::try_from(self.original.len())?, self.original)?.check()?;
+        self.conn.sync()?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for TestMapping<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.restore();
+        }
+    }
+}
+
+#[test]
 fn native_typing_snapshots_follow_server_maps_and_modifiers() {
     let Some(server) = Xvfb::start() else { return };
     let observer = server.observer();
