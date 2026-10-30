@@ -8,6 +8,25 @@ permissions:
   contents: read
 
 jobs:
+  wallpaper-sbom-dry-run:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with: { toolchain: stable }
+      - name: Optional importer licence gate and SBOM (never published as a runtime)
+        run: |
+          mkdir -p target
+          cargo build --locked -j 2 -p one-mk-wall-import
+          cargo metadata --locked --format-version 1 > target/wallpaper-metadata.json
+          python3 scripts/check-wallpaper-artifact.py --self-test
+          python3 scripts/check-wallpaper-artifact.py --metadata target/wallpaper-metadata.json --helper target/debug/one-mk-wall-import --sbom target/wallpaper-import.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wallpaper-import-sbom-dry-run
+          path: target/wallpaper-import.cdx.json
+
   build:
     strategy:
       fail-fast: false
