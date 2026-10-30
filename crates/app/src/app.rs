@@ -198,6 +198,9 @@ pub struct App {
     /// Sides (and offsets) chosen here and not yet reported back by the
     /// daemon, and when.
     pending_side: HashMap<String, (Side, Offset, f64)>,
+    /// Layout learning's question (computer id, side) answered here, and
+    /// hidden until the daemon stops asking it.
+    answered: Option<(String, Side)>,
     /// Computers placed where no screen of theirs touches ours.
     apart: HashSet<String>,
     pending_swap: HashMap<String, String>,
@@ -410,6 +413,7 @@ impl App {
             failed_measure: HashSet::new(),
             measuring: None,
             pending_side: HashMap::new(),
+            answered: None,
             apart: HashSet::new(),
             pending_swap: HashMap::new(),
             hop: None,
@@ -2156,8 +2160,11 @@ impl eframe::App for App {
             child.set_opacity(e);
             child
         };
+        // Layout learning's question has a strip of its own under the desk.
+        let card = self.suggestion_card(ui, desk);
+        let scene = card.as_ref().map_or(desk, |c| Rect::from_min_max(desk.min, pos2(desk.right(), c.rect.top() - 6.0)));
         match self.tab {
-            t if t.desk() => self.desk(ui, desk, now),
+            t if t.desk() => self.desk(ui, scene, now),
             _ => {}
         }
         let body = Rect::from_min_max(pos2(full.left(), top.bottom()), full.max);
@@ -2179,6 +2186,9 @@ impl eframe::App for App {
         self.top_bar(ui, top, now);
         if !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys) {
             self.panel(ui, panel, now);
+        }
+        if let Some(card) = card {
+            self.suggestion_banner(ui, card);
         }
         widgets::set_locked(ui.ctx(), false);
         // The sheet sits over the panel, leaving the desk room to show
