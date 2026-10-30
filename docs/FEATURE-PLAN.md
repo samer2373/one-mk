@@ -402,10 +402,29 @@ the PC, with one mouse), plus a keyboard mapper for any key.
 6. Run an independent review of the merged diff.
 7. Update README and this file.
 
+## Wave 5 (chosen by the owner from a checklist, 2026-10-30)
+
+Branch `wave5` (worktree `.claude/worktrees/wave5`), from `main` at d7b8c6b
+(which includes origin's release 0.1.12). Same rules as before: failing-first
+tests, cross-review by the other model, full validation before merging.
+
+| ID | Task | Author | Status |
+|---|---|---|---|
+| 5A | Clipboard history and a hotkey to paste from another computer's clipboard (must skip sensitive copies) | Codex | todo |
+| 5B | Live latency graph per computer in the window (event-driven; no polling when the window is closed) | Claude | todo |
+| 5C | Broadcast input to all connected computers (explicit, visible, auto-off, no stuck keys) | Claude | todo |
+| 5D | Edge pushes where no computer sits: pointer wrap to the opposite edge, and push-toward-it layout learning | Claude | todo |
+| 5E | Keyboard layout and AltGr fix: send the typed character when layouts differ | Codex | todo |
+| 5F | Autoscroll (middle-click) and gesture buttons | Claude | todo |
+| 5G | Auto-update from signed GitHub Releases (build on the owner's release workflow) | Codex | todo |
+| 5H | Activate local-only key remap on Windows and macOS (acknowledged handoff, no stuck keys) | Codex | todo |
+
 ## Out of scope for now
 
-- Audio switching: least reliable, hardest to test.
-- Android, ChromeOS and iPad as peers.
+Chosen NOT to build (owner, 2026-10-30): audio switching, the Windows
+login/UAC service (pure contracts stay), Android/ChromeOS/iPad as peers, real
+drag into another computer's open window, acceleration off via raw input on
+Windows/macOS, settings per display.
 
 ## Research source
 
