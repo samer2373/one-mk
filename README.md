@@ -664,7 +664,13 @@ Good to know:
 - Only input sent to other computers is changed. Local keyboard rules
   (`scope = { local = true }`, or `one-mk keymap add capslock esc --local`)
   can be stored and checked, but are **inactive on every platform**: the
-  Windows/macOS hook integration is not implemented yet (plan 4C).
+  Windows/macOS hook integration is not implemented yet (5H incomplete;
+  experimental and **untested on real Windows/macOS hardware**).
+  `--local --device NAME` stores a rule for one attached keyboard;
+  local+device rules override local rules, never peer rules. The default-off
+  `[input] local_rules` preference (`one-mk keymap local on|off`) is stored
+  but cannot activate the unfinished native integration. See
+  `docs/LOCAL-REMAP.md` for the handoff design and native acceptance script.
   Linux status says `local key rules are not available on Linux`; its
   Wayland portal only supplies keys while forwarding. Local rules never
   change keys sent to a peer. See `docs/INPUT-TUNING.md` for the safety gates.

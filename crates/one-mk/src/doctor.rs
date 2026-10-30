@@ -660,6 +660,18 @@ pub fn tuning_check(t: Option<&Tuning>) -> Check {
     check("input-tuning", "Input tuning", out)
 }
 
+pub fn local_rules_check() -> Check {
+    let outcome = if cfg!(target_os = "linux") {
+        Outcome::skip("Local key rules are not available on Linux; stored rules remain inactive.")
+    } else {
+        Outcome::warn(
+            "Experimental; untested on real Windows/macOS hardware. Native local hook integration is incomplete; rules remain inactive even with the preference on.",
+            "Keep `one-mk keymap local off` until native acknowledgement and real-hardware acceptance tests pass. See docs/LOCAL-REMAP.md.",
+        )
+    };
+    check("local-key-rules", "Local key rules", outcome)
+}
+
 /// What decides the per-device rules check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceRules {
@@ -1061,6 +1073,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
     checks.push(broadcast_check(&daemon, crate::settings::Settings::load(dir).ok().map(|s| s.broadcast).as_ref(), os));
     checks.push(tuning_check(probe_tuning(dir).as_ref()));
+    checks.push(local_rules_check());
     checks.push(device_rules_check(&probe_device_rules(dir, daemon.status().is_some())));
     checks.push(pointer_overlay_check(
         crate::pointeroverlay::support_here(daemon.status().map(|s| s.backend.as_str())),
@@ -1883,6 +1896,20 @@ mod tests {
         assert_eq!(st(&noted), Status::Pass);
         assert!(noted.outcome.detail.contains("Wayland window has the focus"), "{}", noted.outcome.detail);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_keys_never_claim_native_acceptance() {
+        let result = local_rules_check();
+        assert_eq!(result.id, "local-key-rules");
+        if cfg!(target_os = "linux") {
+            assert_eq!(st(&result), Status::Skip);
+            assert!(result.outcome.detail.contains("not available on Linux"));
+        } else {
+            assert_eq!(st(&result), Status::Warn);
+            assert!(result.outcome.detail.contains("untested on real Windows/macOS hardware"));
+            assert!(result.outcome.detail.contains("inactive"));
+        }
     }
     #[test]
     fn per_device_rules_check() {

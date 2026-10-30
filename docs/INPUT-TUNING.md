@@ -151,7 +151,20 @@ Mapper::set_keymap (as a reload)
   previous app's rules (`app::tests::tuning::per_app_rules_follow_a_switch_made_with_enter`,
   `..._with_no_input`, `system::linux::tests::watch_says_when_the_active_window_changes`).
 
-### Local keyboard scope: groundwork only (4C incomplete)
+### Local keyboard scope: groundwork only (4C / 5H incomplete)
+
+Windows/macOS are experimental and **untested on real hardware**. The
+acknowledged handoff model and held-key matrix are in `LOCAL-REMAP.md`;
+native activation is still incomplete. `[input] local_rules = false` is the
+default, including when upgrading old files. `one-mk keymap local on|off`
+stores this preference but explicitly reports that native integration is
+inactive. It does not install a hook. Mouse buttons and local pointer speed
+are outside this feature.
+
+The native-free tests cover the ticketed ownership fence, stale/foreign
+acknowledgements, cleanup failure, the held-key routing matrix, randomized
+device/transition/failure streams and allocation-free gate decisions. They
+do not establish native hook latency or actual injection/release delivery.
 
 `one-mk keymap add capslock esc --local` stores a local rule; `one-mk
 keymap remove capslock --local` removes it, and `one-mk keymap` labels it
@@ -428,8 +441,10 @@ remainders, so notches from that wheel never carry into another's).
   name (or a part of one, letter case ignored) that picks exactly one
   device seen; several matches are refused with the candidates listed.
   `--device` combines with `--peer` or `--os` ("this keyboard, when it
-  types on the laptop"); with `--local` it is refused (local rules have no
-  devices yet). On `scroll`, `--device wheel` and `--device touchpad` keep
+  types on the laptop"); `--local --device NAME` stores a rule for this
+  computer's keyboard, with Local+Device taking precedence over Local.
+  Unknown devices use only Local rules. These rules remain inactive until
+  native integration is complete. On `scroll`, `--device wheel` and `--device touchpad` keep
   their old meaning (the kind of scrolling, now also `--kind`); any other
   value names a device. Changing a device rule where devices can't be told
   apart prints a note saying so (the rule is kept).
