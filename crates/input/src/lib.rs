@@ -26,6 +26,7 @@ mod linux_logic;
 #[cfg(target_os = "linux")]
 mod linux_rt;
 mod null;
+pub mod typing;
 pub mod system;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -155,6 +156,7 @@ pub enum Event {
     /// the desktop's permission dialog), `None` that it works (again).
     /// `part` tells the parts apart ("capture", "control"). Sent on changes.
     Status { part: &'static str, problem: Option<String> },
+    KeyboardLayout(typing::KeyboardLayout),
 }
 
 /// From the daemon to the capture side.
@@ -190,6 +192,8 @@ pub enum Inject {
     ScrollDiscrete { dx: i32, dy: i32 },
     ScrollStop,
     Key { code: u32, down: bool },
+    Text { text: typing::Text },
+    CharacterKey { code: u32, down: bool, character: char },
     /// Whether a peer controls this machine from now on. The daemon sends
     /// `true` when a peer takes control and `false` when it lets go (after
     /// releasing what it held). Backends report `Event::LocalInput` only
@@ -198,6 +202,7 @@ pub enum Inject {
 }
 
 pub struct Backend {
+    pub keyboard: Option<typing::KeyboardLayout>,
     pub name: &'static str,
     pub events: mpsc::UnboundedReceiver<Event>,
     pub capture: mpsc::UnboundedSender<CaptureCmd>,

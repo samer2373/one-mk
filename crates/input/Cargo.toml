@@ -3,6 +3,9 @@ name = "one-mk-input"
 version.workspace = true
 edition = "2024"
 
+[features]
+null-typing-tests = []
+
 [dependencies]
 anyhow = "1.0.104"
 one-mk-proto = { path = "../proto" }

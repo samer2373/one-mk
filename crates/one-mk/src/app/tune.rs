@@ -376,6 +376,14 @@ impl App {
         let out = &mut t.out;
         t.mapper.release_all(&mut |e| out.push(e));
         self.send_tuned();
+        if let Some(remote) = self.remote.as_mut() {
+            let swap = remote.swap;
+            let remaining = remote.typing.release_all();
+            for mut message in remaining {
+                if swap && let Control::Key { code, .. } = &mut message { *code = swap_ctrl_meta(*code); }
+                self.send_input(message);
+            }
+        }
         if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
     }
 
@@ -424,12 +432,23 @@ impl App {
         let mut out = std::mem::take(&mut r.tune.out);
         let mut actions = Vec::new();
         for e in out.drain(..) {
-            let Some(r) = self.remote.as_ref() else { break };
+            let Some(r) = self.remote.as_mut() else { break };
             let msg = match e {
                 Emit::Key { code, down } if is_button(code) => {
                     Control::Button { button: code, down, seq: r.cursor.seq(), pos: r.cursor.pos() }
                 }
-                Emit::Key { code, down } => Control::Key { code: if r.swap { swap_ctrl_meta(code) } else { code }, down },
+                Emit::Key { code, down } => {
+                    r.typing_mods.update(code, down);
+                    let Some(mut message) = r.typing.key(code, down, || {
+                        if r.characters {
+                            self.keyboard.as_ref().map_or(one_mk_proto::typing::Resolution::Physical, |keyboard| keyboard.resolve(code, r.typing_mods))
+                        } else {
+                            one_mk_proto::typing::Resolution::Physical
+                        }
+                    }) else { continue };
+                    if r.swap && let Control::Key { code, .. } = &mut message { *code = swap_ctrl_meta(*code); }
+                    message
+                }
                 Emit::Action(a) => {
                     actions.push(a);
                     continue;

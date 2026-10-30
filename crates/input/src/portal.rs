@@ -84,7 +84,7 @@ pub(crate) async fn open(state_dir: PathBuf) -> Result<Backend> {
     tokio::spawn(watch_power(sys_rx, ev_tx.clone(), power_tx));
     let env = Env { bus: None, unit: Duration::from_secs(1), power };
     let (capture, inject) = start(env, ev_tx, state_dir)?;
-    Ok(Backend { name: "portal", events: ev_rx, capture, inject, focus, locker })
+    Ok(Backend { keyboard: None, name: "portal", events: ev_rx, capture, inject, focus, locker })
 }
 
 type Channels = (mpsc::UnboundedSender<CaptureCmd>, mpsc::UnboundedSender<Inject>);
@@ -947,7 +947,7 @@ struct Held {
 impl Held {
     fn update(&mut self, m: &Inject) {
         let (list, code, down) = match *m {
-            Inject::Key { code, down } => (&mut self.keys, code, down),
+            Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => (&mut self.keys, code, down),
             Inject::Button { button, down } => (&mut self.buttons, button, down),
             _ => return,
         };
@@ -1213,7 +1213,8 @@ fn apply(devices: &mut Devices, m: Inject, last: &mut Option<Pos>, warned_relati
         Inject::ScrollStop => {
             devices.with::<ei::Scroll>(|d| d.scroll_stop(1, 1, 0));
         }
-        Inject::Key { code, down } => {
+        Inject::Text { .. } => tracing::warn!("text unsupported; sender must use physical fallback"),
+        Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
             let state = if down { ei::keyboard::KeyState::Press } else { ei::keyboard::KeyState::Released };
             devices.with::<ei::Keyboard>(|d| d.key(code, state));
         }

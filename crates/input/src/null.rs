@@ -35,6 +35,7 @@ pub(crate) fn open(desktop: Desktop) -> (Backend, NullHandles) {
     let locks = Arc::new(AtomicUsize::new(0));
     let lock_error = Arc::new(Mutex::new(None));
     let backend = Backend {
+        keyboard: None,
         name: "null",
         events: ev_rx,
         capture: cap_tx,

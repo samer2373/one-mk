@@ -89,7 +89,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, trusted, controlled))?;
-    Ok(Backend { name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { keyboard: None, name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 // ------------------------------------------------------------ permissions
@@ -1045,7 +1045,7 @@ async fn inject_loop(
                 warned = false;
                 let now = Instant::now();
                 for m in batch.drain(..) {
-                    if let Inject::Key { code, down } = m {
+                    if let Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } = m {
                         if down && is_repeatable(code) && now.duration_since(settings_read) > Duration::from_secs(5) {
                             repeat.set_timing(repeat_setting());
                             settings_read = now;
@@ -1185,7 +1185,8 @@ impl Injector {
             Inject::ScrollStop => self.smooth.reset(),
             // Handled by the injection loop.
             Inject::Controlled(_) => {}
-            Inject::Key { code, down } => {
+            Inject::Text { .. } => tracing::warn!("text unsupported; sender must use physical fallback"),
+            Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
                 // Each posted Caps Lock press toggles it; a repeat must not.
                 if self.mods.is_caps_repeat(code, down) {
                     return;

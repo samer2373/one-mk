@@ -84,11 +84,12 @@ pub fn encode(message: &Message) -> Result<Frame, LogicError> {
                 payload[4..8].copy_from_slice(&dy.to_le_bytes());
                 (if matches!(input, Inject::MoveBy { .. }) { 17 } else { 20 }, 8)
             }
-            Inject::Button { button, down } | Inject::Key { code: button, down } => {
+            Inject::Button { button, down } | Inject::Key { code: button, down } | Inject::CharacterKey { code: button, down, .. } => {
                 payload[..4].copy_from_slice(&button.to_le_bytes());
                 payload[4] = u8::from(*down);
                 (if matches!(input, Inject::Button { .. }) { 18 } else { 22 }, 5)
             }
+            Inject::Text { .. } => return Err(LogicError::Invalid),
             Inject::Scroll { dx, dy } => {
                 finite(*dx, *dy)?;
                 payload[..8].copy_from_slice(&dx.to_le_bytes());

@@ -94,6 +94,17 @@ const CTRL: [u32; 2] = [29, 97];
 const ALT: [u32; 2] = [56, 100];
 const SHIFT: [u32; 2] = [42, 54];
 
+fn layout_name(name: &str) -> &str {
+    match name {
+        "us" => "US",
+        "de" => "German",
+        "fr" => "French",
+        "pl" => "Polish",
+        "tr" => "Turkish",
+        _ => "custom layout",
+    }
+}
+
 pub struct Options {
     pub backend: one_mk_input::Kind,
     pub port: u16,
@@ -215,6 +226,7 @@ enum AppEvent {
 }
 
 struct Connected {
+    keyboard: Option<one_mk_proto::typing::LayoutDescriptor>,
     id: usize,
     name: String,
     /// The peer's OS (see [`one_mk_proto::os`]).
@@ -232,6 +244,10 @@ struct Connected {
 
 /// We control a peer.
 struct Remote {
+    typing: one_mk_proto::typing::Sender,
+    typing_mods: Mods,
+    characters: bool,
+    typing_description: String,
     /// The capture activation this visit belongs to.
     activation: u32,
     peer: Fingerprint,
@@ -377,6 +393,8 @@ struct Owner {
     pos: Pos,
     held: HeldKeys,
     keys: one_mk_proto::typing::Receiver,
+    source_kinds: HashMap<u32, Option<char>>,
+    text_budget: one_mk_proto::typing::TextBudget,
     /// Last valid traffic from the owner for this visit.
     last_rx: Instant,
     /// Last real input: a key, button, scroll or a new position (not a
@@ -403,6 +421,39 @@ struct Owner {
 }
 
 impl Owner {
+    fn character_input(&mut self, input: Control, keyboard: &one_mk_input::typing::KeyboardLayout, inject: &InjectTx) {
+        use one_mk_proto::typing::{Chord, printable};
+        let now = Instant::now();
+        match input {
+            Control::Text { text } => {
+                if self.held.iter().any(|code| matches!(code, 29 | 97 | 56 | 125 | 126))
+                    || !self.text_budget.accept(&text, now.into_std()) { return; }
+                if let Some(text) = one_mk_input::typing::Text::new(&text) {
+                    let _ = inject.send(Inject::Text { text });
+                }
+            }
+            Control::CharacterKey { code, down, character } => {
+                if !one_mk_proto::typing::character_key_code(code) || !printable(character) { return; }
+                match self.source_kinds.get(&code) {
+                    Some(Some(original)) if *original == character => {}
+                    None if down => {}
+                    _ => return,
+                }
+                if down {
+                    if !self.text_budget.accept(&character.to_string(), now.into_std()) { return; }
+                    self.source_kinds.insert(code, Some(character));
+                } else {
+                    self.source_kinds.remove(&code);
+                }
+                let events = self.keys.key(code, down, || keyboard.reverse(character).unwrap_or(Chord { code, modifiers: Vec::new() }));
+                self.key_events(events, inject);
+            }
+            _ => return,
+        }
+        self.last_rx = now;
+        self.last_input = now;
+    }
+
     fn new(peer: Fingerprint, link: usize, epoch: u16, pos: Pos) -> Self {
         let mut motion = MotionReceiver::default();
         motion.enter(epoch);
@@ -415,6 +466,8 @@ impl Owner {
             pos,
             held: HeldKeys::new(),
             keys: one_mk_proto::typing::Receiver::default(),
+            source_kinds: HashMap::new(),
+            text_budget: one_mk_proto::typing::TextBudget::new(now.into_std()),
             last_rx: now,
             last_input: now,
             relative: false,
@@ -479,6 +532,9 @@ impl Owner {
         };
         match msg {
             Control::Key { code, down } => {
+                if !one_mk_proto::typing::valid_key_code(code) { return; }
+                if self.source_kinds.get(&code).is_some_and(Option::is_some) { return; }
+                if down { self.source_kinds.insert(code, None); } else { self.source_kinds.remove(&code); }
                 let events = self.keys.physical_key(code, down);
                 self.key_events(events, inject_tx);
             }
@@ -514,6 +570,7 @@ impl Owner {
     }
 
     fn release_all(&mut self, inject: &InjectTx) {
+        self.source_kinds.clear();
         self.keys = one_mk_proto::typing::Receiver::default();
         for code in self.held.take_all() {
             let release = if link::is_button(code) {
@@ -527,6 +584,7 @@ impl Owner {
 }
 
 struct App {
+    keyboard: Option<one_mk_input::typing::KeyboardLayout>,
     dropzones: Option<one_mk_input::dropzone::Handle>,
     dir: PathBuf,
     backend_name: &'static str,
@@ -633,7 +691,7 @@ pub async fn serve(
     }
     tracing::debug!(id = %identity.fingerprint.short(), port, "listening");
 
-    let Backend { name, mut events, capture, inject, focus, locker } = backend;
+    let Backend { name, mut events, capture, inject, focus, locker, keyboard } = backend;
     let services = Services {
         clip: opts.clipboard.map(|cb| ClipSync::new(cb, node.clone())),
         inbox: Inbox::new(opts.downloads.clone()),
@@ -685,6 +743,7 @@ pub async fn serve(
     let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys, computers);
     let devices = tune::Devices::load(&dir, name);
     let mut app = App {
+        keyboard,
         dropzones,
         dir,
         backend_name: name,
@@ -1034,6 +1093,37 @@ fn coalesce(
 }
 
 impl App {
+    fn character_mode(&self, fingerprint: Fingerprint) -> bool {
+        let mode = match self.settings.typing.requested(Some(&fingerprint.to_string())) {
+            crate::typing::Mode::Physical => one_mk_proto::typing::Mode::Physical,
+            crate::typing::Mode::Characters => one_mk_proto::typing::Mode::Characters,
+            crate::typing::Mode::Auto => one_mk_proto::typing::Mode::Auto,
+        };
+        let Some(peer) = self.peers.get(&fingerprint) else { return false };
+        one_mk_proto::typing::use_characters(mode, peer.caps, self.keyboard.is_some(), self.keyboard.as_ref().map(|keyboard| keyboard.descriptor()), peer.keyboard.as_ref())
+    }
+
+    fn typing_description(&self, fingerprint: Fingerprint) -> String {
+        if self.character_mode(fingerprint) {
+            let local = self.keyboard.as_ref().map(|keyboard| layout_name(&keyboard.descriptor().name)).unwrap_or("unknown");
+            let peer = self.peers.get(&fingerprint).and_then(|peer| peer.keyboard.as_ref()).map(|layout| layout_name(&layout.name)).unwrap_or("unknown");
+            format!("characters ({local} to {peer})")
+        } else if self.keyboard.is_some() {
+            "physical (visit preference, equal/unknown layouts, or peer lacks TEXT)".into()
+        } else {
+            self.settings.typing.summary()
+        }
+    }
+
+    fn typing_summary(&self) -> String {
+        if self.keyboard.is_some() {
+            let mut summaries: Vec<_> = self.peers.keys().map(|fingerprint| self.typing_description(*fingerprint)).collect();
+            summaries.sort();
+            summaries.dedup();
+            if !summaries.is_empty() { return summaries.join("; "); }
+        }
+        self.settings.typing.summary()
+    }
     // ------------------------------------------------------------ local input
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
@@ -1041,6 +1131,16 @@ impl App {
             Event::Key { code, down, .. } if self.captured_shortcut(code, down) => {}
             ev @ (Event::Hotkey(_) | Event::Hotkeys(_)) => self.on_shortcut_event(ev),
             ev if self.broadcast_takes(&ev) => self.broadcast_input(ev, events),
+            Event::KeyboardLayout(layout) => {
+                if self.keyboard.is_some() {
+                    self.keyboard = Some(layout);
+                    for peer in self.peers.values() {
+                        if peer.caps & caps::TEXT != 0 {
+                            peer.ctl.send(Control::KeyboardLayout(Box::new(self.keyboard.as_ref().unwrap().descriptor().clone())));
+                        }
+                    }
+                }
+            }
             Event::Desktop(d) => {
                 tracing::debug!(screens = ?d.screens, "local screens");
                 for p in self.peers.values() {
@@ -1413,6 +1513,10 @@ impl App {
         peer.ctl.send(Control::Enter { epoch: cursor.epoch(), pos: cursor.pos() });
         let now = Instant::now();
         Remote {
+            typing: one_mk_proto::typing::Sender::default(),
+            typing_mods: Mods::default(),
+            characters: self.character_mode(fp),
+            typing_description: self.typing_description(fp),
             activation,
             peer: fp,
             side: peer.side,
@@ -1816,14 +1920,14 @@ impl App {
         let desktop = (!link.screens.is_empty()).then(|| Desktop::new(link.screens.clone()));
         let (id, name, os, rank, sent) = (link.id, link.name.clone(), link.os, link.rank, link.sent_screens.clone());
         let (conn, ctl) = link.spawn(self.link_tx.clone());
-        ctl.send(Control::Caps(caps::LOCAL));
+        ctl.send(Control::Caps(caps::LOCAL | if self.keyboard.is_some() { caps::TEXT } else { 0 }));
         // Our monitors may have changed during the handshake.
         if let Some(local) = &self.local
             && local.screens != sent
         {
             ctl.send(Control::Screens(local.screens.clone()));
         }
-        if let Some(old) = self.peers.insert(fp, Connected { id, name, os, rank, side, offset, conn, ctl, desktop, caps: 0 }) {
+        if let Some(old) = self.peers.insert(fp, Connected { keyboard: None, id, name, os, rank, side, offset, conn, ctl, desktop, caps: 0 }) {
             old.conn.close(2u32.into(), b"duplicate");
         }
         self.push.connected(fp);
@@ -1906,8 +2010,24 @@ impl App {
             Control::Caps(bits) => {
                 if let Some(p) = self.peers.get_mut(&fp) {
                     p.caps = bits;
+                    if bits & caps::TEXT != 0 && let Some(keyboard) = &self.keyboard {
+                        p.ctl.send(Control::KeyboardLayout(Box::new(keyboard.descriptor().clone())));
+                    }
                 }
                 self.apply_pointer_mode();
+            }
+            Control::KeyboardLayout(layout) => {
+                if layout.valid() && let Some(peer) = self.peers.get_mut(&fp) {
+                    peer.keyboard = Some(*layout);
+                }
+            }
+            input @ (Control::Text { .. } | Control::CharacterKey { .. }) => {
+                if self.peers.get(&fp).is_some_and(|peer| peer.caps & caps::TEXT != 0)
+                    && let Some(keyboard) = &self.keyboard
+                    && let Some(owner) = self.owner.as_mut().filter(|owner| owner.peer == fp && owner.link == id)
+                {
+                    owner.character_input(input, keyboard, &self.inject);
+                }
             }
             Control::PointerMode { epoch, relative } => {
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
@@ -2327,7 +2447,7 @@ impl App {
             pointer_locked: self.locked,
             screen_locked: self.lock_sync.is_locked(),
             gaming: self.settings.gaming.to_string(),
-            typing: self.settings.typing.summary(),
+            typing: self.remote.as_ref().map_or_else(|| self.typing_summary(), |remote| remote.typing_description.clone()),
             relative: self.remote.as_ref().is_some_and(|r| r.cursor.is_relative()),
             lock_sync: self.settings.lock_sync,
             edges: self.edges_status(),
@@ -3044,6 +3164,22 @@ mod tests {
             Self::start_on(tag, clips, setup, desk.clone(), desk).await
         }
 
+        #[cfg(debug_assertions)]
+        async fn start_typing(tag: &str, sender: &str, receiver: &str) -> Duo {
+            let desk = Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]);
+            let mut duo = Self::start_on_keyboards(tag, None, |_, _| {}, desk.clone(), desk,
+                (Some(one_mk_input::typing::KeyboardLayout::fake(sender)), Some(one_mk_input::typing::KeyboardLayout::fake(receiver)))).await;
+            duo.settle().await;
+            Settings::update(&duo.da, |settings| { settings.typing.keys = crate::typing::Mode::Auto; Ok(()) }).unwrap();
+            control::request(&duo.da, Request::Reload).await.unwrap();
+            for _ in 0..100 {
+                let text = control::request(&duo.da, Request::Status).await.unwrap().unwrap();
+                if Status::decode(&text).unwrap().typing.contains("characters") { return duo; }
+                tokio::task::yield_now().await;
+            }
+            panic!("keyboard descriptors were not exchanged");
+        }
+
         /// Like `start_with`, with A's monitors `desk_a` and B's `desk_b`.
         async fn start_on(
             tag: &str,
@@ -3051,6 +3187,17 @@ mod tests {
             setup: impl FnOnce(&mut Device, &mut Device),
             desk_a: Desktop,
             desk_b: Desktop,
+        ) -> Duo {
+            Self::start_on_keyboards(tag, clips, setup, desk_a, desk_b, (None, None)).await
+        }
+
+        async fn start_on_keyboards(
+            tag: &str,
+            clips: Option<(one_mk_clipboard::Clipboard, one_mk_clipboard::Clipboard)>,
+            setup: impl FnOnce(&mut Device, &mut Device),
+            desk_a: Desktop,
+            desk_b: Desktop,
+            keyboards: (Option<one_mk_input::typing::KeyboardLayout>, Option<one_mk_input::typing::KeyboardLayout>),
         ) -> Duo {
             let (da, db) = (temp_dir(&format!("{tag}-a")), temp_dir(&format!("{tag}-b")));
             let (ia, ib) = (Identity::load_or_create(&da).unwrap(), Identity::load_or_create(&db).unwrap());
@@ -3061,8 +3208,10 @@ mod tests {
             ta.save().unwrap();
             tb.save().unwrap();
             let (pa, pb) = (free_port(), free_port());
-            let (ba, ha) = one_mk_input::null(desk_a);
-            let (bb, hb) = one_mk_input::null(desk_b);
+            let (mut ba, ha) = one_mk_input::null(desk_a);
+            let (mut bb, hb) = one_mk_input::null(desk_b);
+            ba.keyboard = keyboards.0;
+            bb.keyboard = keyboards.1;
             let (stop, stop_rx) = watch::channel(false);
             let wait = |mut rx: watch::Receiver<bool>| async move {
                 let _ = rx.wait_for(|s| *s).await;
@@ -3612,7 +3761,7 @@ mod tests {
             raw.send(Control::Hello { version: PROTOCOL_VERSION, name: "raw".into(), screens: vec![], nonce: 0, os: 0 })
                 .await;
             assert!(matches!(raw.next().await, Control::Hello { .. }));
-            assert_eq!(raw.next().await, Control::Caps(caps::LOCAL));
+            assert!(matches!(raw.next().await, Control::Caps(bits) if bits & !caps::TEXT == caps::LOCAL));
             raw.layout = raw.next().await;
             assert!(matches!(raw.layout, Control::Layout { .. }));
             raw
@@ -3640,6 +3789,26 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
+    }
+
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn null_character_visit_preserves_german_text_and_shortcuts() {
+        let mut duo = Duo::start_typing("typing-german", "de", "us").await;
+        duo.enter_b().await;
+        duo.ha.key_from(21, true, None);
+        duo.ha.key_from(21, true, None);
+        duo.ha.key_from(21, false, None);
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Text { text: "z".into() });
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Text { text: "z".into() });
+        duo.ha.key_from(29, true, None);
+        duo.ha.key_from(21, true, None);
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 29, down: true });
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 44, down: true });
+        duo.leave_b().await;
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 44, down: false });
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 29, down: false });
+        duo.stop().await;
     }
 
     #[tokio::test]
@@ -4971,6 +5140,8 @@ mod tests {
     mod push;
     /// Broadcast between three daemons (in `app/tests/broadcast.rs`).
     mod broadcast;
+    #[cfg(debug_assertions)]
+    mod typing;
 
     #[test]
     fn swaps_only_between_a_mac_and_something_else() {

@@ -144,7 +144,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, shared, controlled))?;
-    Ok(Backend { name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { keyboard: None, name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 fn set_thread_dpi_awareness() {
@@ -1148,7 +1148,7 @@ async fn inject_loop(
                 let now = std::time::Instant::now();
                 let Ok(space) = shared.lock() else { return };
                 for m in batch.drain(..) {
-                    if let Inject::Key { code, down } = m {
+                    if let Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } = m {
                         if down && is_repeatable(code) {
                             repeat.set_timing(repeat_setting());
                         }
@@ -1260,7 +1260,8 @@ fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScro
         Inject::ScrollStop => scroll.stop(),
         // Handled by the injection loop.
         Inject::Controlled(_) => {}
-        Inject::Key { code, down } => {
+        Inject::Text { .. } => tracing::warn!("text unsupported; sender must use physical fallback"),
+        Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
             let up = if down { 0 } else { KEYEVENTF_KEYUP };
             match evdev_to_win(code) {
                 Some(WinKey::Scan { scan, extended }) => {

@@ -23,6 +23,7 @@ impl App {
             let mode = choices[index].0;
             self.set_pref("typing preference", &["typing", "--keys", mode], |prefs| prefs.typing = mode);
         }
-        para(ui, pos2(content.left(), content.top() + 40.0), content.width(), "Saved preference only. Same letters and Auto are not available yet. Effective mode: Same keys. Use matching keyboard layouts on both computers.", regular(T_META), INK2);
+        let effective = self.running().map(|status| status.typing.as_str()).filter(|typing| !typing.is_empty()).unwrap_or("physical (daemon not running; native character injection unavailable)");
+        para(ui, pos2(content.left(), content.top() + 40.0), content.width(), &format!("Effective typing: {effective}. Changes apply on the next visit. Native character injection is not available yet."), regular(T_META), INK2);
     }
 }

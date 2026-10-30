@@ -78,7 +78,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let (cap_tx, cap_rx) = mpsc::unbounded_channel();
     let (inj_tx, inj_rx) = mpsc::unbounded_channel();
     spawn_thread("one-mk-x11", move || run(Some(first), Target::default(), ev_tx, cap_rx, inj_rx, locked))?;
-    Ok(Backend { name: "x11", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { keyboard: None, name: "x11", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 /// Which X server, and (for tests) whether pointer barriers may be used.
@@ -878,7 +878,8 @@ impl X {
                 self.click_notches(x, y)?;
             }
             Inject::ScrollStop => st.notches.stop(),
-            Inject::Key { code, down } => match evdev_to_xkeycode(code) {
+            Inject::Text { .. } => tracing::warn!("text unsupported; sender must use physical fallback"),
+            Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => match evdev_to_xkeycode(code) {
                 Some(k) => self.fake(if down { 2 } else { 3 }, k, NONE, 0, 0)?,
                 None => tracing::debug!(code, "key code beyond X11's range"),
             },
@@ -964,7 +965,7 @@ fn open_target(target: Target) -> Result<(Backend, watch::Sender<bool>)> {
     spawn_thread("one-mk-x11", move || run(Some(first), target, ev_tx, cap_rx, inj_rx, locked))?;
     let focus = Box::new(crate::system::Unknown);
     let locker = Box::new(NoLock);
-    Ok((Backend { name: "x11", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker }, locked_tx))
+    Ok((Backend { keyboard: None, name: "x11", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker }, locked_tx))
 }
 
 #[cfg(test)]
