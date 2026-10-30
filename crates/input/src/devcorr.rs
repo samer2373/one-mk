@@ -138,8 +138,12 @@ impl Correlator {
         self.motion.clear();
     }
 
-    /// A device went away: what it said no longer counts.
-    pub(crate) fn forget(&mut self, device: DeviceRef) {
+    /// A device went away: what it said no longer counts. Whatever still
+    /// waits goes to `out` first, unknown where unmatched, so that the removal
+    /// that follows can release it (a press let out later would be held with
+    /// nothing left to release it).
+    pub(crate) fn forget(&mut self, device: DeviceRef, out: &mut Vec<Event>) {
+        out.extend(self.waiting.drain(..).map(|w| w.ev));
         self.seen.retain(|s| s.1 != device);
         self.motion.retain(|m| m.0 != device);
     }
@@ -326,9 +330,28 @@ mod tests {
         c.hook(m(), 200, &mut out);
         assert_eq!(devices(&out), [None, Some(A), None, None], "nothing moved, A, A and B, too old");
         c.device_motion(B, 300);
-        c.forget(B);
+        c.forget(B, &mut out);
         c.hook(m(), 301, &mut out);
         assert_eq!(devices(&out)[4], None, "a device that went away");
+    }
+
+    #[test]
+    fn a_press_waiting_behind_another_goes_out_before_its_device_is_removed() {
+        let mut c = Correlator::default();
+        let mut out = Vec::new();
+        // An unmatched event at the head holds a matched press back.
+        c.hook(key(31, true), 0, &mut out);
+        c.device_event(press(30, true), A, 1, &mut out);
+        c.hook(key(30, true), 1, &mut out);
+        assert!(out.is_empty());
+        c.forget(A, &mut out);
+        // Both are out now, before the removal is published: the mapper sees
+        // the press while the device is still known, and releases it with the
+        // device. Nothing is left to come out late.
+        assert_eq!(out.len(), 2);
+        let mut late = Vec::new();
+        c.tick(1000, &mut late);
+        assert!(late.is_empty());
     }
 
     #[test]

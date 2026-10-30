@@ -148,8 +148,13 @@ pub mod caps {
     /// can be asked for that alone. Per-app input rules use it.
     pub const FOCUS_APP: u32 = 32;
     pub const TEXT: u32 = 64;
+    /// Says [`Control::IdleRevoked`](crate::Control::IdleRevoked), not
+    /// `Revoked`, when it lets go of a controller that sent nothing for a
+    /// minute: a broadcast controller enters it again with the next input,
+    /// but never after a plain `Revoked` (the user took control back).
+    pub const IDLE_REVOKE: u32 = 128;
     /// What this build supports.
-    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT | FOCUS_APP;
+    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT | FOCUS_APP | IDLE_REVOKE;
 }
 
 /// How often a computer with [`caps::FOCUS_BEAT`] repeats `Focus` while
@@ -188,6 +193,11 @@ pub enum Control {
     /// The receiver ended visit `epoch` (someone used its own mouse or
     /// keyboard, or the sender went silent); the sender takes its pointer back.
     Revoked { epoch: u16 },
+    /// Like `Revoked`, but because the receiver's idle rule let go of a
+    /// controller that sent no input for a minute (only to peers with
+    /// [`caps::IDLE_REVOKE`]). A broadcast controller may enter it again
+    /// with its next input.
+    IdleRevoked { epoch: u16 },
     /// Layout sync: the sender sits on `side_of_you` of the receiver. The
     /// receiver adopts it if `version` is newer than the one it has stored.
     /// Equal versions with different layouts (two changes in the same
@@ -317,6 +327,10 @@ impl Control {
                 w.u8(12);
                 w.u16(*epoch);
             }
+            Control::IdleRevoked { epoch } => {
+                w.u8(24);
+                w.u16(*epoch);
+            }
             Control::Layout { side_of_you, version, offset } => {
                 w.u8(13);
                 w.u8(Side::ALL.iter().position(|s| s == side_of_you).unwrap_or(0) as u8);
@@ -421,6 +435,7 @@ impl Control {
             10 => Control::EnterAck { epoch: r.u16()? },
             11 => Control::Busy { epoch: r.u16()? },
             12 => Control::Revoked { epoch: r.u16()? },
+            24 => Control::IdleRevoked { epoch: r.u16()? },
             13 => Control::Layout {
                 side_of_you: *Side::ALL.get(usize::from(r.u8()?)).ok_or(DecodeError::Invalid("side"))?,
                 version: r.u64()?,
@@ -735,6 +750,7 @@ mod tests {
             Control::EnterAck { epoch: 1 },
             Control::Busy { epoch: 2 },
             Control::Revoked { epoch: u16::MAX },
+            Control::IdleRevoked { epoch: 9 },
             Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123, offset: None },
             Control::Layout { side_of_you: Side::Left, version: 7, offset: Some((-3432, 98)) },
             Control::Caps(caps::LOCAL),

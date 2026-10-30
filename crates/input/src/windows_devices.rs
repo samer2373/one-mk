@@ -74,14 +74,15 @@ impl RawDevices {
 
     /// The keyboards and mice connected now; `None` if that is what was
     /// said last time. Devices gone are forgotten (their numbers are not
-    /// used again).
-    pub(crate) fn enumerate(&mut self) -> Option<Vec<InputDevice>> {
+    /// used again); input still waiting for them goes to `out`, to be sent
+    /// before the new list.
+    pub(crate) fn enumerate(&mut self, out: &mut Vec<Event>) -> Option<Vec<InputDevice>> {
         let handles = device_list();
         let before: Vec<InputDevice> = self.table.iter().map(|(_, d)| d.clone()).collect();
         self.table.retain(|(h, _)| handles.iter().any(|(x, _)| x == h));
         for d in &before {
             if !self.table.iter().any(|(_, x)| x.id == d.id) {
-                self.corr.forget(d.id);
+                self.corr.forget(d.id, out);
             }
         }
         for (h, kind) in handles {

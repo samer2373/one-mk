@@ -1528,7 +1528,7 @@ impl App {
         let tap = self.remote.as_ref().and_then(|r| r.tune.deadline()).map(Instant::from_std);
         let waits = waits.into_iter().chain(tap).min();
         let lease = self.owner.as_ref().map(|o| {
-            let lease = (o.last_rx + LEASE).min(o.last_input + IDLE);
+            let lease = (o.last_rx + LEASE).min(o.last_input + self.owner_idle());
             o.focus_check.map_or(lease, |c| c.min(lease))
         });
         let lease = lease.into_iter().chain(waits).min();
@@ -1555,9 +1555,9 @@ impl App {
         if self.owner.as_ref().is_some_and(|o| now >= o.last_rx + LEASE) {
             tracing::warn!("the controlling computer went silent; releasing held keys");
             self.end_owner(true);
-        } else if self.owner.as_ref().is_some_and(|o| now >= o.last_input + IDLE) {
-            tracing::info!("no input from the controlling computer for {} s; it lets go", IDLE.as_secs());
-            self.end_owner(true);
+        } else if self.owner.as_ref().is_some_and(|o| now >= o.last_input + self.owner_idle()) {
+            tracing::info!("no input from the controlling computer for {} s; it lets go", self.owner_idle().as_secs());
+            self.end_owner_as(true, true);
         }
         self.tune_timer(now.into_std());
         self.broadcast_timer(now);
@@ -1695,12 +1695,24 @@ impl App {
     /// Ends the current owner's control, releasing everything it held.
     /// With `revoke`, tells it to take its pointer back.
     fn end_owner(&mut self, revoke: bool) {
+        self.end_owner_as(revoke, false);
+    }
+
+    /// As [`App::end_owner`]; `idle`: the reason is the idle rule, which a
+    /// peer that can tell is told (a user taking control back must never be
+    /// mistaken for it).
+    fn end_owner_as(&mut self, revoke: bool, idle: bool) {
         let Some(mut o) = self.owner.take() else { return };
         o.release_all(&self.inject);
         let _ = self.inject.send(Inject::Controlled(false));
         if let Some(p) = self.peers.get(&o.peer).filter(|p| p.id == o.link) {
             if revoke {
-                p.ctl.send(Control::Revoked { epoch: o.epoch });
+                let msg = if idle && p.caps & caps::IDLE_REVOKE != 0 {
+                    Control::IdleRevoked { epoch: o.epoch }
+                } else {
+                    Control::Revoked { epoch: o.epoch }
+                };
+                p.ctl.send(msg);
             }
             if let Some(clip) = &self.services.clip {
                 clip.left(o.peer, p.conn.remote_address());
@@ -1880,6 +1892,7 @@ impl App {
             }
             Control::Busy { epoch } => self.go_home_from(fp, epoch, "it is controlled by another computer"),
             Control::Revoked { epoch } => self.go_home_from(fp, epoch, "it took back control"),
+            Control::IdleRevoked { epoch } => self.go_home_from(fp, epoch, "it let go after a minute without input"),
             Control::Caps(bits) => {
                 if let Some(p) = self.peers.get_mut(&fp) {
                     p.caps = bits;

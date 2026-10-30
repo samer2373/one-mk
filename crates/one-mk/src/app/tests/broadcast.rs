@@ -382,21 +382,22 @@ async fn a_computer_that_drops_out_lets_go_and_the_rest_carry_on() {
     t.stop().await;
 }
 
-/// A computer that lets go by its idle rule is entered again with the next
-/// input, where it was, and that input reaches it. A key held since before
-/// is not released there (it never saw it pressed this time).
+/// A computer that lets go by its idle rule (and says so) is entered again
+/// with the next input, where it was, and that input reaches it. A key held
+/// since before is not released there (it never saw it pressed this time).
 #[tokio::test]
 async fn idle_let_go_enters_again_with_the_next_input() {
-    let mut t = Trio::start("rest", Swap::Auto, |da| testing::set(da, None, Some(Duration::ZERO))).await;
+    let mut t = Trio::start("rest", Swap::Auto, |_| {}).await;
+    // B's idle rule fires soon after its last input (A's other tests keep the
+    // real minute).
+    testing::set(&t.b.dir, None, Some(Duration::from_millis(300)));
     t.on(1).await;
     t.a.send(Event::Motion { dx: 10.0, dy: 10.0, device: None });
     assert_eq!(next_inject(&mut t.b.h).await, Inject::MoveTo(Pos::new(970.0, 550.0)));
     t.a.send(Event::Key { code: KEY_X, down: true, device: None });
     assert_eq!(t.both().await, (key(KEY_X, true), key(KEY_X, true)));
-    // B lets go (as its idle rule would).
-    assert!(ask(&t.b.dir, Request::TakeBack).await.starts_with("ok\n"));
+    // B lets go by its own idle rule: no input for 300 ms.
     assert_eq!(next_non_move(&mut t.b.h).await, key(KEY_X, false));
-    tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(status(&t.a.dir).await.broadcast, ["bee", "sea"], "resting, still in");
     // The next key enters B again where its pointer was, then types there.
     t.a.send(Event::Key { code: KEY_A, down: true, device: None });
@@ -407,6 +408,26 @@ async fn idle_let_go_enters_again_with_the_next_input() {
     assert_eq!(next_non_move(&mut t.c.h).await, key(KEY_X, false));
     tokio::time::sleep(Duration::from_millis(100)).await;
     nothing_but_moves(&mut t.b.h);
+    t.stop().await;
+}
+
+/// A user who takes control back stays out, whenever they do it: the next
+/// input of the broadcast does not enter that computer again.
+#[tokio::test]
+async fn taking_control_back_is_never_undone_by_the_next_input() {
+    let mut t = Trio::start("takeback", Swap::Auto, |_| {}).await;
+    t.on(1).await;
+    t.a.send(Event::Key { code: KEY_X, down: true, device: None });
+    assert_eq!(t.both().await, (key(KEY_X, true), key(KEY_X, true)));
+    assert!(ask(&t.b.dir, Request::TakeBack).await.starts_with("ok\n"));
+    assert_eq!(next_non_move(&mut t.b.h).await, key(KEY_X, false));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(status(&t.a.dir).await.broadcast, ["sea"], "B is out");
+    t.a.send(Event::Key { code: KEY_A, down: true, device: None });
+    assert_eq!(next_non_move(&mut t.c.h).await, key(KEY_A, true));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    nothing_but_moves(&mut t.b.h);
+    t.a.keys(&[(KEY_A, false), (KEY_X, false)]);
     t.stop().await;
 }
 
@@ -533,8 +554,13 @@ async fn a_capture_that_never_starts_gives_up() {
 #[tokio::test]
 async fn random_presses_drops_and_returns_never_leave_a_key_held() {
     for (seed, rest) in [(0x5eed_u64, true), (0xb0b, false), (0xfeed_f00d, true)] {
-        let let_go = if rest { Duration::ZERO } else { Duration::from_secs(3600) };
-        let mut t = Trio::start(&format!("prop-{seed:x}"), Swap::Auto, |da| testing::set(da, None, Some(let_go))).await;
+        let mut t = Trio::start(&format!("prop-{seed:x}"), Swap::Auto, |_| {}).await;
+        if rest {
+            // The receivers' idle rules fire at random, as the sleeps allow.
+            for dir in [&t.b.dir, &t.c.dir] {
+                testing::set(dir, None, Some(Duration::from_millis(40)));
+            }
+        }
         t.on(1).await;
         let mut rng = seed;
         let mut next = move |n: u64| {
@@ -591,4 +617,21 @@ async fn random_presses_drops_and_returns_never_leave_a_key_held() {
         }
         t.stop().await;
     }
+}
+
+/// A keyboard that goes away (unplugged, Bluetooth asleep) while it holds a
+/// key: every computer of the broadcast lets go of it at once, even though
+/// no visit exists between events.
+#[tokio::test]
+async fn an_unplugged_keyboard_is_let_go_of_by_every_computer_of_a_broadcast() {
+    use one_mk_input::{DeviceRef, fake_keyboard};
+    let mut t = Trio::start("unplug", Swap::Auto, |_| {}).await;
+    t.a.h.devices(vec![fake_keyboard(7, "Keyboard")]);
+    t.on(871).await;
+    t.a.h.key_from(KEY_A, true, Some(DeviceRef(7)));
+    assert_eq!(t.both().await, (key(KEY_A, true), key(KEY_A, true)));
+    t.a.h.devices(vec![]);
+    let released = tokio::time::timeout(Duration::from_millis(500), t.both()).await;
+    t.stop().await;
+    assert_eq!(released.ok(), Some((key(KEY_A, false), key(KEY_A, false))));
 }

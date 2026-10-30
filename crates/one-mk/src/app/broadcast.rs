@@ -23,11 +23,6 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
-/// A computer that lets go this long after the last input sent to it did
-/// so by its idle rule (`IDLE`, measured by it from when the input
-/// arrived), not because its user took control back: it is entered again
-/// with the next input instead of being left out.
-const IDLE_LET_GO: Duration = IDLE.saturating_sub(Duration::from_secs(2));
 /// After broadcast was stopped before capture started, a capture that
 /// starts this late is still handed straight back.
 const LATE_CAPTURE: Duration = Duration::from_secs(2);
@@ -247,13 +242,14 @@ impl App {
         self.settings.broadcast.idle_off()
     }
 
-    /// See [`IDLE_LET_GO`].
-    fn idle_let_go(&self) -> Duration {
+    /// How long a controller may send nothing before this computer lets go
+    /// of it (shorter in the daemon tests).
+    pub(super) fn owner_idle(&self) -> Duration {
         #[cfg(test)]
         if let Some(d) = testing::get(&self.dir).1 {
             return d;
         }
-        IDLE_LET_GO
+        IDLE
     }
 
     /// Connected computers that said what their screens are, by name.
@@ -511,7 +507,7 @@ impl App {
     /// Runs `f` once per visit, with the visit in `self.remote` (where the
     /// single visit's code looks for it), then the key mapper actions they
     /// asked for, once each. Allocates nothing.
-    fn each_visit(&mut self, mut f: impl FnMut(&mut App)) {
+    pub(super) fn each_visit(&mut self, mut f: impl FnMut(&mut App)) {
         let Some(on) = self.on_mut() else { return };
         let mut visits = std::mem::take(&mut on.visits);
         debug_assert!(self.remote.is_none(), "a visit and broadcast at once");
@@ -570,7 +566,6 @@ impl App {
     /// handled here (None); the rest go on.
     pub(super) fn broadcast_control(&mut self, fp: Fingerprint, msg: Control) -> Option<Control> {
         let now = Instant::now();
-        let idle_let_go = self.idle_let_go();
         let Some(Broadcast::On(on)) = self.broadcast.as_mut() else { return Some(msg) };
         let Some(r) = on.visits.iter_mut().find(|r| r.peer == fp) else { return Some(msg) };
         let epoch = r.cursor.epoch();
@@ -583,7 +578,10 @@ impl App {
                 return None;
             }
             Control::Busy { epoch: e } if e == epoch => Some((Out::Leave, "it is controlled by another computer")),
-            Control::Revoked { epoch: e } if e == epoch && now.duration_since(on.last_input) >= idle_let_go => {
+            // Only the idle rule's own message rests; a plain `Revoked` is the
+            // user taking control back (or an older one-mk, which cannot say):
+            // it leaves until the broadcast is started again.
+            Control::IdleRevoked { epoch: e } if e == epoch => {
                 Some((Out::Rest, "it let go after a minute without input; your next input enters it again"))
             }
             Control::Revoked { epoch: e } if e == epoch => Some((Out::Leave, "it took back control")),
@@ -839,11 +837,5 @@ mod tests {
         assert_eq!(capitalized(&End::Emergency.why(None)), "Ctrl+Alt+Shift+Esc");
         assert_eq!(capitalized(&End::Asked.why(None)), "You stopped it");
         assert_eq!(capitalized(""), "");
-    }
-
-    #[test]
-    fn a_let_go_counts_as_idle_only_near_the_peers_idle_rule() {
-        assert_eq!(IDLE_LET_GO, Duration::from_secs(58));
-        assert!(IDLE_LET_GO < IDLE);
     }
 }

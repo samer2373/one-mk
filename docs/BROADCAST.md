@@ -194,10 +194,11 @@ keepalives); off again, back to 10 ms. Memory: 34 MB resident, against
 - A computer that is killed or loses the network drops out only when the
   connection notices (a few seconds); until then it is still listed.
 - The other computers show no sign that it is a broadcast (by design).
-- A computer whose user takes control back 58 s or more after the last input
-  sent to it can't be told from its idle rule letting go, so it is entered
-  again with your next input (its user can take it back again, or stop the
-  broadcast). Telling the two apart needs a reason in the protocol's
-  `Revoked` message, which older versions would not send.
+- A computer that lets go because of its own idle rule (a minute without
+  input) says so (`IdleRevoked`, capability `IDLE_REVOKE`), and is entered again
+  with your next input. A user who takes control back is never undone: the
+  computer leaves the broadcast until you start it again, at any time. A
+  computer running an older one-mk cannot say which it was, so it too leaves
+  (it is not entered again after its idle rule).
 - At most 9 computers make sense for the shortcuts; broadcast itself has no
   limit, but each computer adds a visit's traffic.

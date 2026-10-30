@@ -191,22 +191,29 @@ impl App {
         tracing::debug!(devices = list.len(), gone = gone.len(), "keyboards and mice connected");
         self.devices.connected = Some(list);
         self.devices.unavailable = None;
-        if let Some(r) = self.remote.as_mut()
-            && !gone.is_empty()
-        {
-            let t = &mut r.tune;
-            let out = &mut t.out;
-            for &d in &gone {
-                t.mapper.device_gone(d, &mut |e| out.push(e));
-            }
-            let still: Vec<u32> = r.held.iter().filter(|&c| !t.mapper.held_anywhere(c)).collect();
-            for code in still {
-                r.held.update(code, false);
-            }
-            self.send_tuned();
+        if !gone.is_empty() {
+            // The visit, or every computer of a broadcast.
+            self.release_gone(&gone);
+            self.each_visit(|app| app.release_gone(&gone));
         }
         self.retune();
+        self.broadcast_retune();
         self.devices.remember();
+    }
+
+    /// What the devices `gone` held in the visit in progress is let go of.
+    fn release_gone(&mut self, gone: &[DeviceRef]) {
+        let Some(r) = self.remote.as_mut() else { return };
+        let t = &mut r.tune;
+        let out = &mut t.out;
+        for &d in gone {
+            t.mapper.device_gone(d, &mut |e| out.push(e));
+        }
+        let still: Vec<u32> = r.held.iter().filter(|&c| !t.mapper.held_anywhere(c)).collect();
+        for code in still {
+            r.held.update(code, false);
+        }
+        self.send_tuned();
     }
 
     /// The backend can't tell keyboards and mice apart (the desktop merges

@@ -609,7 +609,13 @@ impl State {
 
     /// Says which keyboards and mice are connected, if that changed.
     fn devices_changed(&mut self) {
-        if let Some(list) = self.raw.enumerate() {
+        let mut out = Vec::new();
+        let list = self.raw.enumerate(&mut out);
+        // What waited for a device that went away comes before the news.
+        for ev in out {
+            let _ = self.tx.send(ev);
+        }
+        if let Some(list) = list {
             let _ = self.tx.send(Event::Devices(list));
         }
     }

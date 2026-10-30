@@ -227,7 +227,13 @@ unsafe extern "C-unwind" fn on_removed(context: *mut c_void, _result: i32, _send
         let Ok(mut inner) = hid.inner.try_borrow_mut() else { return };
         let Some(at) = inner.table.iter().position(|(d, _)| *d == device as usize) else { return };
         let (_, gone) = inner.table.remove(at);
-        inner.corr.forget(gone.id);
+        let mut out = Vec::new();
+        inner.corr.forget(gone.id, &mut out);
+        // What waited for the device goes before the news that it is gone.
+        for ev in out {
+            let _ = hid.tx.send(ev);
+        }
+        inner.arm();
         hid.devices(&inner);
     }));
 }

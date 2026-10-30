@@ -52,6 +52,13 @@ impl Ring {
         if !now.is_finite() || self.samples.back().is_some_and(|s| now - s.at < MIN_GAP) {
             return;
         }
+        // Nothing in the window any more (the graph was hidden for longer than
+        // it shows): the losses meanwhile cannot be placed in it, so counting
+        // starts over from here.
+        if self.samples.back().is_some_and(|s| now - s.at > SPAN) {
+            self.samples.clear();
+            self.lost_seen = None;
+        }
         let lost = match self.lost_seen {
             Some(before) if link.lost >= before => u32::try_from(link.lost - before).unwrap_or(u32::MAX),
             // The count went down: another connection. Nothing before it counts.
@@ -445,6 +452,22 @@ mod tests {
         assert!(text.starts_with("Latency to MacBook Air: 60 ms, some stalls.") && text.ends_with("2 packets were lost."), "{text}");
         assert_eq!((ms(0), ms(999), ms(1000), ms(4499), ms(4500)), ("<1 ms".into(), "<1 ms".into(), "1 ms".into(), "4 ms".into(), "5 ms".into()));
         assert_eq!((ms_number(400), ms_number(12_600)), ("<1".to_owned(), "13".to_owned()));
+    }
+
+    #[test]
+    fn losses_from_before_a_long_gap_are_not_charged_to_the_new_window() {
+        let stats = |lost, sent| LinkStats { rtt_us: 1000, lost, sent };
+        let mut ring = Ring::default();
+        ring.push(0.0, stats(0, 100));
+        // The graph was hidden: the daemon's count grew meanwhile.
+        for (i, t) in [600.0, 601.0, 602.0].into_iter().enumerate() {
+            ring.push(t, stats(100, 1000 + i as u64));
+        }
+        let s = ring.summary(602.0).unwrap();
+        assert_eq!((s.count, s.lost), (3, 0));
+        // Loss while it IS shown still counts.
+        ring.push(603.0, stats(103, 1003));
+        assert_eq!(ring.summary(603.0).unwrap().lost, 3);
     }
 
     #[test]
