@@ -132,9 +132,9 @@ jobs:
       # What is uploaded, and SHA256SUMS over all of it.
       - name: Stage the assets
         run: |
-          mkdir assets
-          cp dist/one-mk-* dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb assets/
-          cd assets && sha256sum * > SHA256SUMS && cat SHA256SUMS
+          mkdir release-files
+          cp dist/one-mk-* dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb release-files/
+          cd release-files && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - name: Notes
         run: |
           cat > notes.md <<'MD'
@@ -175,10 +175,10 @@ jobs:
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
               --title "$tag" --notes-file notes.md --generate-notes
           fi
-          gh release upload "$tag" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$tag" release-files/* --repo "$GITHUB_REPOSITORY" --clobber
           export LC_ALL=C   # one collation for sort and comm
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > uploaded
-          (cd assets && ls) | sort > staged
+          (cd release-files && ls) | sort > staged
           missing=$(comm -23 staged uploaded)
           if [ -n "$missing" ]; then
             echo "not uploaded: $missing" >&2
