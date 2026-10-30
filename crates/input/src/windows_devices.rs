@@ -1,6 +1,6 @@
 //! Which keyboard or mouse input came from, on Windows (per-device rules):
-//! Raw Input, registered on the capture window only while capturing
-//! (`RIDEV_INPUTSINK`, so nothing is read the rest of the time), names the
+//! Raw Input, registered while capturing or while local key rules are configured
+//! (`RIDEV_INPUTSINK`), names the
 //! device of each event (`hDevice`); the hook's events are matched to them
 //! by [`crate::devcorr::Correlator`]. The devices' identity comes from
 //! their interface path (vendor, product, Bluetooth) and, where Windows
@@ -89,7 +89,8 @@ impl RawDevices {
             if self.table.iter().any(|(x, _)| *x == h) {
                 continue;
             }
-            self.next = self.next.wrapping_add(1);
+            let Some(next) = self.next.checked_add(1) else { break };
+            self.next = next;
             let kinds = Kinds { keyboard: kind == RIM_TYPEKEYBOARD, pointer: kind == RIM_TYPEMOUSE };
             let fingerprint = identity(h as HANDLE, kinds);
             self.table.push((h, InputDevice { id: DeviceRef(self.next), fingerprint, kinds }));

@@ -8,6 +8,8 @@ null-typing-tests = []
 
 [dependencies]
 anyhow = "1.0.104"
+arc-swap = "1.9.3"
+crossbeam-queue = "0.3.14"
 one-mk-proto = { path = "../proto" }
 tokio = { version = "1.54.1", features = ["rt", "sync", "macros", "time"] }
 tracing = "0.1.44"
@@ -38,7 +40,7 @@ zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 sha2 = "0.11.1"
 windows-core = "0.62.2"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
-windows-sys = { version = "0.61.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_UI_Input", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_LibraryLoader", "Win32_System_RemoteDesktop", "Win32_System_Threading", "Win32_System_Shutdown", "Win32_Security", "Win32_Media", "Win32_System_Power", "Win32_System_SystemServices", "Win32_UI_Accessibility"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Devices_HumanInterfaceDevice", "Win32_Storage_FileSystem", "Win32_UI_Input", "Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_LibraryLoader", "Win32_System_RemoteDesktop", "Win32_System_Threading", "Win32_System_Shutdown", "Win32_Security", "Win32_Media", "Win32_System_Power", "Win32_System_SystemServices", "Win32_System_StationsAndDesktops", "Win32_UI_Accessibility"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

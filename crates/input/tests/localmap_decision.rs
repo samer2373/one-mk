@@ -1,4 +1,5 @@
 use one_mk_input::localmap_handoff::{Destination, Handoff, Owner, PhysicalKey, Route};
+use one_mk_input::localmap_runtime::{Admission, Physical, Rules, Snapshots};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
@@ -48,6 +49,12 @@ fn decision_allocates_nothing_and_reports_debug_throughput() {
     let ticket = gate.begin(Destination::Local, || {}).unwrap();
     assert!(gate.acknowledge(ticket));
     let hook = gate.hook_gate();
+    let mut admission = Admission::new(hook.clone());
+    let mut physical = Physical::default();
+    let snapshots = Snapshots::default();
+    let snapshot = snapshots.load();
+    drop(snapshot);
+    let rules = Rules::default();
     let key = PhysicalKey {
         down: true, injected: false, shortcut: false, eligible: true, healthy: true, owner: Owner::Unknown,
     };
@@ -70,6 +77,18 @@ fn decision_allocates_nothing_and_reports_debug_throughput() {
                 healthy: index & 32 != 0, eligible: index & 64 != 0,
             };
             std::hint::black_box(hook.decide(std::hint::black_box(event)));
+        }
+    }
+    let ticket = gate.begin(Destination::Local, || {}).unwrap();
+    assert!(gate.acknowledge(ticket));
+    let now = Instant::now();
+    for _ in 0..100_000 {
+        let snapshot = snapshots.load();
+        std::hint::black_box(snapshot.count);
+        drop(snapshot);
+        for down in [true, false] {
+            std::hint::black_box(physical.key(PhysicalKey { down, ..key }, 30, now, &rules, &mut admission, |_| true));
+            while let Some(key) = admission.pop() { admission.acknowledge(key.sequence); }
         }
     }
     let elapsed = started.elapsed();

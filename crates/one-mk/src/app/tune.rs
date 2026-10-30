@@ -22,6 +22,31 @@ use one_mk_proto::{Control, swap_ctrl_meta};
 use std::path::{Path, PathBuf};
 use tokio::sync::oneshot;
 
+#[cfg(any(windows, test))]
+fn local_rules_snapshot(settings: &crate::settings::Settings, devices: &[InputDevice], computers: usize) -> anyhow::Result<Option<std::sync::Arc<one_mk_input::localmap_runtime::Rules>>> {
+    if !settings.input.local_rules { return Ok(None); }
+    Ok(Some(std::sync::Arc::new(one_mk_input::localmap_runtime::Rules {
+        maps: settings.input.local_keymaps(devices)?,
+        hotkeys: settings.hotkeys.bindings_for(computers).map_err(anyhow::Error::msg)?,
+        count: settings.input.keymap.rule.iter().filter(|rule| *rule.scope.target() == crate::tuning::Scope::Local).count(),
+    })))
+}
+
+#[cfg(windows)]
+impl App {
+    pub(super) fn reload_local_rules(&mut self) {
+        if self.backend_name != "native" { return; }
+        self.input_problems.insert("local-key-rules", "Local key rules inactive: waiting for current settings acknowledgement; EXPERIMENTAL, native Windows UNTESTED (compile-checked only)".into());
+        let (rules, inactive) = match local_rules_snapshot(&self.settings, self.devices.list(), self.trust.devices().len() + 1) {
+            Ok(rules) => (rules, None),
+            Err(error) => {
+                (None, Some(error.to_string()))
+            }
+        };
+        let _ = self.capture.send(one_mk_input::CaptureCmd::LocalRules { rules, inactive });
+    }
+}
+
 /// The tuning of one visit, resolved for its computer.
 pub(super) struct Tune {
     mapper: Mapper,
@@ -216,6 +241,8 @@ impl App {
         let gone: Vec<DeviceRef> = self.devices.list().iter().filter(|d| !list.contains(d)).map(|d| d.id).collect();
         tracing::debug!(devices = list.len(), gone = gone.len(), "keyboards and mice connected");
         self.devices.connected = Some(list);
+        #[cfg(windows)]
+        self.reload_local_rules();
         self.devices.unavailable = None;
         if !gone.is_empty() {
             // The visit, or every computer of a broadcast.
@@ -539,6 +566,18 @@ mod tests {
     use one_mk_proto::os;
     use std::time::Duration;
     use tokio::time::Instant;
+
+    #[test]
+    fn local_snapshot_requires_opt_in_and_valid_physical_shortcuts() {
+        let mut settings = crate::settings::Settings::default();
+        assert!(local_rules_snapshot(&settings, &[], 1).unwrap().is_none());
+        settings.input.local_rules = true;
+        settings.input.keymap.rule.push(KeyRule { from: "capslock".into(), to: Some(crate::tuning::To::One("esc".into())), scope: crate::tuning::Scope::Local, ..Default::default() });
+        let snapshot = local_rules_snapshot(&settings, &[], 1).unwrap().unwrap();
+        assert_eq!(snapshot.count, 1);
+        settings.hotkeys.home = "not a valid key".into();
+        assert!(local_rules_snapshot(&settings, &[], 1).is_err());
+    }
 
     fn tap_hold() -> Tune {
         let mut s = TuningSettings::default();
