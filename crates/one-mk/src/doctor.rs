@@ -489,9 +489,7 @@ pub fn portal_check(os: Os, p: Option<&Portals>, running: &[String]) -> Check {
     let title = "Permissions";
     let out = match (os, p) {
         (Os::Linux, Some(p)) => linux_portals(p),
-        (Os::Mac, _) => Outcome::skip(
-            "Not checked on macOS. Allow one-mk under System Settings > Privacy & Security > Accessibility and Input Monitoring.",
-        ),
+        (Os::Mac, _) => macos_permissions(),
         _ => Outcome::skip("Nothing to check on this system."),
     };
     let out = match running {
@@ -503,6 +501,25 @@ pub fn portal_check(os: Os, p: Option<&Portals>, running: &[String]) -> Check {
         ),
     };
     check("input", title, out)
+}
+
+fn macos_permissions() -> Outcome {
+    #[cfg(target_os = "macos")]
+    {
+        let (accessibility, input_monitoring) = one_mk_input::macos_permissions();
+        macos_permission_result(accessibility, input_monitoring)
+    }
+    #[cfg(not(target_os = "macos"))]
+    Outcome::skip("macOS Accessibility and Input Monitoring cannot be checked from this OS; native macOS UNTESTED.")
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_permission_result(accessibility: bool, input_monitoring: bool) -> Outcome {
+    let state = |granted| if granted { "granted" } else { "not granted" };
+    Outcome::warn(
+        format!("This process: Accessibility {}; Input Monitoring {}. Native macOS UNTESTED (compile-checked only).", state(accessibility), state(input_monitoring)),
+        "Check the daemon's state separately with `one-mk status`; its launch context may differ. Manage one-mk/the launching terminal under System Settings > Privacy & Security. No permission prompt or event tap is installed by this check.",
+    )
 }
 
 fn linux_portals(p: &Portals) -> Outcome {
@@ -663,9 +680,9 @@ pub fn tuning_check(t: Option<&Tuning>) -> Check {
 pub fn local_rules_check(runtime: Option<&DaemonStatus>) -> Check {
     let outcome = if cfg!(target_os = "linux") {
         Outcome::skip("Local key rules are not available on Linux; stored rules remain inactive.")
-    } else if cfg!(windows) {
+    } else if cfg!(any(windows, target_os = "macos")) {
         let detail = runtime.and_then(|status| status.input.iter().find(|line| line.starts_with("Local key rules ")))
-            .map(String::as_str).unwrap_or("Local key rules inactive: no native backend acknowledgement; EXPERIMENTAL, native Windows UNTESTED (compile-checked only).");
+            .map(String::as_str).unwrap_or("Local key rules inactive: no native backend acknowledgement; EXPERIMENTAL, native Windows/macOS UNTESTED (compile-checked only).");
         Outcome::warn(detail, "Default OFF. Native execution has not been accepted. Run `one-mk keymap local off` to disable; session/desktop/power changes require explicit reload. See docs/LOCAL-REMAP.md.")
     } else {
         Outcome::warn(
@@ -1371,6 +1388,19 @@ mod tests {
     use super::*;
     use one_mk_proto::Side;
 
+    #[test]
+    fn macos_permission_report_distinguishes_both_grants_without_claiming_acceptance() {
+        for accessibility in [false, true] {
+            for input_monitoring in [false, true] {
+                let result = macos_permission_result(accessibility, input_monitoring);
+                assert_eq!(result.status, Status::Warn);
+                assert!(result.detail.contains(if accessibility { "Accessibility granted" } else { "Accessibility not granted" }));
+                assert!(result.detail.contains(if input_monitoring { "Input Monitoring granted" } else { "Input Monitoring not granted" }));
+                assert!(result.detail.contains("UNTESTED"));
+            }
+        }
+    }
+
     fn status(id: &str, port: u16, peers: &[(&str, bool)]) -> DaemonStatus {
         DaemonStatus {
             name: "desk".into(),
@@ -1758,7 +1788,7 @@ mod tests {
         let c = portal_check(Os::Linux, Some(&portals(ok, ok, false, true)), &[]);
         assert_eq!(st(&c), Status::Warn);
         assert_eq!(st(&portal_check(Os::Windows, None, &[])), Status::Skip);
-        assert_eq!(st(&portal_check(Os::Mac, None, &[])), Status::Skip);
+        assert_eq!(st(&portal_check(Os::Mac, None, &[])), if cfg!(target_os = "macos") { Status::Warn } else { Status::Skip });
         // What the running daemon reports comes first, unless the desktop
         // can't do it at all.
         let waiting = ["Waiting for your approval: allow one-mk in the desktop's dialog.".to_owned()];

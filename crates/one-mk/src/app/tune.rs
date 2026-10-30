@@ -22,7 +22,7 @@ use one_mk_proto::{Control, swap_ctrl_meta};
 use std::path::{Path, PathBuf};
 use tokio::sync::oneshot;
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn local_rules_snapshot(settings: &crate::settings::Settings, devices: &[InputDevice], computers: usize) -> anyhow::Result<Option<std::sync::Arc<one_mk_input::localmap_runtime::Rules>>> {
     if !settings.input.local_rules { return Ok(None); }
     Ok(Some(std::sync::Arc::new(one_mk_input::localmap_runtime::Rules {
@@ -32,11 +32,11 @@ fn local_rules_snapshot(settings: &crate::settings::Settings, devices: &[InputDe
     })))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 impl App {
     pub(super) fn reload_local_rules(&mut self) {
         if self.backend_name != "native" { return; }
-        self.input_problems.insert("local-key-rules", "Local key rules inactive: waiting for current settings acknowledgement; EXPERIMENTAL, native Windows UNTESTED (compile-checked only)".into());
+        self.input_problems.insert("local-key-rules", "Local key rules inactive: waiting for current settings acknowledgement; EXPERIMENTAL, native Windows/macOS UNTESTED (compile-checked only)".into());
         let (rules, inactive) = match local_rules_snapshot(&self.settings, self.devices.list(), self.trust.devices().len() + 1) {
             Ok(rules) => (rules, None),
             Err(error) => {
@@ -241,7 +241,7 @@ impl App {
         let gone: Vec<DeviceRef> = self.devices.list().iter().filter(|d| !list.contains(d)).map(|d| d.id).collect();
         tracing::debug!(devices = list.len(), gone = gone.len(), "keyboards and mice connected");
         self.devices.connected = Some(list);
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         self.reload_local_rules();
         self.devices.unavailable = None;
         if !gone.is_empty() {
