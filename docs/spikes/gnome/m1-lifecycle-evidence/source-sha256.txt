@@ -1,0 +1,16 @@
+f046560048ea39e5cf166f65ced6ed7e5365ad4394aab54b46f02569af5c7b35  extensions/gnome/one-mk-wallpaper@one-mk.org/extension.js
+63832301be2e3d4b7a809e3de45bceee30bd3f6ad940400afeeb5ef9c622b877  crates/wall-presenter/src/playback.rs
+a6f2e8ed4a3b148811c95b78e4a8e0e7543e56bf6e150ae1e026c40cc11e1ef9  crates/wall-presenter/src/presentation_session.rs
+e83e426a80086400ceaf22ee61d9eeec35cd524307cf343bc5be3ac38acccd7a  crates/wall/src/presentation.rs
+9164f42defc8d8b3abb82e2539650b154a5403b5f38af7ae856ee0af795366f3  crates/wall/src/presentation_auth.rs
+6d1869f8b4a4aaab03a7c64f33ebcf508325c4089415e987e444afdf041a201f  crates/wall/src/bridge.rs
+e420480cc48bff64c74b5df03f1040abc35949da48334fc2dd842b8b313ff231  crates/wall-import/src/cgroup.rs
+8f9effb1499fa07dd3be05d193525bf3dc0c8c13a80794ceb4ae0e895f2b5fda  crates/wall-import/src/sandbox.rs
+d4188c8b6423efe152fafd7e6234931d373639bb7aedc4f4b332eb24e219d257  docs/spikes/gnome/qualify-m1-lifecycle.py
+934ed0207c1f232c67d45c68f257bdcf0a5763613c5835b43f36d43a99b18765  docs/spikes/gnome/qualify-m1-playback.py
+a78e0412d037b4a17b4635c5586127baa2d909d9518eb8efb154e5337d642039  docs/spikes/gnome/client/fake_logind.py
+7b17b15781157b33c40f7c6a3e3cc360b8f5fa2fa2456af2d06423025256a946  docs/spikes/gnome/client/displayconfig.py
+26fc568f99f5436282d96ccea6dbe7cc3920391ab5d48bb912867bfd39ba6e99  docs/spikes/gnome/isolated-session.sh
+7a79895deca6fb190829c4f4581c55cc6c661e781e4045432fee8083ad5bb4bc  one-mk (laboratory build, bench-opt with debug assertions)
+ce293392ed92a71e55aad0e3c4cc782e0a4c7f453c0a0aa5ceaf6cce6bbf2365  one-mk-wall (laboratory build, bench-opt with debug assertions)
+392be6f7edcd8c98c44ce20c1ab7fd752d37a4552f46f63b885403349a53b73f  one-mk-wall-import (laboratory build, bench-opt with debug assertions)

@@ -159,10 +159,21 @@ impl Drop for Group {
     fn drop(&mut self) { let _ = self.finish(); }
 }
 
+/// Removes empty or abandoned playback groups left by a renderer that was
+/// killed (SIGKILL) before it could clean up. Returns how many were removed;
+/// does nothing while another playback holds the delegation (its owner is
+/// alive and will reclaim when it next starts playing).
+pub(crate) fn reclaim_playback(root: &Path) -> Result<usize, String> {
+    let parent = open_root(root)?;
+    if unsafe { libc::flock(parent.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 { return Ok(0); }
+    remove_stale(&parent, Purpose::Playback)
+}
+
 /// Removes groups of this purpose left behind by a renderer that was killed
 /// before it could clean up. Safe only because the caller holds the root's
 /// exclusive lock: every live owner of such a group would hold that lock.
-fn remove_stale(parent: &File, purpose: Purpose) -> Result<(), String> {
+fn remove_stale(parent: &File, purpose: Purpose) -> Result<usize, String> {
+    let mut removed = 0;
     let listing = std::path::PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd()));
     for entry in std::fs::read_dir(&listing).map_err(|error| error.to_string())?.take(4096) {
         let entry = entry.map_err(|error| error.to_string())?;
@@ -183,8 +194,9 @@ fn remove_stale(parent: &File, purpose: Purpose) -> Result<(), String> {
         if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
             return Err(format!("remove stale playback group: {}", std::io::Error::last_os_error()));
         }
+        removed += 1;
     }
-    Ok(())
+    Ok(removed)
 }
 
 pub(crate) fn attach(descriptor: RawFd) -> std::io::Result<()> {
@@ -197,6 +209,14 @@ pub(crate) fn attach(descriptor: RawFd) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reclaim_refuses_anything_but_a_trusted_cgroup_v2_root() {
+        assert!(reclaim_playback(Path::new("relative")).is_err());
+        assert!(reclaim_playback(Path::new("/proc/../sys")).is_err());
+        let ordinary = std::env::temp_dir();
+        assert!(reclaim_playback(&ordinary).is_err(), "a non-cgroup directory is never swept");
+    }
 
     #[test]
     fn no_delegation_means_no_worker() {

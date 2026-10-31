@@ -1,0 +1,2138 @@
+{
+  "checks": [
+    "all eight generated items imported by the real sandboxed importer (delegated cgroup v2 of this run's own transient systemd scope): gif=gif/10f, apng=apng/10f, webp=webp/10f, still=still_png/1f, vp9=vp9_webm/30f, av1=av1_webm/30f, clip1080p=vp9_webm/240f, longgif=gif/4f",
+    "harness control without the component (extension disabled, no daemon or renderer): the stand-in logind's PrepareForSleep, lock/unlock and a Shell SIGKILL + restart produce 10 + 1 warning records of their own; these identities are reported separately and are not charged to, nor hidden from, the component gate below",
+    "user wallpaper set in the private session and native baselines captured for all 9 layouts (two 3840x1080, three 5760x1080, one 1920x1080, two@2 3840x1080, two@1.25 3840x1080, swapped 3840x1080, rotated 3000x1920, stacked 1920x2160, column3 1920x3240)",
+    "layout change / hot-plug with real GIF playback (same renderer PID 864508 throughout): monitor added (three) -> revealed in 0.60s; monitors removed (one) -> revealed in 0.48s; scale 2 (logical resize) -> revealed in 0.52s; fractional scale 1.25 -> revealed in 0.53s; reposition (order swapped) -> revealed in 0.53s; rotation (1080x1920 resize) -> revealed in 0.59s; reposition (stacked vertically) -> revealed in 0.53s; layout outside the committed canvas -> static user wallpaper in 0.78s; two monitors -> revealed in 0.53s; monitor added (three) -> revealed in 0.59s; two monitors -> revealed in 0.53s (each revealed layout then verified exact on every pixel at scale 1, at block centres when scaled); transition screenshots never showed a frame sliced for the old layout; worst 0.60s; a 3-change burst (150 ms apart) converged; renderer exit and restoration after stop",
+    "VP9 (PSNR) and the still (exact, holding) re-slice through add, fractional scale, reposition and back",
+    "lock/unlock x6 within about a minute with VP9: at lock the renderer exits via SIGTERM in 93-117 ms (worker and cgroup removed by the renderer itself); while locked no bridge, renderer, decoder, cgroup or timer exists and the lock screen shows no frame; each unlock starts a fresh renderer showing verified advancing frames in 879-985 ms; the restart cap is not consumed by lock cycles (attempts 1, not exhausted)",
+    "suspend/resume via PrepareForSleep on the private system bus with APNG: before sleep the presentation is hidden and the renderer exits (SIGTERM, 26-42 ms, no worker or cgroup left); asleep the screen is the user wallpaper with no restart/watchdog timers; after resume a fresh renderer shows verified advancing frames (643-1482 ms), both with and without the Shell's lock-on-suspend",
+    "stills and long frames announce Holding instead of being re-committed: the still stays revealed 12 s (4x the Shell watchdog) unchanged in state 4 with no Shell watchdog source and zero presenter-thread wakeups (renderer thread switches over 12 s: {'one-mk-wall/867386': 27, 'presenter/867388': 0}); a GIF with 2.6 s frames alternates Holding/Playing (5/4 in 12 s) and is never stopped by the watchdog",
+    "renderer crashes still count: two SIGKILLs are each followed by a fresh verified renderer (Shell restart after 2 s, then 4 s), the third within the minute latches the restart cap; the screen is the user wallpaper; the one empty group the killed renderer left is reclaimed by the next renderer at start",
+    "restoration: after daemon one-mk stop, SIGTERM, SIGKILL, consent revoke, wallpaper disable, bare renderer SIGKILL, extension disable, extension uninstall and GNOME Shell SIGKILL + restart, the screen equals the user's own wallpaper (mean error stop 0.0, sigterm 0.0, sigkill 0.0, revoke 0.0, disable 0.0, renderer-kill 0.0, extension-disable 0.0, uninstall 0.0, shell-restart 0.0), picture-uri untouched, no renderer, worker, cgroup or other process left; playback works again in the restarted Shell"
+  ],
+  "production_authorization": false,
+  "timings": {
+    "layout_to_reveal_s": [
+      601.7,
+      475.7,
+      520.0,
+      525.3,
+      524.7,
+      592.3,
+      532.2,
+      530.4,
+      588.3,
+      527.4,
+      550.2,
+      616.3,
+      538.3,
+      539.5,
+      537.0,
+      604.5,
+      524.7,
+      518.7,
+      523.2,
+      597.2,
+      527.0,
+      565.5,
+      523.5,
+      521.6,
+      523.8,
+      505.5,
+      553.2,
+      525.3,
+      527.4,
+      537.8,
+      522.6,
+      524.5,
+      477.0,
+      594.7,
+      523.0,
+      538.1,
+      537.5,
+      537.6,
+      590.5,
+      522.0,
+      567.0,
+      477.0,
+      571.8,
+      591.8,
+      612.4,
+      535.3,
+      555.1,
+      601.6,
+      665.0,
+      564.0,
+      624.6,
+      539.1,
+      472.4,
+      531.8,
+      533.5,
+      531.1,
+      569.0,
+      560.2,
+      675.6,
+      621.2,
+      466.4,
+      1062.4,
+      605.3,
+      560.4,
+      533.3,
+      531.5,
+      540.7,
+      530.7,
+      636.3,
+      489.1,
+      629.3,
+      665.9,
+      586.4,
+      682.4,
+      670.5,
+      539.8,
+      532.3,
+      591.0,
+      535.2,
+      532.3,
+      536.9,
+      528.5,
+      536.3,
+      533.7,
+      531.3,
+      526.6,
+      461.2,
+      626.7,
+      534.9,
+      522.1,
+      523.4,
+      520.2,
+      529.8,
+      523.9,
+      526.4,
+      521.7,
+      550.8,
+      463.0,
+      501.2,
+      533.3,
+      524.3,
+      523.9,
+      632.3,
+      571.0,
+      556.9,
+      594.9,
+      548.1,
+      627.5
+    ],
+    "layout_to_verified_s": [
+      1204.4,
+      796.0,
+      893.6,
+      894.6,
+      974.8,
+      1129.1,
+      988.0,
+      977.6,
+      1185.8,
+      984.7,
+      997.2,
+      1137.8,
+      941.7,
+      941.6,
+      935.8,
+      1462.2,
+      1176.1,
+      1220.9,
+      1220.0,
+      1408.4,
+      1236.8,
+      1147.2,
+      895.6,
+      886.6,
+      1236.4,
+      957.5,
+      1139.8,
+      1177.2,
+      972.8,
+      905.5,
+      886.5,
+      978.2,
+      792.5,
+      1390.9,
+      1171.5,
+      942.7,
+      941.3,
+      936.7,
+      991.5,
+      966.6,
+      1151.7,
+      794.4,
+      1082.7,
+      1438.3,
+      1020.3,
+      903.2,
+      965.2,
+      1207.4,
+      1403.8,
+      1148.7,
+      1340.1,
+      909.0,
+      791.8,
+      979.0,
+      980.2,
+      977.5,
+      1157.9,
+      1028.1,
+      1348.6,
+      1214.6,
+      779.8,
+      1549.4,
+      1190.9,
+      1171.0,
+      1251.3,
+      1245.2,
+      1001.4,
+      904.0,
+      1192.6,
+      1056.0,
+      1043.7,
+      1210.4,
+      1006.8,
+      1419.9,
+      1311.1,
+      993.5,
+      908.6,
+      1190.6,
+      990.4,
+      896.0,
+      910.0,
+      1240.4,
+      1183.6,
+      909.7,
+      979.9,
+      985.5,
+      776.3,
+      1156.2,
+      918.1,
+      1223.9,
+      1234.9,
+      1168.2,
+      983.4,
+      974.5,
+      889.4,
+      1219.6,
+      1199.7,
+      776.5,
+      951.3,
+      985.2,
+      969.9,
+      968.1,
+      1082.5,
+      1166.4,
+      1020.6,
+      1009.9,
+      951.7
+    ],
+    "layout_to_static_s": [
+      778.5,
+      788.1,
+      809.6,
+      803.0,
+      840.8,
+      2339.3,
+      1137.4,
+      800.0
+    ],
+    "burst_converged_s": [
+      2532.5,
+      4266.2,
+      2811.3,
+      2509.9,
+      2873.9,
+      4437.1,
+      2559.3,
+      4595.8,
+      2670.5,
+      2687.1,
+      2558.8,
+      2551.9,
+      4633.8,
+      2959.4,
+      2785.4,
+      2559.1,
+      2776.3,
+      4667.5,
+      2538.3,
+      2524.4,
+      2520.5,
+      2834.0
+    ],
+    "lock_to_renderer_exit_s": [
+      116.6,
+      94.6,
+      96.0,
+      92.6,
+      92.9,
+      95.2,
+      100.1,
+      95.2,
+      88.8,
+      89.3,
+      92.7,
+      93.1,
+      91.9,
+      90.1,
+      91.8,
+      95.3,
+      90.8,
+      94.2,
+      100.4,
+      100.3,
+      100.1,
+      89.7,
+      95.1,
+      92.4,
+      96.5,
+      92.0,
+      91.4,
+      123.4,
+      97.2,
+      97.3,
+      92.2,
+      90.7,
+      91.2,
+      95.9,
+      95.8,
+      90.2,
+      90.9,
+      90.7,
+      94.2,
+      103.4,
+      96.8,
+      96.0,
+      92.8,
+      90.7,
+      90.3,
+      96.1,
+      94.4,
+      92.7,
+      95.4,
+      93.3,
+      98.0,
+      91.9,
+      93.0,
+      93.8,
+      97.4,
+      99.8,
+      99.9,
+      103.5
+    ],
+    "unlock_to_settled_s": [
+      977.5,
+      878.7,
+      971.1,
+      971.7,
+      965.0,
+      984.7,
+      1363.0,
+      1253.7,
+      934.5,
+      932.5,
+      1230.1,
+      1219.3,
+      808.3,
+      1215.4,
+      1214.8,
+      1373.5,
+      981.1,
+      1022.2,
+      1021.5,
+      1288.1,
+      1207.2,
+      874.0,
+      902.8,
+      933.2,
+      1166.2,
+      1454.2,
+      1376.2,
+      983.1,
+      1086.3,
+      997.1,
+      1198.8,
+      1013.3,
+      943.5,
+      938.9,
+      946.7,
+      1450.0,
+      1269.4,
+      1277.7,
+      1283.0,
+      1104.5,
+      1099.4,
+      1066.7,
+      1011.0,
+      1003.4,
+      1035.6,
+      1158.4,
+      1160.7,
+      931.7,
+      1217.5,
+      967.1,
+      927.2,
+      920.2,
+      1206.5,
+      934.2,
+      923.7,
+      1298.5,
+      902.8,
+      985.0
+    ],
+    "sleep_to_renderer_exit_s": [
+      26.8,
+      26.1,
+      41.9,
+      44.6,
+      29.1,
+      26.0,
+      26.5,
+      15.7,
+      15.8,
+      25.8,
+      26.2,
+      26.9,
+      41.9,
+      26.0,
+      36.4,
+      26.3,
+      43.0,
+      26.5,
+      47.0,
+      26.1,
+      41.8,
+      27.3,
+      37.8,
+      27.8,
+      41.3,
+      47.1,
+      26.6,
+      36.4,
+      30.8,
+      43.6,
+      25.9,
+      42.3,
+      27.0,
+      28.4,
+      46.7,
+      27.6,
+      47.1,
+      32.6,
+      17.6,
+      15.4,
+      26.6,
+      49.0,
+      36.1,
+      17.3,
+      17.4,
+      17.3,
+      41.5,
+      28.5,
+      26.9,
+      43.3,
+      26.1,
+      35.8,
+      27.1,
+      25.8,
+      26.7,
+      49.8,
+      26.4,
+      36.5,
+      26.2,
+      37.3,
+      26.5,
+      26.1,
+      26.1,
+      26.6,
+      27.4,
+      36.8,
+      27.3
+    ],
+    "wake_to_settled_s": [
+      654.2,
+      642.9,
+      1482.0,
+      1721.9,
+      874.2,
+      559.5,
+      1668.5,
+      287.2,
+      286.2,
+      644.3,
+      506.1,
+      591.9,
+      1436.6,
+      593.7,
+      1692.9,
+      561.1,
+      1429.5,
+      563.3,
+      1492.9,
+      663.9,
+      1653.8,
+      604.3,
+      1430.6,
+      1024.6,
+      1394.8,
+      1392.8,
+      641.9,
+      1487.5,
+      642.2,
+      1772.0,
+      485.6,
+      1498.2,
+      647.8,
+      740.0,
+      1549.6,
+      847.5,
+      2547.6,
+      1914.0,
+      1066.7,
+      289.6,
+      813.3,
+      1647.9,
+      1611.9,
+      1085.2,
+      1012.3,
+      940.3,
+      1608.1,
+      700.9,
+      897.2,
+      1740.2,
+      811.9,
+      1393.1,
+      724.3,
+      560.2,
+      644.6,
+      1541.1,
+      721.6,
+      1628.7,
+      607.3,
+      1393.8,
+      815.1,
+      1730.8,
+      560.9,
+      562.2,
+      606.8,
+      1660.1,
+      669.7
+    ],
+    "teardown_sigterm_exit_s": [
+      68.0,
+      67.7,
+      67.7,
+      67.7,
+      67.8,
+      57.3,
+      67.6,
+      56.9,
+      67.8,
+      57.3,
+      68.2,
+      67.4,
+      57.2,
+      67.4,
+      67.2
+    ],
+    "teardown_sigkill_exit_s": [
+      15.6,
+      5.2,
+      15.6,
+      15.7,
+      15.5,
+      15.5,
+      15.7,
+      15.5,
+      15.6,
+      15.5,
+      15.6,
+      15.6,
+      15.6,
+      15.6
+    ],
+    "teardown_revoke_exit_s": [
+      25.5,
+      25.2,
+      26.0,
+      15.1,
+      25.8,
+      26.7,
+      25.6,
+      25.5,
+      25.4,
+      15.2,
+      25.8
+    ],
+    "teardown_disable_exit_s": [
+      26.0,
+      27.9,
+      25.6,
+      25.9,
+      25.7,
+      15.3,
+      25.8,
+      27.1,
+      25.2,
+      25.9,
+      15.3,
+      26.1,
+      15.5
+    ],
+    "teardown_extension-disable_exit_s": [
+      151.4,
+      129.3,
+      128.5,
+      151.7,
+      133.5,
+      27.6,
+      129.1,
+      162.2,
+      160.3,
+      133.3,
+      26.6,
+      138.5,
+      138.3
+    ],
+    "teardown_uninstall_exit_s": [
+      26.2,
+      143.2,
+      140.5,
+      140.0,
+      15.3,
+      14.7,
+      142.2,
+      144.5,
+      138.2,
+      143.4
+    ],
+    "shell_kill_to_renderer_exit_s": [
+      36.3,
+      51.7,
+      41.3,
+      41.3,
+      57.0,
+      53.6
+    ]
+  },
+  "events": {
+    "layout": 116,
+    "layout-burst": 22,
+    "teardown-stop": 19,
+    "lock": 58,
+    "suspend": 40,
+    "suspend-lock": 27,
+    "renderer-kill": 21,
+    "teardown-sigterm": 15,
+    "teardown-sigkill": 14,
+    "teardown-revoke": 11,
+    "teardown-disable": 13,
+    "teardown-renderer-kill": 13,
+    "teardown-extension-disable": 13,
+    "uninstall-restart": 10,
+    "shell-restart": 6,
+    "pause": 31,
+    "extension-cycle": 24
+  },
+  "sequences": [
+    {
+      "sequence": 0,
+      "item": "still",
+      "layout_start": "two",
+      "events": [
+        "layout:rotated",
+        "lock"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "rotated"
+    },
+    {
+      "sequence": 1,
+      "item": "still",
+      "layout_start": "rotated",
+      "events": [
+        "layout:swapped",
+        "layout:column3"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "column3"
+    },
+    {
+      "sequence": 2,
+      "item": "clip1080p",
+      "layout_start": "swapped",
+      "events": [
+        "suspend-lock",
+        "lock",
+        "suspend"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 3,
+      "item": "clip1080p",
+      "layout_start": "swapped",
+      "events": [
+        "layout:two@2",
+        "pause"
+      ],
+      "teardown": "disable",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 4,
+      "item": "webp",
+      "layout_start": "two@2",
+      "events": [
+        "suspend",
+        "layout:two@1.25"
+      ],
+      "teardown": "stop",
+      "layout_end": "two@1.25"
+    },
+    {
+      "sequence": 5,
+      "item": "apng",
+      "layout_start": "two@1.25",
+      "events": [
+        "layout:two@2",
+        "pause",
+        "lock",
+        "lock"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 6,
+      "item": "still",
+      "layout_start": "two@2",
+      "events": [
+        "lock",
+        "suspend-lock",
+        "layout:two"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 7,
+      "item": "clip1080p",
+      "layout_start": "two",
+      "events": [
+        "layout:one",
+        "layout:swapped",
+        "extension-cycle",
+        "renderer-kill"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 8,
+      "item": "still",
+      "layout_start": "swapped",
+      "events": [
+        "layout:two@1.25",
+        "renderer-kill",
+        "lock"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "two@1.25"
+    },
+    {
+      "sequence": 9,
+      "item": "still",
+      "layout_start": "two@1.25",
+      "events": [
+        "layout:column3",
+        "suspend",
+        "suspend"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "column3"
+    },
+    {
+      "sequence": 10,
+      "item": "gif",
+      "layout_start": "two",
+      "events": [
+        "layout:swapped",
+        "suspend"
+      ],
+      "teardown": "revoke",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 11,
+      "item": "apng",
+      "layout_start": "swapped",
+      "events": [
+        "pause",
+        "layout:two@1.25"
+      ],
+      "teardown": "disable",
+      "layout_end": "two@1.25"
+    },
+    {
+      "sequence": 12,
+      "item": "apng",
+      "layout_start": "two@1.25",
+      "events": [
+        "layout:two@2",
+        "layout:stacked",
+        "layout:one",
+        "pause"
+      ],
+      "teardown": "disable",
+      "layout_end": "one"
+    },
+    {
+      "sequence": 13,
+      "item": "apng",
+      "layout_start": "one",
+      "events": [
+        "suspend",
+        "pause",
+        "renderer-kill",
+        "lock"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "one"
+    },
+    {
+      "sequence": 14,
+      "item": "vp9",
+      "layout_start": "one",
+      "events": [
+        "renderer-kill",
+        "pause",
+        "pause",
+        "layout-burst"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 15,
+      "item": "still",
+      "layout_start": "two",
+      "events": [
+        "layout:rotated",
+        "layout:two@2",
+        "lock"
+      ],
+      "teardown": "stop",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 16,
+      "item": "vp9",
+      "layout_start": "two@2",
+      "events": [
+        "layout:two",
+        "layout:stacked",
+        "layout:two",
+        "suspend"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 17,
+      "item": "vp9",
+      "layout_start": "two",
+      "events": [
+        "suspend-lock",
+        "suspend",
+        "layout:swapped"
+      ],
+      "teardown": "disable",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 18,
+      "item": "longgif",
+      "layout_start": "swapped",
+      "events": [
+        "pause",
+        "extension-cycle",
+        "layout:stacked"
+      ],
+      "teardown": "revoke",
+      "layout_end": "stacked"
+    },
+    {
+      "sequence": 19,
+      "item": "clip1080p",
+      "layout_start": "stacked",
+      "events": [
+        "pause",
+        "extension-cycle",
+        "extension-cycle",
+        "layout:two@2"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 20,
+      "item": "still",
+      "layout_start": "two@2",
+      "events": [
+        "extension-cycle",
+        "suspend-lock",
+        "lock"
+      ],
+      "teardown": "disable",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 21,
+      "item": "apng",
+      "layout_start": "two@2",
+      "events": [
+        "suspend",
+        "layout:one",
+        "layout:rotated"
+      ],
+      "teardown": "uninstall",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 22,
+      "item": "still",
+      "layout_start": "three",
+      "events": [
+        "layout:rotated",
+        "lock",
+        "pause",
+        "layout-burst"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 23,
+      "item": "av1",
+      "layout_start": "swapped",
+      "events": [
+        "pause",
+        "pause"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 24,
+      "item": "vp9",
+      "layout_start": "swapped",
+      "events": [
+        "suspend-lock",
+        "layout:two",
+        "lock"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 25,
+      "item": "webp",
+      "layout_start": "two",
+      "events": [
+        "pause",
+        "lock",
+        "layout:two@1.25",
+        "suspend"
+      ],
+      "teardown": "uninstall",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 26,
+      "item": "vp9",
+      "layout_start": "three",
+      "events": [
+        "extension-cycle",
+        "extension-cycle",
+        "layout:two",
+        "layout-burst"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 27,
+      "item": "webp",
+      "layout_start": "swapped",
+      "events": [
+        "pause",
+        "suspend-lock",
+        "suspend"
+      ],
+      "teardown": "stop",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 28,
+      "item": "apng",
+      "layout_start": "swapped",
+      "events": [
+        "pause",
+        "layout:three",
+        "suspend-lock",
+        "layout:column3"
+      ],
+      "teardown": "revoke",
+      "layout_end": "column3"
+    },
+    {
+      "sequence": 29,
+      "item": "vp9",
+      "layout_start": "two",
+      "events": [
+        "suspend",
+        "suspend-lock"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 30,
+      "item": "clip1080p",
+      "layout_start": "two",
+      "events": [
+        "layout:three",
+        "suspend",
+        "layout-burst"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "stacked"
+    },
+    {
+      "sequence": 31,
+      "item": "gif",
+      "layout_start": "stacked",
+      "events": [
+        "renderer-kill",
+        "extension-cycle",
+        "layout-burst",
+        "suspend-lock"
+      ],
+      "teardown": "uninstall",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 32,
+      "item": "clip1080p",
+      "layout_start": "three",
+      "events": [
+        "renderer-kill",
+        "layout:two",
+        "layout:three"
+      ],
+      "teardown": "stop",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 33,
+      "item": "longgif",
+      "layout_start": "three",
+      "events": [
+        "layout:two@1.25",
+        "suspend-lock",
+        "pause"
+      ],
+      "teardown": "stop",
+      "layout_end": "two@1.25"
+    },
+    {
+      "sequence": 34,
+      "item": "gif",
+      "layout_start": "two@1.25",
+      "events": [
+        "layout:one",
+        "layout:stacked"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "stacked"
+    },
+    {
+      "sequence": 35,
+      "item": "apng",
+      "layout_start": "stacked",
+      "events": [
+        "layout:two",
+        "pause",
+        "lock",
+        "pause"
+      ],
+      "teardown": "disable",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 36,
+      "item": "apng",
+      "layout_start": "two",
+      "events": [
+        "suspend",
+        "suspend-lock",
+        "suspend",
+        "layout:swapped"
+      ],
+      "teardown": "revoke",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 37,
+      "item": "clip1080p",
+      "layout_start": "swapped",
+      "events": [
+        "suspend-lock",
+        "layout:two@2",
+        "lock",
+        "renderer-kill"
+      ],
+      "teardown": "stop",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 38,
+      "item": "webp",
+      "layout_start": "two@2",
+      "events": [
+        "layout-burst",
+        "layout:two"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 39,
+      "item": "still",
+      "layout_start": "two",
+      "events": [
+        "pause",
+        "lock"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 40,
+      "item": "apng",
+      "layout_start": "two",
+      "events": [
+        "layout:three",
+        "layout:column3"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "column3"
+    },
+    {
+      "sequence": 41,
+      "item": "longgif",
+      "layout_start": "two",
+      "events": [
+        "layout:three",
+        "layout:one",
+        "lock",
+        "renderer-kill"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "one"
+    },
+    {
+      "sequence": 42,
+      "item": "av1",
+      "layout_start": "one",
+      "events": [
+        "extension-cycle",
+        "suspend"
+      ],
+      "teardown": "revoke",
+      "layout_end": "one"
+    },
+    {
+      "sequence": 43,
+      "item": "longgif",
+      "layout_start": "one",
+      "events": [
+        "suspend-lock",
+        "lock",
+        "lock"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "one"
+    },
+    {
+      "sequence": 44,
+      "item": "gif",
+      "layout_start": "one",
+      "events": [
+        "renderer-kill",
+        "layout:column3",
+        "layout-burst",
+        "layout:stacked",
+        "pause"
+      ],
+      "teardown": "shell-restart",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 45,
+      "item": "clip1080p",
+      "layout_start": "three",
+      "events": [
+        "layout:two@1.25",
+        "pause",
+        "layout:swapped"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 46,
+      "item": "still",
+      "layout_start": "swapped",
+      "events": [
+        "layout:two",
+        "extension-cycle",
+        "layout:swapped"
+      ],
+      "teardown": "uninstall",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 47,
+      "item": "apng",
+      "layout_start": "three",
+      "events": [
+        "layout:stacked",
+        "suspend"
+      ],
+      "teardown": "shell-restart",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 48,
+      "item": "vp9",
+      "layout_start": "three",
+      "events": [
+        "suspend",
+        "suspend-lock",
+        "layout-burst",
+        "pause"
+      ],
+      "teardown": "disable",
+      "layout_end": "rotated"
+    },
+    {
+      "sequence": 49,
+      "item": "longgif",
+      "layout_start": "rotated",
+      "events": [
+        "layout:two@1.25",
+        "layout-burst",
+        "layout:rotated"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "rotated"
+    },
+    {
+      "sequence": 50,
+      "item": "still",
+      "layout_start": "rotated",
+      "events": [
+        "renderer-kill",
+        "extension-cycle"
+      ],
+      "teardown": "uninstall",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 51,
+      "item": "longgif",
+      "layout_start": "three",
+      "events": [
+        "extension-cycle",
+        "suspend",
+        "suspend-lock",
+        "pause"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 52,
+      "item": "still",
+      "layout_start": "three",
+      "events": [
+        "suspend-lock",
+        "suspend",
+        "layout:one"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "one"
+    },
+    {
+      "sequence": 53,
+      "item": "av1",
+      "layout_start": "one",
+      "events": [
+        "layout:column3",
+        "suspend",
+        "layout-burst",
+        "layout:swapped"
+      ],
+      "teardown": "uninstall",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 54,
+      "item": "apng",
+      "layout_start": "three",
+      "events": [
+        "suspend",
+        "suspend-lock",
+        "lock",
+        "suspend-lock"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 55,
+      "item": "still",
+      "layout_start": "three",
+      "events": [
+        "lock",
+        "renderer-kill",
+        "lock",
+        "suspend"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 56,
+      "item": "av1",
+      "layout_start": "three",
+      "events": [
+        "layout:rotated",
+        "layout:two",
+        "renderer-kill",
+        "lock"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 57,
+      "item": "still",
+      "layout_start": "two",
+      "events": [
+        "suspend",
+        "layout:swapped",
+        "suspend",
+        "renderer-kill"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 58,
+      "item": "apng",
+      "layout_start": "swapped",
+      "events": [
+        "layout:three",
+        "suspend-lock",
+        "pause"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 59,
+      "item": "apng",
+      "layout_start": "three",
+      "events": [
+        "layout-burst",
+        "layout:stacked",
+        "layout-burst"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "rotated"
+    },
+    {
+      "sequence": 60,
+      "item": "av1",
+      "layout_start": "rotated",
+      "events": [
+        "suspend",
+        "extension-cycle",
+        "lock",
+        "lock"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "rotated"
+    },
+    {
+      "sequence": 61,
+      "item": "apng",
+      "layout_start": "rotated",
+      "events": [
+        "layout:two@1.25",
+        "layout:three",
+        "lock",
+        "layout:swapped"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 62,
+      "item": "clip1080p",
+      "layout_start": "swapped",
+      "events": [
+        "suspend",
+        "renderer-kill",
+        "suspend-lock"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 63,
+      "item": "longgif",
+      "layout_start": "swapped",
+      "events": [
+        "lock",
+        "layout:two@2",
+        "suspend"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 64,
+      "item": "longgif",
+      "layout_start": "two@2",
+      "events": [
+        "lock",
+        "suspend-lock",
+        "lock",
+        "lock"
+      ],
+      "teardown": "disable",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 65,
+      "item": "still",
+      "layout_start": "two@2",
+      "events": [
+        "layout-burst",
+        "lock"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 66,
+      "item": "vp9",
+      "layout_start": "three",
+      "events": [
+        "suspend",
+        "renderer-kill",
+        "extension-cycle"
+      ],
+      "teardown": "disable",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 67,
+      "item": "webp",
+      "layout_start": "three",
+      "events": [
+        "layout:two@2",
+        "suspend",
+        "extension-cycle"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 68,
+      "item": "still",
+      "layout_start": "two@2",
+      "events": [
+        "renderer-kill",
+        "layout:stacked",
+        "lock",
+        "lock"
+      ],
+      "teardown": "disable",
+      "layout_end": "stacked"
+    },
+    {
+      "sequence": 69,
+      "item": "still",
+      "layout_start": "stacked",
+      "events": [
+        "layout-burst",
+        "lock",
+        "layout:two@1.25",
+        "pause"
+      ],
+      "teardown": "shell-restart",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 70,
+      "item": "vp9",
+      "layout_start": "three",
+      "events": [
+        "lock",
+        "lock",
+        "lock"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 71,
+      "item": "webp",
+      "layout_start": "three",
+      "events": [
+        "layout:two@1.25",
+        "layout:two",
+        "suspend",
+        "lock"
+      ],
+      "teardown": "revoke",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 72,
+      "item": "longgif",
+      "layout_start": "two",
+      "events": [
+        "lock",
+        "extension-cycle",
+        "lock"
+      ],
+      "teardown": "shell-restart",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 73,
+      "item": "webp",
+      "layout_start": "three",
+      "events": [
+        "layout:swapped",
+        "layout:one",
+        "extension-cycle"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "one"
+    },
+    {
+      "sequence": 74,
+      "item": "av1",
+      "layout_start": "one",
+      "events": [
+        "pause",
+        "layout-burst"
+      ],
+      "teardown": "disable",
+      "layout_end": "rotated"
+    },
+    {
+      "sequence": 75,
+      "item": "vp9",
+      "layout_start": "rotated",
+      "events": [
+        "suspend-lock",
+        "layout:three",
+        "pause",
+        "suspend"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 76,
+      "item": "longgif",
+      "layout_start": "three",
+      "events": [
+        "renderer-kill",
+        "lock",
+        "lock",
+        "suspend-lock"
+      ],
+      "teardown": "stop",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 77,
+      "item": "webp",
+      "layout_start": "three",
+      "events": [
+        "layout:two@1.25",
+        "renderer-kill",
+        "lock"
+      ],
+      "teardown": "revoke",
+      "layout_end": "two@1.25"
+    },
+    {
+      "sequence": 78,
+      "item": "still",
+      "layout_start": "two@1.25",
+      "events": [
+        "lock",
+        "layout:swapped",
+        "extension-cycle"
+      ],
+      "teardown": "stop",
+      "layout_end": "swapped"
+    },
+    {
+      "sequence": 79,
+      "item": "still",
+      "layout_start": "swapped",
+      "events": [
+        "layout:two",
+        "layout-burst",
+        "layout:two@1.25"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "two@1.25"
+    },
+    {
+      "sequence": 80,
+      "item": "gif",
+      "layout_start": "two@1.25",
+      "events": [
+        "extension-cycle",
+        "extension-cycle",
+        "layout:stacked"
+      ],
+      "teardown": "stop",
+      "layout_end": "stacked"
+    },
+    {
+      "sequence": 81,
+      "item": "vp9",
+      "layout_start": "stacked",
+      "events": [
+        "extension-cycle",
+        "suspend",
+        "lock",
+        "layout-burst"
+      ],
+      "teardown": "uninstall",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 82,
+      "item": "longgif",
+      "layout_start": "three",
+      "events": [
+        "layout-burst",
+        "extension-cycle",
+        "layout:two"
+      ],
+      "teardown": "stop",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 83,
+      "item": "apng",
+      "layout_start": "two",
+      "events": [
+        "layout:two@2",
+        "pause",
+        "lock",
+        "suspend-lock"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 84,
+      "item": "longgif",
+      "layout_start": "two@2",
+      "events": [
+        "lock",
+        "suspend"
+      ],
+      "teardown": "revoke",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 85,
+      "item": "still",
+      "layout_start": "two@2",
+      "events": [
+        "lock",
+        "layout:two",
+        "suspend-lock",
+        "layout:two@2"
+      ],
+      "teardown": "disable",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 86,
+      "item": "longgif",
+      "layout_start": "two@2",
+      "events": [
+        "lock",
+        "extension-cycle",
+        "renderer-kill"
+      ],
+      "teardown": "extension-disable",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 87,
+      "item": "apng",
+      "layout_start": "two@2",
+      "events": [
+        "pause",
+        "suspend",
+        "suspend",
+        "lock"
+      ],
+      "teardown": "renderer-kill",
+      "layout_end": "two@2"
+    },
+    {
+      "sequence": 88,
+      "item": "longgif",
+      "layout_start": "two@2",
+      "events": [
+        "pause",
+        "layout:one"
+      ],
+      "teardown": "uninstall",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 89,
+      "item": "clip1080p",
+      "layout_start": "three",
+      "events": [
+        "layout:one",
+        "pause"
+      ],
+      "teardown": "uninstall",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 90,
+      "item": "longgif",
+      "layout_start": "three",
+      "events": [
+        "layout:swapped",
+        "layout:two",
+        "layout:stacked"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "stacked"
+    },
+    {
+      "sequence": 91,
+      "item": "still",
+      "layout_start": "stacked",
+      "events": [
+        "lock",
+        "layout:column3"
+      ],
+      "teardown": "revoke",
+      "layout_end": "column3"
+    },
+    {
+      "sequence": 92,
+      "item": "vp9",
+      "layout_start": "one",
+      "events": [
+        "layout-burst",
+        "layout:stacked"
+      ],
+      "teardown": "sigkill",
+      "layout_end": "stacked"
+    },
+    {
+      "sequence": 93,
+      "item": "vp9",
+      "layout_start": "stacked",
+      "events": [
+        "extension-cycle",
+        "suspend",
+        "lock"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "stacked"
+    },
+    {
+      "sequence": 94,
+      "item": "clip1080p",
+      "layout_start": "stacked",
+      "events": [
+        "layout:two@1.25",
+        "suspend-lock"
+      ],
+      "teardown": "shell-restart",
+      "layout_end": "three"
+    },
+    {
+      "sequence": 95,
+      "item": "gif",
+      "layout_start": "three",
+      "events": [
+        "layout:two",
+        "suspend"
+      ],
+      "teardown": "sigterm",
+      "layout_end": "two"
+    },
+    {
+      "sequence": 96,
+      "item": "vp9",
+      "layout_start": "two",
+      "events": [
+        "layout-burst",
+        "layout:stacked",
+        "lock",
+        "layout:two@2"
+      ],
+      "teardown": "revoke",
+      "layout_end": "two@2"
+    }
+  ],
+  "shell_sessions": 18,
+  "media": {
+    "gif": {
+      "hash": "54b0df019d25db335f1c7dd64bf19a6dfbf8b5d93510d5817e370597f2620849",
+      "bytes": 65341,
+      "format": "gif",
+      "width": 576,
+      "height": 108,
+      "frames": 10,
+      "duration_ms": 1000
+    },
+    "apng": {
+      "hash": "a8222d5a967057a9021757410810560f554c60dddd60097d74505baf0ffa77db",
+      "bytes": 6638,
+      "format": "apng",
+      "width": 576,
+      "height": 108,
+      "frames": 10,
+      "duration_ms": 1000
+    },
+    "webp": {
+      "hash": "ebd2ce115eb6f65540c72ff69e05452cf82a34ebf2bdd006cc112ec26497a942",
+      "bytes": 3810,
+      "format": "webp",
+      "width": 576,
+      "height": 108,
+      "frames": 10,
+      "duration_ms": 1000
+    },
+    "still": {
+      "hash": "7597825d9b5ab6a8f816253392e91ee263f233c3d8d0343cbb8b24e251749586",
+      "bytes": 2362,
+      "format": "still_png",
+      "width": 1152,
+      "height": 216,
+      "frames": 1,
+      "duration_ms": 0
+    },
+    "vp9": {
+      "hash": "acf4710d2b5f49b7d6f7edb920477850fb28e8d82c47278daa4018037b84ea11",
+      "bytes": 303628,
+      "format": "vp9_webm",
+      "width": 960,
+      "height": 180,
+      "frames": 30,
+      "duration_ms": 1000
+    },
+    "av1": {
+      "hash": "4b736fab0042d7de0abfbd5b63a6531a02ed502aaf942afe311db851265233bd",
+      "bytes": 483233,
+      "format": "av1_webm",
+      "width": 960,
+      "height": 180,
+      "frames": 30,
+      "duration_ms": 1000
+    },
+    "clip1080p": {
+      "hash": "5cf6ed2ce2a40e627d448d0ffb2cb578700d54b8a184e6b4182f17802c728d74",
+      "bytes": 3375661,
+      "format": "vp9_webm",
+      "width": 1920,
+      "height": 1080,
+      "frames": 240,
+      "duration_ms": 8000
+    },
+    "longgif": {
+      "hash": "71d30bdefdcb5624625c427a1f51d6e89044a512c1eef37f99b22864c0d61b73",
+      "bytes": 30177,
+      "format": "gif",
+      "width": 576,
+      "height": 108,
+      "frames": 4,
+      "duration_ms": 6000
+    }
+  },
+  "binary_sha256": {
+    "one-mk": "7a79895deca6fb190829c4f4581c55cc6c661e781e4045432fee8083ad5bb4bc",
+    "one-mk-wall": "ce293392ed92a71e55aad0e3c4cc782e0a4c7f453c0a0aa5ceaf6cce6bbf2365",
+    "one-mk-wall-import": "392be6f7edcd8c98c44ce20c1ab7fd752d37a4552f46f63b885403349a53b73f"
+  },
+  "source_sha256": {
+    "extensions/gnome/one-mk-wallpaper@one-mk.org/extension.js": "f046560048ea39e5cf166f65ced6ed7e5365ad4394aab54b46f02569af5c7b35",
+    "docs/spikes/gnome/qualify-m1-lifecycle.py": "6e4c472bef6023905c931af7f5b1a07ab20d180a2fe4cac8e9e6357d2144086d",
+    "docs/spikes/gnome/client/fake_logind.py": "a78e0412d037b4a17b4635c5586127baa2d909d9518eb8efb154e5337d642039",
+    "docs/spikes/gnome/isolated-session.sh": "26fc568f99f5436282d96ccea6dbe7cc3920391ab5d48bb912867bfd39ba6e99"
+  },
+  "seed": 20261031,
+  "shell": "GNOME Shell 50.1",
+  "control_warnings": {
+    "suspend_and_lock_without_component": [
+      "(gnome-shell:860802): GNOME Shell-WARNING **: 20:35:01.446: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:860802): GNOME Shell-WARNING **: 20:35:02.258: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:860802): GNOME Shell-WARNING **: 20:35:02.258: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+      "(gnome-shell:860802): GNOME Shell-WARNING **: 20:35:03.068: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:860802): GNOME Shell-WARNING **: 20:35:03.879: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:860802): GNOME Shell-WARNING **: 20:35:03.880: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+      "(gnome-shell:860802): Gjs-WARNING **: 20:35:04.785: Type GITypeInfo of property AccountsService.User::password-mode does not match return type GITypeInfo of getter get_password_mode. Falling back to slow path",
+      "(gnome-shell:860802): GNOME Shell-WARNING **: 20:35:04.786: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:860802): GNOME Shell-WARNING **: 20:35:04.856: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:860802): GNOME Shell-WARNING **: 20:35:04.856: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d"
+    ],
+    "shell_kill_without_component": [
+      "(evolution-calendar-factory:860884): libedbus-private-WARNING **: 20:35:07.493: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+    ]
+  },
+  "proofs_run": "all",
+  "transition_screens": {
+    "native": 115,
+    "media": 1
+  },
+  "layout_matrix": [
+    {
+      "layout": "three",
+      "what": "monitor added (three)",
+      "fits_canvas": true,
+      "seconds": 0.602
+    },
+    {
+      "layout": "one",
+      "what": "monitors removed (one)",
+      "fits_canvas": true,
+      "seconds": 0.476
+    },
+    {
+      "layout": "two@2",
+      "what": "scale 2 (logical resize)",
+      "fits_canvas": true,
+      "seconds": 0.52
+    },
+    {
+      "layout": "two@1.25",
+      "what": "fractional scale 1.25",
+      "fits_canvas": true,
+      "seconds": 0.525
+    },
+    {
+      "layout": "swapped",
+      "what": "reposition (order swapped)",
+      "fits_canvas": true,
+      "seconds": 0.525
+    },
+    {
+      "layout": "rotated",
+      "what": "rotation (1080x1920 resize)",
+      "fits_canvas": true,
+      "seconds": 0.592
+    },
+    {
+      "layout": "stacked",
+      "what": "reposition (stacked vertically)",
+      "fits_canvas": true,
+      "seconds": 0.532
+    },
+    {
+      "layout": "column3",
+      "what": "layout outside the committed canvas",
+      "fits_canvas": false,
+      "seconds": 0.778
+    },
+    {
+      "layout": "two",
+      "what": "two monitors",
+      "fits_canvas": true,
+      "seconds": 0.53
+    },
+    {
+      "layout": "three",
+      "what": "monitor added (three)",
+      "fits_canvas": true,
+      "seconds": 0.588
+    },
+    {
+      "layout": "two",
+      "what": "two monitors",
+      "fits_canvas": true,
+      "seconds": 0.527
+    }
+  ],
+  "holding": {
+    "thread_switches_12s": {
+      "one-mk-wall/867386": 27,
+      "presenter/867388": 0
+    },
+    "view": {
+      "state": 4,
+      "layer": true,
+      "fresh": true,
+      "reasons": 0,
+      "clones": 2,
+      "rect": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "pid": 867386,
+      "authorized": true,
+      "sources": [],
+      "attempts": 1,
+      "starts": 1,
+      "exhausted": false,
+      "children": 1,
+      "escalations": 0,
+      "serial": 1,
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080,
+          1
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080,
+          1
+        ]
+      ],
+      "lastStop": {
+        "cause": "renderer left the bus",
+        "planned": false,
+        "pid": 867158
+      }
+    },
+    "long_frames": {
+      "holding_reports": 5,
+      "moving_reports": 4
+    }
+  },
+  "reclaimed_at_start": [
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1"
+  ],
+  "restoration": {
+    "stop": 0.0,
+    "sigterm": 0.0,
+    "sigkill": 0.0,
+    "revoke": 0.0,
+    "disable": 0.0,
+    "renderer-kill": 0.0,
+    "extension-disable": 0.0,
+    "uninstall": 0.0,
+    "shell-restart": 0.0
+  },
+  "stale_empty_groups_after_bare_sigkill": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "passed": false,
+  "failure": "AssertionError: ('seq097', 'two->rotated took 3.72s')",
+  "traceback": "Traceback (most recent call last):\n  File \"/home/samer/.t3/projects/one-mk/.claude/worktrees/agent-ad820fc757181bd93/docs/spikes/gnome/qualify-m1-lifecycle.py\", line 1414, in main\n    sequence(index)\n    ~~~~~~~~^^^^^^^\n  File \"/home/samer/.t3/projects/one-mk/.claude/worktrees/agent-ad820fc757181bd93/docs/spikes/gnome/qualify-m1-lifecycle.py\", line 1237, in sequence\n    event_layout(ctx, target)\n    ~~~~~~~~~~~~^^^^^^^^^^^^^\n  File \"/home/samer/.t3/projects/one-mk/.claude/worktrees/agent-ad820fc757181bd93/docs/spikes/gnome/qualify-m1-lifecycle.py\", line 556, in event_layout\n    assert total <= LAYOUT_BOUND + 1.0, (ctx.label, f'{source}->{target} took {total:.2f}s')\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: ('seq097', 'two->rotated took 3.72s')\n",
+  "failure_view": {
+    "state": 4,
+    "layer": true,
+    "fresh": true,
+    "reasons": 0,
+    "clones": 2,
+    "rect": [
+      0,
+      0,
+      3000,
+      1920
+    ],
+    "pid": 950566,
+    "authorized": true,
+    "sources": [],
+    "attempts": 2,
+    "starts": 2,
+    "exhausted": false,
+    "children": 1,
+    "escalations": 0,
+    "serial": 6,
+    "monitors": [
+      [
+        0,
+        0,
+        1080,
+        1920,
+        1
+      ],
+      [
+        1080,
+        0,
+        1920,
+        1080,
+        1
+      ]
+    ],
+    "lastStop": {
+      "cause": "window refused (actor true, retired 0)",
+      "planned": false,
+      "pid": 950308
+    }
+  },
+  "remaining_lab_processes": {},
+  "remaining_play_groups": {}
+}

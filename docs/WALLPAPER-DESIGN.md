@@ -275,10 +275,15 @@ unbounded D-Bus fields; cross-check local geometry before adoption. Serial is
 nonzero local layout generation, separate from scene revision; wrap restarts
 bridge session. Keep current/latest pending only; coalesce events for ≤100 ms.
 
-State 0 starting, 1 playing, 2 paused, 3 failed. Unknown enums/bits/invalid geometry
+State 0 starting, 1 playing, 2 paused, 3 failed, 4 holding (added in 6D-M1 step C:
+a still or a frame due ≥2 s later is on screen, so no damage is expected and the
+Shell runs no damage watchdog until the renderer reports playing again; this is
+the frame-deadline signal, reduced to "no deadline until further notice").
+Unknown enums/bits/invalid geometry
 return `org.onemk.WallpaperBridge1.InvalidArgs`; unauthorized sender gets
 `org.freedesktop.DBus.Error.AccessDenied`. Reason mask values: 1 covered (all local
-outputs), 2 locked, 4 overview, 8 display-off, other bits zero. Mask zero permits
+outputs), 2 locked, 4 overview, 8 display-off (also set from logind's
+PrepareForSleep until resume), other bits zero. Mask zero permits
 resume, never overrides local battery/manual/session restrictions. Hide covered
 clones per monitor; all-covered sets the bit and stops decoder. Hello binds and
 returns layout, then immediately unicast current PauseHint; start hidden until
@@ -319,6 +324,9 @@ Targets below are PROPOSED unless marked MEASURED:
   probe clone ≤250 ms to restore frame callbacks. Then stop all failure timers.
   Spawn retry 1/2/4 s, ≤3 automatic starts in rolling 60 s, then static + doctor
   Retry. Caps prevent no-clone/no-frame-callback recovery deadlock and storms.
+  (Step C: a run the Shell itself ends for a pause reason, lock, sleep or
+  disable is credited back, so only failed runs reach the cap; every start in
+  the minute still lengthens the restart delay. Unlock and wake restart at once.)
 - Pause hides clones first, sends reasons, stops renderer/decoder ≤1 s
   cooperatively. SIGTERM then SIGKILL after 2 s if needed, reap ≤3 s. Cancel
   watchdog/re-probe immediately. No paused animation child/timer. Resume fresh

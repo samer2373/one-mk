@@ -1,0 +1,270 @@
+20:55:14 PASS all eight generated items imported by the real sandboxed importer (delegated cgroup v2 of this run's own transient systemd scope): gif=gif/10f, apng=apng/10f, webp=webp/10f, still=still_png/1f, vp9=vp9_webm/30f, av1=av1_webm/30f, clip1080p=vp9_webm/240f, longgif=gif/4f
+20:55:30 PASS harness control without the component (extension disabled, no daemon or renderer): the stand-in logind's PrepareForSleep, lock/unlock and a Shell SIGKILL + restart produce 10 + 1 warning records of their own; these identities are reported separately and are not charged to, nor hidden from, the component gate below
+20:55:50 PASS user wallpaper set in the private session and native baselines captured for all 9 layouts (two 3840x1080, three 5760x1080, one 1920x1080, two@2 3840x1080, two@1.25 3840x1080, swapped 3840x1080, rotated 3000x1920, stacked 1920x2160, column3 1920x3240)
+20:55:54 layouts-gif: layout two -> three verified in 1.35s
+20:55:55 layouts-gif: layout three -> one verified in 0.88s
+20:55:56 layouts-gif: layout one -> two@2 verified in 1.01s
+20:55:57 layouts-gif: layout two@2 -> two@1.25 verified in 1.03s
+20:55:58 layouts-gif: layout two@1.25 -> swapped verified in 1.17s
+20:55:59 layouts-gif: layout swapped -> rotated verified in 1.33s
+20:56:01 layouts-gif: layout rotated -> stacked verified in 1.12s
+20:56:04 layouts-gif: layout stacked -> column3 static in 0.95s
+20:56:06 layouts-gif: layout column3 -> two verified in 1.36s
+20:56:07 layouts-gif: layout two -> three verified in 1.54s
+20:56:08 layouts-gif: layout three -> two verified in 1.19s
+20:56:12 layouts-gif: burst ['one', 'rotated', 'two@1.25'] converged pid 967647
+20:56:13 layouts-gif: layout two@1.25 -> two verified in 1.08s
+20:56:13 PASS layout change / hot-plug with real GIF playback (same renderer PID 967647 throughout): monitor added (three) -> revealed in 0.68s; monitors removed (one) -> revealed in 0.55s; scale 2 (logical resize) -> revealed in 0.61s; fractional scale 1.25 -> revealed in 0.63s; reposition (order swapped) -> revealed in 0.65s; rotation (1080x1920 resize) -> revealed in 0.71s; reposition (stacked vertically) -> revealed in 0.62s; layout outside the committed canvas -> static user wallpaper in 0.95s; two monitors -> revealed in 0.74s; monitor added (three) -> revealed in 0.84s; two monitors -> revealed in 0.68s (each revealed layout then verified exact on every pixel at scale 1, at block centres when scaled); transition screenshots never showed a frame sliced for the old layout; worst 0.84s; a 3-change burst (150 ms apart) converged; renderer exit and restoration after stop
+20:56:16 layouts-vp9: layout two -> three verified in 1.28s
+20:56:17 layouts-vp9: layout three -> two@1.25 verified in 1.06s
+20:56:18 layouts-vp9: layout two@1.25 -> swapped verified in 1.03s
+20:56:20 layouts-vp9: layout swapped -> two verified in 1.05s
+20:56:24 layouts-still: layout two -> three verified in 1.57s
+20:56:25 layouts-still: layout three -> two@1.25 verified in 1.28s
+20:56:26 layouts-still: layout two@1.25 -> swapped verified in 1.34s
+20:56:28 layouts-still: layout swapped -> two verified in 1.31s
+20:56:28 PASS VP9 (PSNR) and the still (exact, holding) re-slice through add, fractional scale, reposition and back
+20:56:48 PASS lock/unlock x6 within about a minute with VP9: at lock the renderer exits via SIGTERM in 109-208 ms (worker and cgroup removed by the renderer itself); while locked no bridge, renderer, decoder, cgroup or timer exists and the lock screen shows no frame; each unlock starts a fresh renderer showing verified advancing frames in 957-1219 ms; the restart cap is not consumed by lock cycles (attempts 1, not exhausted)
+20:56:58 PASS suspend/resume via PrepareForSleep on the private system bus with APNG: before sleep the presentation is hidden and the renderer exits (SIGTERM, 29-49 ms, no worker or cgroup left); asleep the screen is the user wallpaper with no restart/watchdog timers; after resume a fresh renderer shows verified advancing frames (752-1591 ms), both with and without the Shell's lock-on-suspend
+20:57:31 PASS stills and long frames announce Holding instead of being re-committed: the still stays revealed 12 s (4x the Shell watchdog) unchanged in state 4 with no Shell watchdog source and zero presenter-thread wakeups (renderer thread switches over 12 s: {'one-mk-wall/974340': 27, 'presenter/974346': 0}); a GIF with 2.6 s frames alternates Holding/Playing (5/4 in 12 s) and is never stopped by the watchdog
+20:57:43 PASS renderer crashes still count: two SIGKILLs are each followed by a fresh verified renderer (Shell restart after 2 s, then 4 s), the third within the minute latches the restart cap; the screen is the user wallpaper; the one empty group the killed renderer left is reclaimed by the next renderer at start
+20:58:13 restore-uninstall: Shell restarted (uninstall=True); native error 0.000
+20:58:25 restore-shell: Shell restarted (uninstall=False); native error 0.000
+20:58:28 PASS restoration: after daemon one-mk stop, SIGTERM, SIGKILL, consent revoke, wallpaper disable, bare renderer SIGKILL, extension disable, extension uninstall and GNOME Shell SIGKILL + restart, the screen equals the user's own wallpaper (mean error stop 0.0, sigterm 0.0, sigkill 0.0, revoke 0.0, disable 0.0, renderer-kill 0.0, extension-disable 0.0, uninstall 0.0, shell-restart 0.0), picture-uri untouched, no renderer, worker, cgroup or other process left; playback works again in the restarted Shell
+20:58:28 seq000: item=still layout=two events=['layout', 'lock'] teardown=extension-disable
+20:58:31 seq000: layout two -> rotated verified in 1.57s
+20:58:35 seq001: item=still layout=rotated events=['layout', 'layout'] teardown=sigkill
+20:58:39 seq001: layout rotated -> swapped verified in 2.38s
+20:58:43 seq001: layout swapped -> column3 static in 1.21s
+20:58:44 seq002: item=clip1080p layout=swapped events=['suspend-lock', 'lock', 'suspend'] teardown=sigterm
+20:58:56 seq003: item=clip1080p layout=swapped events=['layout', 'pause'] teardown=disable
+20:59:00 seq003: layout swapped -> two@2 verified in 1.59s
+20:59:02 seq004: item=webp layout=two@2 events=['suspend', 'layout'] teardown=stop
+20:59:07 seq004: layout two@2 -> two@1.25 verified in 1.10s
+20:59:08 seq005: item=apng layout=two@1.25 events=['layout', 'pause', 'lock', 'lock'] teardown=sigterm
+20:59:10 seq005: layout two@1.25 -> two@2 verified in 1.04s
+20:59:19 seq006: item=still layout=two@2 events=['lock', 'suspend-lock', 'layout'] teardown=extension-disable
+20:59:29 seq006: layout two@2 -> two verified in 1.52s
+20:59:30 seq007: item=clip1080p layout=two events=['layout', 'layout', 'extension-cycle', 'renderer-kill'] teardown=extension-disable
+20:59:32 seq007: layout two -> one verified in 1.00s
+20:59:33 seq007: layout one -> swapped verified in 1.27s
+20:59:38 seq008: item=still layout=swapped events=['layout', 'renderer-kill', 'lock'] teardown=renderer-kill
+20:59:41 seq008: layout swapped -> two@1.25 verified in 1.34s
+20:59:47 seq009: item=still layout=two@1.25 events=['layout', 'suspend', 'suspend'] teardown=extension-disable
+20:59:54 seq009: layout two@1.25 -> column3 static in 1.85s
+20:59:59 seq010: item=gif layout=two events=['layout', 'suspend'] teardown=revoke
+21:00:02 seq010: layout two -> swapped verified in 1.59s
+21:00:05 seq011: item=apng layout=swapped events=['pause', 'layout'] teardown=disable
+21:00:09 seq011: layout swapped -> two@1.25 verified in 1.05s
+21:00:10 seq012: item=apng layout=two@1.25 events=['layout', 'layout', 'layout', 'pause'] teardown=disable
+21:00:12 seq012: layout two@1.25 -> two@2 verified in 1.03s
+21:00:14 seq012: layout two@2 -> stacked verified in 1.15s
+21:00:14 seq012: layout stacked -> one verified in 0.89s
+21:00:16 seq013: item=apng layout=one events=['suspend', 'pause', 'renderer-kill', 'lock'] teardown=sigterm
+21:00:26 seq014: item=vp9 layout=one events=['renderer-kill', 'pause', 'pause', 'layout-burst'] teardown=sigkill
+21:00:37 seq014: burst ['three', 'swapped', 'two'] converged pid 997173
+21:00:38 seq015: item=still layout=two events=['layout', 'layout', 'lock'] teardown=stop
+21:00:41 seq015: layout two -> rotated verified in 1.54s
+21:00:43 seq015: layout rotated -> two@2 verified in 1.33s
+21:00:46 seq016: item=vp9 layout=two@2 events=['layout', 'layout', 'layout', 'suspend'] teardown=renderer-kill
+21:00:49 seq016: layout two@2 -> two verified in 1.04s
+21:00:50 seq016: layout two -> stacked verified in 0.98s
+21:00:51 seq016: layout stacked -> two verified in 0.97s
+21:00:55 seq017: item=vp9 layout=two events=['suspend-lock', 'suspend', 'layout'] teardown=disable
+21:01:02 seq017: layout two -> swapped verified in 1.06s
+21:01:03 seq018: item=longgif layout=swapped events=['pause', 'extension-cycle', 'layout'] teardown=revoke
+21:01:11 seq018: layout swapped -> stacked verified in 3.83s
+21:01:12 seq019: item=clip1080p layout=stacked events=['pause', 'extension-cycle', 'extension-cycle', 'layout'] teardown=extension-disable
+21:01:18 seq019: layout stacked -> two@2 verified in 1.19s
+21:01:19 seq020: item=still layout=two@2 events=['extension-cycle', 'suspend-lock', 'lock'] teardown=disable
+21:01:27 seq021: item=apng layout=two@2 events=['suspend', 'layout', 'layout'] teardown=uninstall
+21:01:32 seq021: layout two@2 -> one verified in 0.82s
+21:01:33 seq021: layout one -> rotated verified in 1.16s
+21:01:45 seq021: Shell restarted (uninstall=True); native error 0.000
+21:01:45 seq022: item=still layout=three events=['layout', 'lock', 'pause', 'layout-burst'] teardown=extension-disable
+21:01:51 seq022: layout three -> rotated verified in 2.85s
+21:02:00 seq022: burst ['one', 'stacked', 'swapped'] converged pid 1003716
+21:02:01 seq023: item=av1 layout=swapped events=['pause', 'pause'] teardown=sigkill
+21:02:04 seq024: item=vp9 layout=swapped events=['suspend-lock', 'layout', 'lock'] teardown=renderer-kill
+21:02:10 seq024: layout swapped -> two verified in 0.99s
+21:02:14 seq025: item=webp layout=two events=['pause', 'lock', 'layout', 'suspend'] teardown=uninstall
+21:02:22 seq025: layout two -> two@1.25 verified in 0.93s
+21:02:35 seq025: Shell restarted (uninstall=True); native error 0.000
+21:02:35 seq026: item=vp9 layout=three events=['extension-cycle', 'extension-cycle', 'layout', 'layout-burst'] teardown=renderer-kill
+21:02:40 seq026: layout three -> two verified in 1.00s
+21:02:43 seq026: burst ['two@1.25', 'two@2', 'swapped'] converged pid 1007327
+21:02:45 seq027: item=webp layout=swapped events=['pause', 'suspend-lock', 'suspend'] teardown=stop
+21:02:53 seq028: item=apng layout=swapped events=['pause', 'layout', 'suspend-lock', 'layout'] teardown=revoke
+21:02:57 seq028: layout swapped -> three verified in 1.20s
+21:03:03 seq028: layout three -> column3 static in 0.79s
+21:03:04 seq029: item=vp9 layout=two events=['suspend', 'suspend-lock'] teardown=sigkill
+21:03:11 seq030: item=clip1080p layout=two events=['layout', 'suspend', 'layout-burst'] teardown=sigterm
+21:03:14 seq030: layout two -> three verified in 1.44s
+21:03:20 seq030: burst ['rotated', 'two@2', 'stacked'] converged pid 1010685
+21:03:21 seq031: item=gif layout=stacked events=['renderer-kill', 'extension-cycle', 'layout-burst', 'suspend-lock'] teardown=uninstall
+21:03:32 seq031: burst ['two', 'swapped', 'two@2'] converged pid 1011623
+21:03:45 seq031: Shell restarted (uninstall=True); native error 0.000
+21:03:45 seq032: item=clip1080p layout=three events=['renderer-kill', 'layout', 'layout'] teardown=stop
+21:03:51 seq032: layout three -> two verified in 1.16s
+21:03:52 seq032: layout two -> three verified in 1.41s
+21:03:53 seq033: item=longgif layout=three events=['layout', 'suspend-lock', 'pause'] teardown=stop
+21:03:56 seq033: layout three -> two@1.25 verified in 0.92s
+21:04:00 seq034: item=gif layout=two@1.25 events=['layout', 'layout'] teardown=renderer-kill
+21:04:02 seq034: layout two@1.25 -> one verified in 0.79s
+21:04:03 seq034: layout one -> stacked verified in 0.99s
+21:04:06 seq035: item=apng layout=stacked events=['layout', 'pause', 'lock', 'pause'] teardown=disable
+21:04:08 seq035: layout stacked -> two verified in 0.99s
+21:04:13 seq036: item=apng layout=two events=['suspend', 'suspend-lock', 'suspend', 'layout'] teardown=revoke
+21:04:23 seq036: layout two -> swapped verified in 0.99s
+21:04:23 seq037: item=clip1080p layout=swapped events=['suspend-lock', 'layout', 'lock', 'renderer-kill'] teardown=stop
+21:04:29 seq037: layout swapped -> two@2 verified in 1.17s
+21:04:35 seq038: item=webp layout=two@2 events=['layout-burst', 'layout'] teardown=renderer-kill
+21:04:40 seq038: burst ['rotated', 'two', 'swapped'] converged pid 1017141
+21:04:41 seq038: layout swapped -> two verified in 0.99s
+21:04:43 seq039: item=still layout=two events=['pause', 'lock'] teardown=renderer-kill
+21:04:50 seq040: item=apng layout=two events=['layout', 'layout'] teardown=sigterm
+21:04:53 seq040: layout two -> three verified in 1.25s
+21:04:56 seq040: layout three -> column3 static in 0.81s
+21:04:57 seq041: item=longgif layout=two events=['layout', 'layout', 'lock', 'renderer-kill'] teardown=sigterm
+21:05:00 seq041: layout two -> three verified in 1.21s
+21:05:01 seq041: layout three -> one verified in 0.78s
+21:05:07 seq042: item=av1 layout=one events=['extension-cycle', 'suspend'] teardown=revoke
+21:05:11 seq043: item=longgif layout=one events=['suspend-lock', 'lock', 'lock'] teardown=sigkill
+21:05:21 seq044: item=gif layout=one events=['renderer-kill', 'layout', 'layout-burst', 'pause'] teardown=shell-restart
+21:05:28 seq044: layout one -> column3 static in 0.81s
+21:05:29 seq044: layout column3 -> stacked verified in 0.99s
+21:05:34 seq044: burst ['one', 'three', 'swapped'] converged pid 1020793
+21:05:45 seq044: Shell restarted (uninstall=False); native error 0.000
+21:05:45 seq045: item=clip1080p layout=three events=['layout', 'pause', 'layout'] teardown=extension-disable
+21:05:48 seq045: layout three -> two@1.25 verified in 1.15s
+21:05:51 seq045: layout two@1.25 -> swapped verified in 1.16s
+21:05:51 seq046: item=still layout=swapped events=['layout', 'extension-cycle', 'layout'] teardown=uninstall
+21:05:54 seq046: layout swapped -> two verified in 1.25s
+21:05:56 seq046: layout two -> swapped verified in 1.27s
+21:06:07 seq046: Shell restarted (uninstall=True); native error 0.000
+21:06:07 seq047: item=apng layout=three events=['layout', 'suspend'] teardown=shell-restart
+21:06:10 seq047: layout three -> stacked verified in 1.01s
+21:06:21 seq047: Shell restarted (uninstall=False); native error 0.000
+21:06:21 seq048: item=vp9 layout=three events=['suspend', 'suspend-lock', 'layout-burst', 'pause'] teardown=disable
+21:06:32 seq048: burst ['two@1.25', 'two', 'rotated'] converged pid 1025804
+21:06:33 seq049: item=longgif layout=rotated events=['layout', 'layout-burst', 'layout'] teardown=renderer-kill
+21:06:36 seq049: layout rotated -> two@1.25 verified in 0.90s
+21:06:39 seq049: burst ['two@2', 'rotated', 'three'] converged pid 1026409
+21:06:41 seq049: layout three -> rotated verified in 1.13s
+21:06:43 seq050: item=still layout=rotated events=['renderer-kill', 'extension-cycle'] teardown=uninstall
+21:07:00 seq050: Shell restarted (uninstall=True); native error 0.000
+21:07:00 seq051: item=longgif layout=three events=['extension-cycle', 'suspend', 'suspend-lock', 'pause'] teardown=renderer-kill
+21:07:12 seq052: item=still layout=three events=['suspend-lock', 'suspend', 'layout'] teardown=sigterm
+21:07:20 seq052: layout three -> one verified in 1.03s
+21:07:21 seq053: item=av1 layout=one events=['layout', 'suspend', 'layout-burst'] teardown=uninstall
+21:07:26 seq053: layout one -> column3 static in 0.81s
+21:07:28 seq053: layout column3 -> swapped verified in 0.95s
+21:07:32 seq053: burst ['rotated', 'three', 'two@1.25'] converged pid 1030165
+21:07:42 seq053: Shell restarted (uninstall=True); native error 0.000
+21:07:42 seq054: item=apng layout=three events=['suspend', 'suspend-lock', 'lock', 'suspend-lock'] teardown=sigterm
+21:07:55 seq055: item=still layout=three events=['lock', 'renderer-kill', 'lock', 'suspend'] teardown=renderer-kill
+21:08:10 seq056: item=av1 layout=three events=['layout', 'layout', 'renderer-kill', 'lock'] teardown=extension-disable
+21:08:13 seq056: layout three -> rotated verified in 1.12s
+21:08:14 seq056: layout rotated -> two verified in 0.96s
+21:08:21 seq057: item=still layout=two events=['suspend', 'layout', 'suspend', 'renderer-kill'] teardown=sigterm
+21:08:25 seq057: layout two -> swapped verified in 1.27s
+21:08:31 seq058: item=apng layout=swapped events=['layout', 'suspend-lock', 'pause'] teardown=sigkill
+21:08:34 seq058: layout swapped -> three verified in 1.31s
+21:08:39 seq059: item=apng layout=three events=['layout-burst', 'layout', 'layout-burst'] teardown=sigkill
+21:08:44 seq059: burst ['two@1.25', 'rotated', 'swapped'] converged pid 1036168
+21:08:45 seq059: layout swapped -> stacked verified in 1.05s
+21:08:51 seq059: burst ['two@2', 'two', 'rotated'] converged pid 1036638
+21:08:52 seq060: item=av1 layout=rotated events=['suspend', 'extension-cycle', 'lock', 'lock'] teardown=sigterm
+21:09:03 seq061: item=apng layout=rotated events=['layout', 'layout', 'lock', 'layout'] teardown=sigkill
+21:09:06 seq061: layout rotated -> two@1.25 verified in 0.91s
+21:09:07 seq061: layout two@1.25 -> three verified in 1.21s
+21:09:11 seq061: layout three -> swapped verified in 1.01s
+21:09:11 seq062: item=clip1080p layout=swapped events=['suspend', 'renderer-kill', 'suspend-lock'] teardown=sigkill
+21:09:22 seq063: item=longgif layout=swapped events=['lock', 'layout', 'suspend'] teardown=sigkill
+21:09:27 seq063: layout swapped -> two@2 verified in 0.89s
+21:09:30 seq064: item=longgif layout=two@2 events=['lock', 'suspend-lock', 'lock', 'lock'] teardown=disable
+21:09:42 seq065: item=still layout=two@2 events=['layout-burst', 'lock'] teardown=extension-disable
+21:09:48 seq065: burst ['one', 'rotated', 'three'] converged pid 1040347
+21:09:52 seq066: item=vp9 layout=three events=['suspend', 'renderer-kill', 'extension-cycle'] teardown=disable
+21:09:59 seq067: item=webp layout=three events=['layout', 'suspend', 'extension-cycle'] teardown=extension-disable
+21:10:02 seq067: layout three -> two@2 verified in 0.96s
+21:10:06 seq068: item=still layout=two@2 events=['renderer-kill', 'layout', 'lock', 'lock'] teardown=disable
+21:10:11 seq068: layout two@2 -> stacked verified in 1.24s
+21:10:17 seq069: item=still layout=stacked events=['layout-burst', 'lock', 'layout', 'pause'] teardown=shell-restart
+21:10:23 seq069: burst ['one', 'rotated', 'two'] converged pid 1042722
+21:10:26 seq069: layout two -> two@1.25 verified in 1.22s
+21:10:37 seq069: Shell restarted (uninstall=False); native error 0.000
+21:10:38 seq070: item=vp9 layout=three events=['lock', 'lock', 'lock'] teardown=sigkill
+21:10:48 seq071: item=webp layout=three events=['layout', 'layout', 'suspend', 'lock'] teardown=revoke
+21:10:51 seq071: layout three -> two@1.25 verified in 0.93s
+21:10:52 seq071: layout two@1.25 -> two verified in 0.99s
+21:10:57 seq072: item=longgif layout=two events=['lock', 'extension-cycle', 'lock'] teardown=shell-restart
+21:11:15 seq072: Shell restarted (uninstall=False); native error 0.000
+21:11:15 seq073: item=webp layout=three events=['layout', 'layout', 'extension-cycle'] teardown=renderer-kill
+21:11:18 seq073: layout three -> swapped verified in 1.01s
+21:11:19 seq073: layout swapped -> one verified in 0.79s
+21:11:22 seq074: item=av1 layout=one events=['pause', 'layout-burst'] teardown=disable
+21:11:27 seq074: burst ['two@1.25', 'stacked', 'rotated'] converged pid 1047965
+21:11:28 seq075: item=vp9 layout=rotated events=['suspend-lock', 'layout', 'pause', 'suspend'] teardown=sigterm
+21:11:33 seq075: layout rotated -> three verified in 1.15s
+21:11:37 seq076: item=longgif layout=three events=['renderer-kill', 'lock', 'lock', 'suspend-lock'] teardown=stop
+21:11:51 seq077: item=webp layout=three events=['layout', 'renderer-kill', 'lock'] teardown=revoke
+21:11:54 seq077: layout three -> two@1.25 verified in 0.92s
+21:11:59 seq078: item=still layout=two@1.25 events=['lock', 'layout', 'extension-cycle'] teardown=stop
+21:12:05 seq078: layout two@1.25 -> swapped verified in 1.25s
+21:12:07 seq079: item=still layout=swapped events=['layout', 'layout-burst', 'layout'] teardown=sigterm
+21:12:10 seq079: layout swapped -> two verified in 1.24s
+21:12:14 seq079: burst ['stacked', 'one', 'swapped'] converged pid 1051071
+21:12:15 seq079: layout swapped -> two@1.25 verified in 1.19s
+21:12:16 seq080: item=gif layout=two@1.25 events=['extension-cycle', 'extension-cycle', 'layout'] teardown=stop
+21:12:20 seq080: layout two@1.25 -> stacked verified in 1.00s
+21:12:21 seq081: item=vp9 layout=stacked events=['extension-cycle', 'suspend', 'lock', 'layout-burst'] teardown=uninstall
+21:12:33 seq081: burst ['two@1.25', 'three', 'rotated'] converged pid 1052527
+21:12:44 seq081: Shell restarted (uninstall=True); native error 0.000
+21:12:44 seq082: item=longgif layout=three events=['layout-burst', 'extension-cycle', 'layout'] teardown=stop
+21:12:49 seq082: burst ['two@2', 'two@1.25', 'stacked'] converged pid 1054020
+21:12:51 seq082: layout stacked -> two verified in 0.99s
+21:12:51 seq083: item=apng layout=two events=['layout', 'pause', 'lock', 'suspend-lock'] teardown=extension-disable
+21:12:54 seq083: layout two -> two@2 verified in 0.89s
+21:13:01 seq084: item=longgif layout=two@2 events=['lock', 'suspend'] teardown=revoke
+21:13:06 seq085: item=still layout=two@2 events=['lock', 'layout', 'suspend-lock', 'layout'] teardown=disable
+21:13:12 seq085: layout two@2 -> two verified in 1.23s
+21:13:16 seq085: layout two -> two@2 verified in 1.18s
+21:13:17 seq086: item=longgif layout=two@2 events=['lock', 'extension-cycle', 'renderer-kill'] teardown=extension-disable
+21:13:26 seq087: item=apng layout=two@2 events=['pause', 'suspend', 'suspend', 'lock'] teardown=renderer-kill
+21:13:36 seq088: item=longgif layout=two@2 events=['pause', 'layout'] teardown=uninstall
+21:13:39 seq088: layout two@2 -> one verified in 0.78s
+21:13:50 seq088: Shell restarted (uninstall=True); native error 0.000
+21:13:50 seq089: item=clip1080p layout=three events=['layout', 'pause'] teardown=uninstall
+21:13:53 seq089: layout three -> one verified in 0.96s
+21:14:04 seq089: Shell restarted (uninstall=True); native error 0.000
+21:14:04 seq090: item=longgif layout=three events=['layout', 'layout', 'layout'] teardown=sigkill
+21:14:07 seq090: layout three -> swapped verified in 0.98s
+21:14:08 seq090: layout swapped -> two verified in 0.97s
+21:14:09 seq090: layout two -> stacked verified in 0.98s
+21:14:09 seq091: item=still layout=stacked events=['lock', 'layout'] teardown=revoke
+21:14:17 seq091: layout stacked -> column3 static in 0.82s
+21:14:18 seq092: item=vp9 layout=one events=['layout-burst', 'layout'] teardown=sigkill
+21:14:23 seq092: burst ['swapped', 'rotated', 'three'] converged pid 1062096
+21:14:24 seq092: layout three -> stacked verified in 0.95s
+21:14:25 seq093: item=vp9 layout=stacked events=['extension-cycle', 'suspend', 'lock'] teardown=sigterm
+21:14:32 seq094: item=clip1080p layout=stacked events=['layout', 'suspend-lock'] teardown=shell-restart
+21:14:36 seq094: layout stacked -> two@1.25 verified in 1.18s
+21:14:48 seq094: Shell restarted (uninstall=False); native error 0.000
+21:14:48 seq095: item=gif layout=three events=['layout', 'suspend'] teardown=sigterm
+21:14:51 seq095: layout three -> two verified in 1.00s
+21:14:54 seq096: item=vp9 layout=two events=['layout-burst', 'layout', 'lock', 'layout'] teardown=revoke
+21:14:59 seq096: burst ['stacked', 'rotated', 'two@2'] converged pid 1065119
+21:15:00 seq096: layout two@2 -> stacked verified in 0.94s
+21:15:03 seq096: layout stacked -> two@2 verified in 0.93s
+21:15:04 seq097: item=longgif layout=two@2 events=['layout-burst', 'layout', 'pause', 'layout'] teardown=sigterm
+21:15:09 seq097: burst ['stacked', 'two@1.25', 'two'] converged pid 1065904
+21:15:10 seq097: layout two -> rotated verified in 1.20s
+21:15:12 seq097: layout rotated -> stacked verified in 1.00s
+21:15:13 seq098: item=still layout=stacked events=['layout-burst', 'layout', 'pause', 'suspend-lock'] teardown=extension-disable
+21:15:18 seq098: burst ['two@2', 'swapped', 'rotated'] converged pid 1066552
+21:15:20 seq098: layout rotated -> two@1.25 verified in 1.20s
+21:15:24 seq099: item=vp9 layout=two@1.25 events=['lock', 'layout', 'extension-cycle'] teardown=extension-disable
+21:15:28 seq099: layout two@1.25 -> rotated verified in 1.11s
+21:15:30 PASS 100 randomized lifecycle sequences (seed 20261031; events {"layout": 119, "layout-burst": 23, "teardown-stop": 19, "lock": 59, "suspend": 40, "suspend-lock": 28, "renderer-kill": 21, "teardown-sigterm": 16, "teardown-sigkill": 14, "teardown-revoke": 11, "teardown-disable": 13, "teardown-renderer-kill": 13, "teardown-extension-disable": 15, "uninstall-restart": 10, "shell-restart": 6, "pause": 33, "extension-cycle": 25}): every sequence started real playback of a random imported item, every event ended in verified frames or the expected static user wallpaper within its bound, every teardown restored the user wallpaper with no leftover process or cgroup
+21:15:30 PASS zero new Mutter/Shell warning records versus the M1a-2 baseline across all 18 Shell sessions (822 records: baseline-known, or 223 of the identities the control phase produced without the component); 2 new records from other session services (not Shell/Mutter, never ours) are listed in result.json

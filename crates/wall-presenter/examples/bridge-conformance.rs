@@ -7,7 +7,7 @@ async fn main() -> one_mk_wall::gnome_bridge::Result<()> {
     let descriptor = std::env::var("WAYLAND_SOCKET")?.parse()?;
     let mut client = one_mk_wall::gnome_bridge::Bridge::connect(descriptor).await?;
     let proxy = zbus::Proxy::new(client.connection(), client.owner(), bridge::PATH, bridge::NAME).await?;
-    for (method, value, expected) in [("Hello", 2_u32, "NotSupported"), ("SetState", 4, "InvalidArgs")] {
+    for (method, value, expected) in [("Hello", 2_u32, "NotSupported"), ("SetState", 5, "InvalidArgs")] {
         let error = proxy.call_method(method, &(value,)).await.unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }

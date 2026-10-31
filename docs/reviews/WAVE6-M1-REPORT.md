@@ -1,6 +1,88 @@
 # Wave 6 M1 implementation slices — NOT M1 completion
 
-## Latest slice: step B reached in the private laboratory (C–D not)
+## Latest slice: step C reached in the private laboratory (D not)
+
+October 31, 2026 (Asia/Amman). Branch `worktree-agent-ad820fc757181bd93` on top
+of `500f237` (steps A, B and review fixes). **Step C of 6D-M1 (lifecycle and
+restoration) is done and proven in the private GNOME 50.1 harness with real
+playback; M1 is not complete** (step D, production authorization, stays false).
+The 16–26 engineer-week remaining estimate is not reduced by laboratory steps.
+
+**Done.** Extension: cooperative stops (SIGTERM, SIGKILL after 2 s, escalation
+survives disable); suspend via logind `PrepareForSleep` (pause reason 8 until
+resume, prompt restart on wake, like unlock); bridge state 4 *holding* (stills
+and frames ≥2 s announce that no damage is due, so neither the renderer's 2 s
+keepalive commits nor the Shell's damage watchdog run); windows adopted under
+an older layout serial are never revealed again and the layer hides without a
+fresh window; Shell-chosen stops no longer consume the three-per-minute restart
+cap (crashes still do); the first healthy frame ends the start deadline; stop
+causes recorded. Renderer (`m1-lab`): clean SIGTERM teardown (worker, cgroup,
+surface), Holding/Playing reports per playback generation, spurious Wayland
+`EAGAIN` no longer fatal, stale playback groups reclaimed at start. Publisher/
+Gate: a local layout outside the committed canvas is published paused (static)
+and admitted; a playing plan must still fit. Harness: stand-in logind on the
+private system bus, explicit layouts, in-place session restart, own delegated
+transient scope, `qualify-m1-lifecycle.py` with a no-component control phase.
+
+**Proven** by `qualify-m1-lifecycle.py` ([evidence](../spikes/gnome/m1-lifecycle-evidence/README.md)),
+three virtual monitors, eight locally generated imported items:
+(1) add/remove/scale 2/scale 1.25/reposition/rotation: same renderer re-plans,
+verified exact slices revealed in median 0.57 s, max 1.58 s over 111 changes;
+never old slicing on screen; a layout outside the canvas is static and recovers;
+(2) lock: renderer exits by SIGTERM (median 97 ms, max 208 ms), nothing of ours
+exists while locked, unlock shows verified frames (max 2.6 s), six cycles a
+minute leave the cap untouched; (3) simulated suspend with and without
+lock-on-suspend: exit before sleep (max 49 ms), user wallpaper while asleep,
+fresh verified frames after wake (max 1.8 s), no worker left; (4) after daemon
+stop/SIGTERM/SIGKILL, revoke, disable, bare renderer SIGKILL, extension disable,
+uninstall and Shell SIGKILL + restart, the screenshot equals the user's own
+generated wallpaper (mean error 0.0), `picture-uri` untouched, no process or
+cgroup of ours left (a bare renderer SIGKILL leaves one empty group until the
+next renderer reclaims it); (5) a still shows 12 s in state 4 with zero
+presenter wakeups and no Shell watchdog; (6) 100 randomized sequences (seed
+20261031: 119 layout changes, 23 bursts, 59 locks, 68 suspends, 21 renderer
+kills, 33 pause/play, 25 extension cycles, every teardown kind, 16 Shell
+restarts) all ended verified or correctly static with nothing left; (7) zero
+new Mutter/Shell warning records versus the M1a-2 baseline across 18 sessions,
+with harness-caused identities measured separately in a control phase with
+nothing of ours enabled. Bonus: the importer's two native cgroup kernel tests
+passed against a child of the private delegation.
+
+**Not proven / not done.** Step D: production authorization and its channel
+(the laboratory re-authorizes each new bridge instance by private Eval; after a
+daemon stop the authorized lab Shell retries the renderer, which fails and
+counts toward the cap — production must withdraw authorization instead).
+Suspend is the logind signal only (no real sleep, frozen processes, GPU/DRM
+resume); lock has no real GDM/authentication; virtual monitors only (no
+physical outputs, mixed scales, HiDPI sampling or content rotation); an unfit
+layout pauses all local outputs (per-output static needs 6D-M2 wire changes).
+The still keepalive is gone, but a 0.5 Hz authenticated heartbeat to the daemon
+remains in the renderer by design (wedged-daemon bound; zbus does not drop
+`Changed` signals); removing it is a step D decision. "Shell restart" is SIGKILL
+plus a fresh private session with the wallpaper setting re-applied by the
+harness. One machine; no power or long-duration data. No Muro/Aura/Hanabi code
+was consulted or copied.
+
+**Validation.** Clean env (`env -i`, throwaway HOME, mode-0700 XDG_RUNTIME_DIR,
+ONE_MK_HOME, one worktree CARGO_TARGET_DIR, `-j 2`, offline): `cargo test
+--workspace` **1,212 passed, 0 failed, 17 ignored** (43 result records);
+`cargo clippy --workspace --all-targets -- -D warnings` passed, also with
+`--features one-mk-wall/gnome-bridge` and with
+`--features one-mk/wallpaper-m1-lab,one-mk-wall/m1-lab`; `one-mk-wall` lab unit
+tests 7 passed; daemon lab tests 13 passed; warning-gate Python tests passed;
+`git diff --check` clean. No formatter ran. The qualifying harness run was the
+third 100-sequence attempt; attempts 1–3 failed only on harness rules (lossy
+frame-identification margin; an evolution-addressbook record at Shell kills;
+a bound that included verification time), recorded in the evidence; no product
+code changed between attempt 1 and the qualifying run.
+
+**Cleanup.** The harness finalizer stopped the private session (no remaining
+laboratory process or playback group in `result.json`); the transient scope,
+its cgroups, the trusted-runtime directory, `/tmp` scratch and the worktree
+build target were removed after the evidence was copied. No owner desktop, X
+server, clipboard, real session bus or `~/.config/one-mk` was touched.
+
+## Previous slice: step B reached in the private laboratory (C–D not)
 
 October 31, 2026 (Asia/Amman). Branch `worktree-agent-a09a60f8d1fd50bec` on top
 of `2b5bf48` (step A). **Step B of 6D-M1 is done and proven with real

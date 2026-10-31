@@ -173,6 +173,9 @@ impl Publisher {
 
     pub fn generation(&self) -> [u8; 16] { self.generation }
 
+    /// A layout with an output outside the committed canvas (added, or moved
+    /// past its edge) gets a paused plan: the whole local presentation stays
+    /// static until the layout fits again; the canvas is never reflowed.
     pub fn plan(&mut self, revision: u64, serial: u32, monitors: &[Monitor], paused: bool)
         -> Result<Vec<u8>, presentation::Error> {
         if revision == 0 { return Err(presentation::Error::Consent); }
@@ -186,6 +189,9 @@ impl Publisher {
             slices.push(Slice { screen: format!("monitor-{index}"),
                 canvas: Rect { x, y, width: width as u32, height: height as u32 } });
         }
+        let mut fits = true;
+        for slice in &slices { fits &= self.canvas.contains(slice.canvas)?; }
+        let paused = paused || !fits;
         let sequence = self.sequence.checked_add(1).ok_or(presentation::Error::Replay)?;
         let plan = PresentationPlan { generation: self.generation, consent_revision: revision, sequence,
             layout_serial: serial, media_id: self.media, canvas: self.canvas, slices, looping: true, paused };

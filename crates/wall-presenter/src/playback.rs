@@ -140,12 +140,20 @@ pub struct Request {
     pub monitors: Vec<Monitor>,
 }
 
-enum Command { Play(Box<Request>), Stop, Shutdown }
+enum Command { Play(u64, Box<Request>), Stop, Shutdown }
 
+/// What the presenter tells the session. Each report names the playback
+/// (`generation`, as returned by `Presenter::play`) it belongs to, so a
+/// report from a replaced or stopped playback can be ignored.
 #[derive(Debug)]
 pub enum Report {
     /// The first frame of this playback was committed.
-    FirstFrame { latency: Duration },
+    FirstFrame { generation: u64, latency: Duration },
+    /// A still or a long frame is on screen: no new frame is due soon, so the
+    /// Shell must not expect damage (bridge state Holding).
+    Holding { generation: u64 },
+    /// Frames are changing again after a hold (bridge state Playing).
+    Moving { generation: u64 },
     /// Playback cannot continue (decoder, sandbox or surface failure).
     Failed(String),
 }
@@ -177,6 +185,7 @@ pub struct Presenter {
     wake: std::sync::Arc<Wake>,
     pub reports: tokio::sync::mpsc::UnboundedReceiver<Report>,
     thread: Option<std::thread::JoinHandle<()>>,
+    generation: u64,
 }
 
 impl Presenter {
@@ -192,7 +201,7 @@ impl Presenter {
                 let _ = reporter.send(Report::Failed(error));
             }
         }).map_err(|error| error.to_string())?;
-        Ok(Self { commands, wake, reports, thread: Some(thread) })
+        Ok(Self { commands, wake, reports, thread: Some(thread), generation: 0 })
     }
 
     fn send(&self, command: Command) {
@@ -200,7 +209,12 @@ impl Presenter {
         self.wake.signal();
     }
 
-    pub fn play(&self, request: Request) { self.send(Command::Play(Box::new(request))) }
+    /// Starts (or replaces) playback; returns the generation its reports carry.
+    pub fn play(&mut self, request: Request) -> u64 {
+        self.generation += 1;
+        self.send(Command::Play(self.generation, Box::new(request)));
+        self.generation
+    }
 
     pub fn stop(&self) { self.send(Command::Stop) }
 }
@@ -407,12 +421,13 @@ struct Running {
     reader: Option<std::thread::JoinHandle<()>>,
     pending: Option<Vec<u32>>,
     requested: Instant,
+    generation: u64,
+    /// Whether the Shell was told that no damage is due (still or long frame).
+    holding: bool,
     /// Index of the next frame to present and when it is due.
     next: usize,
     due: Option<Instant>,
     last_commit: Option<Instant>,
-    /// Last commit of any kind, including a repeated frame.
-    last_damage: Option<Instant>,
     loops: u64,
     presented: u64,
     late: u64,
@@ -445,7 +460,7 @@ impl Running {
     }
 }
 
-fn start(config: &Config, request: &Request, state: &mut State, handle: &QueueHandle<State>, wake: &std::sync::Arc<Wake>) -> Result<Running> {
+fn start(config: &Config, generation: u64, request: &Request, state: &mut State, handle: &QueueHandle<State>, wake: &std::sync::Arc<Wake>) -> Result<Running> {
     let requested = Instant::now();
     let media = resolve(config, &request.plan.media_id)?;
     let format = media.record.media.format;
@@ -479,32 +494,34 @@ fn start(config: &Config, request: &Request, state: &mut State, handle: &QueueHa
         &hex(&request.plan.media_id)[..16], header.pixels, header.width, header.height, header.durations.len(), header.loop_micros() / 1000,
         layout.width, layout.height, worker.pid()));
     let yuv = match header.pixels { Pixels::I420 { bt709, full_range } => Some(Yuv::new(bt709, full_range)), Pixels::Bgrx => None };
-    Ok(Running { worker, header, layout, yuv, frames, recycle, reader: Some(reader), pending: None, requested, next: 0,
-        due: None, last_commit: None, last_damage: None, loops: 0, presented: 0, late: 0, starved: 0, finished: false, waiting: false })
+    Ok(Running { worker, header, layout, yuv, frames, recycle, reader: Some(reader), pending: None, requested, generation,
+        holding: false, next: 0, due: None, last_commit: None, loops: 0, presented: 0, late: 0, starved: 0, finished: false,
+        waiting: false })
 }
 
 /// The Shell's damage watchdog stops a renderer that shows nothing new for
-/// 3 s, and the v1 bridge cannot announce a still or a long frame (design
-/// section 4 leaves that to frame deadlines). Until it can, a still or a
-/// frame longer than this is committed again, unchanged, at this interval.
-const KEEPALIVE: Duration = Duration::from_millis(2000);
+/// 3 s while it reports Playing. A still, or a frame that stays on screen at
+/// least this long, is announced instead (bridge state Holding: no damage
+/// due, no watchdog), so the same pixels are never committed again just to
+/// look alive and a still costs no periodic presentation work.
+pub const HOLD_AFTER: Duration = Duration::from_millis(2000);
 
-/// Commits the frame on screen again when the watchdog interval has passed or
-/// a configure is waiting; returns when to check next.
-fn refresh(window: &mut Window, last_damage: &mut Option<Instant>) -> Option<Duration> {
-    let index = window.shown?;
-    let since = last_damage.map_or(KEEPALIVE, |last| last.elapsed());
-    if since < KEEPALIVE && window.serial.is_none() { return Some(KEEPALIVE - since); }
-    // A buffer still held by the compositor: its release wakes us.
-    if window.buffers[index].busy { return None; }
+/// Whether a frame shown for `duration` (a still: `None`) must be announced
+/// as held rather than kept alive by repeated commits.
+pub fn holds(duration: Option<Duration>) -> bool { duration.is_none_or(|duration| duration >= HOLD_AFTER) }
+
+/// Acknowledges a pending configure by committing the frame on screen again;
+/// nothing is committed otherwise. A buffer still held by the compositor is
+/// retried when its release wakes the loop.
+fn acknowledge(window: &mut Window) {
+    let Some(index) = window.shown else { return };
+    if window.serial.is_none() || window.buffers[index].busy { return; }
     if let Some(serial) = window.serial.take() { window.role.ack_configure(serial); }
     let buffer = &mut window.buffers[index];
     window.surface.attach(Some(&buffer.proxy), 0, 0);
     window.surface.damage_buffer(0, 0, window.width as i32, window.height as i32);
     window.surface.commit();
     buffer.busy = true;
-    *last_damage = Some(Instant::now());
-    Some(KEEPALIVE)
 }
 
 /// Presents what is due; returns how long to sleep at most.
@@ -513,16 +530,15 @@ fn step(running: &mut Running, state: &mut State, reporter: &tokio::sync::mpsc::
     if window.closed { return Err("the compositor closed the wallpaper surface".into()); }
     if !window.configured { return Ok(None); }
     if running.finished {
-        // A still keeps its one frame (and acknowledges later configures with it).
-        return Ok(refresh(window, &mut running.last_damage));
+        // A still keeps its one frame: no timer, only later configures are
+        // acknowledged with it.
+        acknowledge(window);
+        return Ok(None);
     }
     let now = Instant::now();
     if let Some(due) = running.due && now < due {
-        let until_due = due - now;
-        let since = running.last_damage.map_or(Duration::ZERO, |last| now - last);
-        if since + until_due <= KEEPALIVE && window.serial.is_none() { return Ok(Some(until_due)); }
-        // A long frame: show the same pixels again before the Shell's watchdog.
-        return Ok(Some(refresh(window, &mut running.last_damage).map_or(until_due, |keep| keep.min(until_due))));
+        acknowledge(window);
+        return Ok(Some(due - now));
     }
     if running.pending.is_none() {
         match running.frames.try_recv() {
@@ -558,7 +574,13 @@ fn step(running: &mut Running, state: &mut State, reporter: &tokio::sync::mpsc::
     if running.presented == 0 {
         let latency = committed - running.requested;
         log(format_args!("event=first-frame latency_ms={}", latency.as_millis()));
-        let _ = reporter.send(Report::FirstFrame { latency });
+        let _ = reporter.send(Report::FirstFrame { generation: running.generation, latency });
+    }
+    let hold = holds((!running.header.still()).then_some(duration));
+    if hold != running.holding {
+        running.holding = hold;
+        let generation = running.generation;
+        let _ = reporter.send(if hold { Report::Holding { generation } } else { Report::Moving { generation } });
     }
     running.presented += 1;
     if presented == 0 && running.presented > 1 {
@@ -570,13 +592,12 @@ fn step(running: &mut Running, state: &mut State, reporter: &tokio::sync::mpsc::
             running.loops, running.presented, running.late, running.starved));
     }
     running.last_commit = Some(committed);
-    running.last_damage = Some(committed);
     if running.header.still() {
         running.finished = true;
         // The worker has sent its only frame; reap it now: no decoder stays.
         let errors = running.end_worker();
-        log(format_args!("event=still-presented worker=stopped cleanup={}", if errors.is_ok() { "ok" } else { "failed" }));
-        return Ok(Some(KEEPALIVE));
+        log(format_args!("event=still-presented worker=stopped cleanup={} holding=true", if errors.is_ok() { "ok" } else { "failed" }));
+        return Ok(None);
     }
     // Keep the timeline anchored; re-anchor only after falling a frame behind.
     let due = running.due.unwrap_or(committed);
@@ -596,10 +617,10 @@ fn run(connection: Connection, config: Config, commands: mpsc::Receiver<Command>
     let result = (|| loop {
         while let Ok(command) = commands.try_recv() {
             match command {
-                Command::Play(request) => {
+                Command::Play(generation, request) => {
                     if let Some(mut previous) = running.take() { previous.stop("replaced"); }
                     state.window = None;
-                    running = Some(start(&config, &request, &mut state, &handle, wake)?);
+                    running = Some(start(&config, generation, &request, &mut state, &handle, wake)?);
                 }
                 Command::Stop => {
                     if let Some(mut previous) = running.take() { previous.stop("plan"); }
@@ -629,7 +650,13 @@ fn run(connection: Connection, config: Config, commands: mpsc::Receiver<Command>
         }
         if descriptors[0].revents & (libc::POLLHUP | libc::POLLERR) != 0 { return Err("Wayland connection closed".into()); }
         if descriptors[0].revents & libc::POLLIN != 0 {
-            guard.read().map_err(|error| format!("Wayland read: {error}"))?;
+            match guard.read() {
+                Ok(_) => {}
+                // Nothing to read after all (the readiness was consumed or
+                // spurious): not an error, the next poll waits again.
+                Err(wayland_client::backend::WaylandError::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(format!("Wayland read: {error}")),
+            }
         } else {
             drop(guard);
         }
@@ -684,5 +711,15 @@ mod tests {
         assert_eq!(read_header(&mut reader, Duration::from_secs(1)).unwrap(), header);
         drop(writer);
         assert!(read_header(&mut reader, Duration::from_secs(1)).unwrap_err().contains("failed to fill whole buffer"));
+    }
+
+    #[test]
+    fn stills_and_long_frames_are_held_short_frames_are_not() {
+        assert!(holds(None), "a still is held");
+        assert!(!holds(Some(Duration::from_millis(1999))));
+        assert!(holds(Some(HOLD_AFTER)));
+        assert!(holds(Some(Duration::from_secs(10))));
+        // Held frames must be announced before the Shell's 3 s damage watchdog.
+        assert!(HOLD_AFTER < Duration::from_secs(3));
     }
 }

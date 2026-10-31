@@ -108,6 +108,40 @@ Private Eval still authorizes the bridge (never a production path); the
 first-frame and damage watchdogs stay in force. Evidence:
 [m1-playback-evidence](m1-playback-evidence/README.md).
 
+## Lifecycle and restoration (6D-M1 step C, laboratory)
+
+`qualify-m1-lifecycle.py` reuses the step B media, importer, daemon and process
+helpers and drives the private Shell (three virtual monitors) through layout
+changes and hot-plug (`client/displayconfig.py layout JSON`: add, remove,
+scale 2 and 1.25, reposition, rotation, a layout outside the committed
+canvas), lock/unlock (fake GDM), suspend/resume (`client/fake_logind.py`, a
+stand-in that owns `org.freedesktop.login1` on the **private** system bus and
+emits `PrepareForSleep` on request; it refuses any other bus), renderer and
+daemon kills, extension disable/uninstall and Shell SIGKILL + restart
+(`isolated-session.sh restart`, which kills only the session's own process
+group). It sets a generated "user wallpaper" in the private Shell and proves
+restoration by screenshot against it. A first control phase, with nothing of
+ours enabled, records the warnings the harness itself causes (the Shell's own
+reaction to the stand-in logind and to being killed). Same environment as
+step B plus `M1_SEQUENCES` (default 100) and `M1_SEED`; `M1_ONLY` selects
+directed proofs for debugging only:
+
+```text
+env -i PATH=/usr/bin:/bin HOME=<throwaway> LANG=C.UTF-8 USER=$USER \
+  M1_BIN=<bin> M1_LAB=/tmp/<new-short-dir> M1_TRUSTED=<as step B> \
+  M1_CGROUP=<own delegated cgroup> M1_SEQUENCES=100 \
+  python3 -B docs/spikes/gnome/qualify-m1-lifecycle.py
+```
+
+A private delegation that touches nothing of the owner's: `systemd-run --user
+--scope -p Delegate=yes --unit=<name> -- sleep infinity` (talking only to the
+user manager's private socket), move that holder into a `holder` child, enable
+`+cpu +memory +pids` in the scope and in a mode-0755 `lab` child, and pass
+`lab`; stop the scope afterwards. Private Eval still authorizes each bridge
+instance (a test-only hook re-authorizes the bridge the Shell re-creates on
+unlock, re-enable and restart: a stand-in for step D). Evidence:
+[m1-lifecycle-evidence](m1-lifecycle-evidence/README.md).
+
 ## Cleanup
 
 Do not run concurrent laboratories at the same path. Stop a private session using

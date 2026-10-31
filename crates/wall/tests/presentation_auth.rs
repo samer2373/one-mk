@@ -112,6 +112,28 @@ fn publisher_advances_sequence_only_on_change_and_slices_on_the_shared_canvas() 
 }
 
 #[test]
+fn a_layout_outside_the_committed_canvas_is_published_paused_and_admitted_static() {
+    // Canvas -1920..3840: the two local monitors fit, a third (added) one does not.
+    let mut publisher = publisher();
+    let three = vec![(0, 0, 1920, 1080, 1.0), (1920, 0, 1920, 1080, 1.0), (3840, 0, 1920, 1080, 1.0)];
+    let unfit = presentation_wire::decode(&publisher.plan(7, 1, &three, false).unwrap()).unwrap();
+    assert!(unfit.paused, "an output outside the canvas pauses the local presentation");
+    assert_eq!(unfit.canvas, canvas(), "the canvas is never reflowed");
+    let stacked = vec![(0, 0, 1920, 1080, 1.0), (0, 1080, 1920, 1080, 1.0)];
+    assert!(presentation_wire::decode(&publisher.plan(7, 1, &stacked, false).unwrap()).unwrap().paused);
+    let fits = presentation_wire::decode(&publisher.plan(7, 1, &monitors(), false).unwrap()).unwrap();
+    assert!(!fits.paused);
+
+    let mut session = Session::new(owner(), record(), RENDERER.into(), 1, three.clone(), 0).unwrap();
+    let paused = publisher.plan(7, 1, &three, false).unwrap();
+    assert!(matches!(deliver(&mut session, [1; 32], true, 7, &paused), Outcome::Accepted { active: false, .. }));
+    assert!(!session.active());
+    session.layout(2, monitors()).unwrap();
+    let playing = publisher.plan(7, 2, &monitors(), false).unwrap();
+    assert!(matches!(deliver(&mut session, [2; 32], true, 7, &playing), Outcome::Accepted { active: true, .. }));
+}
+
+#[test]
 fn genuine_plans_are_admitted_and_identical_bytes_are_idempotent() {
     let mut publisher = publisher();
     let mut session = session();
@@ -207,8 +229,11 @@ fn stale_replayed_oversize_and_malformed_plans_are_refused_and_keep_the_admitted
 #[test]
 fn a_refused_first_plan_leaves_no_pinned_canvas() {
     let mut session = session();
-    let mut publisher = Publisher::new([6; 16], [9; 32], Rect { x: 0, y: 0, width: 100, height: 100 }, (0, 0)).unwrap();
-    let small = publisher.plan(7, 1, &monitors(), false).unwrap();
+    // A playing plan whose slices leave its canvas (a genuine publisher would
+    // have paused it) is refused and pins nothing.
+    let mut small = presentation_wire::decode(&publisher().plan(7, 1, &monitors(), false).unwrap()).unwrap();
+    small.canvas = Rect { x: 0, y: 0, width: 100, height: 100 };
+    let small = presentation_wire::encode(&small).unwrap();
     assert_eq!(deliver(&mut session, [1; 32], true, 7, &small), Outcome::Refused(Refusal::Geometry));
     let mut wrong_generation = Publisher::new([8; 16], [9; 32], canvas(), (0, 0)).unwrap();
     let foreign = wrong_generation.plan(7, 1, &monitors(), false).unwrap();

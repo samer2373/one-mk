@@ -1,5 +1,42 @@
 # GNOME component implementation checkpoint — NOT a playback qualification
 
+## Step C: lifecycle and restoration in the laboratory (2026-10-31)
+
+The extension and laboratory renderer now survive layout change and hot-plug,
+lock/unlock, suspend/resume, kills, disable/uninstall and Shell restarts with
+real playback, and every teardown leaves the user's own wallpaper on screen;
+see the [step C evidence](m1-lifecycle-evidence/README.md). Changes to the
+production extension (all under the unchanged default-off authorization):
+
+- Stops are cooperative: SIGTERM, SIGKILL only after 2 s (escalation timers
+  live in the recovery object, so they survive disable). The renderer handles
+  SIGTERM by removing its worker, cgroup and surface before exiting. This
+  closes the earlier deviation "immediate force-exit" (item 4 below).
+- A window adopted under an older layout serial is never revealed again, the
+  layer is hidden whenever no fresh window is behind it, and an unchanged
+  logical layout is not a layout change. (Before: a late damage of the old
+  window re-marked it fresh, so frames sliced for the old layout could be
+  shown on the new one for up to 100 ms.)
+- Suspend: logind's `PrepareForSleep(true)` is pause reason 8 until resume;
+  wake, like unlock, starts a fresh renderer at once.
+- Bridge state 4 *holding*: a still or a long frame is announced instead of
+  being re-committed every 2 s; the Shell runs no damage watchdog meanwhile.
+  The first-damage-before-geometry case is re-checked (bounded, 40 x 25 ms)
+  because a still sends no second damage.
+- Runs the Shell ends for a pause reason, lock, sleep or disable are credited
+  back: only failed runs reach the three-per-minute cap (before, four
+  lock/unlock or cover/uncover cycles in a minute latched "restart limit
+  reached" for the whole session). The first healthy frame cancels the 5 s
+  start deadline; a renderer paused by its plan is not failed by it.
+- The bridge records the last stop's cause (`lastStop`) for diagnosis.
+
+Renderer: SIGTERM teardown, Holding/Playing reports per playback generation,
+no keepalive commits, a spurious `EAGAIN` from the Wayland read is no longer
+fatal (it killed a renderer during a layout change), and stale playback groups
+of a SIGKILLed predecessor are reclaimed at start. Daemon publisher: a local
+layout outside the committed canvas is published paused (static), and the Gate
+admits such a paused plan; a playing plan must still lie inside the canvas.
+
 ## Step B: real playback in the laboratory (2026-10-31)
 
 With the laboratory features, the renderer now plays the admitted plan's
@@ -142,8 +179,8 @@ there is no new warning-baseline comparison or playback claim. See
    the session; the client signal queue is bounded to 16 rather than a single
    latest slot. GPU-specific limits and physical/HiDPI import are not probed.
    Do not silently promote these partial implementations to section 4 compliance.
-4. Teardown uses immediate force-exit and async reap, not the proposed cooperative
-   SIGTERM/two-second escalation. The cap is observable, but a user-facing explicit
+4. ~~Teardown uses immediate force-exit and async reap, not the proposed cooperative
+   SIGTERM/two-second escalation.~~ Resolved in step C (SIGTERM, SIGKILL after 2 s). The cap is observable, but a user-facing explicit
    Retry operation is not delivered. Cold-install recognition without logout/login
    is not qualified. No on-host system or extension validation setting was changed.
 5. Whole-runtime licensing/sandbox/decoder package acceptance, Windows/macOS native

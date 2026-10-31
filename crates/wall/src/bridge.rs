@@ -9,14 +9,19 @@ pub type Monitor = (i32, i32, i32, i32, f64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
-pub enum State { Starting, Playing, Paused, Failed }
+pub enum State {
+    Starting, Playing, Paused, Failed,
+    /// Playing a still or a long frame: no damage is expected until the
+    /// renderer reports `Playing` again, so the Shell runs no damage watchdog.
+    Holding,
+}
 
 impl TryFrom<u32> for State {
     type Error = &'static str;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Starting), 1 => Ok(Self::Playing),
-            2 => Ok(Self::Paused), 3 => Ok(Self::Failed),
+            2 => Ok(Self::Paused), 3 => Ok(Self::Failed), 4 => Ok(Self::Holding),
             _ => Err("invalid renderer state"),
         }
     }
@@ -71,6 +76,7 @@ mod tests {
         assert!(validate_layout(1, &[(0, 0, 1, 1, 1.0); 17]).is_err());
         assert!(validate_reasons(15).is_ok());
         assert!(validate_reasons(16).is_err());
-        assert!(State::try_from(4).is_err());
+        assert_eq!(State::try_from(4), Ok(State::Holding));
+        assert!(State::try_from(5).is_err());
     }
 }
