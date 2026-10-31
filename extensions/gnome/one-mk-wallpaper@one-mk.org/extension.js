@@ -363,6 +363,10 @@ class Bridge {
         actor.connectObject('notify::visible', () => this._hide(renderer),
             'destroy', () => this._drop(), 'damaged', () => {
                 const rect = window.get_buffer_rect();
+                // Mutter 50 reports the first damage before the window has
+                // buffer geometry; an empty rectangle is not content yet.
+                if (!rect.width || !rect.height)
+                    return;
                 if (rect.width !== right - left || rect.height !== bottom - top) {
                     this._stop();
                     return;
