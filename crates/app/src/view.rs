@@ -292,12 +292,8 @@ impl Prefs {
         let flag = |table: &str, key: &str, def: bool| get(table, key).and_then(Val::as_bool).unwrap_or(def);
         let num = |table: &str, key: &str, def: i64| get(table, key).and_then(Val::as_int).unwrap_or(def);
         let text = |table: &str, key: &str, def: &str| get(table, key).and_then(Val::as_str).unwrap_or(def).to_owned();
-        let hotkeys = vec![
-            ("Jump to computer N", text("hotkeys", "jump", "ctrl+alt+{n}")),
-            ("The next computer", text("hotkeys", "cycle", "ctrl+alt+pagedown")),
-            ("Lock the pointer here", text("hotkeys", "lock_pointer", "ctrl+alt+p")),
-            ("Back to this computer", text("hotkeys", "home", "ctrl+alt+h")),
-        ];
+        let hotkeys = one_mk_proto::shortcuts::defaults(cfg!(windows)).into_iter()
+            .map(|shortcut| (shortcut.label, text("hotkeys", shortcut.key, shortcut.default))).collect();
         let hooks = HOOK_EVENTS
             .iter()
             .filter_map(|(key, label)| get("hooks", key).map(|v| (*label, command_words(&v.words()))).filter(|(_, c)| !c.is_empty()))
@@ -699,6 +695,17 @@ pub fn transfer_lines(t: &TransferStatus) -> (String, String, Option<f32>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shortcut_preferences_share_every_daemon_default() {
+        let defaults = super::Prefs::read("", "");
+        for (actual, shortcut) in defaults.hotkeys.iter().zip(one_mk_proto::shortcuts::defaults(cfg!(windows))) {
+            assert_eq!(*actual, (shortcut.label, shortcut.default.to_owned()));
+        }
+        assert_eq!(defaults.hotkeys.len(), 6);
+        let custom = super::Prefs::read("[hotkeys]\nbroadcast = 'none'\nfetch_clipboard = 'ctrl+alt+f'", "");
+        assert_eq!(custom.hotkeys[4].1, "none");
+        assert_eq!(custom.hotkeys[5].1, "ctrl+alt+f");
+    }
     use super::*;
 
     #[test]

@@ -21,11 +21,11 @@ pub enum Operation {
     /// List newest first, with stable item numbers.
     List,
     /// Print full text or HTML (terminal controls escaped); --json preserves exact text.
-    Show { #[arg(value_parser = clap::value_parser!(u64).range(1..u64::MAX))] number: u64 },
+    Show { #[arg(value_parser = clap::value_parser!(u64).range(1..u64::MAX), help = "Item number from one-mk clipboard history")] number: u64 },
     /// Restore an item here only; does not send it to another computer.
-    Copy { #[arg(value_parser = clap::value_parser!(u64).range(1..u64::MAX))] number: u64 },
+    Copy { #[arg(value_parser = clap::value_parser!(u64).range(1..u64::MAX), help = "Item number from one-mk clipboard history")] number: u64 },
     /// Delete one item by its number in list.
-    Delete { #[arg(value_parser = clap::value_parser!(u64).range(1..u64::MAX))] number: u64 },
+    Delete { #[arg(value_parser = clap::value_parser!(u64).range(1..u64::MAX), help = "Item number from one-mk clipboard history")] number: u64 },
     /// Forget every item, including saved history when enabled.
     Clear,
 }

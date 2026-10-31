@@ -11,7 +11,7 @@ mod pages;
 mod place;
 mod typing;
 
-use crate::daemon::{Event, Job, Latency, Link};
+use crate::daemon::{Event, Job, Link};
 use crate::motion::{self, tween};
 use crate::pairing::{Pairing, Step};
 use crate::scene::{self, Cargo, Device, Kind, SPACING, Scene, v};
@@ -105,6 +105,7 @@ struct PairUi {
     hint: bool,
     retry: Option<String>,
     me: String,
+    port: Option<u16>,
 }
 
 /// What the sheet does when one of its buttons is chosen.
@@ -142,13 +143,6 @@ struct Toast {
     error: bool,
     at: f64,
     life: f32,
-}
-
-/// A measurement, and what it replaced, so the numbers can count over.
-struct Measured {
-    l: Latency,
-    was: (f32, f32),
-    at: f64,
 }
 
 /// What a cell of the panel shows. When it changes, the old one fades
@@ -202,7 +196,7 @@ pub struct App {
     sheet_top: Option<f32>,
     sheet_key: String,
     toast: Option<Toast>,
-    latency: HashMap<String, Measured>,
+    latency: HashSet<String>,
     /// Round trips of the connected computers, while a graph is on screen.
     rtts: crate::rtt::Rtts,
     /// Set while a screenshot's scripted history stands in for live samples.
@@ -432,7 +426,7 @@ impl App {
             sheet_top: None,
             sheet_key: String::new(),
             toast: None,
-            latency: HashMap::new(),
+            latency: HashSet::new(),
             rtts: Default::default(),
             rtt_frozen: None,
             failed_measure: HashSet::new(),
@@ -520,7 +514,7 @@ impl App {
                     // A measurement belongs to one connection: once that
                     // computer goes offline (or one·mk stops) it means nothing.
                     let online: Vec<String> = self.running().map_or(vec![], |s| s.peers.iter().filter(|p| p.online).map(|p| p.id.clone()).collect());
-                    self.latency.retain(|id, _| online.contains(id));
+                    self.latency.retain(|id| online.contains(id));
                     self.failed_measure.retain(|id| online.contains(id));
                     self.sync_scene();
                 }
@@ -533,12 +527,11 @@ impl App {
                     self.measuring = None;
                     self.failed_measure.remove(&l.peer);
                     // Show the measurement where it was taken: one crossing, labelled.
-                    self.scene.latency_label = Some(format!("{:.2} ms", l.p50_us / 2000.0));
+                    self.scene.latency_label = Some("Connection check".into());
                     if self.active == "me" && self.scene.flight.is_none() {
                         self.scene.fly("me", &l.peer, Cargo::Probe);
                     }
-                    let was = self.latency.get(&l.peer).map_or((0.0, 0.0), |m| (m.l.p50_us, m.l.p99_us));
-                    self.latency.insert(l.peer.clone(), Measured { l, was, at: now });
+                    self.latency.insert(l.peer.clone());
                 }
                 Event::Done { what, error } => {
                     self.busy.retain(|j| j != &what);
@@ -669,12 +662,12 @@ impl App {
         if let Some(p) = &mut self.pairing {
             while let Some(step) = p.proc.as_ref().and_then(|c| c.rx.try_recv().ok()) {
                 match step {
-                    Step::Searching { me } => p.me = me,
+                    Step::Searching { me, port } => { p.me = me; p.port = port; }
                     Step::Hint => p.hint = true,
                     Step::Retry(why) => {
                         p.retry = Some(why);
                         p.hint = false;
-                        p.step = Step::Searching { me: p.me.clone() };
+                        p.step = Step::Searching { me: p.me.clone(), port: p.port };
                         p.since = now;
                     }
                     Step::Paired { id, name } => {
@@ -826,7 +819,7 @@ impl App {
             me.name = s.name.clone();
         }
         me.online = !off;
-        me.set_subtitle(if off { "one·mk is off" } else { "This computer" }, now);
+        me.set_subtitle(if off { "one·mk is off" } else if self.tab == Tab::Files { "Here" } else { "This computer" }, now);
 
         // New computers come in staggered by how far they are from this one.
         let opening = self.scene.opening(now);
@@ -887,7 +880,7 @@ impl App {
             return "Offline".into();
         }
         match self.tab {
-            Tab::Files => "Drop files here".into(),
+            Tab::Files => "Drop here".into(),
             _ => os_name(p.os).into(),
         }
     }
@@ -948,8 +941,8 @@ impl App {
         match Pairing::start(&self.link.daemon, &self.link.home_args(), self.ctx.clone()) {
             Ok(proc) => {
                 let me = self.running().map(|s| s.name.clone()).unwrap_or_default();
-                let step = Step::Searching { me: me.clone() };
-                self.pairing = Some(PairUi { proc: Some(proc), step, since: now, opened: now, hint: false, retry: None, me });
+                let step = Step::Searching { me: me.clone(), port: None };
+                self.pairing = Some(PairUi { proc: Some(proc), step, since: now, opened: now, hint: false, retry: None, me, port: None });
             }
             Err(e) => self.toast_error("Couldn't start pairing. Is one-mk installed next to this app?", Some(e.to_string()), now),
         }
@@ -1074,7 +1067,7 @@ impl App {
     /// Chooses a computer for the panel; the first look at one measures it.
     fn select(&mut self, id: String) {
         let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.id == id && p.online));
-        if online && !self.latency.contains_key(&id) && !self.failed_measure.contains(&id) {
+        if online && !self.latency.contains(&id) && !self.failed_measure.contains(&id) {
             self.measure(&id);
         }
         self.selected = Some(id);
@@ -1390,7 +1383,7 @@ impl App {
         let off = self.off();
         // The action button, and Stop beside it while one·mk runs (at
         // least its short word): the tabs make room for both.
-        let stop_w = if self.running().is_some() { button_width(ui, "Stop") + 8.0 } else { 0.0 };
+        let stop_w = if self.running().is_some() { button_width(ui, "Stop service") + 8.0 } else { 0.0 };
         let action_w = button_width(ui, &self.action().0) + 16.0 + stop_w;
         let lockup_w = 18.0 + 22.0 * self.lockup.size()[0] as f32 / self.lockup.size()[1] as f32 + 16.0;
         let room = rect.width() - 2.0 * lockup_w.max(action_w + 8.0);
@@ -1456,19 +1449,19 @@ impl App {
         child.set_opacity(shown);
         let a11y_label = match label {
             "Take back" => Some("Take back control of this computer"),
-            "Stop broadcast" => Some("Stop broadcasting to every computer"),
+            "Use keyboard to stop" | "Keyboard stop" => Some("Use the keyboard shortcut shown in the broadcast panel"),
             _ => None,
         };
         if self.running().is_some() {
             let busy = self.busy.contains(&Job::Stop);
             // The short word when the long one would run into the tabs.
-            let label = [if busy { "Stopping…" } else { "Stop one·mk" }, "Stop"]
+            let label = [if busy { "Stopping…" } else { "Stop service" }, "Stop service"]
                 .into_iter()
                 .find(|l| r.left() - 8.0 - button_width(ui, l) > track.right() + 12.0)
-                .unwrap_or("Stop");
+                .unwrap_or("Stop service");
             let w = button_width(ui, label);
             let stop = Rect::from_min_size(pos2(r.left() - 8.0 - w, r.top()), vec2(w, 34.0));
-            if button(&mut child, stop, Id::unique("stop"), label, Look::Quiet, !busy && shown > 0.99, Some("Stop one·mk on this computer")).clicked() {
+            if button(&mut child, stop, Id::unique("stop"), label, Look::Quiet, !busy && shown > 0.99, Some("Stop the sharing service, not just broadcast")).clicked() {
                 self.busy.push(Job::Stop);
                 self.link.stop();
             }
@@ -1493,12 +1486,12 @@ impl App {
     fn action(&self) -> (String, Look, bool, Option<Job>) {
         let controlled = self.running().is_some_and(|s| s.controlled_by.is_some());
         let broadcasting = self.running().is_some_and(|s| !s.broadcast.is_empty());
-        let narrow = self.ctx.content_rect().width() < 900.0;
+        let narrow = self.ctx.content_rect().width() < 1100.0;
         let (label, look, enabled, job) = match self.status.as_ref() {
             Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
             Some(None) => ("Start one·mk", Look::Primary, true, Some(Job::Start)),
             _ if broadcasting && self.busy.contains(&Job::Broadcast(false)) => ("Stopping…", Look::Primary, false, None),
-            _ if broadcasting => ("Stop broadcast", Look::Primary, true, Some(Job::Broadcast(false))),
+            _ if broadcasting => (if narrow { "Keyboard stop" } else { "Use keyboard to stop" }, Look::Quiet, false, None),
             _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
             _ if controlled => ("Take back", Look::Primary, true, Some(Job::TakeBack)),
             _ if self.running().is_some_and(|s| !s.peers.is_empty()) => (if narrow { "Pair another" } else { "Pair another computer" }, Look::Quiet, true, None),
@@ -1537,8 +1530,7 @@ impl App {
                 [rest @ .., last] if rest.len() < 3 => format!("{} and {last}", rest.join(", ")),
                 _ => "all of them".to_owned(),
             };
-            let key = if s.broadcast_hotkey.is_empty() { String::new() } else { format!("{}, ", s.broadcast_hotkey) };
-            return (title, format!("Everything you type, click and scroll here goes to {names}. Stop it with {key}Stop broadcast, or Ctrl+Alt+Shift+Esc."));
+            return (title, format!("Everything you type, click and scroll here goes to {names}. {}", self.broadcast_stop_hint()));
         }
         if let Some(p) = &s.controlled_by {
             let sub = if cfg!(target_os = "linux") {
@@ -1699,7 +1691,7 @@ impl App {
             let online = status.peers.iter().filter(|p| p.online).count();
             let paired = match status.peers.len() {
                 0 => "None yet".to_owned(),
-                n => format!("{n}, {online} connected"),
+                n => format!("{online} of {n} connected"),
             };
             // No position here: the others are placed around this one.
             info_row(ui, c, c.top() + 42.0, "ID", &status.id, true, 1.0);
@@ -1710,7 +1702,7 @@ impl App {
         };
         let mut room = if peer.online { chip(ui, c, "Connected", Some(true)) } else { chip(ui, c, "Offline", Some(false)) };
         // Measure again: a quiet icon button on the title row.
-        if peer.online && (self.latency.contains_key(&peer.id) || self.failed_measure.contains(&peer.id)) {
+        if peer.online && (self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id)) {
             let busy = self.measuring.is_some();
             let r = Rect::from_min_size(pos2(c.right() - room - 26.0, c.top() - 2.0), vec2(24.0, 24.0));
             let spin = if self.measuring.as_ref() == Some(&peer.id) && !motion::reduced() {
@@ -1765,31 +1757,9 @@ impl App {
         }
         self.quick_actions(ui, c, c.top() + 116.0, Some(&peer));
         self.latency_card(ui, c, c.top() + links::CARD_Y, &peer);
-        match self.latency.get(&peer.id) {
-            Some(m) => {
-                // New numbers count over from the old ones, in fixed-width digits.
-                let k = motion::progress(now, m.at, motion::fade(0.45), motion::out_cubic);
-                if k < 1.0 {
-                    ui.ctx().request_repaint();
-                }
-                let fade_in = if m.was.0 > 0.0 { 1.0 } else { motion::progress(now, m.at, 0.1, motion::linear) };
-                let p50 = scene::lerp(m.was.0, m.l.p50_us, k) / 2000.0;
-                let p99 = scene::lerp(m.was.1, m.l.p99_us, k) / 2000.0;
-                info_row(ui, c, y0, "Response time", &format!("{p50:.2} ms"), true, fade_in);
-                info_row(ui, c, y1, "Slowest 1 in 100", &format!("{p99:.2} ms"), true, fade_in);
-                let tip = Rect::from_min_max(pos2(c.left(), y0 - 10.0), pos2(c.right(), y0 + 10.0));
-                ui.interact(tip, Id::unique("response-tip"), Sense::hover())
-                    .on_hover_text("How long a mouse move takes to reach that computer: half the measured round trip.");
-            }
-            None if self.failed_measure.contains(&peer.id) => info_row(ui, c, y0, "Response time", "Not measured", false, 1.0),
-            None => {
-                info_row(ui, c, y0, "Response time", "Measuring…", false, 0.6);
-                // Measure each computer once, the first time it is shown.
-                if self.measuring.is_none() {
-                    self.measure(&peer.id);
-                }
-            }
-        }
+        info_row(ui, c, y0, "Network round trip", "Live graph below", false, 1.0);
+        let caption = fit(ui.painter(), "Latest keep-alive reply · last 2 minutes", &regular(T_META), c.width());
+        ui.painter().text(pos2(c.left(), y1), Align2::LEFT_CENTER, caption, regular(T_META), INK2);
     }
 
     /// Ctrl and Cmd for every paired computer, a row each, from the top of
@@ -1886,7 +1856,10 @@ impl App {
                 if let Some(why) = &pair.retry {
                     sub += &format!("\n\nThat attempt didn't finish: {why}. Still looking.");
                 } else if pair.hint {
-                    sub += "\n\nNothing found yet. Check that both computers are on the same network (not a guest network) and that the firewall allows one·mk.";
+                    sub += "\n\nNo discovery? Cancel, run one-mk invite here, then one-mk join LINK on the other computer. Treat the link as a secret.";
+                    if let Some(port) = pair.port {
+                        sub += &format!("\n\nOr keep this search open and run one-mk pair --connect LAN_IP:{port} there. Use this computer’s LAN IP; allow UDP {port}.");
+                    }
                 }
                 ("Looking for another computer".into(), sub, vec![quiet("Cancel", Act::Close)], 0)
             }
@@ -2386,6 +2359,23 @@ mod debug {
         let ready = app.running().is_some();
         if app.status.is_some() && var("ONE_MK_APP_PAIR").is_some() && once(&ctx, "pair") {
             app.start_pairing(now);
+        }
+        if ready && let Some(state) = var("ONE_MK_APP_PAIR_STATE") && once(&ctx, "pair-state") {
+            let step = match state.as_str() {
+                "code" => Step::Code { name: "Studio PC".into(), code: "726480".into() },
+                "waiting" => Step::Waiting { name: "Studio PC".into() },
+                "paired" => Step::Paired { id: "1111-2222".into(), name: "Studio PC".into() },
+                "ended" => Step::Ended("The codes did not match. Nothing was saved.".into()),
+                _ => Step::Searching { me: "desk".into(), port: Some(45173) },
+            };
+            app.pairing = Some(PairUi { proc: None, step, since: now, opened: now, hint: state == "hint", retry: None, me: "desk".into(), port: Some(45173) });
+        }
+        if ready && var("ONE_MK_APP_HISTORY").is_some() {
+            app.prefs.history_enabled = true;
+            app.clipboard_history = Some(Ok((1..=5).map(|id| crate::daemon::HistoryItem { id, preview: "[hidden]".into(), detail: "text · 96 B · from Studio PC".into(), timestamp: 1793440000 }).collect()));
+            if var("ONE_MK_APP_HISTORY").as_deref() == Some("revealed") {
+                app.clipboard_reveal = Some((1, "First line — second line with preserved separators and a long Unicode preview…".into()));
+            }
         }
         if ready && let Some(script) = var("ONE_MK_APP_RTT") && once(&ctx, "rtt") {
             for part in script.split(';') {

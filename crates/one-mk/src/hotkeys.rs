@@ -36,16 +36,17 @@ pub struct HotkeySettings {
 
 impl Default for HotkeySettings {
     fn default() -> Self {
+        let defaults = one_mk_proto::shortcuts::defaults(cfg!(windows));
         Self {
             enabled: true,
-            jump: default_jump(cfg!(windows)).into(),
+            jump: defaults[0].default.into(),
             // Not Ctrl+Alt+Right (GNOME's workspaces) nor Ctrl+Alt+N
             // (AltGr+N types ń on Polish keyboards).
-            cycle: "ctrl+alt+pagedown".into(),
-            lock_pointer: "ctrl+alt+p".into(),
-            home: "ctrl+alt+h".into(),
-            broadcast: default_broadcast(cfg!(windows)).into(),
-            fetch_clipboard: if cfg!(windows) { "ctrl+alt+shift+v" } else { "ctrl+alt+v" }.into(),
+            cycle: defaults[1].default.into(),
+            lock_pointer: defaults[2].default.into(),
+            home: defaults[3].default.into(),
+            broadcast: defaults[4].default.into(),
+            fetch_clipboard: defaults[5].default.into(),
         }
     }
 }
@@ -56,15 +57,16 @@ impl Default for HotkeySettings {
 /// keyboards and most of the digit row's symbols on French AZERTY ones.
 /// (The matcher used while the pointer is away counts only the left Alt,
 /// so elsewhere AltGr is no problem.)
+#[cfg(test)]
 fn default_jump(windows: bool) -> &'static str {
-    if windows { "ctrl+alt+shift+{n}" } else { "ctrl+alt+{n}" }
+    one_mk_proto::shortcuts::defaults(windows)[0].default
 }
 
 /// The broadcast shortcut's default: Ctrl+Alt+B, but Ctrl+Alt+Shift+B on
 /// Windows, where AltGr counts as Ctrl+Alt and AltGr+B types `{` on
 /// Hungarian keyboards (see [`default_jump`]).
 fn default_broadcast(windows: bool) -> &'static str {
-    if windows { "ctrl+alt+shift+b" } else { "ctrl+alt+b" }
+    one_mk_proto::shortcuts::defaults(windows)[4].default
 }
 
 /// `""` and `none` mean no chord.
@@ -183,7 +185,7 @@ pub fn request(action: Action, order: &[Numbered]) -> Result<Request, String> {
 /// `one-mk hotkeys` options.
 #[derive(clap::Args, Debug, Default)]
 pub struct HotkeyArgs {
-    /// Jump to computer N: modifiers and {n}, like 'ctrl+alt+{n}' (none: off).
+    /// Jump to computer N: use ctrl+alt+ followed by n in braces (none: off).
     #[arg(long, value_name = "CHORD")]
     pub jump: Option<String>,
     /// The next computer, like 'ctrl+alt+pagedown' (none: off).

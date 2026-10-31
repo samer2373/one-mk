@@ -47,7 +47,9 @@ pub async fn status(dir: &Path) -> Result<()> {
         println!("{}", settings.hooks.describe());
     }
     println!("Clipboard: {}.", settings.clipboard.summary());
-    println!("{}", crate::wallpaper::summary(&settings.wallpaper));
+    if settings.wallpaper.enabled || !settings.wallpaper.grants.is_empty() {
+        println!("{}", crate::wallpaper::summary(&settings.wallpaper));
+    }
     Ok(())
 }
 

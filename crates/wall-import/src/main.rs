@@ -42,7 +42,7 @@ fn main() -> std::process::ExitCode {
         return worker_result(one_mk_wall_import::sandbox::check_storage_pressure());
     }
     if arguments.iter().any(|argument| argument == "--help") {
-        println!("Optional finite wallpaper importer (never starts playback)\nUsage: one-mk wallpaper import FILE --output PRIVATE_DIR --runtime AUDITED_ROOT [--json]\n       one-mk wallpaper doctor [--runtime AUDITED_ROOT] [--json]\nExit: 0 complete/available, 2 usage/validation, 3 sandbox unavailable, 4 path authority refused, 5 operational failure, 130 cancelled\nOnly VP9/AV1 WebM + GIF/APNG/animated WebP. Otherwise: convert first.\nWindows/macOS sandbox: UNTESTED/unimplemented, refuses imports.");
+        print!("{}", include_str!("../../proto/src/wallpaper-import-help.txt"));
         return std::process::ExitCode::SUCCESS;
     }
     #[cfg(target_os = "linux")]

@@ -2482,6 +2482,8 @@ impl App {
             hotkeys,
             hotkeys_detail,
             clipboard_history: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history_status().len.load(std::sync::atomic::Ordering::Relaxed)),
+            clipboard_history_enabled: self.services.clip.as_ref().is_some_and(|clip| !clip.clipboard().history_status().disabled.load(std::sync::atomic::Ordering::Relaxed)),
+            broadcast_stop_hint: if self.broadcast_hotkey().is_empty() { "Press Ctrl+Alt+Shift+Esc to stop broadcasting.".into() } else { format!("Press {} or Ctrl+Alt+Shift+Esc to stop broadcasting.", self.broadcast_hotkey()) },
             clipboard_history_revision: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history_status().revision.load(std::sync::atomic::Ordering::Relaxed)),
             clipboard_history_note: self.services.clip.as_ref().map_or_else(|| "Clipboard sharing and history are off (--no-clipboard).".into(), |clip| {
                 let history = clip.clipboard().history_status();
@@ -2761,7 +2763,7 @@ impl App {
                 if let Some((_, first)) = edges.iter().find(|(e, _)| overlaps(e)) {
                     let used = &self.peers[first].name;
                     conflicts.push(format!(
-                        "{} and {} are both {} this computer and their edges overlap, so only {} is reached there; \
+                        "{} and {} are both {} and their edges overlap, so only {} is reached there; \
                          move the other with `one-mk layout \"{}\" <left|right|top|bottom> [--offset DX,DY]`",
                         used, p.name, on_your(side), used, p.name
                     ));

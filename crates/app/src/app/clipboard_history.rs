@@ -19,15 +19,22 @@ impl App {
             self.clipboard_clear_confirm = !self.clipboard_clear_confirm;
             self.clipboard_reveal = None;
         }
+        let toggle = Rect::from_min_size(pos2(rect.left(), rect.top() + 30.0), vec2(rect.width(), 28.0));
+        if switch(ui, toggle, Id::unique("history-enabled"), "Keep clipboard history", self.prefs.history_enabled, true).clicked() {
+            let enabled = !self.prefs.history_enabled;
+            self.set_pref("clipboard history", &["clipboard", "history", if enabled { "on" } else { "off" }], |prefs| prefs.history_enabled = enabled);
+            self.clipboard_reveal = None;
+            self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
+        }
         let privacy = if !self.prefs.history_enabled {
-            "History is off by default for privacy, including upgrades. Enable history_max in settings.toml to retain copies."
+            "Off: copies are not retained. Turning history on may retain unmarked secrets."
         } else if self.prefs.history_persist {
             "Saved unencrypted on disk. Previews are hidden until Show. Clear deletes saved items too. Unmarked secrets may be retained."
         } else {
-            "Kept in memory only. Previews are hidden until Show. Native sensitivity hints are checked, but unmarked secrets may be retained. App skipping is X11-only, not Wayland-native."
+            "Memory only; hidden until Show. Unmarked secrets may be retained. App skipping is X11-only."
         };
-        let height = para(ui, pos2(rect.left(), rect.top() + 30.0), rect.width(), privacy, regular(T_META), INK2);
-        let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 38.0 + height), rect.max);
+        let height = para(ui, pos2(rect.left(), rect.top() + 64.0), rect.width(), privacy, regular(T_META), INK2);
+        let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 72.0 + height), rect.max);
         if !area.is_positive() { return; }
         let text = if !online { Some("Start one·mk to see clipboard history.") } else {
             match &self.clipboard_history {
@@ -52,7 +59,7 @@ impl App {
                 let age = now.saturating_sub(item.timestamp);
                 let age = if age < 60 { "just now".into() } else if age < 3600 { format!("{} min ago", age / 60) } else { format!("{} h ago", age / 3600) };
                 let detail = format!("{} · {age}", item.detail);
-                let (row, _) = ui.allocate_exact_size(vec2(area.width(), 50.0), Sense::hover());
+                let (row, _) = ui.allocate_exact_size(vec2(area.width(), 44.0), Sense::hover());
                 let revealed = self.clipboard_reveal.as_ref().filter(|(id, _)| *id == item.id).map(|(_, content)| content.as_str());
                 let copy = Rect::from_min_size(row.min, vec2(row.width() - 64.0, 28.0));
                 let preview = revealed.unwrap_or("[hidden; choose Show]");
@@ -70,7 +77,7 @@ impl App {
                     else { self.link.history_reveal(item.id, self.clipboard_reveal_epoch); }
                 }
                 let shown = fit(ui.painter(), &detail, &regular(T_META), row.width());
-                ui.painter().text(pos2(row.left(), row.top() + 37.0), Align2::LEFT_CENTER, shown, regular(T_META), INK2);
+                ui.painter().text(pos2(row.left(), row.top() + 35.0), Align2::LEFT_CENTER, shown, regular(T_META), INK2);
             }
         });
     }

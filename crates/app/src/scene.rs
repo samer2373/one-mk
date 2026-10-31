@@ -1056,10 +1056,9 @@ impl Scene {
         let (yaw, dist) = (self.yaw + lerp(-0.12, 0.0, k), self.dist * lerp(1.12, 1.0, k));
         let target = v(self.focus_x, 15.0, -2.0);
         let mut cam = Camera::new(yaw, self.pitch, dist, target, rect, raise);
-        // With a sheet open, fit everything between the top bar and the
-        // sheet: shrink if it doesn't fit, then centre it in the room left.
-        if let Some(sheet_top) = self.sheet_top.filter(|_| raise > 0.0) {
-            let (lo, hi) = (rect.top() + self.top_clear, sheet_top - 16.0);
+        {
+            let sheet_top = self.sheet_top.filter(|_| raise > 0.0).unwrap_or(rect.bottom());
+            let (lo, hi) = (rect.top() + self.top_clear + 8.0, sheet_top - 30.0);
             let ys: Vec<f32> = self
                 .devices
                 .iter()
@@ -1073,7 +1072,7 @@ impl Scene {
                 let (c, mid) = (cam.centre.y, (top + bottom) / 2.0);
                 // After scaling about the centre, the middle sits at c + s*(mid - c).
                 let dy = (lo + hi) / 2.0 - (c + s * (mid - c));
-                cam.adjust(lerp(1.0, s, raise), dy * raise);
+                cam.adjust(s, dy);
             }
         }
         cam
@@ -1597,6 +1596,30 @@ mod tests {
         assert_eq!(s.hit(mac), Some(1));
         assert!(mac.x < me.x);
         assert!(s.bounds(1).is_some_and(|b| b.contains(mac)));
+    }
+
+    #[test]
+    fn top_computer_fits_default_and_compact_scenes() {
+        let mut scene = two();
+        scene.devices[1].pos = v(0.0, 70.0, -26.0);
+        scene.devices[1].target = scene.devices[1].pos;
+        scene.devices[1].mounted = true;
+        scene.top_clear = 64.0;
+        settle(&mut scene, 0.0);
+        for height in [408.0, 200.0, 160.0] {
+            let area = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(980.0, height));
+            let camera = scene.camera(area);
+            for device in &scene.devices {
+                for bounds in device.geometry().boxes {
+                    for horizontal in [bounds.a.0, bounds.a.1] {
+                        for vertical in [bounds.b.0, bounds.b.1] {
+                            let point = camera.pt(bounds.fr.at(horizontal, vertical, bounds.c.0));
+                            assert!(point.y >= scene.top_clear && point.y <= height, "{height}: {point:?}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

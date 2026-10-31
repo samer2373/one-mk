@@ -164,12 +164,17 @@ impl Link {
         std::thread::spawn(move || {
             let content = client::request(&link.dir, Request::ClipHistory { action: client::HistoryAction::Show(id), json: false }, Duration::from_secs(5))
                 .map_err(|_| "Could not reveal this item. Try Refresh.".to_owned())
-                .and_then(|reply| reply.and_then(|reply| reply.strip_prefix("ok\n").map(|body| body.chars().filter(|ch| !ch.is_control()).take(80).collect())).ok_or_else(|| "This item is no longer available.".to_owned()));
+                .and_then(|reply| reply.and_then(|reply| reply.strip_prefix("ok\n").map(|body| history_preview(body.trim_end_matches('\n')))).ok_or_else(|| "This item is no longer available.".to_owned()));
             link.send(Event::ClipboardReveal(id, epoch, content));
         });
     }
 
     pub fn history(&self) {
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ONE_MK_APP_STATUS").is_some() {
+            self.send(Event::ClipboardHistory(Ok(Vec::new())));
+            return;
+        }
         let link = self.clone();
         std::thread::spawn(move || {
             let read = || -> Result<Vec<HistoryItem>, String> {
@@ -581,6 +586,8 @@ impl Link {
     /// Puts the menu-bar / tray icon up if it isn't, so the window is never
     /// the only way in. The tray exits by itself when one is already there.
     fn show_tray(&self) {
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ONE_MK_APP_STATUS").is_some() { return; }
         if let Some(tray) = &self.tray {
             let _ = proc::spawn_detached(tray, &self.home_args(), None);
         }
@@ -672,6 +679,15 @@ impl Link {
     }
 }
 
+fn history_preview(body: &str) -> String {
+    let normalized: String = body.chars().map(|ch| if ch.is_whitespace() { ' ' } else { ch })
+        .filter(|ch| !ch.is_control()).collect();
+    let mut chars = normalized.chars();
+    let mut preview: String = chars.by_ref().take(80).collect();
+    if chars.next().is_some() { preview.push('…'); }
+    preview
+}
+
 fn parse_history(body: &str) -> Result<Vec<HistoryItem>, String> {
     let bad = || "Could not read history. Update one·mk and try Refresh.".to_owned();
     if body == "Clipboard history is empty.\n" { return Ok(Vec::new()); }
@@ -708,6 +724,14 @@ pub fn parse_bench(out: &str, peer: &str) -> Option<Latency> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_preview_preserves_separators_and_marks_truncation() {
+        assert_eq!(history_preview("multi\nline\ttext"), "multi line text");
+        assert_eq!(history_preview(&"a".repeat(80)), "a".repeat(80));
+        assert_eq!(history_preview(&"é".repeat(81)), format!("{}…", "é".repeat(80)));
+        assert_eq!(history_preview("hello\u{1b}world"), "helloworld");
+    }
 
     #[test]
     fn history_metadata_and_hostile_generated_lines() {

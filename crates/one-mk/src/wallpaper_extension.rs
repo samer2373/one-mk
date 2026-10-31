@@ -16,8 +16,14 @@ const FILES: &[(&str, &str)] = &[
 
 #[derive(Subcommand)]
 pub enum Command {
-    Install { #[arg(long)] renderer: Option<PathBuf> },
+    /// Install the managed extension files; enabling it is a separate step.
+    Install {
+        /// Absolute path to the separately installed renderer executable.
+        #[arg(long)] renderer: Option<PathBuf>,
+    },
+    /// Remove managed extension files after disabling the extension.
     Uninstall,
+    /// Show installation, session and qualification status.
     Status,
 }
 

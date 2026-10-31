@@ -52,6 +52,11 @@ impl App {
         }
     }
 
+    pub(super) fn broadcast_stop_hint(&self) -> String {
+        self.running().map(|status| status.broadcast_stop_hint.clone()).filter(|hint| !hint.is_empty())
+            .unwrap_or_else(|| "Press Ctrl+Alt+Shift+Esc to stop broadcasting. The window cannot receive clicks during broadcast.".into())
+    }
+
     /// Starts or stops broadcast, showing it at once.
     pub(super) fn ask_broadcast(&mut self, on: bool) {
         self.pending_broadcast = Some((on, self.now));
@@ -94,12 +99,11 @@ impl App {
         let on = self.broadcasting();
         if online || on {
             let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
-            let r = switch(ui, row(next), Id::unique("broadcast"), "Broadcast to all computers", on, !busy);
+            let r = switch(ui, row(next), Id::unique("broadcast"), "Broadcast to all computers", on, !busy && !on);
             if r.clicked() {
                 self.ask_broadcast(!on);
             }
-            let key = self.running().map(|s| s.broadcast_hotkey.clone()).filter(|k| !k.is_empty());
-            let key = key.map_or_else(String::new, |k| format!(" {k} starts and stops it."));
+            let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
             r.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}"));
             next += 1;
         }

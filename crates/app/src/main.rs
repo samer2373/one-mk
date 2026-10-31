@@ -36,6 +36,19 @@ fn parse_args() -> Result<Option<PathBuf>, String> {
 }
 
 fn main() {
+    let mut args = Vec::new();
+    let mut input = std::env::args_os().skip(1);
+    while let Some(arg) = input.next() {
+        if arg == "--home" { let _ = input.next(); } else { args.push(arg); }
+    }
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("one·mk window — arrange computers, pair and manage sharing\n\nUsage: one-mk-app [OPTIONS]\n\nOptions:\n      --home DIR  Use this settings folder (or ONE_MK_HOME)\n  -h, --help      Show this help\n  -V, --version   Show the version\n\nClosing the window does not stop sharing. Use Stop service to stop sharing entirely.");
+        return;
+    }
+    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
+        println!("one-mk-app {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let home = match parse_args() {
         Ok(h) => h,
         Err(e) => {

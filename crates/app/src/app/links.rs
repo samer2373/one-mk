@@ -67,7 +67,7 @@ impl App {
     /// latency card, on the Desk tab once a computer is paired.
     pub(super) fn panel_h(&self) -> f32 {
         if self.tab == Tab::Files {
-            return 390.0;
+            return 460.0_f32.min(self.ctx.content_rect().height() - 160.0);
         }
         let with_card = self.tab == Tab::Desk && self.running().is_some_and(|s| !s.peers.is_empty());
         if with_card { PANEL_H.max(CARD_Y + CARD_H + 2.0 * PAD) } else { PANEL_H }
@@ -132,6 +132,7 @@ impl App {
             }
         }
         let all = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), CARD_H));
+        ui.interact(all, Id::unique(("latency-definition", &peer.id)), Sense::hover()).on_hover_text("Network round trip: time for a keep-alive request and its reply, not one-way pointer travel. The number is the latest sample, not an average. The graph and min/avg/max cover the last 2 minutes; gaps mean no reply. CLI status uses the same keep-alive measurement, sampled at a different moment.");
         a11y_text(ui, Id::unique(("latency-card", &peer.id)), all, Role::Image, &self.latency_words(peer), None);
     }
 

@@ -298,17 +298,18 @@ pub fn use_profile(dir: &Path, name: &str) -> Result<(String, Vec<String>)> {
 pub enum ProfileCmd {
     /// Save where every paired computer is now as a profile (replacing one
     /// of the same name, keeping its automatic switching).
-    Save { name: String },
+    Save { #[arg(help = "Name for the saved layout")] name: String },
     /// Put a saved profile's layout in place (applies at once if one-mk is
     /// running; the other computers pick it up too).
-    Use { name: String },
+    Use { #[arg(help = "Saved layout to activate")] name: String },
     /// List the saved profiles.
     List,
     /// Delete a profile.
-    Delete { name: String },
+    Delete { #[arg(help = "Saved layout to delete")] name: String },
     /// Switch to a profile by itself when this computer joins a Wi-Fi
     /// network or a network (needs NetworkManager on Linux).
     Auto {
+        #[arg(help = "Saved layout whose automatic switching rules change")]
         name: String,
         /// A Wi-Fi network name (repeatable).
         #[arg(long, value_name = "WIFI-NAME")]

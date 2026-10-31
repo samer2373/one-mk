@@ -123,6 +123,8 @@ pub struct Status {
     pub hotkeys_detail: String,
     pub clipboard_history: usize,
     pub clipboard_history_revision: u64,
+    pub clipboard_history_enabled: bool,
+    pub broadcast_stop_hint: String,
     pub clipboard_history_note: String,
     /// What the input backend needs the user to know or do, one line each
     /// (e.g. approve the desktop's permission dialog); empty when it works.
@@ -424,6 +426,8 @@ impl Status {
         }
         out += &format!("clipboard-history\t{}\n", self.clipboard_history);
         out += &format!("clipboard-history-revision\t{}\n", self.clipboard_history_revision);
+        out += &format!("clipboard-history-enabled\t{}\n", self.clipboard_history_enabled);
+        out += &format!("broadcast-stop-hint\t{}\n", self.broadcast_stop_hint.replace(['\t', '\r', '\n'], " "));
         if !self.clipboard_history_note.is_empty() { out += &format!("clipboard-history-note\t{}\n", self.clipboard_history_note.replace(['\t', '\r', '\n'], " ")); }
         for line in &self.input {
             out += &format!("input\t{}\n", line.replace(['\t', '\n', '\r'], " "));
@@ -501,6 +505,8 @@ impl Status {
                 ["edges", v] => s.edges = v.into(),
                 ["clipboard-history", count] => s.clipboard_history = count.parse().unwrap_or(0),
                 ["clipboard-history-revision", revision] => s.clipboard_history_revision = revision.parse().unwrap_or(0),
+                ["clipboard-history-enabled", enabled] => s.clipboard_history_enabled = enabled == "true",
+                ["broadcast-stop-hint", hint] => s.broadcast_stop_hint = hint.to_string(),
                 ["clipboard-history-note", note] => s.clipboard_history_note = note.to_string(),
                 ["hotkeys", state, detail] => (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into()),
                 ["profile", v] => s.layout.profile = Some(v.into()),
@@ -610,8 +616,6 @@ impl Status {
         if let Some(line) = self.hotkeys_line() {
             out += &format!("{line}\n");
         }
-        out += &format!("Clipboard history: {} items.\n", self.clipboard_history);
-        if !self.clipboard_history_note.is_empty() { out += &format!("{}\n", self.clipboard_history_note); }
         if let Some(p) = &self.layout.profile {
             out += &format!("Layout profile: {p}.\n");
         }
@@ -961,6 +965,24 @@ impl InvitationStatus {
 #[cfg(test)]
 mod invitation_tests {
     use super::*;
+    #[test]
+    fn window_safety_fields_roundtrip_without_repeating_privacy_notice() {
+        let status = Status {
+            name: "desk".into(),
+            clipboard_history_enabled: true,
+            clipboard_history_note: "Long one-time privacy guidance".into(),
+            broadcast_stop_hint: "Press Ctrl+Alt+F8 or Ctrl+Alt+Shift+Esc to stop broadcasting.".into(),
+            ..Default::default()
+        };
+        let decoded = Status::decode(&status.encode()).unwrap();
+        assert!(decoded.clipboard_history_enabled);
+        assert_eq!(decoded.broadcast_stop_hint, status.broadcast_stop_hint);
+        assert!(!status.render().contains("Long one-time privacy guidance"));
+        let old = Status::decode("ok\nname\tdesk\n").unwrap();
+        assert!(!old.clipboard_history_enabled);
+        assert!(old.broadcast_stop_hint.is_empty());
+    }
+
     #[test]
     fn invitation_status_roundtrip() {
         let s = InvitationStatus { link: "onemk://pair?v=1&d=test".into(), expires: 123 };
