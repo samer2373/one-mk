@@ -509,7 +509,7 @@ class Bridge {
     _rebuild() {
         // The layer is never visible without a fresh window behind it; it is
         // revealed again only by the coverage check that follows.
-        if (!this._renderer?.fresh || !showing(this._state))
+        if (!this._renderer?.fresh || !showing(this._state) || this._sources.has('layout'))
             this._layer.hide();
         this._layer.destroy_all_children();
         this._clones = [];
@@ -550,7 +550,8 @@ class Bridge {
         const previous = this._reasons;
         this._reasons = reasons;
         this._clones.forEach((clone, index) => { clone.visible = !covered[index]; });
-        this._layer.visible = this._ownsName && reasons === 0 && showing(this._state) && this._renderer?.fresh === true;
+        this._layer.visible = this._ownsName && reasons === 0 && !this._sources.has('layout') &&
+            showing(this._state) && this._renderer?.fresh === true;
         if (reasons !== previous)
             this._emit('PauseHint', new GLib.Variant('(u)', [reasons]));
         if (reasons) {
