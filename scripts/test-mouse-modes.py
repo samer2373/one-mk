@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import select
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -77,9 +78,10 @@ def main():
     parser.add_argument("--skip-idle", action="store_true", help="repeat UI checks without replacing idle.json")
     options = parser.parse_args()
     options.output.mkdir(parents=True, exist_ok=True)
-    binary = str(ROOT / "target/debug/one-mk")
-    app = str(ROOT / "target/debug/one-mk-app")
-    with tempfile.TemporaryDirectory(prefix="mouse-qa-", dir=options.output) as directory:
+    target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+    binary = str(target / "debug/one-mk")
+    app = str(target / "debug/one-mk-app")
+    with tempfile.TemporaryDirectory(prefix="mouse-qa-") as directory:
         lab = idle.Lab(Path(directory), binary)
         try:
             home = lab.home("xvfb")
@@ -226,7 +228,7 @@ def main():
 
             daemon = lab.daemon(window_home, "null", idle.free_port(), False)
             wrapper_home = lab.home("wrapper")
-            os.link(app, wrapper_home / "one-mk-app")
+            shutil.copy2(app, wrapper_home / "one-mk-app")
             wrapper = wrapper_home / "one-mk"
             wrapper.write_text('#!/bin/sh\ncase "$*" in *autoscroll*) sleep 2; if [ "$QA_MOUSE_ERROR" = 1 ]; then echo "QA: simulated write failure" >&2; exit 1; fi;; esac\nexec ' + binary + ' "$@"\n')
             wrapper.chmod(0o700)
