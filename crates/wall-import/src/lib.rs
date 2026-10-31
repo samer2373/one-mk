@@ -3,6 +3,8 @@ mod decode;
 pub mod sandbox;
 mod transaction;
 #[cfg(target_os = "linux")]
+mod cgroup;
+#[cfg(target_os = "linux")]
 mod runtime_elf;
 
 pub use admission::{Format, Media, inspect};

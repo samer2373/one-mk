@@ -51,6 +51,7 @@ fn main() -> std::process::ExitCode {
         libc::signal(libc::SIGTERM, cancel as *const () as libc::sighandler_t);
     }
     let mut runtime = None;
+    let mut cgroup_root = None;
     let mut output = None;
     let mut source = None;
     let Some(operation) = arguments.first() else { return failure("missing command; use --help", 2, json); };
@@ -58,9 +59,9 @@ fn main() -> std::process::ExitCode {
     while index < arguments.len() {
         match arguments[index].to_str() {
             Some("--json") => {}
-            Some("--runtime" | "--output") => {
+            Some("--runtime" | "--output" | "--cgroup-root") => {
                 let Some(value) = arguments.get(index + 1) else { return failure("missing option value", 2, json); };
-                let slot = if arguments[index] == "--runtime" { &mut runtime } else { &mut output };
+                let slot = if arguments[index] == "--runtime" { &mut runtime } else if arguments[index] == "--cgroup-root" { &mut cgroup_root } else { &mut output };
                 if slot.is_some() { return failure("duplicate option", 2, json); }
                 *slot = Some(PathBuf::from(value));
                 index += 1;
@@ -71,7 +72,7 @@ fn main() -> std::process::ExitCode {
         index += 1;
     }
     if operation == "doctor" {
-        let status = one_mk_wall_import::sandbox::doctor(runtime.as_deref());
+        let status = one_mk_wall_import::sandbox::doctor(runtime.as_deref(), cgroup_root.as_deref());
         if json { println!("{}", serde_json::to_string(&status).expect("serializable status")); }
         else { println!("Wallpaper import sandbox: {}, {}", if status.available { "available" } else { "unavailable" }, status.reason); }
         return std::process::ExitCode::from(if status.available { 0 } else { 3 });
@@ -79,13 +80,13 @@ fn main() -> std::process::ExitCode {
     #[cfg(all(target_os = "linux", feature = "test-faults"))]
     if operation == "storage-check" {
         let Some(runtime) = runtime else { return failure("storage-check requires --runtime", 2, json); };
-        return worker_result(one_mk_wall_import::sandbox::storage_check(&runtime));
+        return worker_result(one_mk_wall_import::sandbox::storage_check(&runtime, cgroup_root.as_deref()));
     }
     if operation != "import" { return failure("unknown command; use --help", 2, json); }
     let Some(source) = source else { return failure("import requires FILE", 2, json); };
     let Some(output) = output else { return failure("import requires --output (existing private directory)", 2, json); };
     let Some(runtime) = runtime else { return failure("sandbox unavailable: refusing to import: select an audited --runtime", 3, json); };
-    match one_mk_wall_import::import(one_mk_wall_import::ImportOptions { source: &source, output: &output, runtime: &runtime, cancel: &CANCELLED, timeout: std::time::Duration::from_secs(600) }) {
+    match one_mk_wall_import::import(one_mk_wall_import::ImportOptions { source: &source, output: &output, runtime: &runtime, cgroup_root: cgroup_root.as_deref(), cancel: &CANCELLED, timeout: std::time::Duration::from_secs(600) }) {
         Ok(record) => {
             if json { println!("{}", serde_json::to_string(&record).expect("serializable record")); }
             else { println!("Imported {}: {} frames, {} ms; poster saved. Playback/normalization unqualified.", record.source_blake3, record.media.frames, record.media.duration_ms); }

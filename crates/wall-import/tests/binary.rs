@@ -5,7 +5,13 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn invoke(arguments: &[&std::ffi::OsStr]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_one-mk-wall-import")).args(arguments).env_clear().output().expect("finite helper reaped")
+    let mut command = Command::new(env!("CARGO_BIN_EXE_one-mk-wall-import"));
+    command.args(arguments).env_clear();
+    if arguments.first().is_some_and(|operation| ["import", "doctor", "storage-check"].iter().any(|name| operation == name))
+        && let Some(root) = std::env::var_os("ONE_MK_WALL_TEST_CGROUP_ROOT") {
+        command.arg("--cgroup-root").arg(root);
+    }
+    command.output().expect("finite helper reaped")
 }
 
 #[test]
@@ -45,10 +51,12 @@ fn killed_workers_at_each_checkpoint_and_cancel_leave_no_partials_or_descendants
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) }, 0);
     for stage in ["start", "probe", "decode", "decoder", "poster", "respond", "cancel", "parent-sigkill"] {
         std::fs::write(&source, if stage == "decoder" { std::fs::read(lab.join("media/six.webm")).unwrap() } else { fixtures::gif(2, 2, 2) }).unwrap();
-        let mut guard = ChildGuard(Some(Command::new(env!("CARGO_BIN_EXE_one-mk-wall-import"))
-            .arg("import").arg(&source).arg("--output").arg(&output).arg("--runtime").arg(&runtime).arg("--json")
+        let mut command = Command::new(env!("CARGO_BIN_EXE_one-mk-wall-import"));
+        command.arg("import").arg(&source).arg("--output").arg(&output).arg("--runtime").arg(&runtime).arg("--json")
             .env_clear().env("ONE_MK_WALL_TEST_STOP", if stage == "cancel" || stage == "parent-sigkill" { "decode" } else { stage })
-            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().unwrap()), Vec::new());
+            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+        command.arg("--cgroup-root").arg(std::env::var_os("ONE_MK_WALL_TEST_CGROUP_ROOT").expect("explicit private cgroup delegation required"));
+        let mut guard = ChildGuard(Some(command.spawn().unwrap()), Vec::new());
         let parent = guard.0.as_ref().unwrap().id();
         let started = std::time::Instant::now();
         let worker = loop {
@@ -193,5 +201,5 @@ fn isolated_real_binary_import_and_failure_paths() {
     assert!(!result.status.success());
     assert_eq!(std::fs::read_dir(&output).unwrap().count(), 0);
     let cancelled = std::sync::atomic::AtomicBool::new(true);
-    assert!(one_mk_wall_import::import(one_mk_wall_import::ImportOptions { source: &source, output: &output, runtime, cancel: &cancelled, timeout: std::time::Duration::ZERO }).unwrap_err().contains("cancelled"));
+    assert!(one_mk_wall_import::import(one_mk_wall_import::ImportOptions { source: &source, output: &output, runtime, cgroup_root: None, cancel: &cancelled, timeout: std::time::Duration::ZERO }).unwrap_err().contains("cancelled"));
 }
