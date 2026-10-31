@@ -24,3 +24,7 @@ one-mk-wall-sync = { path = "../wall", optional = true }
 [[example]]
 name = "bridge-conformance"
 required-features = ["gnome-bridge"]
+
+[[example]]
+name = "bridge-lifecycle"
+required-features = ["gnome-bridge"]

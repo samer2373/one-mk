@@ -113,12 +113,39 @@ def main():
             if evaluate(f'{BRIDGE}._recovery.children.size') == 0:
                 break
             time.sleep(0.1)
-        for _ in range(20):
+        lifecycle = SESSION / 'data/gnome-shell/extensions' / UUID / 'libexec/one-mk-wall'
+        shutil.copy2(REPO / 'target/debug/examples/bridge-lifecycle', lifecycle)
+        background = evaluate('new imports.gi.Gio.Settings({schema_id: "org.gnome.desktop.background"})'
+                              '.get_string("picture-uri")')
+        report['authenticated_child_cycles'] = 0
+        for _ in range(100):
             extension('Disable')
             extension('Enable')
             assert evaluate(f'Boolean({BRIDGE}._ownsName)')
+            evaluate(f'{BRIDGE}._recovery.attempts = []; {BRIDGE}._authorized = true; '
+                     f'{BRIDGE}._coverage(); true')
+            for _ in range(80):
+                if evaluate(f'{BRIDGE}._sender !== null && {BRIDGE}._state === 2'):
+                    break
+                time.sleep(0.05)
+            assert evaluate(f'{BRIDGE}._sender !== null && {BRIDGE}._state === 2'), 'child handshake failed'
+            pid = evaluate(f'{BRIDGE}._pid')
+            evaluate(f'globalThis.oneMkQaRecovery = {BRIDGE}._recovery; true')
+            extension('Disable')
+            for _ in range(80):
+                if evaluate('globalThis.oneMkQaRecovery.children.size') == 0:
+                    break
+                time.sleep(0.05)
+            assert evaluate('globalThis.oneMkQaRecovery.children.size') == 0, 'child not reaped'
+            assert not Path(f'/proc/{pid}').exists(), f'child {pid} leaked'
+            assert evaluate('new imports.gi.Gio.Settings({schema_id: "org.gnome.desktop.background"})'
+                            '.get_string("picture-uri")') == background
             evaluate('Main.extensionManager.lookup("spike-harness@one-mk.test").stateObj.collectGarbage(); true')
-        report['checks'].append('20 enable/disable + GC cycles, no renderer children')
+            report['authenticated_child_cycles'] += 1
+        evaluate('delete globalThis.oneMkQaRecovery; true')
+        report['checks'].append('100 authenticated paused-fixture start/stop + GC cycles; '
+                                'each PID reaped, no background setting changes; NOT playback/restoration')
+        extension('Enable')
         extension('Disable')
         code = ('from gi.repository import Gio, GLib; '
                 'bus=Gio.bus_get_sync(Gio.BusType.SESSION); '
