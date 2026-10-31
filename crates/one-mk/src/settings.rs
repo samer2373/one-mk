@@ -902,6 +902,97 @@ pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// Every table 0.1.14's `Settings` could write (its full default save
+    /// plus rules, scopes and hooks in the shapes its serializers produce)
+    /// is still known: nothing is reported unknown, and rules survive an
+    /// unrelated edit.
+    #[test]
+    fn a_full_0_1_14_save_is_wholly_understood() {
+        let source = r#"settings_version = 2
+notify_files = true
+gaming = "auto"
+lock_sync = false
+
+[drag]
+enabled = true
+zone_px = 12
+
+[clipboard]
+text = true
+html = true
+image = true
+max_mb = 10
+skip_sensitive = true
+
+[edge]
+corner = 10
+fullscreen_allow = []
+fullscreen_block = ["game.exe"]
+
+[edge.top]
+dwell_ms = 300
+
+[hooks]
+on_enter = ["notify-send", "here"]
+on_leave = "echo gone"
+timeout_secs = 5
+
+[power]
+block_screensaver_on_peers = true
+sleep_sync = false
+
+[hotkeys]
+enabled = true
+jump = "ctrl+alt+shift+j"
+cycle = "ctrl+alt+pagedown"
+lock_pointer = "ctrl+alt+p"
+home = "ctrl+alt+h"
+
+[input.keymap]
+tap_ms = 180
+
+[[input.keymap.rule]]
+from = "capslock"
+tap = "esc"
+hold = "ctrl"
+
+[[input.keymap.rule]]
+from = "f13"
+to = ["ctrl+c", "ctrl+v"]
+scope = { os = "mac" }
+
+[[input.pointer]]
+speed = 1.5
+acceleration = "curve"
+scope = { local = true }
+
+[[input.scroll]]
+device = "touchpad"
+natural = "auto"
+mode = "smooth"
+modifiers = { shift = "horizontal" }
+scope = { peer = "Laptop" }
+
+[[input.button]]
+from = 8
+to = "alt+left"
+
+[pointer]
+draw_when_no_mouse = "auto"
+"#;
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join(FILE), source).unwrap();
+        let before = Settings::load(directory.path()).unwrap();
+        assert!(before.unknown.is_empty(), "0.1.14 keys reported unknown: {:?}", before.unknown);
+        assert_eq!(before.input.keymap.rule.len(), 2);
+        assert_eq!((before.input.pointer.len(), before.input.scroll.len(), before.input.button.len()), (1, 1, 1));
+        assert!(before.hooks.on_enter.is_some() && before.hooks.on_leave.is_some());
+        Settings::update(directory.path(), |settings| { settings.lock_sync = true; Ok(()) }).unwrap();
+        let after = Settings::load(directory.path()).unwrap();
+        assert!(after.lock_sync && after.unknown.is_empty());
+        assert_eq!((after.input.clone(), after.hooks.on_enter.clone(), after.edge.clone(), after.gaming), (before.input.clone(), before.hooks.on_enter.clone(), before.edge.clone(), before.gaming));
+    }
+
     #[test]
     fn historical_settings_survive_upgrade_and_unrelated_edits() {
         for fixture in [include_str!("../tests/fixtures/settings-0.1.13.toml"), include_str!("../tests/fixtures/settings-0.1.14.toml")] {
