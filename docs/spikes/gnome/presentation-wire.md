@@ -60,6 +60,15 @@ replaced consent and owner loss permanently revoke the gate instance; a layout o
 suspend change clears admitted intent until a fresh plan arrives. The Gate performs
 no I/O; the renderer must destroy presentation resources when intent is absent.
 
+Step C: a **paused** plan may carry slices outside the frozen canvas (every other
+slice check still applies), because it presents nothing. The daemon's publisher
+uses this for a local layout that does not fit the committed canvas (an added or
+moved output): it publishes that layout paused, so the screen stays static
+without refusals or teardown, and a fitting layout plays again. The canvas is
+never reflowed (design section 3: "Fit to connected screens" is an explicit
+commit). Whole-local pause is coarser than the design's per-output static; that
+needs per-slice optionality in the wire format (6D-M2).
+
 ## Authenticated session (`presentation_auth`)
 
 Trust is never ambient: being on the bus, owning a name or serving the object path
@@ -92,6 +101,11 @@ grants nothing.
    disable|enable`, any reload) and sends an empty unicast `Changed` signal to the
    pinned renderer on every change; the renderer then fetches immediately (a
    2-second heartbeat fetch is only a safety net; owner loss is observed directly).
+   Step C kept that heartbeat: zbus applies back-pressure rather than dropping a
+   queued `Changed`, so it is not needed against signal loss, but it is the only
+   bound on a wedged (not dead) daemon after a file-level consent revocation. It
+   is the one periodic wakeup left while a still is shown (one authenticated
+   round trip, no compositor work); removing it is a step D decision.
    Each applied consent transition also advances an internal epoch. A pinned
    connection from an older epoch receives a revoked reply even if a disable and
    re-enable (or revision replacement and restoration) were coalesced before its

@@ -1,0 +1,691 @@
+PASS all eight generated items imported by the real sandboxed importer (delegated cgroup v2 of this run's own transient systemd scope): gif=gif/10f, apng=apng/10f, webp=webp/10f, still=still_png/1f, vp9=vp9_webm/30f, av1=av1_webm/30f, clip1080p=vp9_webm/240f, longgif=gif/4f
+PASS harness control without the component (extension disabled, no daemon or renderer): the stand-in logind's PrepareForSleep, lock/unlock and a Shell SIGKILL + restart produce 10 + 1 warning records of their own; these identities are reported separately and are not charged to, nor hidden from, the component gate below
+PASS user wallpaper set in the private session and native baselines captured for all 9 layouts (two 3840x1080, three 5760x1080, one 1920x1080, two@2 3840x1080, two@1.25 3840x1080, swapped 3840x1080, rotated 3000x1920, stacked 1920x2160, column3 1920x3240)
+PASS layout change / hot-plug with real GIF playback (same renderer PID 967647 throughout): monitor added (three) -> revealed in 0.68s; monitors removed (one) -> revealed in 0.55s; scale 2 (logical resize) -> revealed in 0.61s; fractional scale 1.25 -> revealed in 0.63s; reposition (order swapped) -> revealed in 0.65s; rotation (1080x1920 resize) -> revealed in 0.71s; reposition (stacked vertically) -> revealed in 0.62s; layout outside the committed canvas -> static user wallpaper in 0.95s; two monitors -> revealed in 0.74s; monitor added (three) -> revealed in 0.84s; two monitors -> revealed in 0.68s (each revealed layout then verified exact on every pixel at scale 1, at block centres when scaled); transition screenshots never showed a frame sliced for the old layout; worst 0.84s; a 3-change burst (150 ms apart) converged; renderer exit and restoration after stop
+PASS VP9 (PSNR) and the still (exact, holding) re-slice through add, fractional scale, reposition and back
+PASS lock/unlock x6 within about a minute with VP9: at lock the renderer exits via SIGTERM in 109-208 ms (worker and cgroup removed by the renderer itself); while locked no bridge, renderer, decoder, cgroup or timer exists and the lock screen shows no frame; each unlock starts a fresh renderer showing verified advancing frames in 957-1219 ms; the restart cap is not consumed by lock cycles (attempts 1, not exhausted)
+PASS suspend/resume via PrepareForSleep on the private system bus with APNG: before sleep the presentation is hidden and the renderer exits (SIGTERM, 29-49 ms, no worker or cgroup left); asleep the screen is the user wallpaper with no restart/watchdog timers; after resume a fresh renderer shows verified advancing frames (752-1591 ms), both with and without the Shell's lock-on-suspend
+PASS stills and long frames announce Holding instead of being re-committed: the still stays revealed 12 s (4x the Shell watchdog) unchanged in state 4 with no Shell watchdog source and zero presenter-thread wakeups (renderer thread switches over 12 s: {'one-mk-wall/974340': 27, 'presenter/974346': 0}); a GIF with 2.6 s frames alternates Holding/Playing (5/4 in 12 s) and is never stopped by the watchdog
+PASS renderer crashes still count: two SIGKILLs are each followed by a fresh verified renderer (Shell restart after 2 s, then 4 s), the third within the minute latches the restart cap; the screen is the user wallpaper; the one empty group the killed renderer left is reclaimed by the next renderer at start
+PASS restoration: after daemon one-mk stop, SIGTERM, SIGKILL, consent revoke, wallpaper disable, bare renderer SIGKILL, extension disable, extension uninstall and GNOME Shell SIGKILL + restart, the screen equals the user's own wallpaper (mean error stop 0.0, sigterm 0.0, sigkill 0.0, revoke 0.0, disable 0.0, renderer-kill 0.0, extension-disable 0.0, uninstall 0.0, shell-restart 0.0), picture-uri untouched, no renderer, worker, cgroup or other process left; playback works again in the restarted Shell
+sequence 10/100
+sequence 20/100
+sequence 30/100
+sequence 40/100
+sequence 50/100
+sequence 60/100
+sequence 70/100
+sequence 80/100
+sequence 90/100
+sequence 100/100
+PASS 100 randomized lifecycle sequences (seed 20261031; events {"layout": 119, "layout-burst": 23, "teardown-stop": 19, "lock": 59, "suspend": 40, "suspend-lock": 28, "renderer-kill": 21, "teardown-sigterm": 16, "teardown-sigkill": 14, "teardown-revoke": 11, "teardown-disable": 13, "teardown-renderer-kill": 13, "teardown-extension-disable": 15, "uninstall-restart": 10, "shell-restart": 6, "pause": 33, "extension-cycle": 25}): every sequence started real playback of a random imported item, every event ended in verified frames or the expected static user wallpaper within its bound, every teardown restored the user wallpaper with no leftover process or cgroup
+PASS zero new Mutter/Shell warning records versus the M1a-2 baseline across all 18 Shell sessions (822 records: baseline-known, or 223 of the identities the control phase produced without the component); 2 new records from other session services (not Shell/Mutter, never ours) are listed in result.json
+{
+  "production_authorization": false,
+  "events": {
+    "layout": 119,
+    "layout-burst": 23,
+    "teardown-stop": 19,
+    "lock": 59,
+    "suspend": 40,
+    "suspend-lock": 28,
+    "renderer-kill": 21,
+    "teardown-sigterm": 16,
+    "teardown-sigkill": 14,
+    "teardown-revoke": 11,
+    "teardown-disable": 13,
+    "teardown-renderer-kill": 13,
+    "teardown-extension-disable": 15,
+    "uninstall-restart": 10,
+    "shell-restart": 6,
+    "pause": 33,
+    "extension-cycle": 25
+  },
+  "shell_sessions": 18,
+  "binary_sha256": {
+    "one-mk": "7a79895deca6fb190829c4f4581c55cc6c661e781e4045432fee8083ad5bb4bc",
+    "one-mk-wall": "ce293392ed92a71e55aad0e3c4cc782e0a4c7f453c0a0aa5ceaf6cce6bbf2365",
+    "one-mk-wall-import": "392be6f7edcd8c98c44ce20c1ab7fd752d37a4552f46f63b885403349a53b73f"
+  },
+  "source_sha256": {
+    "extensions/gnome/one-mk-wallpaper@one-mk.org/extension.js": "f046560048ea39e5cf166f65ced6ed7e5365ad4394aab54b46f02569af5c7b35",
+    "docs/spikes/gnome/qualify-m1-lifecycle.py": "d4188c8b6423efe152fafd7e6234931d373639bb7aedc4f4b332eb24e219d257",
+    "docs/spikes/gnome/client/fake_logind.py": "a78e0412d037b4a17b4635c5586127baa2d909d9518eb8efb154e5337d642039",
+    "docs/spikes/gnome/isolated-session.sh": "26fc568f99f5436282d96ccea6dbe7cc3920391ab5d48bb912867bfd39ba6e99"
+  },
+  "seed": 20261031,
+  "shell": "GNOME Shell 50.1",
+  "control_warnings": {
+    "suspend_and_lock_without_component": [
+      "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:17.743: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:18.555: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:18.556: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+      "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:19.370: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:20.182: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:20.183: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+      "(gnome-shell:953007): Gjs-WARNING **: 20:55:21.094: Type GITypeInfo of property AccountsService.User::password-mode does not match return type GITypeInfo of getter get_password_mode. Falling back to slow path",
+      "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:21.095: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:21.174: Failed to update user state: can't access property \"State\", this._loginUser is null",
+      "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:21.174: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d"
+    ],
+    "shell_kill_without_component": [
+      "(evolution-calendar-factory:953142): libedbus-private-WARNING **: 20:55:23.945: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+    ]
+  },
+  "proofs_run": "all",
+  "transition_screens": {
+    "native": 114,
+    "media": 5
+  },
+  "layout_matrix": [
+    {
+      "layout": "three",
+      "what": "monitor added (three)",
+      "fits_canvas": true,
+      "seconds": 0.676
+    },
+    {
+      "layout": "one",
+      "what": "monitors removed (one)",
+      "fits_canvas": true,
+      "seconds": 0.55
+    },
+    {
+      "layout": "two@2",
+      "what": "scale 2 (logical resize)",
+      "fits_canvas": true,
+      "seconds": 0.614
+    },
+    {
+      "layout": "two@1.25",
+      "what": "fractional scale 1.25",
+      "fits_canvas": true,
+      "seconds": 0.627
+    },
+    {
+      "layout": "swapped",
+      "what": "reposition (order swapped)",
+      "fits_canvas": true,
+      "seconds": 0.653
+    },
+    {
+      "layout": "rotated",
+      "what": "rotation (1080x1920 resize)",
+      "fits_canvas": true,
+      "seconds": 0.71
+    },
+    {
+      "layout": "stacked",
+      "what": "reposition (stacked vertically)",
+      "fits_canvas": true,
+      "seconds": 0.624
+    },
+    {
+      "layout": "column3",
+      "what": "layout outside the committed canvas",
+      "fits_canvas": false,
+      "seconds": 0.954
+    },
+    {
+      "layout": "two",
+      "what": "two monitors",
+      "fits_canvas": true,
+      "seconds": 0.74
+    },
+    {
+      "layout": "three",
+      "what": "monitor added (three)",
+      "fits_canvas": true,
+      "seconds": 0.839
+    },
+    {
+      "layout": "two",
+      "what": "two monitors",
+      "fits_canvas": true,
+      "seconds": 0.681
+    }
+  ],
+  "holding": {
+    "thread_switches_12s": {
+      "one-mk-wall/974340": 27,
+      "presenter/974346": 0
+    },
+    "view": {
+      "state": 4,
+      "layer": true,
+      "fresh": true,
+      "reasons": 0,
+      "clones": 2,
+      "rect": [
+        0,
+        0,
+        3840,
+        1080
+      ],
+      "pid": 974340,
+      "authorized": true,
+      "sources": [],
+      "attempts": 1,
+      "starts": 1,
+      "exhausted": false,
+      "children": 1,
+      "escalations": 0,
+      "serial": 1,
+      "monitors": [
+        [
+          0,
+          0,
+          1920,
+          1080,
+          1
+        ],
+        [
+          1920,
+          0,
+          1920,
+          1080,
+          1
+        ]
+      ],
+      "lastStop": {
+        "cause": "renderer left the bus",
+        "planned": false,
+        "pid": 973883
+      }
+    },
+    "long_frames": {
+      "holding_reports": 5,
+      "moving_reports": 4
+    }
+  },
+  "reclaimed_at_start": [
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1",
+    "event=reclaimed stale_playback_groups=1"
+  ],
+  "restoration": {
+    "stop": 0.0,
+    "sigterm": 0.0,
+    "sigkill": 0.0,
+    "revoke": 0.0,
+    "disable": 0.0,
+    "renderer-kill": 0.0,
+    "extension-disable": 0.0,
+    "uninstall": 0.0,
+    "shell-restart": 0.0
+  },
+  "stale_empty_groups_after_bare_sigkill": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "event_counts": {
+    "layout": 119,
+    "layout-burst": 23,
+    "teardown-stop": 19,
+    "lock": 59,
+    "suspend": 40,
+    "suspend-lock": 28,
+    "renderer-kill": 21,
+    "teardown-sigterm": 16,
+    "teardown-sigkill": 14,
+    "teardown-revoke": 11,
+    "teardown-disable": 13,
+    "teardown-renderer-kill": 13,
+    "teardown-extension-disable": 15,
+    "uninstall-restart": 10,
+    "shell-restart": 6,
+    "pause": 33,
+    "extension-cycle": 25
+  },
+  "warnings": {
+    "1": {
+      "records": 25,
+      "harness_control": [
+        "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:17.743: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:18.555: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:18.556: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:19.370: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:20.182: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:20.183: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:21.095: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:21.174: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:953007): GNOME Shell-WARNING **: 20:55:21.174: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(evolution-calendar-factory:953142): libedbus-private-WARNING **: 20:55:23.945: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "2": {
+      "records": 78,
+      "harness_control": [
+        "(gnome-shell:955645): GNOME Shell-WARNING **: 20:56:50.352: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:955645): GNOME Shell-WARNING **: 20:56:51.549: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:955645): GNOME Shell-WARNING **: 20:56:51.550: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:955645): GNOME Shell-WARNING **: 20:56:52.491: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:955645): GNOME Shell-WARNING **: 20:56:53.691: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:955645): GNOME Shell-WARNING **: 20:56:53.691: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:955645): GNOME Shell-WARNING **: 20:56:54.758: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:955645): GNOME Shell-WARNING **: 20:56:55.903: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:955645): GNOME Shell-WARNING **: 20:56:55.904: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d"
+      ],
+      "new": [],
+      "new_other_services": [
+        "(evolution-addressbook-factory:955814): libedbus-private-WARNING **: 20:58:04.129: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ]
+    },
+    "3": {
+      "records": 16,
+      "harness_control": [
+        "(evolution-calendar-factory:983555): libedbus-private-WARNING **: 20:58:15.768: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "4": {
+      "records": 110,
+      "harness_control": [
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:58:46.321: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:58:47.390: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:58:47.391: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:58:53.128: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:58:54.460: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:58:54.506: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:04.408: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:05.589: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:05.590: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:24.567: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:25.704: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:25.705: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:54.688: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:56.012: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:56.013: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:56.556: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:57.837: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 20:59:57.837: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:02.786: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:03.950: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:03.950: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:18.179: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:19.268: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:19.269: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:51.471: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:52.590: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:52.590: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:57.343: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:58.504: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:00:58.504: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:01:00.043: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:01:01.182: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:01:01.182: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:01:21.829: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:01:22.894: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:01:22.895: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:01:29.675: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:01:30.802: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:984675): GNOME Shell-WARNING **: 21:01:30.803: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(evolution-calendar-factory:984753): libedbus-private-WARNING **: 21:01:34.271: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": [
+        "(evolution-addressbook-factory:984795): libedbus-private-WARNING **: 21:01:34.272: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ]
+    },
+    "5": {
+      "records": 28,
+      "harness_control": [
+        "(gnome-shell:1002004): GNOME Shell-WARNING **: 21:02:06.674: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1002004): GNOME Shell-WARNING **: 21:02:07.743: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1002004): GNOME Shell-WARNING **: 21:02:07.743: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1002004): GNOME Shell-WARNING **: 21:02:22.839: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1002004): GNOME Shell-WARNING **: 21:02:23.958: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1002004): GNOME Shell-WARNING **: 21:02:23.958: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "6": {
+      "records": 56,
+      "harness_control": [
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:02:48.410: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:02:49.472: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:02:49.472: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:02:51.120: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:02:52.239: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:02:52.240: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:02:57.504: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:02:58.558: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:02:58.558: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:06.244: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:07.357: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:07.358: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:08.119: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:09.184: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:09.184: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:14.770: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:15.953: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:15.954: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:32.181: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:33.245: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1005639): GNOME Shell-WARNING **: 21:03:33.245: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(evolution-calendar-factory:1005725): libedbus-private-WARNING **: 21:03:35.473: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "7": {
+      "records": 63,
+      "harness_control": [
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:03:56.495: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:03:57.559: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:03:57.560: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:15.619: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:16.738: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:16.739: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:17.548: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:18.607: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:18.607: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:20.236: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:21.358: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:21.358: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:25.747: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:26.819: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:04:26.819: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:05:09.641: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:05:10.701: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:05:10.702: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:05:13.563: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:05:14.622: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1011983): GNOME Shell-WARNING **: 21:05:14.622: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "8": {
+      "records": 20,
+      "harness_control": [],
+      "new": [],
+      "new_other_services": []
+    },
+    "9": {
+      "records": 19,
+      "harness_control": [
+        "(gnome-shell:1022883): GNOME Shell-WARNING **: 21:06:10.177: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1022883): GNOME Shell-WARNING **: 21:06:11.303: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1022883): GNOME Shell-WARNING **: 21:06:11.304: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(evolution-calendar-factory:1022963): libedbus-private-WARNING **: 21:06:12.106: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "10": {
+      "records": 35,
+      "harness_control": [
+        "(gnome-shell:1024135): GNOME Shell-WARNING **: 21:06:23.814: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1024135): GNOME Shell-WARNING **: 21:06:25.015: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1024135): GNOME Shell-WARNING **: 21:06:25.015: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1024135): GNOME Shell-WARNING **: 21:06:25.923: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1024135): GNOME Shell-WARNING **: 21:06:26.981: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1024135): GNOME Shell-WARNING **: 21:06:26.981: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(evolution-calendar-factory:1024217): libedbus-private-WARNING **: 21:06:50.570: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "11": {
+      "records": 35,
+      "harness_control": [
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:03.699: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:04.905: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:04.906: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:05.919: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:06.999: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:07.000: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:14.273: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:15.335: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:15.336: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:17.291: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:18.464: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:18.465: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:26.120: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:27.315: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1027170): GNOME Shell-WARNING **: 21:07:27.316: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "12": {
+      "records": 101,
+      "harness_control": [
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:07:44.488: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:07:45.694: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:07:45.695: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:07:46.678: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:07:47.738: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:07:47.739: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:07:52.245: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:07:53.307: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:07:53.308: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:06.980: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:08.173: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:08.174: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:22.477: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:23.605: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:23.606: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:25.957: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:27.092: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:27.092: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:34.816: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:35.895: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:35.896: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:53.961: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:55.166: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:08:55.167: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:13.957: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:15.071: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:15.072: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:19.065: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:20.122: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:20.122: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:27.721: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:28.838: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:28.839: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:34.642: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:35.698: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:35.698: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:53.120: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:54.310: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:09:54.311: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:10:02.768: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:10:03.883: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1030316): GNOME Shell-WARNING **: 21:10:03.883: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "13": {
+      "records": 22,
+      "harness_control": [
+        "(gnome-shell:1043122): GNOME Shell-WARNING **: 21:10:52.326: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1043122): GNOME Shell-WARNING **: 21:10:53.447: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1043122): GNOME Shell-WARNING **: 21:10:53.448: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "14": {
+      "records": 60,
+      "harness_control": [
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:11:30.103: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:11:31.170: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:11:31.170: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:11:35.064: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:11:36.256: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:11:36.256: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:11:47.876: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:11:48.932: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:11:48.933: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:12:23.934: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:12:25.056: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1046007): GNOME Shell-WARNING **: 21:12:25.056: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(evolution-calendar-factory:1046095): libedbus-private-WARNING **: 21:12:34.415: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "15": {
+      "records": 51,
+      "harness_control": [
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:12:57.912: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:12:58.985: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:12:58.986: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:04.335: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:05.453: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:05.453: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:12.859: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:13.907: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:13.908: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:28.155: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:29.292: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:29.292: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:30.038: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:31.155: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1052671): GNOME Shell-WARNING **: 21:13:31.156: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(evolution-calendar-factory:1052754): libedbus-private-WARNING **: 21:13:40.576: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "16": {
+      "records": 17,
+      "harness_control": [
+        "(evolution-calendar-factory:1058743): libedbus-private-WARNING **: 21:13:54.832: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "17": {
+      "records": 31,
+      "harness_control": [
+        "(gnome-shell:1059993): GNOME Shell-WARNING **: 21:14:28.092: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1059993): GNOME Shell-WARNING **: 21:14:29.211: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1059993): GNOME Shell-WARNING **: 21:14:29.211: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1059993): GNOME Shell-WARNING **: 21:14:36.221: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1059993): GNOME Shell-WARNING **: 21:14:37.278: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1059993): GNOME Shell-WARNING **: 21:14:37.278: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(evolution-calendar-factory:1060075): libedbus-private-WARNING **: 21:14:39.156: Error setting property 'ConnectionStatus' on interface org.gnome.evolution.dataserver.Source: The connection is closed (g-io-error-quark, 18)"
+      ],
+      "new": [],
+      "new_other_services": []
+    },
+    "18": {
+      "records": 55,
+      "harness_control": [
+        "(gnome-shell:1063435): GNOME Shell-WARNING **: 21:14:51.905: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1063435): GNOME Shell-WARNING **: 21:14:53.031: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1063435): GNOME Shell-WARNING **: 21:14:53.031: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d",
+        "(gnome-shell:1063435): GNOME Shell-WARNING **: 21:15:21.289: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1063435): GNOME Shell-WARNING **: 21:15:22.336: Failed to update user state: can't access property \"State\", this._loginUser is null",
+        "(gnome-shell:1063435): GNOME Shell-WARNING **: 21:15:22.337: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: Object does not exist at path \u201c/org/freedesktop/login1\u201d"
+      ],
+      "new": [],
+      "new_other_services": []
+    }
+  },
+  "timing_summary": {
+    "layout_to_reveal_s": {
+      "count": 111,
+      "median_ms": 570.4,
+      "max_ms": 1577.5
+    },
+    "layout_to_verified_s": {
+      "count": 111,
+      "median_ms": 1080.2,
+      "max_ms": 3828.1
+    },
+    "layout_to_static_s": {
+      "count": 8,
+      "median_ms": 812.2,
+      "max_ms": 1845.6
+    },
+    "burst_converged_s": {
+      "count": 23,
+      "median_ms": 2688.1,
+      "max_ms": 4722.6
+    },
+    "lock_to_renderer_exit_s": {
+      "count": 59,
+      "median_ms": 97.4,
+      "max_ms": 207.5
+    },
+    "unlock_to_settled_s": {
+      "count": 59,
+      "median_ms": 1073.9,
+      "max_ms": 2619.4
+    },
+    "sleep_to_renderer_exit_s": {
+      "count": 68,
+      "median_ms": 28.2,
+      "max_ms": 49.1
+    },
+    "wake_to_settled_s": {
+      "count": 68,
+      "median_ms": 907.95,
+      "max_ms": 1809.3
+    },
+    "teardown_sigterm_exit_s": {
+      "count": 16,
+      "median_ms": 67.6,
+      "max_ms": 68.6
+    },
+    "teardown_sigkill_exit_s": {
+      "count": 14,
+      "median_ms": 15.6,
+      "max_ms": 15.8
+    },
+    "teardown_revoke_exit_s": {
+      "count": 11,
+      "median_ms": 25.9,
+      "max_ms": 37.9
+    },
+    "teardown_disable_exit_s": {
+      "count": 13,
+      "median_ms": 26.3,
+      "max_ms": 32.4
+    },
+    "teardown_extension-disable_exit_s": {
+      "count": 15,
+      "median_ms": 144.2,
+      "max_ms": 552.2
+    },
+    "teardown_uninstall_exit_s": {
+      "count": 10,
+      "median_ms": 140.95,
+      "max_ms": 160.2
+    },
+    "shell_kill_to_renderer_exit_s": {
+      "count": 6,
+      "median_ms": 43.95,
+      "max_ms": 52.1
+    }
+  },
+  "passed": true,
+  "remaining_lab_processes": {},
+  "remaining_play_groups": {}
+}
+exit 0

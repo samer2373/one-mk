@@ -1,0 +1,8 @@
+     Running unittests src/lib.rs (target/debug/deps/one_mk_wall_import-cb86b12aa55cf3b2)
+
+running 2 tests
+test cgroup::tests::delegated_kernel_limits_attach_and_cleanup ... ok
+test cgroup::tests::delegated_kernel_memory_and_task_pressure ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.09s
+
