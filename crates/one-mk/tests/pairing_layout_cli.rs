@@ -26,7 +26,7 @@ impl Lab {
 
     fn command(home: &Path) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_one-mk"));
-        command.env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        command.env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default()).env("SystemRoot", std::env::var_os("SystemRoot").unwrap_or_default())
             .env("HOME", home).env("ONE_MK_HOME", home).env("XDG_RUNTIME_DIR", home);
         command
     }

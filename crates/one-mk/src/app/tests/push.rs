@@ -201,8 +201,12 @@ async fn pushing_twice_suggests_the_computer_online() {
     let s = status(&duo.da).await;
     let name = s.peers[0].name.clone();
     let id = s.peers[0].id.clone();
-    let arg = one_mk_ctl::status::device_arg(&name, &id);
-    assert_eq!(s.suggestion, Some(Suggestion { id, name: name.clone(), side: Side::Left, arg }));
+    // The name where it is safe to type and finds exactly this computer, else
+    // the id (a long hostname, as on some CI machines, falls back to the id).
+    let by_name = one_mk_ctl::status::device_arg(&name, &id);
+    let suggestion = s.suggestion.clone().expect("a suggestion");
+    assert!(suggestion.arg == by_name || suggestion.arg == id, "{suggestion:?}");
+    assert_eq!(suggestion, Suggestion { id, name: name.clone(), side: Side::Left, arg: suggestion.arg.clone() });
     let text = s.render();
     assert!(text.contains(&format!("Is {name} on your left?")) && text.contains("one-mk layout "), "{text}");
     // Nothing moved, here or there.

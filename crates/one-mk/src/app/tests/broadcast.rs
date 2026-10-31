@@ -252,7 +252,7 @@ async fn broadcast_types_clicks_and_scrolls_on_every_computer() {
     let mut t = Trio::start("all", Swap::Auto, |_| {}).await;
     let s = status(&t.a.dir).await;
     assert!(s.broadcast.is_empty());
-    assert_eq!(s.broadcast_hotkey, if cfg!(windows) { "Ctrl+Alt+Shift+B" } else { "Ctrl+Alt+B" });
+    assert_eq!(s.broadcast_hotkey, if cfg!(windows) { "Ctrl+Alt+Shift+B" } else if cfg!(target_os = "macos") { "Control+Option+B" } else { "Ctrl+Alt+B" });
 
     assert_eq!(t.on(7).await, "ok\non\nbee\tsea\n");
     let s = status(&t.a.dir).await;

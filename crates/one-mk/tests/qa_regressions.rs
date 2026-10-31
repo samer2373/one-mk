@@ -10,10 +10,31 @@ fn private_home() -> tempfile::TempDir {
     home
 }
 
+/// The environment kept for a spawned one-mk (everything else is cleared).
+/// Windows processes also need `SystemRoot` (Winsock fails without it), and a
+/// CI runner's whole PATH can be long enough for CreateProcess to refuse the
+/// environment ("filename or extension too long"), so there it is cut down to
+/// System32.
+fn minimal_env() -> Vec<(&'static str, std::ffi::OsString)> {
+    if cfg!(windows) {
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let system32 = std::path::Path::new(&root).join("System32").into_os_string();
+        vec![("PATH", system32), ("SystemRoot", root)]
+    } else {
+        vec![("PATH", std::env::var_os("PATH").unwrap_or_default())]
+    }
+}
+
+/// An argument far past any name limit, but within the command-line limit
+/// (32,767 characters on Windows).
+fn long_argument() -> usize {
+    if cfg!(windows) { 20_000 } else { 100_000 }
+}
+
 fn run(home: &std::path::Path, args: &[&str]) -> Output {
     let runtime = private_home();
     Command::new(env!("CARGO_BIN_EXE_one-mk"))
-        .env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env_clear().envs(minimal_env())
         .env("HOME", home).env("ONE_MK_HOME", home).env("XDG_RUNTIME_DIR", runtime.path())
         .args(args).output().unwrap()
 }
@@ -64,7 +85,7 @@ fn history_can_be_enabled_without_daemon_and_unknown_keys_survive() {
 #[test]
 fn fullscreen_allow_rejects_controls_and_unbounded_names() {
     let home = private_home();
-    for name in ["bad\nescape".to_owned(), "x".repeat(100_000)] {
+    for name in ["bad\nescape".to_owned(), "x".repeat(long_argument())] {
         assert!(!run(home.path(), &["edge", "--fullscreen-allow", &name]).status.success());
     }
 }
@@ -82,7 +103,7 @@ fn missing_send_path_cannot_emit_terminal_controls() {
 #[test]
 fn invalid_control_targets_are_rejected_before_connecting() {
     let home = private_home();
-    for args in [vec!["switch", "bad\nstop"], vec!["clip-send", "--to", "bad\nescape"], vec!["switch", &"x".repeat(100_000)]] {
+    for args in [vec!["switch", "bad\nstop"], vec!["clip-send", "--to", "bad\nescape"], vec!["switch", &"x".repeat(long_argument())]] {
         let output = run(home.path(), &args);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("computer name or id"));
@@ -99,6 +120,8 @@ fn disabling_autoscroll_does_not_tell_user_to_click() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains("Autoscroll and gestures:"));
 }
 
+// The extension installer is GNOME's: other systems report it as unavailable.
+#[cfg(target_os = "linux")]
 #[test]
 fn renderer_install_requires_an_explicit_nonempty_file() {
     let home = private_home();
@@ -137,7 +160,7 @@ impl Drop for Process {
 fn process(home: &std::path::Path, args: &[&str], interactive: bool) -> Process {
     use std::process::Stdio;
     Process(Command::new(env!("CARGO_BIN_EXE_one-mk"))
-        .env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env_clear().envs(minimal_env())
         .env("HOME", home).env("ONE_MK_HOME", home).env("XDG_RUNTIME_DIR", home)
         .args(args).stdin(if interactive { Stdio::piped() } else { Stdio::null() })
         .stdout(if interactive { Stdio::piped() } else { Stdio::null() })
@@ -187,7 +210,7 @@ fn shortcut_upgrade_notice_is_once_and_piped_logs_have_no_ansi() {
     std::fs::write(home.path().join("settings.toml"), std::fs::read_to_string(home.path().join("settings.toml")).unwrap().replace("version = 1", "version = 999")).unwrap();
     for first in [true, false] {
         let mut daemon = Process(Command::new(env!("CARGO_BIN_EXE_one-mk"))
-            .env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env_clear().envs(minimal_env())
             .env("HOME", home.path()).env("ONE_MK_HOME", home.path()).env("XDG_RUNTIME_DIR", home.path())
             .args(["run", "--backend", "null", "--no-discovery", "--no-notify", "--no-clipboard", "--port", "0"])
             .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap());
