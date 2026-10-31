@@ -363,7 +363,7 @@ pub fn read_settings(path: &Path) -> std::io::Result<(String, Option<String>)> {
     if !metadata.is_file() {
         return Err(std::io::Error::other("settings must be a regular file"));
     }
-    const MAX_SETTINGS_BYTES: u64 = 4 * 1024 * 1024;
+    use one_mk_ctl::MAX_SETTINGS_BYTES;
     let too_large = || std::io::Error::new(std::io::ErrorKind::InvalidData, "settings exceeds the 4 MiB limit");
     if metadata.len() > MAX_SETTINGS_BYTES { return Err(too_large()); }
     let reason = opened_permissions(path, &resolved, &file);
