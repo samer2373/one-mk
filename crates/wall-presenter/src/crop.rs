@@ -273,4 +273,16 @@ mod tests {
         assert!(Layout::new(&plan, &[(0, 0, 3, 2, 1.0)], (4, 1)).is_err());
         assert!(Layout::new(&plan, &[(0, 0, 2, 2, 1.0)], (0, 1)).is_err());
     }
+
+    #[test]
+    fn odd_height_i420_uses_padded_luma_rows() {
+        let plan = plan(Rect { x: -5, y: -3, width: 5, height: 3 }, &[(-5, -3, 5, 3)]);
+        let layout = Layout::new(&plan, &[(-5, -3, 5, 3, 1.0)], (5, 3)).unwrap();
+        let mut frame = vec![0_u8; 48];
+        frame[..24].fill(235);
+        frame[32..48].fill(128);
+        let mut surface = vec![0_u32; 15];
+        layout.compose_i420(&frame, &Yuv::new(false, false), &mut surface);
+        assert!(surface.iter().all(|pixel| pixel & 0xffffff == 0xffffff));
+    }
 }
