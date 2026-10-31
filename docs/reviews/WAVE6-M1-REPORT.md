@@ -1,4 +1,76 @@
-# Wave 6 M1 implementation slice — resource containment, NOT M1 completion
+# Wave 6 M1 implementation slices — NOT M1 completion
+
+## Latest slice: presentation admission precursor, not playback
+
+October 31, 2026 (Asia/Amman), workspace 0.1.15 plus the cgroup importer slice.
+Implementation commit `6299fd1` adds the I/O-free admission core. The requested
+end-to-end daemon/media/lifecycle slice is **not completed** by this delivery.
+
+**Done:** bounded plans carry an imported-media content hash, consent revision,
+authority generation, monotonic sequence, local-layout serial, frozen canvas,
+ordered monitor slices and loop/manual-pause state. The gate compares pinned
+caller identity (unique name/UID/PID), waits for the initial pause snapshot,
+rejects stale/invalid plans by clearing admitted intent, composes pause reasons,
+requires fresh plans after layout/suspend changes, and makes owner loss or consent
+revocation terminal for that session. Missing/asleep output space never shrinks
+the frozen canvas. Eleven failure-path tests cover this model.
+
+**Not implemented:** this core is not called by the daemon, D-Bus bridge or
+renderer. A future transport must obtain credentials independently, reconcile
+live consent and actually tear down surfaces/decoders when intent is absent.
+The existing Shell bridge XML is unchanged (no paths/media channel). There is
+no new daemon-plan IPC, media resolver, production decoder/surface pipeline,
+or normal-build authorization path. Production authorization stays false and
+`--present=gnome` refuses. No copied Muro/Aura/Hanabi code was introduced.
+
+**Proven in the isolated laboratory:** GNOME Shell 50.1 with two virtual
+monitors passed the existing bridge/CLI conformance and negative cases plus
+100 authenticated **paused-fixture** child start/stop/GC cycles. Each exact child
+PID disappeared and its handle was reaped; the private background URI was
+unchanged. Zero new warning records against the unchanged M1a-2 baseline.
+The restricted start failed; the approved private-socket rerun passed, rather
+than substituting unit tests for a harness run. Private Eval authorizes the
+test fixture and resets its retry budget; a separate negative still verifies
+the unmodified real restart cap. No owner desktop/session bus was accessed.
+
+**Not proven:** those children never create surfaces or decode media. Thus
+there is no production VP9/AV1 WebM, GIF/APNG/animated WebP or still playback
+evidence, no 100-cycle visible-playback/restoration gate, and no actual daemon
+stop/crash/kill, lock/unlock, suspend/resume or hot-plug surface acceptance.
+State-machine tests are not evidence for OS lifecycle hooks. Physical GPU/HiDPI
+and Windows/macOS remain unqualified. No explicit private cgroup delegation was
+provided/provisioned; the native cgroup tests remain ignored. Outside the sandbox,
+cgroup v2 is mounted read/write but its root controls are not writable by the
+invoking UID; the earlier read-only observation was the sandbox view, not proof
+of a read-only host. No controller or membership changes were made.
+
+**Validation after source changes:** clean-env `cargo test --offline -j 2
+--workspace`: **1,169 passed, 0 failed, 17 ignored**, 40 result records including
+doc tests. Clean-env `cargo clippy --offline -j 2 --workspace --all-targets --
+-D warnings`: passed, also with `--features one-mk-wall/gnome-bridge`. The warning
+gate's six Python tests passed. `git diff --check` passed. No formatter ran.
+Conditional audited-runtime tests returning `ok` do not qualify native decoding.
+Builds used one worktree `target`, cleared HOME/runtime/one-mk environment and
+`-j 2`; daemon test fixtures use the null backend with discovery/notify disabled.
+
+Exact logs, source/baseline hashes and reproduction/interpretation notes are in
+[component-admission-evidence](../spikes/gnome/component-admission-evidence/README.md).
+M1 remains incomplete and the 16–26 engineer-week low-confidence estimate is
+unchanged. The historical resource-only report below is retained, not relabelled
+as evidence for this new run.
+
+**Final cleanup for the latest slice:** both cargo command sessions and the
+private harness exited successfully. The harness removed its session and copied
+extension sources. A host-side process-environment check found zero remaining
+processes bearing this run's worktree lab markers (`process-cleanup.json`).
+Eighteen exact `/tmp` test directories left by three completed test executables
+were removed after verifying ownership, absent test PIDs and no environment-bound
+children (`test-scratch-cleanup.json`). No manual `/tmp` lab was created. After
+retaining evidence, the single worktree `target` (including all private HOME,
+runtime, one-mk state and build products) was deleted and its absence checked.
+No owner configuration, clipboard, live display or real session bus was touched.
+
+## Previous slice: importer aggregate-resource containment
 
 Date: October 31, 2026 (Asia/Amman). Workspace version 0.1.15, branch
 `t3/wallpaper-m1-playback-lifecycle`. This re-run changes implementation; it does

@@ -1,5 +1,26 @@
 # GNOME component implementation checkpoint — NOT a playback qualification
 
+## Admission precursor and private child stress follow-up (2026-10-31)
+
+An I/O-free presentation admission state machine now exists, with eleven
+failure-path tests for pinned transport identity, consent revision/generation,
+sequence replay, imported media hash, frozen reserved canvas, monitor slices,
+pause composition, fresh plans after suspend/hot-plug, and terminal revocation
+or owner loss. It is **not wired into daemon/renderer IPC** and does not itself
+authenticate credentials or control a process. Production authorization remains
+false; the normal binary still refuses playback.
+
+The private GNOME 50.1 component runner now proves 100 authenticated **paused
+fixture** child start/stop/GC cycles, every exact PID and child handle reaped,
+no background URI changes, and zero new warnings against the unchanged M1a-2
+baseline. Existing conformance and negative cases also passed. The first
+restricted start failed; the approved isolated rerun passed. No live desktop was
+used. These are not media/playback/restoration or daemon-crash lifecycle results.
+See the [laboratory instructions](README.md), [retained exact evidence and
+limitations](component-admission-evidence/README.md) and current
+[slice report](../../reviews/WAVE6-M1-REPORT.md). All unfinished gates below
+remain open; neither previous spike results nor these child cycles close them.
+
 October 31, 2026, Asia/Amman. Branch `t3/production-gnome-wallpaper`, based on
 `ad0f430` (local wave5). This is a **partial delivery** of the production-component
 request, not completion of 6D-M1. The spike's successful lifecycle measurements
