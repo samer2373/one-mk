@@ -50,8 +50,8 @@ keyed tags, daemon publisher and renderer session. The laboratory daemon
 (`one-mk` built with `--features wallpaper-m1-lab`, null backend only) and the
 laboratory renderer (`one-mk-wall` built with `--features m1-lab`, run as
 `--present=gnome --m1-lab`) call them for real; see
-[the session design](presentation-wire.md). `active` is admitted intent only:
-the renderer creates **no surface or decoder** and production authorization
+[the session design](presentation-wire.md). In step A `active` was admitted intent only (step B, below, adds playback):
+the renderer created **no surface or decoder**; production authorization
 stays false.
 
 `qualify-m1-presentation.py` proves the session with real processes in this
@@ -75,6 +75,38 @@ bridge instance only, because step A draws nothing; neither is a production path
 Results and logs stay in `$M1_LAB`; the harness session is stopped at the end.
 Evidence from the qualifying run is in
 [m1-presentation-evidence](m1-presentation-evidence/README.md).
+
+## Real playback (6D-M1 step B, laboratory)
+
+Since step B the laboratory renderer (`m1-lab`) really plays the admitted plan:
+it resolves the plan's media hash in a private import library, re-verifies
+the source, starts the sandboxed playback worker (`one-mk-wall-import --play`,
+the importer's bubblewrap/seccomp/cgroup model) and presents on its own xdg
+surface, each monitor showing its slice of the one canvas. It now needs a
+private playback configuration (`ONE_MK_WALL_M1_PLAYBACK`, set by the harness
+wrapper), so the step A script above no longer runs unchanged; the step B
+script repeats its admission and teardown paths with real playback.
+
+`qualify-m1-playback.py` generates its own media (`m1_playback_media.py`,
+PIL patterns and GStreamer test sources), imports them with the real
+importer, then proves frames with Shell screenshots. It needs an audited
+runtime location and an explicitly delegated, empty cgroup v2 directory
+(memory and pids, optionally cpu, in `cgroup.subtree_control`); it creates and
+removes `import/` and `play/` inside. Build the laboratory binaries optimized:
+
+```text
+cargo build --offline -j 2 --profile bench-opt -p one-mk --features one-mk/wallpaper-m1-lab \
+  -p one-mk-wall --features one-mk-wall/m1-lab -p one-mk-wall-import
+mkdir -m 700 <bin> && cp target/bench-opt/{one-mk,one-mk-wall,one-mk-wall-import} <bin>/
+env -i PATH=/usr/bin:/bin HOME=<throwaway> LANG=C.UTF-8 USER=$USER \
+  M1_BIN=<bin> M1_LAB=/tmp/<new-short-dir> M1_TRUSTED=<0700 dir containing "target", no writable ancestor> \
+  M1_CGROUP=<explicit delegated cgroup dir> M1_CYCLES=100 M1_MEASURE=30 \
+  python3 -B docs/spikes/gnome/qualify-m1-playback.py
+```
+
+Private Eval still authorizes the bridge (never a production path); the
+first-frame and damage watchdogs stay in force. Evidence:
+[m1-playback-evidence](m1-playback-evidence/README.md).
 
 ## Cleanup
 
