@@ -553,7 +553,8 @@ def event_layout(ctx, target, burst=False):
         assert reveal <= LAYOUT_BOUND, (ctx.label, f'{source}->{target} revealed after {reveal:.2f}s')
     assert current['pid'] == previous, (ctx.label, 'layout change must not restart the renderer', previous, current['pid'])
     if not ctx.static_expected():
-        assert total <= LAYOUT_BOUND + 1.0, (ctx.label, f'{source}->{target} took {total:.2f}s')
+        # The bound is on the reveal (asserted above); 'total' also includes the
+        # verification screenshots, which wait up to 3.5 s for a 2.6 s GIF frame.
         timing('layout_to_verified_s', total)
         assert all(group not in pb.play_groups() for group in groups_before) or not groups_before
     else:
