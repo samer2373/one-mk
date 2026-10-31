@@ -3215,6 +3215,8 @@ dependencies = [
  "egui",
  "one-mk-ctl",
  "one-mk-proto",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
