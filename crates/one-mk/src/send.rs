@@ -48,11 +48,6 @@ pub async fn dropped(dir: &Path, paths: Vec<PathBuf>, peer: String) -> Result<()
 }
 
 async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<(usize, String)> {
-    for p in &paths {
-        if std::fs::symlink_metadata(p).is_err() {
-            bail!("{}: no such file or folder", p.display());
-        }
-    }
     let files = transfer::collect(&paths)?;
     if files.is_empty() {
         bail!("nothing to send (the folders are empty)");

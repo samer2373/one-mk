@@ -329,11 +329,14 @@ fn port_of(d: &Daemon) -> u16 {
 
 pub fn mdns_check(d: &Daemon, m: &MdnsFacts) -> Check {
     let title = "Discovery";
+    if d.status().is_some_and(|status| status.discovery == Some(false)) {
+        return check("mdns", title, Outcome::skip("Discovery is disabled with --no-discovery; direct connections are still available."));
+    }
     let port = port_of(d);
-    let blocked = format!(
-        "Check that no firewall or VPN blocks UDP 5353 (mDNS) and that you are not on a guest Wi-Fi. \
-         Without discovery, connect directly: `one-mk run --connect <ip>:{port}`."
-    );
+    let direct = if d.status().is_some() {
+        format!("one-mk is already running and retries paired addresses automatically; verify the other computer's address and UDP port (<ip>:{port}).")
+    } else { format!("Without discovery, connect directly: `one-mk run --connect <ip>:{port}`.") };
+    let blocked = format!("Check that no firewall or VPN blocks UDP 5353 (mDNS) and that you are not on a guest Wi-Fi. {direct}");
     let blocked = blocked.as_str();
     if let Err(e) = &m.join {
         let out =
@@ -839,7 +842,7 @@ pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
                     format!("It is on the network ({}) but not connected to this computer.", f.addrs.join(", ")),
                     &format!(
                         "On \"{name}\" run `one-mk doctor` (its firewall may block one-mk's UDP port); \
-                         or wait a few seconds: connecting is automatic. You can also try `one-mk run --connect {}`.",
+                         or wait a few seconds: connecting is automatic. Verify its address and UDP port ({}); do not start a second daemon.",
                         f.addrs.first().map_or(format!("<ip>:{port}"), |a| a.clone()),
                     ),
                 ),
@@ -856,7 +859,9 @@ pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
                     &format!(
                         "Is \"{name}\" switched on, running one-mk and on the same network (not a guest Wi-Fi)? {}",
                         match p.addrs.first() {
+                            Some(a) if running => format!("It was last at {a}. Check its daemon and firewall; this daemon retries automatically."),
                             Some(a) => format!("It was last at {a}: try `one-mk run --connect {a}`."),
+                            None if running => format!("Check the other daemon, address and firewall (<ip>:{port}); this daemon retries automatically."),
                             None => format!("Connect directly with `one-mk run --connect <ip>:{port}`."),
                         }
                     ),
@@ -1067,7 +1072,9 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
 
     let (port_facts, mdns, firewall, mut portals, addrs, shortcuts) = tokio::join!(
         blocking(move || probe_port(port), PortFacts { port, bind: Bind::Error("probe failed".into()), holder: None },),
-        probe_mdns(wanted),
+        async { if daemon.status().is_some_and(|status| status.discovery == Some(false)) {
+            MdnsFacts { join: Ok(()), seen: Ok(Vec::new()) }
+        } else { probe_mdns(wanted).await } },
         probe_firewall(os),
         async { if non_portal.is_some() { None } else { probe_portals(os, dir.to_owned()).await } },
         blocking(probe_addrs, Vec::new()),
@@ -1079,8 +1086,8 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
 
     let mut checks = vec![daemon_check(&daemon)];
     checks.push(check("wallpaper", "Wallpaper", match Settings::load(dir) {
-        Ok(settings) if settings.wallpaper.enabled => Outcome::warn(crate::wallpaper::summary(&settings.wallpaper), "This build has no qualified renderer. No playback is available; use one-mk wallpaper disable to turn the feature off."),
-        Ok(settings) => Outcome::pass(crate::wallpaper::summary(&settings.wallpaper)),
+        Ok(settings) if settings.wallpaper.enabled => Outcome::warn(crate::wallpaper::summary(&settings.wallpaper).trim_start_matches("Wallpaper: "), "This build has no qualified renderer. No playback is available; use one-mk wallpaper disable to turn the feature off."),
+        Ok(settings) => Outcome::pass(crate::wallpaper::summary(&settings.wallpaper).trim_start_matches("Wallpaper: ")),
         Err(_) => Outcome::warn("Wallpaper settings could not be read.", "Repair settings.toml before enabling wallpaper."),
     }));
     checks.push(check("wallpaper-import-sandbox", "Wallpaper import sandbox", Outcome::skip(
@@ -1091,9 +1098,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         }
     )));
     let (configured, managed, detail) = crate::update::doctor();
-    checks.push(check("updates", "Updates", if !configured {
-        Outcome::warn(detail, "Use manual installation until signing and real-OS validation are complete; see docs/UPDATES.md.")
-    } else if managed { Outcome::skip(detail) } else { Outcome::pass(detail) }));
+    checks.push(check("updates", "Updates", if !configured || managed { Outcome::skip(detail) } else { Outcome::pass(detail) }));
     checks.push(check("drag", "File edge drops", Outcome::skip(one_mk_input::dropzone::availability())));
     checks.extend(config_checks(&config, dir));
     checks.push(port_check(&daemon, &port_facts));
@@ -1465,6 +1470,15 @@ mod tests {
 
     fn running() -> Daemon {
         Daemon::Running(Box::new(status("aaaa-aaaa", 24900, &[])))
+    }
+
+    #[test]
+    fn intentional_no_discovery_is_informational_even_without_multicast() {
+        let mut status = status("no-discovery", 43021, &[]);
+        status.discovery = Some(false);
+        let daemon = Daemon::Running(Box::new(status));
+        let facts = mdns(Err("blocked"), Err("not probed"));
+        assert_eq!(st(&mdns_check(&daemon, &facts)), Status::Skip);
     }
 
     fn st(c: &Check) -> Status {
@@ -1847,7 +1861,7 @@ mod tests {
         let mut with_addr = paired.clone();
         with_addr[0].addrs = vec!["10.0.0.7:24900".into()];
         let c = peer_checks(&down, &with_addr, &[]);
-        assert!(c[0].outcome.fix.as_ref().unwrap().contains("--connect 10.0.0.7:24900"));
+        assert!(c[0].outcome.fix.as_ref().unwrap().contains("10.0.0.7:24900"));
         assert!(peer_checks(&down, &[], &[]).is_empty());
     }
 
@@ -1865,6 +1879,7 @@ mod tests {
         for fix in fixes(&on(24955)) {
             assert!(!fix.contains("24900"), "{fix}");
             assert!(fix.contains("<ip>:24955"), "{fix}");
+            assert!(!fix.contains("run --connect"), "do not start a second daemon: {fix}");
         }
         for fix in fixes(&Daemon::NotRunning) {
             assert!(fix.contains("<ip>:24900"), "{fix}");

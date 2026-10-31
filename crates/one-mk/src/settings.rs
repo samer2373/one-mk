@@ -19,6 +19,48 @@ use std::sync::atomic::{AtomicU32, Ordering};
 const FILE: &str = "settings.toml";
 /// Held while settings are changed (see [`Settings::update`]).
 const LOCK_FILE: &str = "settings.toml.lock";
+
+fn ignored_components(path: &serde_ignored::Path<'_>) -> Option<Vec<String>> {
+    match path {
+        serde_ignored::Path::Root => Some(Vec::new()),
+        serde_ignored::Path::Map { parent, key } => {
+            let mut components = ignored_components(parent)?;
+            components.push(key.clone());
+            Some(components)
+        }
+        serde_ignored::Path::Some { parent }
+        | serde_ignored::Path::NewtypeStruct { parent }
+        | serde_ignored::Path::NewtypeVariant { parent } => ignored_components(parent),
+        serde_ignored::Path::Seq { .. } => None,
+    }
+}
+
+fn unknown_settings(source: &toml::Table, known: &toml::Table) -> toml::Table {
+    let mut unknown = toml::Table::new();
+    for (key, value) in source {
+        match known.get(key) {
+            None => {
+                unknown.insert(key.clone(), value.clone());
+            }
+            Some(toml::Value::Table(schema)) => if let Some(table) = value.as_table() {
+                let extra = unknown_settings(table, schema);
+                if !extra.is_empty() { unknown.insert(key.clone(), toml::Value::Table(extra)); }
+            },
+            _ => {}
+        }
+    }
+    unknown
+}
+
+fn merge_unknown(target: &mut toml::Table, unknown: &toml::Table) {
+    for (key, value) in unknown {
+        match (target.get_mut(key), value) {
+            (Some(toml::Value::Table(table)), toml::Value::Table(extra)) => merge_unknown(table, extra),
+            (None, _) => { target.insert(key.clone(), value.clone()); }
+            _ => {}
+        }
+    }
+}
 /// Bounds for the edge rules; larger values are almost surely typos.
 pub const MAX_CORNER: u32 = 500;
 pub const MAX_DWELL_MS: u32 = 5000;
@@ -26,6 +68,10 @@ pub const MAX_DWELL_MS: u32 = 5000;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(skip)]
+    pub unknown: toml::Table,
+    #[serde(skip)]
+    pub shortcut_upgrade: bool,
     #[serde(deserialize_with = "crate::wallpaper::lenient")]
     pub wallpaper: crate::wallpaper::WallpaperSettings,
     pub update: crate::update::Settings,
@@ -58,6 +104,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            unknown: toml::Table::new(),
+            shortcut_upgrade: false,
             wallpaper: Default::default(),
             update: Default::default(),
             drag: Default::default(),
@@ -214,7 +262,7 @@ impl ClipSettings {
                 Err(error) => error.kind() != std::io::ErrorKind::AlreadyExists,
             }
         }) {
-            format!("{summary}; privacy update: this upgraded install has no explicit history choice, so history stays OFF. To opt in, set clipboard.history_max in settings.toml; unmarked secrets may be retained")
+            format!("{summary}; privacy update: this upgraded install has no explicit history choice, so history stays OFF. To opt in, run `one-mk clipboard history on`; unmarked secrets may be retained")
         } else { summary }
     }
 }
@@ -481,8 +529,41 @@ impl Settings {
         let path = path(dir);
         match crate::hooks::read_settings(&path) {
             Ok((s, unsafe_reason)) => {
-                let mut settings: Settings = toml::from_str(&s).with_context(|| format!("reading {}", path.display()))?;
+                let mut ignored = Vec::new();
+                let deserializer = toml::de::Deserializer::parse(&s).with_context(|| format!("reading {}", path.display()))?;
+                let mut settings: Settings = serde_ignored::deserialize(deserializer, |key| ignored.push((key.to_string(), ignored_components(&key))))
+                    .with_context(|| format!("reading {}", path.display()))?;
                 let fields: toml::Value = toml::from_str(&s)?;
+                for (section, allowed) in [
+                    ("edge", &["corner", "dwell_ms", "modifier", "fullscreen_guard", "fullscreen_allow", "fullscreen_block", "left", "right", "top", "bottom", "wrap", "learn"][..]),
+                    ("input.autoscroll", &["enabled", "button", "speed", "dead_zone", "vertical_only", "scope", "app", "rule"][..]),
+                ] {
+                    let mut value = Some(&fields);
+                    for component in section.split('.') { value = value.and_then(|value| value.get(component)); }
+                    if let Some(table) = value.and_then(toml::Value::as_table) {
+                        for key in table.keys().filter(|key| !allowed.contains(&key.as_str())) {
+                            let mut components: Vec<String> = section.split('.').map(str::to_owned).collect();
+                            components.push(key.clone());
+                            ignored.push((format!("{section}.{key}"), Some(components)));
+                        }
+                    }
+                }
+                ignored.sort();
+                ignored.dedup();
+                let mut known = fields.clone();
+                for (key, components) in ignored {
+                    eprintln!("one-mk: unknown setting {key:?} in {}; not applied", path.display());
+                    let Some(components) = components else { continue };
+                    let mut table = known.as_table_mut();
+                    for (index, component) in components.iter().enumerate() {
+                        let Some(current) = table else { break };
+                        if index + 1 == components.len() { current.remove(component); break; }
+                        table = current.get_mut(component).and_then(toml::Value::as_table_mut);
+                    }
+                }
+                settings.unknown = unknown_settings(fields.as_table().expect("settings table"), known.as_table().expect("settings table"));
+                settings.shortcut_upgrade = fields.get("hotkeys").is_none_or(|keys| keys.get("broadcast").is_none() || keys.get("fetch_clipboard").is_none())
+                    || dir.join(".wave5-shortcuts-pending").exists();
                 if fields.get("clipboard").and_then(|clipboard| clipboard.get("history_max")).is_none() {
                     settings.clipboard.history_notice = Some(dir.join(".clipboard-history-update-noticed"));
                 }
@@ -500,7 +581,7 @@ impl Settings {
                 Ok(settings)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
         }
     }
 
@@ -520,7 +601,7 @@ impl Settings {
     /// this alone would lose a change made by someone else in between.
     pub fn save(&self, dir: &Path) -> Result<()> {
         static N: AtomicU32 = AtomicU32::new(0);
-        std::fs::create_dir_all(dir)?;
+        std::fs::create_dir_all(dir).with_context(|| format!("creating settings folder {}", dir.display()))?;
         let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let write = || -> Result<()> {
             use std::io::Write;
@@ -531,10 +612,27 @@ impl Settings {
                 use std::os::unix::fs::OpenOptionsExt;
                 options.mode(0o600);
             }
-            let mut file = options.open(&tmp)?;
-            file.write_all(toml::to_string_pretty(self)?.as_bytes())?;
+            let mut file = options.open(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+            let mut values: toml::Table = toml::from_str(&toml::to_string(self)?)?;
+            merge_unknown(&mut values, &self.unknown);
+            file.write_all(toml::to_string_pretty(&values)?.as_bytes()).with_context(|| format!("writing {}", tmp.display()))?;
             drop(file);
-            std::fs::rename(&tmp, path(dir))?;
+            if self.shortcut_upgrade && !dir.join(".wave5-shortcuts-noticed").exists() {
+                let pending = dir.join(".wave5-shortcuts-pending");
+                let mut marker = std::fs::OpenOptions::new();
+                marker.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    marker.mode(0o600);
+                }
+                match marker.open(&pending) {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error).with_context(|| format!("preserving shortcut upgrade notice in {}", pending.display())),
+                }
+            }
+            std::fs::rename(&tmp, path(dir)).with_context(|| format!("saving {}", path(dir).display()))?;
             Ok(())
         };
         write().inspect_err(|_| {
@@ -548,7 +646,7 @@ impl Settings {
     /// can't be read is an error, as with [`Settings::load`]), applies
     /// `change` and saves. If `change` fails nothing is written.
     pub fn update<R>(dir: &Path, change: impl FnOnce(&mut Settings) -> Result<R>) -> Result<R> {
-        std::fs::create_dir_all(dir)?;
+        std::fs::create_dir_all(dir).with_context(|| format!("creating settings folder {}", dir.display()))?;
         let lock_path = dir.join(LOCK_FILE);
         let lock = File::options()
             .create(true)
@@ -635,6 +733,11 @@ impl EdgeArgs {
 
     /// Applies these options to `s`.
     pub fn apply(&self, s: &mut EdgeSettings) -> Result<()> {
+        for name in self.fullscreen_allow.iter().chain(&self.fullscreen_block).chain(&self.fullscreen_forget) {
+            if name.len() > 256 || name.chars().any(char::is_control) {
+                bail!("fullscreen program names must be at most 256 bytes and contain no control characters: {name:?}");
+            }
+        }
         if let Some(n) = self.corner.filter(|&n| n > MAX_CORNER) {
             bail!("--corner {n} is too large (at most {MAX_CORNER} px)");
         }

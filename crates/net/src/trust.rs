@@ -163,7 +163,7 @@ impl TrustStore {
         let mut file: File = match std::fs::read_to_string(&path) {
             Ok(s) => toml::from_str(&s).with_context(|| format!("reading {}", path.display()))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => File::default(),
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e).with_context(|| format!("reading paired computers {}", path.display())),
         };
         for device in &mut file.devices {
             device.offset = device.offset.map(bounded_offset);
@@ -176,8 +176,8 @@ impl TrustStore {
             crate::identity::secure_dir(dir)?;
         }
         let tmp = self.path.with_extension("toml.tmp");
-        std::fs::write(&tmp, toml::to_string_pretty(&self.file)?)?;
-        std::fs::rename(&tmp, &self.path)?;
+        crate::identity::write_private(&tmp, toml::to_string_pretty(&self.file)?.as_bytes()).with_context(|| format!("writing paired computers {}", tmp.display()))?;
+        std::fs::rename(&tmp, &self.path).with_context(|| format!("saving paired computers {}", self.path.display()))?;
         Ok(())
     }
 
@@ -233,6 +233,16 @@ impl TrustStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_devices_are_owner_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("one-mk-private-devices-{}-{}", std::process::id(), rand::random::<u64>()));
+        TrustStore::load(&dir).unwrap().save().unwrap();
+        assert_eq!(std::fs::metadata(dir.join("devices.toml")).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A hand-edited offset too large for the geometry is cut down on load;
     /// the `align` of builds before the placement model is ignored (it was

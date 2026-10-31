@@ -54,11 +54,13 @@ impl TypingSettings {
 }
 
 pub async fn run(dir: &Path, keys: Option<Mode>, peer: Option<&str>) -> Result<()> {
+    let mut peer_name = None;
     let peer = if let Some(query) = peer {
         let store = one_mk_net::TrustStore::load(dir)?;
         let Some(device) = store.find(query) else {
             bail!("no unique paired computer matches {query:?}; use its id from `one-mk devices`");
         };
+        peer_name = Some(device.name.clone());
         Some(device.fingerprint.clone())
     } else {
         None
@@ -75,7 +77,7 @@ pub async fn run(dir: &Path, keys: Option<Mode>, peer: Option<&str>) -> Result<(
     } else {
         Settings::load(dir)?.typing
     };
-    println!("Typing preference: {}{}.", typing.requested(peer.as_deref()), peer.as_ref().map_or(String::new(), |peer| format!(" for {peer}")));
+    println!("Typing preference: {}{}.", typing.requested(peer.as_deref()), peer_name.as_ref().map_or(String::new(), |name| format!(" for {name}")));
     println!("Typing effective: {UNAVAILABLE}.");
     if keys.is_some() {
         settings::apply(dir).await?;

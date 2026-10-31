@@ -220,8 +220,8 @@ impl std::fmt::Display for Failure {
 impl std::error::Error for Failure {}
 
 pub fn summary(settings: &WallpaperSettings) -> String {
-    format!("Wallpaper: {}; {} receiver-approved coordinators; renderer unavailable; no playback or timers.",
-        if settings.enabled { "enabled (scaffolding only)" } else { "off" }, settings.grants.len())
+    format!("Wallpaper: {}; {} receiver-approved coordinator{}; renderer unavailable; no playback or timers.",
+        if settings.enabled { "enabled (scaffolding only)" } else { "off" }, settings.grants.len(), if settings.grants.len() == 1 { "" } else { "s" })
 }
 
 pub fn forget(dir: &Path, fingerprint: &str) -> Result<()> {

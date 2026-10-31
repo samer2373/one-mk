@@ -118,7 +118,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
         }
     };
     println!("Invitation from {} ({})", sanitize_name(&identity.name), identity.fingerprint);
-    println!("Expires at Unix time {wall_expiry}. One use; closing this process cancels it.");
+    println!("Expires in {} minutes. One use; closing this process cancels it.", wall_expiry.saturating_sub(one_mk_net::invite::unix_now()).div_ceil(60));
     println!("Treat this link like a password: whoever uses it first can request trust.");
     println!("{}", link.as_str());
     print_qr(&link)?;
@@ -238,10 +238,10 @@ async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, c
     std::io::stdout().flush()?;
     let end = expiry.min(tokio::time::Instant::now() + Duration::from_secs(120));
     let accept = if confirm {
-        println!("Does the other computer show {}? Trust it with your keyboard, mouse and shared clipboard? [y/N]", session.code);
+        println!("Does the other computer show {}? Trust it with your keyboard, mouse and shared clipboard? [y/N]", grouped_code(&session.code));
         std::io::stdout().flush()?;
         read_approval(end, Some(wall_expiry)).await
-    } else { println!("WARNING: --no-confirm skips comparing code {} and approves automatically.", session.code); true };
+    } else { println!("WARNING: --no-confirm skips comparing code {} and approves automatically.", grouped_code(&session.code)); true };
     let accept = accept && tokio::time::Instant::now() < end && one_mk_net::invite::unix_now() < wall_expiry;
     let ok = tokio::time::timeout(STEP_TIMEOUT, session.confirm(accept)).await.context("invitation approval transport timed out")??;
     if !ok { bail!("device refused; invitation consumed; nothing saved here"); }
@@ -313,7 +313,7 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
     let name = session.peer_name.clone();
     let port = session.service_port;
     println!("Authenticated {name} ({}).", grouped(peer.fingerprint));
-    println!("Your code: {} (the other computer will ask you to compare it)", session.code);
+    println!("Your code: {} (the other computer will ask you to compare it)", grouped_code(&session.code));
     let end = tokio::time::Instant::now() + Duration::from_secs(120);
     let accept = if yes {
         println!("WARNING: --yes skips the host trust prompt; verify the code on the host unless it uses --no-confirm.");
@@ -327,7 +327,7 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
     ensure!(tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")??, "invitation declined; nothing saved here");
     save(dir, &peer, &name, port, Side::Right).await?;
     acknowledge(session).await?;
-    println!("Trusted {name} ({}). Start `one-mk run` on both computers.", peer.fingerprint);
+    println!("Trusted {name} ({}). Start `one-mk run` only on computers not already running.", peer.fingerprint);
     Ok(())
 }
 
@@ -353,6 +353,10 @@ async fn read_approval(end: tokio::time::Instant, wall_expiry: Option<u64>) -> b
 async fn acknowledge(session: InviteSession) -> Result<()> {
     tokio::time::timeout(STEP_TIMEOUT, session.committed()).await.context("Trust saved locally, but peer commit is uncertain. Run `one-mk forget <peer>` on both computers and create a new invitation.")?
         .context("Trust saved locally, but peer commit is uncertain. Run `one-mk forget <peer>` on both computers and create a new invitation.")
+}
+
+fn grouped_code(code: &str) -> String {
+    if code.len() == 6 && code.bytes().all(|byte| byte.is_ascii_digit()) { format!("{} {}", &code[..3], &code[3..]) } else { code.to_owned() }
 }
 
 fn grouped(fingerprint: one_mk_net::Fingerprint) -> String {

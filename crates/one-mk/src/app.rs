@@ -584,6 +584,7 @@ impl Owner {
 }
 
 struct App {
+    discovery: bool,
     keyboard: Option<one_mk_input::typing::KeyboardLayout>,
     dropzones: Option<one_mk_input::dropzone::Handle>,
     dir: PathBuf,
@@ -796,9 +797,22 @@ pub async fn serve(
         dial_backoff: DIAL_INTERVAL,
         push: Default::default(),
         broadcast: None,
+        discovery: opts.discovery,
     };
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
+    if app.settings.shortcut_upgrade {
+        let marker = app.dir.join(".wave5-shortcuts-noticed");
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&marker) {
+            Ok(_) => {
+                let defaults = crate::hotkeys::HotkeySettings::default();
+                println!("New default shortcuts: {} toggles broadcast; {} fetches a clipboard only while fetching is enabled somewhere. Review/change them with `one-mk hotkeys`; see this release's notes.", defaults.broadcast, defaults.fetch_clipboard);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => tracing::warn!("could not record shortcut upgrade notice {}: {error}", marker.display()),
+        }
+    }
     app.wallpaper.refresh(&app.settings.wallpaper);
+    app.refresh_fetch_shortcut();
     #[cfg(any(windows, target_os = "macos"))]
     app.reload_local_rules();
     if app.locked {
@@ -1925,7 +1939,7 @@ impl App {
         let desktop = (!link.screens.is_empty()).then(|| Desktop::new(link.screens.clone()));
         let (id, name, os, rank, sent) = (link.id, link.name.clone(), link.os, link.rank, link.sent_screens.clone());
         let (conn, ctl) = link.spawn(self.link_tx.clone());
-        ctl.send(Control::Caps(caps::LOCAL | if self.keyboard.is_some() { caps::TEXT } else { 0 }));
+        ctl.send(Control::Caps(self.local_caps()));
         // Our monitors may have changed during the handshake.
         if let Some(local) = &self.local
             && local.screens != sent
@@ -1963,6 +1977,7 @@ impl App {
             LinkEvent::Closed => {
                 self.wallpaper.disconnected(fp);
                 let peer = self.peers.remove(&fp).expect("present");
+                self.refresh_fetch_shortcut();
                 if self.owner.as_ref().is_some_and(|o| o.peer == fp) {
                     self.end_owner(false);
                 }
@@ -1994,7 +2009,7 @@ impl App {
             }
             Control::Hello { .. } => {}
             Control::Screens(screens) => self.on_peer_screens(fp, screens),
-            Control::Layout { side_of_you, version, offset } => self.on_peer_layout(fp, side_of_you, version, offset),
+            Control::Layout { side_of_you, version, offset, clear_offset } => self.on_peer_layout(fp, side_of_you, version, offset, clear_offset),
             Control::Enter { epoch, pos } => self.on_enter(fp, id, epoch, pos),
             Control::Leave => {
                 if self.is_owner(fp, id) {
@@ -2028,6 +2043,7 @@ impl App {
                 }
                 self.apply_pointer_mode();
                 self.announce_wallpaper(fp);
+                self.refresh_fetch_shortcut();
             }
             Control::KeyboardLayout(layout) => {
                 if layout.valid() && let Some(peer) = self.peers.get_mut(&fp) {
@@ -2117,8 +2133,19 @@ impl App {
         if let (Some(p), Some(d)) = (self.peers.get(&fp), self.trust.get(&fp)) {
             #[cfg(test)]
             tests::layouts_sent_by(&self.dir).fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            p.ctl.send(Control::Layout { side_of_you: d.side().opposite(), version: d.layout_version, offset: d.offset });
+            p.ctl.send(Control::Layout { side_of_you: d.side().opposite(), version: d.layout_version, offset: d.offset, clear_offset: d.offset.is_none() });
         }
+    }
+
+    fn local_caps(&self) -> u32 {
+        caps::LOCAL | if self.keyboard.is_some() { caps::TEXT } else { 0 }
+            | if self.services.clip.is_some() && self.settings.clipboard.allow_pull { caps::CLIPBOARD_FETCH } else { 0 }
+    }
+
+    fn refresh_fetch_shortcut(&mut self) {
+        let enabled = self.services.clip.is_some() && (self.settings.clipboard.allow_pull
+            || self.peers.values().any(|peer| peer.caps & caps::CLIPBOARD_FETCH != 0));
+        self.shortcuts.set_fetch_enabled(enabled);
     }
 
     /// The peer says it sits on `side_of_you` of us, and maybe where it put
@@ -2126,12 +2153,13 @@ impl App {
     /// older peer, or none set) an offset only goes with a change of side.
     /// A newer version wins; equal versions with different layouts are a
     /// tie, broken by [`resolve_layout`].
-    fn on_peer_layout(&mut self, fp: Fingerprint, side_of_you: Side, version: u64, offset: Option<(i32, i32)>) {
+    fn on_peer_layout(&mut self, fp: Fingerprint, side_of_you: Side, version: u64, offset: Option<(i32, i32)>, clear_offset: bool) {
         self.reload_trust();
         let our_fp = self.node.identity().fingerprint;
         let Some(dev) = self.trust.get_mut(&fp) else { return };
         let offset = match offset {
             Some((x, y)) => Some((x.saturating_neg(), y.saturating_neg())),
+            None if clear_offset => None,
             // It was for the old side.
             None if dev.side() != side_of_you => None,
             None => dev.offset,
@@ -2324,6 +2352,7 @@ impl App {
     /// notifications, edge rules, gaming mode and lock sync. A file that
     /// can't be read changes nothing.
     fn reload_settings(&mut self) -> Result<()> {
+        let previous_caps = self.local_caps();
         self.settings = Settings::load(&self.dir)?;
         self.wallpaper.refresh(&self.settings.wallpaper);
         let peers: Vec<_> = self.peers.keys().copied().collect();
@@ -2334,6 +2363,11 @@ impl App {
         self.apply_pointer_mode();
         self.sync_sides();
         self.shortcuts.reload(&self.settings.hotkeys);
+        let caps = self.local_caps();
+        if caps != previous_caps {
+            for peer in self.peers.values() { peer.ctl.send(Control::Caps(caps)); }
+        }
+        self.refresh_fetch_shortcut();
         #[cfg(any(windows, target_os = "macos"))]
         self.reload_local_rules();
         let paired: Vec<_> = self.trust.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone(), d.os)).collect();
@@ -2462,6 +2496,7 @@ impl App {
             name: sanitize_name(&id.name),
             id: id.fingerprint.short(),
             port: self.node.local_addr().map_or(0, |a| a.port()),
+            discovery: Some(self.discovery),
             backend: self.backend_name.into(),
             controlling: self.remote.as_ref().map(|r| name_of(&r.peer)),
             controlled_by: self.owner.as_ref().map(|o| name_of(&o.peer)),
@@ -2483,6 +2518,7 @@ impl App {
             hotkeys_detail,
             clipboard_history: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history_status().len.load(std::sync::atomic::Ordering::Relaxed)),
             clipboard_history_enabled: self.services.clip.as_ref().is_some_and(|clip| !clip.clipboard().history_status().disabled.load(std::sync::atomic::Ordering::Relaxed)),
+            clipboard_fetch_shortcut: self.shortcuts.fetch_enabled(),
             broadcast_stop_hint: if self.broadcast_hotkey().is_empty() { "Press Ctrl+Alt+Shift+Esc to stop broadcasting.".into() } else { format!("Press {} or Ctrl+Alt+Shift+Esc to stop broadcasting.", self.broadcast_hotkey()) },
             clipboard_history_revision: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history_status().revision.load(std::sync::atomic::Ordering::Relaxed)),
             clipboard_history_note: self.services.clip.as_ref().map_or_else(|| "Clipboard sharing and history are off (--no-clipboard).".into(), |clip| {
@@ -3306,6 +3342,34 @@ mod tests {
             let _ = std::fs::remove_dir_all(self.da);
             let _ = std::fs::remove_dir_all(self.db);
         }
+
+        async fn restart(&mut self) {
+            self.stop.send(true).unwrap();
+            for task in self.tasks.drain(..) { task.await.unwrap().unwrap(); }
+            let (stop, stopped) = watch::channel(false);
+            self.stop = stop;
+            let ports = [free_port(), free_port()];
+            for (index, dir) in [&self.da, &self.db].into_iter().enumerate() {
+                let (backend, handles) = one_mk_input::null(Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]));
+                if index == 0 { self.ha = handles; } else { self.hb = handles; }
+                let opts = Options {
+                    backend: one_mk_input::Kind::Null, port: ports[index],
+                    connect: vec![SocketAddr::from(([127, 0, 0, 1], ports[1 - index]))], discovery: false,
+                    clipboard: None, downloads: dir.join("downloads"), start_locked: false,
+                    power: Some(one_mk_input::fake_power().0),
+                };
+                let mut stopped = stopped.clone();
+                self.tasks.push(tokio::spawn(serve(dir.clone(), opts, backend, async move { let _ = stopped.wait_for(|value| *value).await; })));
+            }
+            self.pb = ports[1];
+            eventually_async("restarted peers", || async {
+                for dir in [&self.da, &self.db] {
+                    let reply = control::request(dir, Request::Status).await.ok().flatten();
+                    if !reply.and_then(|reply| Status::decode(&reply)).is_some_and(|status| status.peers.len() == 1 && status.peers[0].online) { return false; }
+                }
+                true
+            }).await;
+        }
     }
 
     async fn eventually(what: &str, mut ok: impl FnMut() -> bool) {
@@ -3340,6 +3404,22 @@ mod tests {
         }
         released.sort();
         assert_eq!(released, vec![115, 225]);
+        duo.stop().await;
+    }
+
+    #[tokio::test]
+    async fn fetch_shortcut_tracks_peer_permission_without_restart() {
+        let (ca, _) = one_mk_clipboard::Clipboard::memory();
+        let (cb, _) = one_mk_clipboard::Clipboard::memory();
+        let duo = Duo::start("fetch-permission", Some((ca, cb))).await;
+        for enabled in [false, true, false] {
+            Settings::update(&duo.db, |settings| { settings.clipboard.allow_pull = enabled; Ok(()) }).unwrap();
+            control::request(&duo.db, Request::Settings).await.unwrap();
+            eventually_async("fetch registration reflects the peer permission", || async {
+                let reply = control::request(&duo.da, Request::Status).await.unwrap().unwrap();
+                Status::decode(&reply).unwrap().clipboard_fetch_shortcut == enabled
+            }).await;
+        }
         duo.stop().await;
     }
 
@@ -3490,7 +3570,7 @@ mod tests {
         assert_eq!(results[0].1, Outcome::Saved { name: "other.bin".into(), resumed_from: 0 });
         assert_eq!(results[1].1, Outcome::Saved { name: "album/a (1).txt".into(), resumed_from: 0 });
         assert_eq!(std::fs::read(downloads.join("other.bin")).unwrap(), &big[..1_500_000]);
-        assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
+        assert!(!staging.exists(), "successful transfers remove the empty staging folder");
         peer.conn.close(0u32.into(), b"done");
 
         // The service link is still there.
@@ -3726,7 +3806,7 @@ mod tests {
         // far slower than they arrive: its event queue never runs dry.
         let mut flood = Vec::new();
         for _ in 0..30_000 {
-            Control::Layout { side_of_you: Side::Bottom, version: 0, offset: None }.encode_frame(&mut flood);
+            Control::Layout { side_of_you: Side::Bottom, version: 0, offset: None, clear_offset: false }.encode_frame(&mut flood);
         }
         let (tx_done, mut rx_done) = mpsc::unbounded_channel();
         let send = async {
@@ -4142,6 +4222,21 @@ mod tests {
         assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Bottom));
         assert_eq!(Duo::peer_status(&duo.da).await.side, Side::Bottom);
         assert!(version(&duo.da, &fb).1 > v);
+        duo.stop().await;
+    }
+
+    #[tokio::test]
+    async fn clearing_offset_converges_from_either_daemon() {
+        let mut duo = Duo::start("clear-offset", None).await;
+        for (sender, receiver, peer, mirrored) in [(duo.da.clone(), duo.db.clone(), duo.fb.clone(), duo.fa.clone()), (duo.db.clone(), duo.da.clone(), duo.fa.clone(), duo.fb.clone())] {
+            for offset in [Some((300, -200)), None] {
+                crate::manage::set_layout(&sender, &peer[..8], None, Some(offset), None).unwrap();
+                control::request(&sender, Request::Reload).await.unwrap();
+                eventually("mirrored offset", || TrustStore::load(&receiver).unwrap().get(&mirrored.parse().unwrap()).unwrap().offset == offset.map(|(x, y)| (-x, -y))).await;
+            }
+            duo.restart().await;
+            for dir in [&duo.da, &duo.db] { assert!(TrustStore::load(dir).unwrap().devices().iter().all(|peer| peer.offset.is_none())); }
+        }
         duo.stop().await;
     }
 

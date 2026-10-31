@@ -25,7 +25,6 @@ pub fn unknown_device(device: &str) -> anyhow::Error {
 
 pub async fn status(dir: &Path) -> Result<()> {
     if let Some(notice) = crate::update::notice(dir) { println!("Updates: {notice}."); }
-    if !crate::update_key::PRODUCTION_KEY { println!("Updates: publisher signing key not configured; install releases manually."); }
     #[cfg(any(windows, target_os = "macos"))]
     println!("Updates: executable replacement is untested on this operating system.");
     let reply = control::request(dir, Request::Status).await?;
@@ -57,7 +56,7 @@ pub async fn status(dir: &Path) -> Result<()> {
 pub async fn takeback(dir: &Path) -> Result<()> {
     let reply = control::request(dir, Request::TakeBack).await?;
     match reply.as_deref() {
-        None => println!("one-mk is not running."),
+        None => bail!("{}", control::NOT_RUNNING),
         Some("none\n") => println!("No other computer is controlling this one."),
         Some(r) => match r.strip_prefix("ok\n") {
             Some(name) if !name.trim().is_empty() => println!("Took control back from {}.", name.trim()),

@@ -137,8 +137,12 @@ pub async fn configure(dir: &Path, on: bool, off: bool, zone: Option<u16>) -> Re
         let _ = crate::control::request(dir, crate::control::Request::Settings).await?;
     }
     let settings = crate::settings::Settings::load_or_default(dir).drag;
-    println!("File edge drops: {}; zone {} px. {}", if settings.enabled { "on" } else { "off" }, settings.zone_px,
-        one_mk_input::dropzone::availability());
+    let status = crate::control::request(dir, crate::control::Request::Status).await?
+        .and_then(|reply| one_mk_ctl::status::Status::decode(&reply));
+    let availability = if status.is_some_and(|status| status.backend.as_str() == "x11") {
+        "The daemon is using X11; file edge drops use its desktop, not this terminal session."
+    } else { one_mk_input::dropzone::availability() };
+    println!("File edge drops: {}; zone {} px. {}", if settings.enabled { "on" } else { "off" }, settings.zone_px, availability);
     Ok(())
 }
 

@@ -37,14 +37,15 @@ fn destination() -> Result<PathBuf> {
 }
 
 fn regular(path: &Path) -> Result<std::fs::Metadata> {
-    let metadata = std::fs::symlink_metadata(path)?;
+    let metadata = std::fs::symlink_metadata(path).with_context(|| format!("inspecting {}", path.display()))?;
     if !metadata.is_file() { bail!("refusing non-regular file {}", path.display()); }
     Ok(metadata)
 }
 
 fn install(destination: &Path, renderer: &Path) -> Result<()> {
     if std::fs::symlink_metadata(destination).is_ok() { bail!("extension path exists; uninstall the managed copy first"); }
-    regular(renderer)?;
+    if !renderer.is_absolute() { bail!("--renderer must name an absolute path: {}", renderer.display()); }
+    if regular(renderer)?.len() == 0 { bail!("renderer is empty: {}", renderer.display()); }
     let parent = destination.parent().context("missing extension parent")?;
     std::fs::create_dir_all(parent)?;
     let stage = parent.join(format!(".one-mk-install-{}-{}", std::process::id(), rand::random::<u64>()));
@@ -104,8 +105,8 @@ pub async fn command(command: &Command) -> Result<Value> {
     let destination = destination()?;
     let message = match command {
         Command::Install { renderer } => {
-            let renderer = renderer.clone().unwrap_or(std::env::current_exe()?.with_file_name("one-mk-wall"));
-            install(&destination, &renderer)?;
+            let renderer = renderer.as_ref().context("--renderer /absolute/path is required")?;
+            install(&destination, renderer).with_context(|| format!("installing renderer {} into {}", renderer.display(), destination.display()))?;
             format!("Installed {}. Not enabled. Enable explicitly: gnome-extensions enable {UUID}\nA logout/login may be required. Playback remains unavailable until daemon-plan integration is qualified.", destination.display())
         }
         Command::Uninstall => {
@@ -113,8 +114,9 @@ pub async fn command(command: &Command) -> Result<Value> {
             if let Ok((_, enabled, _)) = shell_state().await && enabled {
                 bail!("disable first: gnome-extensions disable {UUID}");
             }
-            uninstall(&destination)?;
-            "Removed managed extension files; no GNOME settings changed.".into()
+            let existed = destination.try_exists().with_context(|| format!("checking extension {}", destination.display()))?;
+            uninstall(&destination).with_context(|| format!("uninstalling extension {}", destination.display()))?;
+            if existed { "Removed managed extension files; no GNOME settings changed." } else { "No managed extension is installed; nothing changed." }.into()
         }
         Command::Status => return status().await,
     };
