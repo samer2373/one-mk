@@ -1,0 +1,35 @@
+settings_version = 2
+notify_files = false
+gaming = "auto"
+lock_sync = true
+
+[clipboard]
+text = false
+html = true
+image = false
+max_mb = 5
+skip_sensitive = true
+allow_pull = true
+
+[edge]
+corner = 32
+dwell_ms = 250
+modifier = "ctrl"
+fullscreen_guard = true
+fullscreen_allow = ["editor"]
+fullscreen_block = ["game"]
+
+[edge.left]
+corner = 0
+dwell_ms = 0
+
+[hotkeys]
+enabled = false
+home = "ctrl+alt+end"
+
+[power]
+block_screensaver_on_peers = true
+sleep_sync = false
+
+[pointer]
+draw_when_no_mouse = "never"

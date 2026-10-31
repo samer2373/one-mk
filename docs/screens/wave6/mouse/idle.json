@@ -1,0 +1,44 @@
+[
+  {
+    "state": "OFF before broadcast",
+    "seconds": 10.000281233922578,
+    "ticks": 1,
+    "cpu_percent": 0.0999971877398645,
+    "rss_mib": 39.6171875
+  },
+  {
+    "state": "OFF broadcast after middle/side clicks",
+    "seconds": 10.000312770949677,
+    "ticks": 23,
+    "cpu_percent": 2.2999280649314944,
+    "rss_mib": 39.6171875
+  },
+  {
+    "state": "OFF after broadcast",
+    "seconds": 10.000229523982853,
+    "ticks": 0,
+    "cpu_percent": 0.0,
+    "rss_mib": 39.7734375
+  },
+  {
+    "state": "ON before broadcast",
+    "seconds": 10.000248617958277,
+    "ticks": 1,
+    "cpu_percent": 0.09999751388222658,
+    "rss_mib": 39.7734375
+  },
+  {
+    "state": "ON broadcast after middle/side clicks",
+    "seconds": 10.000306473928504,
+    "ticks": 31,
+    "cpu_percent": 3.0999049959937888,
+    "rss_mib": 39.7734375
+  },
+  {
+    "state": "ON after broadcast",
+    "seconds": 10.00021512794774,
+    "ticks": 0,
+    "cpu_percent": 0.0,
+    "rss_mib": 39.7734375
+  }
+]

@@ -535,6 +535,7 @@ impl Settings {
                     .with_context(|| format!("reading {}", path.display()))?;
                 let fields: toml::Value = toml::from_str(&s)?;
                 for (section, allowed) in [
+                    ("wallpaper", &["version", "enabled", "grants"][..]),
                     ("edge", &["corner", "dwell_ms", "modifier", "fullscreen_guard", "fullscreen_allow", "fullscreen_block", "left", "right", "top", "bottom", "wrap", "learn"][..]),
                     ("input.autoscroll", &["enabled", "button", "speed", "dead_zone", "vertical_only", "scope", "app", "rule"][..]),
                 ] {
@@ -902,6 +903,65 @@ pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn historical_settings_survive_upgrade_and_unrelated_edits() {
+        for fixture in [include_str!("../tests/fixtures/settings-0.1.13.toml"), include_str!("../tests/fixtures/settings-0.1.14.toml")] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join(FILE);
+            let source = format!("{fixture}\n[future.\"quoted.table\"]\nkeep = ['one', 'two']\n");
+            std::fs::write(&path, &source).unwrap();
+            let before = Settings::load(directory.path()).unwrap();
+            assert!(!before.clipboard.text);
+            assert_eq!(before.clipboard.max_mb, 5);
+            assert!(before.clipboard.allow_pull);
+            assert_eq!(before.clipboard.history_max, 0);
+            assert!(!before.clipboard.history_persist);
+            assert!(!before.hotkeys.enabled);
+            Settings::update(directory.path(), |settings| { settings.notify_files = true; Ok(()) }).unwrap();
+            let after = Settings::load(directory.path()).unwrap();
+            assert!(after.notify_files);
+            assert_eq!(after.clipboard.filter(), before.clipboard.filter());
+            assert_eq!(after.edge, before.edge);
+            assert_eq!(after.power, before.power);
+            assert_eq!(after.drag, before.drag);
+            assert_eq!(after.unknown, before.unknown);
+            assert_eq!(after.unknown["future"]["quoted.table"]["keep"].as_array().unwrap().len(), 2);
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let settings = Settings::load(directory.path()).unwrap();
+        assert_eq!(settings, Settings::default());
+        assert!(!directory.path().join(FILE).exists());
+    }
+
+    #[test]
+    fn deterministic_settings_mutation_stress_preserves_rejected_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(FILE);
+        let seed = b"settings_version = 2\nnotify_files = false\n[clipboard]\nmax_mb = 5\n[future]\nkeep = 'yes'\n";
+        let mut state = 0x7761_7665_365f_7161_u64;
+        for iteration in 0..2048 {
+            let mut bytes = seed.to_vec();
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let offset = state as usize % bytes.len();
+            if iteration % 2 == 0 { bytes.truncate(offset); }
+            else { bytes[offset] = (state >> 32) as u8; }
+            std::fs::write(&path, &bytes).unwrap();
+            if let Ok(settings) = super::Settings::load(directory.path()) {
+                settings.save(directory.path()).unwrap();
+                assert!(super::Settings::load(directory.path()).is_ok());
+            } else {
+                assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            }
+        }
+        for depth in [64, 256, 1024] {
+            let text = format!("future = {}0{}", "[".repeat(depth), "]".repeat(depth));
+            std::fs::write(&path, text).unwrap();
+            let _ = super::Settings::load(directory.path());
+        }
+    }
+
+    #[test]
     fn upgraded_history_is_off_with_one_time_explanation() {
         let directory = temp_dir("history-update-notice");
         std::fs::create_dir_all(&directory).unwrap();
@@ -1200,6 +1260,24 @@ mod tests {
         std::fs::write(dir.join(FILE), "clipboard = [").unwrap();
         assert!(Settings::load(&dir).is_err(), "a broken file is reported, not silently reset");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unknown_wallpaper_tables_survive_unrelated_settings_edits() {
+        let dir = temp_dir("future-wallpaper");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[wallpaper]\nfuture_option = true\n[wallpaper.future]\nlabel = 'keep-me'\n").unwrap();
+        let mut settings = Settings::load(&dir).unwrap();
+        assert!(!settings.wallpaper.enabled && settings.wallpaper.grants.is_empty());
+        settings.notify_files = false;
+        settings.save(&dir).unwrap();
+        let saved: toml::Value = toml::from_str(&std::fs::read_to_string(dir.join(FILE)).unwrap()).unwrap();
+        assert_eq!(saved["wallpaper"]["future_option"].as_bool(), Some(true));
+        assert_eq!(saved["wallpaper"]["future"]["label"].as_str(), Some("keep-me"));
+        let loaded = Settings::load(&dir).unwrap();
+        assert!(!loaded.wallpaper.enabled && loaded.wallpaper.grants.is_empty());
+        assert!(!loaded.notify_files);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A key action that runs a command is held to the same permission

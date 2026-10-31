@@ -1,0 +1,29 @@
+settings_version = 2
+notify_files = false
+gaming = "off"
+lock_sync = false
+
+[clipboard]
+text = false
+html = false
+image = true
+max_mb = 5
+skip_sensitive = true
+allow_pull = true
+
+[drag]
+enabled = true
+zone_px = 24
+
+[edge]
+corner = 16
+dwell_ms = 400
+fullscreen_guard = true
+
+[hotkeys]
+enabled = false
+home = "ctrl+alt+end"
+
+[power]
+block_screensaver_on_peers = false
+sleep_sync = true

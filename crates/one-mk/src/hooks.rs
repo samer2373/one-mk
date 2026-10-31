@@ -358,13 +358,18 @@ pub fn read_settings(path: &Path) -> std::io::Result<(String, Option<String>)> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    let mut file = options.open(&resolved)?;
-    if !file.metadata()?.is_file() {
+    let file = options.open(&resolved)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
         return Err(std::io::Error::other("settings must be a regular file"));
     }
+    const MAX_SETTINGS_BYTES: u64 = 4 * 1024 * 1024;
+    let too_large = || std::io::Error::new(std::io::ErrorKind::InvalidData, "settings exceeds the 4 MiB limit");
+    if metadata.len() > MAX_SETTINGS_BYTES { return Err(too_large()); }
     let reason = opened_permissions(path, &resolved, &file);
     let mut text = String::new();
-    file.read_to_string(&mut text)?;
+    file.take(MAX_SETTINGS_BYTES + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_SETTINGS_BYTES { return Err(too_large()); }
     Ok((text, reason))
 }
 
@@ -1000,6 +1005,17 @@ pub async fn run_command(dir: &Path, args: HooksArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oversized_settings_are_rejected_before_parsing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(4 * 1024 * 1024 + 1).unwrap();
+        let error = super::read_settings(&path).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("4 MiB"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn symlink_target_directory_permissions() {

@@ -1072,6 +1072,9 @@ and exits with status 1 if something failed.
   so. A one-mk older than this feature can't read a `settings.toml` with
   such rules: remove them (`--device ...` on `keymap remove` and the
   others) before going back to an older version.
+- **Settings cannot be read because the file is too large.** `settings.toml`
+  is limited to 4 MiB. Reduce the file before retrying; one-mk leaves the
+  original file untouched when rejecting it.
 - **macOS.** Allow one-mk under System Settings > Privacy & Security >
   Accessibility and Input Monitoring, then start it again. (Not yet tested on
   real hardware.)

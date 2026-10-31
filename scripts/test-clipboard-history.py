@@ -19,7 +19,10 @@ import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-BINARY = ROOT / "target/debug/one-mk"
+TARGET = pathlib.Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+BINARY = TARGET / "debug/one-mk"
+APP = TARGET / "debug/one-mk-app"
+SCREENSHOTS = pathlib.Path(os.environ.get("ONE_MK_AUDIT_SCREENS", ROOT / ".clipboard-history-qa"))
 CHILDREN = []
 LOGS = []
 ENVIRONMENT = {}
@@ -260,7 +263,7 @@ class IsolatedX11:
 def main():
     global ENVIRONMENT
     previous = os.environ.get("PREVIOUS_ONE_MK")
-    with tempfile.TemporaryDirectory(prefix="h-", dir=ROOT / "target") as directory:
+    with tempfile.TemporaryDirectory(prefix="h-") as directory:
         base = pathlib.Path(directory)
         runtime = base / "runtime"
         runtime.mkdir(mode=0o700)
@@ -417,12 +420,12 @@ def main():
             time.sleep(0.08)
         items = history(first)
         assert len(items) == 20, len(items)
-        screenshot_dir = ROOT / ".clipboard-history-qa"
-        screenshot_dir.mkdir(exist_ok=True)
+        screenshot_dir = SCREENSHOTS
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
         from PIL import ImageGrab
         for name, size, zoom in (("normal", "980x660", "1"), ("narrow", "820x540", "1"), ("hidpi", "820x540", "2")):
             window_env = dict(first_env, ONE_MK_APP_TAB="files", ONE_MK_APP_SIZE=size, ONE_MK_APP_ZOOM=zoom)
-            app = start([str(ROOT / "target/debug/one-mk-app"), "--home", str(first)], env=window_env,
+            app = start([str(APP), "--home", str(first)], env=window_env,
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(4)
             assert app.poll() is None, "window failed to start"
@@ -431,11 +434,11 @@ def main():
             if name == "normal":
                 isolated = IsolatedX11(first_env)
                 isolated.activate(first_env)
-                isolated.click(930, 572)
+                isolated.click(930, 519)
                 time.sleep(0.5)
                 ImageGrab.grab(xdisplay=first_env["DISPLAY"]).crop((0, 0, *dimensions)).save(screenshot_dir / "revealed.png")
-                isolated.click(930, 572)
-                isolated.click(400, 572)
+                isolated.click(930, 519)
+                isolated.click(400, 519)
                 time.sleep(0.3)
                 selected = clipboard(first_env)
                 assert selected.startswith("History item"), selected
@@ -444,14 +447,14 @@ def main():
                 isolated.enter()
                 eventually(lambda: clipboard(first_env), lambda value: value == selected)
                 print("PASS real window mouse copy and keyboard Enter restore")
-                isolated.click(932, 495)
+                isolated.click(932, 426)
                 time.sleep(0.3)
-                isolated.click(932, 495)
+                isolated.click(932, 426)
                 eventually(lambda: history(first), lambda items: not items)
                 time.sleep(1)
                 ImageGrab.grab(xdisplay=first_env["DISPLAY"]).crop((0, 0, *dimensions)).save(screenshot_dir / "empty.png")
                 os.killpg(first_daemon.pid, signal.SIGSTOP)
-                isolated.click(865, 495)
+                isolated.click(865, 426)
                 time.sleep(0.3)
                 ImageGrab.grab(xdisplay=first_env["DISPLAY"]).crop((0, 0, *dimensions)).save(screenshot_dir / "loading.png")
                 time.sleep(6)
@@ -462,10 +465,10 @@ def main():
                     time.sleep(0.08)
                 isolated.close()
             stop(app)
-        print("PASS captured real window screenshots in .clipboard-history-qa")
+        print(f"PASS captured real window screenshots in {screenshot_dir}")
         settings(first, maximum=0)
         control(first, "settings")
-        app = start([str(ROOT / "target/debug/one-mk-app"), "--home", str(first)],
+        app = start([str(APP), "--home", str(first)],
                     env=dict(first_env, ONE_MK_APP_TAB="files", ONE_MK_APP_SIZE="980x660"),
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(4)
@@ -490,7 +493,7 @@ def main():
         settings(first, persist=True)
         control(first, "settings")
         eventually(saved.exists, bool)
-        app = start([str(ROOT / "target/debug/one-mk-app"), "--home", str(first)],
+        app = start([str(APP), "--home", str(first)],
                     env=dict(first_env, ONE_MK_APP_TAB="files", ONE_MK_APP_SIZE="980x660"),
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(4)
@@ -538,7 +541,7 @@ def main():
         assert not saved.exists()
         print("PASS damaged saved history is reported without overwrite; real CLI Clear recovers")
         stop(first_daemon)
-        app = start([str(ROOT / "target/debug/one-mk-app"), "--home", str(first)],
+        app = start([str(APP), "--home", str(first)],
                     env=dict(first_env, ONE_MK_APP_TAB="files", ONE_MK_APP_SIZE="980x660"),
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(4)

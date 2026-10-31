@@ -178,7 +178,7 @@ impl Link {
         let link = self.clone();
         std::thread::spawn(move || {
             let read = || -> Result<Vec<HistoryItem>, String> {
-                let response = client::request(&link.dir, Request::ClipHistory { action: client::HistoryAction::List, json: false }, Duration::from_secs(5))
+                let response = client::request(&link.dir, Request::ClipHistory { action: client::HistoryAction::List, json: true }, Duration::from_secs(5))
                     .map_err(|_| "Could not read history. Try Refresh when one·mk is running.".to_owned())?
                     .ok_or_else(|| "Start one·mk to see clipboard history.".to_owned())?;
                 let body = response.strip_prefix("ok\n").ok_or_else(|| response.trim_start_matches("error ").trim().to_owned())?;
@@ -689,20 +689,27 @@ fn history_preview(body: &str) -> String {
 }
 
 fn parse_history(body: &str) -> Result<Vec<HistoryItem>, String> {
+    #[derive(serde::Deserialize)]
+    struct Metadata {
+        id: u64,
+        kind: String,
+        preview: String,
+        size: u64,
+        timestamp: u64,
+        origin: String,
+    }
     let bad = || "Could not read history. Update one·mk and try Refresh.".to_owned();
-    if body == "Clipboard history is empty.\n" { return Ok(Vec::new()); }
-    if body.len() > 1000 * (2 * 80 * 4 + 128) || body.lines().count() > 1000 { return Err(bad()); }
-    body.lines().map(|line| {
-        if line.chars().any(|ch| ch.is_control() && ch != '\t') { return Err(bad()); }
-        let mut fields = line.splitn(6, '\t');
-        let id: u64 = fields.next().and_then(|field| field.parse().ok()).ok_or_else(bad)?;
-        let kind = fields.next().ok_or_else(bad)?;
-        let size = fields.next().ok_or_else(bad)?;
-        let timestamp = fields.next().and_then(|field| field.parse().ok()).ok_or_else(bad)?;
-        let origin = fields.next().ok_or_else(bad)?;
-        let preview = fields.next().ok_or_else(bad)?.to_owned();
-        if id == 0 || id == u64::MAX || !matches!(kind, "text" | "html" | "image") || preview.chars().count() > 80 || preview.contains('\t') || origin.chars().count() > 85 || size.len() > 32 { return Err(bad()); }
-        Ok(HistoryItem { id, preview, detail: format!("{kind} · {size} · {origin}"), timestamp })
+    if body.len() > 1000 * (2 * 80 * 4 + 128) { return Err(bad()); }
+    let entries: Vec<Metadata> = serde_json::from_str(body).map_err(|_| bad())?;
+    if entries.len() > 1000 { return Err(bad()); }
+    entries.into_iter().map(|entry| {
+        let Metadata { id, kind, preview, size, timestamp, origin } = entry;
+        if id == 0 || id == u64::MAX || !matches!(kind.as_str(), "text" | "html" | "image")
+            || preview != "[hidden; use Show]" || origin.chars().count() > 85 || origin.chars().any(char::is_control) { return Err(bad()); }
+        let size = if size >= 1 << 20 { format!("{:.1} MB", size as f64 / f64::from(1 << 20)) }
+            else if size >= 1 << 10 { format!("{} KB", size.div_ceil(1 << 10)) }
+            else { format!("{size} B") };
+        Ok(HistoryItem { id, preview, detail: format!("{kind} · {size} · from {origin}"), timestamp })
     }).collect()
 }
 
@@ -726,6 +733,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn history_accepts_the_daemons_stable_json_metadata() {
+        let body = r#"[{"id":7,"kind":"text","preview":"[hidden; use Show]","size":12,"timestamp":123,"origin":"desk"}]"#;
+        let parsed = parse_history(body).unwrap();
+        assert_eq!(parsed[0].id, 7);
+        assert_eq!(parsed[0].timestamp, 123);
+        assert_eq!(parsed[0].preview, "[hidden; use Show]");
+        assert!(parse_history("[]\n").unwrap().is_empty());
+    }
+
+    #[test]
     fn history_preview_preserves_separators_and_marks_truncation() {
         assert_eq!(history_preview("multi\nline\ttext"), "multi line text");
         assert_eq!(history_preview(&"a".repeat(80)), "a".repeat(80));
@@ -735,16 +752,17 @@ mod tests {
 
     #[test]
     fn history_metadata_and_hostile_generated_lines() {
-        let largest = format!("1\ttext\t12 B\t123\tfrom {}\t{}\n", "🦀".repeat(80), "🦀".repeat(80)).repeat(1000);
+        let row = format!(r#"{{"id":7,"kind":"text","preview":"[hidden; use Show]","size":12,"timestamp":123,"origin":"{}"}}"#, "🦀".repeat(80));
+        let largest = format!("[{}]", vec![row.as_str(); 1000].join(","));
         assert_eq!(parse_history(&largest).unwrap().len(), 1000);
-        let valid = "7\ttext\t12 B\t123\tfrom desk\thello\n";
-        let parsed = parse_history(valid).unwrap();
+        let valid = format!("[{row}]");
+        let parsed = parse_history(&valid).unwrap();
         assert_eq!(parsed[0].id, 7);
-        assert_eq!(parsed[0].preview, "hello");
-        assert!(parse_history(&valid.repeat(1001)).is_err());
-        assert!(parse_history("1\timage\t12 B\t123\tfrom desk\t\u{1b}[2J\n").is_err());
-        assert!(parse_history("1\ttext\t12 B\t123\tfrom desk\ttoo\tmany\n").is_err());
-        for cut in 1..valid.len() - 1 {
+        assert_eq!(parsed[0].preview, "[hidden; use Show]");
+        assert!(parse_history(&format!("[{}]", vec![row.as_str(); 1001].join(","))).is_err());
+        assert!(parse_history(&valid.replace("[hidden; use Show]", "unexpected secret")).is_err());
+        assert!(parse_history(&valid.replace(&"🦀".repeat(80), "hostile\\u001b[2J")).is_err());
+        for (cut, _) in valid.char_indices().skip(1) {
             let _ = parse_history(&valid[..cut]);
         }
         let mut state = 7u32;

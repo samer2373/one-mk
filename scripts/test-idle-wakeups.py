@@ -99,7 +99,7 @@ class Lab:
 
     def daemon(self, home, backend, port, discovery):
         log = self.cleanup.enter_context((home / "daemon.log").open("a"))
-        arguments = [self.binary, "--home", str(home), "run", "--backend", backend, "--port", str(port)]
+        arguments = [self.binary, "--home", str(home), "run", "--backend", backend, "--port", str(port), "--no-notify"]
         if not discovery:
             arguments.append("--no-discovery")
         process = self.spawn(arguments, home, stdout=log, stderr=log)

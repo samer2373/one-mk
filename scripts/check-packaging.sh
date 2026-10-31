@@ -43,7 +43,9 @@ if command -v dpkg-deb >/dev/null; then
     [ -z "$(find "$root" -not -path "$root/DEBIAN*" \( -perm -002 -o -perm -4000 \) -not -type l)" ] && ok ".deb has no world-writable or setuid files" || bad ".deb has world-writable or setuid files"
     grep -q "^Version: $VERSION$" "$root/DEBIAN/control" && ok ".deb control version matches Cargo.toml ($VERSION)" || bad ".deb control version"
     got=$("$root/usr/bin/one-mk" --version) && [ "$got" = "one-mk $VERSION" ] && ok "unpacked one-mk --version: $got" || bad "one-mk --version said '$got'"
-    check "unpacked one-mk-app starts (prints its usage and refuses an unknown option)" sh -c "! '$root/usr/bin/one-mk-app' --help"
+    check "unpacked one-mk-app prints help successfully" sh -c "'$root/usr/bin/one-mk-app' --help | grep -q 'Usage: one-mk-app'"
+    got=$("$root/usr/bin/one-mk-app" --version) && [ "$got" = "one-mk-app $VERSION" ] && ok "unpacked one-mk-app --version: $got" || bad "one-mk-app --version said '$got'"
+    check "unpacked one-mk-app refuses an unknown option with usage" sh -c "'$root/usr/bin/one-mk-app' --not-an-option > '$scratch/app-error' 2>&1; [ \$? = 2 ] && grep -q 'unknown option' '$scratch/app-error' && grep -q 'usage: one-mk-app' '$scratch/app-error'"
     check "unpacked one-mk-tray starts (prints its usage and refuses an unknown option)" sh -c "! '$root/usr/bin/one-mk-tray' --help"
     # The hidden app-id entry the GlobalShortcuts portal needs, as `one-mk
     # install` writes it (the packaging-files example prints the same text).
