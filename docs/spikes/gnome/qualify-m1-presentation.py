@@ -530,8 +530,8 @@ def main():
     try:
         REPORT['shell'] = run(['gnome-shell', '--version']).stdout.strip()
         assert run([BIN / 'one-mk-wall', '--present=gnome'], check=False).returncode == 3
-        run([HARNESS, 'start', '2'])
         started = True
+        run([HARNESS, 'start', '2'])
         extension('Enable', 'spike-harness@one-mk.test')
         evaluate('Main.overview.hide(); true')
         extension('Enable')

@@ -19,6 +19,7 @@ jobs:
       - run: cargo clippy --locked -j 2 -p one-mk-wall-import --all-targets -- -D warnings
       - run: python3 scripts/check-wallpaper-artifact.py --self-test
       - run: python3 scripts/test-wallpaper-release-gates.py
+      - run: python3 docs/spikes/gnome/test_presentation_cleanup.py
       - run: |
           cargo build --locked -j 2 -p one-mk-wall-import
           cargo metadata --locked --format-version 1 > target/wallpaper-metadata.json
