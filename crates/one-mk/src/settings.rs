@@ -535,6 +535,7 @@ impl Settings {
                     .with_context(|| format!("reading {}", path.display()))?;
                 let fields: toml::Value = toml::from_str(&s)?;
                 for (section, allowed) in [
+                    ("wallpaper", &["version", "enabled", "grants"][..]),
                     ("edge", &["corner", "dwell_ms", "modifier", "fullscreen_guard", "fullscreen_allow", "fullscreen_block", "left", "right", "top", "bottom", "wrap", "learn"][..]),
                     ("input.autoscroll", &["enabled", "button", "speed", "dead_zone", "vertical_only", "scope", "app", "rule"][..]),
                 ] {
@@ -1200,6 +1201,24 @@ mod tests {
         std::fs::write(dir.join(FILE), "clipboard = [").unwrap();
         assert!(Settings::load(&dir).is_err(), "a broken file is reported, not silently reset");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unknown_wallpaper_tables_survive_unrelated_settings_edits() {
+        let dir = temp_dir("future-wallpaper");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[wallpaper]\nfuture_option = true\n[wallpaper.future]\nlabel = 'keep-me'\n").unwrap();
+        let mut settings = Settings::load(&dir).unwrap();
+        assert!(!settings.wallpaper.enabled && settings.wallpaper.grants.is_empty());
+        settings.notify_files = false;
+        settings.save(&dir).unwrap();
+        let saved: toml::Value = toml::from_str(&std::fs::read_to_string(dir.join(FILE)).unwrap()).unwrap();
+        assert_eq!(saved["wallpaper"]["future_option"].as_bool(), Some(true));
+        assert_eq!(saved["wallpaper"]["future"]["label"].as_str(), Some("keep-me"));
+        let loaded = Settings::load(&dir).unwrap();
+        assert!(!loaded.wallpaper.enabled && loaded.wallpaper.grants.is_empty());
+        assert!(!loaded.notify_files);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A key action that runs a command is held to the same permission
