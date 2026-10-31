@@ -1,5 +1,18 @@
 # Wave 6 M1 implementation slices — NOT M1 completion
 
+## Step C adversarial review addendum
+
+The historical run below predates the fixes and limitations recorded in
+[`WAVE6-M1-STEPC-CODEX-REVIEW.md`](WAVE6-M1-STEPC-CODEX-REVIEW.md).
+Review found and fixed a stale-slice reveal during layout debounce and an
+unbounded long-frame hold after decoder starvation. The run's event totals
+include directed proofs, not just its 100 randomized sequences. Final clean
+restoration checks may follow lab disarming and, after a bare renderer kill,
+an explicitly started reclamation renderer. Zero presenter wakeups is not
+zero whole-renderer work. Treat “never old slicing” as sampled historical
+observations, not a guarantee over every race; these fixes have targeted
+regressions, not a rerun of native lifecycle qualification.
+
 ## Latest slice: step C reached in the private laboratory (D not)
 
 October 31, 2026 (Asia/Amman). Branch `worktree-agent-ad820fc757181bd93` on top

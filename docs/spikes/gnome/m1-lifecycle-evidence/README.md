@@ -34,6 +34,16 @@ stayed false throughout.
 
 ## Proven
 
+**Subsequent review qualification:** the raw evidence is retained unchanged.
+The event counts below aggregate directed proofs and randomized sequences;
+they are not counts from the 100 sequences alone. Final no-leak checks after
+bare renderer SIGKILL include a deliberately started reclamation renderer;
+the killed renderer can leave an empty cgroup indefinitely without a restart.
+Daemon teardown checks disarm the lab bridge before final restoration checks.
+Screenshot/state sampling does not establish absence of every transient stale
+frame. See the [Step C review](../../../reviews/WAVE6-M1-STEPC-CODEX-REVIEW.md)
+for the two subsequently fixed races and the remaining idle-work limitation.
+
 1. **Layout change and hot-plug** (GIF exact on every pixel at scale 1, at block
    centres when scaled; VP9 PSNR; still exact): monitor added, removed, scale 2,
    fractional 1.25, order swapped, stacked, one monitor rotated (1080x1920) and
