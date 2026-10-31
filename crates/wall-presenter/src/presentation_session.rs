@@ -6,6 +6,13 @@
 //! imported media (step B, `playback.rs`); otherwise there is no surface and
 //! no decoder. Any teardown (revoked consent, daemon exit/crash, forged reply,
 //! repeated faults, unanswered request, playback failure) ends the process.
+//!
+//! Lifecycle (step C): the Shell ends a renderer with SIGTERM (lock, sleep,
+//! cover, disable, layout failure) and SIGKILL only after a grace period.
+//! SIGTERM is a clean teardown: the decode worker and its cgroup are removed
+//! and the surface is destroyed before the process exits. A layout change
+//! drops the admitted plan and the surface at once; only a fresh plan for the
+//! new layout is presented again.
 
 use crate::gnome_bridge::{Bridge, Event, Result};
 use crate::playback::{self, Presenter, Report, Request};
@@ -120,32 +127,60 @@ async fn fetch(connection: &Connection, session: &mut Session, owner: &Owner) ->
 #[derive(Clone, Debug, PartialEq)]
 struct Showing { media: [u8; 32], canvas: Rect, slices: Vec<Slice>, monitors: Vec<Monitor> }
 
+/// The playback the session is showing (its presenter generation), if any.
+#[derive(Default)]
+struct Screen { showing: Option<Showing>, generation: Option<u64> }
+
 /// Starts, replaces or stops playback so the screen follows the session.
 /// Stopping reports Paused first, so the Shell hides the clones before the
 /// surface and decoder go away.
-async fn reconcile(session: &Session, bridge: &mut Bridge, presenter: &Presenter, showing: &mut Option<Showing>) -> Result<()> {
+async fn reconcile(session: &Session, bridge: &mut Bridge, presenter: &mut Presenter, screen: &mut Screen) -> Result<()> {
     let plan = session.active().then(|| session.admitted()).flatten();
     let wanted = plan.map(|plan| Showing { media: plan.media_id, canvas: plan.canvas, slices: plan.slices.clone(),
         monitors: session.monitors().to_vec() });
-    if wanted == *showing { return Ok(()); }
+    if wanted == screen.showing { return Ok(()); }
     match plan {
         Some(plan) => {
             log(format_args!("event=play sequence={}", plan.sequence));
-            presenter.play(Request { plan: plan.clone(), monitors: session.monitors().to_vec() });
+            screen.generation = Some(presenter.play(Request { plan: plan.clone(), monitors: session.monitors().to_vec() }));
         }
         None => {
             bridge.set_state(State::Paused).await?;
             presenter.stop();
+            screen.generation = None;
             log(format_args!("event=stopped surfaces=0 decoders=0 {}", describe(session)));
         }
     }
-    *showing = wanted;
+    screen.showing = wanted;
     Ok(())
 }
 
+/// Runs the presentation until a teardown, or until the Shell sends SIGTERM.
+/// Either way the presenter is dropped before returning: the decode worker is
+/// killed, its cgroup removed and the surface destroyed.
 pub async fn present() -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+    // Installed first, so a SIGTERM at any point is a clean teardown.
+    let mut terminate = signal(SignalKind::terminate())?;
+    tokio::select! {
+        biased;
+        _ = terminate.recv() => {}
+        result = run() => return result,
+    }
+    // The session future, and with it the presenter, was dropped above.
+    log(format_args!("event=terminated signal=SIGTERM surfaces=0 decoders=0"));
+    Err("terminated by the Shell (SIGTERM); presentation destroyed".into())
+}
+
+async fn run() -> Result<()> {
     let descriptor = std::env::var("WAYLAND_SOCKET")?.parse()?;
     let config = playback::Config::from_env().map_err(|error| format!("playback unavailable: {error}"))?;
+    // A previous renderer killed outright cannot remove its worker's group.
+    match one_mk_wall_import::sandbox::reclaim_playback_groups(&config.cgroup_root) {
+        Ok(0) => {}
+        Ok(count) => log(format_args!("event=reclaimed stale_playback_groups={count}")),
+        Err(error) => log(format_args!("event=reclaim-failed error={error:?}")),
+    }
     let mut bridge = Bridge::connect(descriptor).await?;
     bridge.set_state(State::Paused).await?;
     let record = read_record().map_err(|error| format!("no usable authority record: {error}"))?;
@@ -174,9 +209,9 @@ pub async fn present() -> Result<()> {
     // to the bridge owner above); nothing else uses the descriptor.
     let socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(descriptor) };
     let mut presenter = Presenter::start(socket, config)?;
-    let mut showing = None;
+    let mut screen = Screen::default();
     fetch(&connection, &mut session, &owner).await?;
-    reconcile(&session, &mut bridge, &presenter, &mut showing).await?;
+    reconcile(&session, &mut bridge, &mut presenter, &mut screen).await?;
     let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -203,14 +238,24 @@ pub async fn present() -> Result<()> {
             }
             _ = heartbeat.tick() => fetch(&connection, &mut session, &owner).await?,
             report = presenter.reports.recv() => match report {
-                Some(Report::FirstFrame { latency }) => {
+                Some(Report::FirstFrame { generation, latency }) if screen.generation == Some(generation) => {
                     bridge.set_state(State::Playing).await?;
                     log(format_args!("event=playing first_frame_ms={}", latency.as_millis()));
                 }
+                Some(Report::Holding { generation }) if screen.generation == Some(generation) => {
+                    bridge.set_state(State::Holding).await?;
+                    log(format_args!("event=holding"));
+                }
+                Some(Report::Moving { generation }) if screen.generation == Some(generation) => {
+                    bridge.set_state(State::Playing).await?;
+                    log(format_args!("event=moving"));
+                }
+                // A report from a playback that was replaced or stopped.
+                Some(Report::FirstFrame { .. } | Report::Holding { .. } | Report::Moving { .. }) => {}
                 Some(Report::Failed(error)) => return Err(format!("playback failed: {error}").into()),
                 None => return Err("presenter ended".into()),
             },
         }
-        reconcile(&session, &mut bridge, &presenter, &mut showing).await?;
+        reconcile(&session, &mut bridge, &mut presenter, &mut screen).await?;
     }
 }
