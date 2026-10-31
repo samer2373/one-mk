@@ -183,6 +183,8 @@ fn shortcut_upgrade_notice_is_once_and_piped_logs_have_no_ansi() {
     use std::process::Stdio;
     let home = private_home();
     std::fs::write(home.path().join("settings.toml"), "settings_version = 2\n[wallpaper]\nversion = 999\n").unwrap();
+    assert!(run(home.path(), &["notify", "off"]).status.success());
+    std::fs::write(home.path().join("settings.toml"), std::fs::read_to_string(home.path().join("settings.toml")).unwrap().replace("version = 1", "version = 999")).unwrap();
     for first in [true, false] {
         let mut daemon = Process(Command::new(env!("CARGO_BIN_EXE_one-mk"))
             .env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())

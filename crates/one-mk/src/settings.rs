@@ -562,7 +562,8 @@ impl Settings {
                     }
                 }
                 settings.unknown = unknown_settings(fields.as_table().expect("settings table"), known.as_table().expect("settings table"));
-                settings.shortcut_upgrade = fields.get("hotkeys").is_none_or(|keys| keys.get("broadcast").is_none() || keys.get("fetch_clipboard").is_none());
+                settings.shortcut_upgrade = fields.get("hotkeys").is_none_or(|keys| keys.get("broadcast").is_none() || keys.get("fetch_clipboard").is_none())
+                    || dir.join(".wave5-shortcuts-pending").exists();
                 if fields.get("clipboard").and_then(|clipboard| clipboard.get("history_max")).is_none() {
                     settings.clipboard.history_notice = Some(dir.join(".clipboard-history-update-noticed"));
                 }
@@ -616,6 +617,21 @@ impl Settings {
             merge_unknown(&mut values, &self.unknown);
             file.write_all(toml::to_string_pretty(&values)?.as_bytes()).with_context(|| format!("writing {}", tmp.display()))?;
             drop(file);
+            if self.shortcut_upgrade && !dir.join(".wave5-shortcuts-noticed").exists() {
+                let pending = dir.join(".wave5-shortcuts-pending");
+                let mut marker = std::fs::OpenOptions::new();
+                marker.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    marker.mode(0o600);
+                }
+                match marker.open(&pending) {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error).with_context(|| format!("preserving shortcut upgrade notice in {}", pending.display())),
+                }
+            }
             std::fs::rename(&tmp, path(dir)).with_context(|| format!("saving {}", path(dir).display()))?;
             Ok(())
         };
