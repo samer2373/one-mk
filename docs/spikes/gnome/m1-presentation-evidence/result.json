@@ -1,0 +1,99 @@
+{
+  "checks": [
+    "production extension dormant and unauthorized by default; renderer without --m1-lab refuses",
+    "absent credential: renderer refuses without a daemon record, admits nothing, exits",
+    "stale credential: record left by a SIGKILLed daemon is refused (name has no owner)",
+    "stale record replayed while a new daemon runs: refused, nothing admitted, renderer exited",
+    "stale key on the live daemon name: refused, nothing admitted, renderer exited",
+    "wrong key on the live daemon name: refused, nothing admitted, renderer exited",
+    "live name with another PID: refused, nothing admitted, renderer exited",
+    "impostor authority with a valid-looking record but no key: forged reply refused, exited",
+    "daemon refuses an unauthenticated bus caller (AccessDenied, no plan)",
+    "genuine plan admitted via Gate::accept_encoded: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "pause: event=accepted sequence=2 admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "replay: event=refused reason=Replay admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "stale-sequence: event=refused reason=Replay admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "stale-revision: event=refused reason=Consent admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "oversize: event=refused reason=Wire admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "oversize-envelope: event=refused reason=Envelope admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "malformed: event=refused reason=Wire admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "play: event=accepted sequence=3 admitted_sequence=3 paused=false active=true revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "layout change discards the admitted plan until a fresh one: event=accepted sequence=4 admitted_sequence=4 paused=false active=true revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080",
+    "mid-session forged reply: presentation torn down, renderer exited in 5 ms",
+    "revoke: renderer exited 20 ms after the action (presentation torn down: Revoked); Shell restart refused (presentation torn down: Revoked); no leftover processes",
+    "disable: renderer exited 19 ms after the action (presentation torn down: Revoked); Shell restart refused (presentation torn down: Revoked); no leftover processes",
+    "stop: renderer exited 84 ms after the action (authority connection lost); Shell restart refused (no usable authority record); no leftover processes",
+    "sigterm: renderer exited 57 ms after the action (authority connection lost); Shell restart refused (no usable authority record); no leftover processes",
+    "sigkill: renderer exited 5 ms after the action (authority connection lost); Shell restart refused (stale authority record); no leftover processes",
+    "100 real daemon+renderer start/authenticate/admit/teardown cycles (rotating revoke, disable, stop, sigterm, sigkill), every renderer and daemon reaped, no leftover processes",
+    "zero new Mutter/Shell warning records versus the M1a-2 baseline (14 total, all known)"
+  ],
+  "production_authorization": false,
+  "surfaces_or_decoders_created": false,
+  "shell": "GNOME Shell 50.1",
+  "baseline_processes": [
+    "bwrap",
+    "dbus-daemon",
+    "dbus-run-sessio",
+    "evolution-addre",
+    "evolution-calen",
+    "evolution-sourc",
+    "gjs",
+    "glycin-svg",
+    "gnome-control-c",
+    "gnome-keyring-d",
+    "gnome-shell",
+    "gnome-shell-cal",
+    "goa-daemon",
+    "goa-identity-se",
+    "ibus-daemon",
+    "ibus-dconf",
+    "ibus-engine-sim",
+    "ibus-extension-",
+    "ibus-portal",
+    "inner.sh",
+    "python3",
+    "xdg-desktop-por",
+    "xdg-permission-"
+  ],
+  "teardown_latency_ms": {
+    "revoke": 19.8,
+    "disable": 19.5,
+    "stop": 84.4,
+    "sigterm": 57.5,
+    "sigkill": 5.2
+  },
+  "cycles": 100,
+  "cycle_renderer_processes": 100,
+  "cycle_exit_latency_ms": {
+    "revoke": {
+      "count": 20,
+      "median": 18.6,
+      "max": 19.4
+    },
+    "disable": {
+      "count": 20,
+      "median": 19.0,
+      "max": 20.0
+    },
+    "stop": {
+      "count": 20,
+      "median": 84.7,
+      "max": 86.0
+    },
+    "sigterm": {
+      "count": 20,
+      "median": 57.0,
+      "max": 57.5
+    },
+    "sigkill": {
+      "count": 20,
+      "median": 5.2,
+      "max": 5.3
+    }
+  },
+  "new_warnings": [],
+  "warning_records": 14,
+  "passed": true,
+  "remaining_lab_processes": {}
+}

@@ -42,24 +42,39 @@ media playback, restoration after visible playback, daemon kill/crash teardown,
 lock/unlock, suspend/resume, hot-plug surfaces, physical GPU behavior or production
 consent. Never label these 100 paused-fixture cycles as 100 playback cycles.
 
-## Presentation admission precursor
+## Presentation admission and daemon session (6D-M1 step A, laboratory)
 
-`crates/wall/src/presentation.rs` is an I/O-free, bounded state machine with
-failure-path tests. A future adapter must provide bus-authenticated credentials,
-the explicit local consent revision, frozen canvas and authoritative local
-layout; call `owner_lost` on disconnect or owner replacement, and reconcile
-consent changes. No identity supplied inside a plan is trusted. It must actually
-destroy presentation/decoder resources when `active()` is absent. `active()` is
-an admitted intent, **not permission to enable production playback**.
+`crates/wall/src/presentation.rs` is the I/O-free admission gate;
+`presentation_wire.rs` the bounded payload; `presentation_auth.rs` the record,
+keyed tags, daemon publisher and renderer session. The laboratory daemon
+(`one-mk` built with `--features wallpaper-m1-lab`, null backend only) and the
+laboratory renderer (`one-mk-wall` built with `--features m1-lab`, run as
+`--present=gnome --m1-lab`) call them for real; see
+[the session design](presentation-wire.md). `active` is admitted intent only:
+the renderer creates **no surface or decoder** and production authorization
+stays false.
 
-The module is not yet called by the daemon, bridge or renderer. A bounded
-[presentation payload codec](presentation-wire.md) and `Gate::accept_encoded`
-entry point now exist, with ten additional unit tests. This remains a precursor:
-there is no new D-Bus method, daemon authority bootstrap or local-media resolver.
-Transport body/rate limits,
-cache verification, native lifecycle hooks and all production authorization gates
-remain integration work. The original bridge XML deliberately still carries no
-paths, media selection or frame bytes through Shell.
+`qualify-m1-presentation.py` proves the session with real processes in this
+harness. It needs a short new private directory because Unix socket paths must
+fit in 108 bytes (a worktree `target/` path is too long):
+
+```text
+cargo build --offline -j 2 -p one-mk --features wallpaper-m1-lab
+cargo build --offline -j 2 -p one-mk-wall --features m1-lab
+mkdir -p target/m1-bin && cp target/debug/one-mk target/debug/one-mk-wall target/m1-bin/
+env -i PATH=/usr/bin:/bin HOME=<throwaway> LANG=C.UTF-8 USER=$USER \
+  M1_BIN=$PWD/target/m1-bin M1_LAB=/tmp/<new-short-dir> M1_CYCLES=100 \
+  python3 -B docs/spikes/gnome/qualify-m1-presentation.py
+```
+
+The production extension is copied with a two-line `libexec/one-mk-wall` wrapper
+that redirects the renderer's output to `$M1_LAB/renderer.log` and `exec`s the
+laboratory renderer with `--m1-lab` (same PID, same inherited Wayland socket).
+Private Eval authorizes the bridge and disables its first-frame watchdog for that
+bridge instance only, because step A draws nothing; neither is a production path.
+Results and logs stay in `$M1_LAB`; the harness session is stopped at the end.
+Evidence from the qualifying run is in
+[m1-presentation-evidence](m1-presentation-evidence/README.md).
 
 ## Cleanup
 

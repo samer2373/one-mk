@@ -1,0 +1,345 @@
+wallpaper-m1-renderer[270394]: exit no usable authority record: No such file or directory (os error 2)
+wallpaper-m1-renderer[271129]: exit stale authority record: its bus name has no owner
+wallpaper-m1-renderer[271257]: exit stale authority record: its bus name has no owner
+wallpaper-m1-renderer[271309]: event=authenticating authority=:1.40 pid=271164
+wallpaper-m1-renderer[271309]: exit authority refused this renderer (credential refused); presentation destroyed
+wallpaper-m1-renderer[271488]: event=authenticating authority=:1.40 pid=271164
+wallpaper-m1-renderer[271488]: exit authority refused this renderer (credential refused); presentation destroyed
+wallpaper-m1-renderer[271749]: exit authority record does not match the connection that owns its name
+wallpaper-m1-renderer[271916]: event=authenticating authority=:1.57 pid=271791
+wallpaper-m1-renderer[271916]: exit presentation torn down: Authentication
+wallpaper-m1-renderer[271986]: event=authenticating authority=:1.40 pid=271164
+wallpaper-m1-renderer[271986]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: event=accepted sequence=2 admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: event=refused reason=Replay admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: event=refused reason=Replay admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: event=refused reason=Consent admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: event=refused reason=Wire admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: event=refused reason=Envelope admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: event=refused reason=Wire admitted_sequence=2 paused=true active=false revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: event=accepted sequence=3 admitted_sequence=3 paused=false active=true revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: event=layout serial=2 admitted_sequence=none active=false
+wallpaper-m1-renderer[271986]: event=accepted sequence=4 admitted_sequence=4 paused=false active=true revision=11 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[271986]: exit presentation torn down: Authentication
+wallpaper-m1-renderer[272091]: event=authenticating authority=:1.68 pid=272033
+wallpaper-m1-renderer[272091]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=500 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[272091]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[272130]: event=authenticating authority=:1.68 pid=272033
+wallpaper-m1-renderer[272130]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[272252]: event=authenticating authority=:1.74 pid=272165
+wallpaper-m1-renderer[272252]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=501 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[272252]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[272400]: event=authenticating authority=:1.74 pid=272165
+wallpaper-m1-renderer[272400]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[272465]: event=authenticating authority=:1.80 pid=272423
+wallpaper-m1-renderer[272465]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=502 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[272465]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[272624]: exit no usable authority record: No such file or directory (os error 2)
+wallpaper-m1-renderer[272711]: event=authenticating authority=:1.86 pid=272650
+wallpaper-m1-renderer[272711]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=503 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[272711]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[272798]: exit no usable authority record: No such file or directory (os error 2)
+wallpaper-m1-renderer[272947]: event=authenticating authority=:1.92 pid=272837
+wallpaper-m1-renderer[272947]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=504 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[272947]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[273024]: exit stale authority record: its bus name has no owner
+wallpaper-m1-renderer[273076]: event=authenticating authority=:1.98 pid=273052
+wallpaper-m1-renderer[273076]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1000 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273076]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[273127]: event=authenticating authority=:1.104 pid=273112
+wallpaper-m1-renderer[273127]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1001 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273127]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[273202]: event=authenticating authority=:1.110 pid=273167
+wallpaper-m1-renderer[273202]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1002 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273202]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[273267]: event=authenticating authority=:1.116 pid=273252
+wallpaper-m1-renderer[273267]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1003 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273267]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[273359]: event=authenticating authority=:1.122 pid=273302
+wallpaper-m1-renderer[273359]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1004 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273359]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[273419]: event=authenticating authority=:1.128 pid=273385
+wallpaper-m1-renderer[273419]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1005 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273419]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[273475]: event=authenticating authority=:1.134 pid=273455
+wallpaper-m1-renderer[273475]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1006 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273475]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[273558]: event=authenticating authority=:1.140 pid=273520
+wallpaper-m1-renderer[273558]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1007 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273558]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[273604]: event=authenticating authority=:1.146 pid=273589
+wallpaper-m1-renderer[273604]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1008 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273604]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[273678]: event=authenticating authority=:1.152 pid=273630
+wallpaper-m1-renderer[273678]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1009 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273678]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[273751]: event=authenticating authority=:1.158 pid=273704
+wallpaper-m1-renderer[273751]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1010 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273751]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[273887]: event=authenticating authority=:1.164 pid=273830
+wallpaper-m1-renderer[273887]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1011 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273887]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[273938]: event=authenticating authority=:1.170 pid=273924
+wallpaper-m1-renderer[273938]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1012 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273938]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[273983]: event=authenticating authority=:1.176 pid=273969
+wallpaper-m1-renderer[273983]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1013 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[273983]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274024]: event=authenticating authority=:1.182 pid=274009
+wallpaper-m1-renderer[274024]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1014 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274024]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274074]: event=authenticating authority=:1.188 pid=274050
+wallpaper-m1-renderer[274074]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1015 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274074]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[274140]: event=authenticating authority=:1.194 pid=274112
+wallpaper-m1-renderer[274140]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1016 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274140]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[274206]: event=authenticating authority=:1.200 pid=274176
+wallpaper-m1-renderer[274206]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1017 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274206]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274252]: event=authenticating authority=:1.206 pid=274237
+wallpaper-m1-renderer[274252]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1018 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274252]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274321]: event=authenticating authority=:1.212 pid=274278
+wallpaper-m1-renderer[274321]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1019 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274321]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274362]: event=authenticating authority=:1.218 pid=274347
+wallpaper-m1-renderer[274362]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1020 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274362]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[274413]: event=authenticating authority=:1.224 pid=274398
+wallpaper-m1-renderer[274413]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1021 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274413]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[274471]: event=authenticating authority=:1.230 pid=274449
+wallpaper-m1-renderer[274471]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1022 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274471]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274523]: event=authenticating authority=:1.236 pid=274502
+wallpaper-m1-renderer[274523]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1023 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274523]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274563]: event=authenticating authority=:1.242 pid=274549
+wallpaper-m1-renderer[274563]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1024 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274563]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274630]: event=authenticating authority=:1.248 pid=274605
+wallpaper-m1-renderer[274630]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1025 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274630]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[274680]: event=authenticating authority=:1.254 pid=274666
+wallpaper-m1-renderer[274680]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1026 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274680]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[274748]: event=authenticating authority=:1.260 pid=274717
+wallpaper-m1-renderer[274748]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1027 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274748]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274793]: event=authenticating authority=:1.266 pid=274779
+wallpaper-m1-renderer[274793]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1028 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274793]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274834]: event=authenticating authority=:1.272 pid=274819
+wallpaper-m1-renderer[274834]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1029 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274834]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[274874]: event=authenticating authority=:1.278 pid=274860
+wallpaper-m1-renderer[274874]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1030 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274874]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[274932]: event=authenticating authority=:1.284 pid=274917
+wallpaper-m1-renderer[274932]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1031 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274932]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[274993]: event=authenticating authority=:1.290 pid=274968
+wallpaper-m1-renderer[274993]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1032 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[274993]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[275039]: event=authenticating authority=:1.296 pid=275024
+wallpaper-m1-renderer[275039]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1033 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275039]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[275221]: event=authenticating authority=:1.302 pid=275065
+wallpaper-m1-renderer[275221]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1034 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275221]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[275334]: event=authenticating authority=:1.308 pid=275292
+wallpaper-m1-renderer[275334]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1035 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275334]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[275395]: event=authenticating authority=:1.314 pid=275381
+wallpaper-m1-renderer[275395]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1036 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275395]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[275453]: event=authenticating authority=:1.320 pid=275431
+wallpaper-m1-renderer[275453]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1037 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275453]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[275504]: event=authenticating authority=:1.326 pid=275484
+wallpaper-m1-renderer[275504]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1038 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275504]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[275546]: event=authenticating authority=:1.332 pid=275531
+wallpaper-m1-renderer[275546]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1039 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275546]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[275594]: event=authenticating authority=:1.338 pid=275573
+wallpaper-m1-renderer[275594]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1040 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275594]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[275645]: event=authenticating authority=:1.344 pid=275630
+wallpaper-m1-renderer[275645]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1041 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275645]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[275696]: event=authenticating authority=:1.350 pid=275682
+wallpaper-m1-renderer[275696]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1042 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275696]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[275762]: event=authenticating authority=:1.356 pid=275727
+wallpaper-m1-renderer[275762]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1043 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275762]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[275803]: event=authenticating authority=:1.362 pid=275788
+wallpaper-m1-renderer[275803]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1044 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275803]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[275844]: event=authenticating authority=:1.368 pid=275830
+wallpaper-m1-renderer[275844]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1045 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275844]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[275930]: event=authenticating authority=:1.374 pid=275887
+wallpaper-m1-renderer[275930]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1046 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[275930]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[276468]: event=authenticating authority=:1.380 pid=275968
+wallpaper-m1-renderer[276468]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1047 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[276468]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[276760]: event=authenticating authority=:1.386 pid=276503
+wallpaper-m1-renderer[276760]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1048 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[276760]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[277068]: event=authenticating authority=:1.392 pid=276898
+wallpaper-m1-renderer[277068]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1049 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[277068]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[277290]: event=authenticating authority=:1.398 pid=277131
+wallpaper-m1-renderer[277290]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1050 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[277290]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[277506]: event=authenticating authority=:1.404 pid=277367
+wallpaper-m1-renderer[277506]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1051 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[277506]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[277568]: event=authenticating authority=:1.410 pid=277553
+wallpaper-m1-renderer[277568]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1052 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[277568]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[277741]: event=authenticating authority=:1.416 pid=277609
+wallpaper-m1-renderer[277741]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1053 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[277741]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[277943]: event=authenticating authority=:1.422 pid=277798
+wallpaper-m1-renderer[277943]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1054 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[277943]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[278137]: event=authenticating authority=:1.428 pid=277992
+wallpaper-m1-renderer[278137]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1055 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[278137]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[278350]: event=authenticating authority=:1.434 pid=278207
+wallpaper-m1-renderer[278350]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1056 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[278350]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[278567]: event=authenticating authority=:1.440 pid=278422
+wallpaper-m1-renderer[278567]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1057 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[278567]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[278782]: event=authenticating authority=:1.446 pid=278633
+wallpaper-m1-renderer[278782]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1058 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[278782]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[279015]: event=authenticating authority=:1.452 pid=278854
+wallpaper-m1-renderer[279015]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1059 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[279015]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[279213]: event=authenticating authority=:1.458 pid=279078
+wallpaper-m1-renderer[279213]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1060 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[279213]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[279439]: event=authenticating authority=:1.464 pid=279291
+wallpaper-m1-renderer[279439]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1061 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[279439]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[279663]: event=authenticating authority=:1.470 pid=279514
+wallpaper-m1-renderer[279663]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1062 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[279663]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[279875]: event=authenticating authority=:1.476 pid=279725
+wallpaper-m1-renderer[279875]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1063 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[279875]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[280080]: event=authenticating authority=:1.482 pid=279941
+wallpaper-m1-renderer[280080]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1064 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[280080]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[280273]: event=authenticating authority=:1.488 pid=280139
+wallpaper-m1-renderer[280273]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1065 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[280273]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[280507]: event=authenticating authority=:1.494 pid=280354
+wallpaper-m1-renderer[280507]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1066 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[280507]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[280735]: event=authenticating authority=:1.500 pid=280580
+wallpaper-m1-renderer[280735]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1067 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[280735]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[280951]: event=authenticating authority=:1.506 pid=280797
+wallpaper-m1-renderer[280951]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1068 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[280951]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[281156]: event=authenticating authority=:1.512 pid=281017
+wallpaper-m1-renderer[281156]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1069 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[281156]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[281354]: event=authenticating authority=:1.518 pid=281216
+wallpaper-m1-renderer[281354]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1070 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[281354]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[281574]: event=authenticating authority=:1.524 pid=281433
+wallpaper-m1-renderer[281574]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1071 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[281574]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[281815]: event=authenticating authority=:1.530 pid=281658
+wallpaper-m1-renderer[281815]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1072 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[281815]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[282028]: event=authenticating authority=:1.536 pid=281885
+wallpaper-m1-renderer[282028]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1073 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[282028]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[282241]: event=authenticating authority=:1.542 pid=282085
+wallpaper-m1-renderer[282241]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1074 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[282241]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[282438]: event=authenticating authority=:1.548 pid=282301
+wallpaper-m1-renderer[282438]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1075 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[282438]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[282686]: event=authenticating authority=:1.554 pid=282520
+wallpaper-m1-renderer[282686]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1076 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[282686]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[282913]: event=authenticating authority=:1.560 pid=282771
+wallpaper-m1-renderer[282913]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1077 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[282913]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[283129]: event=authenticating authority=:1.566 pid=282982
+wallpaper-m1-renderer[283129]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1078 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[283129]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[283341]: event=authenticating authority=:1.572 pid=283184
+wallpaper-m1-renderer[283341]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1079 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[283341]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[283546]: event=authenticating authority=:1.578 pid=283397
+wallpaper-m1-renderer[283546]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1080 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[283546]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[283767]: event=authenticating authority=:1.584 pid=283628
+wallpaper-m1-renderer[283767]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1081 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[283767]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[283997]: event=authenticating authority=:1.590 pid=283857
+wallpaper-m1-renderer[283997]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1082 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[283997]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[284240]: event=authenticating authority=:1.596 pid=284065
+wallpaper-m1-renderer[284240]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1083 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[284240]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[284445]: event=authenticating authority=:1.602 pid=284297
+wallpaper-m1-renderer[284445]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1084 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[284445]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[284638]: event=authenticating authority=:1.608 pid=284499
+wallpaper-m1-renderer[284638]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1085 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[284638]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[284858]: event=authenticating authority=:1.614 pid=284721
+wallpaper-m1-renderer[284858]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1086 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[284858]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[285079]: event=authenticating authority=:1.620 pid=284941
+wallpaper-m1-renderer[285079]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1087 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[285079]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[285308]: event=authenticating authority=:1.626 pid=285150
+wallpaper-m1-renderer[285308]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1088 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[285308]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[285514]: event=authenticating authority=:1.632 pid=285366
+wallpaper-m1-renderer[285514]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1089 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[285514]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[285702]: event=authenticating authority=:1.638 pid=285566
+wallpaper-m1-renderer[285702]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1090 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[285702]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[285927]: event=authenticating authority=:1.644 pid=285785
+wallpaper-m1-renderer[285927]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1091 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[285927]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[286143]: event=authenticating authority=:1.650 pid=286009
+wallpaper-m1-renderer[286143]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1092 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[286143]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[286358]: event=authenticating authority=:1.656 pid=286215
+wallpaper-m1-renderer[286358]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1093 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[286358]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[286564]: event=authenticating authority=:1.662 pid=286421
+wallpaper-m1-renderer[286564]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1094 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[286564]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[286762]: event=authenticating authority=:1.668 pid=286619
+wallpaper-m1-renderer[286762]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1095 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[286762]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[286978]: event=authenticating authority=:1.674 pid=286838
+wallpaper-m1-renderer[286978]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1096 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[286978]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[287279]: event=authenticating authority=:1.680 pid=287072
+wallpaper-m1-renderer[287279]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1097 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[287279]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[287511]: event=authenticating authority=:1.686 pid=287357
+wallpaper-m1-renderer[287511]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1098 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[287511]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[287732]: event=authenticating authority=:1.692 pid=287577
+wallpaper-m1-renderer[287732]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1099 media=5e5e5e5e5e5e5e5e canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[287732]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed

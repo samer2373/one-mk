@@ -1,5 +1,17 @@
 # GNOME component implementation checkpoint — NOT a playback qualification
 
+## Step A: authenticated daemon presentation session, laboratory (2026-10-31)
+
+The laboratory daemon (`wallpaper-m1-lab`) now authenticates to the renderer the
+production extension spawns (`m1-lab`, `--present=gnome --m1-lab`) and publishes
+plans the renderer admits through `Gate::accept_encoded`; consent revocation and
+daemon exit/SIGKILL tear the presentation down and end the renderer within
+milliseconds. 100 real-process start/stop cycles passed with zero new warning
+records. The extension and bridge XML are unchanged; the renderer still creates no
+surface or decoder, and production authorization stays false. Steps B–D remain
+open. See [the session design](presentation-wire.md) and
+[evidence and limits](m1-presentation-evidence/README.md).
+
 ## Encoded admission precursor follow-up (2026-10-31)
 
 `f93761a` adds a bounded payload codec and encoded Gate entry point, with ten

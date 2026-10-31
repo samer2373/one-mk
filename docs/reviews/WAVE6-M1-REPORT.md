@@ -1,6 +1,74 @@
 # Wave 6 M1 implementation slices — NOT M1 completion
 
-## Latest slice: encoded-plan precursor — none of A–D reached
+## Latest slice: step A reached in the private laboratory (B–D not)
+
+October 31, 2026 (Asia/Amman). Branch `worktree-agent-a69b251f0c19489d7`, on top
+of the stopped Codex WIP `2145bea` (merged; its Gate change that keeps the admitted
+plan on refusal is kept, its inherited-descriptor bootstrap and daemon-side
+fault file were replaced). Commits `764545d` (I/O-free session core), `f9604af`
+(daemon authority, renderer session, harness), `15a8b31` (artifact gate). **Step A
+of 6D-M1 is done and proven with real processes; M1 is not complete.** The 16–26
+engineer-week remaining estimate is not reduced by this laboratory step.
+
+**Done.** `one_mk_wall_sync::presentation_auth`: a private authority record
+(per-run key, generation, PID, unique bus name), keyed BLAKE3 request/reply tags
+binding both bus names, a fresh nonce and every field, a daemon-side publisher
+(sequence advances only on change; per-monitor slices on the frozen shared canvas)
+and the renderer session that admits plans through `Gate::accept_encoded`, keeps
+the admitted plan on refusal and tears down on forged tags, revoked/replaced
+consent, owner loss, invalid Shell layout/pause or 16 refusals in a row. The daemon
+(feature `wallpaper-m1-lab`, null backend/no discovery/no notify/no clipboard only)
+serves `org.onemk.WallpaperAuthority1.Plan`, follows live `[wallpaper]` consent
+(the real `one-mk wallpaper consent revoke` / `disable` CLI) and signals changes to
+the pinned renderer at once. The renderer (feature `m1-lab`, `--present=gnome
+--m1-lab`) authenticates the Shell bridge first, then the record's authority
+(owner PID/UID checked after subscribing to owner changes) and exits on every
+teardown. Design and threat-model limits: [session design](../spikes/gnome/presentation-wire.md).
+
+**Proven** in the private GNOME 50.1 harness by `qualify-m1-presentation.py`
+([evidence](../spikes/gnome/m1-presentation-evidence/README.md)): (1) absent,
+stale (SIGKILL leftover and replayed), stale-key, wrong-key, wrong-PID and impostor
+authorities refused with nothing admitted; unauthenticated callers refused by the
+daemon; (2) the daemon's plan (media hash, two monitor slices on a 5760-wide canvas
+with a reserved absent third, pause, consent revision) admitted; replayed,
+stale-sequence, stale-revision, 4097-byte, 64 KiB-envelope and malformed plans
+refused with the previous plan intact in the same process; fresh plan required
+after a Shell layout change; a forged mid-session reply ends the renderer;
+(3) consent revoke/disable and daemon `one-mk stop`/SIGTERM/SIGKILL end the
+renderer in at most 86 ms (2 s bound asserted), Shell restarts refuse too, every
+PID reaped, no leftover laboratory process; (4) 100 real-process start/stop cycles
+rotating those five teardowns, zero new warning records against the M1a-2 baseline.
+
+**Not proven / not done.** No surface or decoder exists: admitted/active is intent,
+so there is no media playback, presented-frame, restoration, lock/unlock,
+suspend/resume or hot-plug surface evidence (steps B/C). Production authorization
+stays false (D): both features are off in release builds, plain `--present=gnome`
+refuses and the artifact gate now rejects a daemon linking the authority. The
+production credential bootstrap and packaging are undesigned; "crash" was
+exercised as SIGKILL (no core-dumping signals, to keep the host coredump handler
+out); same-UID readers of the runtime record are outside the threat model. No
+physical GPU/HiDPI, Windows/macOS or multi-computer evidence. No Muro/Aura/Hanabi
+code was consulted or copied.
+
+**Validation.** With `env -i` (PATH, throwaway HOME, mode-0700
+XDG_RUNTIME_DIR, ONE_MK_HOME, toolchain homes, one worktree CARGO_TARGET_DIR),
+`-j 2`, offline: `cargo test --workspace` **1,190 passed, 0 failed, 17 ignored**
+(42 result records including doc tests; +11 `presentation_auth` tests);
+`cargo clippy --workspace --all-targets -- -D warnings` passed, also with
+`--features one-mk-wall/gnome-bridge` and with
+`--features one-mk/wallpaper-m1-lab,one-mk-wall/m1-lab`; `cargo test -p one-mk
+--features wallpaper-m1-lab --bin one-mk wallpaper` 9 passed (3 laboratory
+authority tests); warning-gate Python tests and the artifact checker self-test
+passed; `git diff --check` clean. The private-harness run used the binaries pinned
+in the evidence `source-sha256.txt`.
+
+**Cleanup.** The harness finalizer stopped the private session; the host process
+scan found no laboratory process. Both `/tmp` laboratory directories, the worktree
+build target and the private `.lab` tree were deleted after evidence was copied.
+No owner desktop, X server, clipboard, real session bus or `~/.config/one-mk` was
+touched; no formatter ran.
+
+## Previous slice: encoded-plan precursor — none of A–D reached
 
 October 31, 2026 (Asia/Amman). Implementation commit `f93761a` adds a bounded
 presentation payload codec and `Gate::accept_encoded`. **The requested real
