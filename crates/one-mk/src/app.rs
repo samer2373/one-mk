@@ -2131,6 +2131,7 @@ impl App {
     /// is newer than its own.
     fn send_layout(&self, fp: Fingerprint) {
         if let (Some(p), Some(d)) = (self.peers.get(&fp), self.trust.get(&fp)) {
+            if d.placed_by == one_mk_net::PlacedBy::Pending { return; }
             #[cfg(test)]
             tests::layouts_sent_by(&self.dir).fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             p.ctl.send(Control::Layout { side_of_you: d.side().opposite(), version: d.layout_version, offset: d.offset, clear_offset: d.offset.is_none() });
@@ -2156,7 +2157,10 @@ impl App {
     fn on_peer_layout(&mut self, fp: Fingerprint, side_of_you: Side, version: u64, offset: Option<(i32, i32)>, clear_offset: bool) {
         self.reload_trust();
         let our_fp = self.node.identity().fingerprint;
+        let occupied: Vec<_> = self.trust.devices().iter().filter(|device| device.fingerprint() != Some(fp) && device.placed_by != one_mk_net::PlacedBy::Pending)
+            .map(|device| device.side()).collect();
         let Some(dev) = self.trust.get_mut(&fp) else { return };
+        if dev.placed_by == one_mk_net::PlacedBy::Pending && version <= crate::pairing_layout::AUTOMATIC_VERSION_LIMIT + 1 { return; }
         let offset = match offset {
             Some((x, y)) => Some((x.saturating_neg(), y.saturating_neg())),
             None if clear_offset => None,
@@ -2166,8 +2170,23 @@ impl App {
         };
         let same = (dev.side(), dev.offset) == (side_of_you, offset);
         let verdict = resolve_layout(dev.layout_version, version, same, &our_fp, &fp);
+        let mut resend = verdict == LayoutVerdict::Win;
         match verdict {
             LayoutVerdict::Keep => return,
+            LayoutVerdict::Adopt if dev.placed_by == one_mk_net::PlacedBy::Pairing
+                && version <= crate::pairing_layout::AUTOMATIC_VERSION_LIMIT + 1 && occupied.contains(&side_of_you) => {
+                match one_mk_proto::pairing_layout::next_side(occupied.into_iter().chain([dev.side()])) {
+                    Some(side) if version < crate::pairing_layout::AUTOMATIC_VERSION_LIMIT => {
+                        dev.side = side.to_string();
+                        dev.layout_version = version + 1;
+                        resend = true;
+                    }
+                    _ => {
+                        dev.placed_by = one_mk_net::PlacedBy::Pending;
+                        dev.layout_version = crate::pairing_layout::AUTOMATIC_VERSION_LIMIT;
+                    }
+                }
+            }
             LayoutVerdict::Adopt => {
                 dev.side = side_of_you.to_string();
                 dev.offset = offset;
@@ -2182,7 +2201,7 @@ impl App {
         if let Err(e) = self.trust.save() {
             tracing::warn!("could not save the new layout: {e:#}");
         }
-        if verdict == LayoutVerdict::Win {
+        if resend {
             self.send_layout(fp);
         }
         self.sync_sides();
@@ -2553,7 +2572,8 @@ impl App {
             SwitchTo::Here => self.switch_here(),
             SwitchTo::Next => {
                 let mut online: Vec<_> =
-                    self.peers.iter().filter(|(_, p)| p.desktop.is_some()).map(|(fp, p)| (p.name.clone(), *fp)).collect();
+                    self.peers.iter().filter(|(fp, p)| p.desktop.is_some() && self.trust.get(fp).is_none_or(|device| device.placed_by != one_mk_net::PlacedBy::Pending))
+                        .map(|(fp, p)| (p.name.clone(), *fp)).collect();
                 online.sort();
                 let order: Vec<Fingerprint> = online.into_iter().map(|(_, fp)| fp).collect();
                 let current = self.switching.map(|(fp, _)| fp).or(self.remote.as_ref().map(|r| r.peer));
@@ -2607,6 +2627,9 @@ impl App {
     }
 
     fn switch_to(&mut self, fp: Fingerprint) -> String {
+        if let Some(device) = self.trust.get(&fp).filter(|device| device.placed_by == one_mk_net::PlacedBy::Pending) {
+            return format!("error {}\n", crate::pairing_layout::warning(&device.name));
+        }
         let (name, side) = (self.peers[&fp].name.clone(), self.peers[&fp].side);
         let p = &self.peers[&fp];
         if let (Some(local), Some(desktop)) = (&self.local, &p.desktop)
@@ -2772,7 +2795,8 @@ impl App {
     /// the choice doesn't depend on connection order.
     fn update_sides(&mut self) {
         let mut edges: Vec<(Edge, Fingerprint)> = Vec::new();
-        let mut conflicts = Vec::new();
+        let mut conflicts: Vec<_> = self.trust.devices().iter().filter(|device| device.placed_by == one_mk_net::PlacedBy::Pending)
+            .map(|device| crate::pairing_layout::warning(&device.name)).collect();
         // A switch or broadcast about to start (or a broadcast on) needs
         // its edge armed (see below).
         let switching = self.switching.map(|(fp, _)| fp).or(self.broadcast_edge());
@@ -2780,6 +2804,7 @@ impl App {
             let mut here: Vec<_> = self.peers.iter().filter_map(|(fp, p)| Some((*fp, p, p.desktop.as_ref()?))).collect();
             here.sort_by_key(|(fp, ..)| *fp);
             for (fp, p, desktop) in here {
+                if self.trust.get(&fp).is_some_and(|device| device.placed_by == one_mk_net::PlacedBy::Pending) { continue; }
                 let side = p.side;
                 let whole = || local.outer_edges(side).map(|r| Edge::of(side, r)).collect::<Vec<_>>();
                 let mut mine: Vec<Edge> = match p.offset {

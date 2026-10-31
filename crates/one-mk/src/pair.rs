@@ -17,8 +17,7 @@
 //! Names are sanitized and never contain tabs or newlines.
 
 use anyhow::{Context, Result, bail};
-use one_mk_net::{Device, Discovery, Fingerprint, Identity, Node, Pairing, Peer, TrustStore};
-use one_mk_proto::Side;
+use one_mk_net::{Discovery, Fingerprint, Identity, Node, Pairing, Peer, TrustStore};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::net::SocketAddr;
@@ -231,23 +230,29 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
         return Ok(());
     }
 
-    // Opposite defaults on each side, so the layout agrees out of the box.
-    let side = if peer.initiator { Side::Right } else { Side::Left };
+    *trust = TrustStore::load(dir)?;
     let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), peer_port.unwrap_or(one_mk_proto::DEFAULT_PORT));
-    trust.upsert(Device { name: name.clone(), fingerprint: fingerprint.to_string(), side: side.to_string(), addrs: vec![addr.to_string()], ..Device::default() });
+    let placement = crate::pairing_layout::remember(trust, fingerprint, &name, addr, peer.initiator);
+    let side = placement.side();
     trust.save()?;
     let _ = crate::control::request(dir, crate::control::Request::Reload).await?;
+    if placement.placed_by == one_mk_net::PlacedBy::Pending {
+        out.say(|| crate::pairing_layout::warning(&name), || format!("placement-needed\t{fingerprint}\t{}", crate::pairing_layout::warning(&name)));
+    }
     let side = trust.get(&fingerprint).map_or(side, |d| d.side());
     out.say(
         || {
+            if placement.placed_by == one_mk_net::PlacedBy::Pending {
+                return format!("\nPaired with {name}. Choose its placement before sharing through a screen edge.\nStart sharing: one-mk run (only on computers not already running)");
+            }
             format!(
-                "\nPaired with {name}. It is set to the {side} of this computer.\n\
+                "\nPaired with {name}. Its provisional side is {side}; running computers reconcile the mirrored layout.\n\
                  If that's wrong:  one-mk layout \"{name}\" {}\n\
                  Start sharing:    one-mk run   (only on computers not already running)",
                 side.opposite()
             )
         },
-        || format!("paired\t{fingerprint}\t{name}\t{side}"),
+        || format!("paired\t{fingerprint}\t{name}\t{}", if placement.placed_by == one_mk_net::PlacedBy::Pending { "unplaced".to_owned() } else { side.to_string() }),
     );
     Ok(())
 }

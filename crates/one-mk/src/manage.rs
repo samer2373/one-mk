@@ -39,6 +39,9 @@ pub async fn status(dir: &Path) -> Result<()> {
         None => {
             println!("one-mk is not running.");
             println!("Start it with `one-mk run`, or make it start when you log in with `one-mk install`.");
+            for device in TrustStore::load(dir)?.devices().iter().filter(|device| device.placed_by == PlacedBy::Pending) {
+                println!("{}", crate::pairing_layout::warning(&device.name));
+            }
         }
     }
     let settings = crate::settings::Settings::load(dir)?;

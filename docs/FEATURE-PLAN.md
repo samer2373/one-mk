@@ -281,6 +281,12 @@ ported to it. Kept for history.
 | 3G | "Send to <computer>" file-manager entries | 1B | Nautilus, Dolphin, Explorer, Finder. `one-mk install`/`integrate` write them, pair/forget refresh them, `uninstall` removes them; `send --notify-errors` reports failures. **Verified here:** unit tests of every generated file and of quoting with hostile file and computer names, a real `sh` run of the generated script against a stub `one-mk` with odd file names, a real `integrate`/`forget`/`--remove` cycle in a scratch `$HOME`, failure notification through a stub `notify-send`. **Compiled only:** Windows `.cmd`, macOS Quick Action (plist parses; not seen in Finder). | done (Linux verified) |
 | 3H | Pairing without sitting at both screens (QR or link) | none | `t3/implement-pair-invite-flow`: `invite`/`join`, single-use expiring link + ANSI QR, certificate pinning and transcript/TLS-bound HMAC, default A-side approval, private control hook. See [PAIRING-INVITE.md](PAIRING-INVITE.md). Linux loopback/null validated; Windows/macOS compile-only. | done |
 
+Wave 5 QA M9: numeric/window pairing and invitations now share free-side
+selection, mirrored versioned layout reconciliation, re-pair placement
+preservation and explicit pending placement when no edge is available.
+See [Pairing placement](PAIRING-LAYOUT.md) for compatibility and regression
+coverage.
+
 ## Wave 4: input tuning and key mapper (added 2026-10-29, from LinearMouse)
 
 LinearMouse (macOS) offers per-device/app/display profiles, pointer speed and

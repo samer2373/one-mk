@@ -44,6 +44,7 @@ mod manage;
 mod netwatch;
 mod notify;
 mod pair;
+mod pairing_layout;
 mod pointeroverlay;
 mod power;
 mod profiles;
@@ -705,7 +706,8 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
     }
     for d in trust.devices() {
         let name = one_mk_proto::sanitize_name(&d.name);
-        let side = d.offset.map_or_else(|| d.side.clone(), |(x, y)| format!("{} at {x},{y}", d.side));
+        let side = if d.placed_by == one_mk_net::PlacedBy::Pending { "placement needed".into() }
+            else { d.offset.map_or_else(|| d.side.clone(), |(x, y)| format!("{} at {x},{y}", d.side)) };
         if verbose {
             println!("{name:<24} {:<9}  {:<6}  {}", d.short_id(), side, d.addrs.join(", "));
         } else {

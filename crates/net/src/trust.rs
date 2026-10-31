@@ -91,6 +91,8 @@ pub enum PlacedBy {
     /// The guessed or learned place has been used: the pointer crossed to
     /// the device through that edge.
     Confirmed,
+    Pairing,
+    Pending,
 }
 
 impl PlacedBy {
@@ -105,6 +107,8 @@ impl<'de> Deserialize<'de> for PlacedBy {
             "user" => PlacedBy::User,
             "learned" => PlacedBy::Learned,
             "confirmed" => PlacedBy::Confirmed,
+            "pairing" => PlacedBy::Pairing,
+            "pending" => PlacedBy::Pending,
             _ => PlacedBy::Default,
         })
     }
@@ -130,8 +134,8 @@ impl Device {
         self.offset.is_none()
             && match self.placed_by {
                 PlacedBy::Default => self.layout_version == 0,
-                PlacedBy::Learned => true,
-                PlacedBy::User | PlacedBy::Confirmed => false,
+                PlacedBy::Learned | PlacedBy::Pairing => true,
+                PlacedBy::User | PlacedBy::Confirmed | PlacedBy::Pending => false,
             }
     }
 }
@@ -233,6 +237,17 @@ impl TrustStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_and_pending_placements_round_trip_without_becoming_user_choices() {
+        for origin in [PlacedBy::Pairing, PlacedBy::Pending] {
+            let device = Device { placed_by: origin, layout_version: 16, ..Device::default() };
+            let saved = toml::to_string(&device).unwrap();
+            let restored: Device = toml::from_str(&saved).unwrap();
+            assert_eq!(restored.placed_by, origin);
+            assert_eq!(restored.learnable(), origin == PlacedBy::Pairing);
+        }
+    }
 
     #[cfg(unix)]
     #[test]

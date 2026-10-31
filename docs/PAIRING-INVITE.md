@@ -10,6 +10,12 @@ credential is exposed in process arguments (including `/proc/.../cmdline`
 where readable) and possibly shell history. Prefer stdin and a private,
 authenticated transfer channel.
 
+New pairings choose an unused screen edge without moving existing
+computers; running daemons agree on opposite sides using normal layout
+sync. If all four sides are occupied, trust still succeeds and `status`
+asks you to choose a non-overlapping placement. Re-pairing keeps the
+existing placement. See [Pairing placement](PAIRING-LAYOUT.md).
+
 After mutual proofs, B prints:
 
 ```text
