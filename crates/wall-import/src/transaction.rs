@@ -13,6 +13,7 @@ pub struct ImportOptions<'a> {
     pub source: &'a Path,
     pub output: &'a Path,
     pub runtime: &'a Path,
+    pub cgroup_root: Option<&'a Path>,
     pub cancel: &'a AtomicBool,
     pub timeout: std::time::Duration,
 }
@@ -55,7 +56,7 @@ pub fn import(options: ImportOptions<'_>) -> Result<ImportRecord, String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     if options.cancel.load(Ordering::Relaxed) { return Err("import cancelled".into()); }
     let runtime = sandbox::validate_runtime(options.runtime).map_err(|error| format!("sandbox unavailable: refusing to import: {error}"))?;
-    let available = sandbox::doctor(Some(&runtime));
+    let available = sandbox::doctor(Some(&runtime), options.cgroup_root);
     if !available.available { return Err(available.reason); }
     if options.cancel.load(Ordering::Relaxed) { return Err("import cancelled".into()); }
     let output = open_path(options.output, true)?;
@@ -92,7 +93,7 @@ pub fn import(options: ImportOptions<'_>) -> Result<ImportRecord, String> {
     snapshot.sync_all().map_err(|error| error.to_string())?;
     drop(snapshot);
     let source_blake3 = hash.finalize().to_hex().to_string();
-    let response = sandbox::run(&runtime, Some(&staging.path().join("source")), "--worker", options.cancel, options.timeout)?;
+    let response = sandbox::run(&runtime, options.cgroup_root, Some(&staging.path().join("source")), "--worker", options.cancel, options.timeout)?;
     let decoded: Decoded = serde_json::from_slice(&response).map_err(|error| format!("invalid worker record: {error}"))?;
     validate_decoded(&decoded)?;
     let verified = hash_file(&staging.path().join("source"))?;

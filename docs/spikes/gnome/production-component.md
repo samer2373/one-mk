@@ -5,6 +5,20 @@ October 31, 2026, Asia/Amman. Branch `t3/production-gnome-wallpaper`, based on
 request, not completion of 6D-M1. The spike's successful lifecycle measurements
 are not inherited as production acceptance.
 
+## M1 resource slice follow-up (2026-10-31)
+
+The importer now requires an explicit private cgroup v2 delegation, sets and
+reads back 1 GiB memory / zero swap / 64-task ceilings, attaches the launcher
+before exec, and kills/removes its child group on normal teardown. Missing
+delegation refuses rather than using the former rlimit-only fallback. The
+host's cgroup mount is read-only: live controller/pressure tests remain unproven.
+This does **not** implement daemon presentation-plan IPC, enable authorization,
+connect imported media to the renderer, or establish lifecycle acceptance.
+No Mutter session or owner desktop was started/touched for this resource slice;
+there is no new warning-baseline comparison or playback claim. See
+[done/proven/not-proven report](../../reviews/WAVE6-M1-REPORT.md) and
+[import boundary](../../WALLPAPER-IMPORT.md).
+
 ## Delivered surface
 
 - Independent MIT OR Apache-2.0 extension source:

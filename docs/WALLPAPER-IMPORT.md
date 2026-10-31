@@ -48,6 +48,8 @@ Unshare/setns, namespace clone flags (including NEWTIME), and alternate x32
 entry are blocked; clone3 returns ENOSYS. Bubblewrap also disables nested user
 namespaces and asserts that restriction. Memfd creation and SysV shmget/shmat
 are denied, so anonymous shmem cannot bypass the scratch-file ceiling.
+Explicit MAP_HUGETLB mappings are also denied and checked by doctor, rather
+than relying on optional hugetlb accounting in a particular kernel/mount.
 Only anonymous AF_UNIX socketpairs remain for
 GStreamer internal wakeups; no external endpoint can be opened.
 
@@ -74,13 +76,42 @@ failure produces `sandbox unavailable: refusing to import`. A Linux platform
 without this bubblewrap configuration is unavailable, even if another sandbox
 technology might be installed.
 
-**Memory fallback is explicitly weaker than the design.** No delegated cgroup
-memory/pids controller is implemented. Doctor reports `NO aggregate cgroup
-memory/pids ceiling`, even when available. The development fallback is a
-per-process 1 GiB virtual-address rlimit plus bounded private storage, finite
-CPU/wall time and descendant teardown. It is not a 1 GiB aggregate resident or
-kernel-memory limit, nor a thread-count limit. Do not ship this fallback as
-the design's cgroup guarantee. The bounded scratch pressure test verifies
+**Resource slice (2026-10-31): no weaker memory fallback.** Both doctor and import
+now require an explicit `--cgroup-root` on Linux. An administrator/lab supervisor
+must separately provide an empty delegated cgroup v2 domain with `memory` and
+`pids` already enabled in `cgroup.subtree_control`. The importer never enables
+controllers, moves the parent, calls a service manager, or discovers/mutates the
+owner's session hierarchy. A missing/read-only/invalid delegation refuses before
+worker spawn. Each worker gets a fresh child cgroup with read-back-verified
+`memory.max=1073741824`, `memory.swap.max=0`, `memory.oom.group=1`, `pids.max=64`.
+The launcher writes `0` to its pinned `cgroup.procs` descriptor in pre-exec,
+before bubblewrap or any untrusted runtime loader runs. All descendant processes
+and threads inherit the group; the sandbox cannot see the cgroup filesystem.
+The existing per-process rlimits remain additional limits, not the aggregate cap.
+
+Root path components and controls are opened without following symlinks, and
+the root must be on cgroup v2 with trusted ownership/modes. A nonblocking root
+directory flock serializes workers sharing that delegation, including imports
+with different output directories; separate delegations are not a machine-wide
+queue. The explicit root is a trusted administrator input, not media metadata.
+This is a ceiling on cgroup-charged memory, not an assertion that parent snapshot
+page cache, inherited/shared charges or GPU allocations are included.
+
+After success, cancellation, timeout or worker failure, `cgroup.kill` tears down
+the entire group before pipe joins, and bounded `cgroup.events` polling waits for
+empty membership before removing it. Cleanup failure refuses the import. Pipe
+readers are nonblocking and stop after teardown even if a leaked descendant
+holds a writer open. A parent SIGKILL still relies on the existing bubblewrap
+parent-death/PID-namespace contract and can leave an empty cgroup; there is no
+automatic stale-cgroup deletion or authorization to kill a pre-existing group.
+
+**Not a kernel-pressure qualification:** this implementation environment mounts
+cgroup v2 read-only. Controller write/readback, real OOM/task pressure, concurrent
+native worker teardown, and parent-SIGKILL cleanup have not been demonstrated
+with this new path. The explicit-delegation kernel integration test is ignored
+unless deliberately selected in a private laboratory. Do not ship based on the
+unit tests alone. See [slice report](reviews/WAVE6-M1-REPORT.md).
+The bounded scratch pressure test verifies
 mount/rlimit caps first, then writes at most 16 MiB plus one 64 KiB attempt;
 it never attempts to fill host memory. Device writes do not allocate storage;
 read-only mounts and shmem API denial are checked separately.
@@ -108,6 +139,7 @@ decoder PTS normalization is **not implemented**.
 | Uncompressed poster | opaque black alpha flattening, at most 320 × 180 RGB PPM |
 | Metadata | at most 256 KiB before passing to decoders |
 | Per-process virtual memory | RLIMIT_AS 1 GiB, inherited by decoder |
+| Aggregate worker memory / tasks | mandatory cgroup v2: 1 GiB charged memory, zero swap, 64 tasks (threads included); native pressure acceptance pending |
 | Per-process CPU / wall time | 120 CPU seconds / 600 wall seconds (doctor: 5 seconds) |
 | File / descriptors / cores | 512 MiB per file, 64 descriptors, no core dumps |
 | Worker result / stderr | 1 MiB / 16 KiB; overflow tears down worker |
@@ -142,8 +174,8 @@ already happened; never blindly retry as though nothing persisted.
 ## CLI contract
 
 ```text
-one-mk wallpaper import FILE --runtime AUDITED_ROOT --output PRIVATE_DIR [--json]
-one-mk wallpaper doctor [--runtime AUDITED_ROOT] [--json]
+one-mk wallpaper import FILE --runtime AUDITED_ROOT --output PRIVATE_DIR --cgroup-root DELEGATED_DIR [--json]
+one-mk wallpaper doctor [--runtime AUDITED_ROOT] [--cgroup-root DELEGATED_DIR] [--json]
 ```
 
 Runtime paths must be absolute, canonical and nonsymlink. No URL imports or
@@ -211,6 +243,13 @@ publishes the helper/runtime nor claims a complete shipping SBOM without
 `deny.toml` includes advisories, compatible Rust licences, bans and source gates.
 
 ## Reproduction and evidence
+
+The following retained lab commands/results predate the mandatory cgroup slice.
+Current doctor/import/storage-check commands additionally need `--cgroup-root`
+pointing to an explicitly provisioned private delegation. The native binary test
+helper adds that option from `ONE_MK_WALL_TEST_CGROUP_ROOT`. Neither a historical
+successful import nor an unconfigured conditional-test `ok` qualifies the new
+resource boundary; see [current validation](reviews/WAVE6-M1-REPORT.md).
 
 Use a cleared environment with explicit Cargo/rustup homes; `cargo ... -j 2`;
 never run cargo fmt. Generated media/tools belong under ignored
@@ -309,7 +348,12 @@ No Mutter/GNOME presentation harness or owner-session access was used.
   duplicate miniz_oxide versions and unused licence allowances. CI pins this
   version and uses the verified global `--config` argument before `check`.
 
-### Per-finding disposition and hostile self-review
+### Historical per-finding disposition and hostile self-review
+
+The resource slice above supersedes item 1's unimplemented-controller/fallback
+statement; its native acceptance remains outstanding. Old reproduction commands
+below require `--cgroup-root` with the current helper; the native binary tests
+add it from explicit `ONE_MK_WALL_TEST_CGROUP_ROOT` laboratory configuration.
 
 1. **Fixed with documented fallback:** read-only 64 KiB `/dev`, read-only shm,
    explicit 16 MiB scratch, doctor and real capped ENOSPC regression. Hostile
@@ -352,11 +396,12 @@ No Mutter/GNOME presentation harness or owner-session access was used.
 
 ## Deliberately unmet exit criteria
 
-- **M1b is not complete or shippable.** Linux RLIMIT_AS is a per-process virtual
-  limit, not the design's aggregate ≤1 GiB resident/cgroup ceiling. Decoder
-  threads and scratch/kernel allocations are not an aggregate-memory proof.
-  Cross-directory imports are not globally serialized. Add delegated cgroup
-  memory/pids enforcement and adversarial native measurement before shipping.
+- **M1b is not complete or shippable.** Mandatory delegated cgroup memory/pids
+  setup is implemented, but native controller/pressure/teardown qualification
+  is not proven. Cross-directory workers sharing a root are serialized, not
+  workers in independently supplied delegations. Adversarial native measurement,
+  stale-group recovery after parent death, and administrator provisioning remain
+  release gates. RLIMIT_AS alone is never advertised as aggregate containment.
 - No normalized ≤30 fps VP9/AV1 cache or presentation-ready timeline is emitted.
   The retained source is validated but still untrusted; future playback must
   rehash and isolate decoding, never treat this record as a trust bypass.

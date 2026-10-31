@@ -1,12 +1,13 @@
 Optional finite wallpaper importer (never starts playback)
-Usage: one-mk wallpaper import FILE --output PRIVATE_DIR --runtime AUDITED_ROOT [--json]
-       one-mk wallpaper doctor [--runtime AUDITED_ROOT] [--json]
+Usage: one-mk wallpaper import FILE --output PRIVATE_DIR --runtime AUDITED_ROOT --cgroup-root DELEGATED_DIR [--json]
+       one-mk wallpaper doctor [--runtime AUDITED_ROOT] [--cgroup-root DELEGATED_DIR] [--json]
 
 Arguments:
   FILE           Source video or animated image
 Options:
   --output DIR   Existing private directory for the validated source and poster
   --runtime DIR  Absolute path to an audited sandbox runtime
+  --cgroup-root DIR  Explicit private cgroup v2 delegation with memory/pids enabled (Linux)
   --json         Print machine-readable JSON
   --help         Show this help without importing anything
 

@@ -17,12 +17,12 @@ pub struct RuntimeManifest {
 #[derive(Debug, Serialize)]
 pub struct Availability { pub available: bool, pub reason: String }
 
-pub fn doctor(runtime: Option<&Path>) -> Availability {
+pub fn doctor(runtime: Option<&Path>, cgroup_root: Option<&Path>) -> Availability {
     let result = runtime.ok_or_else(|| "no audited runtime selected (--runtime DIR)".to_string())
         .and_then(validate_runtime)
-        .and_then(|root| run(&root, None, "--sandbox-check", &std::sync::atomic::AtomicBool::new(false), std::time::Duration::from_secs(5)).map(|_| ()));
+        .and_then(|root| run(&root, cgroup_root, None, "--sandbox-check", &std::sync::atomic::AtomicBool::new(false), std::time::Duration::from_secs(5)).map(|_| ()));
     match result {
-        Ok(()) => Availability { available: true, reason: "bubblewrap namespaces, external seccomp, read-only bounded /dev, 16 MiB scratch and per-process rlimits passed; NO aggregate cgroup memory/pids ceiling; native hardware unqualified".into() },
+        Ok(()) => Availability { available: true, reason: "bubblewrap namespaces, external seccomp, read-only bounded /dev, 16 MiB scratch, per-process rlimits and mandatory cgroup v2 1 GiB memory / zero swap / 64 tasks configured; native hardware and pressure qualification still required".into() },
         Err(reason) => Availability { available: false, reason: format!("sandbox unavailable: refusing to import: {reason}") },
     }
 }
@@ -155,6 +155,9 @@ fn external_filter() -> Result<std::fs::File, String> {
         filter.push(instruction(0x06, 0, 0, 0x00050000 | libc::EPERM as u32));
     }
     filter.extend([
+        instruction(0x15, 0, 4, libc::SYS_mmap as u32), instruction(0x20, 0, 0, 40),
+        instruction(0x45, 0, 1, libc::MAP_HUGETLB as u32), instruction(0x06, 0, 0, 0x00050000 | libc::EPERM as u32),
+        instruction(0x20, 0, 0, 0),
         instruction(0x15, 0, 1, libc::SYS_clone3 as u32), instruction(0x06, 0, 0, 0x00050000 | libc::ENOSYS as u32),
         instruction(0x15, 0, 3, libc::SYS_clone as u32), instruction(0x20, 0, 0, 16),
         instruction(0x45, 0, 1, 0x7e020080), instruction(0x06, 0, 0, 0x00050000 | libc::EPERM as u32),
@@ -195,6 +198,9 @@ pub fn check_worker() -> Result<(), String> {
     let memory = unsafe { libc::shmget(libc::IPC_PRIVATE, 4096, libc::IPC_CREAT | 0o600) };
     if memory >= 0 { unsafe { libc::shmctl(memory, libc::IPC_RMID, std::ptr::null_mut()); } return Err("SysV shmem bypasses scratch ceiling".into()); }
     if std::io::Error::last_os_error().raw_os_error() != Some(libc::EPERM) { return Err("SysV shmem denial unverified".into()); }
+    let huge = unsafe { libc::mmap(std::ptr::null_mut(), 4096, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_HUGETLB, -1, 0) };
+    if huge != libc::MAP_FAILED { unsafe { libc::munmap(huge, 4096); } return Err("explicit huge pages bypass the memory controller".into()); }
+    if std::io::Error::last_os_error().raw_os_error() != Some(libc::EPERM) { return Err("huge-page denial unverified".into()); }
     if unsafe { libc::unshare(libc::CLONE_NEWUSER) } == 0 { return Err("nested user namespace allowed".into()); }
     for path in ["/dev", "/dev/shm", "/proc"] {
         if std::fs::write(format!("{path}/wall-import-write-check"), b"denied").is_ok() { return Err(format!("writable sandbox mount: {path}")); }
@@ -232,8 +238,8 @@ pub fn check_storage_pressure() -> Result<(), String> {
 }
 
 #[cfg(all(target_os = "linux", feature = "test-faults"))]
-pub fn storage_check(root: &Path) -> Result<(), String> {
-    run(root, None, "--sandbox-storage-check", &std::sync::atomic::AtomicBool::new(false), std::time::Duration::from_secs(10)).map(|_| ())
+pub fn storage_check(root: &Path, cgroup_root: Option<&Path>) -> Result<(), String> {
+    run(root, cgroup_root, None, "--sandbox-storage-check", &std::sync::atomic::AtomicBool::new(false), std::time::Duration::from_secs(10)).map(|_| ())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -263,12 +269,43 @@ pub fn deny_subprocesses() -> Result<(), String> {
 pub fn deny_subprocesses() -> Result<(), String> { worker_restrictions() }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn run(root: &Path, input: Option<&Path>, operation: &str, cancel: &std::sync::atomic::AtomicBool, timeout: std::time::Duration) -> Result<Vec<u8>, String> {
-    use std::io::Read;
+fn read_pipe(mut pipe: impl std::io::Read + std::os::fd::AsRawFd, limit: usize, overflow: &std::sync::atomic::AtomicBool, stopped: &std::sync::atomic::AtomicBool) -> std::io::Result<Vec<u8>> {
+    use std::sync::atomic::Ordering;
+    let result = (|| {
+        let descriptor = pipe.as_raw_fd();
+        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+        if flags < 0 || unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 { return Err(std::io::Error::last_os_error()); }
+        let mut bytes = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            let available = buffer.len().min(limit + 1 - bytes.len());
+            match pipe.read(&mut buffer[..available]) {
+                Ok(0) => return Ok(bytes),
+                Ok(count) => {
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if bytes.len() > limit { overflow.store(true, Ordering::Relaxed); return Ok(bytes); }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if stopped.load(Ordering::Relaxed) { return Ok(bytes); }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })();
+    if result.is_err() { overflow.store(true, Ordering::Relaxed); }
+    result
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn run(root: &Path, cgroup_root: Option<&Path>, input: Option<&Path>, operation: &str, cancel: &std::sync::atomic::AtomicBool, timeout: std::time::Duration) -> Result<Vec<u8>, String> {
     use std::os::unix::process::CommandExt;
     use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
     use std::process::{Command, Stdio};
     use std::os::fd::AsRawFd;
+    let mut group = crate::cgroup::Group::create(cgroup_root).map_err(|error| format!("sandbox unavailable: refusing to import: {error}"))?;
+    let membership_fd = group.membership_fd();
     let directory = pin_runtime(root)?;
     validate_contents(Path::new(&format!("/proc/self/fd/{}", directory.as_raw_fd())))?;
     let filter = external_filter()?;
@@ -299,6 +336,7 @@ pub(crate) fn run(root: &Path, input: Option<&Path>, operation: &str, cancel: &s
     unsafe {
         command.pre_exec(move || {
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 || libc::getppid() != parent_pid { return Err(std::io::Error::other("import parent died")); }
+            crate::cgroup::attach(membership_fd)?;
             for descriptor in [directory_fd, filter_fd] {
                 if libc::fcntl(descriptor, libc::F_SETFD, 0) < 0 { return Err(std::io::Error::last_os_error()); }
             }
@@ -312,21 +350,14 @@ pub(crate) fn run(root: &Path, input: Option<&Path>, operation: &str, cancel: &s
     let mut child = command.spawn().map_err(|error| format!("bubblewrap: {error}"))?;
     let output = child.stdout.take().ok_or("worker stdout missing")?;
     let overflow = Arc::new(AtomicBool::new(false));
+    let stopped = Arc::new(AtomicBool::new(false));
     let observed = Arc::clone(&overflow);
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = output.take(crate::MAX_RESPONSE + 1).read_to_end(&mut bytes);
-        if bytes.len() as u64 > crate::MAX_RESPONSE { observed.store(true, Ordering::Relaxed); }
-        result.map(|_| bytes)
-    });
+    let reader_stopped = Arc::clone(&stopped);
+    let reader = std::thread::spawn(move || read_pipe(output, crate::MAX_RESPONSE as usize, &observed, &reader_stopped));
     let stderr = child.stderr.take().ok_or("worker stderr missing")?;
     let observed = Arc::clone(&overflow);
-    let error_reader = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = stderr.take(16 * 1024 + 1).read_to_end(&mut bytes);
-        if bytes.len() > 16 * 1024 { observed.store(true, Ordering::Relaxed); }
-        result.map(|_| bytes)
-    });
+    let reader_stopped = Arc::clone(&stopped);
+    let error_reader = std::thread::spawn(move || read_pipe(stderr, 16 * 1024, &observed, &reader_stopped));
     let started = std::time::Instant::now();
     let result = loop {
         if cancel.load(Ordering::Relaxed) || started.elapsed() >= timeout || overflow.load(Ordering::Relaxed) {
@@ -340,8 +371,12 @@ pub(crate) fn run(root: &Path, input: Option<&Path>, operation: &str, cancel: &s
             Err(error) => { let _ = child.kill(); let _ = child.wait(); break Err(error.to_string()); }
         }
     };
+    let cleanup = group.finish();
+    stopped.store(true, Ordering::Relaxed);
     let bytes = reader.join().map_err(|_| "worker pipe reader failed")?.map_err(|error| error.to_string())?;
     let stderr = error_reader.join().map_err(|_| "worker error reader failed")?.map_err(|error| error.to_string())?;
+    cleanup?;
+    if overflow.load(Ordering::Relaxed) { return Err("worker output or stderr exceeded limit, or pipe read failed".into()); }
     if let Err(error) = result {
         if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes)
             && let Some(message) = value.get("error").and_then(|value| value.as_str()) {
@@ -355,7 +390,7 @@ pub(crate) fn run(root: &Path, input: Option<&Path>, operation: &str, cancel: &s
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn run(_root: &Path, _input: Option<&Path>, _operation: &str, _cancel: &std::sync::atomic::AtomicBool, _timeout: std::time::Duration) -> Result<Vec<u8>, String> {
+pub(crate) fn run(_root: &Path, _cgroup_root: Option<&Path>, _input: Option<&Path>, _operation: &str, _cancel: &std::sync::atomic::AtomicBool, _timeout: std::time::Duration) -> Result<Vec<u8>, String> {
     worker_restrictions()?;
     unreachable!()
 }
@@ -364,6 +399,69 @@ pub(crate) fn run(_root: &Path, _input: Option<&Path>, _operation: &str, _cancel
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn external_filter_denies_hugetlb_without_denying_normal_mappings() {
+        use std::io::Read;
+        let mut filter = Vec::new();
+        external_filter().unwrap().read_to_end(&mut filter).unwrap();
+        for (flags, expected) in [(libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, 0x7fff0000), (libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_HUGETLB, 0x00050000 | libc::EPERM as u32)] {
+            let mut data = [0u8; 64];
+            data[..4].copy_from_slice(&(libc::SYS_mmap as u32).to_ne_bytes());
+            let architecture: u32 = if cfg!(target_arch = "x86_64") { 0xc000003e } else { 0xc00000b7 };
+            data[4..8].copy_from_slice(&architecture.to_ne_bytes());
+            data[40..44].copy_from_slice(&(flags as u32).to_ne_bytes());
+            let mut accumulator = 0;
+            let mut position = 0;
+            let result = loop {
+                let entry = &filter[position * 8..position * 8 + 8];
+                let value = u32::from_ne_bytes(entry[4..8].try_into().unwrap());
+                match u16::from_ne_bytes(entry[..2].try_into().unwrap()) {
+                    0x20 => accumulator = u32::from_ne_bytes(data[value as usize..value as usize + 4].try_into().unwrap()),
+                    0x06 => break value,
+                    code => {
+                        let condition = match code { 0x15 => accumulator == value, 0x35 => accumulator >= value, 0x45 => accumulator & value != 0, _ => panic!("unsupported filter instruction") };
+                        position += usize::from(if condition { entry[2] } else { entry[3] });
+                    }
+                }
+                position += 1;
+            };
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn worker_pipes_are_bounded_even_when_a_descendant_holds_them_open() {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"bounded").unwrap();
+        let overflow = AtomicBool::new(false);
+        let stopped = AtomicBool::new(true);
+        assert_eq!(read_pipe(reader, 8, &overflow, &stopped).unwrap(), b"bounded");
+        assert!(!overflow.load(Ordering::Relaxed));
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"oversized").unwrap();
+        assert_eq!(read_pipe(reader, 3, &overflow, &stopped).unwrap(), b"over");
+        assert!(overflow.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn pipe_io_failure_stops_the_supervisor() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let overflow = AtomicBool::new(false);
+        let stopped = AtomicBool::new(false);
+        let file = std::fs::OpenOptions::new().write(true).open("/dev/null").unwrap();
+        assert!(read_pipe(file, 8, &overflow, &stopped).is_err());
+        assert!(overflow.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn missing_cgroup_is_refused_before_runtime_or_spawn() {
+        let result = run(Path::new("/no-runtime"), None, None, "--sandbox-check", &std::sync::atomic::AtomicBool::new(false), std::time::Duration::ZERO);
+        assert!(result.unwrap_err().contains("--cgroup-root"));
+    }
 
     fn runtime(extra: &str) -> tempfile::TempDir {
         use std::os::unix::fs::PermissionsExt;
