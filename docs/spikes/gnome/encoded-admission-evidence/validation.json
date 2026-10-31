@@ -1,0 +1,50 @@
+{
+  "implementation_commit": "f93761a",
+  "stage_a_reached": false,
+  "stage_b_attempted": false,
+  "stage_c_attempted": false,
+  "production_authorization": false,
+  "real_playback_cycles": 0,
+  "workspace": {
+    "passed": 1179,
+    "failed": 0,
+    "ignored": 17,
+    "result_records": 41
+  },
+  "clippy_default": "passed",
+  "clippy_gnome_bridge": "passed",
+  "warning_gate_tests": 6,
+  "harness": {
+    "checks": [
+      "CLI install/status/uninstall in private XDG data; never auto-enabled",
+      "default dormant, no renderer or authorization",
+      "unspawned caller refused before Hello",
+      "Rust Hello/snapshot, layout serials, unicast isolation, pause masks, state/type/version/rate negatives",
+      "100 authenticated paused-fixture start/stop + GC cycles; each PID reaped, no background setting changes; NOT playback/restoration",
+      "bus-name squatting refused, no renderer start",
+      "actual 1/2/4-second failed-spawn cap, no remaining timer/child, doctor-visible restart limit",
+      "exact-version guard refuses lab Shell when absent from qualified list (separate expected-error log)"
+    ],
+    "production_playback_qualified": false,
+    "shell": "GNOME Shell 50.1",
+    "authenticated_child_cycles": 100,
+    "new_warnings": [],
+    "passed": true
+  },
+  "fixture_environment_retries": [
+    "restricted sockets: Operation not permitted",
+    "approved with group-writable fixture ancestors: security checks refuse",
+    "private but long TMPDIR: one long-named Unix socket fixture fails",
+    "short private TMPDIR: full workspace passed"
+  ],
+  "long_socket_paths": [
+    {
+      "path": "/tmp/one-mk-wire-t3-fc70d846.4vl3FA/tmp/one-mk-test-mouse-mode-cancel-autoscroll-reload-b-118607/control.sock",
+      "bytes": 109
+    },
+    {
+      "path": "/tmp/one-mk-wire-t3-fc70d846.4vl3FA/tmp/one-mk-test-mouse-mode-cancel-autoscroll-reload-a-118607/control.sock",
+      "bytes": 109
+    }
+  ]
+}

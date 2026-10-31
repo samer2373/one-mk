@@ -1,5 +1,16 @@
 # GNOME component implementation checkpoint — NOT a playback qualification
 
+## Encoded admission precursor follow-up (2026-10-31)
+
+`f93761a` adds a bounded payload codec and encoded Gate entry point, with ten
+additional unit tests. This is **not daemon IPC**: no production process calls
+the new entry point, no new Shell bridge method is added, and authorization stays
+false. Requested stage A is not reached; B/C are not attempted and D is not enabled.
+The rerun of the private GNOME 50.1 regression again passes 100 paused-fixture
+cycles with zero new baseline warning records, not real playback qualification.
+See the [wire boundary](presentation-wire.md) and
+[exact evidence/limitations](encoded-admission-evidence/README.md).
+
 ## Admission precursor and private child stress follow-up (2026-10-31)
 
 An I/O-free presentation admission state machine now exists, with eleven

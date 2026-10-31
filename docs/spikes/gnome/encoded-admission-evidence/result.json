@@ -1,0 +1,17 @@
+{
+  "checks": [
+    "CLI install/status/uninstall in private XDG data; never auto-enabled",
+    "default dormant, no renderer or authorization",
+    "unspawned caller refused before Hello",
+    "Rust Hello/snapshot, layout serials, unicast isolation, pause masks, state/type/version/rate negatives",
+    "100 authenticated paused-fixture start/stop + GC cycles; each PID reaped, no background setting changes; NOT playback/restoration",
+    "bus-name squatting refused, no renderer start",
+    "actual 1/2/4-second failed-spawn cap, no remaining timer/child, doctor-visible restart limit",
+    "exact-version guard refuses lab Shell when absent from qualified list (separate expected-error log)"
+  ],
+  "production_playback_qualified": false,
+  "shell": "GNOME Shell 50.1",
+  "authenticated_child_cycles": 100,
+  "new_warnings": [],
+  "passed": true
+}

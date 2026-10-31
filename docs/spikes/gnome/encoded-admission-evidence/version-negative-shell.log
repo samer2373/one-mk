@@ -1,0 +1,350 @@
+/home/samer/.t3/worktrees/one-mk/t3-fc70d846/docs/spikes/gnome/client/fake_gdm.py:15: DeprecationWarning: Gio.DBusConnection.register_object is deprecated
+  bus.register_object("/org/gnome/DisplayManager/Manager", info, call, prop, None)
+libmutter-Message: 16:30:10.371: Running GNOME Shell (using mutter 50.1) as a Wayland display server
+
+(gnome-shell:129605): libmutter-WARNING **: 16:30:10.372: Unknown experimental feature 'scale-monitor-framebuffer'
+
+(gnome-shell:129605): libmutter-WARNING **: 16:30:10.372: Unknown experimental feature 'xwayland-native-scaling'
+libmutter-Message: 16:30:10.569: Added device '/dev/dri/renderD129' (nvidia-drm) using no mode setting.
+libmutter-Message: 16:30:10.585: Added device '/dev/dri/renderD128' (i915) using no mode setting.
+libmutter-Message: 16:30:10.586: Created gbm renderer for '/dev/dri/renderD129'
+libmutter-Message: 16:30:10.587: Created gbm renderer for '/dev/dri/renderD128'
+libmutter-Message: 16:30:10.587: Boot VGA GPU /dev/dri/renderD128 selected as primary
+** Message: 16:30:10.589: Obtained a high priority EGL context
+libmutter-Message: 16:30:10.603: Added virtual monitor Meta-0
+libmutter-Message: 16:30:10.603: Added virtual monitor Meta-1
+libmutter-Message: 16:30:10.608: Using Wayland display name 'spike-wl-0'
+
+(gnome-shell:129605): libmutter-WARNING **: 16:30:10.643: There is no colord server available
+GNOME Shell-Message: 16:30:10.865: Unset XDG_SESSION_ID, getCurrentSessionProxy() called outside a user session. Asking logind directly.
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.Shell.Screencast' requested by ':1.0' (uid=1000 pid=129605 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.freedesktop.impl.portal.PermissionStore' requested by ':1.0' (uid=1000 pid=129605 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.Shell.CalendarServer' requested by ':1.0' (uid=1000 pid=129605 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.PermissionStore'
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.evolution.dataserver.Sources5' requested by ':1.2' (uid=1000 pid=129650 comm="/usr/libexec/gnome-shell-calendar-server" label="t3code (unconfined)")
+GNOME Shell-Message: 16:30:10.938: Registering session with GDM
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.Shell.Notifications' requested by ':1.0' (uid=1000 pid=129605 comm="gnome-shell --wayland --headless --no-x11 --waylan" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.OnlineAccounts' requested by ':1.3' (uid=1000 pid=129661 comm="/usr/libexec/evolution-source-registry" label="t3code (unconfined)")
+GNOME Shell-Message: 16:30:10.947: Error registering session with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, “()”, does not match expected type “(a{sv})”
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.Sources5'
+
+(gnome-shell:129605): GNOME Shell-WARNING **: 16:30:10.955: Failed to inhibit suspend: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.evolution.dataserver.Calendar8' requested by ':1.2' (uid=1000 pid=129650 comm="/usr/libexec/gnome-shell-calendar-server" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.Shell.CalendarServer'
+goa-daemon-Message: 16:30:10.962: goa-daemon version 3.58.0 starting
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.Identity' requested by ':1.4' (uid=1000 pid=129670 comm="/usr/libexec/goa-daemon" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.OnlineAccounts'
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.Identity'
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.Shell.Notifications'
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.Calendar8'
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.evolution.dataserver.AddressBook10' requested by ':1.7' (uid=1000 pid=129689 comm="/usr/libexec/evolution-calendar-factory" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.evolution.dataserver.AddressBook10'
+
+(gnome-shell:129605): GNOME Shell-CRITICAL **: 16:30:11.006: Could not get a proxy for user 1000: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.login1 was not provided by any .service files
+
+Stack trace:
+  asyncCallback@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:115:23
+  @resource:///org/gnome/shell/ui/init.js:20:20
+
+GNOME Shell-Message: 16:30:11.007: Will monitor session null
+
+(gnome-shell:129605): GNOME Shell-CRITICAL **: 16:30:11.007: Could not get proxy for session null: Error: Argument string may not be null
+
+Stack trace:
+  _packVariant@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:82:29
+  _packVariant@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:135:27
+  _init/this.Variant._new_internal@resource:///org/gnome/gjs/modules/core/overrides/GLib.js:298:35
+  _proxyInvoker@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:103:23
+  _makeProxyMethod/<@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:148:30
+  @resource:///org/gnome/gjs/modules/core/overrides/Gio.js:202:30
+  @resource:///org/gnome/gjs/modules/core/overrides/Gio.js:193:20
+  getCurrentSessionProxy@resource:///org/gnome/shell/misc/loginManager.js:160:52
+  async*_getLoginSession@resource:///org/gnome/shell/ui/screenShield.js:164:55
+  ScreenShield@resource:///org/gnome/shell/ui/screenShield.js:114:14
+  _initializeUI@resource:///org/gnome/shell/ui/main.js:253:24
+  start@resource:///org/gnome/shell/ui/main.js:197:11
+  @resource:///org/gnome/shell/ui/init.js:12:47
+  @resource:///org/gnome/shell/ui/init.js:20:20
+
+
+(gnome-shell:129605): GNOME Shell-WARNING **: 16:30:11.007: Failed to start state machine: can't access property "connectObject", this._loginUser is null
+
+(gnome-shell:129605): Gjs-WARNING **: 16:30:11.007: Unhandled promise rejection. To suppress this warning, add an error handler to your promise chain with .catch() or a try-catch block around your await expression. Stack trace of the failed promise:
+_getLoginSession@resource:///org/gnome/shell/ui/screenShield.js:163:27
+ScreenShield@resource:///org/gnome/shell/ui/screenShield.js:114:14
+_initializeUI@resource:///org/gnome/shell/ui/main.js:253:24
+start@resource:///org/gnome/shell/ui/main.js:197:11
+@resource:///org/gnome/shell/ui/init.js:12:47
+@resource:///org/gnome/shell/ui/init.js:20:20
+
+GNOME Shell-Message: 16:30:11.019: Error looking up permission: GDBus.Error:org.freedesktop.portal.Error.NotFound: No entry for geolocation
+GNOME Shell-Message: 16:30:11.026: Failed to register AuthenticationAgent
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.freedesktop.portal.IBus' requested by ':1.9' (uid=1000 pid=129681 comm="ibus-daemon --panel disable" label="t3code (unconfined)")
+** Message: 16:30:11.086: Failed to start camera monitor
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.freedesktop.portal.IBus'
+GNOME Shell-Message: 16:30:11.113: No permission to control network connections: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files
+GNOME Shell-Message: 16:30:11.113: Failed to get PolKit permission: Gio.DBusError: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.PolicyKit1 was not provided by any .service files
+GNOME Shell-Message: 16:30:11.114: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.GeoClue2 was not provided by any .service files
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.14' (uid=1000 pid=129761 comm="/usr/libexec/ibus-extension-gtk3" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.freedesktop.portal.Documents' requested by ':1.15' (uid=1000 pid=130030 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.freedesktop.portal.Documents'
+fusermount3: mount failed: Operation not permitted
+error: fuse init failed: Can't mount path /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/gnome-component-qa/session/run/doc
+
+(/usr/libexec/xdg-desktop-portal:130030): xdg-desktop-portal-WARNING **: 16:30:11.195: Document portal fuse mount point unknown: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name :1.16 was not provided by any .service files
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gnome' requested by ':1.15' (uid=1000 pid=130030 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+
+(gnome-shell:129605): accountsservice-WARNING **: 16:30:11.216: ActUserManager: user (null) has no username (uid: -1)
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.Settings.GlobalShortcutsProvider' requested by ':1.17' (uid=1000 pid=130045 comm="/usr/libexec/xdg-desktop-portal-gnome" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.Settings.GlobalShortcutsProvider'
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gnome'
+
+(/usr/libexec/xdg-desktop-portal:130030): xdg-desktop-portal-WARNING **: 16:30:11.386: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:130030): xdg-desktop-portal-WARNING **: 16:30:11.387: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:130030): xdg-desktop-portal-WARNING **: 16:30:11.387: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.15' (uid=1000 pid=130030 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'
+
+(/usr/libexec/xdg-desktop-portal:130030): xdg-desktop-portal-WARNING **: 16:30:11.425: Failed to connect to PipeWire: Couldn't connect to PipeWire
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.freedesktop.secrets' requested by ':1.15' (uid=1000 pid=130030 comm="/usr/libexec/xdg-desktop-portal" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.freedesktop.portal.Desktop'
+** Message: 16:30:11.439: couldn't access control socket: /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/gnome-component-qa/session/run/keyring/control: No such file or directory
+discover_other_daemon: 0dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.freedesktop.secrets'
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.Shell.Screencast'
+GNOME Shell-Message: 16:30:12.204: GNOME Shell started at Sat Oct 31 2026 16:30:10 GMT+0300 (GMT+03:00)
+GNOME Shell-Message: 16:30:12.205: Registering display with GDM
+GNOME Shell-Message: 16:30:12.207: Error registering display with GDM: GDBus.Error:org.freedesktop.DBus.Error.InvalidArgs: Type of message, “()”, does not match expected type “(a{ss})”
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.25' (uid=1000 pid=130086 comm="gdbus call --session -d org.gnome.Shell.Extensions" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'
+GNOME Shell-Message: 16:30:13.014: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+production bridge awaiting layout
+production bridge awaiting reasons
+production bridge conformance: authenticated Hello, exact signatures, bounds, state, negatives PASS
+GNOME Shell-Message: 16:30:15.073: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:15.098: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:15.599: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:15.984: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:16.474: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:16.832: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:17.317: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:17.692: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:18.170: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:18.523: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:19.004: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:19.352: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:19.835: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:20.192: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:20.682: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:21.036: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:21.518: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:21.868: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:22.347: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:22.699: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:23.178: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:23.521: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:24.003: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:24.353: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:24.832: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:25.185: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:25.671: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:26.018: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:26.500: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:26.857: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:27.336: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:27.689: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:28.170: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:28.518: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:29.024: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:29.388: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:29.864: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:30.217: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:30.701: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:31.053: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:31.535: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:31.892: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:32.370: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:32.718: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:33.190: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:33.545: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:34.030: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:34.390: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:34.899: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:35.249: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:35.729: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:36.080: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:36.560: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:36.913: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:37.391: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:37.746: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:38.230: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:38.581: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:39.053: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:39.403: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:39.883: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:40.237: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:40.721: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:41.083: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:41.565: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:41.914: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:42.395: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:42.751: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:43.245: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:43.590: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:44.076: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:44.435: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:44.919: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:45.279: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:45.760: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:46.109: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:46.588: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:46.948: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:47.433: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:47.787: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:48.268: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:48.617: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:49.101: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:49.458: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:49.940: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:50.300: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:50.787: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:51.140: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:51.626: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:51.988: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:52.471: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:52.829: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:53.311: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:53.656: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:54.139: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:54.493: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:54.973: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:55.328: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:55.800: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:56.155: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:56.640: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:56.985: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:57.467: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:57.815: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:58.291: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:58.643: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:59.126: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:30:59.479: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:30:59.962: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:00.328: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:00.814: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:01.158: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:01.640: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:01.994: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:02.476: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:02.830: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:03.325: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:03.684: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:04.163: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:04.514: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:04.996: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:05.351: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:05.832: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:06.185: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:06.665: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:07.020: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:07.503: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:07.863: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:08.346: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:08.696: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:09.179: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:09.530: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:10.012: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:10.364: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:10.849: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:11.204: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:11.693: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:12.043: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:12.525: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:12.876: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:13.363: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:13.709: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:14.193: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:14.545: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:15.035: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:15.389: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:15.873: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:16.236: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:16.710: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:17.062: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:17.553: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:17.909: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:18.394: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:18.747: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:19.227: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:19.577: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:20.060: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:20.414: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:20.898: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:21.247: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:21.731: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:22.087: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:22.574: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:22.930: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:23.420: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:23.787: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:24.265: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:24.623: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:25.097: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:25.452: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:25.935: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:26.287: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:26.775: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:27.130: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:27.622: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:27.974: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:28.457: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:28.811: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:29.293: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:29.635: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:30.119: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:30.474: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:30.956: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:31.312: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:31.803: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:32.156: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:32.639: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:32.995: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:33.482: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:33.833: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:34.308: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:34.657: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:35.138: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:35.490: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:35.973: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:36.327: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:36.813: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:37.167: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:37.649: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:38.003: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:38.483: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:38.898: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:38.929: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:39.054: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:39.073: one-mk wallpaper: bridge name unavailable; static wallpaper
+GNOME Shell-Message: 16:31:39.360: one-mk wallpaper: extension disabled; static wallpaper
+GNOME Shell-Message: 16:31:39.396: one-mk wallpaper: owner-authenticated daemon presentation plan unavailable; static wallpaper
+GNOME Shell-Message: 16:31:45.499: one-mk wallpaper: restart limit reached; disable then explicitly retry in a new session
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Activating service name='org.gnome.Shell.Extensions' requested by ':1.1489' (uid=1000 pid=141769 comm="gdbus call --session -d org.gnome.Shell.Extensions" label="t3code (unconfined)")
+dbus-daemon[129593]: [session uid=1000 pid=129593 pidfd=5] Successfully activated service 'org.gnome.Shell.Extensions'
+GNOME Shell-Message: 16:31:45.761: one-mk wallpaper: restart limit reached; static wallpaper
+GNOME Shell-Message: 16:31:45.888: one-mk wallpaper: unqualified GNOME Shell 50.1; static wallpaper
+
+(gnome-shell:129605): GNOME Shell-CRITICAL **: 16:31:45.905: Extension one-mk-wallpaper@one-mk.org: Error: unqualified GNOME Shell 50.1; static wallpaper
+
+Stack trace:
+  enable@file:///home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/gnome-component-qa/session/data/gnome-shell/extensions/one-mk-wallpaper@one-mk.org/extension.js:487:19
+  _callExtensionEnable@resource:///org/gnome/shell/ui/extensionSystem.js:266:38
+  _onEnabledExtensionsChanged@resource:///org/gnome/shell/ui/extensionSystem.js:598:24
+  _loadExtensions/<@resource:///org/gnome/shell/ui/extensionSystem.js:694:18
+  createCheckedMethod/<@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:808:46
+  enableExtension@resource:///org/gnome/shell/ui/extensionSystem.js:289:29
+  EnableExtension@resource:///org/gnome/shell/ui/shellDBus.js:474:38
+  _handleMethodCall@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:379:29
+  _wrapJSObject/<@resource:///org/gnome/gjs/modules/core/overrides/Gio.js:448:34
+  @resource:///org/gnome/shell/ui/init.js:20:20

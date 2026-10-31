@@ -1,6 +1,56 @@
 # Wave 6 M1 implementation slices — NOT M1 completion
 
-## Latest slice: presentation admission precursor, not playback
+## Latest slice: encoded-plan precursor — none of A–D reached
+
+October 31, 2026 (Asia/Amman). Implementation commit `f93761a` adds a bounded
+presentation payload codec and `Gate::accept_encoded`. **The requested real
+daemon → renderer integration is not delivered.** This is another preparatory
+change, not completion of stage A or 6D-M1. The 16–26 engineer-week remaining
+estimate is unchanged.
+
+**Done:** an independently versioned, canonical ≤4096-byte payload carries the
+existing plan without credentials or paths. Counts, UTF-8 screen lengths, flags,
+reserved bytes, truncation and trailing data are checked before bounded allocation.
+Encoded admission clears existing intent, checks pinned caller identity and
+independent live consent, then applies the original semantic Gate. Invalid input
+cannot reset the replay floor; changed/removed consent remains terminal. Reserved
+canvas space is preserved. Ten additional tests cover these cases, deterministic
+arbitrary-byte inputs and every single-byte mutation of a valid plan. The exact
+[wire contract and integration boundary](../spikes/gnome/presentation-wire.md)
+make clear that structurally decoded data is not authorization.
+
+**Not done / stop boundary:** no production daemon, bridge or renderer calls the
+new API. The existing bridge XML has deliberately not been extended with media
+selection or paths. Trusted real-daemon authority bootstrap, independently sourced
+live consent snapshots/subscriptions, real plan publication, renderer teardown
+on daemon loss/revocation and actual process-exit wiring remain unimplemented.
+Consequently **A is not reached; B and C were not attempted; D stays false**.
+There is no real imported-media playback, presented-frame evidence, 100-cycle
+real-playback gate, restoration or native lifecycle acceptance in this slice.
+No Muro/Aura/Hanabi code was copied. Production authorization stays false.
+
+**Validation:** clean-env `cargo test --offline -j 2 --workspace` passed:
+**1,179 passed, 0 failed, 17 ignored**, 41 result records including doc tests.
+Clean-env `cargo clippy --offline -j 2 --workspace --all-targets -- -D warnings`
+passed, as did the `one-mk-wall/gnome-bridge` feature variant. The warning gate's
+six Python tests passed. No formatter ran. The first restricted workspace run
+failed on socket creation; the approved retries exposed group-writable ancestor
+guards and an overlong Unix socket fixture path. A fresh short mode-0700 `/tmp`
+root resolved those fixture-environment failures without changing unrelated code.
+All attempts are distinguished in the retained validation evidence.
+
+Private bridge regression and final cleanup results are recorded in
+[encoded-admission evidence](../spikes/gnome/encoded-admission-evidence/README.md).
+The approved isolated GNOME 50.1 run passed 100 authenticated paused-fixture
+cycles, every exact child PID/handle reaped, unchanged private background URI,
+and zero new baseline warnings. This is **not** the requested real-playback gate.
+The private session/copied extensions, single worktree target and both exact
+`/tmp` scratch roots were removed and absence checked after evidence retention.
+The host marker scan found zero matching test/lab processes; four unreadable
+same-user service environments had process start times predating this run and
+were not touched. The working desktop/session bus/config were never accessed.
+
+## Previous slice: presentation admission precursor, not playback
 
 October 31, 2026 (Asia/Amman), workspace 0.1.15 plus the cgroup importer slice.
 Implementation commit `6299fd1` adds the I/O-free admission core. The requested

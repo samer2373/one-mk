@@ -1,0 +1,12 @@
+{
+  "removed_target": "/home/samer/.t3/worktrees/one-mk/t3-fc70d846/target",
+  "removed_scratch": [
+    "/tmp/one-mk-wire-t3-fc70d846.4vl3FA",
+    "/tmp/wp.PWzRGy"
+  ],
+  "target_absent": true,
+  "scratch_absent": [
+    true,
+    true
+  ]
+}

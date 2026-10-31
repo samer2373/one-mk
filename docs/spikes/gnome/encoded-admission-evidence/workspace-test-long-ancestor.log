@@ -1,0 +1,1276 @@
+   Compiling one-mk-wall-sync v0.1.15 (/home/samer/.t3/worktrees/one-mk/t3-fc70d846/crates/wall)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
+     Running unittests src/main.rs (target/debug/deps/one_mk-c1f819c852082b7e)
+
+running 416 tests
+test app::broadcast::tests::a_pointer_never_ends_up_between_monitors ... ok
+test app::broadcast::tests::each_pointer_moves_relatively_and_is_clamped_to_its_own_screens ... ok
+test app::shortcuts::tests::system_shortcuts_wait_while_controlled ... ok
+test app::broadcast::tests::words ... ok
+test app::shortcuts::tests::fetch_binding_does_not_steal_application_chord_when_disabled ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+test app::tests::a_controlled_computer_ignores_its_own_shortcuts ... FAILED
+test app::tests::a_modifier_released_here_no_longer_crosses ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::a_computer_forgotten_during_its_handshake_is_not_let_in ... FAILED
+test app::tests::clearing_offset_converges_from_either_daemon ... FAILED
+test app::tests::click_at_the_edge_is_whole_whatever_follows ... FAILED
+test app::tests::click_at_the_edge_leaves_no_button_held ... FAILED
+test app::tests::coalesces_queued_motion ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::connections_being_set_up_are_limited ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your right).
+Broadcasting to 2 computers. Everything you type, click and scroll goes to bee and sea. Ctrl+Alt+B stops it.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Broadcasting to 2 computers. Everything you type, click and scroll goes to bee and sea. Ctrl+Alt+B stops it.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Broadcast stopped: you stopped it.
+test app::tests::control_stream_survives_motion_flood ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus disconnected; reconnecting automatically.
+test app::tests::corners_and_fullscreen_refuse ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus disconnected; reconnecting automatically.
+test app::tests::ctrl_and_cmd_swap_consistently ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::broadcast::broadcast_types_clicks_and_scrolls_on_every_computer ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus's display went to sleep; putting this one to sleep too (sleep sync).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::clipboard_follows_the_pointer ... ok
+test app::tests::fetch_shortcut_tracks_peer_permission_without_restart ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+Connected to raw (above).
+Connected to raw (above).
+raw is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+raw is now below.
+test app::tests::dwell_holds_the_pointer_at_the_edge ... ok
+test app::tests::focus_is_watched_only_for_gaming_auto ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus disconnected; reconnecting automatically.
+samer-Victus disconnected; reconnecting automatically.
+test app::tests::forgetting_a_computer_disconnects_it ... ok
+test app::tests::gaming_auto_ends_when_the_peer_goes_quiet ... FAILED
+test app::tests::gaming_auto_follows_the_peers_fullscreen_window ... FAILED
+test app::tests::gaming_auto_hears_the_front_window_change ... FAILED
+test app::tests::gaming_auto_notices_alt_tab ... FAILED
+test app::tests::gaming_auto_rechecks_without_input ... FAILED
+test app::tests::gaming_auto_unknown_focus_and_switching_it_off ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::gaming_mode_sends_relative_motion ... ok
+test app::tests::handing_back_at_the_edge_leaves_no_key_held ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::displays_sleep_together_without_echo ... ok
+test app::tests::input_forwarding_during_maximum_history_save ... ignored, 256 MiB on-disk save and real loopback input-forwarding measurement
+test app::tests::input_problems_show_in_status ... FAILED
+test app::tests::keyboard_shortcuts_switch_without_leaving_keys_held ... FAILED
+test app::tests::keys_that_may_move_the_focus ... ok
+test app::tests::late_click_does_not_rewind_the_pointer ... ok
+test app::tests::layout::crossing_between_multi_monitor_desktops ... FAILED
+test app::tests::layout::dwell_at_an_inner_edge ... FAILED
+test app::tests::layout::equal_version_clear_and_offset_converge_from_either_side ... FAILED
+test app::tests::layout::input_caught_at_a_wall_is_typed_here ... FAILED
+test app::tests::layout::layout_from_a_peer_without_offset ... FAILED
+Broadcast stopped: no input for 0 minutes.
+Broadcasting to 2 computers. Everything you type, click and scroll goes to bee and sea. Ctrl+Alt+B stops it.
+Broadcast stopped: Ctrl+Alt+Shift+Esc.
+Broadcasting to 2 computers. Everything you type, click and scroll goes to bee and sea. Ctrl+Alt+B stops it.
+Broadcast stopped: this computer's screen locked.
+samer-Victus disconnected; reconnecting automatically.
+samer-Victus disconnected; reconnecting automatically.
+test app::tests::broadcast::idle_emergency_and_lock_end_it_without_stuck_keys ... ok
+test app::tests::layout::offset_change_converges_as_a_mirror_image ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::broadcast::idle_let_go_enters_again_with_the_next_input ... FAILED
+test app::tests::broadcast::a_capture_that_never_starts_gives_up ... FAILED
+test app::tests::broadcast::an_unplugged_keyboard_is_let_go_of_by_every_computer_of_a_broadcast ... FAILED
+test app::tests::broadcast::a_computer_that_drops_out_lets_go_and_the_rest_carry_on ... FAILED
+test app::tests::broadcast::characters_resolve_independently_on_each_broadcast_receiver ... FAILED
+test app::tests::broadcast::random_presses_drops_and_returns_never_leave_a_key_held ... FAILED
+test app::tests::broadcast::swap_and_key_rules_apply_per_computer ... FAILED
+test app::tests::broadcast::broadcast_does_not_intercept_mouse_mode_buttons_even_after_reload ... FAILED
+test app::tests::broadcast::a_key_action_runs_once_for_all_computers ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::broadcast::taking_control_back_is_never_undone_by_the_next_input ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::layout::tie_with_an_old_peer_converges_either_way ... FAILED
+test app::tests::layout::profile_switches_with_the_network ... FAILED
+test app::tests::layout::two_neighbours_share_one_edge ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::lock_all_says_when_this_computer_can_t_lock ... FAILED
+test app::tests::lock_sync_off_obeys_only_lock_all ... FAILED
+test app::tests::lock_pointer_disarms_edges ... FAILED
+test app::tests::modifier_to_cross ... FAILED
+test app::tests::normal_and_resolved_key_paths_never_release_each_others_shift ... ok
+test app::tests::modifiers_released_after_a_switch_are_forgotten ... FAILED
+test app::tests::newer_layout_wins_on_connect ... FAILED
+test app::tests::null_character_visit_preserves_german_text_and_shortcuts ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::offset_syncs_mirrored ... FAILED
+test app::tests::pending_limits_and_release ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::only_real_input_counts_against_idle ... ok
+test app::tests::push::a_real_neighbour_edge_is_never_replaced_by_a_wrap_edge ... FAILED
+test app::tests::push::auto_only_suggests_above_and_below ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::push::auto_places_it_and_the_mirror_syncs ... FAILED
+test app::tests::push::guards_lock_and_control_apply_to_wrap ... FAILED
+test app::tests::push::no_wrap_where_an_offline_computer_sits ... FAILED
+test app::tests::push::placing_the_suggested_computer_ends_the_suggestion ... FAILED
+test app::tests::push::pushing_twice_suggests_the_computer_online ... FAILED
+test app::tests::push::wrap_comes_in_at_the_opposite_edge_and_keeps_input_here ... FAILED
+test app::tests::relative_only_for_peers_that_support_it ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to samer-Victus (on your right).
+test app::tests::layout::offset_crossing_maps_and_walls ... FAILED
+Connected to samer-Victus (on your left).
+samer-Victus is now below, its (0,0) at 50,1080 of yours.
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+test app::tests::sleep_sync_waits_while_a_visit_is_on ... FAILED
+samer-Victus is now above, its (0,0) at 35,-1080 of yours.
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your right).
+samer-Victus is now below, its (0,0) at -35,1080 of yours.
+Connected to samer-Victus (on your right).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test app::tests::status_carries_the_round_trip_of_connected_peers_only ... FAILED
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is now on your left.
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+samer-Victus is now on your right.
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+Connected to raw (above).
+samer-Victus is now above.
+samer-Victus is now below.
+raw is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+test app::tests::media_keys_cross_and_are_never_left_held ... ok
+test app::tests::swaps_only_between_a_mac_and_something_else ... ok
+test app::tests::offset_translates_the_pointer ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::switch_here_takes_back_and_unanswered_switch_gives_up ... FAILED
+test app::tests::takeback_command_takes_control_back ... FAILED
+test app::tests::layout_change_converges ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::tuning::a_reload_mid_hold_keeps_the_pairing ... FAILED
+Received album/empty from samer-Victus (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-test-send-b-115240/downloads/album/empty).
+Received album/a.txt from samer-Victus (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-test-send-b-115240/downloads/album/a.txt).
+Received album/sub/deeper/c.txt from samer-Victus (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-test-send-b-115240/downloads/album/sub/deeper/c.txt).
+test app::tests::tuning::a_tap_hold_key_held_long_enough_holds ... FAILED
+test app::tests::tuning::a_visit_ending_mid_hold_releases_what_was_sent ... FAILED
+test app::tests::tuning::autoscroll_moves_scroll_not_pointer_and_stops_on_escape ... FAILED
+test app::tests::tuning::buttons_are_remapped_and_keys_can_switch ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::tuning::escape_cancels_gesture_without_escaping_remote_and_next_escape_passes ... FAILED
+test app::tests::tuning::escape_held_before_gesture_still_releases_remote_escape ... FAILED
+Received album/sub/b.bin from samer-Victus (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-test-send-b-115240/downloads/album/sub/b.bin).
+test app::tests::tuning::gestures_replay_short_click_fire_once_and_cancel_on_visit_end ... FAILED
+test app::tests::pointer_crosses_and_returns ... ok
+test app::tests::tuning::mouse_modes_cancel_on_relevant_reload_and_display_sleep ... FAILED
+test app::tests::broadcast::broadcast_starts_and_stops_every_way ... FAILED
+test app::tests::tuning::per_app_rules_follow_a_switch_made_with_enter ... FAILED
+test app::tests::tuning::per_app_rules_follow_a_switch_with_no_input ... FAILED
+test app::tests::tuning::per_device_rules_follow_the_keyboard_they_come_from ... FAILED
+test app::tests::tuning::pointer_speed_scales_the_remote_motion ... FAILED
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test app::tests::tuning::per_app_rules_follow_the_peers_focused_app ... FAILED
+test app::tests::tuning::remapped_keys_reach_the_peer ... FAILED
+test app::tests::tuning::reserving_a_held_remapped_button_on_reload_still_releases_its_output ... FAILED
+test app::tests::tuning::the_focused_app_goes_only_to_a_controller_that_asks ... FAILED
+test app::tests::typing::character_resolution_uses_mapper_output_before_control_meta_swap ... FAILED
+test app::tests::tuning::scrolling_is_tuned_and_the_modifier_is_lifted ... FAILED
+test app::tests::typing::enabled_backend_still_requires_peer_text_negotiation ... FAILED
+test app::tests::typing::enabled_path_refuses_non_owner_spoofed_keys_invalid_text_and_over_budget ... FAILED
+test app::tests::typing::national_levels_and_layout_change_mid_hold ... FAILED
+test app::tests::typing::processes::enabled_connected_idle_sample ... ignored, manual CPU measurement; coarse process accounting includes existing QUIC keepalives
+test app::tests::typing::processes::fixture_daemon ... ignored, subprocess fixture; launched only by the isolated lifecycle test
+test app::tests::typing::physical_emergency_chord_precedes_mapping_in_character_visit ... FAILED
+test app::tests::typing::missing_text_capability_and_equal_layouts_keep_physical_keys ... FAILED
+test app::tests::typing::receiver_budget_never_blocks_matching_release_or_accepts_shortcut_text ... ok
+test app::tests::typing::receiver_remembers_resolved_code_across_layout_change_and_disconnect ... FAILED
+test app::tests::unnegotiated_character_messages_never_inject_or_release_physical_keys ... FAILED
+test app::tune::tests::autoscroll_deadline_exists_only_during_the_mode ... ok
+Connected to samer-Victus (on your right).
+test app::tune::tests::broadcast_mouse_modes_have_no_deadline_or_interception ... ok
+test app::tune::tests::local_snapshot_requires_opt_in_and_valid_physical_shortcuts ... ok
+Connected to samer-Victus (on your left).
+test app::tune::tests::relevant_changes_cancel_only_the_changed_mouse_mode ... ok
+test app::tune::tests::retained_tune_cannot_emit_gesture_or_scroll_after_release ... ok
+test app::tune::tests::the_tap_hold_timer_fires_once_and_only_while_waiting ... ok
+test app::tune::tests::unchanged_mouse_rules_preserve_active_scroll_and_gesture ... ok
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+Locking this computer and the connected ones.
+samer-Victus asked to lock every computer (lock-all); locking this one.
+test clip::tests::an_older_peer_neither_confirms_a_send_nor_answers_a_pull ... ok
+Connected to samer-Victus (on your right).
+Connected to samer-Victus (on your left).
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+peer fetched this computer's clipboard (text).
+test app::tests::typing::randomized_owner_events_never_orphan_a_release ... ok
+test app::tests::switch_moves_control_without_crossing_an_edge ... ok
+test app::tests::lock_and_unlock_release_held_keys ... ok
+test app::tests::local_input_takes_control_back ... ok
+test clip::tests::explicit_send_overrides_the_sensitive_skip ... ok
+test clip::tests::rejected_automatic_push_retries_the_same_clipboard ... ok
+peer fetched this computer's clipboard (text).
+Received big.bin from samer-Victus (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-test-send-b-115240/downloads/big.bin).
+Received album/a (1).txt from samer-Victus (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-test-send-b-115240/downloads/album/a (1).txt).
+test clip::tests::clip_get_fetches_that_computers_clipboard ... ok
+This computer locked; locking the connected ones too (lock sync).
+samer-Victus locked its screen; locking this one too (lock sync).
+test clip::tests::shrinking_sharing_limit_keeps_retained_history ... ok
+test clip::tests::the_receiver_keeps_only_the_formats_it_allows ... ok
+test clip::tests::clip_send_reaches_only_the_chosen_computer_without_the_pointer ... ok
+test clip::tests::what_was_moved_reads_well ... ok
+test clipctl::tests::changes_touch_only_what_was_named ... ok
+test clipctl::tests::clipboard_requests_that_cannot_be_served_say_why ... ok
+test clipctl::tests::fetching_chooses_the_next_online_computer_and_wraps ... ok
+test clipctl::tests::on_and_off_are_parsed_and_nothing_else ... ok
+Clipboard sharing: text on, html off, images on, size limit 7 MB, skip marked sensitive content on, others may fetch it off, history 0 items (disabled).
+Applied right away.
+A notification when files arrive: off.
+test clip::tests::unknown_acknowledgement_is_not_cached_as_delivered ... ok
+Applied right away.
+A notification when files arrive: on.
+test clipctl::tests::the_daemon_applies_settings_and_shows_reported_sends ... ok
+test clipctl::tests::the_size_limit_must_be_sensible ... ok
+Applied right away.
+test clipctl::tests::the_target_computer_is_found_by_name_or_id_or_as_the_only_one_connected ... ok
+test control::tests::daemon_answers_and_is_private ... ok
+test control::tests::oversized_history_clear_never_dispatches_a_truncated_prefix ... ok
+Clipboard sharing: text off, html off, images on, size limit 7 MB, skip marked sensitive content on, others may fetch it off, history 0 items (disabled).
+one-mk is not running; this takes effect the next time it starts.
+test control::tests::tcp_transport_checks_the_token ... ok
+test control::tests::unknown_requests_and_oversized_lines_are_refused ... ok
+test doctor::tests::a_settings_file_that_does_not_parse_is_reported ... ok
+test doctor::tests::broadcast_decisions ... ok
+test clipctl::tests::the_commands_apply_live_through_the_control_channel ... ok
+test doctor::tests::config_fresh_machine_is_not_paired ... ok
+test doctor::tests::config_identity_without_peers ... ok
+test doctor::tests::config_paired_and_corrupt ... ok
+test doctor::tests::connect_advice_uses_the_real_port ... ok
+test doctor::tests::connection_quality_reads_what_quic_measured ... ok
+test doctor::tests::daemon_from_reply ... ok
+test doctor::tests::daemon_states ... ok
+test doctor::tests::edge_push_states ... ok
+test doctor::tests::firewall_firewalld ... ok
+test doctor::tests::firewall_none_active_passes ... ok
+test doctor::tests::firewall_other_os_is_a_hint ... ok
+test doctor::tests::firewall_unknown_degrades_to_warn ... ok
+test doctor::tests::firewall_ufw_rules_known ... ok
+test doctor::tests::firewalld_list_all_fields ... ok
+test doctor::tests::hotkey_decisions ... ok
+test doctor::tests::intentional_no_discovery_is_informational_even_without_multicast ... ok
+test doctor::tests::local_keys_never_claim_native_acceptance ... ok
+test doctor::tests::macos_permission_report_distinguishes_both_grants_without_claiming_acceptance ... ok
+test doctor::tests::mdns_decisions ... ok
+test doctor::tests::network_decisions ... ok
+test doctor::tests::peer_decisions ... ok
+test doctor::tests::per_device_rules_check ... ok
+test doctor::tests::port_decisions ... ok
+test doctor::tests::port_holder_from_proc_table ... ok
+test doctor::tests::port_lists ... ok
+test doctor::tests::portal_decisions ... ok
+test doctor::tests::probing_a_corrupt_settings_file ... ok
+test doctor::tests::render_json_escapes_and_reports ... ok
+test doctor::tests::render_text_lists_fixes_and_summary ... ok
+test doctor::tests::running_backend_overrides_session_inference ... ok
+test doctor::tests::summary_counts ... ok
+test doctor::tests::ufw_rule_parsing ... ok
+test doctor::tests::usable_addrs_skip_loopback_and_bridges ... ok
+test doctor::tests::input_tuning ... ok
+test drag::tests::safety_rejects_missing_special_and_symlink_paths ... ok
+test drag::tests::two_null_daemons_receive_a_simulated_edge_drop ... ignored, requires ONE_MK_TEST_BINARY and permission to bind private loopback sockets
+test history::tests::copying_is_local_and_errors_are_actionable ... ok
+test drag::tests::safety_bounds_counts_size_depth_and_empty_folders ... ok
+test history::tests::lists_are_masked_until_explicit_show ... ok
+samer-Victus disconnected; reconnecting automatically.
+Received other.bin from samer-Victus (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-test-send-b-115240/downloads/other.bin).
+peer fetched this computer's clipboard (text).
+test clip::tests::clip_get_respects_the_owners_and_the_askers_settings ... ok
+test hooks::tests::a_real_file_is_checked ... FAILED
+samer-Victus is controlling this computer. To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer).
+test hooks::tests::a_transition_without_a_hook_cancels_stale_opposite_work ... ok
+test hooks::tests::bad_commands_are_reported ... ok
+test hooks::tests::coalescing_preserves_the_newest_transition ... ok
+test hooks::tests::command_line_changes ... ok
+test hooks::tests::commands_read_from_toml_as_arrays_or_strings ... ok
+test hooks::tests::config_changes_discard_pending_work ... ok
+test hooks::tests::different_peers_are_not_coalesced ... ok
+test hooks::tests::each_event_runs_at_most_every_half_second ... ok
+test hooks::tests::engine_reports_enter_leave_and_peers_coming_and_going ... ok
+test hooks::tests::environment_names_the_event_and_the_peer ... ok
+test hooks::tests::group_and_world_writable_files_are_reported ... ok
+test hooks::tests::newest_peer_transition_cancels_the_opposite ... ok
+test hooks::tests::nothing_is_tracked_while_no_hook_is_set ... ok
+test hooks::tests::oversized_hook_commands_are_rejected ... ok
+test hooks::tests::pointer_and_peer_hooks_have_independent_serial_lanes ... ok
+test hooks::tests::quoting_round_trips_through_split ... ok
+test clip::tests::clip_send_says_why_nothing_was_sent_or_taken ... ok
+test hooks::tests::saturated_actions_do_not_drop_hooks ... ok
+test app::tests::the_screen_is_kept_awake_only_while_controlled ... ok
+test hooks::tests::shell_environment_has_no_interpreter_metacharacters ... ok
+test hooks::tests::shell_flips_reinterpret_existing_commands ... ok
+test hooks::tests::splits_like_a_shell_without_expanding ... ok
+test hooks::tests::symlink_target_directory_permissions ... FAILED
+test hooks::tests::timeout_is_bounded ... ok
+test app::tests::layout::simultaneous_changes_converge ... ok
+test hotkeys::tests::computers_are_numbered_by_name_then_id_with_this_one ... ok
+test hotkeys::tests::custom_fetch_wins_over_broadcast_update_default ... ok
+test hotkeys::tests::defaults_are_valid_and_distinct ... ok
+test hotkeys::tests::described_with_the_numbering ... ok
+test hooks::tests::unsafe_directory_blocks_hooks_and_only_explicit_trust_overrides_it ... ok
+test hotkeys::tests::jumps_only_to_computers_that_exist ... ok
+test hotkeys::tests::fetch_update_default_yields_to_existing_home_chord ... ok
+test hotkeys::tests::shortcuts_ask_what_the_commands_ask ... ok
+test hotkeys::tests::the_broadcast_default_avoids_altgr_on_windows ... ok
+test hotkeys::tests::the_broadcast_default_gives_way_to_a_chord_already_in_use ... ok
+test hotkeys::tests::the_command_line_checks_and_normalizes ... ok
+test hotkeys::tests::the_jump_default_avoids_altgr_on_windows ... ok
+test hotkeys::tests::settings_file_roundtrip ... ok
+test inputdevices::tests::ages_read_plainly ... ok
+test inputdevices::tests::devices_are_remembered_with_when_they_came_and_went ... ok
+test inputdevices::tests::devices_are_found_by_name_or_fingerprint ... ok
+test inputdevices::tests::the_list_is_bounded_and_forgets_the_oldest_first ... ok
+test inputdevices::tests::the_list_reads_plainly ... ok
+test invite::tests::bounded_expiry ... ok
+test inputdevices::tests::the_file_round_trips_and_bad_files_are_survived ... ok
+test invite::tests::cancellation_before_save_saves_nothing ... ok
+test invite::tests::cancellation_after_save_waits_for_commit ... ok
+test invite::tests::fingerprint_prompt_contains_all_grouped_hex_digits ... ok
+test invite::tests::flood_cli_invitation_listener ... ignored, manual CLI stress helper: set ONE_MK_TEST_INVITE_ADDR to the loopback pairing listener
+test invite::tests::global_reservation_stays_available_under_source_rotation ... ok
+
+>>> Joiner joined: certificate 7ca6 b7d1 c880 a8f5 e7a0 4d4d 74b0 04d9 a19b 0954 6e9f 4cea 01e4 fdb7 9772 f6ae <<<
+Invitation consumed. This device is NOT trusted yet.
+WARNING: --no-confirm skips comparing code 914 047 and approves automatically.
+test app::tests::send_folder_to_running_peer ... ok
+test invite::tests::ipv6_concurrent_cap_includes_pre_rotation_connections ... ok
+test invite::tests::ipv6_rotation_shares_a_subnet_budget ... ok
+test invite::tests::ordinary_ipv6_neighbors_have_independent_rate_budgets ... ok
+test invite::tests::pre_id_sources_cannot_fill_the_shared_slots ... ok
+test invite::tests::reserved_slots_require_a_fresh_idle_source ... ok
+test invite::tests::source_limits_are_bounded_and_do_not_change_invitations ... ok
+test invite::tests::source_rotation_does_not_lock_out_new_sources ... ok
+test learn::tests::a_suggestion_shows_for_five_minutes ... ok
+test learn::tests::another_edge_starts_over ... ok
+test learn::tests::at_most_one_suggestion_per_computer_per_ten_minutes ... ok
+test learn::tests::auto_places_only_beside_this_computer ... ok
+test learn::tests::holding_against_the_edge_is_one_push ... ok
+test learn::tests::random_pushes_never_conclude_without_two_quick_ones ... ok
+test learn::tests::the_candidate_is_a_guessed_computer_not_already_there ... ok
+test learn::tests::time_going_backwards_never_panics_or_fires ... ok
+test learn::tests::two_pushes_within_two_seconds ... ok
+test link::tests::both_sides_keep_the_same_duplicate ... ok
+test manage::tests::a_change_after_receiving_is_above_the_peers_version ... ok
+test manage::tests::a_tie_goes_to_the_larger_fingerprint_on_both_ends ... ok
+test manage::tests::a_tie_with_the_same_layout_settles_nothing ... ok
+test manage::tests::learning_moves_only_a_guess ... ok
+test manage::tests::newer_version_wins_whatever_the_fingerprints ... ok
+test manage::tests::parse_offset ... ok
+test netwatch::nm::tests::absent_system_bus_stops_retrying ... ok
+test netwatch::nm::tests::reconnect_backoff_is_bounded_and_resets_after_stability ... ok
+test hooks::tests::a_hook_runs_and_is_killed_at_the_timeout ... ok
+test netwatch::tests::reads_the_default_router_and_its_mac ... ok
+test notify::tests::a_folder_counts_once ... ok
+test notify::tests::file_uris_are_percent_encoded ... ok
+test notify::tests::one_file_names_it ... ok
+test notify::tests::several_files_give_count_and_names ... ok
+test app::tests::lock_all_and_lock_sync_without_echo ... ok
+test notify::tests::what_the_other_computer_chose_is_made_safe ... ok
+test pairing_layout::tests::chooses_free_sides_and_reserves_pending_without_moving_anything ... ok
+test pairing_layout::tests::more_occupied_sides_then_initiator_win_the_existing_layout_sync ... ok
+test pairing_layout::tests::repairing_preserves_learned_confirmed_and_pending_origins ... ok
+test pairing_layout::tests::repairing_preserves_offset_origin_and_settings_even_when_full ... ok
+test pointeroverlay::tests::descriptions ... ok
+test pointeroverlay::tests::settings_default_and_round_trip ... ok
+test power::tests::settings_default_to_off_and_round_trip ... ok
+test power::tests::the_inhibitor_is_held_exactly_while_wanted ... ok
+test power::tests::the_peer_is_told_only_what_changed ... ok
+test profiles::tests::a_new_side_drops_the_offset ... ok
+test hooks::tests::shell_conversion_preserves_hostile_argv ... ok
+Saved layout profile "home" (1 computer).
+Switching to "home" by itself on Wi-Fi "Home" or behind the router aa:bb:cc:00:11:22 or on 192.168.1.7/24.
+one-mk is not running; it starts watching the network when it starts.
+Switching to "home" by itself on Wi-Fi "Home" or on Wi-Fi "Office" or behind the router aa:bb:cc:00:11:22 or on 192.168.1.7/24 or on 10.0.0.0/8.
+one-mk is not running; it starts watching the network when it starts.
+Switching to "home" by itself on 172.16.0.0/12.
+one-mk is not running; it starts watching the network when it starts.
+"home" no longer switches by itself.
+test profiles::tests::auto_rules_are_checked ... ok
+test profiles::tests::profile_names_reject_paths_and_toml_syntax ... ok
+test profiles::tests::rules_parse_and_match ... ok
+test clip::tests::the_automatic_push_honours_formats_and_sensitive_content ... ok
+Saved layout profile "home" (2 computers).
+Saved layout profile "work" (2 computers).
+Deleted layout profile "home".
+test profiles::tests::save_and_use_round_trip ... ok
+Trusted Joiner (7ca6b7d1c880a8f5e7a04d4d74b004d9a19b09546e9f4cea01e4fdb79772f6ae).
+Received f.txt from sender (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-send-back-inbox-115240/f.txt).
+test profiles::tests::concurrent_writes_all_land ... ok
+test settings::tests::a_failed_update_or_a_bad_file_changes_nothing ... ok
+test settings::tests::broadcast_idle_off_defaults_and_bounds ... ok
+test settings::tests::clipboard_defaults_share_everything_up_to_25_mb ... ok
+test settings::tests::clipboard_settings_roundtrip_next_to_the_edge_rules ... ok
+test settings::tests::command_line_is_well_formed ... ok
+test notify::tests::show_in_folder_on_a_private_bus ... ok
+test settings::tests::edge_options_are_checked ... ok
+test settings::tests::existing_clipboard_settings_keep_history_off ... ok
+test settings::tests::explicit_clipboard_fetch_opt_in_survives_the_new_default ... ok
+test settings::tests::external_symlink_target_ancestors_must_be_private ... FAILED
+test settings::tests::fullscreen_lists ... ok
+test settings::tests::legacy_clipboard_fetch_is_migrated_but_explicit_v2_is_kept ... ok
+test settings::tests::partial_and_future_files_still_load ... ok
+test settings::tests::per_edge_rules_fall_back_to_every_edge ... ok
+test settings::tests::run_key_actions_are_refused_when_the_file_is_writable_by_others ... FAILED
+test settings::tests::saved_and_loaded ... ok
+test settings::tests::settings_replacement_keeps_private_permissions ... ok
+test settings::tests::symlink_target_directory_must_be_private ... ok
+test settings::tests::the_clipboard_size_limit_is_kept_sane ... ok
+test settings::tests::upgraded_history_is_off_with_one_time_explanation ... ok
+test settings::tests::wrap_and_learn_settings ... ok
+test settings::tests::concurrent_updates_all_survive ... ok
+test tests::layout_offset_bounds_and_empty_values ... ok
+test tests::options_after_run_win_and_lists_add_up ... ok
+test tests::run_options_before_another_command_are_refused ... ok
+test tests::polished_help_describes_options_and_supported_scopes ... ok
+test tests::send_to_entries_parse_odd_file_names ... ok
+test track::tests::a_file_that_arrived_whole_is_all_done ... ok
+test tests::run_options_mean_the_same_before_and_after_run ... ok
+Received f (1).txt from sender (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-send-back-inbox-115240/f (1).txt).
+
+>>> Joiner joined: certificate 1af8 5c4d b67b dab0 29eb 3adb 1fdb 54da c759 ed60 39f0 421a 7e7f eb86 7a27 15c8 <<<
+Invitation consumed. This device is NOT trusted yet.
+WARNING: --no-confirm skips comparing code 619 864 and approves automatically.
+Trusted Joiner (1af85c4db67bdab029eb3adb1fdb54dac759ed6039f0421a7e7feb867a2715c8).
+test invite::tests::invitation_pairs_across_expiry_and_persists_via_production_save ... ok
+Received f (2).txt from sender (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-send-back-inbox-115240/f (2).txt).
+test app::tests::one_controller_at_a_time ... ok
+test track::tests::failures_count_toward_the_end_but_are_not_named ... ok
+test track::tests::files_in_parallel_streams_of_one_batch_are_one_transfer ... ok
+test track::tests::hostile_batches_are_refused_before_progress_accounting ... ok
+test track::tests::hostile_offer_totals_never_overflow ... ok
+test hooks::tests::reset_kills_hook_descendants ... ok
+test track::tests::notifications_can_be_switched_off_live ... ok
+test track::tests::a_known_batch_gives_one_notification_when_its_last_file_lands ... ok
+test track::tests::send_reports_are_shown_and_expire ... ok
+test track::tests::speed_is_smoothed_and_stalls_to_zero ... ok
+test track::tests::the_rate_survives_a_count_that_goes_backwards ... ok
+test track::tests::two_senders_are_two_transfers ... ok
+Received f (3).txt from sender (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-send-back-inbox-115240/f (3).txt).
+test track::tests::undeclared_batches_cannot_accumulate_unlimited_offers ... ok
+test transfer::outgoing_handle_checks_size_and_clears_nonblocking ... ok
+test transfer::swapped_outgoing_fifo_is_rejected ... ok
+test transfer::swapped_outgoing_symlink_is_rejected ... ok
+Received notes.txt from laptop (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-notify-dst-115240/notes.txt).
+Received photos/sub/b.jpg from laptop (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-notify-dst-115240/photos/sub/b.jpg).
+Received photos/c.jpg from laptop (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-notify-dst-115240/photos/c.jpg).
+Received photos/a.jpg from laptop (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-notify-dst-115240/photos/a.jpg).
+Received notes (1).txt from laptop (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-notify-dst-115240/notes (1).txt).
+Received notes (2).txt from laptop (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-notify-dst-115240/notes (2).txt).
+test transfer::tests::a_received_folder_raises_one_notification ... ok
+test transfer::tests::concurrent_offers_cannot_exceed_the_quota ... ok
+test transfer::tests::full_disk_error_is_explained ... ok
+test transfer::tests::long_paths_get_the_extended_prefix ... ok
+test transfer::tests::numbered_names ... ok
+test transfer::tests::place_never_follows_symlinks ... ok
+test track::tests::a_send_that_stops_early_still_reports_what_arrived ... ok
+test transfer::tests::refuses_when_disk_is_too_small ... ok
+Received f (4).txt from sender (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-send-back-inbox-115240/f (4).txt).
+test track::tests::nothing_saved_means_no_notification ... ok
+test transfer::tests::sanitize_rejects_escapes ... ok
+test transfer::tests::sanitize_windows_and_unicode ... ok
+test transfer::tests::staging_is_capped_per_peer ... ok
+test transfer::tests::stream_and_connection_limits ... ok
+test transfer::tests::sweep_keeps_fresh_and_active_partials ... ok
+test tuning::mouse::tests::existing_settings_migrate_without_changing_old_rules ... ok
+test send::tests::back_to_back_sends_all_get_through ... ok
+test tuning::mouse::tests::inherited_autoscroll_button_does_not_warn_about_middle_mapping ... ok
+test tuning::mouse::tests::preset_replaces_aliases_and_case_insensitive_directions ... ok
+test tuning::mouse::tests::removal_accepts_capitalized_config_direction ... ok
+test tuning::mouse::tests::scope_selection_permissions_and_conflicts_include_gestures ... ok
+test tuning::mouse::tests::unsafe_and_device_mouse_modes_warn_and_are_ignored ... ok
+test tuning::tests::a_computer_beats_an_os_beats_everything ... ok
+test track::tests::progress_counts_bytes_resumes_and_speed ... ok
+test tuning::tests::button_rules_take_numbers_and_names ... ok
+test tuning::tests::check_reports_conflicts_typos_and_unreachable_rules ... ok
+test tuning::tests::checking_device_rules ... ok
+test tuning::tests::device_rules_rank_above_computer_rules ... ok
+test tuning::tests::device_scopes_parse_print_and_combine ... ok
+test tuning::tests::local_cli_scope_is_only_for_keys_and_cannot_select_a_peer ... ok
+test tuning::tests::local_device_rules_round_trip_override_and_never_reach_peers ... ok
+test tuning::tests::local_preference_upgrade_and_device_validation ... ok
+test tuning::tests::local_scope_is_explicit_and_never_reaches_a_peer ... ok
+test tuning::tests::local_status_has_one_explicit_availability_line ... ok
+test tuning::tests::local_validation_keeps_compile_warnings_and_rejects_invalid_rules ... ok
+test tuning::tests::modifier_scroll_values ... ok
+test tuning::tests::native_device_attribution_needs_an_applicable_rule ... ok
+test tuning::tests::natural_auto_flips_only_across_mac_and_the_rest ... ok
+test tuning::tests::per_app_rules_apply_only_while_their_app_has_the_focus ... ok
+test tuning::tests::per_app_rules_keep_scope_order ... ok
+test tuning::tests::resolving_for_the_connected_devices ... ok
+test tuning::tests::scopes_parse_and_print ... ok
+test tuning::tests::summary_only_when_something_is_set ... ok
+test tuning::tests::the_documented_example_loads_and_resolves ... ok
+test typing::tests::existing_settings_preserve_physical_default ... ok
+test typing::tests::peer_override_round_trips_without_changing_other_settings ... ok
+test typing::tests::unknown_modes_are_actionable_parse_errors ... ok
+test update::tests::a_symlink_is_never_an_update_target_or_backup ... ok
+test update::tests::downloads_may_only_come_from_the_origin_or_github ... ok
+test update::tests::hostile_http_framing_is_refused ... ok
+Received one.bin from desk (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-progress-115240/one.bin).
+test track::tests::an_old_sender_is_grouped_by_quiet_time ... ok
+test update::tests::interrupted_download_and_redirect_refused ... ok
+test update::tests::kill_mid_download_preserves_original_and_cleans_on_retry ... ok
+test transfer::tests::replacement_takes_over_a_stalled_transfer ... ok
+test tuning::tests::app_changes_never_leave_a_key_stuck ... ok
+test update::tests::signatures_refuse_every_mutation ... ok
+test update::tests::subprocess_apply ... ok
+Received two.bin from desk (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-progress-115240/two.bin).
+test transfer::tests::progress_of_a_transfer_in_flight_is_visible ... ok
+test wallpaper::extension::tests::managed_install_uninstall_preserves_foreign_files ... ok
+test wallpaper::extension::tests::qualification_is_exact_and_default_is_off ... ok
+test wallpaper::tests::flooding_and_remote_revoke_fail_closed_without_timers ... ok
+test wallpaper::tests::hostile_peer_cannot_self_grant_replay_spoof_or_keep_authority_after_revoke ... ok
+test wallpaper::tests::old_settings_migrate_to_off_with_no_consent ... ok
+test wallpaper::tests::status_does_not_invent_resource_measurements ... ok
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+test update::tests::local_signed_check_and_state_replay ... ok
+test update::tests::local_download_replace_rollback_and_failures ... ok
+test app::tests::layout::no_overlap_warns_and_a_switch_still_comes_home ... FAILED
+test update::tests::wrong_version_failed_execution_and_recovery_are_safe ... ok
+test app::tests::status_reports_the_open_backend_not_the_requested_kind ... FAILED
+test tuning::mouse::tests::hostile_mouse_rules_and_parsers_never_panic ... ok
+test app::tests::typing::processes::two_process_character_path_kill9_releases ... FAILED
+Received g.txt from sender (saved to /home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp/one-mk-send-busy-inbox-115240/g.txt).
+raw disconnected; reconnecting automatically.
+raw disconnected; reconnecting automatically.
+samer-Victus disconnected; reconnecting automatically.
+test app::tests::flood_does_not_delay_the_lease ... ok
+test netwatch::nm::tests::reconnects_when_a_private_bus_restarts ... ok
+Connected to samer-Victus (on your left).
+Connected to samer-Victus (on your right).
+test app::tests::a_missing_peer_is_dialed_until_it_is_there ... ok
+test send::tests::a_busy_receiver_is_asked_again_once ... ok
+test app::tests::hooks_run_on_enter_and_leave ... FAILED
+test history::tests::terminal_and_json_never_emit_hostile_controls ... ok
+test invite::tests::continuously_refilled_three_source_slowloris_allows_real_join ... FAILED
+test update::tests::hung_version_probe_terminates_its_process_group ... ok
+
+failures:
+
+---- app::tests::a_controlled_computer_ignores_its_own_shortcuts stdout ----
+
+thread 'app::tests::a_controlled_computer_ignores_its_own_shortcuts' (115247) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- app::tests::a_modifier_released_here_no_longer_crosses stdout ----
+
+thread 'app::tests::a_modifier_released_here_no_longer_crosses' (115249) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::a_computer_forgotten_during_its_handshake_is_not_let_in stdout ----
+
+thread 'app::tests::a_computer_forgotten_during_its_handshake_is_not_let_in' (115246) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::clearing_offset_converges_from_either_daemon stdout ----
+
+thread 'app::tests::clearing_offset_converges_from_either_daemon' (115263) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::click_at_the_edge_is_whole_whatever_follows stdout ----
+
+thread 'app::tests::click_at_the_edge_is_whole_whatever_follows' (115264) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::click_at_the_edge_leaves_no_button_held stdout ----
+
+thread 'app::tests::click_at_the_edge_leaves_no_button_held' (115265) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::connections_being_set_up_are_limited stdout ----
+
+thread 'app::tests::connections_being_set_up_are_limited' (115270) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::fetch_shortcut_tracks_peer_permission_without_restart stdout ----
+
+thread 'app::tests::fetch_shortcut_tracks_peer_permission_without_restart' (115294) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::focus_is_watched_only_for_gaming_auto stdout ----
+
+thread 'app::tests::focus_is_watched_only_for_gaming_auto' (115300) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::gaming_auto_ends_when_the_peer_goes_quiet stdout ----
+
+thread 'app::tests::gaming_auto_ends_when_the_peer_goes_quiet' (115304) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::gaming_auto_follows_the_peers_fullscreen_window stdout ----
+
+thread 'app::tests::gaming_auto_follows_the_peers_fullscreen_window' (115305) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::gaming_auto_hears_the_front_window_change stdout ----
+
+thread 'app::tests::gaming_auto_hears_the_front_window_change' (115306) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::gaming_auto_notices_alt_tab stdout ----
+
+thread 'app::tests::gaming_auto_notices_alt_tab' (115307) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::gaming_auto_rechecks_without_input stdout ----
+
+thread 'app::tests::gaming_auto_rechecks_without_input' (115308) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::gaming_auto_unknown_focus_and_switching_it_off stdout ----
+
+thread 'app::tests::gaming_auto_unknown_focus_and_switching_it_off' (115309) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::handing_back_at_the_edge_leaves_no_key_held stdout ----
+
+thread 'app::tests::handing_back_at_the_edge_leaves_no_key_held' (115313) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::input_problems_show_in_status stdout ----
+
+thread 'app::tests::input_problems_show_in_status' (115317) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::keyboard_shortcuts_switch_without_leaving_keys_held stdout ----
+
+thread 'app::tests::keyboard_shortcuts_switch_without_leaving_keys_held' (115318) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::layout::crossing_between_multi_monitor_desktops stdout ----
+
+thread 'app::tests::layout::crossing_between_multi_monitor_desktops' (115321) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::layout::dwell_at_an_inner_edge stdout ----
+
+thread 'app::tests::layout::dwell_at_an_inner_edge' (115322) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::layout::equal_version_clear_and_offset_converge_from_either_side stdout ----
+
+thread 'app::tests::layout::equal_version_clear_and_offset_converge_from_either_side' (115323) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::layout::input_caught_at_a_wall_is_typed_here stdout ----
+
+thread 'app::tests::layout::input_caught_at_a_wall_is_typed_here' (115324) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::layout::layout_from_a_peer_without_offset stdout ----
+
+thread 'app::tests::layout::layout_from_a_peer_without_offset' (115325) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::layout::offset_change_converges_as_a_mirror_image stdout ----
+
+thread 'app::tests::layout::offset_change_converges_as_a_mirror_image' (115328) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::broadcast::idle_let_go_enters_again_with_the_next_input stdout ----
+
+thread 'app::tests::broadcast::idle_let_go_enters_again_with_the_next_input' (115259) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::broadcast::a_capture_that_never_starts_gives_up stdout ----
+
+thread 'app::tests::broadcast::a_capture_that_never_starts_gives_up' (115250) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::broadcast::an_unplugged_keyboard_is_let_go_of_by_every_computer_of_a_broadcast stdout ----
+
+thread 'app::tests::broadcast::an_unplugged_keyboard_is_let_go_of_by_every_computer_of_a_broadcast' (115253) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::broadcast::a_computer_that_drops_out_lets_go_and_the_rest_carry_on stdout ----
+
+thread 'app::tests::broadcast::a_computer_that_drops_out_lets_go_and_the_rest_carry_on' (115251) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::broadcast::characters_resolve_independently_on_each_broadcast_receiver stdout ----
+
+thread 'app::tests::broadcast::characters_resolve_independently_on_each_broadcast_receiver' (115257) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::broadcast::random_presses_drops_and_returns_never_leave_a_key_held stdout ----
+
+thread 'app::tests::broadcast::random_presses_drops_and_returns_never_leave_a_key_held' (115260) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::broadcast::swap_and_key_rules_apply_per_computer stdout ----
+
+thread 'app::tests::broadcast::swap_and_key_rules_apply_per_computer' (115261) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::broadcast::broadcast_does_not_intercept_mouse_mode_buttons_even_after_reload stdout ----
+
+thread 'app::tests::broadcast::broadcast_does_not_intercept_mouse_mode_buttons_even_after_reload' (115254) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::broadcast::a_key_action_runs_once_for_all_computers stdout ----
+
+thread 'app::tests::broadcast::a_key_action_runs_once_for_all_computers' (115252) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::broadcast::taking_control_back_is_never_undone_by_the_next_input stdout ----
+
+thread 'app::tests::broadcast::taking_control_back_is_never_undone_by_the_next_input' (115262) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::layout::tie_with_an_old_peer_converges_either_way stdout ----
+
+thread 'app::tests::layout::tie_with_an_old_peer_converges_either_way' (115334) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::layout::profile_switches_with_the_network stdout ----
+
+thread 'app::tests::layout::profile_switches_with_the_network' (115332) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::layout::two_neighbours_share_one_edge stdout ----
+
+thread 'app::tests::layout::two_neighbours_share_one_edge' (115335) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::lock_all_says_when_this_computer_can_t_lock stdout ----
+
+thread 'app::tests::lock_all_says_when_this_computer_can_t_lock' (115339) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::lock_sync_off_obeys_only_lock_all stdout ----
+
+thread 'app::tests::lock_sync_off_obeys_only_lock_all' (115342) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::lock_pointer_disarms_edges stdout ----
+
+thread 'app::tests::lock_pointer_disarms_edges' (115341) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::modifier_to_cross stdout ----
+
+thread 'app::tests::modifier_to_cross' (115344) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::modifiers_released_after_a_switch_are_forgotten stdout ----
+
+thread 'app::tests::modifiers_released_after_a_switch_are_forgotten' (115345) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::newer_layout_wins_on_connect stdout ----
+
+thread 'app::tests::newer_layout_wins_on_connect' (115346) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::null_character_visit_preserves_german_text_and_shortcuts stdout ----
+
+thread 'app::tests::null_character_visit_preserves_german_text_and_shortcuts' (115348) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::offset_syncs_mirrored stdout ----
+
+thread 'app::tests::offset_syncs_mirrored' (115349) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::push::a_real_neighbour_edge_is_never_replaced_by_a_wrap_edge stdout ----
+
+thread 'app::tests::push::a_real_neighbour_edge_is_never_replaced_by_a_wrap_edge' (115355) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::push::auto_only_suggests_above_and_below stdout ----
+
+thread 'app::tests::push::auto_only_suggests_above_and_below' (115356) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::push::auto_places_it_and_the_mirror_syncs stdout ----
+
+thread 'app::tests::push::auto_places_it_and_the_mirror_syncs' (115357) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::push::guards_lock_and_control_apply_to_wrap stdout ----
+
+thread 'app::tests::push::guards_lock_and_control_apply_to_wrap' (115358) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::push::no_wrap_where_an_offline_computer_sits stdout ----
+
+thread 'app::tests::push::no_wrap_where_an_offline_computer_sits' (115359) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::push::placing_the_suggested_computer_ends_the_suggestion stdout ----
+
+thread 'app::tests::push::placing_the_suggested_computer_ends_the_suggestion' (115360) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::push::pushing_twice_suggests_the_computer_online stdout ----
+
+thread 'app::tests::push::pushing_twice_suggests_the_computer_online' (115361) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::push::wrap_comes_in_at_the_opposite_edge_and_keeps_input_here stdout ----
+
+thread 'app::tests::push::wrap_comes_in_at_the_opposite_edge_and_keeps_input_here' (115362) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::layout::offset_crossing_maps_and_walls stdout ----
+
+thread 'app::tests::layout::offset_crossing_maps_and_walls' (115329) panicked at crates/one-mk/src/app/tests/layout.rs:71:5:
+assertion failed: status(&duo.da).await.controlling.is_some()
+
+---- app::tests::sleep_sync_waits_while_a_visit_is_on stdout ----
+
+thread 'app::tests::sleep_sync_waits_while_a_visit_is_on' (115380) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::status_carries_the_round_trip_of_connected_peers_only stdout ----
+
+thread 'app::tests::status_carries_the_round_trip_of_connected_peers_only' (115381) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::switch_here_takes_back_and_unanswered_switch_gives_up stdout ----
+
+thread 'app::tests::switch_here_takes_back_and_unanswered_switch_gives_up' (115388) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::takeback_command_takes_control_back stdout ----
+
+thread 'app::tests::takeback_command_takes_control_back' (115390) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::a_reload_mid_hold_keeps_the_pairing stdout ----
+
+thread 'app::tests::tuning::a_reload_mid_hold_keeps_the_pairing' (115392) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::a_tap_hold_key_held_long_enough_holds stdout ----
+
+thread 'app::tests::tuning::a_tap_hold_key_held_long_enough_holds' (115398) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::a_visit_ending_mid_hold_releases_what_was_sent stdout ----
+
+thread 'app::tests::tuning::a_visit_ending_mid_hold_releases_what_was_sent' (115399) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::autoscroll_moves_scroll_not_pointer_and_stops_on_escape stdout ----
+
+thread 'app::tests::tuning::autoscroll_moves_scroll_not_pointer_and_stops_on_escape' (115400) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::buttons_are_remapped_and_keys_can_switch stdout ----
+
+thread 'app::tests::tuning::buttons_are_remapped_and_keys_can_switch' (115401) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::escape_cancels_gesture_without_escaping_remote_and_next_escape_passes stdout ----
+
+thread 'app::tests::tuning::escape_cancels_gesture_without_escaping_remote_and_next_escape_passes' (115402) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::escape_held_before_gesture_still_releases_remote_escape stdout ----
+
+thread 'app::tests::tuning::escape_held_before_gesture_still_releases_remote_escape' (115403) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::gestures_replay_short_click_fire_once_and_cancel_on_visit_end stdout ----
+
+thread 'app::tests::tuning::gestures_replay_short_click_fire_once_and_cancel_on_visit_end' (115404) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::mouse_modes_cancel_on_relevant_reload_and_display_sleep stdout ----
+
+thread 'app::tests::tuning::mouse_modes_cancel_on_relevant_reload_and_display_sleep' (115405) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::broadcast::broadcast_starts_and_stops_every_way stdout ----
+
+thread 'app::tests::broadcast::broadcast_starts_and_stops_every_way' (115255) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for computers to connect
+
+---- app::tests::tuning::per_app_rules_follow_a_switch_made_with_enter stdout ----
+
+thread 'app::tests::tuning::per_app_rules_follow_a_switch_made_with_enter' (115406) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::per_app_rules_follow_a_switch_with_no_input stdout ----
+
+thread 'app::tests::tuning::per_app_rules_follow_a_switch_with_no_input' (115407) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::per_device_rules_follow_the_keyboard_they_come_from stdout ----
+
+thread 'app::tests::tuning::per_device_rules_follow_the_keyboard_they_come_from' (115409) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::pointer_speed_scales_the_remote_motion stdout ----
+
+thread 'app::tests::tuning::pointer_speed_scales_the_remote_motion' (115410) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::per_app_rules_follow_the_peers_focused_app stdout ----
+
+thread 'app::tests::tuning::per_app_rules_follow_the_peers_focused_app' (115408) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::remapped_keys_reach_the_peer stdout ----
+
+thread 'app::tests::tuning::remapped_keys_reach_the_peer' (115411) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::reserving_a_held_remapped_button_on_reload_still_releases_its_output stdout ----
+
+thread 'app::tests::tuning::reserving_a_held_remapped_button_on_reload_still_releases_its_output' (115412) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::the_focused_app_goes_only_to_a_controller_that_asks stdout ----
+
+thread 'app::tests::tuning::the_focused_app_goes_only_to_a_controller_that_asks' (115414) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::typing::character_resolution_uses_mapper_output_before_control_meta_swap stdout ----
+
+thread 'app::tests::typing::character_resolution_uses_mapper_output_before_control_meta_swap' (115415) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::tuning::scrolling_is_tuned_and_the_modifier_is_lifted stdout ----
+
+thread 'app::tests::tuning::scrolling_is_tuned_and_the_modifier_is_lifted' (115413) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::typing::enabled_backend_still_requires_peer_text_negotiation stdout ----
+
+thread 'app::tests::typing::enabled_backend_still_requires_peer_text_negotiation' (115416) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::typing::enabled_path_refuses_non_owner_spoofed_keys_invalid_text_and_over_budget stdout ----
+
+thread 'app::tests::typing::enabled_path_refuses_non_owner_spoofed_keys_invalid_text_and_over_budget' (115417) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::typing::national_levels_and_layout_change_mid_hold stdout ----
+
+thread 'app::tests::typing::national_levels_and_layout_change_mid_hold' (115419) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::typing::physical_emergency_chord_precedes_mapping_in_character_visit stdout ----
+
+thread 'app::tests::typing::physical_emergency_chord_precedes_mapping_in_character_visit' (115420) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::typing::missing_text_capability_and_equal_layouts_keep_physical_keys stdout ----
+
+thread 'app::tests::typing::missing_text_capability_and_equal_layouts_keep_physical_keys' (115418) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::typing::receiver_remembers_resolved_code_across_layout_change_and_disconnect stdout ----
+
+thread 'app::tests::typing::receiver_remembers_resolved_code_across_layout_change_and_disconnect' (115426) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- app::tests::unnegotiated_character_messages_never_inject_or_release_physical_keys stdout ----
+
+thread 'app::tests::unnegotiated_character_messages_never_inject_or_release_physical_keys' (115429) panicked at crates/one-mk/src/app.rs:3079:98:
+called `Option::unwrap()` on a `None` value
+
+---- hooks::tests::a_real_file_is_checked stdout ----
+
+thread 'hooks::tests::a_real_file_is_checked' (115550) panicked at crates/one-mk/src/hooks.rs:1330:9:
+assertion `left == right` failed
+  left: Some("/home/samer/.t3/worktrees/one-mk/t3-fc70d846/target/.slice-env/tmp is writable by its group")
+ right: None
+
+---- hooks::tests::symlink_target_directory_permissions stdout ----
+
+thread 'hooks::tests::symlink_target_directory_permissions' (115608) panicked at crates/one-mk/src/hooks.rs:1027:13:
+assertion `left == right` failed: safe
+  left: true
+ right: false
+
+---- settings::tests::external_symlink_target_ancestors_must_be_private stdout ----
+
+thread 'settings::tests::external_symlink_target_ancestors_must_be_private' (116161) panicked at crates/one-mk/src/settings.rs:1009:9:
+assertion failed: Settings::load(&home).unwrap().hooks.blocked.is_none()
+
+---- settings::tests::run_key_actions_are_refused_when_the_file_is_writable_by_others stdout ----
+
+thread 'settings::tests::run_key_actions_are_refused_when_the_file_is_writable_by_others' (116166) panicked at crates/one-mk/src/settings.rs:1229:9:
+a private file is fine
+
+---- app::tests::layout::no_overlap_warns_and_a_switch_still_comes_home stdout ----
+
+thread 'app::tests::layout::no_overlap_warns_and_a_switch_still_comes_home' (115326) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for the warning
+
+---- app::tests::status_reports_the_open_backend_not_the_requested_kind stdout ----
+
+thread 'app::tests::status_reports_the_open_backend_not_the_requested_kind' (115382) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for status socket
+
+---- app::tests::typing::processes::two_process_character_path_kill9_releases stdout ----
+
+thread 'app::tests::typing::processes::two_process_character_path_kill9_releases' (115421) panicked at crates/one-mk/src/app.rs:5118:9:
+timed out waiting for process layout negotiation
+
+---- app::tests::hooks_run_on_enter_and_leave stdout ----
+
+thread 'app::tests::hooks_run_on_enter_and_leave' (115314) panicked at crates/one-mk/src/app.rs:3407:9:
+timed out waiting for the hooks of the first crossing
+
+---- invite::tests::continuously_refilled_three_source_slowloris_allows_real_join stdout ----
+
+thread 'invite::tests::continuously_refilled_three_source_slowloris_allows_real_join' (115668) panicked at crates/one-mk/src/invite.rs:608:18:
+called `Result::unwrap()` on an `Err` value: Elapsed(())
+
+
+failures:
+    app::tests::a_computer_forgotten_during_its_handshake_is_not_let_in
+    app::tests::a_controlled_computer_ignores_its_own_shortcuts
+    app::tests::a_modifier_released_here_no_longer_crosses
+    app::tests::broadcast::a_capture_that_never_starts_gives_up
+    app::tests::broadcast::a_computer_that_drops_out_lets_go_and_the_rest_carry_on
+    app::tests::broadcast::a_key_action_runs_once_for_all_computers
+    app::tests::broadcast::an_unplugged_keyboard_is_let_go_of_by_every_computer_of_a_broadcast
+    app::tests::broadcast::broadcast_does_not_intercept_mouse_mode_buttons_even_after_reload
+    app::tests::broadcast::broadcast_starts_and_stops_every_way
+    app::tests::broadcast::characters_resolve_independently_on_each_broadcast_receiver
+    app::tests::broadcast::idle_let_go_enters_again_with_the_next_input
+    app::tests::broadcast::random_presses_drops_and_returns_never_leave_a_key_held
+    app::tests::broadcast::swap_and_key_rules_apply_per_computer
+    app::tests::broadcast::taking_control_back_is_never_undone_by_the_next_input
+    app::tests::clearing_offset_converges_from_either_daemon
+    app::tests::click_at_the_edge_is_whole_whatever_follows
+    app::tests::click_at_the_edge_leaves_no_button_held
+    app::tests::connections_being_set_up_are_limited
+    app::tests::fetch_shortcut_tracks_peer_permission_without_restart
+    app::tests::focus_is_watched_only_for_gaming_auto
+    app::tests::gaming_auto_ends_when_the_peer_goes_quiet
+    app::tests::gaming_auto_follows_the_peers_fullscreen_window
+    app::tests::gaming_auto_hears_the_front_window_change
+    app::tests::gaming_auto_notices_alt_tab
+    app::tests::gaming_auto_rechecks_without_input
+    app::tests::gaming_auto_unknown_focus_and_switching_it_off
+    app::tests::handing_back_at_the_edge_leaves_no_key_held
+    app::tests::hooks_run_on_enter_and_leave
+    app::tests::input_problems_show_in_status
+    app::tests::keyboard_shortcuts_switch_without_leaving_keys_held
+    app::tests::layout::crossing_between_multi_monitor_desktops
+    app::tests::layout::dwell_at_an_inner_edge
+    app::tests::layout::equal_version_clear_and_offset_converge_from_either_side
+    app::tests::layout::input_caught_at_a_wall_is_typed_here
+    app::tests::layout::layout_from_a_peer_without_offset
+    app::tests::layout::no_overlap_warns_and_a_switch_still_comes_home
+    app::tests::layout::offset_change_converges_as_a_mirror_image
+    app::tests::layout::offset_crossing_maps_and_walls
+    app::tests::layout::profile_switches_with_the_network
+    app::tests::layout::tie_with_an_old_peer_converges_either_way
+    app::tests::layout::two_neighbours_share_one_edge
+    app::tests::lock_all_says_when_this_computer_can_t_lock
+    app::tests::lock_pointer_disarms_edges
+    app::tests::lock_sync_off_obeys_only_lock_all
+    app::tests::modifier_to_cross
+    app::tests::modifiers_released_after_a_switch_are_forgotten
+    app::tests::newer_layout_wins_on_connect
+    app::tests::null_character_visit_preserves_german_text_and_shortcuts
+    app::tests::offset_syncs_mirrored
+    app::tests::push::a_real_neighbour_edge_is_never_replaced_by_a_wrap_edge
+    app::tests::push::auto_only_suggests_above_and_below
+    app::tests::push::auto_places_it_and_the_mirror_syncs
+    app::tests::push::guards_lock_and_control_apply_to_wrap
+    app::tests::push::no_wrap_where_an_offline_computer_sits
+    app::tests::push::placing_the_suggested_computer_ends_the_suggestion
+    app::tests::push::pushing_twice_suggests_the_computer_online
+    app::tests::push::wrap_comes_in_at_the_opposite_edge_and_keeps_input_here
+    app::tests::sleep_sync_waits_while_a_visit_is_on
+    app::tests::status_carries_the_round_trip_of_connected_peers_only
+    app::tests::status_reports_the_open_backend_not_the_requested_kind
+    app::tests::switch_here_takes_back_and_unanswered_switch_gives_up
+    app::tests::takeback_command_takes_control_back
+    app::tests::tuning::a_reload_mid_hold_keeps_the_pairing
+    app::tests::tuning::a_tap_hold_key_held_long_enough_holds
+    app::tests::tuning::a_visit_ending_mid_hold_releases_what_was_sent
+    app::tests::tuning::autoscroll_moves_scroll_not_pointer_and_stops_on_escape
+    app::tests::tuning::buttons_are_remapped_and_keys_can_switch
+    app::tests::tuning::escape_cancels_gesture_without_escaping_remote_and_next_escape_passes
+    app::tests::tuning::escape_held_before_gesture_still_releases_remote_escape
+    app::tests::tuning::gestures_replay_short_click_fire_once_and_cancel_on_visit_end
+    app::tests::tuning::mouse_modes_cancel_on_relevant_reload_and_display_sleep
+    app::tests::tuning::per_app_rules_follow_a_switch_made_with_enter
+    app::tests::tuning::per_app_rules_follow_a_switch_with_no_input
+    app::tests::tuning::per_app_rules_follow_the_peers_focused_app
+    app::tests::tuning::per_device_rules_follow_the_keyboard_they_come_from
+    app::tests::tuning::pointer_speed_scales_the_remote_motion
+    app::tests::tuning::remapped_keys_reach_the_peer
+    app::tests::tuning::reserving_a_held_remapped_button_on_reload_still_releases_its_output
+    app::tests::tuning::scrolling_is_tuned_and_the_modifier_is_lifted
+    app::tests::tuning::the_focused_app_goes_only_to_a_controller_that_asks
+    app::tests::typing::character_resolution_uses_mapper_output_before_control_meta_swap
+    app::tests::typing::enabled_backend_still_requires_peer_text_negotiation
+    app::tests::typing::enabled_path_refuses_non_owner_spoofed_keys_invalid_text_and_over_budget
+    app::tests::typing::missing_text_capability_and_equal_layouts_keep_physical_keys
+    app::tests::typing::national_levels_and_layout_change_mid_hold
+    app::tests::typing::physical_emergency_chord_precedes_mapping_in_character_visit
+    app::tests::typing::processes::two_process_character_path_kill9_releases
+    app::tests::typing::receiver_remembers_resolved_code_across_layout_change_and_disconnect
+    app::tests::unnegotiated_character_messages_never_inject_or_release_physical_keys
+    hooks::tests::a_real_file_is_checked
+    hooks::tests::symlink_target_directory_permissions
+    invite::tests::continuously_refilled_three_source_slowloris_allows_real_join
+    settings::tests::external_symlink_target_ancestors_must_be_private
+    settings::tests::run_key_actions_are_refused_when_the_file_is_writable_by_others
+
+test result: FAILED. 317 passed; 94 failed; 5 ignored; 0 measured; 0 filtered out; finished in 8.33s
+
+error: test failed, to rerun pass `-p one-mk --bin one-mk`

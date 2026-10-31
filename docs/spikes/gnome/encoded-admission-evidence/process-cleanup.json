@@ -1,0 +1,33 @@
+{
+  "matching_processes": [],
+  "unreadable_same_uid_environments": 4,
+  "private_session_removed": true,
+  "copied_extension_sources_removed": true,
+  "unreadable_details": [
+    {
+      "pid": 52086,
+      "command": "systemd",
+      "started_epoch": 1792587998.93,
+      "predates_first_test_log": true
+    },
+    {
+      "pid": 52088,
+      "command": "(sd-pam)",
+      "started_epoch": 1792587998.94,
+      "predates_first_test_log": true
+    },
+    {
+      "pid": 52809,
+      "command": "ssh-agent",
+      "started_epoch": 1792587999.44,
+      "predates_first_test_log": true
+    },
+    {
+      "pid": 1965920,
+      "command": "ssh-agent",
+      "started_epoch": 1793372605.79,
+      "predates_first_test_log": true
+    }
+  ],
+  "unreadable_processes_touched": false
+}

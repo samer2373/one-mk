@@ -52,8 +52,11 @@ consent changes. No identity supplied inside a plan is trusted. It must actually
 destroy presentation/decoder resources when `active()` is absent. `active()` is
 an admitted intent, **not permission to enable production playback**.
 
-The module is not yet called by the daemon, bridge or renderer. There is no new
-D-Bus method, wire format or local-media resolver. Transport payload/rate limits,
+The module is not yet called by the daemon, bridge or renderer. A bounded
+[presentation payload codec](presentation-wire.md) and `Gate::accept_encoded`
+entry point now exist, with ten additional unit tests. This remains a precursor:
+there is no new D-Bus method, daemon authority bootstrap or local-media resolver.
+Transport body/rate limits,
 cache verification, native lifecycle hooks and all production authorization gates
 remain integration work. The original bridge XML deliberately still carries no
 paths, media selection or frame bytes through Shell.
