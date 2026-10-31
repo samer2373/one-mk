@@ -1,0 +1,787 @@
+--- daemon start 1 (gif)
+wallpaper-m1-authority: ready name=:1.34 pid=507862 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+New default shortcuts: ctrl+alt+b toggles broadcast; ctrl+alt+v fetches a clipboard only while fetching is enabled somewhere. Review/change them with `one-mk hotkeys`; see this release's notes.
+wallpaper-m1-authority: renderer :1.36 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 2 (apng)
+wallpaper-m1-authority: ready name=:1.51 pid=508021 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.53 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 3 (webp)
+wallpaper-m1-authority: ready name=:1.68 pid=508198 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.70 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 4 (still)
+wallpaper-m1-authority: ready name=:1.86 pid=508354 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.88 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 5 (vp9)
+wallpaper-m1-authority: ready name=:1.112 pid=508585 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.114 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 6 (av1)
+wallpaper-m1-authority: ready name=:1.129 pid=508783 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.131 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 7 (clip1080p)
+wallpaper-m1-authority: ready name=:1.146 pid=508950 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.148 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 8 (gif)
+wallpaper-m1-authority: ready name=:1.157 pid=509170 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.159 authenticated
+wallpaper-m1-authority: directive pause
+wallpaper-m1-authority: directive play
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 9 (vp9)
+wallpaper-m1-authority: ready name=:1.177 pid=509371 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.179 authenticated
+wallpaper-m1-authority: renderer :1.185 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 10 (gif)
+wallpaper-m1-authority: ready name=:1.190 pid=509504 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.192 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 11 (apng)
+wallpaper-m1-authority: ready name=:1.199 pid=509630 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.201 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 12 (webp)
+wallpaper-m1-authority: ready name=:1.208 pid=509832 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.210 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 13 (still)
+wallpaper-m1-authority: ready name=:1.217 pid=510005 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.219 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 14 (vp9)
+wallpaper-m1-authority: ready name=:1.240 pid=510561 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.242 authenticated
+--- daemon start 15 (av1)
+wallpaper-m1-authority: ready name=:1.248 pid=510952 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.250 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 16 (clip1080p)
+wallpaper-m1-authority: ready name=:1.256 pid=511128 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.258 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 17 (gif)
+wallpaper-m1-authority: ready name=:1.264 pid=511291 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.266 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 18 (apng)
+wallpaper-m1-authority: ready name=:1.273 pid=511526 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.275 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 19 (webp)
+wallpaper-m1-authority: ready name=:1.282 pid=511679 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.284 authenticated
+--- daemon start 20 (still)
+wallpaper-m1-authority: ready name=:1.291 pid=511826 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.293 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 21 (vp9)
+wallpaper-m1-authority: ready name=:1.313 pid=512133 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.315 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 22 (av1)
+wallpaper-m1-authority: ready name=:1.322 pid=512334 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.324 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 23 (clip1080p)
+wallpaper-m1-authority: ready name=:1.331 pid=512557 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.333 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 24 (gif)
+wallpaper-m1-authority: ready name=:1.340 pid=512715 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.342 authenticated
+--- daemon start 25 (apng)
+wallpaper-m1-authority: ready name=:1.349 pid=512917 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.351 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 26 (webp)
+wallpaper-m1-authority: ready name=:1.358 pid=513074 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.360 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 27 (still)
+wallpaper-m1-authority: ready name=:1.367 pid=513211 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.369 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 28 (vp9)
+wallpaper-m1-authority: ready name=:1.390 pid=513688 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.392 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 29 (av1)
+wallpaper-m1-authority: ready name=:1.398 pid=513956 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.400 authenticated
+--- daemon start 30 (clip1080p)
+wallpaper-m1-authority: ready name=:1.406 pid=514076 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.408 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 31 (gif)
+wallpaper-m1-authority: ready name=:1.415 pid=514230 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.417 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 32 (apng)
+wallpaper-m1-authority: ready name=:1.424 pid=514360 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.426 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 33 (webp)
+wallpaper-m1-authority: ready name=:1.433 pid=514475 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.435 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 34 (still)
+wallpaper-m1-authority: ready name=:1.442 pid=514684 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.444 authenticated
+--- daemon start 35 (vp9)
+wallpaper-m1-authority: ready name=:1.464 pid=514928 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.466 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 36 (av1)
+wallpaper-m1-authority: ready name=:1.472 pid=515126 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.474 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 37 (clip1080p)
+wallpaper-m1-authority: ready name=:1.480 pid=515271 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.482 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 38 (gif)
+wallpaper-m1-authority: ready name=:1.488 pid=515468 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.490 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 39 (apng)
+wallpaper-m1-authority: ready name=:1.497 pid=515745 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.499 authenticated
+--- daemon start 40 (webp)
+wallpaper-m1-authority: ready name=:1.506 pid=515976 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.508 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 41 (still)
+wallpaper-m1-authority: ready name=:1.515 pid=516173 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.517 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 42 (vp9)
+wallpaper-m1-authority: ready name=:1.537 pid=516606 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.539 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 43 (av1)
+wallpaper-m1-authority: ready name=:1.545 pid=516728 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.547 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 44 (clip1080p)
+wallpaper-m1-authority: ready name=:1.554 pid=516870 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.556 authenticated
+--- daemon start 45 (gif)
+wallpaper-m1-authority: ready name=:1.562 pid=516960 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.564 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 46 (apng)
+wallpaper-m1-authority: ready name=:1.571 pid=517095 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.573 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 47 (webp)
+wallpaper-m1-authority: ready name=:1.580 pid=517218 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.582 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 48 (still)
+wallpaper-m1-authority: ready name=:1.589 pid=517443 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.591 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 49 (vp9)
+wallpaper-m1-authority: ready name=:1.613 pid=517855 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.615 authenticated
+--- daemon start 50 (av1)
+wallpaper-m1-authority: ready name=:1.622 pid=518330 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.624 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 51 (clip1080p)
+wallpaper-m1-authority: ready name=:1.631 pid=518557 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.633 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 52 (gif)
+wallpaper-m1-authority: ready name=:1.639 pid=518668 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.641 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 53 (apng)
+wallpaper-m1-authority: ready name=:1.648 pid=518830 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.650 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 54 (webp)
+wallpaper-m1-authority: ready name=:1.657 pid=518923 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.659 authenticated
+--- daemon start 55 (still)
+wallpaper-m1-authority: ready name=:1.666 pid=519080 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.668 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 56 (vp9)
+wallpaper-m1-authority: ready name=:1.690 pid=519437 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.692 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 57 (av1)
+wallpaper-m1-authority: ready name=:1.699 pid=519573 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.701 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 58 (clip1080p)
+wallpaper-m1-authority: ready name=:1.707 pid=519673 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.709 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 59 (gif)
+wallpaper-m1-authority: ready name=:1.716 pid=519800 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.718 authenticated
+--- daemon start 60 (apng)
+wallpaper-m1-authority: ready name=:1.725 pid=519882 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.727 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 61 (webp)
+wallpaper-m1-authority: ready name=:1.735 pid=519973 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.737 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 62 (still)
+wallpaper-m1-authority: ready name=:1.745 pid=520112 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.747 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 63 (vp9)
+wallpaper-m1-authority: ready name=:1.769 pid=520358 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.771 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 64 (av1)
+wallpaper-m1-authority: ready name=:1.778 pid=520436 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.780 authenticated
+--- daemon start 65 (clip1080p)
+wallpaper-m1-authority: ready name=:1.786 pid=520525 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.788 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 66 (gif)
+wallpaper-m1-authority: ready name=:1.795 pid=520611 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.797 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 67 (apng)
+wallpaper-m1-authority: ready name=:1.804 pid=520723 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.806 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 68 (webp)
+wallpaper-m1-authority: ready name=:1.813 pid=520822 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.815 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 69 (still)
+wallpaper-m1-authority: ready name=:1.823 pid=520904 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.825 authenticated
+--- daemon start 70 (vp9)
+wallpaper-m1-authority: ready name=:1.848 pid=521126 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.850 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 71 (av1)
+wallpaper-m1-authority: ready name=:1.857 pid=521228 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.859 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 72 (clip1080p)
+wallpaper-m1-authority: ready name=:1.866 pid=521313 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.868 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 73 (gif)
+wallpaper-m1-authority: ready name=:1.875 pid=521624 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.877 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 74 (apng)
+wallpaper-m1-authority: ready name=:1.884 pid=521817 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.886 authenticated
+--- daemon start 75 (webp)
+wallpaper-m1-authority: ready name=:1.893 pid=521968 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.895 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 76 (still)
+wallpaper-m1-authority: ready name=:1.902 pid=522180 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.904 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 77 (vp9)
+wallpaper-m1-authority: ready name=:1.927 pid=522431 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.929 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 78 (av1)
+wallpaper-m1-authority: ready name=:1.936 pid=522533 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.938 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 79 (clip1080p)
+wallpaper-m1-authority: ready name=:1.945 pid=522627 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.947 authenticated
+--- daemon start 80 (gif)
+wallpaper-m1-authority: ready name=:1.953 pid=522726 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.955 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 81 (apng)
+wallpaper-m1-authority: ready name=:1.962 pid=522817 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.964 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 82 (webp)
+wallpaper-m1-authority: ready name=:1.971 pid=522934 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.973 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 83 (still)
+wallpaper-m1-authority: ready name=:1.980 pid=523258 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.982 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 84 (vp9)
+wallpaper-m1-authority: ready name=:1.1004 pid=524159 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1006 authenticated
+--- daemon start 85 (av1)
+wallpaper-m1-authority: ready name=:1.1012 pid=524415 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1014 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 86 (clip1080p)
+wallpaper-m1-authority: ready name=:1.1021 pid=524545 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1023 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 87 (gif)
+wallpaper-m1-authority: ready name=:1.1029 pid=524677 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1031 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 88 (apng)
+wallpaper-m1-authority: ready name=:1.1038 pid=524801 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1040 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 89 (webp)
+wallpaper-m1-authority: ready name=:1.1047 pid=525012 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1049 authenticated
+--- daemon start 90 (still)
+wallpaper-m1-authority: ready name=:1.1056 pid=525415 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1058 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 91 (vp9)
+wallpaper-m1-authority: ready name=:1.1080 pid=525736 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1082 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 92 (av1)
+wallpaper-m1-authority: ready name=:1.1089 pid=525965 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1091 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 93 (clip1080p)
+wallpaper-m1-authority: ready name=:1.1098 pid=526197 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1100 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 94 (gif)
+wallpaper-m1-authority: ready name=:1.1106 pid=526417 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1108 authenticated
+--- daemon start 95 (apng)
+wallpaper-m1-authority: ready name=:1.1115 pid=526582 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1117 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 96 (webp)
+wallpaper-m1-authority: ready name=:1.1124 pid=526859 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1126 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 97 (still)
+wallpaper-m1-authority: ready name=:1.1133 pid=526962 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1135 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 98 (vp9)
+wallpaper-m1-authority: ready name=:1.1157 pid=527310 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1159 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 99 (av1)
+wallpaper-m1-authority: ready name=:1.1166 pid=527514 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1168 authenticated
+--- daemon start 100 (clip1080p)
+wallpaper-m1-authority: ready name=:1.1175 pid=527597 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1177 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 101 (gif)
+wallpaper-m1-authority: ready name=:1.1184 pid=527973 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1186 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 102 (apng)
+wallpaper-m1-authority: ready name=:1.1193 pid=528613 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1195 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 103 (webp)
+wallpaper-m1-authority: ready name=:1.1202 pid=528956 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1204 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 104 (still)
+wallpaper-m1-authority: ready name=:1.1211 pid=530059 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1213 authenticated
+--- daemon start 105 (vp9)
+wallpaper-m1-authority: ready name=:1.1235 pid=530296 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1237 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 106 (av1)
+wallpaper-m1-authority: ready name=:1.1244 pid=530469 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1246 authenticated
+wallpaper-m1-authority: consent revoked
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 107 (clip1080p)
+wallpaper-m1-authority: ready name=:1.1253 pid=530564 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1255 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 108 (gif)
+wallpaper-m1-authority: ready name=:1.1262 pid=530654 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1264 authenticated
+wallpaper-m1-authority: stopped; record removed
+--- daemon start 109 (apng)
+wallpaper-m1-authority: ready name=:1.1272 pid=530737 consent=true
+one-mk is running on samer-Victus.
+Tip: Ctrl+Alt+Shift+Esc always brings the pointer back.
+No computers are paired yet. Run `one-mk pair` on this computer and on the other one.
+wallpaper-m1-authority: renderer :1.1274 authenticated
