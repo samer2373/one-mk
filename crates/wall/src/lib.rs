@@ -308,3 +308,4 @@ pub mod wire;
 pub mod bridge;
 pub mod presentation;
 pub mod presentation_wire;
+pub mod presentation_auth;

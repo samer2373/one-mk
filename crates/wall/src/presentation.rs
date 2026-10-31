@@ -1,4 +1,4 @@
-//! Fail-closed admission for a future daemon-to-renderer presentation transport.
+//! Fail-closed admission for the daemon-to-renderer presentation transport.
 //! Caller credentials must come from the authenticated transport, never the plan.
 //! This module performs no IPC, cache verification, decoding or authorization.
 
@@ -9,6 +9,13 @@ pub struct Owner {
     pub unique_name: String,
     pub uid: u32,
     pub pid: u32,
+}
+
+/// A D-Bus unique connection name such as `:1.42` (never a well-known name).
+pub fn valid_unique_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(':') else { return false };
+    rest.len() <= 254 && rest.split('.').count() >= 2 && rest.split('.').all(|part| !part.is_empty() &&
+        part.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,12 +94,7 @@ impl Gate {
 
     pub fn new(owner: Owner, consent_revision: u64, generation: [u8; 16], canvas: Rect,
         serial: u32, monitors: Vec<Monitor>) -> Result<Self, Error> {
-        let Some(name) = owner.unique_name.strip_prefix(':') else { return Err(Error::Identity) };
-        if owner.pid == 0 || name.len() > 254 || name.split('.').count() < 2 ||
-            name.split('.').any(|part| part.is_empty() || !part.bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')) {
-            return Err(Error::Identity);
-        }
+        if owner.pid == 0 || !valid_unique_name(&owner.unique_name) { return Err(Error::Identity); }
         if consent_revision == 0 { return Err(Error::Consent); }
         if generation == [0; 16] { return Err(Error::Generation); }
         canvas.edges()?;
