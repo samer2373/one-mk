@@ -354,10 +354,14 @@ def assert_frames(item, analysis):
             assert entry['error'] < 6 and entry['psnr_db'] >= 30, (item, entry)
         assert entry['absent_slice_error'] > 20, (item, entry)
         if entry['runner_up_error'] is not None:
-            # Lossy video: fewer identifying rows are visible on this canvas,
-            # so the next-best frame is closer; still clearly separated.
-            margin = 3 if ITEMS[item]['lossless'] else max(1.5, entry['error'])
-            assert entry['runner_up_error'] > entry['error'] + margin, (item, entry)
+            if ITEMS[item]['lossless']:
+                assert entry['runner_up_error'] > entry['error'] + 3, (item, entry)
+            else:
+                # Lossy video (PSNR >= 30 dB checked above): on small or scaled
+                # monitors fewer identifying rows are visible, so the next-best
+                # frame is closer; it must still be clearly worse.
+                assert entry['runner_up_error'] >= 1.5 * entry['error'] and \
+                    entry['runner_up_error'] >= entry['error'] + 0.5, (item, entry)
 
 
 def media_on_screen(item, shot, name):

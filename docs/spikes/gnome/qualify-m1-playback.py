@@ -324,7 +324,7 @@ def shell_view():
 
 def playing(pid, offset):
     line = await_line(pid, offset, 'event=playing', 8)
-    view = wait(lambda: (lambda value: value if value['layer'] and value['fresh'] and value['state'] == 1 else None)(shell_view()),
+    view = wait(lambda: (lambda value: value if value['layer'] and value['fresh'] and value['state'] in (1, 4) else None)(shell_view()),
                 3, 0.05, 'Shell reveals the presentation')
     assert view['rect'] == [0, 0, 3840, 1080] and view['clones'] == 2 and view['reasons'] == 0, view
     return line, view
@@ -618,7 +618,7 @@ def scenario(item, baseline):
                 assert any('event=still-presented worker=stopped cleanup=ok' in line for line in lines_for(pid, offset))
                 assert not any(group for group in play_groups().values()), play_groups()
                 view = shell_view()
-                assert not exited(pid) and view['layer'] and view['state'] == 1, view
+                assert not exited(pid) and view['layer'] and view['state'] == 4, view  # holding (step C)
                 record['stable_after_s'] = 4.5
                 check(f'still PNG: both monitors show their exact slices (every pixel below the panel), identical '
                       f'4.5 s later and still revealed, decode worker gone right after the one frame')
@@ -782,7 +782,7 @@ def pause_proof(baseline):
         seen = len(lines_for(pid, offset))
         daemon.directive('play')
         wait(lambda: any(line.startswith('event=playing') for line in lines_for(pid, offset)[seen:]), 5, what='resume')
-        wait(lambda: (lambda value: value if value['layer'] and value['state'] == 1 else None)(shell_view()), 3, 0.05, 'revealed')
+        wait(lambda: (lambda value: value if value['layer'] and value['state'] in (1, 4) else None)(shell_view()), 3, 0.05, 'revealed')
         indices = []
         for index in range(4):
             shot, _, _ = screenshot(f'resumed-{index}')
