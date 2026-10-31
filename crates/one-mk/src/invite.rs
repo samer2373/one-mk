@@ -587,6 +587,8 @@ mod tests {
         attempts
     }
 
+    // macOS only answers on 127.0.0.1; 127.0.0.2-4 need `ifconfig lo0 alias`.
+    #[cfg_attr(target_os = "macos", ignore = "needs extra loopback addresses")]
     #[tokio::test]
     async fn continuously_refilled_three_source_slowloris_allows_real_join() {
         let dir = std::env::temp_dir().join(format!("one-mk-continuous-invite-{}", std::process::id()));

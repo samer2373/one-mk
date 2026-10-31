@@ -74,31 +74,38 @@ chmod +x "$scratch/bin/gh"
   cd "$scratch"
   export PATH="$scratch/bin:$PATH" GITHUB_REF_NAME=v0.1.12 GITHUB_REPOSITORY=local/test GITHUB_RUN_NUMBER=123 RELEASE_TIME=1793318400 GITHUB_STEP_SUMMARY="$scratch/summary"
   bash Stage.sh
+  # With the production key on and no signing key, publishing is refused.
+  if bash Generate.sh > unsigned-production-output 2>&1; then echo 'Unsigned production release was accepted' >&2; exit 1; fi
+  grep -q 'refusing to publish' unsigned-production-output
+  # With the test key still in place, an unsigned release is produced and flagged.
+  cp crates/one-mk/src/update_key.rs production-key.rs
+  sed -i 's/PRODUCTION_KEY: bool = true/PRODUCTION_KEY: bool = false/' crates/one-mk/src/update_key.rs
   bash Generate.sh
-  test ! -e assets/update-manifest.json.sig
+  test ! -e release-files/update-manifest.json.sig
   grep -q UNSIGNED summary
+  cp production-key.rs crates/one-mk/src/update_key.rs
   export ONE_MK_UPDATE_SIGNING_KEY
   ONE_MK_UPDATE_SIGNING_KEY=$(cat test-key.pem)
   bash Generate.sh
   unset ONE_MK_UPDATE_SIGNING_KEY
-  test "$(wc -c < assets/update-manifest.json.sig)" -eq 64
+  test "$(wc -c < release-files/update-manifest.json.sig)" -eq 64
   bash Checksum.sh > checksums-output
-  (cd assets && sha256sum -c SHA256SUMS)
+  (cd release-files && sha256sum -c SHA256SUMS)
   touch notes.md
   bash Publish.sh
   test -e published
   if bash Publish.sh > rerun-output 2>&1; then echo 'Published release was overwritten' >&2; exit 1; fi
   grep -q 'Refusing to overwrite' rerun-output
-  cp assets/update-manifest.json tampered
+  cp release-files/update-manifest.json tampered
   printf ' ' >> tampered
-  if openssl pkeyutl -verify -rawin -pubin -inkey test-key.pub.pem -in tampered -sigfile assets/update-manifest.json.sig > tamper-output 2>&1; then
+  if openssl pkeyutl -verify -rawin -pubin -inkey test-key.pub.pem -in tampered -sigfile release-files/update-manifest.json.sig > tamper-output 2>&1; then
     echo 'Tampered manifest was accepted' >&2; exit 1
   fi
   python3 - <<'PY'
 import json
 import pathlib
 
-manifest = json.loads(pathlib.Path("assets/update-manifest.json").read_bytes())
+manifest = json.loads(pathlib.Path("release-files/update-manifest.json").read_bytes())
 assert manifest["sequence"] == 123
 assert len(manifest["assets"]) == 6
 assert {asset["os"] for asset in manifest["assets"]} == {"linux", "windows", "macos", "any"}

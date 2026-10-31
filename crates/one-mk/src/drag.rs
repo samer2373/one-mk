@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn safety_rejects_missing_special_and_symlink_paths() {
-        let root = std::env::temp_dir().join(format!("one-mk-drop-safety-{}", std::process::id()));
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!("one-mk-drop-safety-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("hello.txt");
         std::fs::write(&file, "hello").unwrap();
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn safety_bounds_counts_size_depth_and_empty_folders() {
-        let root = std::env::temp_dir().join(format!("one-mk-drop-bounds-{}", std::process::id()));
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!("one-mk-drop-bounds-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         assert!(safe_paths(vec![]).is_err());
         assert!(safe_paths(vec![root.clone(); MAX_FILES + 1]).is_err());

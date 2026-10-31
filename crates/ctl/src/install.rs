@@ -493,6 +493,8 @@ mod tests {
         assert!(with_home.contains("ExecStart=\"/opt/my apps/one-mk\" \"run\" \"--home\" \"/tmp/a b\"\n"), "{with_home}");
     }
 
+    // Linux package contents: Windows would join the paths with backslashes.
+    #[cfg(unix)]
     #[test]
     fn packaged_files_match_what_install_writes() {
         let files = packaged_files(Path::new("/usr/bin"));

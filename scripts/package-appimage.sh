@@ -53,5 +53,6 @@ if [ -z "$tool" ]; then
     exit 0
 fi
 # --appimage-extract-and-run lets appimagetool itself run where FUSE is missing (CI containers).
-ARCH=$arch "$tool" --appimage-extract-and-run --no-appstream "$appdir" "$out" >/dev/null 2>&1 || ARCH=$arch "$tool" --no-appstream "$appdir" "$out"
+# appimagetool 1.9.0 stamps the squashfs itself and aborts if SOURCE_DATE_EPOCH is also set; clamp_times already fixed the file times.
+ARCH=$arch env -u SOURCE_DATE_EPOCH "$tool" --appimage-extract-and-run --no-appstream "$appdir" "$out" >/dev/null 2>&1 || ARCH=$arch env -u SOURCE_DATE_EPOCH "$tool" --no-appstream "$appdir" "$out"
 echo "$out"

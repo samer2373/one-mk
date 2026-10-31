@@ -128,6 +128,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           APPIMAGETOOL_SHA256: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1
         run: |
+          sudo apt-get install -y --no-install-recommends desktop-file-utils
           mkdir -p "$RUNNER_TEMP/appimagetool"
           curl -fsSL -o "$RUNNER_TEMP/appimagetool/appimagetool" \
             https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage
@@ -169,17 +170,17 @@ jobs:
       # What is uploaded, and SHA256SUMS over all of it.
       - name: Stage the assets
         run: |
-          mkdir assets
-          cp dist/one-mk-* dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb assets/
+          mkdir release-files
+          cp dist/one-mk-* dist/homebrew/one-mk.rb dist/homebrew/one-mk-source.rb release-files/
       - name: Generate and sign update manifest
         env:
           ONE_MK_UPDATE_SIGNING_KEY: ${{ secrets.ONE_MK_UPDATE_SIGNING_KEY }}
         run: |
-          bash scripts/make-update-manifest.sh assets "$GITHUB_RUN_NUMBER"
-          bash scripts/sign-update-manifest.sh assets
+          bash scripts/make-update-manifest.sh release-files "$GITHUB_RUN_NUMBER"
+          bash scripts/sign-update-manifest.sh release-files
       - name: Checksum all staged assets including the signed manifest
         run: |
-          cd assets && sha256sum * > SHA256SUMS && cat SHA256SUMS
+          cd release-files && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - name: Notes
         run: |
           cat > notes.md <<'MD'
@@ -224,10 +225,10 @@ jobs:
             echo 'Refusing to overwrite a published release. Publish a new version with a higher sequence.' >&2
             exit 1
           fi
-          gh release upload "$tag" assets/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$tag" release-files/* --repo "$GITHUB_REPOSITORY" --clobber
           export LC_ALL=C   # one collation for sort and comm
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > uploaded
-          (cd assets && ls) | sort > staged
+          (cd release-files && ls) | sort > staged
           missing=$(comm -23 staged uploaded)
           if [ -n "$missing" ]; then
             echo "not uploaded: $missing" >&2

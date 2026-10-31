@@ -56,13 +56,25 @@ impl Node {
         )?));
         client.transport_config(transport);
 
-        let socket = UdpSocket::bind(addr).with_context(|| format!("binding UDP {addr}"))?;
+        let socket = Self::socket(addr).with_context(|| format!("binding UDP {addr}"))?;
         let runtime = quinn::default_runtime().context("no async runtime")?;
         let endpoint =
             quinn::Endpoint::new(quinn::EndpointConfig::default(), Some(server), socket, runtime)?;
         let (tx, rx) = mpsc::channel(MAX_HANDSHAKES);
         let accepted = Arc::new(Accepted { start: Mutex::new(Some(tx)), rx: tokio::sync::Mutex::new(rx) });
         Ok(Self { endpoint, client, identity, accepted })
+    }
+
+    /// An IPv6 socket must also take IPv4 peers (mapped addresses); Windows
+    /// defaults to IPv6 only, which made a Windows host unreachable over IPv4.
+    fn socket(addr: SocketAddr) -> std::io::Result<UdpSocket> {
+        if !addr.is_ipv6() {
+            return UdpSocket::bind(addr);
+        }
+        let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+        socket.set_only_v6(false)?;
+        socket.bind(&addr.into())?;
+        Ok(socket.into())
     }
 
     /// Binds `port` on all interfaces: a dual-stack IPv6 socket (`[::]`) so

@@ -2,3 +2,5 @@
 /.lab/
 /dist
 /.clipboard-history-qa/
+
+.claude/

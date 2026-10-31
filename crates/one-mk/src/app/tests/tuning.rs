@@ -305,7 +305,9 @@ async fn buttons_are_remapped_and_keys_can_switch() {
     );
     duo.ha.events.send(Event::Button { button: 0x113, down: true, device: None }).unwrap();
     duo.ha.events.send(Event::Button { button: 0x113, down: false, device: None }).unwrap();
-    assert_eq!(next_n(&mut duo, 4).await, [key(LALT, true), key(LEFT, true), key(LEFT, false), key(LALT, false)]);
+    // "back" is Alt+Left on a PC and Cmd+[ on a Mac, and both ends here are this machine.
+    let (mod_key, back) = if cfg!(target_os = "macos") { (125, 26) } else { (LALT, LEFT) };
+    assert_eq!(next_n(&mut duo, 4).await, [key(mod_key, true), key(back, true), key(back, false), key(mod_key, false)]);
     press(&duo, &[(183, true)]);
     assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { .. }), "f13 brought the pointer home");
     duo.stop().await;

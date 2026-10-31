@@ -3168,7 +3168,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "one-mk"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3207,7 +3207,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-app"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "directories",
@@ -3219,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-clipboard"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3240,7 +3240,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-ctl"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "directories",
@@ -3253,7 +3253,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-input"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3289,7 +3289,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-net"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "base64",
@@ -3305,6 +3305,7 @@ dependencies = [
  "rustls",
  "serde",
  "sha2",
+ "socket2",
  "tokio",
  "toml 1.1.8+spec-1.1.0",
  "tracing",
@@ -3313,7 +3314,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-proto"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "unicode-general-category",
  "unicode-segmentation",
@@ -3321,7 +3322,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-tray"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "ksni",
@@ -3333,7 +3334,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "blake3",
  "futures-util",
@@ -3348,11 +3349,11 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall-canvas"
-version = "0.1.14"
+version = "0.1.15"
 
 [[package]]
 name = "one-mk-wall-import"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "blake3",
  "image",
@@ -3367,7 +3368,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall-sync"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "libc",
  "one-mk-net",
