@@ -249,7 +249,11 @@ async fn keysym_visit_release_failure_closes_both_sessions() {
     harness.inject(Inject::Controlled(false));
     harness.until("failed visit cleanup closed", |world| world.count("rd.Close") >= 2).await;
     assert!(harness.world().symbols.is_empty());
-    assert_eq!(harness.world().keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect::<Vec<_>>(), [(0x7a, 1), (0x7a, 0), (0x7a, 0)]);
+    // Press, the release that fails, and then either one more release attempt
+    // or none: closing the session makes the desktop let go either way (which
+    // of the two happens first is a race, and both are safe).
+    let calls = harness.world().keysym_calls.iter().map(|(_, symbol, state)| (*symbol, *state)).collect::<Vec<_>>();
+    assert!(calls == [(0x7a, 1), (0x7a, 0)] || calls == [(0x7a, 1), (0x7a, 0), (0x7a, 0)], "{calls:?}");
 }
 
 #[tokio::test]
