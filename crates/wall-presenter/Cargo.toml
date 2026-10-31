@@ -8,7 +8,7 @@ description = "Default-disabled wallpaper presentation stop-gate probe (not a me
 [features]
 default = []
 gnome-risk-probe = ["dep:libloading", "dep:libc", "dep:blake3", "dep:wayland-client", "dep:wayland-protocols"]
-gnome-bridge = ["dep:zbus", "dep:tokio", "dep:futures-util", "dep:libc", "dep:one-mk-wall-sync"]
+gnome-bridge = ["dep:zbus", "dep:tokio", "dep:futures-util", "dep:libc", "dep:one-mk-wall-sync", "dep:serde", "dep:serde_json"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading = { version = "=0.8.9", optional = true }
@@ -20,6 +20,8 @@ zbus = { version = "5.19.0", default-features = false, features = ["tokio"], opt
 tokio = { version = "1.54.1", features = ["rt", "macros", "time"], optional = true }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"], optional = true }
 one-mk-wall-sync = { path = "../wall", optional = true }
+serde = { version = "1.0.229", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
 
 [[example]]
 name = "bridge-conformance"

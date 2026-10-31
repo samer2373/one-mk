@@ -102,6 +102,7 @@ impl Bridge {
 
     pub fn connection(&self) -> &Connection { &self.connection }
     pub fn owner(&self) -> &str { &self.owner }
+    pub fn serial(&self) -> u32 { self.serial }
 }
 
 fn validate_message(message: &zbus::Message, owner: &str, signature: &str) -> Result<()> {

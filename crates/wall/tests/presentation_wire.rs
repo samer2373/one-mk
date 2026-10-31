@@ -98,13 +98,13 @@ fn total_size_budget_applies_to_encoder_and_decoder() {
 }
 
 #[test]
-fn malformed_payload_discards_intent_without_resetting_replay_protection() {
+fn malformed_payload_preserves_intent_without_resetting_replay_protection() {
     let mut gate = gate();
     let bytes = wire::encode(&plan()).unwrap();
     gate.accept_encoded(&owner(), &bytes, true, Some(7)).unwrap();
     assert!(gate.active().is_some());
     assert_eq!(gate.accept_encoded(&owner(), b"bad", true, Some(7)), Err(AdmissionError::Wire));
-    assert!(gate.active().is_none());
+    assert_eq!(gate.active(), Some(&plan()));
     assert_eq!(gate.accept_encoded(&owner(), &bytes, true, Some(7)), Err(AdmissionError::Replay));
     let fresh = wire::encode(&PresentationPlan { sequence: 2, ..plan() }).unwrap();
     gate.accept_encoded(&owner(), &fresh, true, Some(7)).unwrap();
@@ -125,7 +125,7 @@ fn independent_live_consent_and_identity_are_checked_before_payload() {
     gate.accept_encoded(&owner(), &bytes, true, Some(7)).unwrap();
     let stranger = Owner { pid: 1235, ..owner() };
     assert_eq!(gate.accept_encoded(&stranger, b"bad", false, None), Err(AdmissionError::Identity));
-    assert!(gate.active().is_none());
+    assert_eq!(gate.active(), Some(&plan()));
     let fresh = wire::encode(&PresentationPlan { sequence: 2, ..plan() }).unwrap();
     gate.accept_encoded(&owner(), &fresh, true, Some(7)).unwrap();
     assert!(gate.active().is_some());

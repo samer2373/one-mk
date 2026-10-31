@@ -78,7 +78,6 @@ pub struct Gate {
 impl Gate {
     pub fn accept_encoded(&mut self, caller: &Owner, bytes: &[u8], enabled: bool,
         live_revision: Option<u64>) -> Result<(), Error> {
-        self.active = None;
         if caller != &self.owner { return Err(Error::Identity); }
         self.reconcile_consent(enabled, live_revision);
         if self.revoked { return Err(Error::Revoked); }
@@ -103,7 +102,6 @@ impl Gate {
     }
 
     pub fn accept(&mut self, caller: &Owner, plan: PresentationPlan) -> Result<(), Error> {
-        self.active = None;
         if self.revoked { return Err(Error::Revoked); }
         if caller != &self.owner { return Err(Error::Identity); }
         if plan.consent_revision != self.consent_revision { return Err(Error::Consent); }

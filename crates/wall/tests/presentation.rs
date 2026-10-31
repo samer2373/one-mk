@@ -58,12 +58,12 @@ fn authenticated_identity_requires_unique_name_uid_and_pid() {
         gate.accept(&owner(), plan()).unwrap();
         let update = PresentationPlan { sequence: 2, ..plan() };
         assert_eq!(gate.accept(&caller, update), Err(Error::Identity));
-        assert!(gate.active().is_none());
+        assert_eq!(gate.active(), Some(&plan()));
     }
 }
 
 #[test]
-fn every_rejected_plan_discards_current_presentation() {
+fn every_rejected_plan_preserves_current_presentation() {
     let cases = [
         (PresentationPlan { consent_revision: 8, ..plan() }, Error::Consent),
         (PresentationPlan { generation: [3; 16], ..plan() }, Error::Generation),
@@ -79,7 +79,7 @@ fn every_rejected_plan_discards_current_presentation() {
         gate.accept(&owner(), plan()).unwrap();
         if invalid.sequence != 0 { invalid.sequence = 2; }
         assert_eq!(gate.accept(&owner(), invalid), Err(expected));
-        assert!(gate.active().is_none());
+        assert_eq!(gate.active(), Some(&plan()));
         assert_eq!(gate.accept(&owner(), plan()), Err(Error::Replay));
     }
 }
