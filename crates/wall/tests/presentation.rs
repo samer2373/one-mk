@@ -144,6 +144,27 @@ fn suspend_resume_never_replays_pre_suspend_or_during_suspend_plans() {
 }
 
 #[test]
+fn a_paused_plan_may_leave_the_canvas_but_never_presents() {
+    // The right monitor moved to local x=420: its slice (x=320..420) leaves
+    // the 500-wide canvas that ends at x=400.
+    let mut gate = Gate::new(owner(), 7, [1; 16], canvas(), 3,
+        vec![(0, 0, 100, 100, 1.0), (420, 0, 100, 100, 1.0)]).unwrap();
+    let mut outside = plan();
+    outside.slices[1].canvas.x = 320;
+    gate.pause_hint(0).unwrap();
+    assert_eq!(gate.accept(&owner(), outside.clone()), Err(Error::Geometry));
+    gate.accept(&owner(), PresentationPlan { paused: true, ..outside.clone() }).unwrap();
+    assert!(gate.active().is_none());
+    // Everything else about the slices is still checked.
+    let mut wrong_size = PresentationPlan { sequence: 2, paused: true, ..outside.clone() };
+    wrong_size.slices[1].canvas.width = 101;
+    assert_eq!(gate.accept(&owner(), wrong_size), Err(Error::Geometry));
+    let mut overflow = PresentationPlan { sequence: 2, paused: true, ..outside };
+    overflow.slices[1].canvas.x = i32::MAX;
+    assert_eq!(gate.accept(&owner(), overflow), Err(Error::Geometry));
+}
+
+#[test]
 fn hotplug_requires_fresh_serial_and_plan_without_shrinking_canvas() {
     let mut gate = gate();
     gate.pause_hint(0).unwrap();

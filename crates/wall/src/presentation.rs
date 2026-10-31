@@ -38,7 +38,7 @@ impl Rect {
         Ok((right, bottom))
     }
 
-    fn contains(self, other: Self) -> Result<bool, Error> {
+    pub(crate) fn contains(self, other: Self) -> Result<bool, Error> {
         let (right, bottom) = self.edges()?;
         let (other_right, other_bottom) = other.edges()?;
         Ok(other.x >= self.x && other.y >= self.y && other_right <= right && other_bottom <= bottom)
@@ -118,8 +118,12 @@ impl Gate {
         for (slice, &(local_x, local_y, width, height, _)) in plan.slices.iter().zip(&self.monitors) {
             if slice.screen.is_empty() || slice.screen.len() > 256 || slice.screen.chars().any(char::is_control)
                 || !screens.insert(&slice.screen) { return Err(Error::Geometry); }
+            slice.canvas.edges()?;
+            // A paused plan presents nothing, so a local layout that does not
+            // fit the committed canvas (an added or moved output) may still be
+            // admitted paused: static until the layout fits again.
             if slice.canvas.width != width as u32 || slice.canvas.height != height as u32 ||
-                !self.canvas.contains(slice.canvas)? { return Err(Error::Geometry); }
+                (!plan.paused && !self.canvas.contains(slice.canvas)?) { return Err(Error::Geometry); }
             let offset = (i64::from(slice.canvas.x) - i64::from(local_x),
                 i64::from(slice.canvas.y) - i64::from(local_y));
             if translation.is_some_and(|previous| previous != offset) { return Err(Error::Geometry); }
