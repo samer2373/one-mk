@@ -573,10 +573,12 @@ def main():
         REPORT['failure'] = f'{type(error).__name__}: {error}'
         raise
     finally:
-        if (SESSION / 'log/shell.log').exists():
-            shutil.copy2(SESSION / 'log/shell.log', LAB / 'shell.log')
-        if started:
-            run([HARNESS, 'stop'], check=False)
+        try:
+            if (SESSION / 'log/shell.log').exists():
+                shutil.copy2(SESSION / 'log/shell.log', LAB / 'shell.log')
+        finally:
+            if started:
+                run([HARNESS, 'stop'], check=False)
         REPORT['remaining_lab_processes'] = lab_processes()
         shutil.rmtree(sources, ignore_errors=True)
         (LAB / 'result.json').write_text(json.dumps(REPORT, indent=2) + '\n')

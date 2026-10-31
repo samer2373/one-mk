@@ -13,10 +13,11 @@ from unittest.mock import patch
 
 
 class PresentationCleanupTests(unittest.TestCase):
-    def test_failed_or_timed_out_start_still_stops_the_private_session(self):
-        for error in (subprocess.CalledProcessError(1, "private-start"),
-                      subprocess.TimeoutExpired("private-start", 45)):
-            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as temporary:
+    def test_start_and_evidence_failures_still_stop_the_private_session(self):
+        for phase, error in (("start", subprocess.CalledProcessError(1, "private-start")),
+                             ("start", subprocess.TimeoutExpired("private-start", 45)),
+                             ("evidence", OSError("evidence copy failed"))):
+            with self.subTest(phase=phase, error=type(error).__name__), tempfile.TemporaryDirectory() as temporary:
                 lab = Path(temporary) / "lab"
                 source = Path(__file__).with_name("qualify-m1-presentation.py")
                 spec = importlib.util.spec_from_file_location("presentation_qualification", source)
@@ -30,7 +31,11 @@ class PresentationCleanupTests(unittest.TestCase):
                     nonlocal allocated, stopped
                     if arguments[0] == module.HARNESS and arguments[1] == "start":
                         allocated = True
-                        raise error
+                        if phase == "start":
+                            raise error
+                        log = module.SESSION / "log/shell.log"
+                        log.parent.mkdir(parents=True)
+                        log.write_text("test log")
                     if arguments[0] == module.HARNESS and arguments[1] == "stop":
                         stopped = True
                         allocated = False
@@ -38,6 +43,8 @@ class PresentationCleanupTests(unittest.TestCase):
 
                 with patch.object(module, "run", run), patch.object(
                     module, "lab_processes", lambda: {123: "private-bus"} if allocated else {}
+                ), patch.object(module, "extension", side_effect=RuntimeError("scenario failed")), patch.object(
+                    module.shutil, "copy2", side_effect=error
                 ), contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaises(type(error)):
                         module.main()
