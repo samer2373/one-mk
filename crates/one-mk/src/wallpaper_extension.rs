@@ -198,4 +198,17 @@ mod tests {
             assert!(!source.contains(forbidden), "{forbidden}");
         }
     }
+
+    #[test]
+    fn lifecycle_stops_are_cooperative_and_sleep_or_holding_are_understood() {
+        let source = FILES[1].1;
+        // SIGTERM first (the renderer removes its worker and cgroup), SIGKILL
+        // only after the grace period; never an immediate force-exit.
+        for required in ["process.send_signal(15)", "TERMINATE_GRACE_MS = 2000", "process.force_exit()",
+            "'prepare-for-sleep'", "this._login.preparingForSleep ? 8", "const PLAYING = 1, HOLDING = 4",
+            "value > HOLDING", "renderer.serial !== this._serial"] {
+            assert!(source.contains(required), "{required}");
+        }
+        assert!(!source.contains("process?.force_exit()"));
+    }
 }
