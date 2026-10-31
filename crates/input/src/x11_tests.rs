@@ -27,17 +27,29 @@ fn retained_pool_delivers_only_before_retirement() {
     delayed_remap_client(200, MappingLifetime::QuietDeadline);
 }
 
+#[test]
+#[ignore = "explicit private-Xvfb retained-slot reuse counterexample"]
+fn retained_pool_reuse_corrupts_a_delayed_burst() {
+    delayed_remap_client(10_000, MappingLifetime::ReusedBeforeTranslation);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MappingLifetime {
     Immediate,
     UntilTranslated,
     QuietDeadline,
+    ReusedBeforeTranslation,
 }
 
 fn delayed_remap_client(repetitions: usize, lifetime: MappingLifetime) {
     let server = Xvfb::start().expect("this acceptance experiment requires Xvfb");
     let injector = server.observer();
     let reader = server.observer();
+    if lifetime == MappingLifetime::ReusedBeforeTranslation {
+        let output = Command::new("setxkbmap").args(["-display", &server.display, "-layout", "us", "-variant", "intl"])
+            .output().expect("setxkbmap is required");
+        assert!(output.status.success(), "setxkbmap: {}", String::from_utf8_lossy(&output.stderr));
+    }
     let setup = injector.conn.setup();
     let first = setup.min_keycode;
     let count = setup.max_keycode - first + 1;
@@ -87,11 +99,15 @@ fn delayed_remap_client(repetitions: usize, lifetime: MappingLifetime) {
         output.stdout
     };
     let native_before = dump();
-    let held = 38;
-    injector.fake(xproto::KEY_PRESS_EVENT, held, injector.root, 0, 0);
+    let held: &[u8] = if lifetime == MappingLifetime::ReusedBeforeTranslation { &[38, 50] } else { &[38] };
+    for keycode in held { injector.fake(xproto::KEY_PRESS_EVENT, *keycode, injector.root, 0, 0); }
     let mut expected = Vec::new();
     let mut retained = Vec::new();
-    for (index, wanted) in ['ı', 'ł', '@', 'z'].into_iter().cycle().take(repetitions).enumerate() {
+    let mut final_symbols = [0; 4];
+    let alphabet: &[char] = if lifetime == MappingLifetime::ReusedBeforeTranslation {
+        &['ı', 'ł', '@', 'z', 'λ', '🦀', 'é']
+    } else { &['ı', 'ł', '@', 'z'] };
+    for (index, wanted) in alphabet.iter().copied().cycle().take(repetitions).enumerate() {
         let slot = if lifetime == MappingLifetime::Immediate { 0 } else { index % 4 };
         let offset = offsets[slot];
         let keycode = keycodes[slot];
@@ -103,7 +119,10 @@ fn delayed_remap_client(repetitions: usize, lifetime: MappingLifetime) {
             injector.conn.change_keyboard_mapping(1, keycode, before.keysyms_per_keycode, &symbols).unwrap().check().unwrap();
             if lifetime == MappingLifetime::Immediate { restore = Some(guard); }
             else { retained.push(guard); }
+        } else if lifetime == MappingLifetime::ReusedBeforeTranslation {
+            injector.conn.change_keyboard_mapping(1, keycode, before.keysyms_per_keycode, &symbols).unwrap().check().unwrap();
         }
+        final_symbols[slot] = u32::from(wanted);
         let during = keyboard.snapshot().unwrap();
         assert_eq!(during.resolver.resolve(u32::from(keycode) - 8, during.masks), Some(wanted.to_string()));
         injector.fake(xproto::KEY_PRESS_EVENT, keycode, injector.root, 0, 0);
@@ -116,8 +135,10 @@ fn delayed_remap_client(repetitions: usize, lifetime: MappingLifetime) {
         for mapping in &mut retained { mapping.restore().unwrap(); }
     }
     for keycode in &keycodes { assert!(!injector.key_down(*keycode)); }
-    assert!(injector.key_down(held), "a different client's held key must not be disturbed");
-    injector.fake(xproto::KEY_RELEASE_EVENT, held, injector.root, 0, 0);
+    for keycode in held {
+        assert!(injector.key_down(*keycode), "a different client's held key must not be disturbed");
+        injector.fake(xproto::KEY_RELEASE_EVENT, *keycode, injector.root, 0, 0);
+    }
     let mut presses = 0;
     let mut notifications = 0;
     let mut symbols = Vec::new();
@@ -152,8 +173,10 @@ fn delayed_remap_client(repetitions: usize, lifetime: MappingLifetime) {
         } else {
             assert_eq!(awaiting_release.take(), Some(keycode));
         }
-        if lifetime == MappingLifetime::UntilTranslated {
-            let symbol = 0x0100_0000 | expected[index];
+        if matches!(lifetime, MappingLifetime::UntilTranslated | MappingLifetime::ReusedBeforeTranslation) {
+            let symbol = 0x0100_0000 | if lifetime == MappingLifetime::ReusedBeforeTranslation {
+                final_symbols[index % 4]
+            } else { expected[index] };
             assert!(line.contains(&format!("(keysym {symbol:#x},")), "Xlib event={index} expected={symbol:#x}: {line}");
         } else {
             assert!(line.contains("(keysym 0x0, NoSymbol)"), "Xlib observer: {line}");
@@ -165,11 +188,17 @@ fn delayed_remap_client(repetitions: usize, lifetime: MappingLifetime) {
     let after = injector.conn.get_keyboard_mapping(first, count).unwrap().reply().unwrap();
     assert_eq!(after.keysyms_per_keycode, before.keysyms_per_keycode);
     assert_eq!(after.keysyms, before.keysyms, "the entire core map must be restored");
+    assert_eq!(injector.conn.query_keymap().unwrap().reply().unwrap().keys, down.keys, "no key may remain stuck");
     let native_restored = native_before == dump();
     assert!(native_restored, "the full XKB map must be restored");
-    eprintln!("lifetime={lifetime:?} presses={presses} MappingNotify={notifications} core_restored=true XKB_restored={native_restored} held_key_preserved=true delivered={}/{}", symbols.len(), repetitions);
+    let correct = symbols.iter().zip(&expected).filter(|(actual, wanted)| actual == wanted).count();
+    eprintln!("lifetime={lifetime:?} presses={presses} MappingNotify={notifications} core_restored=true XKB_restored={native_restored} held_key_preserved=true translated={} correct={correct}/{repetitions}", symbols.len());
     if lifetime == MappingLifetime::UntilTranslated || std::env::var_os("ONE_MK_REQUIRE_X11_TEXT_DELIVERY").is_some() {
         assert_eq!(symbols, expected, "a delayed client refreshes from the already-restored map");
+    } else if lifetime == MappingLifetime::ReusedBeforeTranslation {
+        assert_eq!(symbols.len(), repetitions, "every event resolves, but against the wrong generation");
+        assert_eq!(symbols, (0..repetitions).map(|index| final_symbols[index % 4]).collect::<Vec<_>>());
+        assert_ne!(symbols, expected, "a local generation counter is absent from the client's key event");
     } else {
         assert!(symbols.is_empty(), "revisit the remap safety blocker if a delayed reader now receives text");
     }
@@ -340,9 +369,10 @@ impl Xvfb {
         };
         let mut line = String::new();
         std::io::BufReader::new(child.stdout.take().expect("piped")).read_line(&mut line).unwrap();
-        let display = format!(":{}", line.trim());
-        assert!(line.trim().parse::<u32>().is_ok(), "Xvfb did not start: {line:?}");
-        Some(Xvfb { child, display })
+        let server = Xvfb { child, display: format!(":{}", line.trim()) };
+        let number = line.trim().parse::<u32>().expect("Xvfb returned a numeric display");
+        assert!(number >= 2, "refusing reserved desktop display :{number}");
+        Some(server)
     }
 
     fn observer(&self) -> Observer {
