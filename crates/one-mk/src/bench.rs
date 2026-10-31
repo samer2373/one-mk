@@ -70,8 +70,10 @@ pub async fn run(dir: &Path, opts: Options) -> Result<()> {
     let receiver = tokio::spawn(async move {
         let mut rtts = Vec::with_capacity(count);
         while let Ok(Ok(b)) = tokio::time::timeout(Duration::from_secs(1), recv_conn.read_datagram()).await {
-            if let Ok(Datagram::ProbeEcho { sent_ns, .. }) = Datagram::decode(&b) {
-                rtts.push(base.elapsed().as_nanos() as u64 - sent_ns);
+            if let Ok(Datagram::ProbeEcho { id, sent_ns }) = Datagram::decode(&b) {
+                if id as usize >= count { continue; }
+                let Some(elapsed) = (base.elapsed().as_nanos() as u64).checked_sub(sent_ns) else { continue };
+                rtts.push(elapsed);
                 if rtts.len() == count {
                     break;
                 }
@@ -181,4 +183,30 @@ fn cpu_time() -> Option<Duration> {
 #[cfg(not(unix))]
 fn cpu_time() -> Option<Duration> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hostile_probe_timestamps_do_not_panic_or_replace_valid_samples() {
+        let server = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = server.local_addr().unwrap();
+        let responder = tokio::spawn(async move {
+            let peer = server.accept().await.unwrap().unwrap();
+            let bytes = peer.conn.read_datagram().await.unwrap();
+            let Datagram::Probe { id, sent_ns } = Datagram::decode(&bytes).unwrap() else { panic!("expected probe") };
+            for timestamp in [u64::MAX, sent_ns] {
+                let (bytes, length) = Datagram::ProbeEcho { id, sent_ns: timestamp }.encode();
+                peer.conn.send_datagram(bytes::Bytes::copy_from_slice(&bytes[..length])).unwrap();
+            }
+            let _ = peer.conn.closed().await;
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let result = run(directory.path(), Options { count: 1, rate: 1000, serve: None, connect: Some(address), peer: None }).await;
+        responder.abort();
+        let _ = responder.await;
+        assert!(result.is_ok(), "malformed echo crashed the benchmark: {result:?}");
+    }
 }
