@@ -13,6 +13,19 @@ const LIMITS: [(&str, u64); 4] = [
     ("memory.oom.group", 1), ("pids.max", TASKS),
 ];
 static NEXT_GROUP: AtomicU64 = AtomicU64::new(0);
+/// A playback worker may use at most one CPU (`cpu.max`), when the delegation
+/// offers the cpu controller; decoding slower than real time drops frames.
+const PLAYBACK_CPU_MAX: &str = "100000 100000";
+
+/// Which worker a group is for; the two never share a delegation lock holder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Purpose { Import, Playback }
+
+impl Purpose {
+    fn prefix(self) -> &'static str {
+        match self { Self::Import => "one-mk-import-", Self::Playback => "one-mk-play-" }
+    }
+}
 
 pub(crate) struct Group {
     parent: File,
@@ -86,7 +99,7 @@ fn populated(events: &str) -> Result<bool, String> {
 }
 
 impl Group {
-    pub(crate) fn create(root: Option<&Path>) -> Result<Self, String> {
+    pub(crate) fn create(root: Option<&Path>, purpose: Purpose) -> Result<Self, String> {
         let parent = open_root(root.ok_or("select an explicitly delegated --cgroup-root (memory and pids controllers required)")?)?;
         if unsafe { libc::flock(parent.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err("another importer holds this cgroup delegation; retry when it finishes".into());
@@ -96,13 +109,19 @@ impl Group {
             return Err("delegated cgroup root must already enable memory and pids controllers; no host controllers were changed".into());
         }
         if read_control(&parent, "cgroup.type")?.trim() != "domain" { return Err("cgroup root must be a domain".into()); }
-        let name = std::ffi::CString::new(format!("one-mk-import-{}-{}", std::process::id(), NEXT_GROUP.fetch_add(1, Ordering::Relaxed))).map_err(|_| "invalid group name")?;
+        if purpose == Purpose::Playback { remove_stale(&parent, purpose)?; }
+        let cpu = purpose == Purpose::Playback && controllers.split_whitespace().any(|entry| entry == "cpu");
+        let name = std::ffi::CString::new(format!("{}{}-{}", purpose.prefix(), std::process::id(), NEXT_GROUP.fetch_add(1, Ordering::Relaxed))).map_err(|_| "invalid group name")?;
         if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
             return Err(format!("create delegated import cgroup: {}", std::io::Error::last_os_error()));
         }
         let setup = (|| {
             let directory = open_at(parent.as_raw_fd(), &name, libc::O_RDONLY | libc::O_DIRECTORY)?;
             for (control, value) in LIMITS { set_limit(&directory, control, value)?; }
+            if cpu {
+                control(&directory, "cpu.max", true)?.write_all(PLAYBACK_CPU_MAX.as_bytes()).map_err(|error| format!("cgroup cpu.max: {error}"))?;
+                if read_control(&directory, "cpu.max")?.trim() != PLAYBACK_CPU_MAX { return Err("cgroup cpu.max readback mismatch".into()); }
+            }
             if populated(&read_control(&directory, "cgroup.events")?)? { return Err("new import cgroup is unexpectedly populated".into()); }
             let membership = control(&directory, "cgroup.procs", true)?;
             let kill = control(&directory, "cgroup.kill", true)?;
@@ -139,6 +158,34 @@ impl Drop for Group {
     fn drop(&mut self) { let _ = self.finish(); }
 }
 
+/// Removes groups of this purpose left behind by a renderer that was killed
+/// before it could clean up. Safe only because the caller holds the root's
+/// exclusive lock: every live owner of such a group would hold that lock.
+fn remove_stale(parent: &File, purpose: Purpose) -> Result<(), String> {
+    let listing = std::path::PathBuf::from(format!("/proc/self/fd/{}", parent.as_raw_fd()));
+    for entry in std::fs::read_dir(&listing).map_err(|error| error.to_string())?.take(4096) {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name();
+        let Some(text) = name.to_str() else { continue };
+        let Some(rest) = text.strip_prefix(purpose.prefix()) else { continue };
+        if !rest.bytes().all(|byte| byte.is_ascii_digit() || byte == b'-') { continue; }
+        let name = std::ffi::CString::new(text).map_err(|_| "invalid stale group name")?;
+        let directory = open_at(parent.as_raw_fd(), &name, libc::O_RDONLY | libc::O_DIRECTORY)?;
+        if populated(&read_control(&directory, "cgroup.events")?)? {
+            control(&directory, "cgroup.kill", true)?.write_all(b"1").map_err(|error| format!("kill stale group: {error}"))?;
+            let started = std::time::Instant::now();
+            while populated(&read_control(&directory, "cgroup.events")?)? {
+                if started.elapsed() >= std::time::Duration::from_secs(2) { return Err("stale playback group stays populated".into()); }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+            return Err(format!("remove stale playback group: {}", std::io::Error::last_os_error()));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn attach(descriptor: RawFd) -> std::io::Result<()> {
     if unsafe { libc::write(descriptor, b"0".as_ptr().cast(), 1) } != 1 {
         return Err(std::io::Error::last_os_error());
@@ -152,7 +199,8 @@ mod tests {
 
     #[test]
     fn no_delegation_means_no_worker() {
-        assert!(Group::create(None).err().unwrap().contains("--cgroup-root"));
+        assert!(Group::create(None, Purpose::Import).err().unwrap().contains("--cgroup-root"));
+        assert!(Group::create(None, Purpose::Playback).err().unwrap().contains("--cgroup-root"));
         for root in ["relative", "/sys/../sys/fs/cgroup", "/sys/./fs/cgroup"] {
             assert!(open_root(Path::new(root)).is_err(), "{root}");
         }
@@ -203,8 +251,8 @@ mod tests {
     fn delegated_kernel_limits_attach_and_cleanup() {
         use std::os::unix::process::CommandExt;
         let root = std::env::var_os("ONE_MK_WALL_TEST_CGROUP_ROOT").expect("explicit private delegation required");
-        let mut group = Group::create(Some(Path::new(&root))).unwrap();
-        assert!(Group::create(Some(Path::new(&root))).err().unwrap().contains("another importer"));
+        let mut group = Group::create(Some(Path::new(&root)), Purpose::Import).unwrap();
+        assert!(Group::create(Some(Path::new(&root)), Purpose::Import).err().unwrap().contains("another importer"));
         for (control, value) in LIMITS {
             assert_eq!(read_control(&group.directory, control).unwrap().trim().parse::<u64>().unwrap(), value);
         }
@@ -233,7 +281,7 @@ mod tests {
             ("memory.max", 32 * 1024 * 1024, "memory = bytearray(96 * 1024 * 1024)", "memory.events"),
             ("pids.max", 4, "import os, errno, signal\nchildren = []\ntry:\n for attempt in range(32):\n  child = os.fork()\n  if child == 0:\n   signal.pause()\n   os._exit(0)\n  children.append(child)\n raise RuntimeError('task ceiling not enforced')\nexcept OSError as error:\n if error.errno != errno.EAGAIN: raise\nfinally:\n for child in children: os.kill(child, signal.SIGKILL)\n for child in children: os.waitpid(child, 0)", "pids.events"),
         ] {
-            let mut group = Group::create(Some(Path::new(&root))).unwrap();
+            let mut group = Group::create(Some(Path::new(&root)), Purpose::Import).unwrap();
             set_limit(&group.directory, limit, value).unwrap();
             let descriptor = group.membership_fd();
             let mut command = Command::new("/usr/bin/python3");

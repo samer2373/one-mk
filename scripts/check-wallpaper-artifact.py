@@ -111,7 +111,22 @@ def daemon_features(features):
         raise ValueError("6D-M1 laboratory presentation authority cannot ship in the daemon")
 
 
+def renderer_features(features):
+    # The release renderer is built with gnome-bridge only; the 6D-M1 laboratory
+    # playback (feature m1-lab) links the importer's sandbox launcher.
+    if re.search(r'\bone-mk-wall-import v', features) or re.search(r'one-mk-wall feature "m1-lab"', features):
+        raise ValueError("6D-M1 laboratory playback cannot ship in the renderer")
+
+
 def self_test():
+    renderer_features('one-mk-wall v0.1.15 (crates/wall-presenter)\n├── zbus feature "tokio"')
+    for injected in ('├── one-mk-wall feature "m1-lab"', '│   └── one-mk-wall-import v0.1.15 (crates/wall-import)'):
+        try:
+            renderer_features(injected)
+        except ValueError as error:
+            assert "laboratory playback" in str(error), error
+        else:
+            raise AssertionError("renderer laboratory playback injection passed")
     daemon_features('image feature "png"')
     try:
         daemon_features('├── one-mk-wall-sync feature "default"\n│   └── one-mk-wall-sync v0.1.15 (crates/wall)')
@@ -151,6 +166,8 @@ def main():
     parser.add_argument("--sbom", type=Path)
     parser.add_argument("--helper", type=Path)
     parser.add_argument("--daemon-features", type=Path)
+    parser.add_argument("--renderer-features", type=Path,
+                        help="cargo tree --locked -p one-mk-wall --features gnome-bridge -e features")
     arguments = parser.parse_args()
     if arguments.self_test:
         self_test()
@@ -161,6 +178,8 @@ def main():
     if not arguments.daemon_features:
         parser.error("--daemon-features required (cargo tree --locked -p one-mk -e features)")
     daemon_features(arguments.daemon_features.read_text())
+    if arguments.renderer_features:
+        renderer_features(arguments.renderer_features.read_text())
     if arguments.helper:
         info = json.loads(subprocess.check_output([str(arguments.helper.resolve()), "--build-info"], env={}, timeout=5))
         if info.get("schema") != 1 or info.get("test_faults") is not False:

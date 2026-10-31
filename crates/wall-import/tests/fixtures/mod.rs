@@ -49,3 +49,15 @@ pub fn webp() -> Vec<u8> {
     bytes.extend(payload);
     bytes
 }
+
+pub fn still_png() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, 2, 2);
+        encoder.set_color(png::ColorType::Rgba);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[8, 16, 32, 255, 64, 32, 16, 128].repeat(2)).unwrap();
+        writer.finish().unwrap();
+    }
+    bytes
+}

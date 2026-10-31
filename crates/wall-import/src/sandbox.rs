@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 pub const GST_VERSION: &str = "1.28.2";
 pub const SCRATCH_BYTES: u64 = 16 * 1024 * 1024;
 pub const DEV_BYTES: u64 = 64 * 1024;
+#[cfg(target_os = "linux")]
+const IMPORT_CPU_SECONDS: u64 = 120;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -187,7 +189,15 @@ pub fn worker_restrictions() -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
-pub fn check_worker() -> Result<(), String> {
+pub fn check_worker() -> Result<(), String> { check_worker_with(IMPORT_CPU_SECONDS) }
+
+/// A playback worker legitimately runs for as long as the wallpaper plays,
+/// so it has no CPU-seconds ceiling; everything else matches the importer.
+#[cfg(target_os = "linux")]
+pub fn check_playback_worker() -> Result<(), String> { check_worker_with(libc::RLIM_INFINITY) }
+
+#[cfg(target_os = "linux")]
+fn check_worker_with(cpu_seconds: u64) -> Result<(), String> {
     worker_restrictions()?;
     let socket = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
     if socket >= 0 { unsafe { libc::close(socket); } return Err("network denial failed".into()); }
@@ -212,7 +222,7 @@ pub fn check_worker() -> Result<(), String> {
         if status.f_blocks.saturating_mul(status.f_frsize) > ceiling || (status.f_flag & libc::ST_RDONLY != 0) != readonly { return Err("sandbox tmpfs oversized or incorrect read-only flag".into()); }
     }
     if std::fs::write("/sandbox-write-test", b"denied").is_ok() || std::fs::read("/etc/passwd").is_ok() || std::fs::read_dir("/home").is_ok() { return Err("filesystem denial failed".into()); }
-    for (resource, ceiling) in [(libc::RLIMIT_AS, 1024 * 1024 * 1024), (libc::RLIMIT_CPU, 120), (libc::RLIMIT_NOFILE, 64)] {
+    for (resource, ceiling) in [(libc::RLIMIT_AS, 1024 * 1024 * 1024), (libc::RLIMIT_CPU, cpu_seconds), (libc::RLIMIT_NOFILE, 64)] {
         let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
         if unsafe { libc::getrlimit(resource, &mut limit) } != 0 || limit.rlim_max > ceiling { return Err("resource ceiling not installed".into()); }
     }
@@ -244,6 +254,9 @@ pub fn storage_check(root: &Path, cgroup_root: Option<&Path>) -> Result<(), Stri
 
 #[cfg(not(target_os = "linux"))]
 pub fn check_worker() -> Result<(), String> { worker_restrictions() }
+
+#[cfg(not(target_os = "linux"))]
+pub fn check_playback_worker() -> Result<(), String> { worker_restrictions() }
 
 #[cfg(target_os = "linux")]
 pub fn deny_subprocesses() -> Result<(), String> {
@@ -298,24 +311,31 @@ fn read_pipe(mut pipe: impl std::io::Read + std::os::fd::AsRawFd, limit: usize, 
     result
 }
 
+/// What one sandboxed worker launch needs; descriptors stay owned by the caller
+/// until the child has started.
 #[cfg(target_os = "linux")]
-pub(crate) fn run(root: &Path, cgroup_root: Option<&Path>, input: Option<&Path>, operation: &str, cancel: &std::sync::atomic::AtomicBool, timeout: std::time::Duration) -> Result<Vec<u8>, String> {
-    use std::os::unix::process::CommandExt;
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-    use std::process::{Command, Stdio};
+struct Launch<'a> {
+    directory: &'a std::fs::File,
+    filter: &'a std::fs::File,
+    executable: &'a Path,
+    membership: std::os::fd::RawFd,
+    cpu_seconds: u64,
+}
+
+/// The one bubblewrap configuration shared by import and playback workers.
+#[cfg(target_os = "linux")]
+fn bubblewrap(launch: &Launch<'_>, operation: &str, input: Option<std::fs::File>, extra_env: &[(&str, std::ffi::OsString)]) -> std::process::Command {
     use std::os::fd::AsRawFd;
-    let mut group = crate::cgroup::Group::create(cgroup_root).map_err(|error| format!("sandbox unavailable: refusing to import: {error}"))?;
-    let membership_fd = group.membership_fd();
-    let directory = pin_runtime(root)?;
-    validate_contents(Path::new(&format!("/proc/self/fd/{}", directory.as_raw_fd())))?;
-    let filter = external_filter()?;
-    let directory_fd = directory.as_raw_fd();
-    let filter_fd = filter.as_raw_fd();
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let directory_fd = launch.directory.as_raw_fd();
+    let filter_fd = launch.filter.as_raw_fd();
+    let membership_fd = launch.membership;
+    let cpu_seconds = launch.cpu_seconds;
     let parent_pid = unsafe { libc::getpid() };
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut command = Command::new("/usr/bin/bwrap");
     command.args(["--unshare-all", "--unshare-user", "--disable-userns", "--assert-userns-disabled", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--ro-bind-fd"])
-        .arg(directory_fd.to_string()).arg("/").arg("--ro-bind").arg(executable).arg("/worker")
+        .arg(directory_fd.to_string()).arg("/").arg("--ro-bind").arg(launch.executable).arg("/worker")
         .arg("--seccomp").arg(filter_fd.to_string())
         .args(["--proc", "/proc", "--remount-ro", "/proc", "--size", "65536", "--tmpfs", "/dev",
             "--dev-bind", "/dev/null", "/dev/null", "--dev-bind", "/dev/zero", "/dev/zero", "--dev-bind", "/dev/urandom", "/dev/urandom",
@@ -324,29 +344,52 @@ pub(crate) fn run(root: &Path, cgroup_root: Option<&Path>, input: Option<&Path>,
             "--setenv", "GST_PLUGIN_SYSTEM_PATH_1_0", "", "--setenv", "GST_PLUGIN_PATH_1_0", "/plugins",
             "--setenv", "GST_REGISTRY_1_0", "/tmp/registry.bin", "--setenv", "GST_REGISTRY_FORK", "no",
             "--setenv", "LD_LIBRARY_PATH", "/lib", "--setenv", "LC_ALL", "C"]);
-    #[cfg(feature = "test-faults")]
-    if operation == "--worker" && let Some(stage) = std::env::var_os("ONE_MK_WALL_TEST_STOP") {
-        command.args(["--setenv", "ONE_MK_WALL_TEST_STOP"]).arg(stage);
+    for (name, value) in extra_env {
+        command.args(["--setenv", name]).arg(value);
     }
     let input_stream = if let Some(input) = input {
         command.args(["--ro-bind", "/proc/self/fd/0", "/input"]);
-        Stdio::from(std::fs::File::open(input).map_err(|error| error.to_string())?)
+        Stdio::from(input)
     } else { Stdio::null() };
     command.arg("/worker").arg(operation).env_clear().stdin(input_stream).stdout(Stdio::piped()).stderr(Stdio::piped());
     unsafe {
         command.pre_exec(move || {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 || libc::getppid() != parent_pid { return Err(std::io::Error::other("import parent died")); }
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 || libc::getppid() != parent_pid { return Err(std::io::Error::other("worker parent died")); }
             crate::cgroup::attach(membership_fd)?;
             for descriptor in [directory_fd, filter_fd] {
                 if libc::fcntl(descriptor, libc::F_SETFD, 0) < 0 { return Err(std::io::Error::last_os_error()); }
             }
-            for (resource, ceiling) in [(libc::RLIMIT_AS, 1024 * 1024 * 1024), (libc::RLIMIT_CPU, 120), (libc::RLIMIT_FSIZE, crate::MAX_SOURCE), (libc::RLIMIT_NOFILE, 64), (libc::RLIMIT_CORE, 0)] {
+            for (resource, ceiling) in [(libc::RLIMIT_AS, 1024 * 1024 * 1024), (libc::RLIMIT_CPU, cpu_seconds), (libc::RLIMIT_FSIZE, crate::MAX_SOURCE), (libc::RLIMIT_NOFILE, 64), (libc::RLIMIT_CORE, 0)] {
                 let limit = libc::rlimit { rlim_cur: ceiling, rlim_max: ceiling };
                 if libc::setrlimit(resource, &limit) != 0 { return Err(std::io::Error::last_os_error()); }
             }
             Ok(())
         });
     }
+    command
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn run(root: &Path, cgroup_root: Option<&Path>, input: Option<&Path>, operation: &str, cancel: &std::sync::atomic::AtomicBool, timeout: std::time::Duration) -> Result<Vec<u8>, String> {
+    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use std::os::fd::AsRawFd;
+    let mut group = crate::cgroup::Group::create(cgroup_root, crate::cgroup::Purpose::Import).map_err(|error| format!("sandbox unavailable: refusing to import: {error}"))?;
+    let directory = pin_runtime(root)?;
+    validate_contents(Path::new(&format!("/proc/self/fd/{}", directory.as_raw_fd())))?;
+    let filter = external_filter()?;
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let input = match input {
+        Some(input) => Some(std::fs::File::open(input).map_err(|error| error.to_string())?),
+        None => None,
+    };
+    #[allow(unused_mut)]
+    let mut extra_env = Vec::new();
+    #[cfg(feature = "test-faults")]
+    if operation == "--worker" && let Some(stage) = std::env::var_os("ONE_MK_WALL_TEST_STOP") {
+        extra_env.push(("ONE_MK_WALL_TEST_STOP", stage));
+    }
+    let mut command = bubblewrap(&Launch { directory: &directory, filter: &filter, executable: &executable,
+        membership: group.membership_fd(), cpu_seconds: IMPORT_CPU_SECONDS }, operation, input, &extra_env);
     let mut child = command.spawn().map_err(|error| format!("bubblewrap: {error}"))?;
     let output = child.stdout.take().ok_or("worker stdout missing")?;
     let overflow = Arc::new(AtomicBool::new(false));
@@ -387,6 +430,123 @@ pub(crate) fn run(root: &Path, cgroup_root: Option<&Path>, input: Option<&Path>,
     }
     if bytes.len() as u64 > crate::MAX_RESPONSE { return Err("worker response limit".into()); }
     Ok(bytes)
+}
+
+/// What a playback decode worker needs. All paths are trusted local
+/// configuration (never media metadata or a peer): the audited runtime, an
+/// explicitly delegated cgroup v2 root and the worker executable.
+pub struct PlaybackOptions<'a> {
+    pub runtime: &'a Path,
+    pub cgroup_root: &'a Path,
+    pub worker: &'a Path,
+    /// The verified imported source, bound read-only as `/input`.
+    pub input: std::fs::File,
+}
+
+/// A running sandboxed playback worker: same bubblewrap namespaces, external
+/// seccomp, read-only runtime, bounded `/dev` and scratch, rlimits (no CPU
+/// seconds ceiling) and a fresh delegated cgroup (1 GiB, no swap, 64 tasks,
+/// at most one CPU when the cpu controller is delegated) as an import.
+#[cfg(target_os = "linux")]
+pub struct Playback {
+    child: std::process::Child,
+    group: crate::cgroup::Group,
+    frames: Option<std::process::ChildStdout>,
+    errors: Option<std::thread::JoinHandle<Vec<u8>>>,
+    stopped: bool,
+    _runtime: std::fs::File,
+    _filter: std::fs::File,
+}
+
+/// Keeps the first `limit` bytes of a worker's standard error and discards
+/// the rest without ever blocking the worker. Ends at end-of-file, which the
+/// cgroup kill guarantees.
+#[cfg(target_os = "linux")]
+fn drain(mut pipe: impl std::io::Read, limit: usize) -> Vec<u8> {
+    let mut kept = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        match pipe.read(&mut buffer) {
+            Ok(0) => return kept,
+            Ok(count) => {
+                let room = limit.saturating_sub(kept.len()).min(count);
+                kept.extend_from_slice(&buffer[..room]);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return kept,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn trusted_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    if !path.is_absolute() { return Err("playback worker must be an absolute path".into()); }
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| format!("playback worker: {error}"))?;
+    trusted_owner(&metadata)?;
+    if !metadata.is_file() || metadata.mode() & 0o111 == 0 { return Err("playback worker must be an executable regular file".into()); }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn spawn_playback(options: PlaybackOptions<'_>) -> Result<Playback, String> {
+    use std::os::fd::AsRawFd;
+    trusted_executable(options.worker)?;
+    let metadata = options.input.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.len() > crate::MAX_SOURCE { return Err("playback input must be a regular file <=512 MiB".into()); }
+    let group = crate::cgroup::Group::create(Some(options.cgroup_root), crate::cgroup::Purpose::Playback)
+        .map_err(|error| format!("sandbox unavailable: refusing to play: {error}"))?;
+    let directory = pin_runtime(options.runtime)?;
+    validate_contents(Path::new(&format!("/proc/self/fd/{}", directory.as_raw_fd())))
+        .map_err(|error| format!("sandbox unavailable: refusing to play: {error}"))?;
+    let filter = external_filter()?;
+    let mut command = bubblewrap(&Launch { directory: &directory, filter: &filter, executable: options.worker,
+        membership: group.membership_fd(), cpu_seconds: libc::RLIM_INFINITY }, "--play", Some(options.input), &[]);
+    let mut child = command.spawn().map_err(|error| format!("bubblewrap: {error}"))?;
+    let frames = child.stdout.take();
+    let errors = child.stderr.take().map(|stderr| std::thread::spawn(move || drain(stderr, 16 * 1024)));
+    let mut playback = Playback { child, group, frames, errors, stopped: false, _runtime: directory, _filter: filter };
+    if playback.frames.is_none() || playback.errors.is_none() {
+        let _ = playback.stop();
+        return Err("playback worker pipes missing".into());
+    }
+    Ok(playback)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn spawn_playback(_options: PlaybackOptions<'_>) -> Result<std::convert::Infallible, String> {
+    Err(worker_restrictions().err().unwrap_or_default())
+}
+
+#[cfg(target_os = "linux")]
+impl Playback {
+    /// The bubblewrap process (the worker runs in its PID namespace).
+    pub fn pid(&self) -> u32 { self.child.id() }
+
+    /// The frame stream; taken once by the reader.
+    pub fn take_frames(&mut self) -> Option<std::process::ChildStdout> { self.frames.take() }
+
+    /// Whether the worker has already exited (a still image finishes at once).
+    pub fn exited(&mut self) -> Option<std::process::ExitStatus> { self.child.try_wait().ok().flatten() }
+
+    /// Kills the worker and its whole cgroup, reaps it and removes the group.
+    /// Returns the bounded head of its standard error.
+    pub fn stop(&mut self) -> Result<String, String> {
+        if self.stopped { return Ok(String::new()); }
+        self.stopped = true;
+        let _ = self.child.kill();
+        let waited = self.child.wait();
+        let cleanup = self.group.finish();
+        let errors = self.errors.take().map(|reader| reader.join().unwrap_or_default()).unwrap_or_default();
+        waited.map_err(|error| error.to_string())?;
+        cleanup?;
+        Ok(String::from_utf8_lossy(&errors).chars().filter(|character| !character.is_control() || *character == '\n').collect())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Playback {
+    fn drop(&mut self) { let _ = self.stop(); }
 }
 
 #[cfg(not(target_os = "linux"))]

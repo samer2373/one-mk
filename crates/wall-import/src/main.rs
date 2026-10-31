@@ -31,6 +31,16 @@ fn main() -> std::process::ExitCode {
         })();
         return worker_result(result);
     }
+    if arguments == ["--play"] {
+        // Standard output is the frame pipe: errors go to standard error only.
+        return match one_mk_wall_import::play::worker() {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("wallpaper playback worker: {}", error.chars().filter(|character| !character.is_control()).take(512).collect::<String>());
+                std::process::ExitCode::from(4)
+            }
+        };
+    }
     if arguments == ["--worker"] {
         return worker_result(one_mk_wall_import::worker());
     }

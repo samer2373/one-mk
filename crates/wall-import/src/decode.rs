@@ -38,6 +38,13 @@ fn decode_with_limits(bytes: &[u8], mut media: Media, limits: image::Limits) -> 
             decoder.set_limits(limits).map_err(|error| error.to_string())?;
             animation(decoder.into_frames(), &mut media)?
         }
+        Format::StillPng => {
+            let mut decoder = image::codecs::png::PngDecoder::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
+            decoder.set_limits(limits).map_err(|error| error.to_string())?;
+            let image = image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?.to_rgba8();
+            if image.dimensions() != (media.width, media.height) { return Err("decoded dimensions changed".into()); }
+            poster_bytes(&flatten(&image))
+        }
         Format::Vp9Webm | Format::Av1Webm => webm(&media)?,
     };
     Ok(Decoded { media, poster })
@@ -60,18 +67,20 @@ fn animation(frames: image::Frames<'_>, media: &mut Media) -> Result<Vec<u8>, St
         if delay < 17 { return Err("decoded source exceeds 60 fps; convert first".into()); }
         duration = duration.checked_add(delay).ok_or("duration overflow")?;
         if duration > crate::MAX_DURATION_MS { return Err("decoded duration limit exceeded".into()); }
-        if poster.is_none() {
-            let rgb = image::RgbImage::from_fn(image.width(), image.height(), |left, top| {
-                let pixel = image.get_pixel(left, top).0;
-                let alpha = u16::from(pixel[3]);
-                image::Rgb([((u16::from(pixel[0]) * alpha + 127) / 255) as u8, ((u16::from(pixel[1]) * alpha + 127) / 255) as u8, ((u16::from(pixel[2]) * alpha + 127) / 255) as u8])
-            });
-            poster = Some(poster_bytes(&rgb));
-        }
+        if poster.is_none() { poster = Some(poster_bytes(&flatten(image))); }
     }
     if count != media.frames { return Err("decoded frame count differs from container".into()); }
     media.duration_ms = duration;
     poster.ok_or_else(|| "no decoded poster".into())
+}
+
+/// Opaque black alpha flattening (the poster and playback background).
+pub(crate) fn flatten(image: &image::RgbaImage) -> image::RgbImage {
+    image::RgbImage::from_fn(image.width(), image.height(), |left, top| {
+        let pixel = image.get_pixel(left, top).0;
+        let alpha = u16::from(pixel[3]);
+        image::Rgb([((u16::from(pixel[0]) * alpha + 127) / 255) as u8, ((u16::from(pixel[1]) * alpha + 127) / 255) as u8, ((u16::from(pixel[2]) * alpha + 127) / 255) as u8])
+    })
 }
 
 fn poster_bytes(image: &image::RgbImage) -> Vec<u8> {
@@ -148,7 +157,7 @@ mod tests {
 
     #[test]
     fn every_image_decoder_enforces_image_limits() {
-        for bytes in [fixtures::gif(2, 2, 2), fixtures::apng(), fixtures::webp()] {
+        for bytes in [fixtures::gif(2, 2, 2), fixtures::apng(), fixtures::webp(), fixtures::still_png()] {
             for allocation_only in [false, true] {
                 let media = crate::inspect(&bytes).unwrap();
                 let mut limits = image::Limits::default();

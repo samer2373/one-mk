@@ -106,6 +106,33 @@ fn eight_byte_ebml_sizes_do_not_overflow() {
     assert!(inspect(bytes).is_err());
 }
 
+mod fixtures { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mod.rs")); }
+
+#[test]
+fn still_png_is_one_frame_without_duration() {
+    let bytes = fixtures::still_png();
+    let (media, durations) = one_mk_wall_import::timeline(&bytes).unwrap();
+    assert_eq!((media.format, media.width, media.height, media.frames, media.duration_ms), (Format::StillPng, 2, 2, 1, 0));
+    assert_eq!(durations, [0]);
+    let mut trailing = bytes.clone();
+    trailing.extend_from_slice(b"PK\x03\x04polyglot");
+    assert!(inspect(&trailing).is_err());
+    // Frame control chunks without an animation control chunk are not a still.
+    let mut animated = fixtures::apng();
+    let start = animated.windows(4).position(|window| window == b"acTL").unwrap() - 4;
+    animated.drain(start..start + 20);
+    assert!(inspect(&animated).is_err());
+}
+
+#[test]
+fn timelines_follow_container_delays_and_block_timestamps() {
+    for bytes in [fixtures::gif(2, 2, 2), fixtures::apng(), fixtures::webp(), generated_webm(&[])] {
+        let (media, durations) = one_mk_wall_import::timeline(&bytes).unwrap();
+        assert_eq!(durations, [100_000, 100_000], "{:?}", media.format);
+        assert_eq!(durations.iter().map(|&value| u64::from(value)).sum::<u64>(), media.duration_ms * 1000);
+    }
+}
+
 #[test]
 fn decoded_pixel_budget_is_rejected_before_decoding() {
     let mut bytes = b"GIF89a".to_vec();

@@ -37,8 +37,9 @@ jobs:
           cargo build --locked -j 2 -p one-mk-wall-import
           cargo metadata --locked --format-version 1 > target/wallpaper-metadata.json
           cargo tree --locked -p one-mk -e features > target/daemon-features.txt
+          cargo tree --locked -p one-mk-wall --features gnome-bridge -e features > target/renderer-features.txt
           python3 scripts/check-wallpaper-artifact.py --self-test
-          python3 scripts/check-wallpaper-artifact.py --metadata target/wallpaper-metadata.json --daemon-features target/daemon-features.txt --helper target/debug/one-mk-wall-import --sbom target/wallpaper-import.cdx.json
+          python3 scripts/check-wallpaper-artifact.py --metadata target/wallpaper-metadata.json --daemon-features target/daemon-features.txt --renderer-features target/renderer-features.txt --helper target/debug/one-mk-wall-import --sbom target/wallpaper-import.cdx.json
       - uses: actions/upload-artifact@v4
         with:
           name: wallpaper-import-sbom-dry-run
