@@ -60,8 +60,34 @@ struct LabConfig {
     origin: [i32; 2],
 }
 
-struct Policy { peer: String, consent: watch::Sender<Option<u64>> }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LiveConsent { revision: Option<u64>, epoch: u64 }
+
+impl LiveConsent {
+    fn for_renderer(self, epoch: u64) -> Option<u64> {
+        self.revision.filter(|_| self.epoch == epoch)
+    }
+}
+
+struct Policy { peer: String, consent: watch::Sender<LiveConsent> }
 static POLICY: OnceLock<Policy> = OnceLock::new();
+
+impl Policy {
+    fn new(peer: String, settings: &WallpaperSettings) -> Self {
+        let (sender, _) = watch::channel(LiveConsent { revision: consent(&peer, settings), epoch: 0 });
+        Self { peer, consent: sender }
+    }
+
+    fn publish(&self, settings: &WallpaperSettings) {
+        let live = consent(&self.peer, settings);
+        self.consent.send_if_modified(|current| {
+            if current.revision == live || current.epoch == u64::MAX { return false; }
+            current.epoch += 1;
+            current.revision = if current.epoch == u64::MAX { None } else { live };
+            true
+        });
+    }
+}
 
 fn consent(peer: &str, settings: &WallpaperSettings) -> Option<u64> {
     settings.grants.get(peer).copied().filter(|_| settings.enabled)
@@ -70,8 +96,7 @@ fn consent(peer: &str, settings: &WallpaperSettings) -> Option<u64> {
 /// Called whenever the daemon applies `[wallpaper]` settings.
 pub fn publish(settings: &WallpaperSettings) {
     if let Some(policy) = POLICY.get() {
-        let live = consent(&policy.peer, settings);
-        policy.consent.send_if_modified(|current| std::mem::replace(current, live) != live);
+        policy.publish(settings);
     }
 }
 
@@ -168,8 +193,9 @@ pub async fn start(dir: &Path, settings: &WallpaperSettings) -> Result<Authority
     if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         bail!("another wallpaper authority is running for this user");
     }
-    let (sender, mut live) = watch::channel(consent(&config.peer, settings));
-    POLICY.set(Policy { peer: config.peer, consent: sender }).map_err(|_| anyhow::anyhow!("authority already started"))?;
+    let policy = Policy::new(config.peer, settings);
+    let mut live = policy.consent.subscribe();
+    POLICY.set(policy).map_err(|_| anyhow::anyhow!("authority already started"))?;
     let connection = zbus::connection::Builder::session()?.max_queued(16).build().await
         .context("session bus for the wallpaper authority")?;
     let authority = connection.unique_name().context("no unique bus name")?.to_string();
@@ -187,7 +213,7 @@ pub async fn start(dir: &Path, settings: &WallpaperSettings) -> Result<Authority
     file.sync_all()?;
     std::fs::rename(&staging, &path)?;
     eprintln!("wallpaper-m1-authority: ready name={authority} pid={} consent={}", std::process::id(),
-        live.borrow().is_some());
+        live.borrow().revision.is_some());
     let directive_path = dir.join(DIRECTIVE);
     let task = tokio::spawn(async move {
         let bus = match zbus::fdo::DBusProxy::new(&connection).await {
@@ -197,6 +223,7 @@ pub async fn start(dir: &Path, settings: &WallpaperSettings) -> Result<Authority
         // SAFETY: getuid has no preconditions.
         let uid = unsafe { libc::getuid() };
         let mut pinned: Option<String> = None;
+        let mut pinned_epoch = 0;
         let mut paused = false;
         let mut fault: Option<String> = None;
         // Callers that cannot prove the key have their own budget (and stop
@@ -226,11 +253,13 @@ pub async fn start(dir: &Path, settings: &WallpaperSettings) -> Result<Authority
                             let previous: zbus::names::BusName<'_> = previous.as_str().try_into()?;
                             ensure!(!bus.name_has_owner(previous).await?, "another renderer holds this authority");
                         }
+                        let snapshot = *live.borrow();
                         if pinned.as_ref() != Some(&sender) {
                             eprintln!("wallpaper-m1-authority: renderer {sender} authenticated");
                             pinned = Some(sender.clone());
+                            pinned_epoch = snapshot.epoch;
                         }
-                        let consent = *live.borrow();
+                        let consent = snapshot.for_renderer(pinned_epoch);
                         let (enabled, revision, mut payload) = match consent {
                             Some(revision) => (true, revision, publisher.plan(revision, serial, &monitors, paused)
                                 .map_err(|error| anyhow::anyhow!("cannot plan for this layout: {error:?}"))?),
@@ -260,7 +289,7 @@ pub async fn start(dir: &Path, settings: &WallpaperSettings) -> Result<Authority
                 }
                 changed = live.changed() => {
                     if changed.is_err() { break; }
-                    eprintln!("wallpaper-m1-authority: consent {}", if live.borrow().is_some() { "granted" } else { "revoked" });
+                    eprintln!("wallpaper-m1-authority: consent {}", if live.borrow().revision.is_some() { "granted" } else { "revoked" });
                     notify(&connection, pinned.as_deref()).await;
                 }
                 _ = directives.recv() => {
@@ -320,6 +349,46 @@ fn inject(kind: &str, payload: &mut Vec<u8>, publisher: &Publisher, revision: u6
 mod tests {
     use super::*;
     use one_mk_wall_sync::presentation::PresentationPlan;
+
+    #[test]
+    fn disable_and_reenable_cannot_hide_revocation_from_a_pinned_renderer() {
+        let peer = "ab".repeat(32);
+        let mut settings = WallpaperSettings { enabled: true, ..Default::default() };
+        settings.grants.insert(peer.clone(), 9);
+        let policy = Policy::new(peer, &settings);
+        let mut live = policy.consent.subscribe();
+        let pinned = *live.borrow_and_update();
+        settings.enabled = false;
+        policy.publish(&settings);
+        settings.enabled = true;
+        policy.publish(&settings);
+        let current = *live.borrow_and_update();
+        assert_ne!(current, pinned);
+        assert_eq!(current.for_renderer(pinned.epoch), None);
+        assert_eq!(current.for_renderer(current.epoch), Some(9));
+    }
+
+    #[test]
+    fn consent_epoch_changes_only_for_policy_changes_and_exhaustion_fails_closed() {
+        let peer = "ab".repeat(32);
+        let mut settings = WallpaperSettings { enabled: true, ..Default::default() };
+        settings.grants.insert(peer.clone(), 9);
+        let policy = Policy::new(peer, &settings);
+        policy.publish(&settings);
+        assert_eq!(policy.consent.borrow().epoch, 0);
+        let pinned = *policy.consent.borrow();
+        settings.grants.insert(policy.peer.clone(), 10);
+        policy.publish(&settings);
+        settings.grants.insert(policy.peer.clone(), 9);
+        policy.publish(&settings);
+        assert_eq!(policy.consent.borrow().for_renderer(pinned.epoch), None);
+        policy.consent.send_modify(|current| current.epoch = u64::MAX - 1);
+        settings.enabled = false;
+        policy.publish(&settings);
+        settings.enabled = true;
+        policy.publish(&settings);
+        assert_eq!(*policy.consent.borrow(), LiveConsent { revision: None, epoch: u64::MAX });
+    }
 
     #[test]
     fn consent_follows_live_policy_for_the_configured_peer_only() {
