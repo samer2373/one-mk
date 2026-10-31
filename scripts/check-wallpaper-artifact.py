@@ -106,10 +106,19 @@ def daemon_features(features):
     for feature in re.findall(r'image feature "([^"]+)"', features):
         if feature != "png":
             raise ValueError(f"unexpected daemon image decoder feature: {feature}")
+    # Only the 6D-M1 laboratory authority (feature wallpaper-m1-lab) links it.
+    if re.search(r'\bone-mk-wall-sync v', features):
+        raise ValueError("6D-M1 laboratory presentation authority cannot ship in the daemon")
 
 
 def self_test():
     daemon_features('image feature "png"')
+    try:
+        daemon_features('├── one-mk-wall-sync feature "default"\n│   └── one-mk-wall-sync v0.1.15 (crates/wall)')
+    except ValueError as error:
+        assert "laboratory" in str(error), error
+    else:
+        raise AssertionError("daemon laboratory authority injection passed")
     for feature in ("gif", "webp", "avif", "jpeg", "tiff", "exr", "default", "bmp"):
         try:
             daemon_features(f'image feature "{feature}"')
