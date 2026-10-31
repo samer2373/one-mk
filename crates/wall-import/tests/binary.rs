@@ -203,3 +203,91 @@ fn isolated_real_binary_import_and_failure_paths() {
     let cancelled = std::sync::atomic::AtomicBool::new(true);
     assert!(one_mk_wall_import::import(one_mk_wall_import::ImportOptions { source: &source, output: &output, runtime, cgroup_root: None, cancel: &cancelled, timeout: std::time::Duration::ZERO }).unwrap_err().contains("cancelled"));
 }
+
+/// The sandboxed playback worker streams the admitted timeline, loops
+/// animations forever, ends a still after one frame and leaves no cgroup.
+#[test]
+#[cfg(target_os = "linux")]
+fn isolated_playback_worker_streams_loops_and_cleans_up() {
+    use one_mk_wall_import::play::StreamHeader;
+    use one_mk_wall_import::sandbox::{PlaybackOptions, spawn_playback};
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    let (Some(runtime), Some(cgroup)) = (std::env::var_os("ONE_MK_WALL_TEST_RUNTIME"), std::env::var_os("ONE_MK_WALL_TEST_PLAY_CGROUP_ROOT")) else {
+        eprintln!("playback sandbox not requested; set ONE_MK_WALL_TEST_RUNTIME and ONE_MK_WALL_TEST_PLAY_CGROUP_ROOT (not a qualification)");
+        return;
+    };
+    let lab = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/wall-import-lab");
+    std::fs::create_dir_all(&lab).unwrap();
+    let temporary = tempfile::tempdir_in(lab.canonicalize().unwrap()).unwrap();
+    // The worker must not be group/world writable (cargo output follows umask).
+    let worker = temporary.path().join("worker");
+    std::fs::copy(env!("CARGO_BIN_EXE_one-mk-wall-import"), &worker).unwrap();
+    std::fs::set_permissions(&worker, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let groups = || std::fs::read_dir(Path::new(&cgroup)).unwrap()
+        .filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().starts_with("one-mk-play-")).count();
+    let cases = [(fixtures::gif(2, 2, 2), vec![100_000, 100_000]), (fixtures::apng(), vec![100_000, 100_000]),
+        (fixtures::webp(), vec![100_000, 100_000]), (fixtures::still_png(), vec![0])];
+    for (bytes, durations) in cases {
+        let source = temporary.path().join("source");
+        std::fs::write(&source, &bytes).unwrap();
+        let mut playback = spawn_playback(PlaybackOptions { runtime: Path::new(&runtime), cgroup_root: Path::new(&cgroup),
+            worker: &worker, input: std::fs::File::open(&source).unwrap() }).unwrap();
+        let mut frames = playback.take_frames().unwrap();
+        let header = StreamHeader::read(&mut frames).unwrap();
+        assert_eq!((header.width, header.height, &header.durations), (2, 2, &durations));
+        let mut seen = Vec::new();
+        for _ in 0..if header.still() { 1 } else { 5 } {
+            let mut frame = vec![0; header.frame_bytes()];
+            frames.read_exact(&mut frame).unwrap();
+            seen.push(frame);
+        }
+        if header.still() {
+            // Exactly one frame, then end of stream: no decoder keeps running.
+            assert_eq!(frames.read(&mut [0; 1]).unwrap(), 0);
+            // BGRx of RGBA (8,16,32,255) and (64,32,16,128) flattened on black.
+            assert_eq!(&seen[0][..8], &[32, 16, 8, 255, 8, 16, 32, 255][..]);
+        } else {
+            // Alternating frames prove the loop restarts after the last frame.
+            assert_ne!(seen[0], seen[1]);
+            assert_eq!(seen[0], seen[2]);
+            assert_eq!(seen[1], seen[3]);
+            assert_eq!(seen[0], seen[4]);
+        }
+        assert_eq!(groups(), 1);
+        drop(frames);
+        playback.stop().unwrap();
+        assert_eq!(groups(), 0);
+    }
+    // In-process GStreamer from the pinned runtime: VP9 and AV1 loop by a
+    // flushing seek, and every loop decodes to the same bytes.
+    for name in ["six.webm", "six-av1.webm"] {
+        let path = lab.join("media").join(name);
+        let mut playback = spawn_playback(PlaybackOptions { runtime: Path::new(&runtime), cgroup_root: Path::new(&cgroup),
+            worker: &worker, input: std::fs::File::open(&path).expect("generate six-frame VP9/AV1 lab fixtures first") }).unwrap();
+        let mut frames = playback.take_frames().unwrap();
+        let header = StreamHeader::read(&mut frames).unwrap();
+        assert_eq!(header.durations.len(), 6, "{name}");
+        assert_eq!(header.loop_micros(), 200_000, "{name}");
+        let mut seen = Vec::new();
+        for _ in 0..13 {
+            let mut frame = vec![0; header.frame_bytes()];
+            frames.read_exact(&mut frame).unwrap();
+            seen.push(frame);
+        }
+        assert_ne!(seen[0], seen[5], "{name}");
+        for index in 0..7 { assert_eq!(seen[index], seen[index + 6], "{name} frame {index}"); }
+        drop(frames);
+        playback.stop().unwrap();
+        assert_eq!(groups(), 0);
+    }
+    // Hostile input is refused inside the sandbox; the stream ends early.
+    let source = temporary.path().join("source");
+    std::fs::write(&source, b"GIF89a not really").unwrap();
+    let mut playback = spawn_playback(PlaybackOptions { runtime: Path::new(&runtime), cgroup_root: Path::new(&cgroup),
+        worker: &worker, input: std::fs::File::open(&source).unwrap() }).unwrap();
+    assert!(StreamHeader::read(&mut playback.take_frames().unwrap()).is_err());
+    let errors = playback.stop().unwrap();
+    assert!(errors.contains("validation"), "{errors}");
+    assert_eq!(groups(), 0);
+}

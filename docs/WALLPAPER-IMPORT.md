@@ -118,8 +118,10 @@ read-only mounts and shmem API denial are checked separately.
 
 ## Admission, output and limits
 
-Accepted: VP9 or AV1 in WebM, animated GIF, APNG and animated WebP. Static images,
-MP4/H.264/H.265, AVI, Ogg, general Matroska and unsupported codecs get a clear
+Accepted: VP9 or AV1 in WebM, animated GIF, APNG and animated WebP, and (since
+6D-M1 step B) a still PNG: no animation chunks, one frame, no duration, the same
+metadata/polyglot/dimension checks and a poster. Other static images (JPEG,
+static WebP/GIF), MP4/H.264/H.265, AVI, Ogg, general Matroska and unsupported codecs get a clear
 `convert first` error. Malformed supported files get validation errors instead
 of being retried through another decoder. The WebM subset intentionally rejects
 lacing, BlockGroup, encrypted/encoded tracks, unknown track-reference fields,
@@ -170,6 +172,31 @@ never by an off-state timer (bounded
 to the first 4,096 directory entries per activation). Completed objects survive
 failure. A directory-sync error after rename explicitly reports that commit
 already happened; never blindly retry as though nothing persisted.
+
+## Playback worker (6D-M1 step B, laboratory renderer only)
+
+`admission::timeline` returns each frame's container duration (GIF/APNG/WebP
+delays, WebM block timestamps and declared duration). `one-mk-wall-import --play`
+runs only through `sandbox::spawn_playback`: the same bubblewrap namespaces,
+external seccomp, read-only fd-pinned runtime, bounded `/dev` and scratch,
+rlimits (except a CPU-seconds ceiling, since playback runs indefinitely) and a
+fresh delegated cgroup (1 GiB, zero swap, 64 tasks, at most two CPUs through
+`cpu.max` when the delegation offers the cpu controller). The worker re-admits
+the source, then installs the process-creation filter before decoding: images
+through the image crate (looping forever, flattened on black), VP9/AV1 through
+in-process GStreamer from the pinned runtime (`filesrc ! matroskademux ! vp9dec|av1dec
+! videoconvert ! I420 ! fdsink`, prerolled to read the colorimetry, looped by a
+flushing seek; no `gst-launch` and no new process). It writes a bounded header
+(format, pixel layout, size, per-frame durations) and raw frames to its pipe; a
+still sends one frame and exits. The renderer validates the header against the
+import record and never parses media. Playback groups use the `one-mk-play-`
+prefix; under the delegation lock a new playback kills and removes groups left
+by a renderer that was killed (any live owner would hold the lock). The renderer
+(`one-mk-wall`, feature `m1-lab`) re-hashes the imported source against the
+plan's media hash before handing that descriptor to the worker; a same-user
+writer could still change the file afterwards (same-user attackers are outside
+this threat model, as for the runtime record). See the
+[step B evidence](spikes/gnome/m1-playback-evidence/README.md).
 
 ## CLI contract
 

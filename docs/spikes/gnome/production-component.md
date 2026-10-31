@@ -1,5 +1,18 @@
 # GNOME component implementation checkpoint — NOT a playback qualification
 
+## Step B: real playback in the laboratory (2026-10-31)
+
+With the laboratory features, the renderer now plays the admitted plan's
+imported media: a sandboxed playback worker (the importer's bubblewrap/seccomp/
+cgroup model) decodes GIF, APNG, animated WebP, still PNG, VP9 and AV1; the
+renderer presents one xdg surface whose clones show each monitor's exact slice
+of the shared canvas, never the reserved absent-computer slice. Screenshots,
+loop seams, pause, 1080p30 resources and 100 real-playback cycles with zero new
+warnings are in the [step B evidence](m1-playback-evidence/README.md). One
+extension bug surfaced (first damage before buffer geometry stopped every real
+renderer) and is fixed. Production authorization stays false; lifecycle (step
+C) and production packaging remain open.
+
 ## Step A: authenticated daemon presentation session, laboratory (2026-10-31)
 
 The laboratory daemon (`wallpaper-m1-lab`) now authenticates to the renderer the

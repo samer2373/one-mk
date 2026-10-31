@@ -1,17 +1,21 @@
-//! 6D-M1 step A laboratory renderer session (feature `m1-lab`, never in release
+//! 6D-M1 laboratory renderer session (feature `m1-lab`, never in release
 //! builds). The Shell spawns this process; it authenticates the Shell bridge,
 //! then the daemon authority named by the private runtime record, and admits
-//! the daemon's plans through `Gate::accept_encoded`. It creates no surface or
-//! decoder: "presenting" is the admitted intent reported in its log. Any
-//! teardown (revoked consent, daemon exit/crash, forged reply, repeated faults,
-//! unanswered request) ends the process.
+//! the daemon's plans through `Gate::accept_encoded`. While the admitted plan
+//! is active (not paused, nothing pausing locally) the presenter plays its
+//! imported media (step B, `playback.rs`); otherwise there is no surface and
+//! no decoder. Any teardown (revoked consent, daemon exit/crash, forged reply,
+//! repeated faults, unanswered request, playback failure) ends the process.
 
 use crate::gnome_bridge::{Bridge, Event, Result};
+use crate::playback::{self, Presenter, Report, Request};
 use futures_util::StreamExt;
 use one_mk_wall_sync::bridge::State;
-use one_mk_wall_sync::presentation::Owner;
+use one_mk_wall_sync::bridge::Monitor;
+use one_mk_wall_sync::presentation::{Owner, Rect, Slice};
 use one_mk_wall_sync::presentation_auth::{self as auth, Outcome, Record, Reply, Session};
 use std::io::Read;
+use std::os::fd::FromRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -112,8 +116,36 @@ async fn fetch(connection: &Connection, session: &mut Session, owner: &Owner) ->
     Ok(())
 }
 
+/// What is on screen: the media and exactly where each slice goes.
+#[derive(Clone, Debug, PartialEq)]
+struct Showing { media: [u8; 32], canvas: Rect, slices: Vec<Slice>, monitors: Vec<Monitor> }
+
+/// Starts, replaces or stops playback so the screen follows the session.
+/// Stopping reports Paused first, so the Shell hides the clones before the
+/// surface and decoder go away.
+async fn reconcile(session: &Session, bridge: &mut Bridge, presenter: &Presenter, showing: &mut Option<Showing>) -> Result<()> {
+    let plan = session.active().then(|| session.admitted()).flatten();
+    let wanted = plan.map(|plan| Showing { media: plan.media_id, canvas: plan.canvas, slices: plan.slices.clone(),
+        monitors: session.monitors().to_vec() });
+    if wanted == *showing { return Ok(()); }
+    match plan {
+        Some(plan) => {
+            log(format_args!("event=play sequence={}", plan.sequence));
+            presenter.play(Request { plan: plan.clone(), monitors: session.monitors().to_vec() });
+        }
+        None => {
+            bridge.set_state(State::Paused).await?;
+            presenter.stop();
+            log(format_args!("event=stopped surfaces=0 decoders=0 {}", describe(session)));
+        }
+    }
+    *showing = wanted;
+    Ok(())
+}
+
 pub async fn present() -> Result<()> {
     let descriptor = std::env::var("WAYLAND_SOCKET")?.parse()?;
+    let config = playback::Config::from_env().map_err(|error| format!("playback unavailable: {error}"))?;
     let mut bridge = Bridge::connect(descriptor).await?;
     bridge.set_state(State::Paused).await?;
     let record = read_record().map_err(|error| format!("no usable authority record: {error}"))?;
@@ -138,7 +170,13 @@ pub async fn present() -> Result<()> {
     let mut session = Session::new(owner.clone(), record, me, bridge.serial(), bridge.monitors.clone(), bridge.reasons)
         .map_err(|error| format!("cannot open a presentation session: {error:?}"))?;
     log(format_args!("event=authenticating authority={} pid={pid}", owner.unique_name));
+    // SAFETY: the Shell gave this process the connection (its peer was pinned
+    // to the bridge owner above); nothing else uses the descriptor.
+    let socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(descriptor) };
+    let mut presenter = Presenter::start(socket, config)?;
+    let mut showing = None;
     fetch(&connection, &mut session, &owner).await?;
+    reconcile(&session, &mut bridge, &presenter, &mut showing).await?;
     let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT, HEARTBEAT);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -164,6 +202,15 @@ pub async fn present() -> Result<()> {
                 fetch(&connection, &mut session, &owner).await?;
             }
             _ = heartbeat.tick() => fetch(&connection, &mut session, &owner).await?,
+            report = presenter.reports.recv() => match report {
+                Some(Report::FirstFrame { latency }) => {
+                    bridge.set_state(State::Playing).await?;
+                    log(format_args!("event=playing first_frame_ms={}", latency.as_millis()));
+                }
+                Some(Report::Failed(error)) => return Err(format!("playback failed: {error}").into()),
+                None => return Err("presenter ended".into()),
+            },
         }
+        reconcile(&session, &mut bridge, &presenter, &mut showing).await?;
     }
 }

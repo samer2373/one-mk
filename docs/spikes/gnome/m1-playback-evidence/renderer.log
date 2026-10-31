@@ -1,0 +1,929 @@
+wallpaper-m1-renderer[507876]: event=authenticating authority=:1.34 pid=507862
+wallpaper-m1-renderer[507876]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=200 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[507876]: event=play sequence=1
+wallpaper-m1-renderer[507876]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=507879
+wallpaper-m1-renderer[507876]: event=first-frame latency_ms=46
+wallpaper-m1-renderer[507876]: event=playing first_frame_ms=46
+wallpaper-m1-renderer[507876]: event=loop loops=1 seam_us=100026 nominal_us=100000 presented=11 late=0 starved=0
+wallpaper-m1-renderer[507876]: event=loop loops=2 seam_us=100019 nominal_us=100000 presented=21 late=0 starved=0
+wallpaper-m1-renderer[507876]: event=loop loops=3 seam_us=99948 nominal_us=100000 presented=31 late=0 starved=0
+wallpaper-m1-renderer[507876]: event=loop loops=4 seam_us=99989 nominal_us=100000 presented=41 late=0 starved=0
+wallpaper-m1-renderer[507876]: event=playback-stop reason=shutdown presented=46 loops=4 late=0 starved=0
+wallpaper-m1-renderer[507876]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[508040]: event=authenticating authority=:1.51 pid=508021
+wallpaper-m1-renderer[508040]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=201 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[508040]: event=play sequence=1
+wallpaper-m1-renderer[508040]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=508043
+wallpaper-m1-renderer[508040]: event=first-frame latency_ms=45
+wallpaper-m1-renderer[508040]: event=playing first_frame_ms=45
+wallpaper-m1-renderer[508040]: event=loop loops=1 seam_us=99847 nominal_us=100000 presented=11 late=0 starved=0
+wallpaper-m1-renderer[508040]: event=loop loops=2 seam_us=99859 nominal_us=100000 presented=21 late=0 starved=0
+wallpaper-m1-renderer[508040]: event=loop loops=3 seam_us=99916 nominal_us=100000 presented=31 late=0 starved=0
+wallpaper-m1-renderer[508040]: event=loop loops=4 seam_us=99951 nominal_us=100000 presented=41 late=0 starved=0
+wallpaper-m1-renderer[508040]: event=playback-stop reason=shutdown presented=46 loops=4 late=0 starved=0
+wallpaper-m1-renderer[508040]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[508212]: event=authenticating authority=:1.68 pid=508198
+wallpaper-m1-renderer[508212]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=202 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[508212]: event=play sequence=1
+wallpaper-m1-renderer[508212]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=508215
+wallpaper-m1-renderer[508212]: event=first-frame latency_ms=44
+wallpaper-m1-renderer[508212]: event=playing first_frame_ms=44
+wallpaper-m1-renderer[508212]: event=loop loops=1 seam_us=100124 nominal_us=100000 presented=11 late=0 starved=0
+wallpaper-m1-renderer[508212]: event=loop loops=2 seam_us=99990 nominal_us=100000 presented=21 late=0 starved=0
+wallpaper-m1-renderer[508212]: event=loop loops=3 seam_us=100010 nominal_us=100000 presented=31 late=0 starved=0
+wallpaper-m1-renderer[508212]: event=loop loops=4 seam_us=99924 nominal_us=100000 presented=41 late=0 starved=0
+wallpaper-m1-renderer[508212]: event=playback-stop reason=shutdown presented=47 loops=4 late=0 starved=0
+wallpaper-m1-renderer[508212]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[508369]: event=authenticating authority=:1.86 pid=508354
+wallpaper-m1-renderer[508369]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=203 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[508369]: event=play sequence=1
+wallpaper-m1-renderer[508369]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=508372
+wallpaper-m1-renderer[508369]: event=first-frame latency_ms=51
+wallpaper-m1-renderer[508369]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[508369]: event=playing first_frame_ms=51
+wallpaper-m1-renderer[508369]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[508369]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[508603]: event=authenticating authority=:1.112 pid=508585
+wallpaper-m1-renderer[508603]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=204 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[508603]: event=play sequence=1
+wallpaper-m1-renderer[508603]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=508606
+wallpaper-m1-renderer[508603]: event=first-frame latency_ms=47
+wallpaper-m1-renderer[508603]: event=playing first_frame_ms=47
+wallpaper-m1-renderer[508603]: event=loop loops=1 seam_us=32862 nominal_us=32999 presented=31 late=0 starved=0
+wallpaper-m1-renderer[508603]: event=loop loops=2 seam_us=33005 nominal_us=32999 presented=61 late=0 starved=0
+wallpaper-m1-renderer[508603]: event=loop loops=3 seam_us=33001 nominal_us=32999 presented=91 late=0 starved=0
+wallpaper-m1-renderer[508603]: event=loop loops=4 seam_us=33018 nominal_us=32999 presented=121 late=0 starved=0
+wallpaper-m1-renderer[508603]: event=playback-stop reason=shutdown presented=128 loops=4 late=0 starved=0
+wallpaper-m1-renderer[508603]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[508813]: event=authenticating authority=:1.129 pid=508783
+wallpaper-m1-renderer[508813]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=205 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[508813]: event=play sequence=1
+wallpaper-m1-renderer[508813]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=508816
+wallpaper-m1-renderer[508813]: event=first-frame latency_ms=52
+wallpaper-m1-renderer[508813]: event=playing first_frame_ms=52
+wallpaper-m1-renderer[508813]: event=loop loops=1 seam_us=33262 nominal_us=32999 presented=31 late=0 starved=0
+wallpaper-m1-renderer[508813]: event=loop loops=2 seam_us=33042 nominal_us=32999 presented=61 late=0 starved=0
+wallpaper-m1-renderer[508813]: event=loop loops=3 seam_us=32943 nominal_us=32999 presented=91 late=0 starved=0
+wallpaper-m1-renderer[508813]: event=loop loops=4 seam_us=32974 nominal_us=32999 presented=121 late=0 starved=0
+wallpaper-m1-renderer[508813]: event=playback-stop reason=shutdown presented=130 loops=4 late=0 starved=0
+wallpaper-m1-renderer[508813]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[508964]: event=authenticating authority=:1.146 pid=508950
+wallpaper-m1-renderer[508964]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=206 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[508964]: event=play sequence=1
+wallpaper-m1-renderer[508964]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=508967
+wallpaper-m1-renderer[508964]: event=first-frame latency_ms=78
+wallpaper-m1-renderer[508964]: event=playing first_frame_ms=78
+wallpaper-m1-renderer[508964]: event=loop loops=1 seam_us=32712 nominal_us=33000 presented=241 late=0 starved=0
+wallpaper-m1-renderer[508964]: event=loop loops=2 seam_us=32666 nominal_us=33000 presented=481 late=0 starved=0
+wallpaper-m1-renderer[508964]: event=loop loops=3 seam_us=32707 nominal_us=33000 presented=721 late=0 starved=0
+wallpaper-m1-renderer[508964]: event=loop loops=4 seam_us=32666 nominal_us=33000 presented=961 late=0 starved=0
+wallpaper-m1-renderer[508964]: event=playback-stop reason=shutdown presented=1069 loops=4 late=0 starved=0
+wallpaper-m1-renderer[508964]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[509186]: event=authenticating authority=:1.157 pid=509170
+wallpaper-m1-renderer[509186]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=300 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[509186]: event=play sequence=1
+wallpaper-m1-renderer[509186]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=509189
+wallpaper-m1-renderer[509186]: event=first-frame latency_ms=43
+wallpaper-m1-renderer[509186]: event=playing first_frame_ms=43
+wallpaper-m1-renderer[509186]: event=accepted sequence=2 admitted_sequence=2 paused=true active=false revision=300 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[509186]: event=stopped surfaces=0 decoders=0 admitted_sequence=2 paused=true active=false revision=300 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[509186]: event=playback-stop reason=plan presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[509186]: event=accepted sequence=3 admitted_sequence=3 paused=false active=true revision=300 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[509186]: event=play sequence=3
+wallpaper-m1-renderer[509186]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=509294
+wallpaper-m1-renderer[509186]: event=first-frame latency_ms=35
+wallpaper-m1-renderer[509186]: event=playing first_frame_ms=35
+wallpaper-m1-renderer[509186]: event=loop loops=1 seam_us=99998 nominal_us=100000 presented=11 late=0 starved=0
+wallpaper-m1-renderer[509186]: event=loop loops=2 seam_us=99932 nominal_us=100000 presented=21 late=0 starved=0
+wallpaper-m1-renderer[509186]: event=playback-stop reason=shutdown presented=21 loops=2 late=0 starved=0
+wallpaper-m1-renderer[509186]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[509385]: event=authenticating authority=:1.177 pid=509371
+wallpaper-m1-renderer[509385]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=400 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[509385]: event=play sequence=1
+wallpaper-m1-renderer[509385]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=509388
+wallpaper-m1-renderer[509385]: event=first-frame latency_ms=51
+wallpaper-m1-renderer[509385]: event=playing first_frame_ms=51
+wallpaper-m1-renderer[509456]: event=authenticating authority=:1.177 pid=509371
+wallpaper-m1-renderer[509456]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=400 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[509456]: event=play sequence=1
+wallpaper-m1-renderer[509456]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=509459
+wallpaper-m1-renderer[509456]: event=first-frame latency_ms=53
+wallpaper-m1-renderer[509456]: event=playing first_frame_ms=53
+wallpaper-m1-renderer[509456]: event=playback-stop reason=shutdown presented=9 loops=0 late=0 starved=0
+wallpaper-m1-renderer[509456]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[509522]: event=authenticating authority=:1.190 pid=509504
+wallpaper-m1-renderer[509522]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1000 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[509522]: event=play sequence=1
+wallpaper-m1-renderer[509522]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=509525
+wallpaper-m1-renderer[509522]: event=first-frame latency_ms=46
+wallpaper-m1-renderer[509522]: event=playing first_frame_ms=46
+wallpaper-m1-renderer[509522]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[509522]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[509735]: event=authenticating authority=:1.199 pid=509630
+wallpaper-m1-renderer[509735]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1001 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[509735]: event=play sequence=1
+wallpaper-m1-renderer[509735]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=509738
+wallpaper-m1-renderer[509735]: event=first-frame latency_ms=44
+wallpaper-m1-renderer[509735]: event=playing first_frame_ms=44
+wallpaper-m1-renderer[509735]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[509735]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[509881]: event=authenticating authority=:1.208 pid=509832
+wallpaper-m1-renderer[509881]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1002 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[509881]: event=play sequence=1
+wallpaper-m1-renderer[509881]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=509884
+wallpaper-m1-renderer[509881]: event=first-frame latency_ms=47
+wallpaper-m1-renderer[509881]: event=playing first_frame_ms=47
+wallpaper-m1-renderer[509881]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[509881]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[510076]: event=authenticating authority=:1.217 pid=510005
+wallpaper-m1-renderer[510076]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1003 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[510076]: event=play sequence=1
+wallpaper-m1-renderer[510076]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=510079
+wallpaper-m1-renderer[510076]: event=first-frame latency_ms=49
+wallpaper-m1-renderer[510076]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[510076]: event=playing first_frame_ms=49
+wallpaper-m1-renderer[510076]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[510076]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[510877]: event=authenticating authority=:1.240 pid=510561
+wallpaper-m1-renderer[510877]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1004 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[510877]: event=play sequence=1
+wallpaper-m1-renderer[510877]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=510881
+wallpaper-m1-renderer[510877]: event=first-frame latency_ms=74
+wallpaper-m1-renderer[510877]: event=playing first_frame_ms=74
+wallpaper-m1-renderer[510877]: event=loop loops=1 seam_us=32870 nominal_us=32999 presented=31 late=1 starved=0
+wallpaper-m1-renderer[510877]: event=playback-stop reason=shutdown presented=35 loops=1 late=1 starved=0
+wallpaper-m1-renderer[510877]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[511024]: event=authenticating authority=:1.248 pid=510952
+wallpaper-m1-renderer[511024]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1005 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[511024]: event=play sequence=1
+wallpaper-m1-renderer[511024]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=511031
+wallpaper-m1-renderer[511024]: event=first-frame latency_ms=66
+wallpaper-m1-renderer[511024]: event=playing first_frame_ms=66
+wallpaper-m1-renderer[511024]: event=playback-stop reason=shutdown presented=10 loops=0 late=0 starved=0
+wallpaper-m1-renderer[511024]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[511178]: event=authenticating authority=:1.256 pid=511128
+wallpaper-m1-renderer[511178]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1006 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[511178]: event=play sequence=1
+wallpaper-m1-renderer[511178]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=511181
+wallpaper-m1-renderer[511178]: event=first-frame latency_ms=83
+wallpaper-m1-renderer[511178]: event=playing first_frame_ms=83
+wallpaper-m1-renderer[511178]: event=playback-stop reason=shutdown presented=10 loops=0 late=0 starved=0
+wallpaper-m1-renderer[511178]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[511451]: event=authenticating authority=:1.264 pid=511291
+wallpaper-m1-renderer[511451]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1007 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[511451]: event=play sequence=1
+wallpaper-m1-renderer[511451]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=511454
+wallpaper-m1-renderer[511451]: event=first-frame latency_ms=39
+wallpaper-m1-renderer[511451]: event=playing first_frame_ms=39
+wallpaper-m1-renderer[511451]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[511451]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[511588]: event=authenticating authority=:1.273 pid=511526
+wallpaper-m1-renderer[511588]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1008 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[511588]: event=play sequence=1
+wallpaper-m1-renderer[511588]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=511591
+wallpaper-m1-renderer[511588]: event=first-frame latency_ms=60
+wallpaper-m1-renderer[511588]: event=playing first_frame_ms=60
+wallpaper-m1-renderer[511588]: event=playback-stop reason=shutdown presented=7 loops=0 late=0 starved=0
+wallpaper-m1-renderer[511588]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[511747]: event=authenticating authority=:1.282 pid=511679
+wallpaper-m1-renderer[511747]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1009 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[511747]: event=play sequence=1
+wallpaper-m1-renderer[511747]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=511761
+wallpaper-m1-renderer[511747]: event=first-frame latency_ms=52
+wallpaper-m1-renderer[511747]: event=playing first_frame_ms=52
+wallpaper-m1-renderer[511747]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[511747]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[511851]: event=authenticating authority=:1.291 pid=511826
+wallpaper-m1-renderer[511851]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1010 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[511851]: event=play sequence=1
+wallpaper-m1-renderer[511851]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=511854
+wallpaper-m1-renderer[511851]: event=first-frame latency_ms=58
+wallpaper-m1-renderer[511851]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[511851]: event=playing first_frame_ms=58
+wallpaper-m1-renderer[511851]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[511851]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[512231]: event=authenticating authority=:1.313 pid=512133
+wallpaper-m1-renderer[512231]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1011 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[512231]: event=play sequence=1
+wallpaper-m1-renderer[512231]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=512234
+wallpaper-m1-renderer[512231]: event=first-frame latency_ms=51
+wallpaper-m1-renderer[512231]: event=playing first_frame_ms=51
+wallpaper-m1-renderer[512231]: event=playback-stop reason=shutdown presented=14 loops=0 late=0 starved=0
+wallpaper-m1-renderer[512231]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[512468]: event=authenticating authority=:1.322 pid=512334
+wallpaper-m1-renderer[512468]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1012 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[512468]: event=play sequence=1
+wallpaper-m1-renderer[512468]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=512471
+wallpaper-m1-renderer[512468]: event=first-frame latency_ms=60
+wallpaper-m1-renderer[512468]: event=playing first_frame_ms=60
+wallpaper-m1-renderer[512468]: event=playback-stop reason=shutdown presented=16 loops=0 late=0 starved=0
+wallpaper-m1-renderer[512468]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[512614]: event=authenticating authority=:1.331 pid=512557
+wallpaper-m1-renderer[512614]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1013 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[512614]: event=play sequence=1
+wallpaper-m1-renderer[512614]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=512617
+wallpaper-m1-renderer[512614]: event=first-frame latency_ms=73
+wallpaper-m1-renderer[512614]: event=playing first_frame_ms=73
+wallpaper-m1-renderer[512614]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[512614]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[512825]: event=authenticating authority=:1.340 pid=512715
+wallpaper-m1-renderer[512825]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1014 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[512825]: event=play sequence=1
+wallpaper-m1-renderer[512825]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=512828
+wallpaper-m1-renderer[512825]: event=first-frame latency_ms=48
+wallpaper-m1-renderer[512825]: event=playing first_frame_ms=48
+wallpaper-m1-renderer[512825]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[512825]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[512940]: event=authenticating authority=:1.349 pid=512917
+wallpaper-m1-renderer[512940]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1015 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[512940]: event=play sequence=1
+wallpaper-m1-renderer[512940]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=512945
+wallpaper-m1-renderer[512940]: event=first-frame latency_ms=48
+wallpaper-m1-renderer[512940]: event=playing first_frame_ms=48
+wallpaper-m1-renderer[512940]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[512940]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[513143]: event=authenticating authority=:1.358 pid=513074
+wallpaper-m1-renderer[513143]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1016 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[513143]: event=play sequence=1
+wallpaper-m1-renderer[513143]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=513146
+wallpaper-m1-renderer[513143]: event=first-frame latency_ms=42
+wallpaper-m1-renderer[513143]: event=playing first_frame_ms=42
+wallpaper-m1-renderer[513143]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[513143]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[513246]: event=authenticating authority=:1.367 pid=513211
+wallpaper-m1-renderer[513246]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1017 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[513246]: event=play sequence=1
+wallpaper-m1-renderer[513246]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=513249
+wallpaper-m1-renderer[513246]: event=first-frame latency_ms=48
+wallpaper-m1-renderer[513246]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[513246]: event=playing first_frame_ms=48
+wallpaper-m1-renderer[513246]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[513246]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[513880]: event=authenticating authority=:1.390 pid=513688
+wallpaper-m1-renderer[513880]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1018 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[513880]: event=play sequence=1
+wallpaper-m1-renderer[513880]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=513887
+wallpaper-m1-renderer[513880]: event=first-frame latency_ms=90
+wallpaper-m1-renderer[513880]: event=playing first_frame_ms=90
+wallpaper-m1-renderer[513880]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[513880]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[513995]: event=authenticating authority=:1.398 pid=513956
+wallpaper-m1-renderer[513995]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1019 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[513995]: event=play sequence=1
+wallpaper-m1-renderer[513995]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=514002
+wallpaper-m1-renderer[513995]: event=first-frame latency_ms=68
+wallpaper-m1-renderer[513995]: event=playing first_frame_ms=68
+wallpaper-m1-renderer[513995]: event=playback-stop reason=shutdown presented=10 loops=0 late=0 starved=0
+wallpaper-m1-renderer[513995]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[514139]: event=authenticating authority=:1.406 pid=514076
+wallpaper-m1-renderer[514139]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1020 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[514139]: event=play sequence=1
+wallpaper-m1-renderer[514139]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=514142
+wallpaper-m1-renderer[514139]: event=first-frame latency_ms=79
+wallpaper-m1-renderer[514139]: event=playing first_frame_ms=79
+wallpaper-m1-renderer[514139]: event=playback-stop reason=shutdown presented=13 loops=0 late=0 starved=0
+wallpaper-m1-renderer[514139]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[514257]: event=authenticating authority=:1.415 pid=514230
+wallpaper-m1-renderer[514257]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1021 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[514257]: event=play sequence=1
+wallpaper-m1-renderer[514257]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=514260
+wallpaper-m1-renderer[514257]: event=first-frame latency_ms=45
+wallpaper-m1-renderer[514257]: event=playing first_frame_ms=45
+wallpaper-m1-renderer[514257]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[514257]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[514395]: event=authenticating authority=:1.424 pid=514360
+wallpaper-m1-renderer[514395]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1022 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[514395]: event=play sequence=1
+wallpaper-m1-renderer[514395]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=514398
+wallpaper-m1-renderer[514395]: event=first-frame latency_ms=53
+wallpaper-m1-renderer[514395]: event=playing first_frame_ms=53
+wallpaper-m1-renderer[514395]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[514395]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[514566]: event=authenticating authority=:1.433 pid=514475
+wallpaper-m1-renderer[514566]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1023 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[514566]: event=play sequence=1
+wallpaper-m1-renderer[514566]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=514569
+wallpaper-m1-renderer[514566]: event=first-frame latency_ms=50
+wallpaper-m1-renderer[514566]: event=playing first_frame_ms=50
+wallpaper-m1-renderer[514566]: event=playback-stop reason=shutdown presented=7 loops=0 late=0 starved=0
+wallpaper-m1-renderer[514566]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[514700]: event=authenticating authority=:1.442 pid=514684
+wallpaper-m1-renderer[514700]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1024 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[514700]: event=play sequence=1
+wallpaper-m1-renderer[514700]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=514703
+wallpaper-m1-renderer[514700]: event=first-frame latency_ms=49
+wallpaper-m1-renderer[514700]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[514700]: event=playing first_frame_ms=49
+wallpaper-m1-renderer[514700]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[514700]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[514997]: event=authenticating authority=:1.464 pid=514928
+wallpaper-m1-renderer[514997]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1025 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[514997]: event=play sequence=1
+wallpaper-m1-renderer[514997]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=515000
+wallpaper-m1-renderer[514997]: event=first-frame latency_ms=56
+wallpaper-m1-renderer[514997]: event=playing first_frame_ms=56
+wallpaper-m1-renderer[514997]: event=playback-stop reason=shutdown presented=11 loops=0 late=0 starved=0
+wallpaper-m1-renderer[514997]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[515195]: event=authenticating authority=:1.472 pid=515126
+wallpaper-m1-renderer[515195]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1026 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[515195]: event=play sequence=1
+wallpaper-m1-renderer[515195]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=515198
+wallpaper-m1-renderer[515195]: event=first-frame latency_ms=62
+wallpaper-m1-renderer[515195]: event=playing first_frame_ms=62
+wallpaper-m1-renderer[515195]: event=playback-stop reason=shutdown presented=13 loops=0 late=0 starved=0
+wallpaper-m1-renderer[515195]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[515334]: event=authenticating authority=:1.480 pid=515271
+wallpaper-m1-renderer[515334]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1027 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[515334]: event=play sequence=1
+wallpaper-m1-renderer[515334]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=515337
+wallpaper-m1-renderer[515334]: event=first-frame latency_ms=87
+wallpaper-m1-renderer[515334]: event=playing first_frame_ms=87
+wallpaper-m1-renderer[515334]: event=playback-stop reason=shutdown presented=13 loops=0 late=0 starved=0
+wallpaper-m1-renderer[515334]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[515640]: event=authenticating authority=:1.488 pid=515468
+wallpaper-m1-renderer[515640]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1028 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[515640]: event=play sequence=1
+wallpaper-m1-renderer[515640]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=515644
+wallpaper-m1-renderer[515640]: event=first-frame latency_ms=53
+wallpaper-m1-renderer[515640]: event=playing first_frame_ms=53
+wallpaper-m1-renderer[515640]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[515640]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[515863]: event=authenticating authority=:1.497 pid=515745
+wallpaper-m1-renderer[515863]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1029 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[515863]: event=play sequence=1
+wallpaper-m1-renderer[515863]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=515866
+wallpaper-m1-renderer[515863]: event=first-frame latency_ms=47
+wallpaper-m1-renderer[515863]: event=playing first_frame_ms=47
+wallpaper-m1-renderer[515863]: event=playback-stop reason=shutdown presented=7 loops=0 late=0 starved=0
+wallpaper-m1-renderer[515863]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[516063]: event=authenticating authority=:1.506 pid=515976
+wallpaper-m1-renderer[516063]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1030 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[516063]: event=play sequence=1
+wallpaper-m1-renderer[516063]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=516066
+wallpaper-m1-renderer[516063]: event=first-frame latency_ms=47
+wallpaper-m1-renderer[516063]: event=playing first_frame_ms=47
+wallpaper-m1-renderer[516063]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[516063]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[516248]: event=authenticating authority=:1.515 pid=516173
+wallpaper-m1-renderer[516248]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1031 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[516248]: event=play sequence=1
+wallpaper-m1-renderer[516248]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=516251
+wallpaper-m1-renderer[516248]: event=first-frame latency_ms=51
+wallpaper-m1-renderer[516248]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[516248]: event=playing first_frame_ms=51
+wallpaper-m1-renderer[516248]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[516248]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[516665]: event=authenticating authority=:1.537 pid=516606
+wallpaper-m1-renderer[516665]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1032 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[516665]: event=play sequence=1
+wallpaper-m1-renderer[516665]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=516668
+wallpaper-m1-renderer[516665]: event=first-frame latency_ms=52
+wallpaper-m1-renderer[516665]: event=playing first_frame_ms=52
+wallpaper-m1-renderer[516665]: event=playback-stop reason=shutdown presented=12 loops=0 late=0 starved=0
+wallpaper-m1-renderer[516665]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[516802]: event=authenticating authority=:1.545 pid=516728
+wallpaper-m1-renderer[516802]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1033 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[516802]: event=play sequence=1
+wallpaper-m1-renderer[516802]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=516805
+wallpaper-m1-renderer[516802]: event=first-frame latency_ms=57
+wallpaper-m1-renderer[516802]: event=playing first_frame_ms=57
+wallpaper-m1-renderer[516802]: event=playback-stop reason=shutdown presented=16 loops=0 late=0 starved=0
+wallpaper-m1-renderer[516802]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[516909]: event=authenticating authority=:1.554 pid=516870
+wallpaper-m1-renderer[516909]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1034 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[516909]: event=play sequence=1
+wallpaper-m1-renderer[516909]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=516912
+wallpaper-m1-renderer[516909]: event=first-frame latency_ms=86
+wallpaper-m1-renderer[516909]: event=playing first_frame_ms=86
+wallpaper-m1-renderer[516909]: event=playback-stop reason=shutdown presented=10 loops=0 late=0 starved=0
+wallpaper-m1-renderer[516909]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[516997]: event=authenticating authority=:1.562 pid=516960
+wallpaper-m1-renderer[516997]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1035 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[516997]: event=play sequence=1
+wallpaper-m1-renderer[516997]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=517000
+wallpaper-m1-renderer[516997]: event=first-frame latency_ms=40
+wallpaper-m1-renderer[516997]: event=playing first_frame_ms=40
+wallpaper-m1-renderer[516997]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[516997]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[517131]: event=authenticating authority=:1.571 pid=517095
+wallpaper-m1-renderer[517131]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1036 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[517131]: event=play sequence=1
+wallpaper-m1-renderer[517131]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=517134
+wallpaper-m1-renderer[517131]: event=first-frame latency_ms=44
+wallpaper-m1-renderer[517131]: event=playing first_frame_ms=44
+wallpaper-m1-renderer[517131]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[517131]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[517314]: event=authenticating authority=:1.580 pid=517218
+wallpaper-m1-renderer[517314]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1037 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[517314]: event=play sequence=1
+wallpaper-m1-renderer[517314]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=517319
+wallpaper-m1-renderer[517314]: event=first-frame latency_ms=45
+wallpaper-m1-renderer[517314]: event=playing first_frame_ms=45
+wallpaper-m1-renderer[517314]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[517314]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[517521]: event=authenticating authority=:1.589 pid=517443
+wallpaper-m1-renderer[517521]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1038 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[517521]: event=play sequence=1
+wallpaper-m1-renderer[517521]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=517525
+wallpaper-m1-renderer[517521]: event=first-frame latency_ms=44
+wallpaper-m1-renderer[517521]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[517521]: event=playing first_frame_ms=44
+wallpaper-m1-renderer[517521]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[517521]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[518216]: event=authenticating authority=:1.613 pid=517855
+wallpaper-m1-renderer[518216]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1039 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[518216]: event=play sequence=1
+wallpaper-m1-renderer[518216]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=518225
+wallpaper-m1-renderer[518216]: event=first-frame latency_ms=58
+wallpaper-m1-renderer[518216]: event=playing first_frame_ms=58
+wallpaper-m1-renderer[518216]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[518216]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[518453]: event=authenticating authority=:1.622 pid=518330
+wallpaper-m1-renderer[518453]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1040 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[518453]: event=play sequence=1
+wallpaper-m1-renderer[518453]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=518456
+wallpaper-m1-renderer[518453]: event=first-frame latency_ms=55
+wallpaper-m1-renderer[518453]: event=playing first_frame_ms=55
+wallpaper-m1-renderer[518453]: event=playback-stop reason=shutdown presented=14 loops=0 late=0 starved=0
+wallpaper-m1-renderer[518453]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[518577]: event=authenticating authority=:1.631 pid=518557
+wallpaper-m1-renderer[518577]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1041 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[518577]: event=play sequence=1
+wallpaper-m1-renderer[518577]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=518580
+wallpaper-m1-renderer[518577]: event=first-frame latency_ms=73
+wallpaper-m1-renderer[518577]: event=playing first_frame_ms=73
+wallpaper-m1-renderer[518577]: event=playback-stop reason=shutdown presented=9 loops=0 late=0 starved=0
+wallpaper-m1-renderer[518577]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[518756]: event=authenticating authority=:1.639 pid=518668
+wallpaper-m1-renderer[518756]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1042 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[518756]: event=play sequence=1
+wallpaper-m1-renderer[518756]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=518759
+wallpaper-m1-renderer[518756]: event=first-frame latency_ms=54
+wallpaper-m1-renderer[518756]: event=playing first_frame_ms=54
+wallpaper-m1-renderer[518756]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[518756]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[518862]: event=authenticating authority=:1.648 pid=518830
+wallpaper-m1-renderer[518862]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1043 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[518862]: event=play sequence=1
+wallpaper-m1-renderer[518862]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=518865
+wallpaper-m1-renderer[518862]: event=first-frame latency_ms=40
+wallpaper-m1-renderer[518862]: event=playing first_frame_ms=40
+wallpaper-m1-renderer[518862]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[518862]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[518986]: event=authenticating authority=:1.657 pid=518923
+wallpaper-m1-renderer[518986]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1044 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[518986]: event=play sequence=1
+wallpaper-m1-renderer[518986]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=518989
+wallpaper-m1-renderer[518986]: event=first-frame latency_ms=40
+wallpaper-m1-renderer[518986]: event=playing first_frame_ms=40
+wallpaper-m1-renderer[518986]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[518986]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[519183]: event=authenticating authority=:1.666 pid=519080
+wallpaper-m1-renderer[519183]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1045 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[519183]: event=play sequence=1
+wallpaper-m1-renderer[519183]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=519191
+wallpaper-m1-renderer[519183]: event=first-frame latency_ms=50
+wallpaper-m1-renderer[519183]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[519183]: event=playing first_frame_ms=50
+wallpaper-m1-renderer[519183]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[519183]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[519495]: event=authenticating authority=:1.690 pid=519437
+wallpaper-m1-renderer[519495]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1046 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[519495]: event=play sequence=1
+wallpaper-m1-renderer[519495]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=519498
+wallpaper-m1-renderer[519495]: event=first-frame latency_ms=53
+wallpaper-m1-renderer[519495]: event=playing first_frame_ms=53
+wallpaper-m1-renderer[519495]: event=playback-stop reason=shutdown presented=14 loops=0 late=0 starved=0
+wallpaper-m1-renderer[519495]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[519606]: event=authenticating authority=:1.699 pid=519573
+wallpaper-m1-renderer[519606]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1047 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[519606]: event=play sequence=1
+wallpaper-m1-renderer[519606]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=519609
+wallpaper-m1-renderer[519606]: event=first-frame latency_ms=173
+wallpaper-m1-renderer[519606]: event=playing first_frame_ms=173
+wallpaper-m1-renderer[519606]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[519606]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[519722]: event=authenticating authority=:1.707 pid=519673
+wallpaper-m1-renderer[519722]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1048 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[519722]: event=play sequence=1
+wallpaper-m1-renderer[519722]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=519725
+wallpaper-m1-renderer[519722]: event=first-frame latency_ms=83
+wallpaper-m1-renderer[519722]: event=playing first_frame_ms=83
+wallpaper-m1-renderer[519722]: event=playback-stop reason=shutdown presented=14 loops=0 late=0 starved=0
+wallpaper-m1-renderer[519722]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[519817]: event=authenticating authority=:1.716 pid=519800
+wallpaper-m1-renderer[519817]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1049 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[519817]: event=play sequence=1
+wallpaper-m1-renderer[519817]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=519820
+wallpaper-m1-renderer[519817]: event=first-frame latency_ms=49
+wallpaper-m1-renderer[519817]: event=playing first_frame_ms=49
+wallpaper-m1-renderer[519817]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[519817]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[519897]: event=authenticating authority=:1.725 pid=519882
+wallpaper-m1-renderer[519897]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1050 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[519897]: event=play sequence=1
+wallpaper-m1-renderer[519897]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=519900
+wallpaper-m1-renderer[519897]: event=first-frame latency_ms=39
+wallpaper-m1-renderer[519897]: event=playing first_frame_ms=39
+wallpaper-m1-renderer[519897]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[519897]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[519987]: event=authenticating authority=:1.735 pid=519973
+wallpaper-m1-renderer[519987]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1051 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[519987]: event=play sequence=1
+wallpaper-m1-renderer[519987]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=519990
+wallpaper-m1-renderer[519987]: event=first-frame latency_ms=42
+wallpaper-m1-renderer[519987]: event=playing first_frame_ms=42
+wallpaper-m1-renderer[519987]: event=playback-stop reason=shutdown presented=7 loops=0 late=0 starved=0
+wallpaper-m1-renderer[519987]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[520162]: event=authenticating authority=:1.745 pid=520112
+wallpaper-m1-renderer[520162]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1052 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[520162]: event=play sequence=1
+wallpaper-m1-renderer[520162]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=520167
+wallpaper-m1-renderer[520162]: event=first-frame latency_ms=44
+wallpaper-m1-renderer[520162]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[520162]: event=playing first_frame_ms=44
+wallpaper-m1-renderer[520162]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[520162]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[520375]: event=authenticating authority=:1.769 pid=520358
+wallpaper-m1-renderer[520375]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1053 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[520375]: event=play sequence=1
+wallpaper-m1-renderer[520375]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=520378
+wallpaper-m1-renderer[520375]: event=first-frame latency_ms=53
+wallpaper-m1-renderer[520375]: event=playing first_frame_ms=53
+wallpaper-m1-renderer[520375]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[520375]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[520469]: event=authenticating authority=:1.778 pid=520436
+wallpaper-m1-renderer[520469]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1054 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[520469]: event=play sequence=1
+wallpaper-m1-renderer[520469]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=520472
+wallpaper-m1-renderer[520469]: event=first-frame latency_ms=63
+wallpaper-m1-renderer[520469]: event=playing first_frame_ms=63
+wallpaper-m1-renderer[520469]: event=playback-stop reason=shutdown presented=10 loops=0 late=0 starved=0
+wallpaper-m1-renderer[520469]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[520539]: event=authenticating authority=:1.786 pid=520525
+wallpaper-m1-renderer[520539]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1055 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[520539]: event=play sequence=1
+wallpaper-m1-renderer[520539]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=520542
+wallpaper-m1-renderer[520539]: event=first-frame latency_ms=75
+wallpaper-m1-renderer[520539]: event=playing first_frame_ms=75
+wallpaper-m1-renderer[520539]: event=playback-stop reason=shutdown presented=13 loops=0 late=0 starved=0
+wallpaper-m1-renderer[520539]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[520631]: event=authenticating authority=:1.795 pid=520611
+wallpaper-m1-renderer[520631]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1056 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[520631]: event=play sequence=1
+wallpaper-m1-renderer[520631]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=520634
+wallpaper-m1-renderer[520631]: event=first-frame latency_ms=46
+wallpaper-m1-renderer[520631]: event=playing first_frame_ms=46
+wallpaper-m1-renderer[520631]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[520631]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[520753]: event=authenticating authority=:1.804 pid=520723
+wallpaper-m1-renderer[520753]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1057 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[520753]: event=play sequence=1
+wallpaper-m1-renderer[520753]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=520764
+wallpaper-m1-renderer[520753]: event=first-frame latency_ms=53
+wallpaper-m1-renderer[520753]: event=playing first_frame_ms=53
+wallpaper-m1-renderer[520753]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[520753]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[520839]: event=authenticating authority=:1.813 pid=520822
+wallpaper-m1-renderer[520839]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1058 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[520839]: event=play sequence=1
+wallpaper-m1-renderer[520839]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=520842
+wallpaper-m1-renderer[520839]: event=first-frame latency_ms=39
+wallpaper-m1-renderer[520839]: event=playing first_frame_ms=39
+wallpaper-m1-renderer[520839]: event=playback-stop reason=shutdown presented=7 loops=0 late=0 starved=0
+wallpaper-m1-renderer[520839]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[520920]: event=authenticating authority=:1.823 pid=520904
+wallpaper-m1-renderer[520920]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1059 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[520920]: event=play sequence=1
+wallpaper-m1-renderer[520920]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=520923
+wallpaper-m1-renderer[520920]: event=first-frame latency_ms=43
+wallpaper-m1-renderer[520920]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[520920]: event=playing first_frame_ms=43
+wallpaper-m1-renderer[520920]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[520920]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[521156]: event=authenticating authority=:1.848 pid=521126
+wallpaper-m1-renderer[521156]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1060 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[521156]: event=play sequence=1
+wallpaper-m1-renderer[521156]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=521159
+wallpaper-m1-renderer[521156]: event=first-frame latency_ms=50
+wallpaper-m1-renderer[521156]: event=playing first_frame_ms=50
+wallpaper-m1-renderer[521156]: event=playback-stop reason=shutdown presented=13 loops=0 late=0 starved=0
+wallpaper-m1-renderer[521156]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[521243]: event=authenticating authority=:1.857 pid=521228
+wallpaper-m1-renderer[521243]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1061 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[521243]: event=play sequence=1
+wallpaper-m1-renderer[521243]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=521246
+wallpaper-m1-renderer[521243]: event=first-frame latency_ms=53
+wallpaper-m1-renderer[521243]: event=playing first_frame_ms=53
+wallpaper-m1-renderer[521243]: event=playback-stop reason=shutdown presented=13 loops=0 late=0 starved=0
+wallpaper-m1-renderer[521243]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[521543]: event=authenticating authority=:1.866 pid=521313
+wallpaper-m1-renderer[521543]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1062 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[521543]: event=play sequence=1
+wallpaper-m1-renderer[521543]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=521547
+wallpaper-m1-renderer[521543]: event=first-frame latency_ms=77
+wallpaper-m1-renderer[521543]: event=playing first_frame_ms=77
+wallpaper-m1-renderer[521543]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[521543]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[521678]: event=authenticating authority=:1.875 pid=521624
+wallpaper-m1-renderer[521678]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1063 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[521678]: event=play sequence=1
+wallpaper-m1-renderer[521678]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=521685
+wallpaper-m1-renderer[521678]: event=first-frame latency_ms=92
+wallpaper-m1-renderer[521678]: event=playing first_frame_ms=92
+wallpaper-m1-renderer[521678]: event=playback-stop reason=shutdown presented=7 loops=0 late=0 starved=0
+wallpaper-m1-renderer[521678]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[521865]: event=authenticating authority=:1.884 pid=521817
+wallpaper-m1-renderer[521865]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1064 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[521865]: event=play sequence=1
+wallpaper-m1-renderer[521865]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=521868
+wallpaper-m1-renderer[521865]: event=first-frame latency_ms=45
+wallpaper-m1-renderer[521865]: event=playing first_frame_ms=45
+wallpaper-m1-renderer[521865]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[521865]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[522092]: event=authenticating authority=:1.893 pid=521968
+wallpaper-m1-renderer[522092]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1065 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[522092]: event=play sequence=1
+wallpaper-m1-renderer[522092]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=522095
+wallpaper-m1-renderer[522092]: event=first-frame latency_ms=45
+wallpaper-m1-renderer[522092]: event=playing first_frame_ms=45
+wallpaper-m1-renderer[522092]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[522092]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[522231]: event=authenticating authority=:1.902 pid=522180
+wallpaper-m1-renderer[522231]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1066 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[522231]: event=play sequence=1
+wallpaper-m1-renderer[522231]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=522234
+wallpaper-m1-renderer[522231]: event=first-frame latency_ms=38
+wallpaper-m1-renderer[522231]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[522231]: event=playing first_frame_ms=38
+wallpaper-m1-renderer[522231]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[522231]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[522447]: event=authenticating authority=:1.927 pid=522431
+wallpaper-m1-renderer[522447]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1067 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[522447]: event=play sequence=1
+wallpaper-m1-renderer[522447]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=522450
+wallpaper-m1-renderer[522447]: event=first-frame latency_ms=51
+wallpaper-m1-renderer[522447]: event=playing first_frame_ms=51
+wallpaper-m1-renderer[522447]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[522447]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[522561]: event=authenticating authority=:1.936 pid=522533
+wallpaper-m1-renderer[522561]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1068 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[522561]: event=play sequence=1
+wallpaper-m1-renderer[522561]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=522564
+wallpaper-m1-renderer[522561]: event=first-frame latency_ms=55
+wallpaper-m1-renderer[522561]: event=playing first_frame_ms=55
+wallpaper-m1-renderer[522561]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[522561]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[522667]: event=authenticating authority=:1.945 pid=522627
+wallpaper-m1-renderer[522667]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1069 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[522667]: event=play sequence=1
+wallpaper-m1-renderer[522667]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=522671
+wallpaper-m1-renderer[522667]: event=first-frame latency_ms=74
+wallpaper-m1-renderer[522667]: event=playing first_frame_ms=74
+wallpaper-m1-renderer[522667]: event=playback-stop reason=shutdown presented=10 loops=0 late=0 starved=0
+wallpaper-m1-renderer[522667]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[522746]: event=authenticating authority=:1.953 pid=522726
+wallpaper-m1-renderer[522746]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1070 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[522746]: event=play sequence=1
+wallpaper-m1-renderer[522746]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=522749
+wallpaper-m1-renderer[522746]: event=first-frame latency_ms=42
+wallpaper-m1-renderer[522746]: event=playing first_frame_ms=42
+wallpaper-m1-renderer[522746]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[522746]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[522846]: event=authenticating authority=:1.962 pid=522817
+wallpaper-m1-renderer[522846]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1071 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[522846]: event=play sequence=1
+wallpaper-m1-renderer[522846]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=522850
+wallpaper-m1-renderer[522846]: event=first-frame latency_ms=42
+wallpaper-m1-renderer[522846]: event=playing first_frame_ms=42
+wallpaper-m1-renderer[522846]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[522846]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[523071]: event=authenticating authority=:1.971 pid=522934
+wallpaper-m1-renderer[523071]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1072 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[523071]: event=play sequence=1
+wallpaper-m1-renderer[523071]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=523077
+wallpaper-m1-renderer[523071]: event=first-frame latency_ms=44
+wallpaper-m1-renderer[523071]: event=playing first_frame_ms=44
+wallpaper-m1-renderer[523071]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[523071]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[523485]: event=authenticating authority=:1.980 pid=523258
+wallpaper-m1-renderer[523485]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1073 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[523485]: event=play sequence=1
+wallpaper-m1-renderer[523485]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=523495
+wallpaper-m1-renderer[523485]: event=first-frame latency_ms=46
+wallpaper-m1-renderer[523485]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[523485]: event=playing first_frame_ms=46
+wallpaper-m1-renderer[523485]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[523485]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[524317]: event=authenticating authority=:1.1004 pid=524159
+wallpaper-m1-renderer[524317]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1074 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[524317]: event=play sequence=1
+wallpaper-m1-renderer[524317]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=524327
+wallpaper-m1-renderer[524317]: event=first-frame latency_ms=243
+wallpaper-m1-renderer[524317]: event=playing first_frame_ms=243
+wallpaper-m1-renderer[524317]: event=playback-stop reason=shutdown presented=18 loops=0 late=0 starved=0
+wallpaper-m1-renderer[524317]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[524450]: event=authenticating authority=:1.1012 pid=524415
+wallpaper-m1-renderer[524450]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1075 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[524450]: event=play sequence=1
+wallpaper-m1-renderer[524450]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=524457
+wallpaper-m1-renderer[524450]: event=first-frame latency_ms=64
+wallpaper-m1-renderer[524450]: event=playing first_frame_ms=64
+wallpaper-m1-renderer[524450]: event=playback-stop reason=shutdown presented=14 loops=0 late=0 starved=0
+wallpaper-m1-renderer[524450]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[524593]: event=authenticating authority=:1.1021 pid=524545
+wallpaper-m1-renderer[524593]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1076 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[524593]: event=play sequence=1
+wallpaper-m1-renderer[524593]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=524598
+wallpaper-m1-renderer[524593]: event=first-frame latency_ms=88
+wallpaper-m1-renderer[524593]: event=playing first_frame_ms=88
+wallpaper-m1-renderer[524593]: event=playback-stop reason=shutdown presented=10 loops=0 late=0 starved=0
+wallpaper-m1-renderer[524593]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[524732]: event=authenticating authority=:1.1029 pid=524677
+wallpaper-m1-renderer[524732]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1077 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[524732]: event=play sequence=1
+wallpaper-m1-renderer[524732]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=524735
+wallpaper-m1-renderer[524732]: event=first-frame latency_ms=42
+wallpaper-m1-renderer[524732]: event=playing first_frame_ms=42
+wallpaper-m1-renderer[524732]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[524732]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[524850]: event=authenticating authority=:1.1038 pid=524801
+wallpaper-m1-renderer[524850]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1078 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[524850]: event=play sequence=1
+wallpaper-m1-renderer[524850]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=524854
+wallpaper-m1-renderer[524850]: event=first-frame latency_ms=46
+wallpaper-m1-renderer[524850]: event=playing first_frame_ms=46
+wallpaper-m1-renderer[524850]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[524850]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[525194]: event=authenticating authority=:1.1047 pid=525012
+wallpaper-m1-renderer[525194]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1079 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[525194]: event=play sequence=1
+wallpaper-m1-renderer[525194]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=525202
+wallpaper-m1-renderer[525194]: event=first-frame latency_ms=50
+wallpaper-m1-renderer[525194]: event=playing first_frame_ms=50
+wallpaper-m1-renderer[525194]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[525194]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[525445]: event=authenticating authority=:1.1056 pid=525415
+wallpaper-m1-renderer[525445]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1080 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[525445]: event=play sequence=1
+wallpaper-m1-renderer[525445]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=525450
+wallpaper-m1-renderer[525445]: event=first-frame latency_ms=39
+wallpaper-m1-renderer[525445]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[525445]: event=playing first_frame_ms=39
+wallpaper-m1-renderer[525445]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[525445]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[525818]: event=authenticating authority=:1.1080 pid=525736
+wallpaper-m1-renderer[525818]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1081 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[525818]: event=play sequence=1
+wallpaper-m1-renderer[525818]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=525826
+wallpaper-m1-renderer[525818]: event=first-frame latency_ms=53
+wallpaper-m1-renderer[525818]: event=playing first_frame_ms=53
+wallpaper-m1-renderer[525818]: event=playback-stop reason=shutdown presented=14 loops=0 late=0 starved=0
+wallpaper-m1-renderer[525818]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[526062]: event=authenticating authority=:1.1089 pid=525965
+wallpaper-m1-renderer[526062]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1082 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[526062]: event=play sequence=1
+wallpaper-m1-renderer[526062]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=526067
+wallpaper-m1-renderer[526062]: event=first-frame latency_ms=58
+wallpaper-m1-renderer[526062]: event=playing first_frame_ms=58
+wallpaper-m1-renderer[526062]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[526062]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[526361]: event=authenticating authority=:1.1098 pid=526197
+wallpaper-m1-renderer[526361]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1083 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[526361]: event=play sequence=1
+wallpaper-m1-renderer[526361]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=526364
+wallpaper-m1-renderer[526361]: event=first-frame latency_ms=93
+wallpaper-m1-renderer[526361]: event=playing first_frame_ms=93
+wallpaper-m1-renderer[526361]: event=playback-stop reason=shutdown presented=14 loops=0 late=0 starved=0
+wallpaper-m1-renderer[526361]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[526451]: event=authenticating authority=:1.1106 pid=526417
+wallpaper-m1-renderer[526451]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1084 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[526451]: event=play sequence=1
+wallpaper-m1-renderer[526451]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=526456
+wallpaper-m1-renderer[526451]: event=first-frame latency_ms=45
+wallpaper-m1-renderer[526451]: event=playing first_frame_ms=45
+wallpaper-m1-renderer[526451]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[526451]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[526791]: event=authenticating authority=:1.1115 pid=526582
+wallpaper-m1-renderer[526791]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1085 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[526791]: event=play sequence=1
+wallpaper-m1-renderer[526791]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=526794
+wallpaper-m1-renderer[526791]: event=first-frame latency_ms=44
+wallpaper-m1-renderer[526791]: event=playing first_frame_ms=44
+wallpaper-m1-renderer[526791]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[526791]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[526882]: event=authenticating authority=:1.1124 pid=526859
+wallpaper-m1-renderer[526882]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1086 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[526882]: event=play sequence=1
+wallpaper-m1-renderer[526882]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=526885
+wallpaper-m1-renderer[526882]: event=first-frame latency_ms=44
+wallpaper-m1-renderer[526882]: event=playing first_frame_ms=44
+wallpaper-m1-renderer[526882]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[526882]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[526998]: event=authenticating authority=:1.1133 pid=526962
+wallpaper-m1-renderer[526998]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1087 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[526998]: event=play sequence=1
+wallpaper-m1-renderer[526998]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=527002
+wallpaper-m1-renderer[526998]: event=first-frame latency_ms=45
+wallpaper-m1-renderer[526998]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[526998]: event=playing first_frame_ms=45
+wallpaper-m1-renderer[526998]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[526998]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[527415]: event=authenticating authority=:1.1157 pid=527310
+wallpaper-m1-renderer[527415]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1088 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[527415]: event=play sequence=1
+wallpaper-m1-renderer[527415]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=527420
+wallpaper-m1-renderer[527415]: event=first-frame latency_ms=51
+wallpaper-m1-renderer[527415]: event=playing first_frame_ms=51
+wallpaper-m1-renderer[527415]: event=playback-stop reason=shutdown presented=15 loops=0 late=0 starved=0
+wallpaper-m1-renderer[527415]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[527536]: event=authenticating authority=:1.1166 pid=527514
+wallpaper-m1-renderer[527536]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1089 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[527536]: event=play sequence=1
+wallpaper-m1-renderer[527536]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=527539
+wallpaper-m1-renderer[527536]: event=first-frame latency_ms=58
+wallpaper-m1-renderer[527536]: event=playing first_frame_ms=58
+wallpaper-m1-renderer[527536]: event=playback-stop reason=shutdown presented=13 loops=0 late=0 starved=0
+wallpaper-m1-renderer[527536]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[527878]: event=authenticating authority=:1.1175 pid=527597
+wallpaper-m1-renderer[527878]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1090 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[527878]: event=play sequence=1
+wallpaper-m1-renderer[527878]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=527882
+wallpaper-m1-renderer[527878]: event=first-frame latency_ms=79
+wallpaper-m1-renderer[527878]: event=playing first_frame_ms=79
+wallpaper-m1-renderer[527878]: event=playback-stop reason=shutdown presented=17 loops=0 late=0 starved=0
+wallpaper-m1-renderer[527878]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[528506]: event=authenticating authority=:1.1184 pid=527973
+wallpaper-m1-renderer[528506]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1091 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[528506]: event=play sequence=1
+wallpaper-m1-renderer[528506]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=528509
+wallpaper-m1-renderer[528506]: event=first-frame latency_ms=50
+wallpaper-m1-renderer[528506]: event=playing first_frame_ms=50
+wallpaper-m1-renderer[528506]: event=playback-stop reason=shutdown presented=5 loops=0 late=0 starved=0
+wallpaper-m1-renderer[528506]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[528772]: event=authenticating authority=:1.1193 pid=528613
+wallpaper-m1-renderer[528772]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1092 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[528772]: event=play sequence=1
+wallpaper-m1-renderer[528772]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=528775
+wallpaper-m1-renderer[528772]: event=first-frame latency_ms=48
+wallpaper-m1-renderer[528772]: event=playing first_frame_ms=48
+wallpaper-m1-renderer[528772]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[528772]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[529126]: event=authenticating authority=:1.1202 pid=528956
+wallpaper-m1-renderer[529126]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1093 media=ebd2ce115eb6f655 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[529126]: event=play sequence=1
+wallpaper-m1-renderer[529126]: event=playback-start media=ebd2ce115eb6f655 format=Webp pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=529129
+wallpaper-m1-renderer[529126]: event=first-frame latency_ms=49
+wallpaper-m1-renderer[529126]: event=playing first_frame_ms=49
+wallpaper-m1-renderer[529126]: event=loop loops=1 seam_us=99597 nominal_us=100000 presented=11 late=0 starved=0
+wallpaper-m1-renderer[529126]: event=playback-stop reason=shutdown presented=12 loops=1 late=0 starved=0
+wallpaper-m1-renderer[529126]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[530075]: event=authenticating authority=:1.1211 pid=530059
+wallpaper-m1-renderer[530075]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1094 media=7597825d9b5ab6a8 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[530075]: event=play sequence=1
+wallpaper-m1-renderer[530075]: event=playback-start media=7597825d9b5ab6a8 format=StillPng pixels=Bgrx source=1152x216 frames=1 loop_ms=0 surface=3840x1080 worker_pid=530078
+wallpaper-m1-renderer[530075]: event=first-frame latency_ms=44
+wallpaper-m1-renderer[530075]: event=still-presented worker=stopped cleanup=ok
+wallpaper-m1-renderer[530075]: event=playing first_frame_ms=44
+wallpaper-m1-renderer[530075]: event=playback-stop reason=shutdown presented=1 loops=0 late=0 starved=0
+wallpaper-m1-renderer[530075]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[530400]: event=authenticating authority=:1.1235 pid=530296
+wallpaper-m1-renderer[530400]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1095 media=eb0e975f415486b4 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[530400]: event=play sequence=1
+wallpaper-m1-renderer[530400]: event=playback-start media=eb0e975f415486b4 format=Vp9Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=530403
+wallpaper-m1-renderer[530400]: event=first-frame latency_ms=50
+wallpaper-m1-renderer[530400]: event=playing first_frame_ms=50
+wallpaper-m1-renderer[530400]: event=playback-stop reason=shutdown presented=13 loops=0 late=0 starved=0
+wallpaper-m1-renderer[530400]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[530485]: event=authenticating authority=:1.1244 pid=530469
+wallpaper-m1-renderer[530485]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1096 media=1ce5b12ff8f2823b canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[530485]: event=play sequence=1
+wallpaper-m1-renderer[530485]: event=playback-start media=1ce5b12ff8f2823b format=Av1Webm pixels=I420 { bt709: false, full_range: false } source=960x180 frames=30 loop_ms=999 surface=3840x1080 worker_pid=530488
+wallpaper-m1-renderer[530485]: event=first-frame latency_ms=63
+wallpaper-m1-renderer[530485]: event=playing first_frame_ms=63
+wallpaper-m1-renderer[530485]: event=playback-stop reason=shutdown presented=13 loops=0 late=0 starved=0
+wallpaper-m1-renderer[530485]: exit presentation torn down: Revoked
+wallpaper-m1-renderer[530590]: event=authenticating authority=:1.1253 pid=530564
+wallpaper-m1-renderer[530590]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1097 media=c106a8f448aba448 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[530590]: event=play sequence=1
+wallpaper-m1-renderer[530590]: event=playback-start media=c106a8f448aba448 format=Vp9Webm pixels=I420 { bt709: true, full_range: false } source=1920x1080 frames=240 loop_ms=8000 surface=3840x1080 worker_pid=530593
+wallpaper-m1-renderer[530590]: event=first-frame latency_ms=69
+wallpaper-m1-renderer[530590]: event=playing first_frame_ms=69
+wallpaper-m1-renderer[530590]: event=playback-stop reason=shutdown presented=14 loops=0 late=0 starved=0
+wallpaper-m1-renderer[530590]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[530670]: event=authenticating authority=:1.1262 pid=530654
+wallpaper-m1-renderer[530670]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1098 media=54b0df019d25db33 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[530670]: event=play sequence=1
+wallpaper-m1-renderer[530670]: event=playback-start media=54b0df019d25db33 format=Gif pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=530674
+wallpaper-m1-renderer[530670]: event=first-frame latency_ms=40
+wallpaper-m1-renderer[530670]: event=playing first_frame_ms=40
+wallpaper-m1-renderer[530670]: event=playback-stop reason=shutdown presented=7 loops=0 late=0 starved=0
+wallpaper-m1-renderer[530670]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed
+wallpaper-m1-renderer[530751]: event=authenticating authority=:1.1272 pid=530737
+wallpaper-m1-renderer[530751]: event=accepted sequence=1 admitted_sequence=1 paused=false active=true revision=1099 media=a8222d5a967057a9 canvas=-1920,0,5760x1080 slices=monitor-0@0,0,1920x1080;monitor-1@1920,0,1920x1080
+wallpaper-m1-renderer[530751]: event=play sequence=1
+wallpaper-m1-renderer[530751]: event=playback-start media=a8222d5a967057a9 format=Apng pixels=Bgrx source=576x108 frames=10 loop_ms=1000 surface=3840x1080 worker_pid=530756
+wallpaper-m1-renderer[530751]: event=first-frame latency_ms=46
+wallpaper-m1-renderer[530751]: event=playing first_frame_ms=46
+wallpaper-m1-renderer[530751]: event=playback-stop reason=shutdown presented=6 loops=0 late=0 starved=0
+wallpaper-m1-renderer[530751]: exit authority connection lost (daemon exit, crash or kill); presentation destroyed

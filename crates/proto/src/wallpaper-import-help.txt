@@ -13,5 +13,5 @@ Options:
 
 Exit: 0 complete/available, 2 usage/validation, 3 sandbox unavailable,
       4 path authority refused, 5 operational failure, 130 cancelled
-Only VP9/AV1 WebM + GIF/APNG/animated WebP. Otherwise: convert first.
+Only VP9/AV1 WebM + GIF/APNG/animated WebP, or a still PNG. Otherwise: convert first.
 Windows/macOS sandbox: untested/unimplemented, refuses imports.

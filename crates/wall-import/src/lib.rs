@@ -1,5 +1,6 @@
 mod admission;
 mod decode;
+pub mod play;
 pub mod sandbox;
 mod transaction;
 #[cfg(target_os = "linux")]
@@ -7,7 +8,7 @@ mod cgroup;
 #[cfg(target_os = "linux")]
 mod runtime_elf;
 
-pub use admission::{Format, Media, inspect};
+pub use admission::{Format, Media, inspect, timeline};
 pub use transaction::{ImportOptions, ImportRecord, import};
 pub fn decode_webm(codec: &str, width: u32, height: u32) -> Result<(), String> { decode::exec_webm(codec, width, height) }
 

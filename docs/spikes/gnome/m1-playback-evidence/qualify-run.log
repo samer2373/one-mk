@@ -1,0 +1,132 @@
+PASS all seven generated items imported by the real sandboxed importer (one-mk wallpaper import, bubblewrap/seccomp, delegated cgroup v2): gif=gif 576x108/10f, apng=apng 576x108/10f, webp=webp 576x108/10f, still=still_png 1152x216/1f, vp9=vp9_webm 960x180/30f, av1=av1_webm 960x180/30f, clip1080p=vp9_webm 1920x1080/240f
+PASS production extension dormant and unauthorized by default; renderer without --m1-lab refuses; native background captured as the baseline
+/home/samer/.t3/projects/one-mk/.claude/worktrees/agent-a09a60f8d1fd50bec/docs/spikes/gnome/qualify-m1-playback.py:446: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+  for r, g, b in probe.getdata():
+PASS gif: 10 screenshots, both monitors show the same frame as its own slice, exact (every pixel below the panel); frames advance [2, 4, 6, 8, 1, 4, 8, 2, 6, 1] and wrap; reserved absent slice never drawn; loop seams [100026, 100019, 99948, 99989] us vs nominal 100000 us (max error 0.0)
+PASS apng: 10 screenshots, both monitors show the same frame as its own slice, exact (every pixel below the panel); frames advance [2, 4, 6, 8, 1, 4, 8, 2, 6, 1] and wrap; reserved absent slice never drawn; loop seams [99847, 99859, 99916, 99951] us vs nominal 100000 us (max error 0.0)
+PASS webp: 10 screenshots, both monitors show the same frame as its own slice, every pixel below the panel within 1 level (decoder rounding); frames advance [3, 5, 7, 9, 2, 5, 9, 3, 7, 1] and wrap; reserved absent slice never drawn; loop seams [100124, 99990, 100010, 99924] us vs nominal 100000 us (max error 0.31)
+PASS still PNG: both monitors show their exact slices (every pixel below the panel), identical 4.5 s later and still revealed, decode worker gone right after the one frame
+PASS vp9: 10 screenshots, both monitors show the same frame as its own slice, PSNR >= 34.0 dB; frames advance [7, 12, 18, 26, 4, 14, 25, 7, 20, 4] and wrap; reserved absent slice never drawn; loop seams [32862, 33005, 33001, 33018] us vs nominal 32999 us (max error 1.44)
+PASS av1: 10 screenshots, both monitors show the same frame as its own slice, PSNR >= 34.0 dB; frames advance [6, 12, 19, 26, 5, 15, 26, 8, 21, 6] and wrap; reserved absent slice never drawn; loop seams [33262, 33042, 32943, 32974] us vs nominal 32999 us (max error 1.57)
+PASS 1080p30 VP9 clip: frames change between screenshots [43.01, 38.42, 37.65]; seam columns continuous (0.0 vs 170.0 for unrelated columns); resources {"seconds": 30.0, "renderer_cpu_percent_of_one_core": 13.1, "worker_cpu_percent_of_one_core": 42.6, "gnome_shell_cpu_percent_of_one_core": 8.5, "renderer_rss_mib_max": 38.8, "renderer_rss_mib_mean": 38.8, "renderer_shm_mib_max": 18.5, "renderer_anon_mib_max": 17.7, "worker_rss_mib_max": 80.2, "worker_cgroup_mib_max": 66.8, "worker_cgroup_peak_mib": 67.0, "renderer_vmhwm_mib": 38.8, "loops_in_window": 4, "presented_in_window": 961, "late_in_window": 0, "starved_in_window": 0, "late_total": 0, "starved_total": 0, "presented_total": 961, "worker_cpu_max": "200000 100000", "worker_throttled_periods": 0, "seams_us": [32712, 32666, 32707, 32666]}
+PASS pause in the plan: renderer reports Paused, Shell hides the layer, worker and surface destroyed (no play cgroup), screen equals the native background for 3 s ([0.0, 0.0, 0.0]), renderer used 0 CPU ticks while paused; play resumes real frames [2, 6, 1, 5]
+PASS renderer SIGKILLed by the Shell while playing: 3 sandboxed worker process(es) died with it; the empty stale group was reclaimed by the next playback; no group left after the clean exit
+cycle 10/100
+cycle 20/100
+cycle 30/100
+cycle 40/100
+cycle 50/100
+cycle 60/100
+cycle 70/100
+cycle 80/100
+cycle 90/100
+cycle 100/100
+PASS 100 real-playback cycles (rotating 7 imported items x 5 teardowns): every cycle presented verified frames, then the renderer exited, every worker died, no playback group or process left
+PASS zero new Mutter/Shell warning records versus the M1a-2 baseline (14 total, all known)
+{
+  "production_authorization": false,
+  "media": {
+    "gif": {
+      "hash": "54b0df019d25db335f1c7dd64bf19a6dfbf8b5d93510d5817e370597f2620849",
+      "bytes": 65341,
+      "format": "gif",
+      "width": 576,
+      "height": 108,
+      "frames": 10,
+      "duration_ms": 1000
+    },
+    "apng": {
+      "hash": "a8222d5a967057a9021757410810560f554c60dddd60097d74505baf0ffa77db",
+      "bytes": 6638,
+      "format": "apng",
+      "width": 576,
+      "height": 108,
+      "frames": 10,
+      "duration_ms": 1000
+    },
+    "webp": {
+      "hash": "ebd2ce115eb6f65540c72ff69e05452cf82a34ebf2bdd006cc112ec26497a942",
+      "bytes": 3810,
+      "format": "webp",
+      "width": 576,
+      "height": 108,
+      "frames": 10,
+      "duration_ms": 1000
+    },
+    "still": {
+      "hash": "7597825d9b5ab6a8f816253392e91ee263f233c3d8d0343cbb8b24e251749586",
+      "bytes": 2362,
+      "format": "still_png",
+      "width": 1152,
+      "height": 216,
+      "frames": 1,
+      "duration_ms": 0
+    },
+    "vp9": {
+      "hash": "eb0e975f415486b413834c52cdac80e0daa02be1d7d99ef836f3a686e7e5aa6a",
+      "bytes": 303628,
+      "format": "vp9_webm",
+      "width": 960,
+      "height": 180,
+      "frames": 30,
+      "duration_ms": 1000
+    },
+    "av1": {
+      "hash": "1ce5b12ff8f2823bd9bf1ae787f1ecf170e57cc0577c09cf0532c1c5b20d0848",
+      "bytes": 483233,
+      "format": "av1_webm",
+      "width": 960,
+      "height": 180,
+      "frames": 30,
+      "duration_ms": 1000
+    },
+    "clip1080p": {
+      "hash": "c106a8f448aba4483aa8629f06086b69cc6a9d323107c55fff5639129c65b537",
+      "bytes": 3375661,
+      "format": "vp9_webm",
+      "width": 1920,
+      "height": 1080,
+      "frames": 240,
+      "duration_ms": 8000
+    }
+  },
+  "source_sha256": {
+    "one-mk": "038f1f85acde34a377433012525f0d29d920dd2afabf49dd30ddc236977772bd",
+    "one-mk-wall": "be354c954ea004d49fd46833690baa67a97004ade2e1a3a757a993766ee33ace",
+    "one-mk-wall-import": "0a791ebe1c3829015c236113125afdf6554c0bc6e22c301242eff6f50fee24a0"
+  },
+  "cgroup_controllers": [
+    "cpu",
+    "memory",
+    "pids"
+  ],
+  "shell": "GNOME Shell 50.1",
+  "pause": {
+    "paused_background_error": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "renderer_cpu_ticks_paused_3s": 0,
+    "resumed_frames": [
+      2,
+      6,
+      1,
+      5
+    ],
+    "shell_view_paused": {
+      "state": 2,
+      "layer": false,
+      "fresh": false,
+      "reasons": 0,
+      "clones": 0,
+      "rect": null,
+      "type": null
+    }
+  },
+  "new_warnings": [],
+  "warning_records": 14,
+  "passed": true,
+  "remaining_lab_processes": {},
+  "remaining_play_groups": {}
+}

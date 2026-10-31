@@ -1,6 +1,74 @@
 # Wave 6 M1 implementation slices — NOT M1 completion
 
-## Latest slice: step A reached in the private laboratory (B–D not)
+## Latest slice: step B reached in the private laboratory (C–D not)
+
+October 31, 2026 (Asia/Amman). Branch `worktree-agent-a09a60f8d1fd50bec` on top
+of `2b5bf48` (step A). **Step B of 6D-M1 is done and proven with real
+processes and real pixels; M1 is not complete.** The 16–26 engineer-week
+remaining estimate is not reduced by this laboratory step.
+
+**Done.** Importer: still PNG admission (one frame, no duration), per-frame
+container timeline, and a `--play` worker launched only by
+`sandbox::spawn_playback` (same sandbox; no CPU-seconds ceiling; delegated
+cgroup with at most two CPUs; stale playback groups reclaimed under the
+delegation lock). Images loop through the image crate; VP9/AV1 run through
+in-process GStreamer from the pinned runtime (preroll for colorimetry, I420
+out, flushing-seek loop, no new process); a still sends one frame and exits.
+Renderer (`m1-lab`): resolves and re-hashes the plan's media in the private
+import library, starts the worker, and a presenter thread draws one xdg surface
+(two `wl_shm` buffers, first buffer only after the configure ack) with an exact
+centre-anchored cover map per monitor slice; I420 is converted only where
+shown. Pause reports Paused first, then destroys worker and surface. Extension:
+the first damage (before buffer geometry exists) no longer stops the renderer.
+Artifact gate: the release renderer tree may not contain laboratory playback.
+
+**Proven** in the private GNOME 50.1 harness by `qualify-m1-playback.py`
+([evidence](../spikes/gnome/m1-playback-evidence/README.md)): all seven
+locally generated items imported by the real importer; GIF/APNG/still exact on
+every pixel below the top bar on both monitors, WebP within one level (the
+image crate's WebP compositing, measured independently), VP9/AV1 >= 34 dB PSNR;
+same frame on both monitors, reserved absent slice never drawn; real-time
+frame progress and wrap; 28 loop seams within 0.4 ms of nominal; still stable
+4.5 s with no decoder; plan pause → native background, worker and surface gone,
+0 CPU ticks, resume; renderer SIGKILL kills its workers and the next playback
+reclaims the group; 1080p30 VP9 renderer 13.1 % + worker 42.6 % (+ Shell 8.5 %)
+of one core, renderer RSS 38.8 MiB, worker cgroup 67 MiB, 0 late; 100 real
+playback cycles (7 items x 5 teardowns, exit <= 84.8 ms) with no leftover
+worker, group or process; zero new warning records versus the M1a-2 baseline.
+A native test also runs the worker in the real sandbox and delegation
+(images, still, VP9/AV1 loop bytes, hostile input, cleanup).
+
+**Not proven / not done.** Production authorization stays false (D). No
+layout change/hot-plug, lock/unlock, suspend/resume or restoration evidence
+(C). Cover fit only, CPU nearest sampling, no GPU/HiDPI/rotation/physical
+display, no second computer or cross-computer clock (resume restarts at frame
+0). Stills and frames longer than 2 s are re-committed every 2 s because the v1
+bridge cannot announce frame deadlines (design target not met). One machine,
+synthetic software-decoded clip; design CPU budgets not met by software decode
+and not claimed; no power/long-duration data. The laboratory cgroup delegation
+was a directory created for this run under the user's own (T3 Code agents)
+systemd slice, then removed; production provisioning is undesigned. No
+Muro/Aura/Hanabi code was consulted or copied.
+
+**Validation.** Clean env (`env -i`, throwaway HOME, mode-0700
+XDG_RUNTIME_DIR, ONE_MK_HOME, one worktree CARGO_TARGET_DIR, `-j 2`, offline):
+`cargo test --workspace` **1,197 passed, 0 failed, 17 ignored** (42 result
+records); `cargo clippy --workspace --all-targets -- -D warnings` passed, also
+with `--features one-mk-wall/gnome-bridge` and with
+`--features one-mk/wallpaper-m1-lab,one-mk-wall/m1-lab`; the native playback
+worker test passed against the lab runtime and delegation; the artifact
+checker passed with the 32-file lab runtime and refused the laboratory
+renderer tree; warning-gate Python tests passed; whitespace check clean. No
+formatter ran.
+
+**Cleanup.** The harness finalizer stopped the private session; no laboratory
+process or playback group remained (`result.json`). The `/tmp` laboratory and
+scratch directories, the worktree build target, the trusted runtime directory
+and the laboratory cgroup delegation were deleted after evidence was copied.
+No owner desktop, X server, clipboard, real session bus or `~/.config/one-mk`
+was touched.
+
+## Previous slice: step A reached in the private laboratory (B–D not)
 
 Adversarial follow-up: [Codex step A review](WAVE6-M1-STEPA-CODEX-REVIEW.md)
 records the coalesced-consent revocation fix, release-feature guard hardening,
