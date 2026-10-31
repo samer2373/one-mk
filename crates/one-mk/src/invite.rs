@@ -2,9 +2,9 @@
 use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
 use one_mk_ctl::client::Request;
-use one_mk_net::{Device, Discovery, Identity, Node, Peer, TrustStore};
+use one_mk_net::{Discovery, Identity, Node, Peer, TrustStore};
 use one_mk_net::invite::{Invitation, InvitationState, InviteSession, MAX_LINK, STEP_TIMEOUT};
-use one_mk_proto::{DEFAULT_PORT, Side, sanitize_name};
+use one_mk_proto::{DEFAULT_PORT, sanitize_name};
 use std::io::{IsTerminal, Read, Write};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -245,7 +245,7 @@ async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, c
     let accept = accept && tokio::time::Instant::now() < end && one_mk_net::invite::unix_now() < wall_expiry;
     let ok = tokio::time::timeout(STEP_TIMEOUT, session.confirm(accept)).await.context("invitation approval transport timed out")??;
     if !ok { bail!("device refused; invitation consumed; nothing saved here"); }
-    save_marked(dir, peer, &name, port, Side::Left, saved).await?;
+    save_marked(dir, peer, &name, port, true, saved).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}).", peer.fingerprint);
     Ok(())
@@ -325,7 +325,7 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
     };
     std::io::stdout().flush()?;
     ensure!(tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")??, "invitation declined; nothing saved here");
-    save(dir, &peer, &name, port, Side::Right).await?;
+    save(dir, &peer, &name, port, false).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}). Start `one-mk run` only on computers not already running.", peer.fingerprint);
     Ok(())
@@ -437,19 +437,22 @@ impl SourceLimit {
     }
 }
 
-async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, side: Side) -> Result<()> {
-    save_marked(dir, peer, name, port, side, &AtomicBool::new(false)).await
+async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool) -> Result<()> {
+    save_marked(dir, peer, name, port, initiator, &AtomicBool::new(false)).await
 }
 
-async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, side: Side, saved: &AtomicBool) -> Result<()> {
+async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool, saved: &AtomicBool) -> Result<()> {
     // Reload immediately before writing, as ordinary pairing does not own
     // the daemon's in-memory trust store.
     let mut trust = TrustStore::load(dir)?;
     let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), port);
-    trust.upsert(Device { name: name.to_owned(), fingerprint: peer.fingerprint.to_string(), side: side.to_string(), addrs: vec![addr.to_string()], ..Device::default() });
+    let placement = crate::pairing_layout::remember(&mut trust, peer.fingerprint, name, addr, initiator);
     trust.save()?;
     saved.store(true, Ordering::SeqCst);
     let _ = crate::control::request(dir, Request::Reload).await;
+    if placement.placed_by == one_mk_net::PlacedBy::Pending {
+        println!("{}", crate::pairing_layout::warning(name));
+    }
     Ok(())
 }
 
@@ -675,14 +678,14 @@ mod tests {
             }, async {
                 if host_first { tokio::time::sleep(Duration::from_millis(150)).await; }
                 ensure!(join_session.confirm(true).await?, "host declined");
-                save(&join_dir, &outgoing, "Host", 24900, Side::Right).await?;
+                save(&join_dir, &outgoing, "Host", 24900, false).await?;
                 acknowledge(join_session).await
             });
             host_result.unwrap(); join_result.unwrap();
-            for (home, fingerprint, name, port, side) in [(&host_dir, joiner.identity().fingerprint, "Joiner", 24901, Side::Left), (&join_dir, host.identity().fingerprint, "Host", 24900, Side::Right)] {
+            for (home, fingerprint, name, port) in [(&host_dir, joiner.identity().fingerprint, "Joiner", 24901), (&join_dir, host.identity().fingerprint, "Host", 24900)] {
                 let trust = TrustStore::load(home).unwrap();
                 let device = trust.get(&fingerprint).unwrap();
-                assert_eq!((&*device.name, device.side()), (name, side));
+                assert_eq!((&*device.name, device.side()), (name, one_mk_proto::Side::Left));
                 assert_eq!(device.addrs, [format!("127.0.0.1:{port}")]);
             }
             std::fs::remove_dir_all(dir).unwrap();

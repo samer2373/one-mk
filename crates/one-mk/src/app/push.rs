@@ -87,7 +87,7 @@ impl App {
         }
         let me = self.node.identity().fingerprint;
         let mut taken: Vec<Edge> = armed.iter().map(|(e, _)| *e).collect();
-        for d in self.trust.devices() {
+        for d in self.trust.devices().iter().filter(|device| device.placed_by != PlacedBy::Pending) {
             let fp = d.fingerprint();
             let known = fp.and_then(|fp| self.peers.get(&fp)).is_some_and(|p| p.desktop.is_some());
             if !known && fp != Some(me) {

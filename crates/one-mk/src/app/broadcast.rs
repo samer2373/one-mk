@@ -255,7 +255,8 @@ impl App {
     /// Connected computers that said what their screens are, by name.
     fn broadcast_targets(&self) -> Vec<Fingerprint> {
         let mut t: Vec<(String, Fingerprint)> =
-            self.peers.iter().filter(|(_, p)| p.desktop.is_some()).map(|(fp, _)| (self.name_for(*fp).to_lowercase(), *fp)).collect();
+            self.peers.iter().filter(|(fp, p)| p.desktop.is_some() && self.trust.get(fp).is_none_or(|device| device.placed_by != one_mk_net::PlacedBy::Pending))
+                .map(|(fp, _)| (self.name_for(*fp).to_lowercase(), *fp)).collect();
         t.sort();
         t.into_iter().map(|(_, fp)| fp).collect()
     }
