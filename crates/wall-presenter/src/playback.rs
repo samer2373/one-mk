@@ -510,6 +510,15 @@ pub const HOLD_AFTER: Duration = Duration::from_millis(2000);
 /// as held rather than kept alive by repeated commits.
 pub fn holds(duration: Option<Duration>) -> bool { duration.is_none_or(|duration| duration >= HOLD_AFTER) }
 
+fn expire_hold(holding: &mut bool, due: Option<Instant>, now: Instant) -> bool {
+    if *holding && due.is_some_and(|deadline| now >= deadline) {
+        *holding = false;
+        true
+    } else {
+        false
+    }
+}
+
 /// Acknowledges a pending configure by committing the frame on screen again;
 /// nothing is committed otherwise. A buffer still held by the compositor is
 /// retried when its release wakes the loop.
@@ -539,6 +548,9 @@ fn step(running: &mut Running, state: &mut State, reporter: &tokio::sync::mpsc::
     if let Some(due) = running.due && now < due {
         acknowledge(window);
         return Ok(Some(due - now));
+    }
+    if expire_hold(&mut running.holding, running.due, now) {
+        let _ = reporter.send(Report::Moving { generation: running.generation });
     }
     if running.pending.is_none() {
         match running.frames.try_recv() {
@@ -721,5 +733,19 @@ mod tests {
         assert!(holds(Some(Duration::from_secs(10))));
         // Held frames must be announced before the Shell's 3 s damage watchdog.
         assert!(HOLD_AFTER < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn long_frame_hold_expires_before_waiting_for_the_next_frame() {
+        let deadline = Instant::now();
+        let mut holding = true;
+        assert!(!expire_hold(&mut holding, Some(deadline), deadline - Duration::from_millis(1)));
+        assert!(holding);
+        assert!(expire_hold(&mut holding, Some(deadline), deadline));
+        assert!(!holding);
+        assert!(!expire_hold(&mut holding, Some(deadline), deadline + Duration::from_secs(1)));
+        holding = true;
+        assert!(!expire_hold(&mut holding, None, deadline + Duration::from_secs(60)));
+        assert!(holding);
     }
 }
