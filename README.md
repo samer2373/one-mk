@@ -22,52 +22,6 @@ UAC opt-in carries a local-malware elevation risk. No service ships yet; see
 
 ## Quick start
 
-**Live wallpaper playback is not available.** The spike stability gate is resolved,
-but production daemon authorization and media integration are unfinished.
-Receiver-owned policy scaffolding is available through
-`one-mk wallpaper status|enable|disable|doctor` and
-`one-mk wallpaper consent grant|revoke PEER` (each accepts `--json`). It defaults
-off with no consent; enabling it does not start a renderer or accept media.
-Grant consent on the receiving computer, using a directly paired computer's
-name or full fingerprint; revoke it there at any time. Disabling preserves saved
-grants but clears pending metadata. Forgetting a computer removes its grant.
-The separate developer-only `one-mk-wall` probe is not linked into or launched
-by the daemon. Wallpaper doctor exits 3 when enabled because no qualified
-renderer is available, and exits 0 when off. See the
-[canvas, wire and consent contract](docs/WALLPAPER-CANVAS.md).
-Importing media with `one-mk wallpaper-import` needs the separately installed
-optional `one-mk-wall-import` package (a sandboxed worker); without it the
-command refuses. See [import limits](docs/WALLPAPER-IMPORT.md).
-See [the stop report and troubleshooting](docs/spikes/wallpaper-m1-stop.md);
-do not run the risk probe on your real desktop.
-
-The optional GNOME component has explicit `one-mk wallpaper extension
-install|uninstall|status` commands. Nothing installs or enables by default;
-installation requires the separate renderer (`install --renderer /absolute/path`)
-and prints the separate enable command. Only the lab's exact GNOME Shell 50.1 is
-listed; other versions are refused without changing GNOME's validation settings.
-The component still stays **static**, not working playback. See the [partial
-component checkpoint and remaining gates](docs/spikes/gnome/production-component.md).
-
-### Optional wallpaper import development package
-
-`cargo build -j 2 -p one-mk -p one-mk-wall-import` builds the finite optional
-import helper beside the CLI. It is **not linked into the daemon**, starts only
-on an explicit wallpaper command, and is not included in release packages.
-`one-mk wallpaper doctor --json` explains why import is unavailable without an
-explicit audited runtime. The Linux developer import surface is:
-
-```sh
-one-mk wallpaper import animation.webm --runtime /absolute/audited-runtime \
-  --output /absolute/existing-private-directory --json
-```
-
-Only VP9/AV1 WebM and animated GIF/APNG/WebP are admitted; other formats need
-conversion first. No libav/FFmpeg or GPL encoder is permitted. This saves a
-validated source, poster and content-addressed record, **not a normalized or
-playable scene**. Windows/macOS import refuses until native isolation exists.
-See [import threat model, limits, testing and remaining gates](docs/WALLPAPER-IMPORT.md).
-
 Get it first. Every release has a file for each system (the
 [latest release](https://github.com/samer2373/one-mk/releases/latest)):
 
@@ -107,7 +61,7 @@ That is all. Move the pointer off the screen edge toward the other
 computer. (`one-mk run` does the same as `install` for the current session
 only, and shows what is happening.)
 
-The computer you pair from first is placed to the right. To change it, on
+Pairing assigns an initial side; arrange it to match your desk. On
 either computer:
 
 ```bash
@@ -220,6 +174,15 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 | Command | What it does |
 |---|---|
 | `one-mk status` | Is it running? Who is paired, online (with `rtt 4 ms`: how long an answer takes), where, and who controls whom |
+| `one-mk typing --keys physical` | Forward physical keys; letter/auto modes are not available yet |
+| `one-mk autoscroll --help` / `one-mk gestures --help` | Configure autoscroll and mouse gestures (whole computer, not per-device) |
+| `one-mk update --check` / `one-mk update` | Check/install signed updates when the publisher key is configured |
+| `one-mk stop` | Stop the sharing service; closing the window does not stop sharing |
+| `one-mk wallpaper status` / `one-mk wallpaper doctor` | Inspect experimental, disabled-by-default wallpaper scaffolding; no playback |
+| `one-mk invite` / `one-mk join LINK` | Pair without discovery using an expiring secret invitation |
+| `one-mk drag --on` / `one-mk drag --off` | Enable/disable the edge file-drop zone |
+| `one-mk clipboard history` / `one-mk clipboard history on\|off` | Inspect or opt into clipboard history; `history show ID`, `copy ID`, `clear` manage items |
+| `one-mk clip-get [--from PC]` | Fetch a permitted peer's clipboard; source must enable `clipboard --allow-fetch on` |
 | `one-mk takeback` | Take this computer back from the one controlling it |
 | `one-mk switch <pc\|here\|next>` | Move the mouse and keyboard to another computer without crossing an edge (`here`: back to this one) |
 | `one-mk lock-pointer on\|off\|toggle` | Keep the pointer on this computer: edges lead nowhere |
@@ -240,7 +203,7 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 | `one-mk integrate [--remove]` | Add or remove "Send to <computer>" in the file manager only (see below) |
 | `one-mk pair` | Pair with another computer (run on both) |
 | `one-mk layout <pc> <left\|right\|top\|bottom> [--offset DX,DY\|none]` | Say where a paired computer sits, and where its (0,0) is in your screen coordinates |
-| `one-mk profile save\|use\|list\|delete <name>` | Named layouts, e.g. "home" and "office" |
+| `one-mk profile list` / `one-mk profile save\|use\|delete <name>` | Named layouts, e.g. "home" and "office" |
 | `one-mk profile auto <name> --ssid <wifi> --network <router-mac\|subnet>` | Switch layout by itself when this computer joins that network |
 | `one-mk layout <pc> --swap-ctrl-cmd on\|off\|auto` | Ctrl/Cmd swapping (see below) |
 | `one-mk send <files or folders> [--to <pc>]` | Send files; they arrive in `Downloads/one-mk` |
@@ -280,9 +243,10 @@ one-mk clip-get --from other-pc   # fetch its clipboard now
 ```
 
 `clip-send` tells you if the other computer ignored it (a kind switched off
-there, or over its limit). Others can only fetch yours if
+there, or over its limit). Others can only fetch yours if you run
 `one-mk clipboard --allow-fetch on` **on the computer being read**. Fetching is
-**off by default**; existing settings with `allow_pull = true` keep their opt-in.
+**off by default**; version-2 settings with `allow_pull = true` keep their opt-in.
+Unversioned legacy settings require explicit re-enabling.
 `clip-send` still works without enabling fetching: the owner chooses to push.
 
 ### Clipboard history (off by default)
@@ -296,6 +260,8 @@ you explicitly choose **Show** (or CLI `show`). Open
 **Clipboard & files → History** to restore an item here, or use:
 
 ```sh
+one-mk clipboard history on               # explicit opt-in (or use the window switch)
+one-mk clipboard history off              # stop retaining copies
 one-mk clipboard history                  # newest first, stable item numbers
 one-mk clipboard history list --json      # metadata and masked placeholder, no preview content
 one-mk clipboard history show 7           # full text; terminal controls escaped
@@ -909,8 +875,9 @@ press), and can try the rules before they are used. Details and the design:
 - **No stuck keys.** Held keys are tracked and released when the pointer
   leaves, a computer disconnects, traffic stops for 750 ms, or control is
   taken back. However busy the network, these deadlines are checked first.
-- **Light.** No CPU use while idle: nothing polls, and the command-line
-  tools reach the running program through a local socket it only wakes for.
+- **Light.** Measured idle CPU is approximately zero with no peers. Each
+  connected peer costs approximately 4–5 timer wakeups per second for keep-alive.
+  This is measured behavior, not a zero-work guarantee; local commands also wake it.
   Networking runs on one thread, with one thread each for input capture and
   injection.
 - **Easy.** No server/client roles, no IP addresses (mDNS discovery), no
@@ -1058,15 +1025,6 @@ one-mk bench --connect 192.168.1.20:24901   # on machine A
 
 ## Troubleshooting
 
-- **GNOME wallpaper stays static.** Run `one-mk wallpaper extension status` and
-  `one-mk wallpaper doctor`. They distinguish installed/enabled/qualified and
-  unknown session state. **restart limit reached** means automatic retries stopped;
-  disable the extension and retain logs rather than repeatedly killing children.
-  A fresh Shell session resets the current latch; an explicit Retry operation and
-  integrated playback are still unfinished. Uninstall requires disabling first and
-  refuses user-modified/unmanaged files. Never turn off GNOME version validation,
-  enable unsafe mode, or restart the live Shell to bypass a refusal.
-
 Start with `one-mk doctor`. It checks that one-mk is running and paired,
 the port, discovery, the firewall, the desktop permission (Linux), the
 keyboard shortcuts, broadcast, the pointer drawn on a computer with no mouse, the
@@ -1139,7 +1097,7 @@ and exits with status 1 if something failed.
   `one-mk devices` show the offset). `--offset none` makes all of the edge
   lead there again.
 - **What I type appears on every computer.** Broadcast is on: `one-mk status`
-  starts with "Broadcasting to ...". Stop it with `Ctrl+Alt+B`,
+  includes "Broadcasting to ...". Stop it with `Ctrl+Alt+B`,
   `Ctrl+Alt+Shift+Esc` or `one-mk broadcast off` (from another terminal or
   over SSH: this computer's own mouse and keyboard are captured meanwhile, so
   the window and tray can't be clicked). It also stops by itself after 15
@@ -1183,21 +1141,36 @@ background apps, so there it goes through XWayland.
 
 ## Roadmap
 
-1. Done: Linux to Linux mouse and keyboard, pairing, discovery, benchmark
-2. Windows backend: written and unit-tested; needs testing on real machines
-   (service for the UAC and login screens is still to do)
-3. macOS backend: written and unit-tested; needs testing on real machines
-4. Done: clipboard (text, HTML, images), file transfer, live layout sync,
-   Ctrl/Cmd swapping, start at login
-5. Done: a small tray icon (status, sides, take back, start at login).
-   Done: a drag-to-place layout editor in the window (each computer's real
-   monitors; drop a computer beside a monitor and it crosses only where the
-   screens touch), offsets (`one-mk layout --offset DX,DY`), layout
-   profiles that switch by Wi-Fi network. **Next:** "push toward it"
-   layout learning
-6. Done: gaming mode (relative motion), switching without an edge, edge
-   rules, lock sync, connection doctor (`one-mk doctor`), keyboard shortcuts
-   (on Linux through the GlobalShortcuts portal). **Next:** auto-update
+### Shipped in wave 5
+
+- Broadcast input; clipboard history, reveal and fetch controls; expiring one-use
+  pairing invitations; file drag/drop and clipboard file transfer.
+- Layout learning and pointer wrap; per-device forwarded input rules; keys/mouse
+  editor, autoscroll and gestures; typing mode preferences and layout reporting.
+- Signed-update verification and portable-install workflow are implemented, but
+  **disabled until the publisher installs its signing key**. No silent updater.
+- Existing input sharing, profiles, hooks, power controls and pointer overlays
+  remain available. Windows/macOS are compile-checked, not natively validated.
+
+### Experimental, off by default
+
+- Clipboard history and remote clipboard fetch require explicit opt-in. History
+  persistence is a separate opt-in and saves unencrypted text. Do not retain secrets.
+- Local native key remapping requires a separate build feature and is **not in
+  release builds**. Character/letter typing is not available in this release;
+  physical-key typing remains the supported path.
+- Wallpaper policy, consent and diagnostics are experimental scaffolding only.
+  `one-mk wallpaper enable` does not start playback. The optional Linux developer
+  importer (`one-mk wallpaper import`) is not packaged in releases and needs an
+  audited sandbox runtime; it saves validated media, not a playable scene.
+  The optional GNOME extension stays static. Never disable GNOME version
+  validation or restart the live Shell to bypass a refusal.
+  See [wallpaper consent](docs/WALLPAPER-CANVAS.md),
+  [import development](docs/WALLPAPER-IMPORT.md) and
+  [GNOME limitations](docs/spikes/gnome/production-component.md).
+- Native Windows service/UAC input, wallpaper playback and native character
+  injection remain outside this release. Native Windows/macOS acceptance testing
+  and qualifying wallpaper renderers remain future work.
 
 ## Updating
 
