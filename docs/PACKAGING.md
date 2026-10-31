@@ -6,7 +6,7 @@ step of `.github/workflows/release.yml`, and what has and has not been tried.
 | Format | Made by | Release step | File published | Status |
 |---|---|---|---|---|
 | plain `.tar.gz` / `.zip` | inline in the workflow | build: "Package" | `one-mk-<target>.tar.gz` (macOS, Linux), `one-mk-x86_64-pc-windows-msvc.zip` | in use since the first release; `install.sh` downloads the Linux `.tar.gz` |
-| macOS `.app` and `.dmg` | `scripts/bundle-mac.sh` | build: "Mac app" | `one-mk-<target>.app.zip` and `one-mk-<target>.dmg`, for `aarch64-apple-darwin` and `x86_64-apple-darwin` | released since 0.1.1; signed and notarized when the signing secrets are set; `install.sh` uses the `.app.zip` |
+| macOS `.app` and `.dmg` (designed installer window) | `scripts/bundle-mac.sh` + `scripts/dmg/` | build: "Mac app" | `one-mk-<target>.app.zip` and `one-mk-<target>.dmg`, for `aarch64-apple-darwin` and `x86_64-apple-darwin` | released since 0.1.1; signed and notarized when the signing secrets are set; `install.sh` uses the `.app.zip`; the designed `.dmg` window is **written, never opened on a real Mac** |
 | Windows installer | `installer/one-mk.iss` (Inno Setup) | build: "Windows installer" | `one-mk-x86_64-pc-windows-msvc-setup.exe` | released since 0.1.2; CI installs it silently and runs `one-mk id` from the install |
 | Debian `.deb` | `scripts/bundle-deb.sh` | build: "Linux .deb" | `one-mk-x86_64-unknown-linux-gnu.deb` | released since 0.1.1; CI installs it with `dpkg -i` and runs `one-mk id` |
 | AppImage | `scripts/package-appimage.sh` + `packaging/linux/` | build: "Linux AppImage" | `one-mk-x86_64-unknown-linux-gnu.AppImage` | AppDir built and run here and in CI; the `.AppImage` file is built in CI only, **not yet released** |
@@ -89,19 +89,22 @@ build) builds into a scratch folder and checks, installing nothing:
   matches its `sha256`, no checkout path or placeholder left;
 - the Homebrew files, filled in from stand-in `.dmg` files named like the
   release's: no placeholder left, the right checksum, the right file names
-  (and `ruby -c` when Ruby is installed).
+  (and `ruby -c` when Ruby is installed);
+- the macOS installer window (`scripts/dmg/check.sh`, below): its settings, the
+  artwork's pixel sizes, readable text in light and dark mode, and a preview.
 
-Optional tools are reported as skipped when missing. The macOS app and the
-Windows installer are checked by the release workflow itself (it signs,
-installs and runs them).
+Optional tools (Pillow for the last one) are reported as skipped when missing.
+The macOS app and disk image and the Windows installer are built and opened by
+the release workflow itself (it signs, installs and runs them).
 
 ## macOS `.app` and `.dmg`
 
 `scripts/bundle-mac.sh <release dir> <out.app.zip>` builds `one-mk.app` (the
 `Info.plist` is written inline: bundle id `com.one-mk.app`, version from
 `Cargo.toml`, `one-mk-app` as the executable, `LSMinimumSystemVersion` 11.0),
-zips it with `ditto` and writes the matching `.dmg` (with an `Applications`
-link) next to it.
+zips it with `ditto` and writes the matching `.dmg` next to it: a designed
+installer window (see "The installer window" below) when dmgbuild is there,
+otherwise a plain image with the app and an `Applications` link.
 
 ```
 one-mk.app/Contents/Info.plist
@@ -119,10 +122,71 @@ one-mk.app/Contents/Info.plist
   and the hardened runtime; with `NOTARY_APPLE_ID`, `NOTARY_PASSWORD` and
   `NOTARY_TEAM_ID` also set it is notarized and stapled, and the `.dmg` is
   signed too. Without the secrets it is signed ad hoc.
+- The `.dmg` is built, then mounted read-only and checked (the app is in it and
+  passes `codesign --verify --deep --strict`, the `Applications` link is there,
+  and for the designed window the `.DS_Store` and background are there), and
+  only then signed with the Developer ID. The app inside is notarized and
+  stapled; the `.dmg` itself is signed, not notarized.
 - Both architectures are built on the `macos-14` (Apple silicon) runner; the
   Intel build is a cross build (`--target x86_64-apple-darwin`), because the
   `macos-13` Intel runner never started. One `.dmg` per architecture, no
   universal binary.
+
+### The installer window
+
+Opening the `.dmg` shows a fixed 660 x 400 window in the brand's dark look:
+the one·mk icon on the left, the Applications folder on the right, an amber
+arrow between them and one line, "Drag one·mk to Applications, then open it.
+Setup takes a minute." No toolbar, sidebar or status bar. The app then guides
+the user through pairing, so there is no terminal step.
+
+| file | what it is |
+|---|---|
+| `scripts/dmg/settings.py` | the dmgbuild settings: window size and place, icon size, the two icon positions, the hidden toolbar and sidebar, the `Applications` link, the volume icon (`docs/brand/app-icon/macos/onemk.icns`) |
+| `scripts/dmg/make_background.py` | draws the artwork with Pillow from the brand files (`docs/brand/tokens.json`, the Geist fonts in `crates/app/fonts`, the logo) and the numbers in `settings.py`; `--check` validates everything and writes the preview |
+| `scripts/dmg/background.png`, `background@2x.png` | the drawn art, **checked in**: the release then needs no fonts, no Pillow and no particular Pillow version, and a change to the art shows in review. `check.sh` fails if they no longer match the script. Tagged 72 and 144 dpi; dmgbuild finds the `@2x` file next to the first and joins them with `tiffutil -cathidpicheck` into the multi-resolution TIFF Finder wants |
+| `scripts/dmg/check.sh` | the check, runs anywhere with Python 3 and Pillow; also part of `check-packaging.sh` and CI |
+
+Regenerate after changing the art or `settings.py`:
+
+```sh
+python3 scripts/dmg/make_background.py     # rewrites background.png and background@2x.png
+sh scripts/dmg/check.sh                    # validates, writes /tmp/one-mk-dmg-preview.png
+```
+
+`bundle-mac.sh` uses dmgbuild when `dmgbuild` is on `PATH` (or `DMGBUILD` names
+it) and macOS's `SetFile` and `tiffutil` exist. Otherwise it prints why on
+stderr and writes the plain image, so a local build never breaks. The release
+workflow installs a pinned dmgbuild in a venv and sets `REQUIRE_DMGBUILD=1`, which
+turns a missing dmgbuild into an error, so a release cannot go out with the plain
+window unnoticed. A dmgbuild that is present but fails is always an error;
+`ONE_MK_PLAIN_DMG=1` forces the plain image.
+
+Design notes worth knowing before touching it:
+
+- **Light and dark mode.** Finder draws icon names in black in light mode and
+  white in dark mode, and a disk image cannot change that. So the background is a
+  dark panel, and each name sits on a slate plate (`#6C7683`) that gives both
+  colours at least 4.5:1 (`check.sh` measures it). Everything else is drawn by the
+  art and does not depend on the mode.
+- **Alignment.** Icon positions in `settings.py` are icon centres. The arrow, the
+  glows and the plates are placed from the same numbers. The plate is centred where
+  Finder puts a 13-point name under a 128-point icon, with a few points to spare.
+- **Window height.** Finder's window height includes the title bar, so
+  `settings.py` makes the window 22 points taller than the 400-point picture.
+  If a macOS version's title bar is taller, only the empty bottom margin is cut.
+- The `Applications` item is a symlink, so Finder draws the real folder icon;
+  the preview uses a stand-in.
+
+**Not verified on a real Mac yet** (written on Linux: the artwork, settings and
+mock are checked, the disk image itself was never built or opened). On a Mac, once:
+build or download the `.dmg` and open it. Check that the window is 660 wide with the
+artwork filling it and no white strip at the bottom, no toolbar or sidebar; the icon
+and the Applications folder sit on the glows with the arrow between them at the same
+height; the names are readable on their plates in both light and dark appearance
+(System Settings > Appearance); the art is sharp on a Retina display; the volume has
+the one·mk icon; dragging onto Applications works. If the window is the wrong size or
+the plates are off, change `TITLE_BAR` or `PLATE_DY` and regenerate.
 
 ## Windows installer
 

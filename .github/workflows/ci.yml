@@ -54,4 +54,5 @@ jobs:
         with: { toolchain: stable }
       - run: sh scripts/version.sh
       - run: cargo build --locked -p one-mk -p one-mk-tray -p one-mk-app
+      - run: sudo apt-get install -y --no-install-recommends python3-pil   # the installer window's artwork check
       - run: BIN_DIR=target/debug sh scripts/check-packaging.sh

@@ -104,6 +104,12 @@ jobs:
             rm "$RUNNER_TEMP/cert.p12"
             export SIGN_IDENTITY="Developer ID Application"
           fi
+          # dmgbuild draws the installer window (scripts/dmg/); a venv, because the
+          # runner's Homebrew Python refuses a global pip install. Pinned. The
+          # script fails, rather than fall back to a plain image, if it is missing.
+          python3 -m venv "$RUNNER_TEMP/dmgvenv"
+          "$RUNNER_TEMP/dmgvenv/bin/pip" install --quiet dmgbuild==1.6.7
+          export DMGBUILD="$RUNNER_TEMP/dmgvenv/bin/dmgbuild" REQUIRE_DMGBUILD=1
           sh scripts/bundle-mac.sh target/${{ matrix.target }}/release one-mk-${{ matrix.target }}.app.zip
       - name: Windows installer
         if: runner.os == 'Windows'
