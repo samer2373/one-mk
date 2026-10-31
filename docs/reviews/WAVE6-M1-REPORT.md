@@ -10,7 +10,8 @@ remaining estimate is not reduced by this laboratory step.
 **Done.** Importer: still PNG admission (one frame, no duration), per-frame
 container timeline, and a `--play` worker launched only by
 `sandbox::spawn_playback` (same sandbox; no CPU-seconds ceiling; delegated
-cgroup with at most two CPUs; stale playback groups reclaimed under the
+cgroup with at most two CPUs when the CPU controller is delegated (otherwise
+no aggregate CPU quota); stale playback groups reclaimed under the
 delegation lock). Images loop through the image crate; VP9/AV1 run through
 in-process GStreamer from the pinned runtime (preroll for colorimetry, I420
 out, flushing-seek loop, no new process); a still sends one frame and exits.
@@ -26,9 +27,11 @@ Artifact gate: the release renderer tree may not contain laboratory playback.
 ([evidence](../spikes/gnome/m1-playback-evidence/README.md)): all seven
 locally generated items imported by the real importer; GIF/APNG/still exact on
 every pixel below the top bar on both monitors, WebP within one level (the
-image crate's WebP compositing, measured independently), VP9/AV1 >= 34 dB PSNR;
+image crate's WebP compositing, measured independently), VP9/AV1 >= 34 dB PSNR
+at sampled source-pixel/block centres (not a full-output PSNR measurement);
 same frame on both monitors, reserved absent slice never drawn; real-time
-frame progress and wrap; 28 loop seams within 0.4 ms of nominal; still stable
+frame progress and wrap; 28 loop commit seams within 0.4 ms of nominal (not
+compositor presentation feedback); still stable
 4.5 s with no decoder; plan pause → native background, worker and surface gone,
 0 CPU ticks, resume; renderer SIGKILL kills its workers and the next playback
 reclaims the group; 1080p30 VP9 renderer 13.1 % + worker 42.6 % (+ Shell 8.5 %)

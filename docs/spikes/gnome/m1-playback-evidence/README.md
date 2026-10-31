@@ -47,12 +47,12 @@ console output. Production authorization stayed false throughout.
      levels over the next best.
    - Both monitors always show the **same frame**, each its own slice; the
      crop of the reserved absent slice differs by >= 33 mean levels and **no
-     red-dominant (absent-third) pixel** appears anywhere on screen.
+     red-dominant (absent-third) pixel** appears in the sampled 384x101 grid.
 2. **Frames change over time and loop.** Identified frame indices advance in
    real time (each step between screenshots matches the elapsed time modulo
    the loop) and wrap: e.g. GIF `[2, 4, 6, 8, 1, 4, 8, 2, 6, 1]`, VP9
    `[7, 12, 18, 26, 4, 14, 25, 7, 20, 4]`.
-3. **Loops are seamless (hard cut, no stall).** The renderer logs the gap
+3. **Loop commits have bounded gaps (hard cut).** The renderer logs the gap
    between the last frame of a loop and the first of the next. All 28 logged
    seams were within **-0.40..+0.26 ms** of the nominal frame duration
    (100 ms images, 33 ms video); the VP9/AV1 worker loops by a flushing seek
@@ -74,6 +74,15 @@ console output. Production authorization stayed false throughout.
    **67 MiB** (peak), worker processes' RSS 80 MiB. 961 frames presented since
    start with **0 late, 0 starved**, no cgroup CPU throttling under the
    two-CPU `cpu.max` ceiling. First frame 78 ms after the plan.
+   CPU percentages use process CPU-tick deltas (`/proc/PID/stat`, renderer and
+   Shell) and cgroup `cpu.stat` usage deltas (worker), divided by elapsed wall
+   time. RSS is sampled once per second (30 samples); cgroup peak is the
+   kernel's lifetime high-water mark, not a sum of RSS. The historical result's
+   `presented_in_window` is mislabeled: 961 is the latest loop-seam counter
+   since playback started, not an exact 30-second frame count. Late/starved
+   counters are also seam snapshots, not end-of-window measurements. The
+   corrected harness labels these bounds explicitly and retains raw CPU
+   counters for future runs; this archived run is not rewritten.
 7. **Teardown and leftovers.** Renderer SIGKILLed by the Shell while playing:
    its 3 sandboxed worker processes died with it, and the next playback
    reclaimed the empty stale group. Clean exits leave no playback group.

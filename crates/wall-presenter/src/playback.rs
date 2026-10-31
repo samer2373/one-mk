@@ -362,6 +362,40 @@ delegate_noop!(State: ignore wl_region::WlRegion);
 
 type Frame = std::result::Result<Vec<u32>, String>;
 
+struct DeadlineReader<'a, Reader> {
+    reader: &'a mut Reader,
+    deadline: Instant,
+}
+
+impl<Reader: Read + AsRawFd> Read for DeadlineReader<'_, Reader> {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        if bytes.is_empty() { return Ok(0); }
+        loop {
+            let remaining = self.deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() { return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "worker header deadline exceeded")); }
+            let mut descriptor = libc::pollfd { fd: self.reader.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            let timeout = remaining.as_millis().saturating_add(1).min(i32::MAX as u128) as i32;
+            // SAFETY: one live descriptor and a finite millisecond timeout.
+            let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
+            if ready < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted { continue; }
+                return Err(error);
+            }
+            if ready == 0 { continue; }
+            if descriptor.revents & libc::POLLNVAL != 0 { return Err(std::io::Error::other("invalid worker frame descriptor")); }
+            match self.reader.read(bytes) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => return result,
+            }
+        }
+    }
+}
+
+fn read_header(reader: &mut (impl Read + AsRawFd), timeout: Duration) -> Result<StreamHeader> {
+    StreamHeader::read(&mut DeadlineReader { reader, deadline: Instant::now() + timeout })
+}
+
 /// One playback: its worker, frame reader and schedule.
 struct Running {
     worker: Playback,
@@ -418,7 +452,7 @@ fn start(config: &Config, request: &Request, state: &mut State, handle: &QueueHa
     let mut worker = one_mk_wall_import::sandbox::spawn_playback(PlaybackOptions {
         runtime: &config.runtime, cgroup_root: &config.cgroup_root, worker: &config.worker, input: media.source })?;
     let mut pipe = worker.take_frames().ok_or("no frame stream")?;
-    let header = StreamHeader::read(&mut pipe).map_err(|error| format!("worker: {error}"))?;
+    let header = read_header(&mut pipe, Duration::from_secs(3)).map_err(|error| format!("worker: {error}"))?;
     let record = &media.record.media;
     if header.format != format || header.width != record.width || header.height != record.height
         || header.durations.len() != record.frames as usize {
@@ -606,4 +640,49 @@ fn run(connection: Connection, config: Config, commands: mpsc::Receiver<Command>
     state.window = None;
     let _ = connection.flush();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn incomplete_worker_header_has_an_absolute_deadline() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"WSTR").unwrap();
+        let held = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(writer);
+        });
+        let result = read_header(&mut reader, Duration::from_millis(10));
+        held.join().unwrap();
+        assert!(result.unwrap_err().contains("deadline"));
+    }
+
+    #[test]
+    fn worker_header_deadline_is_not_reset_by_progress() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        let producer = std::thread::spawn(move || {
+            for byte in b"WSTR" {
+                if writer.write_all(&[*byte]).is_err() { break; }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let error = read_header(&mut reader, Duration::from_millis(30)).unwrap_err();
+        drop(reader);
+        producer.join().unwrap();
+        assert!(error.contains("deadline"), "{error}");
+    }
+
+    #[test]
+    fn worker_header_deadline_preserves_validation_and_eof() {
+        let header = StreamHeader { format: one_mk_wall_import::Format::StillPng, pixels: Pixels::Bgrx,
+            width: 5, height: 3, durations: vec![0] };
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(&header.encode().unwrap()).unwrap();
+        assert_eq!(read_header(&mut reader, Duration::from_secs(1)).unwrap(), header);
+        drop(writer);
+        assert!(read_header(&mut reader, Duration::from_secs(1)).unwrap_err().contains("failed to fill whole buffer"));
+    }
 }

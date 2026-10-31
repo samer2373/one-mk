@@ -57,7 +57,7 @@ pub fn i420_planes(width: u32, height: u32) -> (usize, usize, usize, usize, usiz
     let luma = round(width);
     let chroma = round(width.div_ceil(2));
     let rows = height.div_ceil(2);
-    let u = luma * height;
+    let u = luma * height.next_multiple_of(2);
     let v = u + chroma * rows;
     (luma, chroma, rows, u, v, v + chroma * rows)
 }
@@ -466,9 +466,8 @@ mod tests {
             width: 5, height: 3, durations: vec![33_000, 33_000] };
         let bytes = video.encode().unwrap();
         assert_eq!(StreamHeader::read(&mut bytes.as_slice()).unwrap(), video);
-        // Y stride 8 x 3 rows, chroma stride 4 x 2 rows per plane.
-        assert_eq!(i420_planes(5, 3), (8, 4, 2, 24, 32, 40));
-        assert_eq!(video.frame_bytes(), 40);
+        assert_eq!(i420_planes(5, 3), (8, 4, 2, 32, 40, 48));
+        assert_eq!(video.frame_bytes(), 48);
         assert!(StreamHeader { pixels: Pixels::Bgrx, ..video.clone() }.encode().is_err());
         for code in 0..=4 { assert_eq!(Pixels::from_code(code).unwrap().code(), code); }
         #[cfg(target_os = "linux")]

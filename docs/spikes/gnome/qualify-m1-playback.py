@@ -712,8 +712,9 @@ def measure(pid, offset):
         return stat('usage_usec')
     start = time.monotonic()
     before = {'renderer': cpu_ticks(pid), 'shell': cpu_ticks(shell), 'worker_usec': usage(), 'throttled': stat('nr_throttled')}
-    late_before = seams(pid, offset)[-1] if seams(pid, offset) else {}
-    seams_before = len(seams(pid, offset))
+    initial_seams = seams(pid, offset)
+    late_before = initial_seams[-1] if initial_seams else {}
+    seams_before = len(initial_seams)
     samples = []
     while time.monotonic() - start < MEASURE:
         samples.append({'renderer_rss': status_kib(pid, 'VmRSS'), 'renderer_anon': status_kib(pid, 'RssAnon'),
@@ -728,6 +729,7 @@ def measure(pid, offset):
     peak = int((group / 'memory.peak').read_text()) // 1024
     summary = {
         'seconds': round(elapsed, 1),
+        'cpu_measurement': {'before': before, 'after': after, 'hertz': hertz, 'elapsed_seconds': elapsed},
         'renderer_cpu_percent_of_one_core': round(100 * (after['renderer'] - before['renderer']) / hertz / elapsed, 1),
         'worker_cpu_percent_of_one_core': round(100 * (after['worker_usec'] - before['worker_usec']) / 1e6 / elapsed, 1),
         'gnome_shell_cpu_percent_of_one_core': round(100 * (after['shell'] - before['shell']) / hertz / elapsed, 1),
@@ -740,9 +742,10 @@ def measure(pid, offset):
         'worker_cgroup_peak_mib': round(peak / 1024, 1),
         'renderer_vmhwm_mib': round(status_kib(pid, 'VmHWM') / 1024, 1),
         'loops_in_window': len(loop_seams),
-        'presented_in_window': last.get('presented', 0) - late_before.get('presented', 0),
-        'late_in_window': last.get('late', 0) - late_before.get('late', 0),
-        'starved_in_window': last.get('starved', 0) - late_before.get('starved', 0),
+        'counter_scope': 'latest loop-seam log at each boundary, not the exact CPU measurement window',
+        'presented_between_seam_samples': last['presented'] - late_before['presented'] if last and late_before else None,
+        'late_between_seam_samples': last['late'] - late_before['late'] if last and late_before else None,
+        'starved_between_seam_samples': last['starved'] - late_before['starved'] if last and late_before else None,
         'late_total': last.get('late'), 'starved_total': last.get('starved'), 'presented_total': last.get('presented'),
         'worker_cpu_max': (group / 'cpu.max').read_text().strip(),
         'worker_throttled_periods': after['throttled'] - before['throttled'],
