@@ -29,7 +29,7 @@ Get it first. Every release has a file for each system (the
 |---|---|---|
 | macOS, Apple silicon / Intel | `one-mk-aarch64-apple-darwin.dmg` / `one-mk-x86_64-apple-darwin.dmg` | Open it and drag one·mk onto Applications |
 | Windows 10/11, 64-bit | `one-mk-x86_64-pc-windows-msvc-setup.exe` | Installs for you alone, into `%LOCALAPPDATA%\Programs\one-mk` |
-| Debian, Ubuntu and relatives | `one-mk-x86_64-unknown-linux-gnu.deb` | `sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb`, then `one-mk install` as yourself |
+| Debian, Ubuntu and relatives | `one-mk-x86_64-unknown-linux-gnu.deb` | `sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb`, then open one·mk from the apps menu: the first launch sets up start at login for you |
 | Any Linux | `one-mk-x86_64-unknown-linux-gnu.AppImage` | `chmod +x` it and run it; with no arguments it opens the window, otherwise it is `one-mk` |
 | Other Linux, by hand | `one-mk-x86_64-unknown-linux-gnu.tar.gz` (and `.zip` on Windows) | Just the programs |
 
@@ -39,9 +39,9 @@ On macOS and Linux the one-line installer picks the right file:
 curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh
 ```
 
-On a Mac this installs **one·mk** into Applications and opens it. Click
-Start and turn on "Start at login" in the window, pair from the window, and
-you never need the terminal. macOS asks for Accessibility permission the
+On a Mac this installs **one·mk** into Applications and opens it. The first
+time the window opens it sets itself up (starts at login, runs in the
+background); you only pair from the window, and never need the terminal. macOS asks for Accessibility permission the
 first time: turn on one·mk in System Settings > Privacy & Security >
 Accessibility. If an update was not signed with an Apple Developer ID,
 macOS may ask again after it: remove one·mk from that list and add it back.
@@ -49,8 +49,9 @@ macOS may ask again after it: remove one·mk from that list and add it back.
 Or build it yourself (see Building). How each package is made, and which
 are untested, is in [docs/PACKAGING.md](docs/PACKAGING.md).
 
-The commands below do the same from a terminal (on Linux, run
-`one-mk-app` to open the window). On **each** computer:
+The commands below do the same from a terminal, for people who prefer one
+(on Linux, `one-mk-app` opens the window; the window already does the
+`install` step the first time it opens). On **each** computer:
 
 ```bash
 one-mk install     # start one-mk automatically whenever you log in

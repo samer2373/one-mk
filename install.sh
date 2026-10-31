@@ -30,7 +30,7 @@ if [ "$(uname -s)" = Darwin ]; then
     printf '#!/bin/sh\nexec "%s/one-mk.app/Contents/MacOS/one-mk" "$@"\n' "$dest" > "$HOME/.local/bin/one-mk"
     chmod +x "$HOME/.local/bin/one-mk"
     echo "Installed $dest/one-mk.app"
-    echo "Opening it. Turn on one·mk in System Settings > Privacy & Security > Accessibility when macOS asks."
+    echo "Opening it. It sets itself up and guides you through the permissions macOS asks for."
     open "$dest/one-mk.app"
 else
     curl -fsSL "$base.tar.gz" | tar xz -C "$tmp"
@@ -41,5 +41,10 @@ else
         *":$HOME/.local/bin:"*) ;;
         *) echo "Add it to your PATH:  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
     esac
-    echo "Next: run 'one-mk-app' to open the window, or 'one-mk install' then 'one-mk pair' on each computer."
+    echo "Opening one·mk. It sets itself up the first time, then you pair from the window."
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        nohup "$HOME/.local/bin/one-mk-app" >/dev/null 2>&1 &
+    else
+        echo "No desktop session here. On a computer with one, run 'one-mk-app'."
+    fi
 fi
