@@ -50,7 +50,8 @@ async fn autoscroll_moves_scroll_not_pointer_and_stops_on_escape() {
 #[tokio::test]
 async fn reserving_a_held_remapped_button_on_reload_still_releases_its_output() {
     for mode in ["autoscroll", "gesture"] {
-        let mut duo = Duo::start(&format!("mouse-mode-reload-{mode}"), None).await;
+        // Short tags: a daemon's control socket path must fit macOS's 104 bytes.
+        let mut duo = Duo::start(&format!("mmr-{}", &mode[..1]), None).await;
         set(&duo.da, |settings| {
             settings.input.button.push(ButtonRule { from: ButtonFrom::Number(3), to: To::One("button1".into()), scope: Scope::Global, app: None });
         }).await;
@@ -74,7 +75,7 @@ async fn reserving_a_held_remapped_button_on_reload_still_releases_its_output() 
 async fn mouse_modes_cancel_on_relevant_reload_and_display_sleep() {
     for (mode, after) in ["autoscroll", "gesture"].into_iter()
         .flat_map(|mode| ["reload", "sleep"].map(|after| (mode, after))) {
-        let mut duo = Duo::start(&format!("mouse-mode-cancel-{mode}-{after}"), None).await;
+        let mut duo = Duo::start(&format!("mmc-{}{}", &mode[..1], &after[..1]), None).await;
         set(&duo.da, |settings| {
             settings.input.autoscroll.base.enabled = Some(true);
             settings.input.gesture.push(crate::tuning::GestureRule { button: "button4".into(), direction: "left".into(),
