@@ -3,6 +3,8 @@
 #
 #   isolated-session.sh start [N_MONITORS]   start Shell with N virtual 1920x1080 monitors
 #   isolated-session.sh run CMD...           run CMD inside the isolated session's env
+#   isolated-session.sh restart [N]          kill only the Shell session (buses, Shell) and
+#                                            start a new one in the same state dir
 #   isolated-session.sh stop                 kill everything and delete the state dir
 #
 # Isolation: private session bus (dbus-run-session), a private *system* bus
@@ -42,14 +44,17 @@ isolated_env() {
 		GIO_USE_VFS=local GVFS_DISABLE_FUSE=1
 }
 
-case "${1:-}" in
-start)
-	n=${2:-1}
-	[ -e "$SPIKE" ] && { echo "$SPIKE exists; run stop first" >&2; exit 1; }
-	mkdir -p "$SPIKE"/{home/Desktop,run,data/gnome-shell/extensions,config,cache,state,log}
-	chmod 700 "$SPIKE/run"
-	echo "spike test file" > "$SPIKE/home/Desktop/spike-icon.txt"
-	for ext in "${EXT_SRC:-$HERE/ext}"/*/; do cp -r "$ext" "$SPIKE/data/gnome-shell/extensions/"; done
+kill_session() {
+	if [ -f "$SPIKE/leader.pid" ]; then
+		sid=$(cat "$SPIKE/leader.pid")
+		pkill -TERM -s "$sid" 2>/dev/null || true
+		sleep 2
+		pkill -KILL -s "$sid" 2>/dev/null || true
+	fi
+}
+
+launch() {
+	n=$1
 	cat > "$SPIKE/system-bus.conf" <<EOF
 <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -94,6 +99,25 @@ EOF
 	[ -S "$SPIKE/run/spike-wl-0" ] || { echo "Shell did not come up; see $SPIKE/log/shell.log" >&2; exit 1; }
 	sleep 2
 	echo "isolated Shell up: leader $(cat "$SPIKE/leader.pid") bus $(cat "$SPIKE/session-bus")"
+}
+
+case "${1:-}" in
+start)
+	[ -e "$SPIKE" ] && { echo "$SPIKE exists; run stop first" >&2; exit 1; }
+	mkdir -p "$SPIKE"/{home/Desktop,run,data/gnome-shell/extensions,config,cache,state,log}
+	chmod 700 "$SPIKE/run"
+	echo "spike test file" > "$SPIKE/home/Desktop/spike-icon.txt"
+	for ext in "${EXT_SRC:-$HERE/ext}"/*/; do cp -r "$ext" "$SPIKE/data/gnome-shell/extensions/"; done
+	launch "${2:-1}"
+	;;
+restart)
+	# Only the session's own process group (Shell, private buses) is killed;
+	# processes started outside it are the caller's to check and stop.
+	[ -d "$SPIKE" ] || { echo "$SPIKE does not exist" >&2; exit 1; }
+	kill_session
+	rm -f "$SPIKE/run/spike-wl-0" "$SPIKE/run/spike-wl-0.lock" "$SPIKE/run/system_bus" \
+		"$SPIKE/session-bus" "$SPIKE/shell.exit" "$SPIKE/system-bus.pid"
+	launch "${2:-1}"
 	;;
 run)
 	shift
@@ -101,12 +125,7 @@ run)
 	;;
 stop)
 	[ -d "$SPIKE" ] || exit 0
-	if [ -f "$SPIKE/leader.pid" ]; then
-		sid=$(cat "$SPIKE/leader.pid")
-		pkill -TERM -s "$sid" 2>/dev/null || true
-		sleep 2
-		pkill -KILL -s "$sid" 2>/dev/null || true
-	fi
+	kill_session
 	# Strays that escaped the session (D-Bus-activated services keep our env).
 	for p in $(pgrep -u "$USER" . ); do
 		if { tr "\0" "\n" < /proc/$p/environ; } 2>/dev/null | grep -qx "XDG_RUNTIME_DIR=$SPIKE/run"; then
@@ -117,5 +136,5 @@ stop)
 	echo stopped
 	;;
 *)
-	echo "usage: $0 start [N]|run CMD...|stop" >&2; exit 2;;
+	echo "usage: $0 start [N]|run CMD...|restart [N]|stop" >&2; exit 2;;
 esac
