@@ -628,6 +628,9 @@ impl Status {
         } else {
             out += "Clipboard history: off (`one-mk clipboard history on` enables it).\n";
         }
+        if self.clipboard_history_note.starts_with("Could not") {
+            out += &format!("{}\n", self.clipboard_history_note);
+        }
         if let Some(p) = &self.layout.profile {
             out += &format!("Layout profile: {p}.\n");
         }
@@ -977,6 +980,14 @@ impl InvitationStatus {
 #[cfg(test)]
 mod invitation_tests {
     use super::*;
+    #[test]
+    fn history_failures_remain_visible_in_human_status() {
+        let error = "Could not load clipboard history: invalid header; clear it with one-mk clipboard history clear.";
+        let status = Status { clipboard_history_enabled: true, clipboard_history_note: error.into(), ..Default::default() };
+        assert!(status.render().contains(error));
+        assert!(Status::decode(&status.encode()).unwrap().render().contains(error));
+    }
+
     #[test]
     fn window_safety_fields_roundtrip_without_repeating_privacy_notice() {
         let status = Status {
