@@ -11,8 +11,8 @@
 //! Each monitor gets its own slice of the one shared canvas (`crop.rs`).
 //! Pausing destroys the worker and the surface: no paused child or timer.
 
-use crate::crop::Layout;
-use one_mk_wall_import::play::StreamHeader;
+use crate::crop::{Layout, Yuv};
+use one_mk_wall_import::play::{Pixels, StreamHeader};
 use one_mk_wall_import::sandbox::{Playback, PlaybackOptions};
 use one_mk_wall_sync::bridge::Monitor;
 use one_mk_wall_sync::presentation::PresentationPlan;
@@ -367,6 +367,7 @@ struct Running {
     worker: Playback,
     header: StreamHeader,
     layout: Layout,
+    yuv: Option<Yuv>,
     frames: mpsc::Receiver<Frame>,
     recycle: mpsc::SyncSender<Vec<u32>>,
     reader: Option<std::thread::JoinHandle<()>>,
@@ -376,6 +377,8 @@ struct Running {
     next: usize,
     due: Option<Instant>,
     last_commit: Option<Instant>,
+    /// Last commit of any kind, including a repeated frame.
+    last_damage: Option<Instant>,
     loops: u64,
     presented: u64,
     late: u64,
@@ -425,23 +428,49 @@ fn start(config: &Config, request: &Request, state: &mut State, handle: &QueueHa
     state.open_window(layout.width, layout.height, handle)?;
     let (sender, frames) = mpsc::sync_channel::<Frame>(READY_FRAMES);
     let (recycle, recycled) = mpsc::sync_channel::<Vec<u32>>(READY_FRAMES + 2);
-    let pixels = header.width as usize * header.height as usize;
+    let frame_bytes = header.frame_bytes();
+    let words = frame_bytes.div_ceil(4);
     let wake = wake.clone();
     let reader = std::thread::Builder::new().name("frames".into()).spawn(move || loop {
-        let mut frame = recycled.try_recv().unwrap_or_else(|_| vec![0_u32; pixels]);
+        let mut frame = recycled.try_recv().unwrap_or_else(|_| vec![0_u32; words]);
         // SAFETY: a u32 slice viewed as bytes; every byte pattern is valid.
-        let bytes = unsafe { std::slice::from_raw_parts_mut(frame.as_mut_ptr().cast::<u8>(), pixels * 4) };
+        let bytes = unsafe { std::slice::from_raw_parts_mut(frame.as_mut_ptr().cast::<u8>(), frame_bytes) };
         let result = pipe.read_exact(bytes).map(|()| frame).map_err(|error| error.to_string());
         let end = result.is_err();
         if sender.send(result).is_err() { return; }
         wake.signal();
         if end { return; }
     }).map_err(|error| error.to_string())?;
-    log(format_args!("event=playback-start media={} format={format:?} source={}x{} frames={} loop_ms={} surface={}x{} worker_pid={}",
-        &hex(&request.plan.media_id)[..16], header.width, header.height, header.durations.len(), header.loop_micros() / 1000,
+    log(format_args!("event=playback-start media={} format={format:?} pixels={:?} source={}x{} frames={} loop_ms={} surface={}x{} worker_pid={}",
+        &hex(&request.plan.media_id)[..16], header.pixels, header.width, header.height, header.durations.len(), header.loop_micros() / 1000,
         layout.width, layout.height, worker.pid()));
-    Ok(Running { worker, header, layout, frames, recycle, reader: Some(reader), pending: None, requested, next: 0,
-        due: None, last_commit: None, loops: 0, presented: 0, late: 0, starved: 0, finished: false, waiting: false })
+    let yuv = match header.pixels { Pixels::I420 { bt709, full_range } => Some(Yuv::new(bt709, full_range)), Pixels::Bgrx => None };
+    Ok(Running { worker, header, layout, yuv, frames, recycle, reader: Some(reader), pending: None, requested, next: 0,
+        due: None, last_commit: None, last_damage: None, loops: 0, presented: 0, late: 0, starved: 0, finished: false, waiting: false })
+}
+
+/// The Shell's damage watchdog stops a renderer that shows nothing new for
+/// 3 s, and the v1 bridge cannot announce a still or a long frame (design
+/// section 4 leaves that to frame deadlines). Until it can, a still or a
+/// frame longer than this is committed again, unchanged, at this interval.
+const KEEPALIVE: Duration = Duration::from_millis(2000);
+
+/// Commits the frame on screen again when the watchdog interval has passed or
+/// a configure is waiting; returns when to check next.
+fn refresh(window: &mut Window, last_damage: &mut Option<Instant>) -> Option<Duration> {
+    let index = window.shown?;
+    let since = last_damage.map_or(KEEPALIVE, |last| last.elapsed());
+    if since < KEEPALIVE && window.serial.is_none() { return Some(KEEPALIVE - since); }
+    // A buffer still held by the compositor: its release wakes us.
+    if window.buffers[index].busy { return None; }
+    if let Some(serial) = window.serial.take() { window.role.ack_configure(serial); }
+    let buffer = &mut window.buffers[index];
+    window.surface.attach(Some(&buffer.proxy), 0, 0);
+    window.surface.damage_buffer(0, 0, window.width as i32, window.height as i32);
+    window.surface.commit();
+    buffer.busy = true;
+    *last_damage = Some(Instant::now());
+    Some(KEEPALIVE)
 }
 
 /// Presents what is due; returns how long to sleep at most.
@@ -450,20 +479,17 @@ fn step(running: &mut Running, state: &mut State, reporter: &tokio::sync::mpsc::
     if window.closed { return Err("the compositor closed the wallpaper surface".into()); }
     if !window.configured { return Ok(None); }
     if running.finished {
-        // A still keeps its one frame; acknowledge any later configure with it.
-        if let (Some(serial), Some(index)) = (window.serial, window.shown) && !window.buffers[index].busy {
-            window.serial = None;
-            window.role.ack_configure(serial);
-            let buffer = &mut window.buffers[index];
-            window.surface.attach(Some(&buffer.proxy), 0, 0);
-            window.surface.damage_buffer(0, 0, window.width as i32, window.height as i32);
-            window.surface.commit();
-            buffer.busy = true;
-        }
-        return Ok(None);
+        // A still keeps its one frame (and acknowledges later configures with it).
+        return Ok(refresh(window, &mut running.last_damage));
     }
     let now = Instant::now();
-    if let Some(due) = running.due && now < due { return Ok(Some(due - now)); }
+    if let Some(due) = running.due && now < due {
+        let until_due = due - now;
+        let since = running.last_damage.map_or(Duration::ZERO, |last| now - last);
+        if since + until_due <= KEEPALIVE && window.serial.is_none() { return Ok(Some(until_due)); }
+        // A long frame: show the same pixels again before the Shell's watchdog.
+        return Ok(Some(refresh(window, &mut running.last_damage).map_or(until_due, |keep| keep.min(until_due))));
+    }
     if running.pending.is_none() {
         match running.frames.try_recv() {
             Ok(Ok(frame)) => running.pending = Some(frame),
@@ -478,7 +504,12 @@ fn step(running: &mut Running, state: &mut State, reporter: &tokio::sync::mpsc::
     let Some(index) = window.buffers.iter().position(|buffer| !buffer.busy) else { return Ok(None) };
     let frame = running.pending.take().ok_or("no frame")?;
     running.waiting = false;
-    running.layout.compose(&frame, window.buffers[index].pixels());
+    match &running.yuv {
+        // SAFETY: the u32 frame viewed as the bytes the reader filled.
+        Some(yuv) => running.layout.compose_i420(unsafe { std::slice::from_raw_parts(frame.as_ptr().cast::<u8>(), frame.len() * 4) },
+            yuv, window.buffers[index].pixels()),
+        None => running.layout.compose(&frame, window.buffers[index].pixels()),
+    }
     let _ = running.recycle.try_send(frame);
     if let Some(serial) = window.serial.take() { window.role.ack_configure(serial); }
     let buffer = &mut window.buffers[index];
@@ -505,12 +536,13 @@ fn step(running: &mut Running, state: &mut State, reporter: &tokio::sync::mpsc::
             running.loops, running.presented, running.late, running.starved));
     }
     running.last_commit = Some(committed);
+    running.last_damage = Some(committed);
     if running.header.still() {
         running.finished = true;
         // The worker has sent its only frame; reap it now: no decoder stays.
         let errors = running.end_worker();
         log(format_args!("event=still-presented worker=stopped cleanup={}", if errors.is_ok() { "ok" } else { "failed" }));
-        return Ok(None);
+        return Ok(Some(KEEPALIVE));
     }
     // Keep the timeline anchored; re-anchor only after falling a frame behind.
     let due = running.due.unwrap_or(committed);

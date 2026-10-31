@@ -446,7 +446,7 @@ pub struct PlaybackOptions<'a> {
 /// A running sandboxed playback worker: same bubblewrap namespaces, external
 /// seccomp, read-only runtime, bounded `/dev` and scratch, rlimits (no CPU
 /// seconds ceiling) and a fresh delegated cgroup (1 GiB, no swap, 64 tasks,
-/// at most one CPU when the cpu controller is delegated) as an import.
+/// at most two CPUs when the cpu controller is delegated) as an import.
 #[cfg(target_os = "linux")]
 pub struct Playback {
     child: std::process::Child,

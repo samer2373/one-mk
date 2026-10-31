@@ -13,9 +13,10 @@ const LIMITS: [(&str, u64); 4] = [
     ("memory.oom.group", 1), ("pids.max", TASKS),
 ];
 static NEXT_GROUP: AtomicU64 = AtomicU64::new(0);
-/// A playback worker may use at most one CPU (`cpu.max`), when the delegation
+/// A playback worker may use at most two CPUs (`cpu.max`; the VP9 decoder runs
+/// two threads), when the delegation
 /// offers the cpu controller; decoding slower than real time drops frames.
-const PLAYBACK_CPU_MAX: &str = "100000 100000";
+const PLAYBACK_CPU_MAX: &str = "200000 100000";
 
 /// Which worker a group is for; the two never share a delegation lock holder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

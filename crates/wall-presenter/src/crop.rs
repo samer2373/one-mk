@@ -106,6 +106,78 @@ impl Layout {
     }
 }
 
+/// Fixed-point (16.16) YCbCr -> RGB lookup tables for one matrix and range.
+pub struct Yuv {
+    luma: [i32; 256],
+    red_v: [i32; 256],
+    green_u: [i32; 256],
+    green_v: [i32; 256],
+    blue_u: [i32; 256],
+}
+
+impl Yuv {
+    pub fn new(bt709: bool, full_range: bool) -> Self {
+        // Kr/Kb of the matrix; limited range scales 16..235 / 16..240.
+        let (red, blue) = if bt709 { (0.2126, 0.0722) } else { (0.299, 0.114) };
+        let green = 1.0 - red - blue;
+        let (luma_scale, luma_offset, chroma_scale) = if full_range { (1.0, 0.0, 1.0) } else { (255.0 / 219.0, 16.0, 255.0 / 224.0) };
+        let fixed = |value: f64| (value * 65536.0).round() as i32;
+        let mut tables = Self { luma: [0; 256], red_v: [0; 256], green_u: [0; 256], green_v: [0; 256], blue_u: [0; 256] };
+        for index in 0..256 {
+            let value = index as f64;
+            let chroma = (value - 128.0) * chroma_scale;
+            tables.luma[index] = fixed((value - luma_offset) * luma_scale) + 32768;
+            tables.red_v[index] = fixed(2.0 * (1.0 - red) * chroma);
+            tables.blue_u[index] = fixed(2.0 * (1.0 - blue) * chroma);
+            tables.green_u[index] = fixed(-2.0 * (1.0 - blue) * blue / green * chroma);
+            tables.green_v[index] = fixed(-2.0 * (1.0 - red) * red / green * chroma);
+        }
+        tables
+    }
+
+    #[inline]
+    fn rgb(&self, y: u8, u: u8, v: u8) -> u32 {
+        let luma = self.luma[y as usize];
+        let clamp = |value: i32| (value >> 16).clamp(0, 255) as u32;
+        let red = clamp(luma + self.red_v[v as usize]);
+        let green = clamp(luma + self.green_u[u as usize] + self.green_v[v as usize]);
+        let blue = clamp(luma + self.blue_u[u as usize]);
+        0xff00_0000 | red << 16 | green << 8 | blue
+    }
+}
+
+impl Layout {
+    /// Like [`Layout::compose`] for an I420 frame: only the pixels that are
+    /// shown are converted (nearest chroma sample), so the cost follows the
+    /// visible output, not the source size.
+    pub fn compose_i420(&self, frame: &[u8], yuv: &Yuv, surface: &mut [u32]) {
+        let (luma_stride, chroma_stride, _, u_offset, v_offset, total) =
+            one_mk_wall_import::play::i420_planes(self.source.0, self.source.1);
+        if frame.len() < total { return; }
+        for map in &self.monitors {
+            let width = map.columns.len();
+            let mut previous: Option<(u32, usize)> = None;
+            for (row, &source_row) in map.rows.iter().enumerate() {
+                let start = (map.y + row) * self.width + map.x;
+                match previous {
+                    Some((last, from)) if last == source_row => surface.copy_within(from..from + width, start),
+                    _ => {
+                        let luma = &frame[source_row as usize * luma_stride..][..luma_stride];
+                        let chroma_row = source_row as usize / 2 * chroma_stride;
+                        let blue = &frame[u_offset + chroma_row..][..chroma_stride];
+                        let red = &frame[v_offset + chroma_row..][..chroma_stride];
+                        for (target, &column) in surface[start..start + width].iter_mut().zip(&map.columns) {
+                            let column = column as usize;
+                            *target = yuv.rgb(luma[column], blue[column / 2], red[column / 2]);
+                        }
+                    }
+                }
+                previous = Some((source_row, start));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +239,31 @@ mod tests {
         let mut surface = vec![7_u32; 12];
         layout.compose(&frame, &mut surface);
         assert_eq!(surface, [10, 10, 7, 7, 13, 13, 10, 10, 7, 7, 13, 13]);
+    }
+
+    #[test]
+    fn i420_conversion_matches_reference_colours_and_layout() {
+        let limited = Yuv::new(false, false);
+        assert_eq!(limited.rgb(16, 128, 128) & 0xffffff, 0x000000);
+        assert_eq!(limited.rgb(235, 128, 128) & 0xffffff, 0xffffff);
+        // BT.601 limited red, green, blue primaries.
+        let near = |pixel: u32, expected: [i32; 3]| (0..3).all(|channel| (((pixel >> (16 - 8 * channel)) & 0xff) as i32 - expected[channel]).abs() <= 2);
+        assert!(near(limited.rgb(81, 90, 240), [255, 0, 0]));
+        assert!(near(limited.rgb(145, 54, 34), [0, 255, 0]));
+        assert!(near(limited.rgb(41, 240, 110), [0, 0, 255]));
+        assert!(near(Yuv::new(true, false).rgb(63, 102, 240), [255, 0, 0]));
+        assert_eq!(Yuv::new(true, true).rgb(255, 128, 128) & 0xffffff, 0xffffff);
+        // A 2x2 source: four lumas, one chroma pair, onto a 2x2 surface.
+        let plan = plan(Rect { x: 0, y: 0, width: 2, height: 2 }, &[(0, 0, 2, 2)]);
+        let layout = Layout::new(&plan, &[(0, 0, 2, 2, 1.0)], (2, 2)).unwrap();
+        let mut frame = vec![0_u8; one_mk_wall_import::play::i420_planes(2, 2).5];
+        frame[..2].copy_from_slice(&[16, 235]);
+        frame[4..6].copy_from_slice(&[235, 16]);
+        frame[8] = 128;
+        frame[12] = 128;
+        let mut surface = vec![0_u32; 4];
+        layout.compose_i420(&frame, &limited, &mut surface);
+        assert_eq!(surface.iter().map(|pixel| pixel & 0xffffff).collect::<Vec<_>>(), [0, 0xffffff, 0xffffff, 0]);
     }
 
     #[test]
