@@ -271,7 +271,10 @@ impl App {
         let total = ys[0].max(ys[1]) - gap;
         let mut child = ui.new_child(UiBuilder::new().max_rect(area.expand2(vec2(6.0, 0.0))));
         child.set_clip_rect(area.expand2(vec2(8.0, 4.0)));
-        egui::ScrollArea::vertical().id_salt("advanced").auto_shrink([false, false]).show(&mut child, |ui| {
+        let scroll = egui::ScrollArea::vertical().id_salt("advanced").auto_shrink([false, false]);
+        #[cfg(debug_assertions)]
+        let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
+        scroll.show(&mut child, |ui| {
             let (all, _) = ui.allocate_exact_size(vec2(area.width(), total), Sense::hover());
             let r = |k: usize| Rect::from_min_size(pos2(all.left() + at[k].0 as f32 * (col_w + gap), all.top() + at[k].1), vec2(col_w, heights[k]));
             self.edges_card(ui, r(0));

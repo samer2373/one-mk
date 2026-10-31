@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, channel};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
     /// Waiting for the other computer to start pairing too.
-    Searching { me: String },
+    Searching { me: String, port: Option<u16> },
     /// Nothing found for a while: show what to check.
     Hint,
     /// A computer answered; the code exchange is running.
@@ -35,7 +35,8 @@ pub struct Pairing {
 pub fn parse(line: &str) -> Option<Step> {
     let f: Vec<&str> = line.trim_end_matches(['\r', '\n']).split('\t').collect();
     Some(match f[..] {
-        ["me", name, ..] => Step::Searching { me: name.into() },
+        ["me", name, _id, port] => Step::Searching { me: name.into(), port: port.parse().ok() },
+        ["me", name, ..] => Step::Searching { me: name.into(), port: None },
         ["searching"] => return None,
         ["hint"] => Step::Hint,
         ["peer", ..] => Step::Found,
@@ -132,7 +133,7 @@ mod tests {
 
     #[test]
     fn reads_events() {
-        assert_eq!(parse("me\tdesk\tabcd-ef01\t4000\n"), Some(Step::Searching { me: "desk".into() }));
+        assert_eq!(parse("me\tdesk\tabcd-ef01\t4000\n"), Some(Step::Searching { me: "desk".into(), port: Some(4000) }));
         assert_eq!(parse("searching"), None);
         assert_eq!(parse("code\tStudio PC\t482 913"), Some(Step::Code { name: "Studio PC".into(), code: "482913".into() }));
         assert_eq!(

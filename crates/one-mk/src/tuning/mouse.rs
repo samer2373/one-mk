@@ -1,6 +1,7 @@
 use super::*;
 
 #[derive(clap::Args, Debug, Default)]
+#[command(mut_arg("device", |arg| arg.hide(true)))]
 pub struct AutoscrollArgs {
     /// Enable click-to-scroll on the other computer.
     #[arg(long, conflicts_with = "off")]
@@ -81,34 +82,43 @@ pub enum GesturesCmd {
     /// Show held-button gestures.
     List,
     /// Hold BUTTON and swipe DIRECTION to type TO on the other computer.
+    #[command(mut_arg("device", |arg| arg.hide(true)))]
     Add {
+        /// Button to hold, for example button4 (not left or right).
         button: String,
+        /// Direction to swipe while holding the button.
         #[arg(value_parser = ["up", "down", "left", "right"], ignore_case = true)]
         direction: String,
         /// A key, chord, quoted action, or several chords for a sequence.
         #[arg(required = true, num_args = 1..)]
         to: Vec<String>,
-        /// Minimum swipe distance, 1 to 10000 backend motion units (default 60).
+        /// Minimum swipe distance, 1 to 10000 backend motion units.
         #[arg(long, default_value_t = 60.0)]
         threshold: f64,
         #[command(flatten)]
         scope: ScopeArgs,
     },
     /// Remove a button's gesture in this scope.
+    #[command(mut_arg("device", |arg| arg.hide(true)))]
     Remove {
+        /// Button whose gesture should be removed.
         button: String,
+        /// Direction whose gesture should be removed.
         #[arg(value_parser = ["up", "down", "left", "right"], ignore_case = true)]
         direction: String,
         #[command(flatten)]
         scope: ScopeArgs,
     },
     /// Remove all held-button gestures in this scope.
+    #[command(mut_arg("device", |arg| arg.hide(true)))]
     Clear {
         #[command(flatten)]
         scope: ScopeArgs,
     },
     /// Hold the back side button and swipe left or right between desktops.
+    #[command(mut_arg("device", |arg| arg.hide(true)))]
     Preset {
+        /// Gesture preset to install.
         #[arg(value_parser = ["side-swipe"])]
         name: String,
         #[command(flatten)]

@@ -532,7 +532,10 @@ impl App {
         if motion::reduced() {
             child.style_mut().scroll_animation = egui::style::ScrollAnimation::none();
         }
-        egui::ScrollArea::vertical().id_salt(salt).auto_shrink([false, false]).show(&mut child, |ui| match self.keys.view {
+        let scroll = egui::ScrollArea::vertical().id_salt(salt).auto_shrink([false, false]);
+        #[cfg(debug_assertions)]
+        let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
+        scroll.show(&mut child, |ui| match self.keys.view {
             View::Keyboard => self.keyboard_view(ui, body.width(), now),
             View::Mouse => self.mouse_view(ui, body.width()),
         });
@@ -1352,7 +1355,7 @@ impl App {
         let mut button = "middle";
         for (_, row) in rows { enabled = row.enabled.unwrap_or(enabled); speed = row.speed.unwrap_or(speed); button = row.button.as_deref().unwrap_or(button); }
         let rect = Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), 30.0));
-        if chip(ui, rect, Id::unique("autoscroll-toggle"), if enabled { "Autoscroll: on" } else { "Autoscroll: off" }, enabled, !busy).clicked() {
+        if switch(ui, rect, Id::unique("autoscroll-toggle"), "Autoscroll", enabled, !busy).clicked() {
             let mut args = vec!["autoscroll".into(), if enabled { "--off".into() } else { "--on".into() }];
             args.extend(self.keys.scope.args());
             self.tune_cmds("autoscroll", "mouse-modes", vec![args], None);
@@ -1382,7 +1385,7 @@ impl App {
         let gestures: Vec<_> = input.gestures.iter().filter(|row| !matches!(row.scope, Scope::Device(..)))
             .filter(|row| !tune::primary_mouse_button(&row.button)).filter(|row| row.scope.rank(facts).is_some()).collect();
         if gestures.is_empty() {
-            top += para(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add a gesture with one-mk gestures add.", regular(T_BODY), INK2);
+            top += widgets::para_code(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add a gesture with `one-mk gestures add`.", regular(T_BODY), INK2);
         }
         for row in gestures {
             let description = format!("Hold {} and swipe {} to {}{}.", tune::mouse_button_label(&row.button), row.direction, row.to.describe(), row.app.as_ref().map_or(String::new(), |app| format!(" in app {app}")));

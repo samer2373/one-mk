@@ -168,6 +168,7 @@ impl Runtime {
 
 #[derive(Args)]
 pub struct WallpaperArgs {
+    /// Print machine-readable JSON.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -176,11 +177,17 @@ pub struct WallpaperArgs {
 
 #[derive(Subcommand)]
 enum WallpaperCommand {
+    /// Manage the optional GNOME extension (static scaffolding, not playback).
     Extension { #[command(subcommand)] cmd: extension::Command },
+    /// Show wallpaper policy and renderer availability.
     Status,
+    /// Enable experimental wallpaper policy; does not start playback.
     Enable,
+    /// Disable wallpaper policy without deleting saved consent.
     Disable,
+    /// Check wallpaper prerequisites and explain unavailable features.
     Doctor,
+    /// Manage which paired computers may coordinate this receiver.
     Consent { #[command(subcommand)] cmd: ConsentCommand },
     /// Import a video or animated image through the separately installed,
     /// sandboxed importer (VP9/AV1 WebM, GIF, APNG, animated WebP). Run
@@ -192,7 +199,18 @@ enum WallpaperCommand {
 }
 
 #[derive(Subcommand)]
-enum ConsentCommand { Grant { peer: String }, Revoke { peer: String } }
+enum ConsentCommand {
+    /// Allow a directly paired computer to coordinate this receiver.
+    Grant {
+        /// Paired computer's name or full fingerprint.
+        peer: String,
+    },
+    /// Withdraw a paired computer's permission on this receiver.
+    Revoke {
+        /// Paired computer's name or full fingerprint.
+        peer: String,
+    },
+}
 
 #[derive(Debug)]
 pub struct Failure { pub code: u8, message: String }

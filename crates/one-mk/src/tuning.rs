@@ -1424,9 +1424,10 @@ impl KeyScopeArgs {
 pub enum KeymapCmd {
     /// Show the key rules.
     List,
-    /// Enable/disable experimental Windows local keys through settings reload.
-    /// Windows is native UNTESTED; macOS integration remains incomplete.
+    /// Save the experimental preference for remapping keys on this computer.
+    /// Requires a separately enabled native build feature; not included in release builds.
     Local {
+        /// Save whether native local remapping is requested.
         #[arg(value_name = "on|off", value_parser = settings::parse_on_off, action = clap::ArgAction::Set)]
         enabled: bool,
     },
@@ -1436,6 +1437,7 @@ pub enum KeymapCmd {
     /// `lock-all`, `scroll down`, `run: COMMAND`). Replaces a rule for the
     /// same key in the same scope and layer.
     Add {
+        /// Key or chord to change, for example capslock or ctrl+h.
         from: String,
         /// What it becomes; several make a sequence. Leave out with --tap and --hold.
         to: Vec<String>,
@@ -1456,6 +1458,7 @@ pub enum KeymapCmd {
     },
     /// Remove the rule for FROM (in that scope and layer).
     Remove {
+        #[arg(help = "Key or chord whose rule should be removed")]
         from: String,
         #[arg(long, value_name = "NAME")]
         layer: Option<String>,
@@ -1872,14 +1875,16 @@ pub enum ButtonsCmd {
     /// do TO: another button (button1), a key or chord, several (a
     /// sequence), back/forward, an action, or none.
     Map {
+        #[arg(help = "Mouse button to remap, for example button4")]
         button: String,
-        #[arg(required = true)]
+        #[arg(required = true, help = "Output button, key, chord, quoted action or sequence")]
         to: Vec<String>,
         #[command(flatten)]
         scope: ScopeArgs,
     },
     /// Remove the rule for button N.
     Unmap {
+        #[arg(help = "Mouse button whose rule should be removed")]
         button: String,
         #[command(flatten)]
         scope: ScopeArgs,

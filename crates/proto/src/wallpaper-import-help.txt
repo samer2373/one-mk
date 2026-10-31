@@ -1,0 +1,16 @@
+Optional finite wallpaper importer (never starts playback)
+Usage: one-mk wallpaper import FILE --output PRIVATE_DIR --runtime AUDITED_ROOT [--json]
+       one-mk wallpaper doctor [--runtime AUDITED_ROOT] [--json]
+
+Arguments:
+  FILE           Source video or animated image
+Options:
+  --output DIR   Existing private directory for the validated source and poster
+  --runtime DIR  Absolute path to an audited sandbox runtime
+  --json         Print machine-readable JSON
+  --help         Show this help without importing anything
+
+Exit: 0 complete/available, 2 usage/validation, 3 sandbox unavailable,
+      4 path authority refused, 5 operational failure, 130 cancelled
+Only VP9/AV1 WebM + GIF/APNG/animated WebP. Otherwise: convert first.
+Windows/macOS sandbox: untested/unimplemented, refuses imports.

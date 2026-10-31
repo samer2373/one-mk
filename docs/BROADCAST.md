@@ -15,8 +15,10 @@ Default keyboard shortcut: **Ctrl+Alt+B** (**Ctrl+Alt+Shift+B** on Windows,
 see below). Change it with `one-mk hotkeys --broadcast <chord>` or turn it off
 with `one-mk hotkeys --broadcast none`. The tray and the window's Desk tab
 have a "Broadcast to all computers" checkmark/switch (shown while a computer
-is connected); while it is on, the Desk headline says so and the window's
-main button becomes "Stop broadcast".
+is connected). While it is on, the Desk headline says so, the window displays
+the daemon's configured stop shortcut, and its broadcast-stop controls are
+disabled. **Stop service** shuts down sharing entirely; it is not a broadcast
+stop button and captured mouse input cannot reach it.
 
 ## What happens
 
@@ -69,8 +71,8 @@ it.
 
 Broadcast ends with any of:
 
-- the keyboard shortcut again, `one-mk broadcast off|toggle`, the tray item, or
-  the Stop button in the window (see "Known limitations");
+- the keyboard shortcut again, or `one-mk broadcast off|toggle` from a terminal
+  that is not being captured (see "Known limitations");
 - `one-mk switch` to anywhere (`here`, `next`, a computer) and the jump, next
   and home shortcuts: broadcast ends first, then the switch happens;
 - **Ctrl+Alt+Shift+Esc**, which always brings the pointer home;
@@ -163,12 +165,12 @@ keepalives); off again, back to 10 ms. Memory: 34 MB resident, against
 
 ## Status and visibility
 
-- `one-mk status` starts with "Broadcasting to 3 computers: A, B and C.
+- `one-mk status` includes "Broadcasting to 3 computers: A, B and C.
   Everything you type, click and scroll goes to all of them."
 - The tray headline says "Broadcasting to 3 computers" and the item
   "Broadcast to all computers" is checked.
 - The window: the Desk headline "Broadcasting to 3 computers" and to whom,
-  the main button "Stop broadcast", and the Desk switch on.
+  a keyboard-stop hint, and the disabled Desk switch on.
 - Notifications at start and end (checked on GNOME; macOS untested; on
   Windows one-mk has no notifications yet, so only the status, tray and
   window show it).
@@ -179,10 +181,12 @@ keepalives); off again, back to 10 ms. Memory: 34 MB resident, against
 ## Known limitations
 
 - While broadcast is on, this computer's mouse and keyboard are captured, so
-  the window's Stop button and the tray can't be clicked with them. Stop with
-  the shortcut, Ctrl+Alt+Shift+Esc, or `one-mk broadcast off` from another
-  terminal or over SSH. The button is there for input that isn't captured
-  (a touch screen, accessibility tools) and as a visible state.
+  the window and tray cannot reliably receive clicks. There is no common
+  cross-backend exclusion for the window. Stop with the displayed shortcut,
+  Ctrl+Alt+Shift+Esc, or `one-mk broadcast off` from another terminal or over
+  SSH. The window deliberately disables broadcast-stop clicks rather than
+  promising a mouse escape route. **Stop service** is a separate shutdown
+  control, subject to the same capture limitation.
 - Broadcast was tested on Linux with the null input backend (three daemons on
   loopback, in the tests and with the real binaries) and with real X11 capture
   in a private Xvfb (keys, Shift+click, scrolling, movement, the shortcut and

@@ -153,21 +153,24 @@ impl Action {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Run the sharing service (the default).
+    Run(RunArgs),
     /// Check for or explicitly install a signed release; never updates in the background.
     Update(update::Options),
     /// Stop the sharing service for this settings folder before restarting it.
     Stop,
     /// Show or configure file edge-drop zones (X11).
     Drag {
+        /// Enable file edge-drop zones on supported desktops.
         #[arg(long, conflicts_with = "off")]
         on: bool,
+        /// Disable file edge-drop zones.
         #[arg(long)]
         off: bool,
+        /// Width of the edge-drop zone, from 1 to 128 pixels.
         #[arg(long, value_name = "PX")]
         zone: Option<u16>,
     },
-    /// Run the sharing service (the default).
-    Run(RunArgs),
     /// Send files or folders to a paired computer running `one-mk run`.
     Send {
         /// Files or folders to send.
@@ -303,6 +306,7 @@ enum Cmd {
     },
     /// Keep the pointer on this computer: edges lead nowhere while on.
     LockPointer {
+        /// Enable, disable or toggle pointer locking.
         #[arg(value_name = "on|off|toggle", value_parser = ["on", "off", "toggle"])]
         state: String,
     },
@@ -312,6 +316,7 @@ enum Cmd {
     /// it is on.
     #[command(after_help = "Examples:\n  one-mk broadcast on\n  one-mk broadcast off\n  one-mk broadcast --idle-off 30    stop by itself after 30 minutes without input (0 = never)\n\nSee docs/BROADCAST.md for what is sent where and how it stops.")]
     Broadcast {
+        /// Enable, disable or toggle broadcasting; omit to show its state.
         #[arg(value_name = "on|off|toggle", value_parser = ["on", "off", "toggle"])]
         state: Option<String>,
         /// Stop by itself after this many minutes without any key, click,
@@ -326,16 +331,18 @@ enum Cmd {
     /// Gaming mode: on another computer, send raw mouse movement (for games)
     /// instead of positions.
     Gaming {
+        /// Enable, disable or automatically choose raw mouse movement.
         #[arg(value_enum)]
         mode: settings::Gaming,
     },
     /// Show or change the keyboard shortcuts: jump to computer N, the next
-    /// one, lock the pointer, come back here, broadcast.
+    /// one, lock the pointer, come back here, broadcast or fetch a clipboard.
     Hotkeys(hotkeys::HotkeyArgs),
     /// Lock this computer's screen and every connected computer's.
     LockAll,
     /// Whether locking this computer locks the connected ones too: on or off.
     LockSync {
+        /// Enable or disable shared screen locking.
         #[arg(value_name = "on|off", value_parser = settings::parse_on_off, action = clap::ArgAction::Set)]
         state: bool,
     },
@@ -704,6 +711,27 @@ fn forget(dir: &Path, device: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polished_help_describes_options_and_supported_scopes() {
+        for (args, required, forbidden) in [
+            (vec!["hotkeys"], "n in braces", "modifiers and "),
+            (vec!["drag"], "Width of the edge-drop zone", "__missing__"),
+            (vec!["autoscroll"], "Click a button", "--device"),
+            (vec!["gestures", "add"], "Minimum swipe distance", "--device"),
+            (vec!["gestures", "remove"], "Usage:", "--device"),
+            (vec!["gestures", "preset"], "Usage:", "--device"),
+            (vec!["wallpaper", "extension", "install"], "--renderer", "__missing__"),
+        ] {
+            let error = Cli::try_parse_from(std::iter::once("one-mk").chain(args).chain(["--help"]))
+                .err()
+                .expect("help should exit before running");
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+            let help = error.to_string();
+            assert!(help.contains(required), "{help}");
+            assert!(!help.contains(forbidden), "{help}");
+        }
+    }
 
     #[test]
     fn layout_offset_bounds_and_empty_values() {

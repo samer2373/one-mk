@@ -4,7 +4,7 @@ use super::pages::card;
 impl App {
     pub(super) fn typing_card(&mut self, ui: &mut Ui, area: Rect) {
         let content = card(ui, area, "Typing on the other computer");
-        let choices = [("physical", "Same keys"), ("characters", "Same letters"), ("auto", "Auto")];
+        let choices = [("physical", "Same keys"), ("characters", "Letters (not yet)"), ("auto", "Auto (not yet)")];
         let track = Rect::from_min_size(pos2(content.left(), content.top()), vec2(content.width(), 28.0));
         let labels: Vec<_> = choices.iter().map(|(_, label)| *label).collect();
         let pills = Pills {
