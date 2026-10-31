@@ -2453,8 +2453,10 @@ scope = { peer = "Laptop" }
         assert_eq!(summary.lines().count(), 2);
         if cfg!(target_os = "linux") {
             assert_eq!(summary.lines().nth(1), Some("local key rules are not available on Linux"));
+        } else if cfg!(windows) {
+            assert!(summary.contains("native Windows UNTESTED"), "{summary}");
         } else {
-            assert!(summary.contains("native hook integration is not implemented yet"));
+            assert!(summary.contains("native hook integration is not implemented yet"), "{summary}");
         }
     }
 

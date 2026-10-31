@@ -346,15 +346,27 @@ async fn broadcast_starts_and_stops_every_way() {
     assert_eq!(t.both().await, (key(KEY_A, true), key(KEY_A, true)));
     assert_eq!(t.both().await, (key(KEY_A, false), key(KEY_A, false)));
 
-    // Ctrl+Alt+B while broadcasting stops it; B is never typed anywhere.
-    t.a.keys(&[(LCTRL, true), (LALT, true)]);
-    assert_eq!(t.both().await, (key(LCTRL, true), key(LCTRL, true)));
-    assert_eq!(t.both().await, (key(LALT, true), key(LALT, true)));
+    // The broadcast shortcut while broadcasting stops it; B is never typed
+    // anywhere. (Ctrl+Alt+B, and with Shift on Windows, where Ctrl+Alt is AltGr.)
+    let chord: &[u32] = if cfg!(windows) { &[LCTRL, LALT, LSHIFT] } else { &[LCTRL, LALT] };
+    for &code in chord {
+        t.a.keys(&[(code, true)]);
+        assert_eq!(t.both().await, (key(code, true), key(code, true)));
+    }
     t.a.send(Event::Key { code: KEY_B, down: true, device: None });
     assert_eq!(next_capture_skipping_edges(&mut t.a.h).await, CaptureCmd::Release { id: 3, pos: Some(CENTER_B) });
-    assert_eq!(t.both().await, (key(LCTRL, false), key(LCTRL, false)));
-    assert_eq!(t.both().await, (key(LALT, false), key(LALT, false)));
-    t.a.keys(&[(KEY_B, false), (LCTRL, false), (LALT, false)]);
+    // The modifiers are let go of, on both computers, in some order.
+    let mut left = Vec::new();
+    for _ in chord {
+        left.push(t.both().await);
+    }
+    left.sort_by_key(|pair| format!("{pair:?}"));
+    let mut expected: Vec<_> = chord.iter().map(|&code| (key(code, false), key(code, false))).collect();
+    expected.sort_by_key(|pair| format!("{pair:?}"));
+    assert_eq!(left, expected);
+    let mut up = vec![(KEY_B, false)];
+    up.extend(chord.iter().map(|&code| (code, false)));
+    t.a.keys(&up);
 
     // The shortcut at home (from the system's listener) starts it. (Not
     // within 300 ms of the same shortcut from captured keys: that would be

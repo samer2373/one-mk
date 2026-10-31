@@ -357,22 +357,47 @@ impl Xvfb {
     }
 
     fn start_sized(height: i16) -> Option<Xvfb> {
-        // Xvfb picks a free display itself and tells us which.
-        let child = Command::new("Xvfb")
-            .args(["-displayfd", "1", "-screen", "0", &format!("{W}x{height}x24"), "-nolisten", "tcp", "-noreset"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn();
-        let Ok(mut child) = child else {
-            eprintln!("Xvfb not installed: skipping");
-            return None;
-        };
-        let mut line = String::new();
-        std::io::BufReader::new(child.stdout.take().expect("piped")).read_line(&mut line).unwrap();
-        let server = Xvfb { child, display: format!(":{}", line.trim()) };
-        let number = line.trim().parse::<u32>().expect("Xvfb returned a numeric display");
-        assert!(number >= 2, "refusing reserved desktop display :{number}");
-        Some(server)
+        // Our own display number, well above the desktop sessions' (:0, :1, ...):
+        // the first one in 20.. with no socket and no lock file. Another test
+        // may take it between the check and the start; then Xvfb exits and the
+        // next number is tried.
+        // Tests start servers in parallel threads: one at a time, or two would
+        // take the same number and each see the other's socket as its own.
+        static START: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _one_at_a_time = START.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for number in 20..220u32 {
+            if std::path::Path::new(&format!("/tmp/.X11-unix/X{number}")).exists()
+                || std::path::Path::new(&format!("/tmp/.X{number}-lock")).exists()
+            {
+                continue;
+            }
+            let child = Command::new("Xvfb")
+                .args([&format!(":{number}"), "-screen", "0", &format!("{W}x{height}x24"), "-nolisten", "tcp", "-noreset"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            let Ok(mut child) = child else {
+                eprintln!("Xvfb not installed: skipping");
+                return None;
+            };
+            let socket = format!("/tmp/.X11-unix/X{number}");
+            for _ in 0..500 {
+                // The socket appears before the server is ready: wait for a
+                // connection that is accepted and answers.
+                if std::path::Path::new(&socket).exists()
+                    && x11rb::connect(Some(&format!(":{number}"))).is_ok_and(|(conn, _)| conn.get_input_focus().is_ok_and(|cookie| cookie.reply().is_ok()))
+                {
+                    return Some(Xvfb { child, display: format!(":{number}") });
+                }
+                if child.try_wait().ok().flatten().is_some() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        panic!("no free private display number for Xvfb");
     }
 
     fn observer(&self) -> Observer {
