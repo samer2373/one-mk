@@ -7,6 +7,7 @@ pub mod client;
 pub mod install;
 pub mod integrate;
 pub mod proc;
+pub mod setup;
 pub mod status;
 pub mod update_logic;
 

@@ -380,6 +380,7 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         let link = Link::new(home, tx, cc.egui_ctx.clone())?;
         link.watch();
+        link.first_run();
         let mut scene = Scene::default();
         scene.top_clear = TOP_H + 12.0;
         let mut me = Device::new("me", "This computer", me_kind(), true, ME_WALL);
@@ -521,6 +522,11 @@ impl App {
                 Event::Links(links) if self.rtt_frozen.is_none() => self.rtts.record(now, &links),
                 Event::Links(_) => {}
                 Event::Autostart(on) => self.autostart = Some(on),
+                Event::Setup(report) => match report.problems().first() {
+                    Some(problem) => self.toast_error(format!("Setup didn't finish. {problem}"), None, now),
+                    None if report.changed() => self.toast("one·mk is set up and starts when you log in.", now),
+                    None => {}
+                },
                 Event::UpdateAvailable(version) => self.update_available = version,
                 Event::UpdateOutput(output) => self.update_output = Some(output),
                 Event::Latency(l) => {

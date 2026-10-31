@@ -515,6 +515,8 @@ pub struct Outcome {
     /// Entries that were not written because something else is in the way;
     /// `integrate` fails if there are any, `install` only warns.
     pub skipped: usize,
+    /// A supported file manager was found (false: nothing was written).
+    pub found: bool,
 }
 
 /// Adds the entries to every file manager found, and says what was done.
@@ -525,6 +527,7 @@ pub fn install(setup: &Setup) -> Result<Outcome> {
         return Ok(Outcome {
             message: "No supported file manager found (Nautilus, Nemo, Dolphin), so no \"Send to\" menu entries were added.".into(),
             skipped: 0,
+            found: false,
         });
     }
     let mut done = Vec::new();
@@ -544,6 +547,7 @@ pub fn install(setup: &Setup) -> Result<Outcome> {
         .trim_end()
         .to_owned(),
         skipped,
+        found: true,
     })
 }
 

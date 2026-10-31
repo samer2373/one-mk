@@ -66,6 +66,8 @@ pub enum Event {
     ClipboardHistory(Result<Vec<HistoryItem>, String>),
     ClipboardReveal(u64, u64, Result<String, String>),
     Autostart(bool),
+    /// First-run setup ran: what it did.
+    Setup(one_mk_ctl::setup::Report),
     /// A command finished: what it was for, and its error if it failed.
     Done { what: Job, error: Option<String> },
     Latency(Latency),
@@ -349,6 +351,25 @@ impl Link {
                 anyhow::bail!("It didn't answer within 4 seconds. Details are in {}.", l.dir.join("daemon.log").display());
             }
             Ok(())
+        });
+    }
+
+    /// First launch only: starts one-mk at login, adds the file manager
+    /// entries and starts the service, so nobody has to run `one-mk
+    /// install`. Never runs again for this settings folder (see
+    /// `one_mk_ctl::setup`); the window says what it did.
+    pub fn first_run(&self) {
+        // Screenshots and demos must not touch the real login items.
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ONE_MK_APP_STATUS").is_some() || std::env::var_os("ONE_MK_APP_NO_SETUP").is_some() {
+            return;
+        }
+        let link = self.clone();
+        std::thread::spawn(move || {
+            if let Some(report) = one_mk_ctl::setup::run(&link.dir, &link) {
+                link.send(Event::Autostart(install::is_installed()));
+                link.send(Event::Setup(report));
+            }
         });
     }
 
@@ -817,5 +838,58 @@ mod tests {
             Some(Latency { peer: "mac".into(), p50_us: 312.0, p99_us: 520.0, lost: 2, count: 400 })
         );
         assert_eq!(parse_bench("garbage", "mac"), None);
+    }
+}
+
+impl one_mk_ctl::setup::Host for Link {
+    fn login_installed(&self) -> bool {
+        install::is_installed()
+    }
+
+    fn install_login(&self) -> Result<(), String> {
+        if !self.daemon.is_absolute() {
+            return Err("one-mk isn't next to this app. Run `one-mk install` instead".into());
+        }
+        install::install(&Launch {
+            exe: self.daemon.clone(),
+            tray: self.tray.clone(),
+            home: self.custom_home.then(|| install::absolute(&self.dir)),
+            start_now: !client::is_running(&self.dir),
+        })
+        .map(drop)
+        .map_err(|e| format!("{e:#}"))
+    }
+
+    fn integrations_present(&self) -> bool {
+        one_mk_ctl::integrate::is_enabled()
+    }
+
+    fn install_integrations(&self) -> Result<bool, String> {
+        let setup = one_mk_ctl::integrate::Setup {
+            exe: self.daemon.clone(),
+            home: self.custom_home.then(|| install::absolute(&self.dir)),
+            // Pairing refreshes the entries for each computer it adds.
+            computers: vec![],
+        };
+        one_mk_ctl::integrate::install(&setup).map(|o| o.found).map_err(|e| format!("{e:#}"))
+    }
+
+    fn running(&self) -> bool {
+        client::is_running(&self.dir)
+    }
+
+    fn start(&self) -> Result<(), String> {
+        let mut args = vec!["run".to_owned()];
+        args.extend(self.home_args());
+        proc::spawn_detached(&self.daemon, &args, Some(&self.dir.join("daemon.log"))).map_err(|e| e.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline && !client::is_running(&self.dir) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if client::is_running(&self.dir) {
+            Ok(())
+        } else {
+            Err(format!("It didn't answer within 4 seconds. Details are in {}.", self.dir.join("daemon.log").display()))
+        }
     }
 }
