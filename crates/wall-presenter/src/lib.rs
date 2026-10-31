@@ -3,5 +3,5 @@
 #[cfg(all(target_os = "linux", feature = "gnome-bridge"))]
 pub mod gnome_bridge;
 
-#[cfg(all(target_os = "linux", feature = "gnome-bridge"))]
+#[cfg(all(target_os = "linux", feature = "m1-lab"))]
 pub mod presentation_session;

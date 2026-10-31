@@ -7,16 +7,18 @@ mod bridge;
 
 fn main() -> std::process::ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    #[cfg(all(target_os = "linux", feature = "gnome-bridge"))]
+    // 6D-M1 laboratory only (feature `m1-lab`, never in release builds).
+    #[cfg(all(target_os = "linux", feature = "m1-lab"))]
     if arguments == ["--present=gnome", "--m1-lab"] {
-        let result = (|| -> one_mk_wall::gnome_bridge::Result<()> {
-            let bootstrap = one_mk_wall::presentation_session::Bootstrap::read_environment()?;
-            tokio::runtime::Builder::new_current_thread().enable_all().build()?
-                .block_on(one_mk_wall::presentation_session::present(bootstrap))
-        })();
+        let result = tokio::runtime::Builder::new_current_thread().enable_all().build()
+            .map_err(Into::into)
+            .and_then(|runtime| runtime.block_on(one_mk_wall::presentation_session::present()));
         return match result {
             Ok(()) => std::process::ExitCode::SUCCESS,
-            Err(error) => { eprintln!("M1 presentation refused/terminated: {error}"); std::process::ExitCode::from(3) }
+            Err(error) => {
+                eprintln!("wallpaper-m1-renderer[{}]: exit {error}", std::process::id());
+                std::process::ExitCode::from(3)
+            }
         };
     }
     if arguments == ["--help"] {

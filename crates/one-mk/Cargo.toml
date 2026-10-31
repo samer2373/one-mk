@@ -6,7 +6,8 @@ edition = "2024"
 [features]
 default = []
 native-local-remap = ["one-mk-input/native-local-remap"]
-wallpaper-m1-lab = ["dep:one-mk-wall"]
+# 6D-M1 laboratory presentation authority; never enabled in release builds.
+wallpaper-m1-lab = ["dep:one-mk-wall-sync"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -51,4 +52,4 @@ libc = "0.2.191"
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 futures-util = { version = "0.3.34", default-features = false }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
-one-mk-wall = { path = "../wall-presenter", features = ["gnome-bridge"], optional = true }
+one-mk-wall-sync = { path = "../wall", optional = true }

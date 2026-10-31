@@ -59,6 +59,8 @@ mod update;
 mod update_key;
 mod typing;
 mod wallpaper_import;
+#[cfg(all(target_os = "linux", feature = "wallpaper-m1-lab"))]
+mod wallpaper_authority;
 
 use anyhow::{Context, Result};
 use clipctl::OnOff;
@@ -554,22 +556,14 @@ fn run(cli: Cli) -> Result<()> {
     rt.block_on(async move {
         let cmd = match action {
             Action::Run(r) => {
+                // 6D-M1 laboratory only: never compiled into release builds.
                 #[cfg(all(target_os = "linux", feature = "wallpaper-m1-lab"))]
-                let _wallpaper_authority = {
-                    if std::env::var_os("ONE_MK_M1_BOOTSTRAP_FD").is_some() {
-                        anyhow::ensure!(r.backend == Some(Backend::Null) && r.no_discovery && r.no_notify && r.no_clipboard,
-                            "M1 laboratory requires null backend, no discovery, no notifications and no clipboard");
-                        let bootstrap = one_mk_wall::presentation_session::Bootstrap::read_environment()
-                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                        let policy_dir = dir.clone();
-                        let peer = bootstrap.peer.clone();
-                        let revision = bootstrap.revision;
-                        Some(one_mk_wall::presentation_session::authority(bootstrap, move || {
-                            settings::Settings::load(&policy_dir).is_ok_and(|settings|
-                                settings.wallpaper.enabled && settings.wallpaper.grants.get(&peer) == Some(&revision))
-                        }).await.map_err(|error| anyhow::anyhow!(error.to_string()))?)
-                    } else { None }
-                };
+                let _wallpaper_authority = if wallpaper_authority::requested() {
+                    anyhow::ensure!(r.backend == Some(Backend::Null) && r.no_discovery && r.no_notify && r.no_clipboard,
+                        "the wallpaper M1 laboratory needs --backend null --no-discovery --no-notify --no-clipboard");
+                    let settings = settings::Settings::load(&dir)?;
+                    Some(wallpaper_authority::start(&dir, &settings.wallpaper).await?)
+                } else { None };
                 if r.no_notify {
                     notify::disable();
                 }

@@ -91,6 +91,8 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn refresh(&mut self, settings: &WallpaperSettings) {
+        #[cfg(all(target_os = "linux", feature = "wallpaper-m1-lab"))]
+        crate::wallpaper_authority::publish(settings);
         if settings.enabled { self.origin.get_or_insert_with(std::time::Instant::now); }
         else { self.origin = None; }
         self.receivers.retain(|peer,receiver| settings.enabled && settings.grants.get(&peer.to_string()) == Some(&receiver.consent));

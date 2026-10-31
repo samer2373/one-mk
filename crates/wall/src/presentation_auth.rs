@@ -24,10 +24,10 @@ pub const INTERFACE: &str = "org.onemk.WallpaperAuthority1";
 pub const PATH: &str = "/org/onemk/WallpaperAuthority1";
 pub const METHOD: &str = "Plan";
 pub const CHANGED: &str = "Changed";
-/// nonce, layout serial, monitors, request tag.
-pub const REQUEST_SIGNATURE: &str = "ayua(iiiid)ay";
+/// nonce, layout serial, monitors, request tag (zbus renders a multi-argument body as a structure).
+pub const REQUEST_SIGNATURE: &str = "(ayua(iiiid)ay)";
 /// enabled, consent revision, encoded plan, reply tag.
-pub const REPLY_SIGNATURE: &str = "btayay";
+pub const REPLY_SIGNATURE: &str = "(btayay)";
 pub const MAX_REQUEST_BODY: usize = 2048;
 pub const MAX_REPLY_BODY: usize = presentation_wire::MAX_PAYLOAD + 256;
 pub const RUNTIME_DIRECTORY: &str = "one-mk-wallpaper-m1";
