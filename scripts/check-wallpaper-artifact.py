@@ -76,6 +76,11 @@ def cargo_components(metadata, package):
     if len(roots) != 1 or not metadata.get("resolve"):
         raise ValueError("exact package and resolved Cargo graph required")
     nodes = {item["id"]: item for item in metadata["resolve"]["nodes"]}
+    for identity, node in nodes.items():
+        name = packages[identity]["name"]
+        forbidden = {"one-mk": "wallpaper-m1-lab", "one-mk-wall": "m1-lab"}.get(name)
+        if forbidden and forbidden in node.get("features", []):
+            raise ValueError(f"presentation laboratory feature cannot ship: {name}/{forbidden}")
     pending, seen, components = roots[:], set(), []
     while pending:
         identity = pending.pop()
@@ -112,6 +117,23 @@ def daemon_features(features):
 
 
 def self_test():
+    for package, feature in (("one-mk", "wallpaper-m1-lab"), ("one-mk-wall", "m1-lab")):
+        metadata = {
+            "packages": [
+                {"id": "importer", "name": "one-mk-wall-import", "version": "1", "license": "MIT"},
+                {"id": "lab", "name": package, "version": "1", "license": "MIT"},
+            ],
+            "resolve": {"nodes": [
+                {"id": "importer", "dependencies": [], "features": []},
+                {"id": "lab", "dependencies": [], "features": [feature]},
+            ]},
+        }
+        try:
+            cargo_components(metadata, "one-mk-wall-import")
+        except ValueError as error:
+            assert "laboratory" in str(error), error
+        else:
+            raise AssertionError(f"activated laboratory feature escaped metadata gate: {package}/{feature}")
     daemon_features('image feature "png"')
     try:
         daemon_features('├── one-mk-wall-sync feature "default"\n│   └── one-mk-wall-sync v0.1.15 (crates/wall)')

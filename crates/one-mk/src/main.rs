@@ -1,5 +1,8 @@
 //! one-mk: share one mouse and keyboard across your computers.
 
+#[cfg(all(feature = "wallpaper-m1-lab", not(debug_assertions)))]
+compile_error!("presentation laboratory features require debug assertions");
+
 macro_rules! print {
     ($($args:tt)*) => {{
         use std::io::Write as _;
