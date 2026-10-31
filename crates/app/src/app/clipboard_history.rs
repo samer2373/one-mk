@@ -33,20 +33,22 @@ impl App {
         } else {
             "Memory only; hidden until Show. Unmarked secrets may be retained. App skipping is X11-only."
         };
-        let height = para(ui, pos2(rect.left(), rect.top() + 64.0), rect.width(), privacy, regular(T_META), INK2);
+        let mut height = para(ui, pos2(rect.left(), rect.top() + 64.0), rect.width(), privacy, regular(T_META), INK2);
+        let failure = history_failure(self.running());
+        let text = history_message(online, self.clipboard_history.as_ref(), self.prefs.history_enabled, failure);
+        // A saved-history failure next to a list: say so above it, or the
+        // list reads as everything there is.
+        if let Some(failure) = failure.filter(|failure| text != Some(*failure)) {
+            let top = rect.top() + 72.0 + height;
+            let shown = para(ui, pos2(rect.left(), top), rect.width(), failure, regular(T_META), ERROR);
+            a11y_text(ui, Id::unique("history-failure"), Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), shown)), Role::Status, failure, Some(Live::Polite));
+            height += 8.0 + shown;
+        }
         let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 72.0 + height), rect.max);
         if !area.is_positive() { return; }
-        let text = if !online { Some("Start one·mk to see clipboard history.") } else {
-            match &self.clipboard_history {
-                None => Some("Loading history…"),
-                Some(Err(error)) => Some(error.as_str()),
-                Some(Ok(items)) if items.is_empty() && !self.prefs.history_enabled => Some("Clipboard history is disabled. No copies are being retained."),
-                Some(Ok(items)) if items.is_empty() => Some("No clipboard items yet. Copy something, then choose Refresh."),
-                _ => None,
-            }
-        };
         if let Some(text) = text {
-            para(ui, area.min, area.width(), text, regular(T_BODY), INK2);
+            let color = if failure == Some(text) { ERROR } else { INK2 };
+            para(ui, area.min, area.width(), text, regular(T_BODY), color);
             a11y_text(ui, Id::unique("history-state"), area, Role::Status, text, Some(Live::Polite));
             return;
         }
@@ -80,5 +82,47 @@ impl App {
                 ui.painter().text(pos2(row.left(), row.top() + 35.0), Align2::LEFT_CENTER, shown, regular(T_META), INK2);
             }
         });
+    }
+}
+
+/// The daemon's saved-history failure ("Could not load/save ..."), if any:
+/// routine privacy notes in the same field are not failures.
+fn history_failure(status: Option<&Status>) -> Option<&str> {
+    status.map(|status| status.clipboard_history_note.as_str()).filter(|note| note.starts_with("Could not"))
+}
+
+/// What the history area says instead of a list, if anything. An empty list
+/// while saved history failed to load is that failure, not "nothing yet".
+fn history_message<'a>(online: bool, history: Option<&'a Result<Vec<crate::daemon::HistoryItem>, String>>, enabled: bool, failure: Option<&'a str>) -> Option<&'a str> {
+    if !online { return Some("Start one·mk to see clipboard history."); }
+    match history {
+        None => Some("Loading history…"),
+        Some(Err(error)) => Some(error.as_str()),
+        Some(Ok(items)) if items.is_empty() && failure.is_some() => failure,
+        Some(Ok(items)) if items.is_empty() && !enabled => Some("Clipboard history is disabled. No copies are being retained."),
+        Some(Ok(items)) if items.is_empty() => Some("No clipboard items yet. Copy something, then choose Refresh."),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn damaged_saved_history_is_not_shown_as_an_empty_history() {
+        let error = "Could not load clipboard history: invalid header; clear it with one-mk clipboard history clear.";
+        let status = Status { clipboard_history_enabled: true, clipboard_history_note: error.into(), ..Default::default() };
+        let failure = history_failure(Some(&status));
+        assert_eq!(failure, Some(error));
+        let empty = Ok(Vec::new());
+        assert_eq!(history_message(true, Some(&empty), true, failure), Some(error));
+        let items = Ok(vec![crate::daemon::HistoryItem { id: 1, preview: String::new(), detail: String::new(), timestamp: 0 }]);
+        assert_eq!(history_message(true, Some(&items), true, failure), None, "the list still shows; the failure goes above it");
+        let routine = Status { clipboard_history_note: "Clipboard history is kept in memory only.".into(), ..Default::default() };
+        assert_eq!(history_failure(Some(&routine)), None);
+        assert_eq!(history_failure(None), None);
+        assert_eq!(history_message(true, Some(&empty), true, None), Some("No clipboard items yet. Copy something, then choose Refresh."));
+        assert_eq!(history_message(false, Some(&empty), true, failure), Some("Start one·mk to see clipboard history."));
     }
 }

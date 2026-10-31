@@ -300,7 +300,7 @@ impl Link {
 
     pub fn prefs(&self) -> Prefs {
         let read = |f: &str| std::fs::read_to_string(self.dir.join(f));
-        let settings = read("settings.toml");
+        let settings = settings_text(&self.dir.join("settings.toml"));
         let mut p = Prefs::read(settings.as_deref().unwrap_or(""), &read("profiles.toml").unwrap_or_default());
         p.unreadable = settings.as_ref().is_err_and(|e| e.kind() != std::io::ErrorKind::NotFound);
         p
@@ -688,6 +688,19 @@ fn history_preview(body: &str) -> String {
     preview
 }
 
+/// `settings.toml`, refused over the daemon's size limit as the daemon
+/// refuses it: the window then says it can't be read rather than showing
+/// values the daemon is not using.
+fn settings_text(path: &std::path::Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::fs::File::open(path)?.take(one_mk_ctl::MAX_SETTINGS_BYTES + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > one_mk_ctl::MAX_SETTINGS_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "settings exceeds the 4 MiB limit"));
+    }
+    Ok(text)
+}
+
 fn parse_history(body: &str) -> Result<Vec<HistoryItem>, String> {
     #[derive(serde::Deserialize)]
     struct Metadata {
@@ -731,6 +744,23 @@ pub fn parse_bench(out: &str, peer: &str) -> Option<Latency> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_over_the_daemons_limit_are_unreadable_here_too() {
+        let dir = std::env::temp_dir().join(format!("one-mk-app-oversized-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.toml");
+        let mut text = "notify_files = false\n".to_owned();
+        text.push_str(&"#".repeat(one_mk_ctl::MAX_SETTINGS_BYTES as usize + 1 - text.len()));
+        std::fs::write(&path, &text).unwrap();
+        let Err(error) = settings_text(&path) else { panic!("a file over the limit must be refused") };
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        text.pop();
+        std::fs::write(&path, &text).unwrap();
+        assert_eq!(settings_text(&path).unwrap().len() as u64, one_mk_ctl::MAX_SETTINGS_BYTES, "exactly at the limit still reads");
+        assert_eq!(settings_text(&dir.join("missing.toml")).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn history_accepts_the_daemons_stable_json_metadata() {

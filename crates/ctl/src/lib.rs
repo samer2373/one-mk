@@ -13,6 +13,10 @@ pub mod update_logic;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
+/// The largest `settings.toml` one-mk reads. The daemon and the window share
+/// it, so the window never shows a file the daemon refuses as applied.
+pub const MAX_SETTINGS_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Where identity and paired devices live (the same folder `one-mk` uses).
 /// On Windows this is the local (non-roaming) AppData.
 pub fn default_home() -> Result<PathBuf> {
