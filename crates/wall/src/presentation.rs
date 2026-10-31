@@ -58,7 +58,7 @@ pub struct PresentationPlan {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { Identity, Consent, Generation, Replay, Layout, Geometry, Media, Revoked }
+pub enum Error { Identity, Consent, Generation, Replay, Layout, Geometry, Media, Revoked, Wire }
 
 #[derive(Debug)]
 pub struct Gate {
@@ -76,6 +76,16 @@ pub struct Gate {
 }
 
 impl Gate {
+    pub fn accept_encoded(&mut self, caller: &Owner, bytes: &[u8], enabled: bool,
+        live_revision: Option<u64>) -> Result<(), Error> {
+        self.active = None;
+        if caller != &self.owner { return Err(Error::Identity); }
+        self.reconcile_consent(enabled, live_revision);
+        if self.revoked { return Err(Error::Revoked); }
+        let plan = crate::presentation_wire::decode(bytes).map_err(|_| Error::Wire)?;
+        self.accept(caller, plan)
+    }
+
     pub fn new(owner: Owner, consent_revision: u64, generation: [u8; 16], canvas: Rect,
         serial: u32, monitors: Vec<Monitor>) -> Result<Self, Error> {
         let Some(name) = owner.unique_name.strip_prefix(':') else { return Err(Error::Identity) };
