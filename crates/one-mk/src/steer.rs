@@ -7,11 +7,10 @@ use anyhow::{Result, bail};
 pub use one_mk_ctl::client::{SwitchTo, Toggle};
 use std::path::Path;
 
-/// Sends `req`; `None` (after saying so) if one-mk is not running.
+/// Sends `req`; reports an actionable error if one-mk is not running.
 async fn ask(dir: &Path, req: Request) -> Result<Option<(String, String)>> {
     let Some(reply) = control::request(dir, req).await? else {
-        println!("one-mk is not running. Start it with `one-mk run` (or `one-mk install`).");
-        return Ok(None);
+        bail!("{}", control::NOT_RUNNING);
     };
     let (word, rest) = reply.split_once('\n').unwrap_or((&reply, ""));
     if let Some(msg) = word.strip_prefix("error ") {
@@ -22,6 +21,7 @@ async fn ask(dir: &Path, req: Request) -> Result<Option<(String, String)>> {
 
 /// `one-mk switch <computer|here|next>`.
 pub async fn switch(dir: &Path, to: &str) -> Result<()> {
+    control::validate_target(to)?;
     let Some(to) = SwitchTo::parse(to) else { bail!("say which computer: a name or id, `here` or `next`") };
     let Some((word, detail)) = ask(dir, Request::Switch(to)).await? else { return Ok(()) };
     match word.as_str() {
@@ -68,7 +68,7 @@ pub async fn broadcast(dir: &Path, state: Option<Toggle>, idle_off: Option<u32>)
         return Ok(());
     };
     let Some(reply) = control::request(dir, Request::Broadcast(t)).await? else {
-        bail!("nothing to broadcast with: the one-mk service is not running here. Start it with `one-mk run` (or `one-mk install`)");
+        bail!("{}", control::NOT_RUNNING);
     };
     let mut lines = reply.lines();
     let (word, state) = (lines.next().unwrap_or(""), lines.next().unwrap_or(""));

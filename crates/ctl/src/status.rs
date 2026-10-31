@@ -122,6 +122,10 @@ pub struct Status {
     pub hotkeys: String,
     pub hotkeys_detail: String,
     pub clipboard_history: usize,
+    pub clipboard_history_enabled: bool,
+    pub clipboard_fetch_shortcut: bool,
+    pub broadcast_stop_hint: String,
+    pub discovery: Option<bool>,
     pub clipboard_history_revision: u64,
     pub clipboard_history_note: String,
     /// What the input backend needs the user to know or do, one line each
@@ -423,6 +427,10 @@ impl Status {
             out += &format!("hotkeys\t{}\t{}\n", self.hotkeys, self.hotkeys_detail);
         }
         out += &format!("clipboard-history\t{}\n", self.clipboard_history);
+        out += &format!("clipboard-history-enabled\t{}\n", self.clipboard_history_enabled);
+        out += &format!("clipboard-fetch-shortcut\t{}\n", self.clipboard_fetch_shortcut);
+        out += &format!("broadcast-stop-hint\t{}\n", self.broadcast_stop_hint.replace(['\t', '\r', '\n'], " "));
+        if let Some(discovery) = self.discovery { out += &format!("discovery\t{discovery}\n"); }
         out += &format!("clipboard-history-revision\t{}\n", self.clipboard_history_revision);
         if !self.clipboard_history_note.is_empty() { out += &format!("clipboard-history-note\t{}\n", self.clipboard_history_note.replace(['\t', '\r', '\n'], " ")); }
         for line in &self.input {
@@ -500,6 +508,11 @@ impl Status {
                 ["typing", v] => s.typing = v.into(),
                 ["edges", v] => s.edges = v.into(),
                 ["clipboard-history", count] => s.clipboard_history = count.parse().unwrap_or(0),
+                ["clipboard-history-enabled", enabled] => s.clipboard_history_enabled = enabled == "true",
+                ["clipboard-fetch-shortcut", enabled] => s.clipboard_fetch_shortcut = enabled == "true",
+                ["broadcast-stop-hint", hint] => s.broadcast_stop_hint = hint.to_string(),
+                ["discovery", "true"] => s.discovery = Some(true),
+                ["discovery", "false"] => s.discovery = Some(false),
                 ["clipboard-history-revision", revision] => s.clipboard_history_revision = revision.parse().unwrap_or(0),
                 ["clipboard-history-note", note] => s.clipboard_history_note = note.to_string(),
                 ["hotkeys", state, detail] => (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into()),
@@ -610,7 +623,11 @@ impl Status {
         if let Some(line) = self.hotkeys_line() {
             out += &format!("{line}\n");
         }
-        out += &format!("Clipboard history: {} items.\n", self.clipboard_history);
+        if self.clipboard_history_enabled {
+            out += &format!("Clipboard history: {} items.\n", self.clipboard_history);
+        } else {
+            out += "Clipboard history: off (`one-mk clipboard history on` enables it).\n";
+        }
         if !self.clipboard_history_note.is_empty() { out += &format!("{}\n", self.clipboard_history_note); }
         if let Some(p) = &self.layout.profile {
             out += &format!("Layout profile: {p}.\n");

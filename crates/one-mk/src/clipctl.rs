@@ -244,7 +244,7 @@ async fn applied(dir: &Path) -> Result<()> {
 pub async fn move_clipboard(dir: &Path, who: Option<String>, send: bool) -> Result<()> {
     let req = if send { Request::ClipSend(who) } else { Request::ClipGet(who) };
     let Some(reply) = control::request(dir, req).await? else {
-        bail!("one-mk is not running; start it with `one-mk run`");
+        bail!("{}", control::NOT_RUNNING);
     };
     let mut lines = reply.lines();
     match lines.next() {

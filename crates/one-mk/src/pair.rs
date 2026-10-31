@@ -56,19 +56,20 @@ impl Out {
     }
 }
 
-pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out) -> Result<()> {
+pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery: bool) -> Result<()> {
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let mut trust = TrustStore::load(dir)?;
     let node = Node::bind_any(identity.clone(), 0)?;
     let port = node.local_addr()?.port();
     let me = identity.fingerprint;
-    let (_discovery, mut found) = match Discovery::start(&identity, port, true) {
-        Ok((d, f)) => (Some(d), f),
-        Err(e) if connect.is_some() => {
+    let (_discovery, mut found) = match discovery.then(|| Discovery::start(&identity, port, true)) {
+        None => (None, mpsc::unbounded_channel().1),
+        Some(Ok((d, f))) => (Some(d), f),
+        Some(Err(e)) if connect.is_some() => {
             tracing::debug!("discovery unavailable: {e:#}");
             (None, mpsc::unbounded_channel().1)
         }
-        Err(e) => return Err(e.context("could not start network discovery (try --connect <ip:port>)")),
+        Some(Err(e)) => return Err(e.context("could not start network discovery (try --connect <ip:port>)")),
     };
 
     out.say(
@@ -134,7 +135,7 @@ pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out) -> Result<()
                 }
                 hinted = true;
                 let short = peer.fingerprint.short();
-                match session(peer, &identity, &mut trust, &mut answers, out).await {
+                match session(dir, peer, &identity, &mut trust, &mut answers, out).await {
                     Ok(()) => break,
                     Err(e) => {
                         out.say(
@@ -177,25 +178,27 @@ pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out) -> Result<()
 
 /// One pairing attempt. `Ok` once pairing is over for good (saved, or a
 /// person said no); `Err` if it failed and we should keep waiting.
-async fn session(peer: Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
+async fn session(dir: &Path, peer: Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
     let fingerprint = peer.fingerprint;
     let ip = peer.conn.remote_address().ip().to_canonical();
     out.say(
         || format!("\nPairing with a computer at {ip} (id {})...", fingerprint.short()),
         || format!("peer\t{}\t{ip}", fingerprint.short()),
     );
-    let res = exchange(&peer, identity, trust, answers, out).await;
+    let res = exchange(dir, &peer, identity, trust, answers, out).await;
     if res.is_err() {
         peer.conn.close(0u32.into(), b"pairing failed");
     }
     res
 }
 
-async fn exchange(peer: &Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
+async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
     let fingerprint = peer.fingerprint;
     // Remember the address with the service port (not this temporary one),
     // for networks where discovery is blocked.
-    let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), one_mk_proto::DEFAULT_PORT);
+    let running = crate::control::request(dir, crate::control::Request::Status).await?
+        .and_then(|reply| one_mk_ctl::status::Status::decode(&reply));
+    let port = running.as_ref().map_or(one_mk_proto::DEFAULT_PORT, |status| status.port);
     let pairing = Pairing::start(peer, identity.fingerprint, &identity.name).await?;
     let name = pairing.peer_name.clone();
 
@@ -219,7 +222,7 @@ async fn exchange(peer: &Peer, identity: &Identity, trust: &mut TrustStore, answ
         return Ok(());
     }
     out.say(|| "  Waiting for the other computer to confirm...".into(), || "waiting".into());
-    let confirmed = tokio::time::timeout(ANSWER_TIMEOUT, pairing.confirm(true))
+    let (confirmed, peer_port) = tokio::time::timeout(ANSWER_TIMEOUT, pairing.confirm_port(true, Some(port)))
         .await
         .context("the other computer did not answer in time")?
         .context("the other computer went away")?;
@@ -230,15 +233,17 @@ async fn exchange(peer: &Peer, identity: &Identity, trust: &mut TrustStore, answ
 
     // Opposite defaults on each side, so the layout agrees out of the box.
     let side = if peer.initiator { Side::Right } else { Side::Left };
+    let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), peer_port.unwrap_or(one_mk_proto::DEFAULT_PORT));
     trust.upsert(Device { name: name.clone(), fingerprint: fingerprint.to_string(), side: side.to_string(), addrs: vec![addr.to_string()], ..Device::default() });
     trust.save()?;
+    let _ = crate::control::request(dir, crate::control::Request::Reload).await?;
     let side = trust.get(&fingerprint).map_or(side, |d| d.side());
     out.say(
         || {
             format!(
                 "\nPaired with {name}. It is set to the {side} of this computer.\n\
                  If that's wrong:  one-mk layout \"{name}\" {}\n\
-                 Start sharing:    one-mk run   (on both computers)",
+                 Start sharing:    one-mk run   (only on computers not already running)",
                 side.opposite()
             )
         },

@@ -20,6 +20,15 @@ mod bench;
 mod clip;
 mod clipctl;
 mod history;
+
+fn readable_time(timestamp: u64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let seconds = now.saturating_sub(timestamp);
+    if seconds < 60 { format!("{seconds} seconds ago") }
+    else if seconds < 3600 { format!("{} minutes ago", seconds / 60) }
+    else if seconds < 86400 { format!("{} hours ago", seconds / 3600) }
+    else { format!("{} days ago", seconds / 86400) }
+}
 mod control;
 mod doctor;
 mod wallpaper;
@@ -163,7 +172,7 @@ enum Cmd {
         on: bool,
         #[arg(long)]
         off: bool,
-        #[arg(long, value_name = "PX")]
+        #[arg(long, value_name = "PX", value_parser = clap::value_parser!(u16).range(1..=128))]
         zone: Option<u16>,
     },
     /// Run the sharing service (the default).
@@ -234,6 +243,9 @@ enum Cmd {
         /// network, e.g. 192.168.1.20:40123 (the other side prints its pairing port).
         #[arg(long, value_name = "IP:PORT")]
         connect: Option<SocketAddr>,
+        /// Pair only through direct addresses; do not use multicast discovery.
+        #[arg(long)]
+        no_discovery: bool,
         /// One event per line for a program to read (the app window uses this).
         #[arg(long, hide = true)]
         machine: bool,
@@ -327,7 +339,7 @@ enum Cmd {
     /// instead of positions.
     Gaming {
         #[arg(value_enum)]
-        mode: settings::Gaming,
+        mode: Option<settings::Gaming>,
     },
     /// Show or change the keyboard shortcuts: jump to computer N, the next
     /// one, lock the pointer, come back here, broadcast.
@@ -337,7 +349,7 @@ enum Cmd {
     /// Whether locking this computer locks the connected ones too: on or off.
     LockSync {
         #[arg(value_name = "on|off", value_parser = settings::parse_on_off, action = clap::ArgAction::Set)]
-        state: bool,
+        state: Option<bool>,
     },
     /// Show or set commands to run when the pointer arrives on or leaves
     /// this computer, or a computer connects or disconnects.
@@ -462,6 +474,8 @@ fn main() -> ExitCode {
         _ => "trace",
     };
     let log = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| level.into()),
         )
@@ -557,8 +571,8 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::ClipGet { from } => clipctl::move_clipboard(&dir, from, false).await,
             Cmd::Notify { state } => clipctl::notify(&dir, state).await,
             Cmd::Send { paths, to, connect, notify_errors } => send::run(&dir, paths, to, connect, notify_errors).await,
-            Cmd::Pair { connect, machine } => {
-                let paired = pair::run(&dir, connect, pair::Out::new(machine)).await;
+            Cmd::Pair { connect, machine, no_discovery } => {
+                let paired = pair::run(&dir, connect, pair::Out::new(machine), !no_discovery).await;
                 integrate::refresh(&dir, custom_home);
                 paired
             }
@@ -594,10 +608,12 @@ fn run(cli: Cli) -> Result<()> {
                 steer::broadcast(&dir, state, idle_off).await
             }
             Cmd::Edge(args) => settings::edge(&dir, args).await,
-            Cmd::Gaming { mode } => settings::gaming(&dir, mode).await,
+            Cmd::Gaming { mode: Some(mode) } => settings::gaming(&dir, mode).await,
+            Cmd::Gaming { mode: None } => { println!("Gaming mode: {}", settings::Settings::load(&dir)?.gaming); Ok(()) },
             Cmd::Hotkeys(args) => hotkeys::hotkeys(&dir, args).await,
             Cmd::LockAll => steer::lock_all(&dir).await,
-            Cmd::LockSync { state } => settings::lock_sync(&dir, state).await,
+            Cmd::LockSync { state: Some(state) } => settings::lock_sync(&dir, state).await,
+            Cmd::LockSync { state: None } => { println!("Lock sync: {}", if settings::Settings::load(&dir)?.lock_sync { "on" } else { "off" }); Ok(()) },
             Cmd::Hooks(args) => hooks::run_command(&dir, args).await,
             Cmd::Power(args) => power::run_command(&dir, args).await,
             Cmd::Keymap { cmd } => tuning::keymap(&dir, cmd).await,

@@ -66,12 +66,13 @@ impl Identity {
         let (cert, key) = match (std::fs::read(&cert_path), std::fs::read(&key_path)) {
             (Ok(c), Ok(k)) => {
                 restrict_file(&key_path)?;
+                restrict_file(&cert_path)?;
                 (c, k)
             }
             _ => {
                 let (c, k) = generate()?;
                 write_private(&key_path, &k)?;
-                std::fs::write(&cert_path, &c)
+                write_private(&cert_path, &c)
                     .with_context(|| format!("writing {}", cert_path.display()))?;
                 (c, k)
             }
@@ -158,7 +159,7 @@ fn tighten(path: &Path, max: u32) -> Result<()> {
     Ok(())
 }
 
-fn write_private(path: &Path, data: &[u8]) -> Result<()> {
+pub(crate) fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -170,13 +171,13 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
             .mode(0o600)
             .open(path)
             .with_context(|| format!("writing {}", path.display()))?;
-        f.write_all(data)?;
+        f.write_all(data).with_context(|| format!("writing identity file {}", path.display()))?;
         // `mode` only applies to new files; an existing one keeps its bits.
         restrict_file(path)
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(path, data)?;
+        std::fs::write(path, data).with_context(|| format!("writing identity file {}", path.display()))?;
         Ok(())
     }
 }
@@ -196,6 +197,7 @@ mod tests {
         let created = Identity::load_or_create(&dir).unwrap();
         let key = dir.join("identity.key.der");
         assert_eq!(mode(&key), 0o600);
+        assert_eq!(mode(&dir.join("identity.cert.der")), 0o600);
         assert_eq!(mode(&dir), 0o700);
 
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();

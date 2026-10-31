@@ -7,7 +7,8 @@
 //! written to a file in the (private, local) config folder, and a client
 //! must send the token first.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+pub const NOT_RUNNING: &str = "one-mk is not running. Start it with `one-mk run` (or `one-mk install`).";
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -32,7 +33,7 @@ impl Server {
         if let Ok(Some(_)) = request(dir, Request::Status).await {
             bail!("one-mk is already running for this user");
         }
-        let listener = sys::bind(dir)?;
+        let listener = sys::bind(dir).with_context(|| format!("opening control endpoint {}", sys::path(dir).display()))?;
         let (tx, rx) = mpsc::unbounded_channel();
         let token = listener.token();
         let task = tokio::spawn(async move {
@@ -105,16 +106,30 @@ fn same(a: &str, b: &str) -> bool {
 
 /// Asks the running daemon. `None` means none is running.
 pub async fn request(dir: &Path, req: Request) -> Result<Option<String>> {
+    match &req {
+        Request::Switch(one_mk_ctl::client::SwitchTo::Device(name)) | Request::ClipSend(Some(name)) | Request::ClipGet(Some(name)) => validate_target(name)?,
+        _ => {}
+    }
     let patience = req.reply_timeout();
     let stream = match tokio::time::timeout(TIMEOUT, sys::connect(dir)).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused) => {
             return Ok(None);
         }
-        Ok(Err(e)) => return Err(e.into()),
+        Ok(Err(e)) => return Err(e).with_context(|| format!("connecting to control endpoint {}", sys::path(dir).display())),
         Err(_) => bail!("one-mk did not answer"),
     };
-    Ok(Some(tokio::time::timeout(patience + TIMEOUT, exchange(stream, req)).await.map_err(|_| anyhow::anyhow!("one-mk did not answer"))??))
+    let reply = tokio::time::timeout(patience + TIMEOUT, exchange(stream, req)).await
+        .map_err(|_| anyhow::anyhow!("one-mk did not answer"))?
+        .with_context(|| format!("exchanging command with control endpoint {}", sys::path(dir).display()))?;
+    Ok(Some(reply))
+}
+
+pub fn validate_target(name: &str) -> Result<()> {
+    if name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
+        bail!("computer name or id must contain 1–256 bytes without control characters; use `one-mk devices` to find its id");
+    }
+    Ok(())
 }
 
 async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, req: Request) -> std::io::Result<String> {

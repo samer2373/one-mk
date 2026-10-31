@@ -18,6 +18,10 @@ pub enum ClipboardCommand {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Operation {
+    /// Retain clipboard copies in memory (explicit privacy opt-in).
+    On,
+    /// Stop retaining clipboard copies and clear retained history.
+    Off,
     /// List newest first, with stable item numbers.
     List,
     /// Print full text or HTML (terminal controls escaped); --json preserves exact text.
@@ -33,7 +37,19 @@ pub enum Operation {
 impl ClipboardCommand {
     pub async fn run(self, dir: &Path) -> Result<()> {
         let Self::History { operation, json } = self;
+        if matches!(operation, Some(Operation::On | Operation::Off)) {
+            let enabled = matches!(operation, Some(Operation::On));
+            crate::settings::Settings::update(dir, |settings| {
+                settings.clipboard.history_max = if enabled { 20 } else { 0 };
+                Ok(())
+            })?;
+            crate::settings::apply(dir).await?;
+            if json { println!("{{\"enabled\":{enabled}}}"); }
+            else { println!("Clipboard history is {}.", if enabled { "on; retained in memory unless persistence is explicitly enabled" } else { "off" }); }
+            return Ok(());
+        }
         let action = match operation.unwrap_or(Operation::List) {
+            Operation::On | Operation::Off => unreachable!(),
             Operation::List => HistoryAction::List, Operation::Show { number } => HistoryAction::Show(number),
             Operation::Copy { number } => HistoryAction::Copy(number), Operation::Delete { number } => HistoryAction::Delete(number),
             Operation::Clear => HistoryAction::Clear,
@@ -66,8 +82,9 @@ pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result
             HistoryAction::List => {
                 let entries = history.list();
                 if json { return Ok(format!("[{}]\n", entries.iter().map(entry_json).collect::<Vec<_>>().join(","))); }
+                if history.disabled() { return Ok("Clipboard history is off. Enable with `one-mk clipboard history on`.\n".into()); }
                 if entries.is_empty() { return Ok("Clipboard history is empty.\n".into()); }
-                Ok(entries.iter().map(|entry| format!("{}\t{}\t{}\t{}\tfrom {}\t[hidden; use Show]\n", entry.id, entry.kind(), crate::clip::mb(entry.data.len()), entry.timestamp, entry.origin)).collect())
+                Ok(format!("Item\tType\tSize\tRecorded\tOrigin\tShow content\n{}", entries.iter().map(|entry| format!("{}\t{}\t{}\t{}\tfrom {}\tone-mk clipboard history show {}\n", entry.id, entry.kind(), crate::clip::mb(entry.data.len()), crate::readable_time(entry.timestamp), entry.origin, entry.id)).collect::<String>()))
             }
             HistoryAction::Show(id) => {
                 let entry = history.get(id).ok_or_else(|| anyhow::anyhow!("Clipboard item {id} is no longer in history; run one-mk clipboard history list"))?;

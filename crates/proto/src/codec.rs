@@ -154,6 +154,7 @@ pub mod caps {
     /// but never after a plain `Revoked` (the user took control back).
     pub const IDLE_REVOKE: u32 = 128;
     pub const WALLPAPER: u32 = 256;
+    pub const CLIPBOARD_FETCH: u32 = 512;
     /// What this build supports.
     pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT | FOCUS_APP | IDLE_REVOKE | WALLPAPER;
 }
@@ -210,8 +211,10 @@ pub enum Control {
     ///
     /// `offset` is where the sender put the receiver's (0,0) in its own
     /// pixels; it travels as optional trailing bytes, which older peers
-    /// neither send nor read.
-    Layout { side_of_you: Side, version: u64, offset: Option<(i32, i32)> },
+    /// neither send nor read. `clear_offset` distinguishes an explicit
+    /// reset from a legacy message which omitted the offset. Its one-byte
+    /// trailing marker is ignored by older offset-aware decoders too.
+    Layout { side_of_you: Side, version: u64, offset: Option<(i32, i32)>, clear_offset: bool },
     // Additive messages. Peers that predate them skip unknown tags (see
     // `link.rs`), so they need no new protocol version.
     /// The optional features the sender supports (bits of [`caps`]), sent
@@ -337,13 +340,15 @@ impl Control {
                 w.u8(24);
                 w.u16(*epoch);
             }
-            Control::Layout { side_of_you, version, offset } => {
+            Control::Layout { side_of_you, version, offset, clear_offset } => {
                 w.u8(13);
                 w.u8(Side::ALL.iter().position(|s| s == side_of_you).unwrap_or(0) as u8);
                 w.u64(*version);
                 if let Some((x, y)) = offset {
                     w.i32(*x);
                     w.i32(*y);
+                } else if *clear_offset {
+                    w.u8(1);
                 }
             }
             Control::Caps(bits) => {
@@ -446,6 +451,7 @@ impl Control {
             13 => Control::Layout {
                 side_of_you: *Side::ALL.get(usize::from(r.u8()?)).ok_or(DecodeError::Invalid("side"))?,
                 version: r.u64()?,
+                clear_offset: r.0 == [1],
                 offset: match r.0.len() {
                     0..8 => None,
                     _ => {
@@ -758,8 +764,8 @@ mod tests {
             Control::Busy { epoch: 2 },
             Control::Revoked { epoch: u16::MAX },
             Control::IdleRevoked { epoch: 9 },
-            Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123, offset: None },
-            Control::Layout { side_of_you: Side::Left, version: 7, offset: Some((-3432, 98)) },
+            Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123, offset: None, clear_offset: false },
+            Control::Layout { side_of_you: Side::Left, version: 7, offset: Some((-3432, 98)), clear_offset: false },
             Control::Caps(caps::LOCAL),
             Control::PointerMode { epoch: 3, relative: true },
             Control::PointerMode { epoch: 3, relative: false },
@@ -969,15 +975,22 @@ mod tests {
         // What an older peer sends: no offset after the version.
         let mut old = vec![13, 1];
         old.extend_from_slice(&42u64.to_le_bytes());
-        assert_eq!(Control::decode(&old), Ok(Control::Layout { side_of_you: Side::Right, version: 42, offset: None }));
+        assert_eq!(Control::decode(&old), Ok(Control::Layout { side_of_you: Side::Right, version: 42, offset: None, clear_offset: false }));
         // And a newer one; an older reader stops before the trailing bytes.
         let mut new = old.clone();
         new.extend_from_slice(&(-1920i32).to_le_bytes());
         new.extend_from_slice(&98i32.to_le_bytes());
-        assert_eq!(Control::decode(&new), Ok(Control::Layout { side_of_you: Side::Right, version: 42, offset: Some((-1920, 98)) }));
+        assert_eq!(Control::decode(&new), Ok(Control::Layout { side_of_you: Side::Right, version: 42, offset: Some((-1920, 98)), clear_offset: false }));
         let mut buf = Vec::new();
-        Control::Layout { side_of_you: Side::Right, version: 42, offset: Some((-1920, 98)) }.encode_frame(&mut buf);
+        Control::Layout { side_of_you: Side::Right, version: 42, offset: Some((-1920, 98)), clear_offset: false }.encode_frame(&mut buf);
         assert_eq!(&buf[2..], &new[..]);
+        let mut clear = old.clone();
+        clear.push(1);
+        assert_eq!(Control::decode(&clear), Ok(Control::Layout { side_of_you: Side::Right, version: 42, offset: None, clear_offset: true }));
+        let mut encoded = Vec::new();
+        Control::Layout { side_of_you: Side::Right, version: 42, offset: None, clear_offset: true }.encode_frame(&mut encoded);
+        assert_eq!(&encoded[2..], &clear);
+        assert!(clear.len() - old.len() < 8);
         let mut bad = old;
         bad.extend_from_slice(&i32::MIN.to_le_bytes());
         bad.extend_from_slice(&0i32.to_le_bytes());

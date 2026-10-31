@@ -55,7 +55,7 @@ pub async fn autoscroll_command(dir: &Path, args: AutoscrollArgs) -> Result<()> 
     let update = AutoscrollRule { enabled: if args.on { Some(true) } else if args.off { Some(false) } else { None },
         button: args.button, speed: args.speed, dead_zone: args.dead_zone, vertical_only: args.vertical_only,
         scope: scope.clone(), app: app.clone() };
-    update.validate().map_err(anyhow::Error::msg)?;
+    update.validate().map_err(|error| anyhow::anyhow!("invalid autoscroll option: {error}; choose middle or a side mouse button"))?;
     Settings::update(dir, |settings| {
         let auto = &mut settings.input.autoscroll;
         let rule = if scope.is_global() && app.is_none() { &mut auto.base } else {
@@ -72,7 +72,11 @@ pub async fn autoscroll_command(dir: &Path, args: AutoscrollArgs) -> Result<()> 
         rule.vertical_only = update.vertical_only.or(rule.vertical_only);
         Ok(())
     })?;
-    println!("Autoscroll settings saved. Click the toggle button again, press Esc, or leave the computer to stop scrolling.");
+    if args.off {
+        println!("Autoscroll disabled; the toggle button no longer starts scrolling in this scope.");
+    } else {
+        println!("Autoscroll settings saved. Click the toggle button again, press Esc, or leave the computer to stop scrolling.");
+    }
     settings::apply(dir).await
 }
 

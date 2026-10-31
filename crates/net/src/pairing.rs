@@ -96,8 +96,14 @@ impl Pairing {
     /// Sends our decision and waits for the peer's. True only if both
     /// users accepted. Waits as long as the other user takes; callers
     /// should bound it.
-    pub async fn confirm(mut self, accept: bool) -> Result<bool> {
-        self.send.write_all(&[u8::from(accept)]).await?;
+    pub async fn confirm(self, accept: bool) -> Result<bool> {
+        self.confirm_port(accept, None).await.map(|(confirmed, _)| confirmed)
+    }
+
+    pub async fn confirm_port(mut self, accept: bool, service_port: Option<u16>) -> Result<(bool, Option<u16>)> {
+        let mut answer = vec![u8::from(accept)];
+        if let Some(port) = service_port { answer.extend_from_slice(&port.to_le_bytes()); }
+        self.send.write_all(&answer).await?;
         self.send.finish()?;
         let mut theirs = [0u8; 1];
         self.recv.read_exact(&mut theirs).await?;
@@ -106,7 +112,14 @@ impl Pairing {
         // "went away" after saving nothing). Bounded: a peer that never
         // acknowledges can't hold us here.
         let _ = tokio::time::timeout(Duration::from_secs(3), self.send.stopped()).await;
-        Ok(accept && theirs[0] == 1)
+        let trailing = step("receiving the service port", self.recv.read_to_end(2)).await?;
+        let port = match trailing.as_slice() {
+            [] => None,
+            [low, high] => Some(u16::from_le_bytes([*low, *high])),
+            _ => bail!("invalid pairing service port"),
+        };
+        ensure!(port != Some(0), "invalid pairing service port");
+        Ok((accept && theirs[0] == 1, port))
     }
 }
 
@@ -170,6 +183,31 @@ impl Transcript {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn service_port_extension_accepts_a_legacy_confirmation() {
+        use crate::{Identity, Node};
+        use std::sync::Arc;
+        let local = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let remote = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let (local_peer, remote_peer) = tokio::join!(local.connect(remote.local_addr().unwrap()), async { remote.accept().await.unwrap() });
+        let (local_peer, remote_peer) = (local_peer.unwrap(), remote_peer.unwrap());
+        let (local_pair, remote_pair) = tokio::join!(
+            Pairing::start(&local_peer, local.identity().fingerprint, "new"),
+            Pairing::start(&remote_peer, remote.identity().fingerprint, "old")
+        );
+        let legacy = async {
+            let mut pairing = remote_pair.unwrap();
+            pairing.send.write_all(&[1]).await.unwrap();
+            pairing.send.finish().unwrap();
+            let mut answer = [0];
+            pairing.recv.read_exact(&mut answer).await.unwrap();
+            let _ = tokio::time::timeout(Duration::from_secs(3), pairing.send.stopped()).await;
+            assert_eq!(answer, [1]);
+        };
+        let (new, ()) = tokio::join!(local_pair.unwrap().confirm_port(true, Some(32123)), legacy);
+        assert_eq!(new.unwrap(), (true, None));
+    }
 
     #[test]
     fn sas_format() {

@@ -328,7 +328,7 @@ impl AutoscrollSettings {
 }
 
 fn mouse_button(text: &str) -> Result<u32, String> {
-    let trigger = ButtonFrom::Name(text.into()).trigger()?;
+    let trigger = ButtonFrom::Name(text.into()).trigger().map_err(|_| format!("{text:?} is not a supported mouse button; choose middle or a side button"))?;
     if trigger.has_mods() { return Err("choose a mouse button without modifier keys".into()); }
     Ok(u32::from(trigger.key))
 }
@@ -1223,7 +1223,7 @@ impl TuningSettings {
 
     /// Summary for `one-mk status`, with a separate local availability line.
     pub fn mouse_mode_note(&self) -> Option<String> {
-        (!self.autoscroll.is_empty() || !self.gesture.is_empty()).then(||
+        (self.autoscroll.rules().any(|rule| rule.enabled == Some(true)) || !self.gesture.is_empty()).then(||
             "Autoscroll and gestures: Linux null-backend tests only; native Linux (GNOME/wlroots), Windows, macOS and Bluetooth hardware are untested. Windows and macOS are compile-checked only.".into())
     }
 
@@ -1245,9 +1245,10 @@ impl TuningSettings {
         if !self.scroll.is_empty() {
             parts.push(n(self.scroll.len(), "scroll setting", "scroll settings"));
         }
-        if !self.autoscroll.is_empty() { parts.push("autoscroll settings".into()); }
+        if self.autoscroll.rules().any(|rule| rule.enabled == Some(true)) { parts.push("autoscroll settings".into()); }
         if !self.gesture.is_empty() { parts.push(n(self.gesture.len(), "gesture", "gestures")); }
         if parts.is_empty() {
+            if !self.local_rules { return None; }
             parts.push("no rules".into());
         }
         let has_local = self.local_rules || self.keymap.rule.iter().any(|rule| *rule.scope.target() == Scope::Local);
@@ -1314,6 +1315,7 @@ fn where_suffix(scope: &Scope, app: &Option<String>) -> String {
     match (scope, app) {
         (Scope::Global, None) => String::new(),
         (Scope::Global, Some(a)) => format!(" ({})", app_words(a)),
+        (Scope::Local, None) => " (for this computer; local)".into(),
         (s, None) => format!(" (for {s})"),
         (s, Some(a)) => format!(" (for {s}, {})", app_words(a)),
     }
@@ -1537,7 +1539,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
                 Ok(())
             })?;
             println!("Local key preference {}. {}", if enabled { "on" } else { "off" }, local_rules_note());
-            settings::apply(dir).await?;
+            if let Some(reply) = crate::control::request(dir, crate::control::Request::Settings).await? && let Some(error) = reply.strip_prefix("error ") { bail!("{error}"); }
             local_runtime_status(dir).await;
         }
         KeymapCmd::Check => {

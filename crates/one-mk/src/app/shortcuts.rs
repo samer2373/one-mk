@@ -24,13 +24,14 @@ pub(super) struct Shortcuts {
     computers: usize,
     /// A peer controls this computer: the system's shortcuts are paused.
     controlled: bool,
+    fetch_enabled: bool,
 }
 
 /// The shortcuts `settings` asks for with `computers` computers (none,
 /// with the reason, if they can't be used).
-fn bindings(settings: &HotkeySettings, computers: usize) -> (Bindings, Option<String>) {
+fn bindings(settings: &HotkeySettings, computers: usize, fetch_enabled: bool) -> (Bindings, Option<String>) {
     match settings.bindings_for(computers) {
-        Ok(b) => (b, None),
+        Ok(bindings) => (Bindings::new(bindings.iter().filter(|(action, _)| fetch_enabled || *action != Action::FetchClipboard).collect()).expect("subset of valid bindings"), None),
         Err(e) => {
             tracing::warn!("keyboard shortcuts in settings.toml: {e}");
             (Bindings::default(), Some(format!("settings.toml: {e}")))
@@ -41,7 +42,7 @@ fn bindings(settings: &HotkeySettings, computers: usize) -> (Bindings, Option<St
 impl Shortcuts {
     /// Starts listening; the listener's events come from the receiver.
     pub(super) fn start(kind: Kind, settings: &HotkeySettings, computers: usize) -> (Self, mpsc::UnboundedReceiver<Event>) {
-        let (bindings, problem) = bindings(settings, computers);
+        let (bindings, problem) = bindings(settings, computers, false);
         let (listener, rx) = one_mk_input::hotkeys::listen(kind, bindings.clone());
         let s = Shortcuts {
             listener,
@@ -54,6 +55,7 @@ impl Shortcuts {
             settings: settings.clone(),
             computers,
             controlled: false,
+            fetch_enabled: false,
         };
         (s, rx)
     }
@@ -75,13 +77,19 @@ impl Shortcuts {
     /// The system is asked again only if the shortcuts changed (on GNOME
     /// that shows a dialog).
     fn apply(&mut self) {
-        let (bindings, problem) = bindings(&self.settings, self.computers);
+        let (bindings, problem) = bindings(&self.settings, self.computers, self.fetch_enabled);
         self.problem = problem;
         if bindings != self.bindings {
             self.bindings = bindings.clone();
             self.listener.set(bindings);
         }
     }
+
+    pub(super) fn set_fetch_enabled(&mut self, enabled: bool) {
+        if std::mem::replace(&mut self.fetch_enabled, enabled) != enabled { self.apply(); }
+    }
+
+    pub(super) fn fetch_enabled(&self) -> bool { self.fetch_enabled }
 
     /// Whether a peer controls this computer. Its keys arrive through the
     /// injector, and must not run this computer's shortcuts: the system's
@@ -155,6 +163,7 @@ impl App {
     }
 
     fn shortcut(&mut self, action: Action, source: Source) {
+        if action == Action::FetchClipboard && !self.shortcuts.fetch_enabled { return; }
         if !self.shortcuts.debounce.admit(action, source, std::time::Instant::now()) {
             return;
         }
@@ -201,6 +210,22 @@ fn system_shortcut_applies(controlled: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn fetch_binding_does_not_steal_application_chord_when_disabled() {
+        let settings = HotkeySettings::default();
+        let chord = settings.fetch_clipboard.parse().unwrap();
+        let off = bindings(&settings, 2, false).0;
+        let on = bindings(&settings, 2, true).0;
+        assert!(!off.iter().any(|(action, _)| action == Action::FetchClipboard));
+        assert!(on.iter().any(|(action, binding)| action == Action::FetchClipboard && binding == chord));
+        let mut matcher = Matcher::default();
+        let mods = one_mk_proto::Mods::from_keys(if cfg!(windows) { vec![29, 56, 42] } else { vec![29, 56] });
+        assert_eq!(matcher.key(&off, mods, chord.key, true), Verdict::Pass);
+        assert_eq!(matcher.key(&off, mods, chord.key, false), Verdict::Pass);
+    }
+
     #[test]
     fn system_shortcuts_wait_while_controlled() {
         assert!(super::system_shortcut_applies(false));

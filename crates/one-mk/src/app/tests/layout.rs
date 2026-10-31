@@ -180,7 +180,7 @@ async fn layout_from_a_peer_without_offset() {
     })
     .await;
     // B told it where it is: below it, B's (0,0) 50 px left of its.
-    assert_eq!(old.layout, Control::Layout { side_of_you: Side::Bottom, version: 5, offset: Some((50, -1080)) });
+    assert_eq!(old.layout, Control::Layout { side_of_you: Side::Bottom, version: 5, offset: Some((50, -1080)), clear_offset: false });
     let fc = Identity::load_or_create(&old.dir).unwrap().fingerprint.to_string();
     let old_layout = |side: u8, version: u64| {
         let mut body = vec![13, side];
@@ -199,7 +199,7 @@ async fn layout_from_a_peer_without_offset() {
     assert_eq!((record(&duo.db, &fc).side(), record(&duo.db, &fc).offset), (Side::Left, None));
     // Older than what B has: ignored.
     old.send_body(&old_layout(1, 3)).await;
-    old.send(Control::Layout { side_of_you: Side::Bottom, version: 4, offset: Some((0, 1080)) }).await;
+    old.send(Control::Layout { side_of_you: Side::Bottom, version: 4, offset: Some((0, 1080)), clear_offset: false }).await;
     tokio::time::sleep(Duration::from_millis(150)).await;
     let d = record(&duo.db, &fc);
     assert_eq!((d.side(), d.offset, d.layout_version), (Side::Left, None, 11));
@@ -438,6 +438,27 @@ async fn simultaneous_changes_converge() {
     duo.stop().await;
 }
 
+#[tokio::test]
+async fn equal_version_clear_and_offset_converge_from_either_side() {
+    for clear_a in [true, false] {
+        let duo = Duo::start(if clear_a { "clear-tie-a" } else { "clear-tie-b" }, None).await;
+        const NOW: u64 = 4_102_444_800_000;
+        for (dir, peer, offset) in [(&duo.da, &duo.fb, if clear_a { None } else { Some((400, 200)) }), (&duo.db, &duo.fa, if clear_a { Some((-400, -200)) } else { None })] {
+            crate::manage::set_layout_at(dir, &peer[..8], None, Some(offset), None, NOW).unwrap();
+        }
+        control::request(&duo.da, Request::Reload).await.unwrap();
+        control::request(&duo.db, Request::Reload).await.unwrap();
+        let clear_wins = (duo.fa > duo.fb) == clear_a;
+        eventually("clear participates in the equal-version tie", || {
+            let (first, second) = (record(&duo.da, &duo.fb), record(&duo.db, &duo.fa));
+            first.offset == if clear_wins { None } else { Some((400, 200)) }
+                && second.offset == first.offset.map(|(x, y)| (-x, -y))
+                && first.layout_version == second.layout_version
+        }).await;
+        duo.stop().await;
+    }
+}
+
 /// A peer from before the tie rule sends a different layout under the
 /// version B holds. Whoever has the larger fingerprint wins: if it is the
 /// old peer, B adopts its layout (and says nothing); if it is B, B sends the
@@ -474,7 +495,7 @@ async fn tie_with_an_old_peer_converges_either_way() {
         } else {
             // B keeps its layout and sends it again, newer.
             let again = old.next().await;
-            assert_eq!(again, Control::Layout { side_of_you: Side::Bottom, version: 6, offset: Some((50, -1080)) });
+            assert_eq!(again, Control::Layout { side_of_you: Side::Bottom, version: 6, offset: Some((50, -1080)), clear_offset: false });
             assert_eq!(record(&duo.db, &fc).layout_version, 6);
             assert_eq!(record(&duo.db, &fc).side(), Side::Top);
             // The old peer adopts it; that settles it, and B stays quiet.

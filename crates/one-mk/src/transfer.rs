@@ -482,7 +482,13 @@ impl Inbox {
             return write_file_msg(send, &FileMsg::Failed { reason: "integrity check failed".into() }).await;
         }
         let root = self.root.clone();
-        let placed = tokio::task::spawn_blocking(move || place(&root, &parts, &part)).await?;
+        let limits = self.limits.clone();
+        let placed = tokio::task::spawn_blocking(move || {
+            let _guard = limits.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let result = place(&root, &parts, &part).with_context(|| format!("placing received file in {root:?}"));
+            if result.is_ok() { let _ = fs::remove_dir(long(&root.join(PARTIAL_DIR))); }
+            result
+        }).await?;
         match placed {
             Ok(name) => {
                 println!("Received {name} from {peer} (saved to {}).", self.root.join(&name).display());
@@ -636,9 +642,9 @@ fn prepare(
     limits: &Arc<Mutex<Limits>>,
     fp: Fingerprint,
 ) -> Result<(File, PathBuf, u64, Reservation)> {
+    let mut l = limits.lock().expect("poisoned");
     let (file, part, offset) = open_part(root, id, size)?;
     let need = size - offset;
-    let mut l = limits.lock().expect("poisoned");
     let peer_reserved = l.reserved.get(&fp).copied().unwrap_or(0);
     if let Err(e) = check_room(root, prefix, id, size, offset, cap, l.reserved_total, peer_reserved) {
         drop(l);
@@ -858,10 +864,10 @@ pub struct Outgoing {
 pub fn collect(paths: &[PathBuf]) -> Result<Vec<Outgoing>> {
     let mut out = Vec::new();
     for p in paths {
-        let meta = fs::symlink_metadata(p).with_context(|| format!("{}", p.display()))?;
+        let meta = fs::symlink_metadata(p).with_context(|| format!("reading file to send {p:?}"))?;
         let name = match p.file_name() {
             Some(n) => n.to_owned(),
-            None => fs::canonicalize(p)?.file_name().context("cannot send the root folder")?.to_owned(),
+            None => fs::canonicalize(p).with_context(|| format!("resolving file to send {p:?}"))?.file_name().context("cannot send the root folder")?.to_owned(),
         };
         let name = name.to_string_lossy().into_owned();
         if meta.is_dir() {
@@ -869,7 +875,7 @@ pub fn collect(paths: &[PathBuf]) -> Result<Vec<Outgoing>> {
         } else if meta.is_file() {
             out.push(outgoing(p.clone(), name, &meta));
         } else {
-            bail!("{} is not a file or folder", p.display());
+            bail!("{p:?} is not a file or folder");
         }
     }
     Ok(out)
@@ -877,16 +883,16 @@ pub fn collect(paths: &[PathBuf]) -> Result<Vec<Outgoing>> {
 
 fn walk(dir: &Path, rel: &str, out: &mut Vec<Outgoing>) -> Result<()> {
     let mut entries: Vec<_> = fs::read_dir(dir)
-        .with_context(|| format!("reading {}", dir.display()))?
-        .collect::<Result<_, _>>()?;
+        .with_context(|| format!("reading folder to send {dir:?}"))?
+        .collect::<Result<_, _>>().with_context(|| format!("listing folder to send {dir:?}"))?;
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
-        let ft = e.file_type()?;
+        let ft = e.file_type().with_context(|| format!("inspecting file to send {:?}", e.path()))?;
         let rel = format!("{rel}/{}", e.file_name().to_string_lossy());
         if ft.is_dir() {
             walk(&e.path(), &rel, out)?;
         } else if ft.is_file() {
-            out.push(outgoing(e.path(), rel, &e.metadata()?));
+            out.push(outgoing(e.path(), rel, &e.metadata().with_context(|| format!("reading file metadata {:?}", e.path()))?));
         } else {
             tracing::warn!("skipping {} (not a regular file)", e.path().display());
         }
@@ -1477,6 +1483,7 @@ mod tests {
         assert_eq!(n.title(), "4 files received from laptop");
         assert_eq!(n.reveal(), root, "a folder and a file: the download folder");
         assert!(inbox.transfers().snapshot().is_empty(), "nothing is in flight any more");
+        assert!(!root.join(PARTIAL_DIR).exists(), "successful concurrent transfers must not leave an empty staging folder");
 
         // Sending again is a new transfer: a new notification (the files get new names).
         let files = collect(&[src.join("notes.txt")]).unwrap();
