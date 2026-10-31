@@ -10,6 +10,12 @@ that release builds never enable. **Production authorization stays false**:
 plain `one-mk-wall --present=gnome` still refuses, and nothing here selects media,
 decodes, or creates a surface.
 
+Laboratory features fail compilation when debug assertions are disabled, including
+the normal release profile. The artifact checker also rejects activated daemon
+or renderer laboratory features anywhere in its supplied resolved Cargo metadata.
+Metadata and feature-tree inputs must describe the actual build; this is not
+binary attestation or protection against a deliberately modified build profile.
+
 ## Version 1 encoding
 
 All integers use little endian. No alignment padding, paths, credentials, optional
@@ -86,6 +92,11 @@ grants nothing.
    disable|enable`, any reload) and sends an empty unicast `Changed` signal to the
    pinned renderer on every change; the renderer then fetches immediately (a
    2-second heartbeat fetch is only a safety net; owner loss is observed directly).
+   Each applied consent transition also advances an internal epoch. A pinned
+   connection from an older epoch receives a revoked reply even if a disable and
+   re-enable (or revision replacement and restoration) were coalesced before its
+   next fetch. A new renderer connection may use the latest grant. Epoch
+   exhaustion permanently disables this authority's consent until restart.
 5. **Teardown.** The renderer ends the presentation and exits on: a reply with an
    invalid tag, an `AccessDenied` from the authority, a request unanswered within
    750 ms, consent disabled/removed/replaced (`Revoked`), loss of the authority's

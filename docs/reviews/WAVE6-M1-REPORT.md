@@ -2,6 +2,11 @@
 
 ## Latest slice: step A reached in the private laboratory (B–D not)
 
+Adversarial follow-up: [Codex step A review](WAVE6-M1-STEPA-CODEX-REVIEW.md)
+records the coalesced-consent revocation fix, release-feature guard hardening,
+failure-path harness cleanup, regression results and historical evidence limits. The recorded
+GNOME run predates those fixes and is not a rerun of the reviewed tree.
+
 October 31, 2026 (Asia/Amman). Branch `worktree-agent-a69b251f0c19489d7`, on top
 of the stopped Codex WIP `2145bea` (merged; its Gate change that keeps the admitted
 plan on refusal is kept, its inherited-descriptor bootstrap and daemon-side
