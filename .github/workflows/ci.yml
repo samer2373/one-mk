@@ -41,6 +41,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: stable }
       - run: cargo test --workspace --locked --no-fail-fast
+        env: { RUST_BACKTRACE: "1" }
 
   # The Linux packages and the package-manager files, built from a debug
   # build and checked without installing anything (scripts/check-packaging.sh).

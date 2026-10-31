@@ -781,7 +781,7 @@ name = "Café, 2nd floor"
         assert_eq!((p.edge_corner, p.edge_dwell_ms, p.edge_modifier.as_str(), p.edge_fullscreen), (20, 300, "shift", true));
         assert!(p.sleep_sync && !p.block_screensaver && !p.hotkeys_on);
         assert_eq!(p.hotkeys[1], ("The next computer", "ctrl+alt+n".to_owned()));
-        assert_eq!(p.hotkeys[0].1, "ctrl+alt+{n}", "unset shortcuts are the defaults");
+        assert_eq!(p.hotkeys[0].1, if cfg!(windows) { "ctrl+alt+shift+{n}" } else { "ctrl+alt+{n}" }, "unset shortcuts are the defaults");
         assert_eq!(p.hooks, vec![("Pointer arrives", "notify-send 'hi there'".to_owned()), ("Pointer leaves", "echo # not a comment".to_owned())]);
         assert_eq!(p.hooks_timeout, 9);
         assert_eq!(p.auto.get("home").map(String::as_str), Some("Wi-Fi “Home Wi-Fi” or 192.168.1.0/24"));
