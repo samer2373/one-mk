@@ -1323,7 +1323,20 @@ def control_phase():
           f'charged to, nor hidden from, the component gate below')
 
 
+def shell_record(record):
+    """Whether a warning record comes from GNOME Shell/Mutter itself (the
+    gnome-shell process: GNOME Shell, libmutter, Gjs, JS, Clutter...), as
+    opposed to another session service writing to the same log (for example
+    evolution-*-factory or xdg-desktop-portal). Records without a program
+    prefix count as Shell records (strict)."""
+    match = re.match(r'\(([^:()]+):\d+\)', record.splitlines()[0])
+    return match is None or os.path.basename(match.group(1)) in ('gnome-shell', 'mutter')
+
+
 def gate_warnings():
+    """Gate: zero new Mutter/Shell warning records versus the M1a-2 baseline,
+    apart from identities the control phase produced without the component.
+    Other session services' new records are reported, attributed, not hidden."""
     baseline = (HERE / 'm1a2-evidence/baseline-shell.log').read_text()
     known = {identity(record) for record in GATE['warning_records'](baseline)}
     control = CONTROL.get('identities', set())
@@ -1331,19 +1344,22 @@ def gate_warnings():
     results = {}
     for index in range(1, REPORT['shell_sessions'] + 1):
         records = GATE['warning_records']((LAB / f'shell-{index}.log').read_text())
+        unknown = [record for record in records if identity(record) not in known]
         results[index] = {'records': len(records),
-                          'harness_control': [record for record in records
-                                              if identity(record) not in known and identity(record) in control],
-                          'new': [record for record in records
-                                  if identity(record) not in known and identity(record) not in control]}
+                          'harness_control': [record for record in unknown if identity(record) in control],
+                          'new': [record for record in unknown if identity(record) not in control and shell_record(record)],
+                          'new_other_services': [record for record in unknown
+                                                 if identity(record) not in control and not shell_record(record)]}
     REPORT['warnings'] = results
     new = [record for value in results.values() for record in value['new']]
     assert not new, new
+    others = [record for value in results.values() for record in value['new_other_services']]
+    assert not [record for record in others if 'one-mk' in record.splitlines()[0]], others
     harness = sum(len(value['harness_control']) for value in results.values())
     check(f'zero new Mutter/Shell warning records versus the M1a-2 baseline across all {len(results)} Shell '
-          f'sessions ({sum(value["records"] for value in results.values())} records: all baseline-known, or '
-          f'{harness} of the harness-control identities recorded without the component)')
-
+          f'sessions ({sum(value["records"] for value in results.values())} records: baseline-known, or {harness} '
+          f'of the identities the control phase produced without the component); {len(others)} new records from '
+          f'other session services (not Shell/Mutter, never ours) are listed in result.json')
 
 def main():
     global WALLPAPER_URI, BASELINE_SHELL
