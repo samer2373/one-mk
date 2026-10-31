@@ -8,8 +8,10 @@
 #   - the Flatpak source bundle: unpacked elsewhere, every path in the
 #     manifest resolves and matches its checksum;
 #   - the Homebrew cask and formula: filled in from stand-in .dmg files named
-#     like the release's, no placeholder left.
-# Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby) are
+#     like the release's, no placeholder left;
+#   - the macOS installer window's artwork and settings (scripts/dmg/check.sh;
+#     needs Python 3 with Pillow).
+# Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby, Pillow) are
 # used when present and reported as skipped when not.
 #   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app
 #   sh scripts/check-packaging.sh
@@ -119,5 +121,12 @@ if OUT_DIR=$scratch/h SOURCE_SHA256=00000000000000000000000000000000000000000000
         check "Homebrew files are valid Ruby" sh -c "ruby -c '$cask' && ruby -c '$formula'"
     else skip "ruby not installed"; fi
 else bad "package-homebrew.sh failed"; fi
+
+# The macOS installer window: settings, artwork, readable names, and a preview
+# of the finished window (left in /tmp/one-mk-dmg-preview.png to look at).
+if python3 -c 'import PIL' 2>/dev/null; then
+    if sh "$ROOT/scripts/dmg/check.sh" >"$scratch/dmg-check.txt" 2>&1; then ok "macOS installer window artwork and settings ($(grep -c '^ok' "$scratch/dmg-check.txt") checks)"
+    else cat "$scratch/dmg-check.txt"; bad "macOS installer window artwork and settings"; fi
+else skip "macOS installer window checks: Python 3 with Pillow not installed"; fi
 
 [ "$fail" = 0 ] && echo "all checks passed" || { echo "some checks failed"; exit 1; }
