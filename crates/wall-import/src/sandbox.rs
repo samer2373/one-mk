@@ -513,6 +513,14 @@ pub fn spawn_playback(options: PlaybackOptions<'_>) -> Result<Playback, String> 
     Ok(playback)
 }
 
+/// Reclaims playback groups a killed renderer left in the delegation (see
+/// `cgroup::reclaim_playback`); a renderer calls this when it starts, so a
+/// SIGKILL followed by the Shell's restart leaves no group behind.
+#[cfg(target_os = "linux")]
+pub fn reclaim_playback_groups(cgroup_root: &Path) -> Result<usize, String> {
+    crate::cgroup::reclaim_playback(cgroup_root)
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn spawn_playback(_options: PlaybackOptions<'_>) -> Result<std::convert::Infallible, String> {
     Err(worker_restrictions().err().unwrap_or_default())
