@@ -16,6 +16,44 @@ advertise TEXT. Test support requires both `null-typing-tests` and debug
 assertions; release builds cannot construct fixture keyboards, even with that
 feature. No polling or background timer is introduced by character routing.
 
+## Wave 6 X11 qualification (October 31, 2026): blocked
+
+**Production TEXT remains disabled.** Fifty strict immediate-remap delivery
+runs produced **zero successes and fifty delivery failures**, not the required
+fifty lossless passes. Each run used a new private Xvfb and a SIGSTOP-delayed
+real xev/Xlib reader. Server round trips did not prevent the first character
+from becoming NoSymbol. This is a rejected design, not a production fix.
+
+A new `--pool-reuse` regression also tests the case where mappings are **not
+restored until readers finish**, but four slots are reassigned during a burst.
+On `us(intl)` with another client's letter and Shift held, 10,000 ordered
+presses translate to 10,000 symbols, but only **1,432** match their original
+characters; the other **8,568** resolve through the slots' final mappings.
+The alphabet includes `ı`, `ł`, `@`, `z`, `λ`, `🦀` and `é`. xev independently
+verifies the final-generation keysym on every press and release. Full core and
+XKB maps and the original down-key bitmap are restored afterward. This checks
+keysyms on a dead-key layout, **not** compose/XIM commits or editor text.
+
+```sh
+# Passing counterexample regression, not successful text delivery:
+bash scripts/test-x11-typing-safety.sh --pool-reuse
+# Fails with exit 101 because the original character sequence is corrupted:
+bash scripts/test-x11-typing-safety.sh --pool-reuse --require-delivery
+```
+
+A local generation counter cannot make a delayed unmodified client look up an
+old mapping. A fixed pool that never reassigns symbols only covers its fixed
+alphabet; a finite retirement deadline still has the earlier counterexample.
+No generally safe destination-consumption acknowledgement or alternative
+injection design was implemented. No runtime TEXT capability, capture wiring,
+portal advertisement, Windows behavior or macOS behavior was changed.
+
+The runner now keeps all Cargo artifacts in `target-x11-typing` under the
+checkout, places temporary test files under its disposable TMPDIR, and refuses
+to connect to reserved desktop displays `:0` and `:1`. It requires `setxkbmap`
+as well as Xvfb, xkbcomp, xev and stdbuf. Remove `target-x11-typing` after use.
+See [the Wave 6 evidence and outstanding acceptance gates](reviews/WAVE6-X11-TYPING-REPORT.md).
+
 ## 5E-5 verified partial delivery (October 30, 2026)
 
 **Not a completed AltGr fix or enterprise runtime sign-off. Production TEXT
