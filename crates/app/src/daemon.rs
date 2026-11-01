@@ -762,6 +762,59 @@ pub fn parse_bench(out: &str, peer: &str) -> Option<Latency> {
     Some(Latency { peer: peer.into(), p50_us: num_after(rtt, "p50")?, p99_us: num_after(rtt, "p99 ")?, lost: lost_n, count })
 }
 
+impl one_mk_ctl::setup::Host for Link {
+    fn login_installed(&self) -> bool {
+        install::is_installed()
+    }
+
+    fn install_login(&self) -> Result<(), String> {
+        if !self.daemon.is_absolute() {
+            return Err("one-mk isn't next to this app. Run `one-mk install` instead".into());
+        }
+        install::install(&Launch {
+            exe: self.daemon.clone(),
+            tray: self.tray.clone(),
+            home: self.custom_home.then(|| install::absolute(&self.dir)),
+            start_now: !client::is_running(&self.dir),
+        })
+        .map(drop)
+        .map_err(|e| format!("{e:#}"))
+    }
+
+    fn integrations_present(&self) -> bool {
+        one_mk_ctl::integrate::is_enabled()
+    }
+
+    fn install_integrations(&self) -> Result<bool, String> {
+        let setup = one_mk_ctl::integrate::Setup {
+            exe: self.daemon.clone(),
+            home: self.custom_home.then(|| install::absolute(&self.dir)),
+            // Pairing refreshes the entries for each computer it adds.
+            computers: vec![],
+        };
+        one_mk_ctl::integrate::install(&setup).map(|o| o.found).map_err(|e| format!("{e:#}"))
+    }
+
+    fn running(&self) -> bool {
+        client::is_running(&self.dir)
+    }
+
+    fn start(&self) -> Result<(), String> {
+        let mut args = vec!["run".to_owned()];
+        args.extend(self.home_args());
+        proc::spawn_detached(&self.daemon, &args, Some(&self.dir.join("daemon.log"))).map_err(|e| e.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline && !client::is_running(&self.dir) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if client::is_running(&self.dir) {
+            Ok(())
+        } else {
+            Err(format!("It didn't answer within 4 seconds. Details are in {}.", self.dir.join("daemon.log").display()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -838,58 +891,5 @@ mod tests {
             Some(Latency { peer: "mac".into(), p50_us: 312.0, p99_us: 520.0, lost: 2, count: 400 })
         );
         assert_eq!(parse_bench("garbage", "mac"), None);
-    }
-}
-
-impl one_mk_ctl::setup::Host for Link {
-    fn login_installed(&self) -> bool {
-        install::is_installed()
-    }
-
-    fn install_login(&self) -> Result<(), String> {
-        if !self.daemon.is_absolute() {
-            return Err("one-mk isn't next to this app. Run `one-mk install` instead".into());
-        }
-        install::install(&Launch {
-            exe: self.daemon.clone(),
-            tray: self.tray.clone(),
-            home: self.custom_home.then(|| install::absolute(&self.dir)),
-            start_now: !client::is_running(&self.dir),
-        })
-        .map(drop)
-        .map_err(|e| format!("{e:#}"))
-    }
-
-    fn integrations_present(&self) -> bool {
-        one_mk_ctl::integrate::is_enabled()
-    }
-
-    fn install_integrations(&self) -> Result<bool, String> {
-        let setup = one_mk_ctl::integrate::Setup {
-            exe: self.daemon.clone(),
-            home: self.custom_home.then(|| install::absolute(&self.dir)),
-            // Pairing refreshes the entries for each computer it adds.
-            computers: vec![],
-        };
-        one_mk_ctl::integrate::install(&setup).map(|o| o.found).map_err(|e| format!("{e:#}"))
-    }
-
-    fn running(&self) -> bool {
-        client::is_running(&self.dir)
-    }
-
-    fn start(&self) -> Result<(), String> {
-        let mut args = vec!["run".to_owned()];
-        args.extend(self.home_args());
-        proc::spawn_detached(&self.daemon, &args, Some(&self.dir.join("daemon.log"))).map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < deadline && !client::is_running(&self.dir) {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if client::is_running(&self.dir) {
-            Ok(())
-        } else {
-            Err(format!("It didn't answer within 4 seconds. Details are in {}.", self.dir.join("daemon.log").display()))
-        }
     }
 }

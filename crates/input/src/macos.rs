@@ -520,6 +520,8 @@ impl Ctx {
                 // Permission revoked mid-capture: give the pointer back.
                 self.end(st);
                 let _ = self.tx.send(Event::Error(p.message().into()));
+                // The window's permission guide reads this from the status.
+                let _ = self.tx.send(Event::Status { part: "permission", problem: Some(p.message().into()) });
                 match p {
                     Problem::Accessibility if !st.asked_accessibility => {
                         st.asked_accessibility = true;
@@ -534,8 +536,12 @@ impl Ctx {
                     _ => {}
                 }
             }
-            None if st.tap.is_some() => tracing::info!("input capture ready"),
-            None => {}
+            None => {
+                if st.tap.is_some() {
+                    tracing::info!("input capture ready");
+                }
+                let _ = self.tx.send(Event::Status { part: "permission", problem: None });
+            }
         }
         st.problem = problem;
     }

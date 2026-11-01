@@ -511,6 +511,7 @@ impl App {
                         _ => {}
                     }
                     let changed = self.running().map(|status| (status.clipboard_history, status.clipboard_history_revision)) != s.as_ref().map(|status| (status.clipboard_history, status.clipboard_history_revision));
+                    if let Some(st) = &s { self.guide.on_status(&st.input, now); }
                     self.status = Some(s);
                     if self.tab == Tab::Files && (changed || self.clipboard_history.is_none()) { self.link.history(); }
                     let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).collect());

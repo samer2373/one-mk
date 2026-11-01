@@ -15,8 +15,9 @@ again**.
 > Settings window, floating above it, following it, where the arrow points,
 > activation) is **compile-checked for `aarch64-apple-darwin` and
 > `x86_64-apple-darwin` only and has never run on a Mac.** Use the manual
-> test script below before shipping it. The guide is also **not started by
-> anything yet**: see [Integration](#integration).
+> test script below before shipping it. The guide is wired: on a Mac the
+> window opens it by itself when the daemon reports a missing permission
+> (see [Integration](#integration)).
 
 ![The card beside System Settings](screens/guide-01-beside-window.png)
 
@@ -118,7 +119,13 @@ focus when it appears (`with_active(false)`).
 
 ## Integration
 
-Not wired yet; this is what the setup work needs to do.
+**Wired.** The macOS backend now sends its missing-permission message as a
+status line (`Event::Status { part: "permission" }`, cleared when granted),
+so it is in `status.input`. `App` calls `Overlay::on_status` for every
+status; it opens the guide once per gap on macOS (closing it is respected
+until a status shows everything granted, then a later revoke opens it
+again) and keeps it in step while open. What follows is the reference
+for how that works and what is still open (items 4 and 5).
 
 1. **Start it**, on macOS only, when the daemon reports a missing
    permission, preferably from a button the person pressed (it opens

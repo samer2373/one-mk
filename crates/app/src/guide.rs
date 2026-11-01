@@ -72,7 +72,6 @@ impl Permission {
     /// `input` lines (crates/input/src/macos.rs `Problem::message`).
     /// The daemon checks Accessibility first, so while it is missing
     /// nothing is known about Input Monitoring.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the setup integration (docs/PERMISSION-GUIDE.md)"))]
     pub fn missing_from_status(input: &[String]) -> Option<Permission> {
         input.iter().find_map(|l| {
             if l.starts_with("one-mk needs Accessibility permission") {
@@ -97,7 +96,6 @@ pub trait PermissionSource {
 /// A source fed from the daemon's status `input` lines: set `lines`
 /// whenever a new status arrives.
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(not(test), expect(dead_code, reason = "wired by the setup integration (docs/PERMISSION-GUIDE.md)"))]
 pub struct StatusPermissions {
     pub lines: Vec<String>,
 }
@@ -394,10 +392,6 @@ impl Guide {
     /// A guide through `steps` (duplicates dropped), with `granted`
     /// telling which are already on. Opens the first pane that is off;
     /// with nothing to do it is finished at once.
-    #[cfg_attr(
-        not(debug_assertions),
-        expect(dead_code, reason = "started by the debug aid until the setup integration calls it")
-    )]
     pub fn new(steps: &[Permission], granted: impl Fn(Permission) -> bool, now: f64) -> (Self, Vec<Effect>) {
         let mut list: Vec<Permission> = Vec::new();
         for p in steps {
@@ -440,12 +434,12 @@ impl Guide {
         self.finished
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the setup integration (docs/PERMISSION-GUIDE.md)"))]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn phase(&self) -> Phase {
         self.phase
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the setup integration (docs/PERMISSION-GUIDE.md)"))]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn steps(&self) -> &[Permission] {
         &self.steps
     }
@@ -961,6 +955,9 @@ pub struct Overlay {
     started_at: f64,
     /// Since when the card has been hidden (another app covers Settings).
     covered: motion::Tween,
+    /// The card was shown for the permission gap that is still open, so it
+    /// is not shown again (after "close") until a status says all is granted.
+    offered: bool,
 }
 
 impl Default for Overlay {
@@ -980,6 +977,7 @@ impl Default for Overlay {
             side: None,
             started_at: 0.0,
             covered: motion::Tween::new(0.0),
+            offered: false,
         }
     }
 }
@@ -1007,10 +1005,6 @@ impl Overlay {
 
     /// Starts guiding through `steps` (those already granted per `source`
     /// are skipped). Restarting while active starts over.
-    #[cfg_attr(
-        not(debug_assertions),
-        expect(dead_code, reason = "started by the debug aid until the setup integration calls it")
-    )]
     pub fn start(&mut self, steps: &[Permission], mut source: Box<dyn PermissionSource>, now: f64) {
         let known: Vec<(Permission, bool)> =
             Permission::ALL.iter().map(|p| (*p, source.granted(*p, now) == Some(true))).collect();
@@ -1026,23 +1020,40 @@ impl Overlay {
     }
 
     /// Whether the card is up (or leaving).
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the setup integration (docs/PERMISSION-GUIDE.md)"))]
     pub fn active(&self) -> bool {
         self.guide.as_ref().is_some_and(|g| !g.finished())
     }
 
     /// Tells the guide about a permission directly (instead of, or as
     /// well as, the source).
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the setup integration (docs/PERMISSION-GUIDE.md)"))]
     pub fn set_granted(&mut self, p: Permission, granted: bool, now: f64) {
         let ev = if granted { GuideEvent::Granted(p) } else { GuideEvent::Revoked(p) };
         self.event(ev, now, None);
     }
 
+    /// Called with every status the daemon reports (not when it isn't
+    /// running: nothing is known then). On a Mac with a permission missing
+    /// it opens the guide once per gap; while it is open it keeps it in step.
+    pub fn on_status(&mut self, input: &[String], now: f64) {
+        self.on_status_if(cfg!(target_os = "macos"), input, now);
+    }
+
+    fn on_status_if(&mut self, enabled: bool, input: &[String], now: f64) {
+        if Permission::missing_from_status(input).is_some() {
+            if !self.offered && !self.active() && enabled {
+                self.offered = true;
+                let src = StatusPermissions { lines: input.to_vec() };
+                self.start(&Permission::ALL, Box::new(src), now);
+            }
+        } else {
+            self.offered = false;
+        }
+        self.set_status_input(input, now);
+    }
+
     /// Feeds the daemon's latest status `input` lines: they become the
     /// guide's source (so a poll never contradicts them) and take effect
     /// at once. Call it for every new status while the guide is active.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the setup integration (docs/PERMISSION-GUIDE.md)"))]
     pub fn set_status_input(&mut self, lines: &[String], now: f64) {
         if !self.active() {
             return;
@@ -1058,7 +1069,7 @@ impl Overlay {
         }
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the setup integration (docs/PERMISSION-GUIDE.md)"))]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn stop(&mut self) {
         self.guide = None;
         self.source = None;
@@ -2095,5 +2106,31 @@ mod tests {
         assert!(!resting, "rests after three beats");
         let (d, _) = nudge(0.33, 0.0);
         assert!(d > 4.0 && d <= 6.0, "{d}");
+    }
+}
+
+#[cfg(test)]
+mod on_status_tests {
+    use super::*;
+
+    fn missing() -> Vec<String> {
+        vec!["one-mk needs Accessibility permission to share this Mac's mouse and keyboard. Open System Settings".into()]
+    }
+
+    #[test]
+    fn the_card_opens_once_per_gap_and_not_where_it_is_not_enabled() {
+        let mut o = Overlay::default();
+        o.on_status_if(false, &missing(), 0.0);
+        assert!(!o.active(), "only on a Mac");
+        o.on_status_if(true, &missing(), 1.0);
+        assert!(o.active());
+        // Closed by the person: later statuses with the same gap don't reopen it.
+        o.stop();
+        o.on_status_if(true, &missing(), 2.0);
+        assert!(!o.active(), "no nagging");
+        // Everything granted, then revoked later: offered again.
+        o.on_status_if(true, &[], 3.0);
+        o.on_status_if(true, &missing(), 4.0);
+        assert!(o.active());
     }
 }
