@@ -7,8 +7,15 @@
   /* colour */
   --omk-ground: #0F1216;
   --omk-room: #101318;
-  --omk-glass: rgba(15, 18, 23, 0.659);
+  --omk-room-tint: rgba(16, 19, 24, 0.878);
+  --omk-glass-top: rgba(54, 56, 61, 0.443);
+  --omk-glass: rgba(31, 33, 38, 0.42);
+  --omk-glass-clear-top: rgba(79, 83, 86, 0.278);
+  --omk-glass-clear: rgba(45, 45, 49, 0.243);
+  --omk-glass-solid-top: #1C2027;
   --omk-glass-solid: #161A20;
+  --omk-glass-rim: rgba(255, 255, 255, 0.102);
+  --omk-glass-edge: rgba(255, 255, 255, 0.22);
   --omk-popover: #1A1E25;
   --omk-on-glass: rgba(255, 255, 255, 0.071);
   --omk-on-glass-lit: rgba(255, 255, 255, 0.118);

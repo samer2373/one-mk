@@ -1210,9 +1210,11 @@ impl Scene {
     }
 
     fn room(&self, painter: &Painter, cam: &Camera, geo: &[Geo], rect: Rect) {
-        // One flat colour behind: the desk's far edge melts into it.
-        let sky_low = Color32::from_rgb(0x10, 0x13, 0x18);
-        painter.rect_filled(rect, 0.0, sky_low);
+        // The room behind is the window's own (chrome::paint_room): the
+        // desk's far edge melts into it, as the desk is the lit wood laid
+        // over it at the light's strength (the same as mixing towards the
+        // room's colour on a solid window, and see-through on a clear one).
+        let _ = rect;
         // The desk is lit around the computers and falls off into the room:
         // no edges, nothing to suggest a box the computers sit in.
         let (cx, cz) = (self.focus_x, -4.0);
@@ -1225,10 +1227,7 @@ impl Scene {
         };
         // A dark walnut desk, lit only by its screens.
         let lit = Color32::from_rgb(0x3B, 0x30, 0x27);
-        let shade = |k: f32| {
-            let f = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * k) as u8;
-            Color32::from_rgb(f(sky_low.r(), lit.r()), f(sky_low.g(), lit.g()), f(sky_low.b(), lit.b()))
-        };
+        let shade = |k: f32| lit.gamma_multiply(k.clamp(0.0, 1.0));
         const NX: usize = 24;
         const NZ: usize = 10;
         let xs: Vec<f32> = (0..=NX).map(|i| cx - rx + 2.0 * rx * i as f32 / NX as f32).collect();
@@ -1253,7 +1252,7 @@ impl Scene {
         for &x in &xs {
             let k = light(x, front - 10.0);
             lip.colored_vertex(cam.pt(v(x, 0.0, front)), shade((k * 1.35).min(1.0)));
-            lip.colored_vertex(cam.pt(v(x, -3.2, front)), mix(sky_low, Color32::from_rgb(0x0B, 0x09, 0x08), k));
+            lip.colored_vertex(cam.pt(v(x, -3.2, front)), Color32::from_rgb(0x0B, 0x09, 0x08).gamma_multiply(k));
         }
         for i in 0..NX as u32 {
             let k = i * 2;

@@ -390,6 +390,7 @@ fn info_row(ui: &Ui, c: Rect, y: f32, key: &str, val: &str, mono_val: bool, alph
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, home: Option<PathBuf>, size: [f32; 2]) -> anyhow::Result<Self> {
         crate::style::install(&cc.egui_ctx);
+        crate::chrome::install(cc);
         motion::set_reduced(motion::detect());
         let (tx, rx) = std::sync::mpsc::channel();
         let link = Link::new(home, tx, cc.egui_ctx.clone())?;
@@ -2033,7 +2034,8 @@ fn lerp_scale(t: f32) -> f32 {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        crate::chrome::place_buttons(ui.ctx(), frame);
         let now = ui.input(|i| i.time);
         self.now = now;
         if self.size.x > 0.0 {
@@ -2066,7 +2068,7 @@ impl eframe::App for App {
         self.shortcuts(ui);
         let full = ui.max_rect();
         self.glass.frame();
-        ui.painter().rect_filled(full, 0.0, ROOM);
+        crate::chrome::paint_room(ui.painter(), full);
         let f = shell::frame(full);
         let content = f.content;
         let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
@@ -2152,6 +2154,8 @@ impl eframe::App for App {
         // what is being paired.
         self.sheet(ui, content, now);
         self.toast_view(ui, desk, now);
+        #[cfg(debug_assertions)]
+        crate::chrome::paint_fake_buttons(ui.painter());
         self.guide.show(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
         // round trips only then (a minimised window draws nothing).
@@ -2164,7 +2168,7 @@ impl eframe::App for App {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        GROUND.to_normalized_gamma_f32()
+        crate::chrome::clear_color()
     }
 }
 

@@ -8,10 +8,25 @@ use std::sync::Arc;
 pub const GROUND: Color32 = Color32::from_rgb(0x0F, 0x12, 0x16);
 /// The room the desk stands in: the window's ground behind everything.
 pub const ROOM: Color32 = Color32::from_rgb(0x10, 0x13, 0x18);
-/// Glass: the tint over a blurred backdrop (premultiplied), and the fill
-/// used instead when there is no blur. Text on either holds 4.5:1.
-pub const GLASS: Color32 = Color32::from_rgba_premultiplied(10, 12, 15, 168);
+/// The room on a see-through window (macOS): a dark tint over the blurred
+/// desktop, 88% so grey text keeps 4.5:1 even over a white wallpaper.
+pub const ROOM_TINT: Color32 = Color32::from_rgba_premultiplied(14, 17, 21, 224);
+/// Glass, frosted: over its blurred backdrop, a little white (more at the
+/// top, as if lit from above) over a little dark, so a panel reads lighter
+/// than the room yet keeps text at 4.5:1 over the brightest backdrop.
+/// `GLASS_TOP` at the top, `GLASS` at the bottom (premultiplied).
+pub const GLASS_TOP: Color32 = Color32::from_rgba_premultiplied(24, 25, 27, 113);
+pub const GLASS: Color32 = Color32::from_rgba_premultiplied(13, 14, 16, 107);
+/// The same on a see-through window, where the room under the panel is
+/// already a dark tint: less dark, the same frost.
+pub const GLASS_CLEAR_TOP: Color32 = Color32::from_rgba_premultiplied(22, 23, 24, 71);
+pub const GLASS_CLEAR: Color32 = Color32::from_rgba_premultiplied(11, 11, 12, 62);
+/// Without blur (old OpenGL, or reduce transparency): solid.
+pub const GLASS_SOLID_TOP: Color32 = Color32::from_rgb(0x1C, 0x20, 0x27);
 pub const GLASS_SOLID: Color32 = Color32::from_rgb(0x16, 0x1A, 0x20);
+/// A glass panel's rim, and its lit top edge.
+pub const GLASS_RIM: Color32 = Color32::from_rgba_premultiplied(26, 26, 26, 26);
+pub const GLASS_EDGE: Color32 = Color32::from_rgba_premultiplied(56, 56, 56, 56);
 /// What floats over everything (a sheet, a toast, a menu): solid, so it
 /// reads the same whatever is under it and while it moves.
 pub const POPOVER: Color32 = Color32::from_rgb(0x1A, 0x1E, 0x25);

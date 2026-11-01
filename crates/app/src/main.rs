@@ -11,6 +11,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app;
+mod chrome;
 mod daemon;
 mod gear;
 mod glass;
@@ -80,13 +81,13 @@ fn main() {
     }
     let options = eframe::NativeOptions {
         multisampling,
-        viewport: egui::ViewportBuilder::default()
+        viewport: chrome::viewport(egui::ViewportBuilder::default())
             .with_title("one·mk")
             .with_app_id("one-mk")
             .with_inner_size(size)
             .with_icon(window_icon())
             .with_min_inner_size([820.0, 540.0])
-            .with_transparent(guide::needs_transparent_root()),
+            .with_transparent(guide::needs_transparent_root() || chrome::see_through()),
         ..Default::default()
     };
     let result = eframe::run_native(

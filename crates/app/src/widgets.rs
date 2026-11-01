@@ -463,17 +463,96 @@ pub fn glass(ctx: &egui::Context) -> crate::glass::Glass {
     ctx.data(|d| d.get_temp::<crate::glass::Glass>(Id::unique("glass"))).unwrap_or_default()
 }
 
-/// A glass panel: a soft shadow, the blurred backdrop, its tint, a lit
-/// top edge and a faint rim. `key` names the panel so its blur is kept.
+/// A glass panel: a soft shadow, the blurred backdrop, its frost (lit
+/// from above: lighter at the top), a bright top edge and a faint rim.
+/// `key` names the panel so its blur is kept.
 pub fn glass_panel(ui: &Ui, key: impl std::hash::Hash + std::fmt::Debug, rect: Rect, radius: u8) {
-    let g = glass(ui.ctx());
-    let p = ui.painter();
+    for s in glass_shapes(ui.ctx(), Id::unique(("glass", key)).value(), rect, radius) {
+        ui.painter().add(s);
+    }
+}
+
+/// The same as shapes, to place behind contents drawn first.
+pub fn glass_shapes(ctx: &egui::Context, key: u64, rect: Rect, radius: u8) -> Vec<egui::Shape> {
+    let g = glass(ctx);
     let r = f32::from(radius);
-    p.add(egui::epaint::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(70) }.as_shape(rect, CornerRadius::same(radius)));
-    g.backdrop(p, Id::unique(("glass", key)).value(), rect, r);
-    p.rect_filled(rect, CornerRadius::same(radius), if g.works() { GLASS } else { GLASS_SOLID });
-    p.rect_stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_white_alpha(14)), egui::StrokeKind::Inside);
-    p.hline(rect.x_range().shrink(r), rect.top() + 1.0, Stroke::new(1.0, Color32::from_white_alpha(26)));
+    let mut out = vec![egui::epaint::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(70) }.as_shape(rect, CornerRadius::same(radius)).into()];
+    g.backdrop_shapes(&mut out, key, rect, r);
+    let [top, bottom] = if !g.works() {
+        [GLASS_SOLID_TOP, GLASS_SOLID]
+    } else if crate::chrome::see_through() {
+        [GLASS_CLEAR_TOP, GLASS_CLEAR]
+    } else {
+        [GLASS_TOP, GLASS]
+    };
+    out.push(rounded_gradient(rect, r, top, bottom));
+    out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, GLASS_RIM), StrokeKind::Inside)));
+    out.push(lit_edge(rect.shrink(0.5), r - 0.5));
+    out
+}
+
+/// Light catching a panel's top edge: along the top and round both top
+/// corners, fading out as the corners turn down.
+fn lit_edge(rect: Rect, r: f32) -> egui::Shape {
+    use egui::epaint::{Mesh, Vertex, WHITE_UV};
+    const STEPS: usize = 10;
+    let mut pts: Vec<(Pos2, f32)> = vec![];
+    // Left corner from its side (dark) to the top (lit), then the right.
+    for i in 0..=STEPS {
+        let a = std::f32::consts::PI + i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2;
+        pts.push((pos2(rect.left() + r + r * a.cos(), rect.top() + r + r * a.sin()), i as f32 / STEPS as f32));
+    }
+    for i in 0..=STEPS {
+        let a = -std::f32::consts::FRAC_PI_2 + i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2;
+        pts.push((pos2(rect.right() - r + r * a.cos(), rect.top() + r + r * a.sin()), 1.0 - i as f32 / STEPS as f32));
+    }
+    // A 1-point band, inward from the edge, its alpha eased along it.
+    let mut m = Mesh::default();
+    for (k, &(p, t)) in pts.iter().enumerate() {
+        let next = pts[(k + 1).min(pts.len() - 1)].0;
+        let prev = pts[k.saturating_sub(1)].0;
+        let d = (next - prev).normalized();
+        let inward = vec2(-d.y, d.x);
+        let c = GLASS_EDGE.gamma_multiply(t * t * (3.0 - 2.0 * t));
+        m.vertices.push(Vertex { pos: p, uv: WHITE_UV, color: c });
+        m.vertices.push(Vertex { pos: p + inward, uv: WHITE_UV, color: c });
+    }
+    for k in 0..pts.len() as u32 - 1 {
+        let (a, b) = (2 * k, 2 * k + 2);
+        m.add_triangle(a, a + 1, b + 1);
+        m.add_triangle(a, b + 1, b);
+    }
+    egui::Shape::mesh(m)
+}
+
+/// A rounded rectangle filled from `top` at its top to `bottom` at its
+/// bottom (premultiplied colours), as rows of quads: corners follow the
+/// arc; the rim drawn over it smooths their edge.
+pub fn rounded_gradient(rect: Rect, radius: f32, top: Color32, bottom: Color32) -> egui::Shape {
+    use egui::epaint::{Mesh, Vertex, WHITE_UV};
+    let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0).max(0.0);
+    // Rows: down the top arc, the straight middle, down the bottom arc.
+    const STEPS: usize = 8;
+    let mut ys: Vec<f32> = (0..=STEPS).map(|i| rect.top() + r * (1.0 - (i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2).cos())).collect();
+    ys.extend((0..=STEPS).map(|i| rect.bottom() - r + r * (i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2).sin()));
+    let inset = |y: f32| {
+        let d = if y < rect.top() + r { rect.top() + r - y } else if y > rect.bottom() - r { y - (rect.bottom() - r) } else { 0.0 };
+        r - (r * r - d * d).max(0.0).sqrt()
+    };
+    let mut m = Mesh::default();
+    for &y in &ys {
+        let t = ((y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0);
+        let c = mix(top, bottom, t);
+        let dx = inset(y);
+        m.vertices.push(Vertex { pos: pos2(rect.left() + dx, y), uv: WHITE_UV, color: c });
+        m.vertices.push(Vertex { pos: pos2(rect.right() - dx, y), uv: WHITE_UV, color: c });
+    }
+    for k in 0..ys.len() as u32 - 1 {
+        let (a, b) = (2 * k, 2 * k + 2);
+        m.add_triangle(a, a + 1, b + 1);
+        m.add_triangle(a, b + 1, b);
+    }
+    egui::Shape::mesh(m)
 }
 
 #[cfg(test)]

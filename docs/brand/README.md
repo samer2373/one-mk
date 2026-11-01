@@ -54,8 +54,15 @@ icon falls back to **one monitor + pointer**.
 |---|---|---|
 | ground | `#0F1216` | ink on it 16.3:1 |
 | room | `#101318` | ink on it 16.2:1 |
-| glass | `rgba(15, 18, 23, 0.659)` | 66% over what is under it |
+| room-tint | `rgba(16, 19, 24, 0.878)` | 88% over what is under it |
+| glass-top | `rgba(54, 56, 61, 0.443)` | 44% over what is under it |
+| glass | `rgba(31, 33, 38, 0.42)` | 42% over what is under it |
+| glass-clear-top | `rgba(79, 83, 86, 0.278)` | 28% over what is under it |
+| glass-clear | `rgba(45, 45, 49, 0.243)` | 24% over what is under it |
+| glass-solid-top | `#1C2027` | 1.1:1 on ground |
 | glass-solid | `#161A20` | ink on it 15.2:1 |
+| glass-rim | `rgba(255, 255, 255, 0.102)` | 10% over what is under it |
+| glass-edge | `rgba(255, 255, 255, 0.22)` | 22% over what is under it |
 | popover | `#1A1E25` | ink on it 14.5:1 |
 | on-glass | `rgba(255, 255, 255, 0.071)` | 7% over what is under it |
 | on-glass-lit | `rgba(255, 255, 255, 0.118)` | 12% over what is under it |

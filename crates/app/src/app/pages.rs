@@ -48,13 +48,32 @@ fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
     }
 }
 
-fn verdict_word(v: Verdict) -> &'static str {
-    match v {
-        Verdict::Pass => "OK",
-        Verdict::Skip => "Skipped",
-        Verdict::Warn => "Warning",
-        Verdict::Fail => "Problem",
-    }
+/// One line of Health: a check, or something the daemon says right now
+/// (no title then). `k` is the check's place, for its buttons.
+struct Item {
+    title: String,
+    detail: String,
+    fix: Option<String>,
+    verdict: Verdict,
+    here: Option<(&'static str, Fix)>,
+    k: usize,
+}
+
+fn text_height(ui: &Ui, text: &str, width: f32) -> f32 {
+    let f = regular(T_BODY);
+    let mut job = egui::text::LayoutJob::simple(text.to_owned(), f.clone(), INK, width);
+    job.sections[0].format.line_height = Some((f.size * LEADING).round());
+    ui.painter().layout_job(job).size().y
+}
+
+/// A "Needs you" row's height: title, what is wrong, what to do.
+fn item_height(ui: &Ui, i: &Item, width: f32) -> f32 {
+    let title = if i.title.is_empty() { 0.0 } else { 24.0 };
+    let fix = match (&i.here, &i.fix) {
+        (None, Some(f)) => text_height(ui, f, width) + 6.0,
+        _ => 0.0,
+    };
+    (12.0 + title + text_height(ui, &i.detail, width) + fix + 14.0).max(if i.here.is_some() || i.fix.is_some() { 56.0 } else { 44.0 })
 }
 
 impl App {
@@ -100,129 +119,196 @@ impl App {
         out
     }
 
+    /// Health: one line that says whether everything works, then what
+    /// needs the person (each with the button that fixes it, when the
+    /// window can), how each paired computer answers, and what works. A
+    /// check about something this computer doesn't use isn't shown.
     pub(super) fn health(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
-        let w = rect.width().min(760.0) - 64.0;
-        let x = rect.center().x - w / 2.0;
-        let mut y = rect.top() + 20.0;
         let running = self.busy.contains(&Job::Doctor);
-        let p = ui.painter().clone();
-        p.text(pos2(x, y + 12.0), Align2::LEFT_CENTER, "Health", semibold(T_TITLE), INK);
-        let summary = match &self.doctor {
-            _ if running => "Checking…".to_owned(),
-            Some((Ok(checks), _)) => view::doctor_summary(checks),
-            Some((Err(e), _)) => format!("The checks didn't run: {e}"),
-            None => String::new(),
+        let checks: Option<Vec<Check>> = match &self.doctor {
+            Some((Ok(c), _)) => Some(c.iter().filter(|c| c.verdict != Verdict::Skip).cloned().collect()),
+            _ => None,
         };
-        let label = if running { "Checking…" } else { "Recheck" };
-        let bw = button_width(ui, label);
-        let b = Rect::from_min_size(pos2(x + w - bw, y - 4.0), vec2(bw, 32.0));
-        if button(ui, b, Id::unique("recheck"), label, Look::Quiet, !running, Some("Run the checks again")).clicked() {
-            self.recheck();
-        }
-        let sh = para(ui, pos2(x, y + 28.0), w - bw - 16.0, &summary, regular(T_BODY), INK2);
-        a11y_text(ui, Id::unique("health-summary"), Rect::from_min_size(pos2(x, y), vec2(w, 44.0)), Role::Status, &format!("Health. {summary}"), Some(Live::Polite));
-        y += 28.0 + sh + 18.0;
-
-        // What the daemon says right now.
-        let lines = self.live_lines();
-        let mut h = 16.0;
-        let heights: Vec<f32> = lines.iter().map(|(_, l)| {
-            let g = ui.painter().layout(l.clone(), regular(T_BODY), INK, w - 50.0);
-            g.size().y
-        }).collect();
-        h += heights.iter().map(|k| k + 8.0).sum::<f32>() + 8.0;
-        let boxr = Rect::from_min_size(pos2(x, y), vec2(w, h));
-        p.rect(boxr, CornerRadius::same(10), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
-        let mut ly = y + 12.0;
-        for ((col, line), lh) in lines.iter().zip(&heights) {
-            p.circle_filled(pos2(x + 20.0, ly + 9.0), 3.0, *col);
-            widgets::para_code(ui, pos2(x + 34.0, ly), w - 50.0, line, regular(T_BODY), INK);
-            ly += lh + 8.0;
-        }
-        a11y_text(ui, Id::unique("health-live"), boxr, Role::Label, &lines.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>().join(" "), None);
-        y += h + 14.0;
-
-        let links = self.latency_rows(ui, x, y, w);
-        if links > 0.0 {
-            y += links + 14.0;
-        }
-
-        let list = Rect::from_min_max(pos2(x - 8.0, y), pos2(x + w + 8.0, rect.bottom() - 8.0));
-        let checks = match &self.doctor {
-            Some((Ok(c), _)) => c.clone(),
-            _ => {
-                if running {
-                    // A spinner while it runs, nothing after.
-                    let turn = if motion::reduced() { 0.0 } else { (now * 5.0) as f32 };
-                    widgets::draw_refresh(&p, Rect::from_center_size(pos2(x + 8.0, y + 16.0), vec2(16.0, 16.0)), INK2, turn);
-                    p.text(pos2(x + 24.0, y + 16.0), Align2::LEFT_CENTER, "Running the checks (a few seconds)…", regular(T_BODY), INK2);
-                    ui.ctx().request_repaint_after_secs(1.0 / 30.0);
-                }
-                return;
-            }
-        };
-        let copied = self.copied;
-        let mut copy = None;
-        let fixes: Vec<_> = checks.iter().map(|c| self.window_fix(c)).collect();
-        let mut fix_now = None;
-        let mut child = ui.new_child(UiBuilder::new().max_rect(list));
-        child.set_clip_rect(list);
-        egui::ScrollArea::vertical().id_salt("health-checks").auto_shrink([false, false]).show(&mut child, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
+        // What needs the person: the daemon's own problems first (they are
+        // happening now), then the checks, worst first.
+        // Off, the checks say so themselves (with Start).
+        let live = if self.running().is_some() { self.live_lines() } else { vec![] };
+        let mut needs: Vec<Item> = live.iter().filter(|(c, _)| *c == ERROR).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Fail, here: None, k: usize::MAX }).collect();
+        let mut works: Vec<Item> = live.iter().filter(|(c, _)| *c != ERROR).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Pass, here: None, k: usize::MAX }).collect();
+        if let Some(checks) = &checks {
             for (k, c) in checks.iter().enumerate() {
-                let inner = w - 34.0;
-                let p = ui.painter().clone();
-                let lay = |t: &str, f: egui::FontId, wid: f32| {
-                    let mut job = egui::text::LayoutJob::simple(t.to_owned(), f.clone(), INK, wid);
-                    job.sections[0].format.line_height = Some((f.size * LEADING).round());
-                    p.layout_job(job).size().y
-                };
-                let dh = lay(&c.detail, regular(T_BODY), inner);
-                let (cmd, is_cmd) = c.fix.as_deref().map(view::fix_command).unwrap_or_default();
-                let here = fixes[k];
-                let copy_label = if copied.as_ref().is_some_and(|(i, t)| *i == k && now - t < 1.5) {
-                    "Copied"
-                } else if is_cmd {
-                    "Copy command"
-                } else {
-                    "Copy"
-                };
-                let cw = button_width(ui, "Copy command") - 4.0;
-                // Fixed here: one button says what to do, without the command.
-                let fix_text = if let Some((label, _)) = &here { Some(format!("Choose {label}.")) } else { c.fix.clone() };
-                let fh = fix_text.as_ref().map_or(0.0, |f| lay(f, regular(T_BODY), inner - cw - 12.0).max(28.0) + 8.0);
-                let h = 14.0 + 20.0 + dh + fh + 14.0;
-                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
-                let rx = row.left() + 8.0;
-                let ty = row.top() + 14.0;
-                verdict_icon(&p, pos2(rx + 8.0, ty + 10.0), c.verdict);
-                p.text(pos2(rx + 26.0, ty + 10.0), Align2::LEFT_CENTER, &c.title, semibold(T_BODY), INK);
-                let word = verdict_word(c.verdict);
-                let wc = if c.verdict == Verdict::Fail { INK } else { INK2 };
-                p.text(pos2(row.right() - 8.0, ty + 10.0), Align2::RIGHT_CENTER, word, regular(T_META), wc);
-                widgets::para_code(ui, pos2(rx + 26.0, ty + 22.0), inner, &c.detail, regular(T_BODY), INK2);
-                if let Some(fix) = &fix_text {
-                    let fy = ty + 22.0 + dh + 8.0;
-                    widgets::para_code(ui, pos2(rx + 26.0, fy + 4.0), inner - cw - 12.0, fix, regular(T_BODY), INK);
-                    let br = Rect::from_min_size(pos2(row.right() - 8.0 - cw, fy), vec2(cw, 28.0));
-                    if let Some((label, job)) = &here {
-                        if button(ui, br, Id::unique(("fix-here", k)), label, Look::Quiet, !running, None).clicked() {
+                let item = Item { title: c.title.clone(), detail: c.detail.clone(), fix: c.fix.clone(), verdict: c.verdict, here: self.window_fix(c), k };
+                if c.verdict == Verdict::Pass { works.push(item) } else { needs.push(item) }
+            }
+        }
+        needs.sort_by_key(|i| i.verdict != Verdict::Fail);
+
+        let w = (rect.width() - 48.0).min(820.0);
+        let x = rect.center().x - w / 2.0;
+        let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 8.0), rect.max - vec2(0.0, 8.0));
+        let mut child = ui.new_child(UiBuilder::new().max_rect(area));
+        child.set_clip_rect(area);
+        let mut fix_now = None;
+        let mut copy = None;
+        let mut recheck = false;
+        let copied = self.copied;
+        egui::ScrollArea::vertical().id_salt("health-page").auto_shrink([false, false]).show(&mut child, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let top = ui.cursor().top();
+            let col = |ui: &mut Ui, h: f32| -> Rect {
+                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
+                Rect::from_min_size(pos2(x, r.top()), vec2(w, h))
+            };
+            let _ = top;
+
+            // The verdict, in one line, with Recheck.
+            let fails = needs.iter().filter(|i| i.verdict == Verdict::Fail).count();
+            let (headline, tone) = if running && checks.is_none() {
+                ("Checking this computer…".to_owned(), INK2)
+            } else if needs.is_empty() && checks.is_some() {
+                ("Everything is working".to_owned(), OK)
+            } else if needs.is_empty() {
+                ("Not checked yet".to_owned(), INK2)
+            } else if needs.len() == 1 {
+                ("One thing needs you".to_owned(), if fails > 0 { ERROR } else { INK })
+            } else {
+                (format!("{} things need you", needs.len()), if fails > 0 { ERROR } else { INK })
+            };
+            let sub = match &self.doctor {
+                Some((Err(e), _)) => format!("The checks didn't run: {e}"),
+                Some((Ok(_), at)) => {
+                    let ago = (now - at).max(0.0);
+                    let when = if ago < 60.0 { "just now".to_owned() } else if ago < 3600.0 { format!("{} min ago", (ago / 60.0) as u32) } else { format!("{} h ago", (ago / 3600.0) as u32) };
+                    format!("{} checks pass · checked {when}", works.iter().filter(|i| i.k != usize::MAX).count())
+                }
+                None => String::new(),
+            };
+            let hero = col(ui, 92.0);
+            widgets::glass_panel(ui, "health-hero", hero, R_PANEL);
+            let p = ui.painter().clone();
+            let medal = pos2(hero.left() + 46.0, hero.center().y);
+            p.circle_filled(medal, 22.0, tone.gamma_multiply(0.16));
+            p.circle_stroke(medal, 22.0, Stroke::new(1.0, tone.gamma_multiply(0.5)));
+            if running && checks.is_none() {
+                let turn = if motion::reduced() { 0.0 } else { (now * 5.0) as f32 };
+                widgets::draw_refresh(&p, Rect::from_center_size(medal, vec2(18.0, 18.0)), INK2, turn);
+                ui.ctx().request_repaint_after_secs(1.0 / 30.0);
+            } else if tone == OK {
+                widgets::draw_check(&p, medal, 18.0, OK, 1.0);
+            } else if needs.is_empty() {
+                p.circle_filled(medal, 3.0, INK2);
+            } else {
+                p.text(medal, Align2::CENTER_CENTER, "!", semibold(T_TITLE + 3.0), tone);
+            }
+            let bw = button_width(ui, "Recheck");
+            let tx = hero.left() + 84.0;
+            let tw = hero.width() - 84.0 - bw - 36.0;
+            p.text(pos2(tx, hero.center().y - (if sub.is_empty() { 0.0 } else { 11.0 })), Align2::LEFT_CENTER, fit(&p, &headline, &semibold(T_TITLE + 3.0), tw), semibold(T_TITLE + 3.0), INK);
+            if !sub.is_empty() {
+                p.text(pos2(tx, hero.center().y + 13.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), tw), regular(T_BODY), INK2);
+            }
+            let b = Rect::from_min_size(pos2(hero.right() - 18.0 - bw, hero.center().y - 16.0), vec2(bw, 32.0));
+            let label = if running { "Checking…" } else { "Recheck" };
+            if button(ui, b, Id::unique("recheck"), label, Look::Quiet, !running, Some("Run the checks again")).clicked() {
+                recheck = true;
+            }
+            a11y_text(ui, Id::unique("health-summary"), hero, Role::Status, &format!("{headline}. {sub}"), Some(Live::Polite));
+            ui.add_space(14.0);
+
+            // What needs the person.
+            if !needs.is_empty() {
+                let inner = w - 36.0 - 26.0;
+                let bw = needs.iter().map(|i| match (&i.here, &i.fix) {
+                    (Some((label, _)), _) => button_width(ui, label),
+                    (None, Some(f)) if view::fix_command(f).1 => button_width(ui, "Copy command"),
+                    _ => 0.0,
+                }).fold(0.0, f32::max);
+                let text_w = inner - if bw > 0.0 { bw + 16.0 } else { 0.0 };
+                let heights: Vec<f32> = needs.iter().map(|i| item_height(ui, i, text_w)).collect();
+                let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
+                let r = col(ui, h);
+                card(ui, r, "Needs you");
+                let mut y = r.top() + 48.0;
+                for (n, (i, ih)) in needs.iter().zip(&heights).enumerate() {
+                    let row = Rect::from_min_size(pos2(r.left() + 18.0, y), vec2(w - 36.0, *ih));
+                    let p = ui.painter().clone();
+                    verdict_icon(&p, pos2(row.left() + 8.0, row.top() + 22.0), i.verdict);
+                    let tx = row.left() + 26.0;
+                    let mut ty = row.top() + 12.0;
+                    if !i.title.is_empty() {
+                        p.text(pos2(tx, ty + 10.0), Align2::LEFT_CENTER, &i.title, semibold(T_BODY), INK);
+                        ty += 24.0;
+                    }
+                    ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, regular(T_BODY), if i.title.is_empty() { INK } else { INK2 });
+                    let fix_text = match &i.here {
+                        Some(_) => None,
+                        None => i.fix.clone(),
+                    };
+                    if let Some(f) = &fix_text {
+                        widgets::para_code(ui, pos2(tx, ty + 6.0), text_w, f, regular(T_BODY), INK);
+                    }
+                    let br = Rect::from_min_size(pos2(row.right() - bw, row.top() + 6.0), vec2(bw, 32.0));
+                    if let Some((label, job)) = &i.here {
+                        if button(ui, br, Id::unique(("fix-here", i.k)), label, Look::Quiet, !running, None).clicked() {
                             fix_now = Some(*job);
                         }
-                    } else {
-                        let name = format!("Copy the fix for {}: {cmd}", c.title);
-                        if button(ui, br, Id::unique(("copy-fix", k)), copy_label, Look::Quiet, true, Some(&name)).clicked() {
-                            copy = Some((k, cmd.clone()));
+                    } else if let Some(f) = &i.fix {
+                        let (cmd, is_cmd) = view::fix_command(f);
+                        if is_cmd {
+                            let word = if copied.as_ref().is_some_and(|(k, t)| *k == i.k && now - t < 1.5) { "Copied" } else { "Copy command" };
+                            if button(ui, br, Id::unique(("copy-fix", i.k)), word, Look::Quiet, true, Some(&format!("Copy the fix for {}: {cmd}", i.title))).clicked() {
+                                copy = Some((i.k, cmd));
+                            }
                         }
                     }
+                    let label = format!("{}{}. {}", i.title, if i.title.is_empty() { "" } else { ": needs you" }, i.detail);
+                    a11y_text(ui, Id::unique(("need", n)), row, Role::ListItem, &label, None);
+                    if n + 1 < needs.len() {
+                        ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
+                    }
+                    y += ih;
                 }
-                let label = format!("{}: {}. {}{}", c.title, word, c.detail, fix_text.as_ref().map_or(String::new(), |f| format!(" Fix: {f}")));
-                a11y_text(ui, Id::unique(("check", k)), row, Role::ListItem, &label, None);
-                if k + 1 < checks.len() {
-                    p.hline(row.x_range().shrink(8.0), row.bottom() - 0.5, Stroke::new(1.0, LINE));
+                ui.add_space(14.0);
+            }
+
+            // How each paired computer answers.
+            let before = ui.cursor().top();
+            let links = self.latency_rows(ui, x, before, w);
+            if links > 0.0 {
+                ui.allocate_exact_size(vec2(ui.available_width(), links + 14.0), Sense::hover());
+            }
+
+            // What works: one quiet line each.
+            if !works.is_empty() {
+                let text_w = w - 36.0 - 26.0;
+                let line = |i: &Item| if i.title.is_empty() { i.detail.clone() } else { i.title.clone() };
+                let heights: Vec<f32> = works.iter().map(|i| {
+                    let detail = if i.title.is_empty() { 0.0 } else { text_height(ui, &i.detail, text_w) + 2.0 };
+                    10.0 + 20.0 + detail + 10.0
+                }).collect();
+                let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
+                let r = col(ui, h);
+                card(ui, r, "Working");
+                let mut y = r.top() + 44.0;
+                for (n, (i, ih)) in works.iter().zip(&heights).enumerate() {
+                    let p = ui.painter().clone();
+                    let tx = r.left() + 18.0 + 26.0;
+                    widgets::draw_check(&p, pos2(r.left() + 26.0, y + 20.0), 12.0, OK, 1.0);
+                    if i.title.is_empty() {
+                        widgets::para_code(ui, pos2(tx, y + 10.0), text_w, &i.detail, regular(T_BODY), INK);
+                    } else {
+                        p.text(pos2(tx, y + 20.0), Align2::LEFT_CENTER, line(i), regular(T_BODY), INK);
+                        widgets::para_code(ui, pos2(tx, y + 32.0), text_w, &i.detail, regular(T_META), INK3);
+                    }
+                    a11y_text(ui, Id::unique(("works", n)), Rect::from_min_size(pos2(r.left(), y), vec2(w, *ih)), Role::ListItem, &format!("{}: works. {}", line(i), i.detail), None);
+                    y += ih;
                 }
+                ui.add_space(8.0);
             }
         });
+        if recheck {
+            self.recheck();
+        }
         if let Some((k, text)) = copy {
             ui.ctx().copy_text(text);
             self.copied = Some((k, now));

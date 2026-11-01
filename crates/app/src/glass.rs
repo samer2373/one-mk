@@ -19,7 +19,7 @@
 
 use eframe::egui_glow::{self, ShaderVersion};
 use eframe::glow::{self, HasContext};
-use egui::{Painter, Rect};
+use egui::Rect;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,9 +38,15 @@ pub struct Glass {
 
 impl Default for Glass {
     fn default() -> Self {
-        let off = std::env::var_os("ONE_MK_NO_GLASS").is_some_and(|v| v != "0");
+        let off = refused();
         Self { res: Default::default(), ok: Arc::new(AtomicBool::new(!off)), generation: Default::default(), frame: Default::default() }
     }
+}
+
+/// No transparency at all: `ONE_MK_NO_GLASS=1`, or the desktop's own
+/// "Reduce transparency" setting (macOS accessibility).
+pub fn refused() -> bool {
+    std::env::var_os("ONE_MK_NO_GLASS").is_some_and(|v| v != "0") || crate::chrome::reduce_transparency()
 }
 
 impl Glass {
@@ -60,16 +66,7 @@ impl Glass {
     }
 
     /// The blurred backdrop for panel `key` at `rect` with corner `radius`
-    /// points; draw its tint and contents after this.
-    pub fn backdrop(&self, painter: &Painter, key: u64, rect: Rect, radius: f32) {
-        let mut v = vec![];
-        self.backdrop_shapes(&mut v, key, rect, radius);
-        for s in v {
-            painter.add(s);
-        }
-    }
-
-    /// The same, as shapes to place (for a panel sized after its contents).
+    /// points, as shapes to place; draw its frost and contents after them.
     pub fn backdrop_shapes(&self, out: &mut Vec<egui::Shape>, key: u64, rect: Rect, radius: f32) {
         if !self.works() || !rect.is_positive() {
             return;
@@ -179,7 +176,7 @@ void main() {
 }";
 
 // The blurred picture inside a rounded rectangle, antialiased at its edge,
-// with premultiplied alpha as egui expects.
+// with premultiplied alpha as egui expects (and the window's own alpha kept).
 const SHOW: &str = r"
 uniform sampler2D u_tex;
 uniform vec4 u_src;
@@ -192,8 +189,9 @@ void main() {
     vec2 q = abs(p - u_size * 0.5) - (u_size * 0.5 - vec2(u_radius));
     float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - u_radius;
     float a = clamp(0.5 - d, 0.0, 1.0);
-    vec3 c = TEXTURE(u_tex, u_src.xy + v_uv * u_src.zw).rgb;
-    FRAG_COLOR = vec4(c * a, a);
+    // Premultiplied, alpha kept: where the window is see-through (macOS),
+    // so is the blur, and the desktop shows through it.
+    FRAG_COLOR = TEXTURE(u_tex, u_src.xy + v_uv * u_src.zw) * a;
 }";
 
 fn source(version: ShaderVersion, body: &str, fragment: bool) -> String {

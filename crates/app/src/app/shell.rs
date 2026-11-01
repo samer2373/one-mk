@@ -5,6 +5,7 @@
 //! action that matters most right now.
 
 use super::*;
+use crate::chrome;
 use crate::icons::{self, Icon};
 
 pub(super) const SIDE_W: f32 = 236.0;
@@ -23,8 +24,12 @@ pub(super) struct Frame {
 
 pub(super) fn frame(full: Rect) -> Frame {
     let rail = full.width() < RAIL_BELOW;
-    let side = Rect::from_min_size(full.min + vec2(M, M), vec2(if rail { RAIL_W } else { SIDE_W }, (full.height() - 2.0 * M).max(0.0)));
-    let content = Rect::from_min_max(pos2(side.right() + M, full.top() + M), pos2(full.right() - M, full.bottom() - M));
+    // macOS: the window buttons sit in the sidebar's top corner, beside the
+    // logo; a rail is too narrow for them, so it starts below them.
+    let top = M.max(chrome::page_top());
+    let side_top = if rail { top } else { M };
+    let side = Rect::from_min_size(full.min + vec2(M, side_top), vec2(if rail { RAIL_W } else { SIDE_W }, (full.height() - side_top - M).max(0.0)));
+    let content = Rect::from_min_max(pos2(side.right() + M, full.top() + top), pos2(full.right() - M, full.bottom() - M));
     Frame { side, content, rail }
 }
 
@@ -98,7 +103,9 @@ impl App {
         let x = side.left() + 10.0;
         let w = side.width() - 20.0;
         let mut y = side.top() + 18.0;
-        draw_lockup(ui.painter(), &self.lockup, pos2(x + 10.0, y + 12.0), 22.0);
+        // On macOS the window buttons come first on this row (chrome.rs).
+        let (logo_x, logo_y) = if chrome::mac_frame() { (chrome::BUTTONS_X + chrome::BUTTONS_W - 4.0, chrome::BUTTONS_Y.center()) } else { (x + 10.0, y + 12.0) };
+        draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, logo_y), 22.0);
         y += 46.0;
         let trouble = self.health_trouble();
         for (tab, icon) in NAV {

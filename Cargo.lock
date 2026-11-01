@@ -3214,6 +3214,7 @@ dependencies = [
  "directories",
  "eframe",
  "egui",
+ "objc2 0.6.5",
  "one-mk-ctl",
  "one-mk-proto",
  "serde",

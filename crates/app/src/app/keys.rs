@@ -122,14 +122,7 @@ impl Card {
     fn end(self, ui: &Ui, bottom: f32) -> f32 {
         let r = Rect::from_min_max(self.top, pos2(self.top.x + self.w, bottom + 14.0));
         // The card's glass goes behind what was drawn on it.
-        let g = widgets::glass(ui.ctx());
-        let mut shapes = vec![egui::epaint::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(70) }.as_shape(r, CornerRadius::same(R_PANEL)).into()];
-        if g.works() {
-            let mut cb = vec![];
-            g.backdrop_shapes(&mut cb, Id::unique(("keys-card", &self.title)).value(), r, f32::from(R_PANEL));
-            shapes.extend(cb);
-        }
-        shapes.push(egui::Shape::Rect(egui::epaint::RectShape::new(r, CornerRadius::same(R_PANEL), if g.works() { GLASS } else { GLASS_SOLID }, Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside)));
+        let shapes = widgets::glass_shapes(ui.ctx(), Id::unique(("keys-card", &self.title)).value(), r, R_PANEL);
         ui.painter().set(self.bg, egui::Shape::Vec(shapes));
         r.height()
     }
