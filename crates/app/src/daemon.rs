@@ -354,6 +354,23 @@ impl Link {
         });
     }
 
+    /// What to start at login. Inside an AppImage the programs sit in a
+    /// temporary mount that is gone after the window closes, so it is the
+    /// AppImage file itself (which hands its arguments to `one-mk`); the
+    /// tray only exists as a real file beside `one-mk`.
+    fn login_launch(&self) -> anyhow::Result<Launch> {
+        let exe = install::program_path().ok().filter(|p| std::env::var_os("APPIMAGE").is_some() && p.is_file()).unwrap_or_else(|| self.daemon.clone());
+        if !exe.is_absolute() {
+            anyhow::bail!("one-mk isn't next to this app. Run `one-mk install` instead");
+        }
+        Ok(Launch {
+            tray: install::sibling(&exe, "one-mk-tray"),
+            exe,
+            home: self.custom_home.then(|| install::absolute(&self.dir)),
+            start_now: !client::is_running(&self.dir),
+        })
+    }
+
     /// First launch only: starts one-mk at login, adds the file manager
     /// entries and starts the service, so nobody has to run `one-mk
     /// install`. Never runs again for this settings folder (see
@@ -361,7 +378,8 @@ impl Link {
     pub fn first_run(&self) {
         // Screenshots and demos must not touch the real login items.
         #[cfg(debug_assertions)]
-        if std::env::var_os("ONE_MK_APP_STATUS").is_some() || std::env::var_os("ONE_MK_APP_NO_SETUP").is_some() {
+        if std::env::var_os("ONE_MK_APP_STATUS").is_some() || std::env::var_os("ONE_MK_APP_NO_SETUP").is_some()
+            || std::env::var_os("ONE_MK_APP_GUIDE").is_some() || std::env::var_os("ONE_MK_GUIDE_STAGE").is_some() || std::env::var_os("ONE_MK_APP_SHOT").is_some() {
             return;
         }
         let link = self.clone();
@@ -639,16 +657,7 @@ impl Link {
     pub fn set_autostart(&self, on: bool) {
         self.job(Job::Autostart(on), move |l| {
             let done = if on {
-                if l.daemon.is_absolute() {
-                    install::install(&Launch {
-                        exe: l.daemon.clone(),
-                        tray: l.tray.clone(),
-                        home: l.custom_home.then(|| install::absolute(&l.dir)),
-                        start_now: !client::is_running(&l.dir),
-                    })
-                } else {
-                    Err(anyhow::anyhow!("one-mk isn't next to this app. Run `one-mk install` instead"))
-                }
+                l.login_launch().and_then(|launch| install::install(&launch))
             } else {
                 install::uninstall()
             };
@@ -768,17 +777,8 @@ impl one_mk_ctl::setup::Host for Link {
     }
 
     fn install_login(&self) -> Result<(), String> {
-        if !self.daemon.is_absolute() {
-            return Err("one-mk isn't next to this app. Run `one-mk install` instead".into());
-        }
-        install::install(&Launch {
-            exe: self.daemon.clone(),
-            tray: self.tray.clone(),
-            home: self.custom_home.then(|| install::absolute(&self.dir)),
-            start_now: !client::is_running(&self.dir),
-        })
-        .map(drop)
-        .map_err(|e| format!("{e:#}"))
+        let launch = self.login_launch().map_err(|e| format!("{e:#}"))?;
+        install::install(&launch).map(drop).map_err(|e| format!("{e:#}"))
     }
 
     fn integrations_present(&self) -> bool {
@@ -786,9 +786,10 @@ impl one_mk_ctl::setup::Host for Link {
     }
 
     fn install_integrations(&self) -> Result<bool, String> {
+        let launch = self.login_launch().map_err(|e| format!("{e:#}"))?;
         let setup = one_mk_ctl::integrate::Setup {
-            exe: self.daemon.clone(),
-            home: self.custom_home.then(|| install::absolute(&self.dir)),
+            exe: launch.exe,
+            home: launch.home,
             // Pairing refreshes the entries for each computer it adds.
             computers: vec![],
         };
@@ -797,6 +798,17 @@ impl one_mk_ctl::setup::Host for Link {
 
     fn running(&self) -> bool {
         client::is_running(&self.dir)
+    }
+
+    fn wait_running(&self) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            if client::is_running(&self.dir) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        false
     }
 
     fn start(&self) -> Result<(), String> {

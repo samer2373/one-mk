@@ -1041,11 +1041,15 @@ impl Overlay {
     fn on_status_if(&mut self, enabled: bool, input: &[String], now: f64) {
         if Permission::missing_from_status(input).is_some() {
             if !self.offered && !self.active() && enabled {
-                self.offered = true;
                 let src = StatusPermissions { lines: input.to_vec() };
                 self.start(&Permission::ALL, Box::new(src), now);
             }
-        } else {
+            // A gap the open guide handles (also a revoke during its success
+            // hold) counts as offered, so closing it is respected.
+            if enabled && self.active() {
+                self.offered = true;
+            }
+        } else if !self.active() {
             self.offered = false;
         }
         self.set_status_input(input, now);
@@ -2132,5 +2136,17 @@ mod on_status_tests {
         o.on_status_if(true, &[], 3.0);
         o.on_status_if(true, &missing(), 4.0);
         assert!(o.active());
+    }
+
+    #[test]
+    fn closing_after_a_grant_and_revoke_during_the_success_hold_is_respected() {
+        let mut o = Overlay::default();
+        o.on_status_if(true, &missing(), 0.0);
+        o.on_status_if(true, &[], 0.5); // granted; the card is still on screen
+        assert!(o.active());
+        o.on_status_if(true, &missing(), 0.6); // revoked before it finished
+        o.stop(); // the person closes it
+        o.on_status_if(true, &missing(), 5.0);
+        assert!(!o.active(), "no reopening for the same gap");
     }
 }

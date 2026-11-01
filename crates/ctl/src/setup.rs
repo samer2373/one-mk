@@ -13,6 +13,32 @@ use std::path::Path;
 
 /// Present in the settings folder once first-run setup has run.
 pub const MARKER: &str = "setup-done";
+/// Exists while one window is running setup; a second window leaves it to
+/// the first. One left behind by a crash is ignored after [`LOCK_STALE`].
+const LOCK: &str = "setup.lock";
+const LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Held while setup runs; removes the lock file when dropped.
+struct Lock(std::path::PathBuf);
+
+impl Lock {
+    fn take(dir: &Path) -> Option<Self> {
+        let _ = std::fs::create_dir_all(dir);
+        let path = dir.join(LOCK);
+        let fresh = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < LOCK_STALE);
+        if path.exists() && !fresh(&path) {
+            let _ = std::fs::remove_file(&path);
+        }
+        // `create_new` is atomic: of two windows, exactly one gets the file.
+        std::fs::OpenOptions::new().write(true).create_new(true).open(&path).ok().map(|_| Self(path))
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
 
 /// How one step of setup went.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +100,10 @@ pub trait Host {
     fn install_integrations(&self) -> Result<bool, String>;
     /// The service answers on its control channel.
     fn running(&self) -> bool;
+    /// Gives a service the login entry just started time to answer on its
+    /// control channel; `false` if it never does. Without this the fallback
+    /// `start` would launch a second daemon beside the managed one.
+    fn wait_running(&self) -> bool;
     /// Starts the service for this session.
     fn start(&self) -> Result<(), String>;
 }
@@ -94,6 +124,11 @@ pub fn run(dir: &Path, host: &dyn Host) -> Option<Report> {
     if !needed(dir) {
         return None;
     }
+    // Another window may be doing it right now; look again once we hold the lock.
+    let _lock = Lock::take(dir)?;
+    if !needed(dir) {
+        return None;
+    }
     let login = if host.login_installed() {
         Step::Already
     } else {
@@ -110,7 +145,8 @@ pub fn run(dir: &Path, host: &dyn Host) -> Option<Report> {
     };
     // `install_login` starts the service itself when it is not running; this
     // covers a login entry that was already there, or one that could not start it.
-    let service = if host.running() {
+    let up = host.running() || (login == Step::Done && host.wait_running());
+    let service = if up {
         if login == Step::Done { Step::Done } else { Step::Already }
     } else {
         host.start().map_or_else(Step::Failed, |()| Step::Done)
@@ -135,6 +171,7 @@ mod tests {
         fail_login: Cell<bool>,
         fail_start: Cell<bool>,
         no_file_manager: Cell<bool>,
+        slow_service: Cell<bool>,
         calls: RefCell<Vec<&'static str>>,
     }
 
@@ -148,7 +185,7 @@ mod tests {
                 return Err("no home directory".into());
             }
             self.login.set(true);
-            self.running.set(true); // like the real one: it starts the service too
+            self.running.set(!self.slow_service.get()); // like the real one: it starts the service too
             Ok(())
         }
         fn integrations_present(&self) -> bool {
@@ -164,6 +201,10 @@ mod tests {
         }
         fn running(&self) -> bool {
             self.running.get()
+        }
+        fn wait_running(&self) -> bool {
+            self.calls.borrow_mut().push("wait");
+            self.running.get() && !self.slow_service.get()
         }
         fn start(&self) -> Result<(), String> {
             self.calls.borrow_mut().push("start");
@@ -241,14 +282,71 @@ mod tests {
     }
 
     #[test]
-    fn an_unwritable_folder_only_means_setup_may_run_again() {
+    fn an_unwritable_folder_changes_nothing() {
         let dir = scratch("readonly");
         let blocker = dir.with_extension("file");
         std::fs::write(&blocker, b"x").unwrap();
         let host = Fake::default();
-        // A folder that cannot be made: the marker can't be written.
-        assert!(run(&blocker.join("inside"), &host).is_some());
+        // A folder that cannot be made: no lock, so nothing is touched. (One-mk
+        // could not keep its identity there either.)
+        assert_eq!(run(&blocker.join("inside"), &host), None);
+        assert!(host.calls.borrow().is_empty());
         assert!(needed(&blocker.join("inside")));
         let _ = std::fs::remove_file(&blocker);
+    }
+
+    #[test]
+    fn a_service_that_is_still_starting_is_waited_for_not_started_twice() {
+        let dir = scratch("slow");
+        let host = Fake::default();
+        host.slow_service.set(true);
+        // Slow to answer: the wait gives up, and only then is the fallback used.
+        let report = run(&dir, &host).unwrap();
+        assert_eq!(*host.calls.borrow(), ["login", "integrations", "wait", "start"]);
+        assert_eq!(report.service, Step::Done);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // A service that comes up during the wait is never started a second time.
+        struct Late(Fake);
+        impl Host for Late {
+            fn login_installed(&self) -> bool { self.0.login_installed() }
+            fn install_login(&self) -> Result<(), String> { self.0.login.set(true); Ok(()) }
+            fn integrations_present(&self) -> bool { true }
+            fn install_integrations(&self) -> Result<bool, String> { Ok(true) }
+            fn running(&self) -> bool { self.0.running.get() }
+            fn wait_running(&self) -> bool { self.0.running.set(true); true }
+            fn start(&self) -> Result<(), String> { panic!("a second daemon must not be started") }
+        }
+        let dir = scratch("late");
+        let report = run(&dir, &Late(Fake::default())).unwrap();
+        assert_eq!(report.service, Step::Done);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn two_windows_never_run_setup_at_the_same_time() {
+        let dir = scratch("lock");
+        std::fs::create_dir_all(&dir).unwrap();
+        let held = Lock::take(&dir).expect("first window");
+        let host = Fake::default();
+        assert_eq!(run(&dir, &host), None, "the second window leaves it to the first");
+        assert!(host.calls.borrow().is_empty());
+        assert!(Lock::take(&dir).is_none());
+        drop(held);
+        assert!(run(&dir, &host).is_some(), "once the first is done, it can run");
+        assert!(!dir.join(LOCK).exists(), "the lock is released");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_lock_left_by_a_crash_does_not_block_setup_forever() {
+        let dir = scratch("stale");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(LOCK);
+        std::fs::write(&path, b"").unwrap();
+        let old = std::time::SystemTime::now() - 2 * LOCK_STALE;
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+        assert!(run(&dir, &Fake::default()).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -21,7 +21,7 @@ shot() { # name after-seconds [env...]
     local name=$1 after=$2; shift 2
     for _ in 1 2 3; do
         rm -f "$W/$name.ppm"
-        env ONE_MK_APP_SIZE=1280x800 ONE_MK_GUIDE_STAGE=1 ONE_MK_GUIDE_FAKE_SCREENS="$MAC" "$@" \
+        env ONE_MK_APP_NO_SETUP=1 ONE_MK_APP_SIZE=1280x800 ONE_MK_GUIDE_STAGE=1 ONE_MK_GUIDE_FAKE_SCREENS="$MAC" "$@" \
             ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 30 "$APP" --home "$W/home" || true
         [ -s "$W/$name.ppm" ] && break
     done
