@@ -54,9 +54,8 @@ impl App {
     /// way it goes at once.
     pub(super) fn suggestion_banner(&mut self, ui: &mut Ui, card: SuggestionCard) {
         let SuggestionCard { g, question, rect, buttons_w, q, d } = card;
+        widgets::glass_panel(ui, "suggestion", rect, 14);
         let p = ui.painter();
-        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(10)));
-        p.rect(rect, CornerRadius::same(10), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
         let qh = q.size().y;
         let text_top = rect.center().y - (qh + 2.0 + d.size().y) / 2.0;
         p.galley(pos2(rect.left() + 16.0, text_top), q, INK);

@@ -6,11 +6,32 @@ use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId,
 use std::sync::Arc;
 
 pub const GROUND: Color32 = Color32::from_rgb(0x0F, 0x12, 0x16);
+/// The room the desk stands in: the window's ground behind everything.
+pub const ROOM: Color32 = Color32::from_rgb(0x10, 0x13, 0x18);
+/// Glass: the tint over a blurred backdrop (premultiplied), and the fill
+/// used instead when there is no blur. Text on either holds 4.5:1.
+pub const GLASS: Color32 = Color32::from_rgba_premultiplied(10, 12, 15, 168);
+pub const GLASS_SOLID: Color32 = Color32::from_rgb(0x16, 0x1A, 0x20);
+/// What floats over everything (a sheet, a toast, a menu): solid, so it
+/// reads the same whatever is under it and while it moves.
+pub const POPOVER: Color32 = Color32::from_rgb(0x1A, 0x1E, 0x25);
+/// A control or a chosen row on glass: a little lighter than the glass.
+pub const ON_GLASS: Color32 = Color32::from_rgba_premultiplied(18, 18, 18, 18);
+pub const ON_GLASS_LIT: Color32 = Color32::from_rgba_premultiplied(30, 30, 30, 30);
+/// Corners: panels, things inside them, small controls.
+pub const R_PANEL: u8 = 20;
+pub const R_INNER: u8 = 12;
+/// The gap round and between panels.
+pub const M: f32 = 12.0;
 pub const PANEL: Color32 = Color32::from_rgb(0x13, 0x17, 0x1C);
-pub const RAISED: Color32 = Color32::from_rgb(0x17, 0x1B, 0x21);
-pub const LINE: Color32 = Color32::from_rgb(0x25, 0x2B, 0x34);
+/// Wells and fields on glass: a touch lighter than what is under them.
+pub const RAISED: Color32 = Color32::from_rgba_premultiplied(13, 13, 13, 13);
+/// Hairlines: the ink at 7%, so they sit on glass and on solid alike.
+pub const LINE: Color32 = Color32::from_rgba_premultiplied(18, 18, 18, 18);
 pub const INK: Color32 = Color32::from_rgb(0xED, 0xEF, 0xF2);
 pub const INK2: Color32 = Color32::from_rgb(0x9D, 0xA6, 0xB1);
+/// Labels and quiet numbers on glass: 4.5:1 over any backdrop.
+pub const INK3: Color32 = Color32::from_rgb(0x8F, 0x98, 0xA4);
 /// Between INK2 and INK: hovered labels.
 pub const INK_HOVER: Color32 = Color32::from_rgb(0xC4, 0xCA, 0xD2);
 /// The one warm colour: something crossing, a drop target, the main action.
@@ -18,12 +39,14 @@ pub const SIGNAL: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
 pub const SIGNAL_LIT: Color32 = Color32::from_rgb(0xFF, 0xC2, 0x66);
 pub const SIGNAL_INK: Color32 = Color32::from_rgb(0x1E, 0x15, 0x05);
 pub const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6B, 0x5E);
+/// Connected: a dot, never words alone.
+pub const OK: Color32 = Color32::from_rgb(0x5B, 0xC9, 0x8F);
 /// Quiet buttons, and the pill under the chosen tab or segment.
-pub const BUTTON: Color32 = Color32::from_rgb(0x22, 0x28, 0x31);
-pub const BUTTON_LIT: Color32 = Color32::from_rgb(0x2A, 0x31, 0x3B);
-pub const PILL: Color32 = Color32::from_rgb(0x26, 0x2C, 0x36);
+pub const BUTTON: Color32 = Color32::from_rgba_premultiplied(22, 22, 22, 22);
+pub const BUTTON_LIT: Color32 = Color32::from_rgba_premultiplied(34, 34, 34, 34);
+pub const PILL: Color32 = Color32::from_rgba_premultiplied(32, 32, 32, 32);
 /// A switch that is off: a visible track with a 3:1 edge.
-pub const TRACK_OFF: Color32 = Color32::from_rgb(0x3A, 0x42, 0x4E);
+pub const TRACK_OFF: Color32 = Color32::from_rgb(0x4A, 0x52, 0x5E);
 pub const TRACK_EDGE: Color32 = Color32::from_rgb(0x70, 0x7A, 0x86);
 /// The outline of a drawn key or mouse button: 3:1 on the panel and on
 /// the key's own fill.
@@ -84,7 +107,7 @@ pub fn install(ctx: &egui::Context) {
         let v = &mut style.visuals;
         *v = egui::Visuals::dark();
         v.panel_fill = GROUND;
-        v.window_fill = RAISED;
+        v.window_fill = POPOVER;
         v.extreme_bg_color = PANEL;
         v.window_stroke = Stroke::new(1.0, LINE);
         v.window_corner_radius = CornerRadius::same(12);

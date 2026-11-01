@@ -840,6 +840,9 @@ pub struct Scene {
     pub sheet_top: Option<f32>,
     /// Nothing may go above this (the top bar).
     pub top_clear: f32,
+    /// Where the computers are framed, when the desk is drawn bigger than
+    /// that (behind the window's glass panels).
+    pub fit: Option<Rect>,
     faces: Vec<Face>,
     /// Half the view's width over its focal length, as last drawn: how
     /// much of the desk fits across at a given distance.
@@ -879,6 +882,7 @@ impl Default for Scene {
             raise: Tween::new(0.0),
             sheet_top: None,
             top_clear: 0.0,
+            fit: None,
             faces: vec![],
             view_k: 0.6,
             last_time: -1.0,
@@ -1051,6 +1055,7 @@ impl Scene {
     }
 
     fn camera(&self, rect: Rect) -> Camera {
+        let rect = self.fit.unwrap_or(rect);
         let k = self.intro_t0.map_or(0.0, |t0| motion::progress(self.now, t0, motion::space(0.6), motion::out_expo));
         let raise = self.raise.value(self.now);
         let (yaw, dist) = (self.yaw + lerp(-0.12, 0.0, k), self.dist * lerp(1.12, 1.0, k));
@@ -1211,20 +1216,23 @@ impl Scene {
         // The desk is lit around the computers and falls off into the room:
         // no edges, nothing to suggest a box the computers sit in.
         let (cx, cz) = (self.focus_x, -4.0);
-        let (rx, rz) = (150.0 + self.dist * 0.4, 70.0);
+        // The desk's front edge, a little in front of the nearest device.
+        let front = geo.iter().map(|g| g.foot[1] + g.foot[3]).fold(f32::MIN, f32::max).max(cz) + 34.0;
+        let (rx, rz) = (150.0 + self.dist * 0.4, (front - cz + 26.0).max(70.0));
         let light = |x: f32, z: f32| {
             let d = (((x - cx) / rx).powi(2) + ((z - cz) / rz).powi(2)).sqrt();
             (1.0 - d).clamp(0.0, 1.0).powf(1.4)
         };
-        let lit = Color32::from_rgb(0x24, 0x29, 0x31);
+        // A dark walnut desk, lit only by its screens.
+        let lit = Color32::from_rgb(0x3B, 0x30, 0x27);
         let shade = |k: f32| {
             let f = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * k) as u8;
             Color32::from_rgb(f(sky_low.r(), lit.r()), f(sky_low.g(), lit.g()), f(sky_low.b(), lit.b()))
         };
-        const NX: usize = 18;
+        const NX: usize = 24;
         const NZ: usize = 10;
         let xs: Vec<f32> = (0..=NX).map(|i| cx - rx + 2.0 * rx * i as f32 / NX as f32).collect();
-        let zs: Vec<f32> = (0..=NZ).map(|j| cz - rz + 2.0 * rz * j as f32 / NZ as f32).collect();
+        let zs: Vec<f32> = (0..=NZ).map(|j| lerp(cz - rz, front, j as f32 / NZ as f32)).collect();
         let mut m = Mesh::default();
         for &z in &zs {
             for &x in &xs {
@@ -1240,25 +1248,27 @@ impl Scene {
             }
         }
         painter.add(Shape::mesh(m));
-        // A 10 cm grid, the room's measuring tape, fading with the light.
-        let seg = |a: V3, b: V3| {
-            let k = light((a.x + b.x) / 2.0, (a.z + b.z) / 2.0);
-            if k > 0.02 {
-                painter.line_segment([cam.pt(a), cam.pt(b)], Stroke::new(1.0, Color32::from_white_alpha((14.0 * k) as u8)));
-            }
-        };
-        let (x0, x1) = (((cx - rx) / 10.0).ceil() as i32, ((cx + rx) / 10.0) as i32);
-        let (z0, z1) = (((cz - rz) / 10.0).ceil() as i32, ((cz + rz) / 10.0) as i32);
-        for i in x0..=x1 {
-            for j in z0..z1 {
-                let (x, z) = (i as f32 * 10.0, j as f32 * 10.0);
-                seg(v(x, 0.0, z), v(x, 0.0, z + 10.0));
-            }
+        // The front edge: a lit lip, then the desk's 3 cm thickness in shade.
+        let mut lip = Mesh::default();
+        for &x in &xs {
+            let k = light(x, front - 10.0);
+            lip.colored_vertex(cam.pt(v(x, 0.0, front)), shade((k * 1.35).min(1.0)));
+            lip.colored_vertex(cam.pt(v(x, -3.2, front)), mix(sky_low, Color32::from_rgb(0x0B, 0x09, 0x08), k));
         }
-        for j in z0..=z1 {
-            for i in x0..x1 {
-                let (x, z) = (i as f32 * 10.0, j as f32 * 10.0);
-                seg(v(x, 0.0, z), v(x + 10.0, 0.0, z));
+        for i in 0..NX as u32 {
+            let k = i * 2;
+            lip.add_triangle(k, k + 2, k + 3);
+            lip.add_triangle(k, k + 3, k + 1);
+        }
+        painter.add(Shape::mesh(lip));
+        // Grain: long faint streaks along the desk, fading with the light.
+        for j in 0..34 {
+            let z = lerp(cz - rz * 0.8, front - 2.0, (j as f32 * 0.618_034).fract());
+            let x0 = cx - rx + ((j * 37) % 100) as f32 / 100.0 * rx;
+            let len = 30.0 + ((j * 53) % 70) as f32;
+            let k = light(x0 + len / 2.0, z);
+            if k > 0.05 {
+                painter.line_segment([cam.pt(v(x0, 0.0, z)), cam.pt(v(x0 + len, 0.0, z + 0.6))], Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 0, 0, (38.0 * k) as u8)));
             }
         }
         // Light from each screen on the desk, and contact shadows that
@@ -1272,8 +1282,10 @@ impl Scene {
             let [fx, fz, rx, _] = g.foot;
             if d.online {
                 let c = hex(d.wall[0]);
-                let pw = if wall { rx.max(30.0) } else { 30.0 };
-                pool(painter, cam, v(fx, 0.0, fz + 16.0), pw, 22.0, rgba([c[0].saturating_add(40), c[1].saturating_add(40), c[2].saturating_add(40)], 1.0, 0.16 * a));
+                let pw = if wall { rx.max(36.0) } else { 36.0 };
+                let glow = [c[0].saturating_add(70), c[1].saturating_add(60), c[2].saturating_add(50)];
+                pool(painter, cam, v(fx, 0.0, fz + 14.0), pw * 1.5, 34.0, rgba(glow, 1.0, 0.22 * a));
+                pool(painter, cam, v(fx, 0.0, fz + 10.0), pw, 18.0, rgba(glow, 1.0, 0.22 * a));
             }
             let up = (d.at.y - d.target.y.max(0.0)).clamp(0.0, 6.0) / 6.0;
             let shadow = |[fx, fz, rx, rz]: [f32; 4]| {

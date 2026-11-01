@@ -794,8 +794,8 @@ fn draw_card(
         color: Color32::from_black_alpha((120.0 * alpha) as u8),
     };
     p.add(shadow.as_shape(card, CornerRadius::same(RADIUS)));
-    p.rect_filled(card, CornerRadius::same(RADIUS), RAISED.gamma_multiply(alpha));
-    p.rect_stroke(card, CornerRadius::same(RADIUS), Stroke::new(1.0, LINE.gamma_multiply(alpha)), StrokeKind::Inside);
+    p.rect_filled(card, CornerRadius::same(RADIUS), POPOVER.gamma_multiply(alpha));
+    p.rect_stroke(card, CornerRadius::same(RADIUS), Stroke::new(1.0, Color32::from_white_alpha(16).gamma_multiply(alpha)), StrokeKind::Inside);
     // A faint top light, as on the app's raised surfaces.
     let top = Rect::from_min_size(card.min + vec2(RADIUS as f32, 0.5), vec2(card.width() - 2.0 * RADIUS as f32, 1.0));
     p.rect_filled(top, 0.0, Color32::from_white_alpha((10.0 * alpha) as u8));

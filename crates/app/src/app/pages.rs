@@ -14,8 +14,8 @@ const MODS: [(&str, &str); 4] = [("none", "None"), ("shift", "Shift"), ("ctrl", 
 
 /// A card: a raised panel with a title.
 pub(super) fn card(ui: &Ui, r: Rect, title: &str) -> Rect {
+    widgets::glass_panel(ui, ("card", title), r, R_PANEL);
     let p = ui.painter();
-    p.rect(r, CornerRadius::same(12), PANEL, Stroke::new(1.0, LINE), StrokeKind::Inside);
     p.text(r.left_top() + vec2(18.0, 26.0), Align2::LEFT_CENTER, title, semibold(T_TITLE), INK);
     a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(r.min, vec2(r.width(), 44.0)), Role::Heading, title, None);
     Rect::from_min_max(r.min + vec2(18.0, 48.0), r.max - vec2(18.0, 14.0))
@@ -275,7 +275,16 @@ impl App {
         #[cfg(debug_assertions)]
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
         scroll.show(&mut child, |ui| {
-            let (all, _) = ui.allocate_exact_size(vec2(area.width(), total), Sense::hover());
+            let (all, _) = ui.allocate_exact_size(vec2(area.width(), total + 44.0), Sense::hover());
+            // Credits for what the window draws and isn't ours.
+            let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for one·mk.";
+            let credit_at = pos2(all.left() + 4.0, all.bottom() - 16.0);
+            let shown = fit(ui.painter(), credit, &regular(T_META), all.width() - 8.0);
+            ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), INK3);
+            let link = ui.interact(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0)), Id::unique("credit-mouse"), Sense::click());
+            if link.on_hover_text("Open the model's page").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
+            }
             let r = |k: usize| Rect::from_min_size(pos2(all.left() + at[k].0 as f32 * (col_w + gap), all.top() + at[k].1), vec2(col_w, heights[k]));
             self.edges_card(ui, r(0));
             self.power_card(ui, r(1));

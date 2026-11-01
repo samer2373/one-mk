@@ -12,7 +12,10 @@
 
 mod app;
 mod daemon;
+mod gear;
+mod glass;
 mod guide;
+mod icons;
 mod motion;
 mod pairing;
 mod rtt;
@@ -58,7 +61,7 @@ fn main() {
         }
     };
     #[allow(unused_mut)]
-    let mut size = [980.0, 660.0];
+    let mut size = [1200.0, 780.0];
     // Development aid (see app.rs `shot`): ONE_MK_APP_SIZE=760x540.
     #[cfg(debug_assertions)]
     if let Some((w, h)) = std::env::var("ONE_MK_APP_SIZE").ok().and_then(|s| {
@@ -67,7 +70,16 @@ fn main() {
     }) {
         size = [w, h];
     }
+    #[allow(unused_mut)]
+    let mut multisampling = 0;
+    // Development aid: ONE_MK_APP_MSAA=4 asks for a multisampled window,
+    // as some drivers give anyway (the glass then copies at full size).
+    #[cfg(debug_assertions)]
+    if let Some(n) = std::env::var("ONE_MK_APP_MSAA").ok().and_then(|n| n.parse().ok()) {
+        multisampling = n;
+    }
     let options = eframe::NativeOptions {
+        multisampling,
         viewport: egui::ViewportBuilder::default()
             .with_title("one·mk")
             .with_app_id("one-mk")

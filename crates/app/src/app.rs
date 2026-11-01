@@ -9,6 +9,8 @@ mod keys;
 mod links;
 mod pages;
 mod place;
+mod shell;
+mod desk_cards;
 mod typing;
 
 use crate::daemon::{Event, Job, Link};
@@ -16,6 +18,8 @@ use crate::motion::{self, tween};
 use crate::pairing::{Pairing, Step};
 use crate::scene::{self, Cargo, Device, Kind, SPACING, Scene, v};
 use crate::style::*;
+use crate::rtt;
+use crate::glass::Glass;
 use crate::view::{Check, Prefs};
 use crate::widgets::{self, Look, Pills, a11y_text, button, button_width, mix, para, switch, text_width};
 use egui::accesskit::{Live, Role};
@@ -32,8 +36,8 @@ const PANEL_H: f32 = 196.0;
 const PAD: f32 = 20.0;
 const GHOST: &str = "\u{0}pairing";
 /// Wallpapers for paired computers: low chroma, about equal lightness.
-const WALLS: [[u32; 2]; 4] = [[0x35312C, 0x16140F], [0x283430, 0x101614], [0x2A313B, 0x11151A], [0x3A2E2A, 0x171211]];
-const ME_WALL: [u32; 2] = [0x1D2D3C, 0x0D151E];
+const WALLS: [[u32; 2]; 4] = [[0x6A4A2E, 0x1C130C], [0x2F5A50, 0x0C1A17], [0x2E5578, 0x0B1724], [0x7A4330, 0x1F0F0A]];
+const ME_WALL: [u32; 2] = [0x2E5578, 0x0B1724];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tab {
@@ -169,6 +173,14 @@ struct Slot {
 }
 
 pub struct App {
+    glass: Glass,
+    /// A computer has been dragged into place: the drag hint goes.
+    dragged_once: bool,
+    /// What was behind the glass last frame, and whether the desk moved.
+    backdrop_was: u64,
+    scene_moving: bool,
+    /// Counts status reports, so the glass knows the desk may look different.
+    status_seen: u64,
     update_available: Option<String>,
     update_output: Option<String>,
     link: Link,
@@ -384,7 +396,7 @@ impl App {
         link.watch();
         link.first_run();
         let mut scene = Scene::default();
-        scene.top_clear = TOP_H + 12.0;
+        scene.top_clear = 0.0;
         let mut me = Device::new("me", "This computer", me_kind(), true, ME_WALL);
         me.arrive(v(0.0, 0.0, 0.0), 0.0, 0.0);
         scene.devices.push(me);
@@ -406,7 +418,14 @@ impl App {
             cc.egui_ctx.set_zoom_factor(z);
         }
         let slot = || Slot { cell: None, was: None, at: f64::NEG_INFINITY };
+        let glass = Glass::default();
+        widgets::set_glass(&cc.egui_ctx, glass.clone());
         Ok(Self {
+            glass,
+            dragged_once: link.dir.join(".window-dragged").exists(),
+            backdrop_was: 0,
+            scene_moving: false,
+            status_seen: 0,
             link,
             rx,
             status: None,
@@ -504,6 +523,7 @@ impl App {
                 }
                 Event::Status(s) => {
                     let s = *s;
+                    self.status_seen += 1;
                     // Round trips: what the daemon says now, or nothing once it is gone.
                     match (&s, self.rtt_frozen) {
                         (Some(st), None) => self.rtts.record(now, &st.links),
@@ -1163,7 +1183,8 @@ impl App {
         }
     }
 
-    fn desk(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
+    /// The desk: framed in `rect`, drawn over `all` (behind the glass).
+    fn desk(&mut self, ui: &mut Ui, rect: Rect, all: Rect, now: f64) {
         let locked = widgets::locked(ui);
         self.desk_keys(ui, rect, now);
         let resp = ui.interact(rect, Id::unique("desk"), if locked { Sense::hover() } else { Sense::CLICK | Sense::DRAG });
@@ -1238,6 +1259,10 @@ impl App {
                 d.pop.go(1.0, now, 0.16, motion::out_cubic);
                 let id = d.id.clone();
                 self.drag_side = None;
+                if !self.dragged_once {
+                    self.dragged_once = true;
+                    let _ = std::fs::write(self.drag_hint_file(), b"");
+                }
                 match offset {
                     Some(o) => self.choose_place(&id, side, Some(o), false),
                     None => self.choose_side(&id, side, false),
@@ -1295,12 +1320,13 @@ impl App {
         };
         self.scene.empty_slot = !self.sheet_open() && self.running().is_some_and(|s| s.peers.is_empty()) && self.just_paired.is_none();
         let moving = self.scene.step(now, dragging);
-        let painter = ui.painter_at(rect);
-        self.scene.paint(&painter, rect);
+        self.scene_moving = moving;
+        self.scene.fit = Some(rect);
+        let painter = ui.painter_at(all);
+        self.scene.paint(&painter, all);
         if moving || self.drag.is_some() {
             ui.ctx().request_repaint();
         }
-        self.desk_status(&painter, rect, hovering_files);
     }
 
     /// While a computer is dragged, the others make room live, so the
@@ -1310,35 +1336,6 @@ impl App {
         if self.drag_side.as_ref() != Some(&side) {
             self.drag_side = Some(side);
             self.sync_scene();
-        }
-    }
-
-    /// One quiet line at the foot of the desk: files on their way, or
-    /// where to let go of the ones being dragged in.
-    fn desk_status(&self, painter: &Painter, rect: Rect, hovering_files: bool) {
-        let p = pos2(rect.center().x, rect.bottom() - 22.0);
-        if hovering_files {
-            painter.text(p, Align2::CENTER_CENTER, "Drop on a computer to send", semibold(T_BODY), SIGNAL);
-            return;
-        }
-        // Transfers the daemon reports: the first one, with its bar (the
-        // Files tab lists them all below).
-        if let Some(t) = self.running().and_then(|s| s.transfers.first()).filter(|_| self.tab != Tab::Files) {
-            let (title, detail, frac) = crate::view::transfer_lines(t);
-            let more = self.running().map_or(0, |s| s.transfers.len() - 1);
-            let text = if more > 0 { format!("{title} · {detail} · and {more} more") } else { format!("{title} · {detail}") };
-            let text = fit(painter, &text, &regular(T_META), rect.width() - 80.0);
-            painter.text(p - vec2(0.0, 6.0), Align2::CENTER_CENTER, text, regular(T_META), INK2);
-            let bar = Rect::from_center_size(p + vec2(0.0, 9.0), vec2(220.0f32.min(rect.width() - 80.0), 3.0));
-            painter.rect_filled(bar, CornerRadius::same(2), TRACK_OFF);
-            let w = bar.width() * frac.unwrap_or(0.18);
-            painter.rect_filled(Rect::from_min_size(bar.min, vec2(w.max(3.0), bar.height())), CornerRadius::same(2), SIGNAL);
-            return;
-        }
-        let sending: Vec<String> = self.busy.iter().filter_map(|j| if let Job::Send { to, count } = j { Some(format!("{} to {to}", items(*count))) } else { None }).collect();
-        if !sending.is_empty() {
-            let text = fit(painter, &format!("Sending {}…", sending.join(", ")), &regular(T_META), rect.width() - 80.0);
-            painter.text(p, Align2::CENTER_CENTER, text, regular(T_META), INK2);
         }
     }
 
@@ -1375,121 +1372,34 @@ impl App {
 
     // ---------- the top bar ----------
 
-    fn top_bar(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
-        let p = ui.painter_at(rect);
-        let mut m = egui::Mesh::default();
-        let clear = Color32::from_rgba_premultiplied(0, 0, 0, 0);
-        for (pt, c) in [(rect.left_top(), GROUND), (rect.right_top(), GROUND), (rect.right_bottom(), clear), (rect.left_bottom(), clear)] {
-            m.colored_vertex(pt, c);
-        }
-        m.add_triangle(0, 1, 2);
-        m.add_triangle(0, 2, 3);
-        p.add(egui::Shape::mesh(m));
-
-        draw_lockup(&p, &self.lockup, pos2(rect.left() + 18.0, rect.center().y), 22.0);
-
-        // Tabs. With one·mk off only some have anything to show. In a
-        // narrow window the names get shorter, then the padding smaller.
-        let off = self.off();
-        // The action button, and Stop beside it while one·mk runs (at
-        // least its short word): the tabs make room for both.
-        let stop_w = if self.running().is_some() { button_width(ui, "Stop service") + 8.0 } else { 0.0 };
-        let action_w = button_width(ui, &self.action().0) + 16.0 + stop_w;
-        let lockup_w = 18.0 + 22.0 * self.lockup.size()[0] as f32 / self.lockup.size()[1] as f32 + 16.0;
-        let room = rect.width() - 2.0 * lockup_w.max(action_w + 8.0);
-        let room_off_centre = rect.width() - lockup_w - action_w - 16.0;
-        let mut pick = None;
-        for (short, pad) in [(false, 26.0), (true, 26.0), (true, 18.0), (true, 12.0)] {
-            let labels: Vec<&str> = TABS.iter().map(|t| if short { t.2 } else { t.1 }).collect();
-            let widths: Vec<f32> = labels.iter().map(|l| text_width(ui, l, semibold(T_BODY)) + pad).collect();
-            let total = widths.iter().sum::<f32>() + 2.0 * (TABS.len() - 1) as f32 + 6.0;
-            pick = Some((labels, widths, total));
-            if total <= room_off_centre {
-                break;
-            }
-        }
-        let (labels, widths, total) = pick.expect("one choice at least");
-        // Centred in the bar when it fits there, else between the logo and the button.
-        let cx = if total <= room { rect.center().x } else { rect.left() + lockup_w + (room_off_centre - total) / 2.0 + total / 2.0 };
-        let track = Rect::from_center_size(pos2(cx, rect.center().y), vec2(total, 34.0));
-        let mut x = track.left() + 3.0;
-        let cells: Vec<Rect> = widths
-            .iter()
-            .map(|w| {
-                let r = Rect::from_min_size(pos2(x, track.top() + 3.0), vec2(*w, 28.0));
-                x += w + 2.0;
-                r
-            })
-            .collect();
-        let tabs = Pills {
-            id: Id::unique("tabs"),
-            track,
-            cells,
-            labels: &labels,
-            names: TABS.iter().map(|t| t.1.to_owned()).collect(),
-            chosen: TABS.iter().position(|t| t.0 == self.tab),
-            enabled: TABS.iter().map(|t| !off || t.0.when_off()).collect(),
-            role: Role::Tab,
-            font: T_BODY,
-            radius: 7,
+    /// The page's title and the quieter words after it.
+    fn page_title(&self) -> (String, String) {
+        let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1).to_owned();
+        let sub = match (self.tab, self.status.as_ref()) {
+            (_, None) => String::new(),
+            (_, Some(None)) => "one·mk is off".to_owned(),
+            (Tab::Desk | Tab::Layout, Some(Some(s))) => match s.peers.len() {
+                0 => "nothing paired yet".to_owned(),
+                n => format!("{} of {n} connected", s.peers.iter().filter(|p| p.online).count()),
+            },
+            _ => String::new(),
         };
-        let cells = tabs.cells.clone();
-        if let Some(k) = tabs.show(ui, self.arrowed) {
-            self.set_tab(TABS[k].0);
-        }
-        // A dot on Health when something there needs attention.
-        let trouble = self.running().is_some_and(|s| !s.input.is_empty())
-            || self.doctor.as_ref().is_some_and(|(d, _)| d.as_ref().is_ok_and(|c| c.iter().any(|c| c.verdict == crate::view::Verdict::Fail)));
-        if trouble && let Some(k) = TABS.iter().position(|t| t.0 == Tab::Health) {
-            let c = cells[k];
-            ui.painter().circle_filled(pos2(c.right() - 7.0, c.top() + 7.0), 3.0, ERROR);
-        }
+        (name, sub)
+    }
 
-        // The one action that matters most right now. A sheet owns its own
-        // way out, so the button steps aside while one is open.
-        let (label, look, enabled, job) = self.action();
-        let label = label.as_str();
-        let shown = tween(ui.ctx(), Id::unique("action-shown"), f32::from(self.status.is_some() && !self.sheet_open()), motion::fade(0.12), motion::linear);
-        if shown < 0.01 {
-            return;
+    /// Changes whenever what is drawn behind the glass may have changed.
+    fn backdrop_sig(&self, full: Rect) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.tab as u8, full.width() as i32, full.height() as i32, self.status_seen, self.scene.hover, self.scene.selected, self.scene.drop_targets, self.scene.empty_slot, self.scene.slot_hover).hash(&mut h);
+        // The desk moves behind the glass only on the pages that show it.
+        let moving = self.tab.desk() && (self.scene_moving || self.drag.is_some());
+        (self.sheet_open(), moving).hash(&mut h);
+        if moving {
+            // Moving: every frame is new.
+            self.now.to_bits().hash(&mut h);
         }
-        let w = button_width(ui, label);
-        let r = Rect::from_min_size(pos2(rect.right() - 16.0 - w, rect.center().y - 17.0), vec2(w, 34.0));
-        let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
-        child.set_opacity(shown);
-        let a11y_label = match label {
-            "Take back" => Some("Take back control of this computer"),
-            "Use keyboard to stop" | "Keyboard stop" => Some("Use the keyboard shortcut shown in the broadcast panel"),
-            _ => None,
-        };
-        if self.running().is_some() {
-            let busy = self.busy.contains(&Job::Stop);
-            // The short word when the long one would run into the tabs.
-            let label = [if busy { "Stopping…" } else { "Stop service" }, "Stop service"]
-                .into_iter()
-                .find(|l| r.left() - 8.0 - button_width(ui, l) > track.right() + 12.0)
-                .unwrap_or("Stop service");
-            let w = button_width(ui, label);
-            let stop = Rect::from_min_size(pos2(r.left() - 8.0 - w, r.top()), vec2(w, 34.0));
-            if button(&mut child, stop, Id::unique("stop"), label, Look::Quiet, !busy && shown > 0.99, Some("Stop the sharing service, not just broadcast")).clicked() {
-                self.busy.push(Job::Stop);
-                self.link.stop();
-            }
-        }
-        if button(&mut child, r, Id::unique("action"), label, look, enabled && shown > 0.99, a11y_label).clicked() {
-            match job {
-                Some(Job::Start) => {
-                    self.busy.push(Job::Start);
-                    self.link.start();
-                }
-                Some(Job::TakeBack) => {
-                    self.busy.push(Job::TakeBack);
-                    self.link.take_back();
-                }
-                Some(Job::Broadcast(on)) => self.ask_broadcast(on),
-                _ => self.start_pairing(now),
-            }
-        }
+        h.finish()
     }
 
     /// The top bar's button: what it says and does.
@@ -1594,7 +1504,13 @@ impl App {
         match self.tab {
             // Off, there is nothing to inspect: the message takes the room.
             Tab::Desk if self.off() => vec![(Cell::Head(t, s), cell(0, 2)), (Cell::Controls, cell(2, 3))],
-            Tab::Desk => vec![(Cell::Head(t, s), cell(0, 1)), (Cell::Inspector(self.selected_id()), cell(1, 2)), (Cell::Controls, cell(2, 3))],
+            // A small window has room for one card: the chosen computer's
+            // (this computer's switches show when it is the one chosen).
+            Tab::Desk if w < 760.0 => match self.selected_id() {
+                Some(id) if id != "me" => vec![(Cell::Inspector(Some(id)), cell(0, 3))],
+                _ => vec![(Cell::Inspector(None), cell(0, 1)), (Cell::Controls, cell(1, 3))],
+            },
+            Tab::Desk => vec![(Cell::Inspector(self.selected_id()), cell(0, 2)), (Cell::Controls, cell(2, 3))],
             Tab::Layout => {
                 let sel = self.selected_id().filter(|id| id != "me");
                 vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
@@ -1619,14 +1535,20 @@ impl App {
     }
 
     fn panel(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
-        let p = ui.painter_at(rect);
-        p.rect_filled(rect, 0.0, PANEL);
-        p.hline(rect.x_range(), rect.top(), Stroke::new(1.0, LINE));
         let cells = self.cells(rect);
-        for (_, r) in cells.iter().skip(1).filter(|(_, area)| area.left() > rect.left() + PAD) {
-            p.vline(r.left() - PAD, rect.top() + 1.0..=r.bottom() + PAD, Stroke::new(1.0, LINE));
+        // Each cell on a glass card of its own, the window's gap between.
+        for (k, (_, c)) in cells.iter().enumerate() {
+            let mut card = Rect::from_min_max(c.min - vec2(PAD - M / 2.0, PAD), c.max + vec2(PAD - M / 2.0, PAD));
+            if card.left() < rect.left() + M {
+                card.min.x = rect.left();
+            }
+            if card.right() > rect.right() - M {
+                card.max.x = rect.right();
+            }
+            card.min.y = card.min.y.max(rect.top());
+            card.max.y = card.max.y.min(rect.bottom());
+            widgets::glass_panel(ui, ("card", k), card, R_PANEL);
         }
-        if self.tab == Tab::Files { p.hline(rect.x_range(), rect.top() + PANEL_H, Stroke::new(1.0, LINE)); }
         let opening = self.scene.opening(now);
         for k in 0..self.slots.len() {
             let next = cells.get(k).cloned();
@@ -1680,7 +1602,7 @@ impl App {
                 let at = Rect::from_min_size(r.min, vec2(r.width(), th + sh + 6.0));
                 a11y_text(ui, Id::unique("headline"), at, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
             }
-            Cell::Inspector(sel) => self.inspector(ui, r, sel.clone(), now),
+            Cell::Inspector(sel) => self.peer_card(ui, r, sel.clone(), now),
             Cell::Clipboard => self.clipboard_cell(ui, r),
             Cell::ClipboardHistory => self.clipboard_history_cell(ui, r),
             Cell::Controls => self.controls(ui, r),
@@ -1690,86 +1612,6 @@ impl App {
             Cell::LineUp(sel) => self.line_up_cell(ui, r, sel.clone()),
             Cell::Profiles => self.profiles_cell(ui, r),
         }
-    }
-
-    /// The selected computer: what it is, where it is, how fast it answers.
-    fn inspector(&mut self, ui: &mut Ui, c: Rect, sel: Option<String>, now: f64) {
-        let Some(status) = self.running().cloned() else { return };
-        let Some(peer) = status.peers.iter().find(|p| Some(&p.id) == sel.as_ref()).cloned() else {
-            let room = chip(ui, c, "This computer", None);
-            title_row(ui, c, &status.name, room);
-            let online = status.peers.iter().filter(|p| p.online).count();
-            let paired = match status.peers.len() {
-                0 => "None yet".to_owned(),
-                n => format!("{online} of {n} connected"),
-            };
-            // No position here: the others are placed around this one.
-            info_row(ui, c, c.top() + 42.0, "ID", &status.id, true, 1.0);
-            info_row(ui, c, c.top() + 66.0, "Paired", &paired, false, 1.0);
-            info_row(ui, c, c.top() + 90.0, "System", os_name(me_os()), false, 1.0);
-            self.quick_actions(ui, c, c.top() + 114.0, None);
-            return;
-        };
-        let mut room = if peer.online { chip(ui, c, "Connected", Some(true)) } else { chip(ui, c, "Offline", Some(false)) };
-        // Measure again: a quiet icon button on the title row.
-        if peer.online && (self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id)) {
-            let busy = self.measuring.is_some();
-            let r = Rect::from_min_size(pos2(c.right() - room - 26.0, c.top() - 2.0), vec2(24.0, 24.0));
-            let spin = if self.measuring.as_ref() == Some(&peer.id) && !motion::reduced() {
-                ui.ctx().request_repaint();
-                (now * 5.0) as f32
-            } else {
-                0.0
-            };
-            let name = if busy { "Measuring…" } else { "Measure again" };
-            if widgets::icon_button(ui, r, Id::unique(("measure", &peer.id)), name, !busy, |pp, rr, col| widgets::draw_refresh(pp, rr, col, spin)).clicked() {
-                self.measure(&peer.id);
-            }
-            room += 32.0;
-        }
-        // Remove this computer: asks first.
-        let r = Rect::from_min_size(pos2(c.right() - room - 26.0, c.top() - 2.0), vec2(24.0, 24.0));
-        if widgets::icon_button(ui, r, Id::unique(("remove", &peer.id)), "Remove computer", !self.sheet_open(), widgets::draw_cross).clicked() {
-            self.removing = Some((peer.id.clone(), peer.name.clone(), now));
-        }
-        room += 32.0;
-        title_row(ui, c, &peer.name, room);
-
-        // Where it is: a control, so it can be set without a mouse.
-        let side = self.side_shown(&peer.id, peer.side);
-        let track = Rect::from_min_size(pos2(c.left(), c.top() + 28.0), vec2(c.width(), 26.0));
-        let labels: Vec<&str> = PLACES.iter().map(|(_, l)| *l).collect();
-        let pills = Pills {
-            id: Id::unique(("position", &peer.id)),
-            track,
-            cells: Pills::even(track, 4, 2.0),
-            labels: &labels,
-            names: PLACES.iter().map(|(_, l)| format!("Position of {}: {l}", peer.name)).collect(),
-            chosen: PLACES.iter().position(|(s, _)| *s == side),
-            enabled: vec![true; 4],
-            role: Role::RadioButton,
-            font: if c.width() >= 230.0 { T_BODY } else { T_META },
-            radius: 6,
-        };
-        if let Some(k) = pills.show(ui, self.arrowed) {
-            self.choose_side(&peer.id, PLACES[k].0, true);
-        }
-
-        let (y0, y1) = (c.top() + 70.0, c.top() + 92.0);
-        if !peer.online {
-            // Say why it is greyed out, and what to do about it.
-            info_row(ui, c, y0, "Status", "Not found on the network", false, 1.0);
-            let hint = fit(ui.painter(), "Start one·mk on it, on the same Wi-Fi.", &regular(T_META), c.width());
-            ui.painter().text(pos2(c.left(), y1), Align2::LEFT_CENTER, hint, regular(T_META), INK2);
-            // No graph of a connection that isn't there.
-            info_row(ui, c, c.top() + 116.0, "Latency", "offline", false, 1.0);
-            return;
-        }
-        self.quick_actions(ui, c, c.top() + 116.0, Some(&peer));
-        self.latency_card(ui, c, c.top() + links::CARD_Y, &peer);
-        info_row(ui, c, y0, "Network round trip", "Live graph below", false, 1.0);
-        let caption = fit(ui.painter(), "Latest keep-alive reply · last 2 minutes", &regular(T_META), c.width());
-        ui.painter().text(pos2(c.left(), y1), Align2::LEFT_CENTER, caption, regular(T_META), INK2);
     }
 
     /// Ctrl and Cmd for every paired computer, a row each, from the top of
@@ -1976,8 +1818,9 @@ impl App {
         // The sheet is modal: what is behind it doesn't get its clicks.
         child.interact(rect, Id::unique("sheet-body"), Sense::CLICK | Sense::DRAG);
         let p = child.painter().clone();
-        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: Color32::from_black_alpha(115) }.as_shape(rect, CornerRadius::same(14)));
-        p.rect(rect, CornerRadius::same(14), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: Color32::from_black_alpha(115) }.as_shape(rect, CornerRadius::same(R_PANEL)));
+        p.rect(rect, CornerRadius::same(R_PANEL), POPOVER, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
+        p.hline(rect.x_range().shrink(f32::from(R_PANEL)), rect.top() + 1.0, Stroke::new(1.0, Color32::from_white_alpha(28)));
         let mut y = rect.top() + 18.0;
         let mut tx = x;
         if let Some(t0) = view.check {
@@ -2135,8 +1978,8 @@ impl App {
         child.set_opacity(a);
         let resp = child.interact(rect, Id::unique("toast-body"), Sense::CLICK);
         let p = child.painter().clone();
-        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(10)));
-        p.rect(rect, CornerRadius::same(10), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(12)));
+        p.rect(rect, CornerRadius::same(12), POPOVER, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
         let dot = if t.error { ERROR } else { INK };
         let gh = g.size().y;
         p.circle_filled(pos2(rect.left() + 17.0, rect.top() + 10.0 + 9.0), 3.5, dot);
@@ -2221,33 +2064,15 @@ impl eframe::App for App {
         }
         widgets::set_locked(ui.ctx(), self.sheet_open());
         self.shortcuts(ui);
-        let mut full = ui.max_rect();
-        if let Some(version) = self.update_available.clone() {
-            let busy = self.busy.contains(&Job::Update);
-            let blocked = self.sheet_open();
-            egui::Frame::new().fill(GROUND).inner_margin(12.0).show(ui, |ui| {
-                let title = format!("one-mk {version} is available");
-                ui.add(egui::Label::new(egui::RichText::new(&title).color(INK)).truncate()).on_hover_text(title);
-                ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!busy && !blocked, egui::Button::new(if busy { "Updating…" } else { "Update" })).clicked() {
-                        self.update_output = None;
-                        self.busy.push(Job::Update);
-                        self.link.update();
-                    }
-                    ui.hyperlink_to("Release notes", "https://github.com/samer2373/one-mk/releases/latest");
-                });
-                if let Some(output) = &self.update_output {
-                    egui::ScrollArea::vertical().id_salt("update-result").max_height(72.0).show(ui, |ui| {
-                        ui.label(egui::RichText::new(output).color(INK2));
-                    });
-                }
-            });
-            full.min.y = ui.cursor().min.y;
-        }
-        ui.painter().rect_filled(full, 0.0, GROUND);
-        let panel = Rect::from_min_max(pos2(full.left(), full.bottom() - self.panel_h()), full.max);
-        let desk = Rect::from_min_max(full.min, pos2(full.right(), panel.top()));
-        let top = Rect::from_min_size(full.min, vec2(full.width(), TOP_H));
+        let full = ui.max_rect();
+        self.glass.frame();
+        ui.painter().rect_filled(full, 0.0, ROOM);
+        let f = shell::frame(full);
+        let content = f.content;
+        let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
+        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys);
+        let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
+        let desk = Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() }));
         // Files let go over a page without the desk: ask where they go.
         if !self.tab.desk() {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
@@ -2270,11 +2095,34 @@ impl eframe::App for App {
         // Layout learning's question has a strip of its own under the desk.
         let card = self.suggestion_card(ui, desk);
         let scene = card.as_ref().map_or(desk, |c| Rect::from_min_max(desk.min, pos2(desk.right(), c.rect.top() - 6.0)));
-        match self.tab {
-            t if t.desk() => self.desk(ui, scene, now),
-            _ => {}
+        // The computers are framed below a banner over the desk, and below
+        // the transfer where a small window puts it at the top.
+        let mut frame = scene;
+        if self.tab.desk() {
+            if self.desk_notice().is_some() {
+                frame.min.y += 92.0;
+            } else if desk.width() < 780.0 && self.running().is_some_and(|s| !s.transfers.is_empty()) {
+                frame.min.y += 60.0;
+            }
+            if frame.height() < 120.0 {
+                frame = scene;
+            }
         }
-        let body = Rect::from_min_max(pos2(full.left(), top.bottom()), full.max);
+        if self.tab.desk() {
+            self.desk(ui, frame, full, now);
+        }
+        // Behind the glass changed: blur again (else each panel keeps its blur).
+        let sig = self.backdrop_sig(full);
+        if sig != self.backdrop_was {
+            self.backdrop_was = sig;
+            self.glass.changed();
+        }
+        self.sidebar(ui, &f, now);
+        if self.tab.desk() {
+            let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
+            self.desk_overlay(ui, scene, hovering);
+        }
+        let body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
         match self.tab {
             Tab::Health => {
                 let mut child = page(ui, body, "health");
@@ -2290,9 +2138,11 @@ impl eframe::App for App {
             }
             _ => {}
         }
-        self.top_bar(ui, top, now);
-        if !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys) {
-            self.panel(ui, panel, now);
+        let (title, sub) = self.page_title();
+        self.page_head(ui, head, &title, &sub);
+        self.desk_actions(ui, head);
+        if with_cards {
+            self.panel(ui, cards, now);
         }
         if let Some(card) = card {
             self.suggestion_banner(ui, card);
@@ -2300,7 +2150,7 @@ impl eframe::App for App {
         widgets::set_locked(ui.ctx(), false);
         // The sheet sits over the panel, leaving the desk room to show
         // what is being paired.
-        self.sheet(ui, full, now);
+        self.sheet(ui, content, now);
         self.toast_view(ui, desk, now);
         self.guide.show(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
@@ -2309,6 +2159,8 @@ impl eframe::App for App {
         self.link.showing.frame(self.graph_wanted() && !hidden);
         #[cfg(debug_assertions)]
         debug::shot(ui.ctx(), now);
+        #[cfg(debug_assertions)]
+        widgets::targets::flush();
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -2367,6 +2219,55 @@ mod debug {
 
     pub fn hooks(app: &mut App, now: f64) {
         let ctx = app.ctx.clone();
+        // ONE_MK_APP_BENCH=N: N frames as if the desk were dragged (it
+        // turns, every glass panel blurs again), then the frame times.
+        // ONE_MK_APP_UPDATE=version[:what the update said]: an update waits.
+        if let Some(u) = var("ONE_MK_APP_UPDATE") {
+            let (v, out) = u.split_once(':').map_or((u.clone(), None), |(v, o)| (v.to_owned(), Some(o.to_owned())));
+            app.update_available = Some(v);
+            if once(&ctx, "update") {
+                app.update_output = out;
+            }
+        }
+        // ONE_MK_APP_WHY=1: after 5 s, what asked for each frame.
+        if var("ONE_MK_APP_WHY").is_some() && now > 5.0 && now < 8.0 {
+            let why: Vec<String> = ctx.repaint_causes().iter().map(|c| format!("{c}")).collect();
+            eprintln!("frame at {now:.3}: {}", why.join(" | "));
+        }
+        if var("ONE_MK_APP_BENCH").is_some() && now <= 1.5 {
+            ctx.request_repaint_after_secs(0.1);
+        }
+        if let Some(n) = var("ONE_MK_APP_BENCH").and_then(|v| v.parse::<usize>().ok()) && now > 1.5 {
+            let times = ctx.data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::Mutex<Vec<f64>>>>(Id::unique("bench")).clone());
+            let mut t = times.lock().unwrap();
+            // CPU used by the whole process (all threads), in clock ticks.
+            let cpu = || std::fs::read_to_string("/proc/self/stat").ok().and_then(|st| {
+                let f: Vec<u64> = st.rsplit(')').next()?.split_whitespace().skip(11).take(2).filter_map(|v| v.parse().ok()).collect();
+                Some(f.iter().sum::<u64>())
+            });
+            if t.is_empty() {
+                ctx.data_mut(|d| d.insert_temp(Id::unique("bench-cpu"), cpu().unwrap_or(0)));
+            }
+            t.push(now);
+            if t.len() > n {
+                let start = ctx.data(|d| d.get_temp::<u64>(Id::unique("bench-cpu"))).unwrap_or(0);
+                let ticks = cpu().unwrap_or(0).saturating_sub(start);
+                println!("bench cpu_ms_per_frame={:.2} (all threads)", ticks as f64 * 10.0 / n as f64);
+                let gaps: Vec<f64> = t.windows(2).map(|w| (w[1] - w[0]) * 1000.0).collect();
+                let mut sorted = gaps.clone();
+                sorted.sort_by(f64::total_cmp);
+                let avg = gaps.iter().sum::<f64>() / gaps.len() as f64;
+                println!("bench frames={} avg_ms={avg:.2} p50_ms={:.2} p95_ms={:.2} max_ms={:.2}", gaps.len(), sorted[sorted.len() / 2], sorted[sorted.len() * 95 / 100], sorted[sorted.len() - 1]);
+                std::process::exit(0);
+            }
+            // ONE_MK_APP_BENCH_HOVER=1: frames where nothing behind the
+            // glass changes (a hover, a key typed): the kept blur is reused.
+            if var("ONE_MK_APP_BENCH_HOVER").is_none() {
+                app.scene.yaw_to = (now * 0.7).sin() as f32 * 0.4;
+                app.glass.changed();
+            }
+            ctx.request_repaint();
+        }
         let ready = app.running().is_some();
         if app.status.is_some() && var("ONE_MK_APP_PAIR").is_some() && once(&ctx, "pair") {
             app.start_pairing(now);

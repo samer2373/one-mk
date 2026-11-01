@@ -69,8 +69,16 @@ impl App {
     /// one·mk is off) only Start at login means anything, so only it shows;
     /// broadcast shows while a computer is connected (or it is on).
     pub(super) fn controls(&mut self, ui: &mut Ui, c: Rect) {
-        let row_h = 36.0;
-        let top = c.top() - 8.0;
+        // This computer's own switches; what acts on every computer at
+        // once sits in the page's title row.
+        let p = ui.painter().clone();
+        p.text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, "This computer", semibold(T_TITLE), INK);
+        if let Some(s) = self.running() {
+            let sub = format!("{} · {}", s.name, os_name(me_os()));
+            p.text(pos2(c.left(), c.top() + 32.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), c.width()), regular(T_BODY), INK3);
+        }
+        let row_h = 40.0;
+        let top = c.top() + 50.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
         let on = self.autostart.unwrap_or(false);
         let busy = self.busy.iter().any(|j| matches!(j, Job::Autostart(_)));
@@ -83,43 +91,33 @@ impl App {
             self.autostart = Some(!on);
             self.link.set_autostart(!on);
         }
-        if self.running().is_none_or(|s| s.peers.is_empty()) {
-            return;
-        }
-        let locked = self.pointer_locked();
-        let r = switch(ui, row(1), Id::unique("lock-pointer"), "Keep the pointer here", locked, true);
-        if r.clicked() {
-            self.pending_lock = Some((!locked, self.now));
-            self.busy.push(Job::LockPointer(!locked));
-            self.link.lock_pointer(!locked);
-        }
-        r.on_hover_text("Edges lead nowhere while this is on.");
-        let mut next = 2;
-        let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
-        let on = self.broadcasting();
-        if online || on {
-            let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
-            let r = switch(ui, row(next), Id::unique("broadcast"), "Broadcast to all computers", on, !busy && !on);
+        let mut next = 1;
+        if self.running().is_some_and(|s| !s.peers.is_empty()) {
+            let locked = self.pointer_locked();
+            let r = switch(ui, row(next), Id::unique("lock-pointer"), "Keep the pointer here", locked, true);
             if r.clicked() {
-                self.ask_broadcast(!on);
+                self.pending_lock = Some((!locked, self.now));
+                self.busy.push(Job::LockPointer(!locked));
+                self.link.lock_pointer(!locked);
             }
-            let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
-            r.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}"));
+            r.on_hover_text("Edges lead nowhere while this is on.");
             next += 1;
         }
-        for k in 1..next + 1 {
-            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
+        if self.running().is_some() {
+            let r1 = row(next);
+            p.text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), INK);
+            let label = "Open";
+            let bw = button_width(ui, label) - 4.0;
+            let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 14.0), vec2(bw, 28.0));
+            let busy = self.busy.contains(&Job::Open);
+            if button(ui, b, Id::unique("open-dl-desk"), label, Look::Quiet, !busy, Some("Open received files folder")).clicked() {
+                self.busy.push(Job::Open);
+                self.link.open_downloads();
+            }
+            next += 1;
         }
-        // Every screen, locked at once.
-        let l = row(next);
-        ui.painter().text(l.left_center(), Align2::LEFT_CENTER, "Lock every screen", regular(T_BODY), INK);
-        let label = "Lock all";
-        let bw = button_width(ui, label) - 4.0;
-        let b = Rect::from_min_size(pos2(l.right() - bw, l.center().y - 14.0), vec2(bw, 28.0));
-        let busy = self.busy.contains(&Job::LockAll);
-        if button(ui, b, Id::unique("lock-all"), label, Look::Quiet, !busy, Some("Lock this computer and every connected one")).clicked() {
-            self.busy.push(Job::LockAll);
-            self.link.lock_all();
+        for k in 1..next {
+            p.hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
         }
     }
 

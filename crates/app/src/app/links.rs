@@ -5,14 +5,6 @@
 use super::*;
 use crate::rtt::{self, Quality, Ring, Summary};
 
-/// The graph's height on the Desk card, and in a Health row.
-const CARD_GRAPH_H: f32 = 40.0;
-/// Beside the Desk card's graph: the number now and its word.
-const GUTTER: f32 = 76.0;
-/// What the Desk card takes, from its top edge down.
-pub(super) const CARD_H: f32 = CARD_GRAPH_H + 18.0;
-/// Where the card starts in the inspector: under the quick actions.
-pub(super) const CARD_Y: f32 = 154.0;
 const ROW_GRAPH_H: f32 = 22.0;
 pub(super) const ROW_H: f32 = 34.0;
 
@@ -59,7 +51,7 @@ fn sparkline(p: &Painter, r: Rect, ring: &Ring, now: f64, q: Option<Quality>) {
 impl App {
     /// The clock the graphs are drawn on: the window's own, or the moment
     /// a scripted history (a screenshot) ended.
-    fn rtt_now(&self) -> f64 {
+    pub(super) fn rtt_now(&self) -> f64 {
         self.rtt_frozen.unwrap_or(self.now)
     }
 
@@ -70,7 +62,12 @@ impl App {
             return 460.0_f32.min(self.ctx.content_rect().height() - 160.0);
         }
         let with_card = self.tab == Tab::Desk && self.running().is_some_and(|s| !s.peers.is_empty());
-        if with_card { PANEL_H.max(CARD_Y + CARD_H + 2.0 * PAD) } else { PANEL_H }
+        let short = self.ctx.content_rect().height() < 640.0;
+        match (with_card, short) {
+            (true, false) => 252.0,
+            (true, true) => 220.0,
+            (false, _) => PANEL_H,
+        }
     }
 
     /// A graph is on screen right now (so the daemon is worth asking).
@@ -88,52 +85,12 @@ impl App {
 
     /// A connected computer that the daemon reports no link for: a daemon
     /// from before the graph, still running after an upgrade.
-    fn older_daemon(&self, id: &str) -> bool {
+    pub(super) fn older_daemon(&self, id: &str) -> bool {
         self.rtts.of(id).is_none() && self.running().is_some_and(|s| s.link_of(id).is_none())
     }
 
-    fn summary_of(&self, id: &str) -> Option<Summary> {
+    pub(super) fn summary_of(&self, id: &str) -> Option<Summary> {
         self.rtts.of(id).and_then(|r| r.summary(self.rtt_now()))
-    }
-
-    /// Under the selected computer on the Desk tab, from `y` and
-    /// [`CARD_H`] tall: its latency. The line is on the left; the number
-    /// now and the word for it are beside it; the numbers over the span
-    /// are below.
-    pub(super) fn latency_card(&self, ui: &Ui, c: Rect, y: f32, peer: &PeerStatus) {
-        let p = ui.painter();
-        let now = self.rtt_now();
-        let summary = self.summary_of(&peer.id);
-        let q = summary.and_then(|s| s.quality());
-        let graph = Rect::from_min_size(pos2(c.left(), y), vec2(c.width() - GUTTER - 8.0, CARD_GRAPH_H));
-        p.rect(graph, CornerRadius::same(6), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
-        match (self.rtts.of(&peer.id), q) {
-            (Some(ring), Some(_)) => sparkline(p, graph.shrink2(vec2(6.0, 6.0)), ring, now, q),
-            _ => {
-                let text = if self.older_daemon(&peer.id) { "Restart one·mk to see latency" } else { "Measuring…" };
-                p.text(graph.center(), Align2::CENTER_CENTER, fit(p, text, &regular(T_META), graph.width() - 8.0), regular(T_META), INK2);
-            }
-        }
-        let right = c.right();
-        if let Some(s) = summary {
-            p.text(pos2(right, y + 12.0), Align2::RIGHT_CENTER, rtt::ms(s.now_us), mono_medium(T_BODY), INK);
-        }
-        if let Some(q) = q {
-            p.text(pos2(right, y + 32.0), Align2::RIGHT_CENTER, q.word(), regular(T_META), tone(Some(q)));
-        }
-        if let Some(s) = summary.filter(|_| q.is_some()) {
-            let foot = y + CARD_GRAPH_H + 10.0;
-            let full = format!("min {} · avg {} · max {}", rtt::ms_number(s.min_us), rtt::ms_number(s.avg_us), rtt::ms(s.max_us));
-            let text = fit(p, &full, &mono(T_META), c.width());
-            p.text(pos2(c.left(), foot), Align2::LEFT_CENTER, &text, mono(T_META), INK2);
-            let span = format!("last {}", rtt::span_words());
-            if text == full && text_width(ui, &full, mono(T_META)) + text_width(ui, &span, regular(T_META)) + 16.0 <= c.width() {
-                p.text(pos2(right, foot), Align2::RIGHT_CENTER, &span, regular(T_META), INK2);
-            }
-        }
-        let all = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), CARD_H));
-        ui.interact(all, Id::unique(("latency-definition", &peer.id)), Sense::hover()).on_hover_text("Network round trip: time for a keep-alive request and its reply, not one-way pointer travel. The number is the latest sample, not an average. The graph and min/avg/max cover the last 2 minutes; gaps mean no reply. CLI status uses the same keep-alive measurement, sampled at a different moment.");
-        a11y_text(ui, Id::unique(("latency-card", &peer.id)), all, Role::Image, &self.latency_words(peer), None);
     }
 
     /// "Latency to desk: 4 ms, smooth. Over the last 2 minutes: …".

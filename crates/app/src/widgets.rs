@@ -22,7 +22,34 @@ pub fn button_width(ui: &Ui, label: &str) -> f32 {
 }
 
 /// Tells assistive technology what a painted control is.
+/// Development aid (`ONE_MK_APP_TARGETS=file`): every named control and
+/// where it is, written out each frame, so tests can click them by name.
+#[cfg(debug_assertions)]
+pub mod targets {
+    use std::sync::Mutex;
+    static NOW: Mutex<Vec<(String, [f32; 4])>> = Mutex::new(Vec::new());
+
+    pub fn note(label: &str, r: egui::Rect) {
+        if std::env::var_os("ONE_MK_APP_TARGETS").is_some() {
+            NOW.lock().unwrap_or_else(|e| e.into_inner()).push((label.to_owned(), [r.min.x, r.min.y, r.max.x, r.max.y]));
+        }
+    }
+
+    /// Writes this frame's controls (as JSON lines) and starts the next.
+    pub fn flush() {
+        let Some(path) = std::env::var_os("ONE_MK_APP_TARGETS") else { return };
+        let all = std::mem::take(&mut *NOW.lock().unwrap_or_else(|e| e.into_inner()));
+        let text: String = all.iter().map(|(l, r)| format!("{}\t{}\t{}\t{}\t{}\n", l.replace(['\t', '\n'], " "), r[0], r[1], r[2], r[3])).collect();
+        let tmp = std::path::PathBuf::from(&path).with_extension("tmp");
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(tmp, path);
+        }
+    }
+}
+
 pub fn a11y(r: &Response, role: Role, label: &str, selected: Option<bool>) {
+    #[cfg(debug_assertions)]
+    targets::note(label, r.rect);
     let (label, enabled) = (label.to_owned(), r.enabled());
     r.widget_info(move || match selected {
         Some(s) => WidgetInfo::selected(role, enabled, s, &label),
@@ -33,6 +60,8 @@ pub fn a11y(r: &Response, role: Role, label: &str, selected: Option<bool>) {
 /// A node for painted text, so screen readers can read it. `live` makes
 /// changes announced (headlines, toasts).
 pub fn a11y_text(ui: &Ui, id: Id, rect: Rect, role: Role, label: &str, live: Option<egui::accesskit::Live>) {
+    #[cfg(debug_assertions)]
+    targets::note(label, rect);
     ui.ctx().accesskit_node_builder(id, |n| {
         n.set_role(role);
         n.set_label(label);
@@ -104,12 +133,17 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
     let rr = Rect::from_center_size(rect.center(), rect.size() * (1.0 - 0.03 * press));
     let radius = if rect.height() >= 32.0 { 10 } else { 8 };
     let (bg, lit, fg) = match (look, enabled) {
-        (_, false) => (Color32::from_rgb(0x1E, 0x23, 0x2A), Color32::from_rgb(0x1E, 0x23, 0x2A), INK2),
+        (_, false) => (RAISED, RAISED, INK2),
         (Look::Primary, true) => (SIGNAL, SIGNAL_LIT, SIGNAL_INK),
         (Look::Quiet, true) => (BUTTON, BUTTON_LIT, INK),
     };
     let p = ui.painter();
     p.rect_filled(rr, CornerRadius::same(radius), mix(bg, lit, hover));
+    if look == Look::Quiet && enabled {
+        // On glass: a faint rim and a lit top edge, so it reads as a key.
+        p.rect_stroke(rr, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
+        p.hline(rr.x_range().shrink(f32::from(radius)), rr.top() + 1.0, Stroke::new(1.0, Color32::from_white_alpha(22)));
+    }
     focus_ring(ui, &r, rr, radius);
     p.text(rr.center(), Align2::CENTER_CENTER, label, semibold(T_BODY), fg);
     if r.hovered() && enabled {
@@ -148,14 +182,6 @@ pub fn draw_refresh(p: &Painter, rect: Rect, col: Color32, turn: f32) {
     let out = vec2(a1.cos(), a1.sin());
     p.add(egui::Shape::line(pts, Stroke::new(1.5, col)));
     p.add(egui::Shape::convex_polygon(vec![end + tangent * 3.2, end + out * 2.8, end - out * 2.8], col, Stroke::NONE));
-}
-
-/// A cross: remove.
-pub fn draw_cross(p: &Painter, rect: Rect, col: Color32) {
-    let (c, r) = (rect.center(), 4.0);
-    let st = Stroke::new(1.5, col);
-    p.line_segment([c + vec2(-r, -r), c + vec2(r, r)], st);
-    p.line_segment([c + vec2(-r, r), c + vec2(r, -r)], st);
 }
 
 /// A tick drawn as two strokes; `t` draws it in.
@@ -197,6 +223,8 @@ pub fn switch(ui: &mut Ui, row: Rect, id: Id, label: &str, on: bool, enabled: bo
     if r.hovered() && enabled {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    #[cfg(debug_assertions)]
+    targets::note(label, r.rect);
     let (label, enabled) = (label.to_owned(), r.enabled());
     let cut = shown != label;
     r.widget_info({
@@ -234,7 +262,7 @@ impl Pills<'_> {
     pub fn show(&self, ui: &mut Ui, arrowed: bool) -> Option<usize> {
         let ctx = ui.ctx().clone();
         let p = ui.painter().clone();
-        p.rect(self.track, CornerRadius::same(self.radius + 3), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        p.rect(self.track, CornerRadius::same(self.radius + 2), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
         let to = self.cells[self.chosen.unwrap_or(0).min(self.cells.len() - 1)];
         let secs = motion::space(0.22);
         let x = tween(&ctx, self.id.with("x"), to.left(), secs, motion::out_quart);
@@ -243,6 +271,7 @@ impl Pills<'_> {
         if shown > 0.0 {
             let pill = Rect::from_min_size(pos2(x, to.top()), vec2(w, to.height()));
             p.rect_filled(pill, CornerRadius::same(self.radius), PILL.gamma_multiply(shown));
+            p.hline(pill.x_range().shrink(f32::from(self.radius)), pill.top() + 0.5, Stroke::new(1.0, Color32::from_white_alpha((20.0 * shown) as u8)));
         }
         let mut picked = None;
         // egui moves focus with the arrows but doesn't report it as gained,
@@ -270,6 +299,8 @@ impl Pills<'_> {
             if r.hovered() && enabled && !on {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
             }
+            #[cfg(debug_assertions)]
+            targets::note(&self.names[k], *cell);
             let (name, enabled) = (self.names[k].clone(), r.enabled());
             let role = self.role;
             r.widget_info(move || WidgetInfo::selected(role, enabled, on, &name));
@@ -421,6 +452,28 @@ pub fn para(ui: &Ui, pos: Pos2, width: f32, text: &str, font: FontId, col: Color
     let h = g.size().y;
     ui.painter().galley(pos, g, col);
     h
+}
+
+/// The window's glass, kept in the context so any panel can use it.
+pub fn set_glass(ctx: &egui::Context, glass: crate::glass::Glass) {
+    ctx.data_mut(|d| d.insert_temp(Id::unique("glass"), glass));
+}
+
+pub fn glass(ctx: &egui::Context) -> crate::glass::Glass {
+    ctx.data(|d| d.get_temp::<crate::glass::Glass>(Id::unique("glass"))).unwrap_or_default()
+}
+
+/// A glass panel: a soft shadow, the blurred backdrop, its tint, a lit
+/// top edge and a faint rim. `key` names the panel so its blur is kept.
+pub fn glass_panel(ui: &Ui, key: impl std::hash::Hash + std::fmt::Debug, rect: Rect, radius: u8) {
+    let g = glass(ui.ctx());
+    let p = ui.painter();
+    let r = f32::from(radius);
+    p.add(egui::epaint::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(70) }.as_shape(rect, CornerRadius::same(radius)));
+    g.backdrop(p, Id::unique(("glass", key)).value(), rect, r);
+    p.rect_filled(rect, CornerRadius::same(radius), if g.works() { GLASS } else { GLASS_SOLID });
+    p.rect_stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_white_alpha(14)), egui::StrokeKind::Inside);
+    p.hline(rect.x_range().shrink(r), rect.top() + 1.0, Stroke::new(1.0, Color32::from_white_alpha(26)));
 }
 
 #[cfg(test)]
