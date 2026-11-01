@@ -1,5 +1,6 @@
 {
-  "name": "one\u00b7mk",
+  "name": "oneMK",
+  "short_name": "oneMK",
   "icons": [
     {
       "src": "/icon-192.png",
@@ -19,6 +20,6 @@
     }
   ],
   "theme_color": "#0F1216",
-  "background_color": "#0F1216",
+  "background_color": "#060B09",
   "display": "standalone"
 }

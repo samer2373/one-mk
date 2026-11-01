@@ -59,7 +59,7 @@ fn smooth(pts: &[Pos2]) -> Vec<Pos2> {
 }
 
 /// The round trip over the last two minutes in `r`: faint lines at 0 and
-/// the top with their values, the line, the newest reading in amber, the
+/// the top with their values, the line, the newest reading in Volt, the
 /// highest one named when it stands out, and lost packets marked.
 fn chart(p: &Painter, r: Rect, ring: &Ring, now: f64, summary: Option<rtt::Summary>) {
     let left = 30.0;
@@ -104,8 +104,8 @@ fn chart(p: &Painter, r: Rect, ring: &Ring, now: f64, summary: Option<rtt::Summa
     // read apart from a slow reading and not only by colour.
     for x in &t.losses {
         let x = plot.left() + x;
-        p.line_segment([pos2(x, plot.top() + 4.0), pos2(x, plot.bottom())], Stroke::new(1.0, SIGNAL.gamma_multiply(0.5)));
-        p.circle_stroke(pos2(x, plot.top() + 2.5), 2.5, Stroke::new(1.0, SIGNAL));
+        p.line_segment([pos2(x, plot.top() + 4.0), pos2(x, plot.bottom())], Stroke::new(1.0, WARN.gamma_multiply(0.5)));
+        p.circle_stroke(pos2(x, plot.top() + 2.5), 2.5, Stroke::new(1.0, WARN));
     }
 }
 
@@ -183,7 +183,7 @@ impl App {
             p.text(pos2(body.left() + nw + 4.0, body.top() + 23.0), Align2::LEFT_CENTER, "ms", regular(T_BODY), INK2);
             let word = q.map_or("Measuring…", Quality::word);
             let ww = text_width(ui, word, regular(T_BODY));
-            p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { SIGNAL } else { INK2 });
+            p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { WARN } else { INK2 });
             if q.is_some() {
                 let (lo, hi) = (rtt::ms_number(s.min_us), rtt::ms(s.p95_us));
                 let usual = if hi == format!("{lo} ms") { format!(" · usually {hi}") } else { format!(" · usually {lo}–{hi}") };

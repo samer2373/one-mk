@@ -1199,7 +1199,7 @@ impl Scene {
         }
     }
 
-    /// The line round a screen: where files can go (amber), which one is
+    /// The line round a screen: where files can go (Volt), which one is
     /// selected or hovered (white), where the keyboard is (the focus ring).
     fn screen_outline(&self, painter: &Painter, f: &Face, d: &Device, preview: f32) {
         let i = f.owner;
@@ -1580,7 +1580,7 @@ impl Scene {
         }
 
         // The edges toward online neighbours: a faint line at rest, so the
-        // edges can be learned; amber only while the pointer is about to
+        // edges can be learned; Volt only while the pointer is about to
         // cross, crossing, or has just come through. They run along the
         // monitors at that side of the wall, not the gaps between them.
         let ends = if wall { panels(&d.screens, pl, GLASS).fold([1.0f32, 1.0, 0.0, 0.0], |[a, b, c, e], [u0, w0, u1, w1]| [a.min(u0), b.min(w0), c.max(u1), e.max(w1)]) } else { glass };

@@ -52,13 +52,13 @@ pub fn mac_frame() -> bool {
 /// dark tint over the blurred desktop instead, dark enough that grey text
 /// on it keeps 4.5:1 over a white wallpaper.
 pub fn paint_room(p: &egui::Painter, full: egui::Rect) {
-    use crate::style::{ROOM, ROOM_TINT, SIGNAL};
+    use crate::style::{LAMP, ROOM, ROOM_TINT};
     #[cfg(debug_assertions)]
     fake::paint_desktop(p, full);
     p.rect_filled(full, 0.0, if see_through() { ROOM_TINT } else { ROOM });
     let w = full.width().max(full.height());
     light(p, full.right_top() + egui::vec2(-0.18 * full.width(), 0.08 * full.height()), 0.75 * w, egui::Color32::from_rgb(0x4A, 0x6F, 0xB0).gamma_multiply(0.10));
-    light(p, egui::pos2(full.center().x + 0.08 * full.width(), full.bottom() + 0.1 * full.height()), 0.55 * w, SIGNAL.gamma_multiply(0.045));
+    light(p, egui::pos2(full.center().x + 0.08 * full.width(), full.bottom() + 0.1 * full.height()), 0.55 * w, LAMP.gamma_multiply(0.045));
 }
 
 /// A soft round light: full colour in the middle, gone at `radius`, eased

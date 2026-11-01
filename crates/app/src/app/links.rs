@@ -12,7 +12,7 @@ pub(super) const ROW_H: f32 = 34.0;
 /// The word beside it says the same, so colour is never the only signal.
 fn tone(q: Option<Quality>) -> Color32 {
     match q {
-        Some(Quality::Stalls | Quality::Slow) => SIGNAL,
+        Some(Quality::Stalls | Quality::Slow) => WARN,
         _ => INK2,
     }
 }
@@ -43,8 +43,8 @@ fn sparkline(p: &Painter, r: Rect, ring: &Ring, now: f64, q: Option<Quality>) {
     // it reads apart from a slow reading and not only by colour.
     for x in &t.losses {
         let x = r.left() + x;
-        p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom())], Stroke::new(1.0, SIGNAL.gamma_multiply(0.6)));
-        p.circle_stroke(pos2(x, r.top() + 2.5), 2.5, Stroke::new(1.0, SIGNAL));
+        p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom())], Stroke::new(1.0, WARN.gamma_multiply(0.6)));
+        p.circle_stroke(pos2(x, r.top() + 2.5), 2.5, Stroke::new(1.0, WARN));
     }
 }
 

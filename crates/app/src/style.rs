@@ -69,17 +69,24 @@ pub const INK2: Color32 = Color32::from_rgb(0x9D, 0xA6, 0xB1);
 pub const INK3: Color32 = Color32::from_rgb(0x8F, 0x98, 0xA4);
 /// Between INK2 and INK: hovered labels.
 pub const INK_HOVER: Color32 = Color32::from_rgb(0xC4, 0xCA, 0xD2);
-/// The one warm colour: something crossing, a drop target, the main action.
-pub const SIGNAL: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
-/// The accent for chosen and on states (a switch that is on). The signal
-/// for now; the brand's own colour when the new mark lands.
-pub const ACCENT: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
-pub const ACCENT_LIT: Color32 = Color32::from_rgb(0xFF, 0xC2, 0x66);
-pub const SIGNAL_LIT: Color32 = Color32::from_rgb(0xFF, 0xC2, 0x66);
-pub const SIGNAL_INK: Color32 = Color32::from_rgb(0x1E, 0x15, 0x05);
+/// Volt, the brand's one signal colour (the lit tip of the oneMK pointer):
+/// something crossing, a drop target, the main action, the pointer on the
+/// desk, keyboard focus.
+pub const SIGNAL: Color32 = Color32::from_rgb(0xC6, 0xF4, 0x32);
+/// The accent for chosen and on states (a switch that is on): Volt too.
+pub const ACCENT: Color32 = Color32::from_rgb(0xC6, 0xF4, 0x32);
+pub const ACCENT_LIT: Color32 = Color32::from_rgb(0xD7, 0xFF, 0x5E);
+pub const SIGNAL_LIT: Color32 = Color32::from_rgb(0xD7, 0xFF, 0x5E);
+/// Text and marks on Volt.
+pub const SIGNAL_INK: Color32 = Color32::from_rgb(0x14, 0x1A, 0x06);
 pub const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6B, 0x5E);
+/// Not smooth (a slow or stalling connection, lost packets): warm amber,
+/// short of an error, and never the brand's Volt, which means good things.
+pub const WARN: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
+/// The desk lamp's warm light in the room.
+pub const LAMP: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
 /// Connected: a dot, never words alone.
-pub const OK: Color32 = Color32::from_rgb(0x5B, 0xC9, 0x8F);
+pub const OK: Color32 = Color32::from_rgb(0x3C, 0xCF, 0xE6);
 /// Quiet buttons, and the pill under the chosen tab or segment.
 pub const BUTTON: Color32 = Color32::from_rgba_premultiplied(22, 22, 22, 22);
 pub const BUTTON_LIT: Color32 = Color32::from_rgba_premultiplied(34, 34, 34, 34);

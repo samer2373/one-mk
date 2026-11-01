@@ -1,0 +1,84 @@
+{
+  "accent": {
+    "value": "#C6F432",
+    "role": "Volt. The lit tip; switches that are on, the primary button, focus ring, the pointer on the desk",
+    "contrast": {
+      "against": "#0F1216",
+      "ratio": 14.65
+    },
+    "on_ground": 14.65,
+    "on_glass_solid": 13.63
+  },
+  "accent-lit": {
+    "value": "#D7FF5E",
+    "role": "Hover and pressed-in state of anything in the accent",
+    "contrast": {
+      "against": "#0F1216",
+      "ratio": 16.41
+    },
+    "on_ground": 16.41,
+    "on_glass_solid": 15.26
+  },
+  "accent-ink": {
+    "value": "#141A06",
+    "role": "Text and icons on the accent",
+    "contrast": {
+      "against": "#C6F432",
+      "ratio": 13.89
+    },
+    "on_ground": 1.06,
+    "on_glass_solid": 1.02
+  },
+  "accent-deep": {
+    "value": "#4E7A00",
+    "role": "The accent as a graphic on white and light trays",
+    "contrast": {
+      "against": "#FFFFFF",
+      "ratio": 5.11
+    },
+    "on_ground": 3.67,
+    "on_glass_solid": 3.42
+  },
+  "ok": {
+    "value": "#3CCFE6",
+    "role": "Connected / ok status. Never the accent, so 'on' and 'connected' never look alike",
+    "contrast": {
+      "against": "#0F1216",
+      "ratio": 10.07
+    },
+    "on_ground": 10.07,
+    "on_glass_solid": 9.36
+  },
+  "ground": {
+    "value": "#0F1216",
+    "role": "Window ground; ink of the mark on light grounds",
+    "contrast": {
+      "against": "#FFFFFF",
+      "ratio": 18.78
+    },
+    "on_ground": 1.0,
+    "on_glass_solid": 1.08
+  },
+  "ink": {
+    "value": "#EDEFF2",
+    "role": "Ink of the mark on dark grounds",
+    "contrast": {
+      "against": "#0F1216",
+      "ratio": 16.3
+    },
+    "on_ground": 16.3,
+    "on_glass_solid": 15.16
+  },
+  "tile-top": {
+    "value": "#1D3A2A",
+    "role": "App-icon tile, top",
+    "on_ground": 1.51,
+    "on_glass_solid": 1.41
+  },
+  "tile-bottom": {
+    "value": "#060B09",
+    "role": "App-icon tile, bottom",
+    "on_ground": 1.06,
+    "on_glass_solid": 1.14
+  }
+}

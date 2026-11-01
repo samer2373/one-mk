@@ -127,12 +127,18 @@ pub fn draw(p: &Painter, icon: Icon, rect: Rect, col: Color32) {
     }
 }
 
-/// The pointer from the logo, in amber: where the mouse is now.
+/// The pointer from the logo (its tip in Volt): where the mouse is now.
 pub fn pointer(p: &Painter, tip: Pos2, h: f32, col: Color32) {
-    let k = h / 15.0;
-    let pts = [(0.0, 0.0), (0.0, 13.0), (3.4, 9.8), (5.8, 15.0), (7.8, 14.1), (5.5, 9.0), (10.0, 9.0)];
-    let v: Vec<Pos2> = pts.iter().map(|(x, y)| pos2(tip.x + x * k, tip.y + y * k)).collect();
-    // Two convex pieces: the arrow head and the tail.
-    p.add(Shape::convex_polygon(vec![v[0], v[1], v[2], v[5], v[6]], col, Stroke::NONE));
-    p.add(Shape::convex_polygon(vec![v[2], v[3], v[4], v[5]], col, Stroke::NONE));
+    // The oneMK mark (docs/brand/logo/onemk-symbol-*.svg) without its
+    // fillets: a body cut by a screen's edge, its tip already across and
+    // lit. In units of the 256 master, the tip's point at (44, 47) and
+    // the mark 127 high; drawn `h` high from `tip`. The body is the light
+    // ink, the tip `col` (Volt where it says where the pointer is).
+    let k = h / 127.0;
+    let at = |x: f32, y: f32| pos2(tip.x + (x - 44.0) * k, tip.y + (y - 47.0) * k);
+    let body = if col == crate::style::SIGNAL { crate::style::INK } else { col };
+    // The body is not convex (its notch): two convex pieces.
+    p.add(Shape::convex_polygon(vec![at(110.0, 61.0), at(180.0, 80.0), at(180.0, 103.0), at(136.0, 115.0), at(68.0, 103.0)], body, Stroke::NONE));
+    p.add(Shape::convex_polygon(vec![at(68.0, 103.0), at(136.0, 115.0), at(131.0, 166.0), at(108.0, 172.0)], body, Stroke::NONE));
+    p.add(Shape::convex_polygon(vec![at(53.0, 46.0), at(100.0, 58.0), at(66.0, 95.0), at(43.0, 59.0)], col, Stroke::NONE));
 }

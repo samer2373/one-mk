@@ -34,7 +34,7 @@ fn icon(state: IconState) -> Icon {
 }
 
 /// Sets the icon. On macOS the plain states are a template image (the menu
-/// bar recolours it); the amber ones keep their colour.
+/// bar recolours it); the lit (Volt) ones keep their colour.
 fn set_icon(tray: &TrayIcon, state: IconState) {
     #[cfg(target_os = "macos")]
     if let Some(t) = icon::template_rgba(state) {

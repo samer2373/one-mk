@@ -113,7 +113,7 @@ impl App {
         let mut y = side.top() + 18.0;
         // On macOS the window buttons come first on this row (chrome.rs).
         let (logo_x, logo_y) = if chrome::mac_frame() { (chrome::BUTTONS_X + chrome::BUTTONS_W - 4.0, chrome::BUTTONS_Y.center()) } else { (x + 10.0, y + 12.0) };
-        draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, logo_y), 22.0);
+        draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, logo_y), 26.0);
         y += 46.0;
         let trouble = self.health_trouble();
         for (tab, icon) in NAV {
@@ -342,7 +342,7 @@ impl App {
     }
 
     /// The narrow window's sidebar: icons, one dot per computer, and the
-    /// action as a round amber button. Names show on hover.
+    /// action as a round Volt button. Names show on hover.
     fn rail(&mut self, ui: &mut Ui, side: Rect, now: f64) {
         let cx = side.center().x;
         let mut y = side.top() + 12.0;

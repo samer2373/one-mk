@@ -368,7 +368,7 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
     r
 }
 
-/// A thin bar `frac` full (amber: something crossing); `None` while the
+/// A thin bar `frac` full (Volt: something crossing); `None` while the
 /// size isn't known: a short segment instead, still.
 pub fn progress_bar(ui: &Ui, rect: Rect, id: Id, frac: Option<f32>) {
     let p = ui.painter();

@@ -61,7 +61,7 @@ pub fn rgba(size: u32, state: IconState) -> Vec<u8> {
 }
 
 /// 32 x 32 black-and-alpha template for the macOS menu bar, which recolours
-/// it to match light or dark mode. Only the states without amber have one.
+/// it to match light or dark mode. Only the states without the lit Volt tip have one.
 #[cfg(any(target_os = "macos", test))]
 pub fn template_rgba(state: IconState) -> Option<Vec<u8>> {
     let raw = match state {
@@ -78,8 +78,9 @@ mod tests {
 
     const ALL: [IconState; 4] = [IconState::Off, IconState::Idle, IconState::Connected, IconState::Controlling];
 
-    fn has_amber(a: &[u8]) -> bool {
-        a.as_chunks::<4>().0.iter().any(|p| p[3] > 128 && p[0] > 200 && p[1] > 140 && p[1] < 210 && p[2] < 120)
+    /// The lit tip, in the brand's Volt (yellow-green).
+    fn has_volt(a: &[u8]) -> bool {
+        a.as_chunks::<4>().0.iter().any(|p| p[3] > 128 && p[0] > 150 && p[1] > 210 && p[2] < 120)
     }
 
     #[test]
@@ -95,15 +96,15 @@ mod tests {
     }
 
     #[test]
-    fn states_differ_and_amber_means_connected() {
+    fn states_differ_and_a_lit_tip_means_connected() {
         for (i, a) in ALL.iter().enumerate() {
             for b in &ALL[i + 1..] {
                 assert_ne!(rgba(32, *a), rgba(32, *b), "{a:?} vs {b:?}");
             }
         }
         for state in ALL {
-            let amber = matches!(state, IconState::Connected | IconState::Controlling);
-            assert_eq!(has_amber(&rgba(64, state)), amber, "{state:?}");
+            let lit = matches!(state, IconState::Connected | IconState::Controlling);
+            assert_eq!(has_volt(&rgba(64, state)), lit, "{state:?}");
         }
     }
 

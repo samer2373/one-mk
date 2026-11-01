@@ -288,7 +288,7 @@ const DESK_LIT: Color32 = Color32::from_rgb(0x3B, 0x30, 0x27);
 pub const SIGNAL: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
 
 /// A legend to print on a key: where, how big, which colour, and whether
-/// it is the key's new job (printed on its front, in amber).
+/// it is the key's new job (printed on its front, in Volt).
 struct Legend {
     at: Pos2,
     size: f32,
@@ -373,7 +373,7 @@ impl Keyboard {
 
     /// Draws the kept mesh, then what changes from frame to frame: the
     /// keys held (darker, as if pressed), the hovered key, the chosen one
-    /// in amber, and the legends.
+    /// in Volt, and the legends.
     pub fn paint(&self, p: &Painter, held: &[usize], hovered: Option<usize>, chosen: Option<usize>, font: &dyn Fn(f32, bool) -> FontId) {
         p.add(Shape::Mesh(self.mesh.clone()));
         let fill = |i: usize, col: Color32| {
@@ -608,7 +608,7 @@ impl ModelHit {
 impl ModelView {
     /// `m` on the desk, filling `rect` and framed in `room`, turned by
     /// `yaw` and seen from `cam_yaw`/`pitch`; the part named `chosen` is
-    /// tinted amber. The last one when nothing changed.
+    /// tinted Volt. The last one when nothing changed.
     #[allow(clippy::too_many_arguments)]
     pub fn get(slot: &mut Option<ModelView>, m: &Model, rect: Rect, room: Rect, yaw: f32, cam_yaw: f32, pitch: f32, chosen: Option<&str>) {
         let key = (rect, room, chosen.map(str::to_owned), [yaw.to_bits(), cam_yaw.to_bits(), pitch.to_bits()]);
