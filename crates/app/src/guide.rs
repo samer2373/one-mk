@@ -682,7 +682,8 @@ pub const CARD_W: f32 = 312.0;
 const PAD: f32 = 18.0;
 /// Room around the card in its window for the shadow.
 const MARGIN: f32 = 30.0;
-const RADIUS: u8 = 14;
+/// Corners as on the window's other small floating surfaces (its toasts).
+const RADIUS: u8 = R_INNER;
 const HEADER_H: f32 = 16.0;
 const FOOTER_H: f32 = 30.0;
 
