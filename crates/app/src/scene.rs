@@ -515,10 +515,10 @@ impl Device {
                     if !held {
                         // A stand and base in proportion, as for a monitor alone.
                         let (mx, m) = ((a.0 + a.1) / 2.0, (a.1 - a.0).max(b.1 - b.0) / 58.0);
-                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 12.0)), a: (-11.0 * m, 11.0 * m), b: (0.0, BASE_H), c: (-8.0 * m, 8.0 * m), col: 0x3A404A, screen: None });
-                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 15.6)), a: (-3.0 * m, 3.0 * m), b: (0.0, cy + (b.0 + b.1) / 2.0), c: (-1.1, 1.1), col: 0x3A404A, screen: None });
+                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 12.0)), a: (-11.0 * m, 11.0 * m), b: (0.0, BASE_H), c: (-8.0 * m, 8.0 * m), col: 0x8E949D, screen: None });
+                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 15.6)), a: (-3.0 * m, 3.0 * m), b: (0.0, cy + (b.0 + b.1) / 2.0), c: (-1.1, 1.1), col: 0x8E949D, screen: None });
                     }
-                    boxes.push(Box3 { fr: scr, a, b, c: (-2.2, 0.0), col: 0x30353E, screen: Some(0x0B0D10) });
+                    boxes.push(Box3 { fr: scr, a, b, c: (-2.2, 0.0), col: 0x2B2F36, screen: Some(0x0B0D10) });
                 }
                 Geo { boxes, screen, deck: None, foot: [x, z - 12.0, hw, 8.0 * s] }
             }
@@ -528,9 +528,9 @@ impl Device {
                 let scr = Frame3::axes(v(x, y + cy, z - 14.0));
                 Geo {
                     boxes: vec![
-                        Box3 { fr: Frame3::axes(v(x, y, z - 12.0)), a: (-11.0 * s, 11.0 * s), b: (0.0, 0.8), c: (-8.0 * s, 8.0 * s), col: 0x3A404A, screen: None },
-                        Box3 { fr: Frame3::axes(v(x, y, z - 15.6)), a: (-3.0 * s, 3.0 * s), b: (0.0, cy), c: (-1.1, 1.1), col: 0x3A404A, screen: None },
-                        Box3 { fr: scr, a: (-hw, hw), b: (-hh, hh), c: (-2.2, 0.0), col: 0x30353E, screen: Some(0x0B0D10) },
+                        Box3 { fr: Frame3::axes(v(x, y, z - 12.0)), a: (-11.0 * s, 11.0 * s), b: (0.0, 0.8), c: (-8.0 * s, 8.0 * s), col: 0x8E949D, screen: None },
+                        Box3 { fr: Frame3::axes(v(x, y, z - 15.6)), a: (-3.0 * s, 3.0 * s), b: (0.0, cy), c: (-1.1, 1.1), col: 0x8E949D, screen: None },
+                        Box3 { fr: scr, a: (-hw, hw), b: (-hh, hh), c: (-2.2, 0.0), col: 0x2B2F36, screen: Some(0x0B0D10) },
                     ],
                     screen: Plane { fr: scr, u: (-hw + 0.9, hw - 0.9), w: (hh - 0.9, -hh + 0.9) },
                     deck: None,
@@ -1167,7 +1167,16 @@ impl Scene {
             } else if d.a < 0.99 {
                 quad(painter, f.pts, fade(f.fill, d.a));
             } else {
-                quad(painter, f.pts, f.fill);
+                // Metal: each face a touch brighter where it turns up to
+                // the light, so stands and bodies read as brushed aluminium,
+                // not flat paint.
+                let (y0, y1) = f.pts.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+                let k = |p: Pos2| 1.10 - 0.2 * ((p.y - y0) / (y1 - y0).max(1.0));
+                let shade = |p: Pos2| {
+                    let m = k(p);
+                    Color32::from_rgb((f.fill.r() as f32 * m).min(255.0) as u8, (f.fill.g() as f32 * m).min(255.0) as u8, (f.fill.b() as f32 * m).min(255.0) as u8)
+                };
+                quad_colors(painter, f.pts, f.pts.map(shade), None);
             }
             if let Some(m) = f.screen {
                 self.screen(painter, &cam, f.owner, m, &geo);
