@@ -65,6 +65,7 @@ library! { Lib, load, {
     state_serialize_mods = c"xkb_state_serialize_mods": fn(*mut c_void, c_int) -> u32;
     state_serialize_layout = c"xkb_state_serialize_layout": fn(*mut c_void, c_int) -> u32;
     state_get_keymap = c"xkb_state_get_keymap": fn(*mut c_void) -> *mut c_void;
+    keymap_layout_name = c"xkb_keymap_layout_get_name": fn(*mut c_void, u32) -> *const c_char;
     state_key_get_utf8 = c"xkb_state_key_get_utf8": fn(*mut c_void, u32, *mut c_char, usize) -> c_int;
     state_key_get_one_sym = c"xkb_state_key_get_one_sym": fn(*mut c_void, u32) -> u32;
 }}
@@ -161,6 +162,19 @@ pub struct LayoutResolver {
 }
 
 impl LayoutResolver {
+    pub fn layout_name(&self, group: u32) -> Option<String> {
+        let name = unsafe { (self.state.lib.keymap_layout_name)((self.state.lib.state_get_keymap)(self.state.state), group) };
+        if name.is_null() { return None; }
+        unsafe { std::ffi::CStr::from_ptr(name) }.to_str().ok().map(str::to_owned)
+    }
+
+    pub fn masks_for(&self, mods: one_mk_proto::Mods, masks: LayoutState) -> Option<LayoutState> {
+        let mut state = self.query(LayoutState { depressed: 0, latched: 0, ..masks })?;
+        for modifier in mods.keys() { state.key(modifier, true); }
+        let current = state.modifiers();
+        Some(LayoutState { depressed: current.depressed, latched: current.latched, locked: current.locked, group: current.group })
+    }
+
     pub fn from_keymap(keymap: &[u8]) -> Option<Self> {
         if keymap.len() > 1024 * 1024 {
             return None;
@@ -179,15 +193,19 @@ impl LayoutResolver {
     }
 
     fn text(state: &State, code: u32) -> Option<String> {
+        Self::sequence(state, code).filter(|text| one_mk_proto::typing::valid_text(text))
+    }
+
+    fn sequence(state: &State, code: u32) -> Option<String> {
         let key = code.checked_add(EVDEV_OFFSET)?;
-        let mut bytes = [0u8; one_mk_proto::typing::MAX_TEXT_BYTES + 1];
+        let mut bytes = [0u8; 33];
         let length = unsafe { (state.lib.state_key_get_utf8)(state.state, key, bytes.as_mut_ptr().cast(), bytes.len()) };
         let length = usize::try_from(length).ok()?;
         if length == 0 || length >= bytes.len() {
             return None;
         }
         let text = std::str::from_utf8(&bytes[..length]).ok()?;
-        one_mk_proto::typing::valid_text(text).then(|| text.to_owned())
+        one_mk_proto::typing::valid_sequence(text).then(|| text.to_owned())
     }
 
     pub fn resolve(&self, code: u32, masks: LayoutState) -> Option<String> {

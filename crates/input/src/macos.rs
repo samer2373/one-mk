@@ -17,7 +17,7 @@
 //!   Otherwise display changes come from the reconfiguration callback and
 //!   the thread sleeps, so idle CPU stays near zero.
 //! - Injected keys are auto-repeated here with the user's own key repeat
-//!   settings (senders drop their repeats).
+//!   settings (the protocol drops held-key repeats).
 //! - Real input while a peer is in control here is reported as
 //!   `Event::LocalInput`.
 //!
@@ -90,7 +90,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, trusted, controlled))?;
-    Ok(Backend { keyboard: None, name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { keyboard: crate::typing::KeyboardLayout::native(), name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 // ------------------------------------------------------------ permissions
@@ -754,9 +754,8 @@ impl Ctx {
                 }
             }
             T::KeyDown => {
-                // The receiving side does its own key repeat.
-                let repeat = CGEvent::integer_value_field(e, CGEventField::KeyboardEventAutorepeat) != 0;
-                if !repeat && let Some(code) = logic::mac_to_evdev(keycode(ev)) {
+                if !st.local_keys.get(usize::from(keycode(ev))).copied().unwrap_or(false)
+                    && let Some(code) = logic::mac_to_evdev(keycode(ev)) {
                     send(Event::Key { code, down: true, device: None });
                 }
             }
@@ -1024,9 +1023,10 @@ async fn inject_loop(
 ) {
     let mut warned = false;
     let mut batch = Vec::new();
-    // CGEventPost doesn't auto-repeat, and senders drop their repeats.
+    // CGEventPost doesn't auto-repeat; held keys and native characters repeat here.
     let mut repeat = KeyRepeat::new(repeat_setting());
     let mut settings_read = Instant::now();
+    let mut text = crate::typing::NativeText::default();
     loop {
         let deadline = repeat.deadline();
         let wake = tokio::time::Instant::from_std(deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(3600)));
@@ -1036,27 +1036,26 @@ async fn inject_loop(
                 // Everything already queued, without the moves that later
                 // ones make stale: a burst costs one move, not latency.
                 drain_coalesced(first, &mut rx, &mut batch);
-                let was = controlled.get();
-                if controlled.apply(&mut batch) {
-                    repeat.clear();
-                }
-                // A Mac with no mouse of its own can leave the pointer
-                // undrawn: ask for it at the start of each visit.
-                if !was && controlled.get() {
-                    let _ = CGDisplayShowCursor(kCGNullDirectDisplay);
-                }
                 if !trusted.load(Ordering::Relaxed) {
                     if !warned {
                         tracing::warn!("ignoring input from peers until Accessibility permission is granted");
                         warned = true;
                     }
+                    controlled.apply(&mut batch);
                     batch.clear();
                     repeat.clear();
+                    text.clear();
                     continue;
                 }
                 warned = false;
                 let now = Instant::now();
                 for m in batch.drain(..) {
+                    if let Inject::Controlled(active) = m {
+                        let was = controlled.get();
+                        controlled.set(active);
+                        if !active { repeat.clear(); }
+                        if !was && active { let _ = CGDisplayShowCursor(kCGNullDirectDisplay); }
+                    }
                     if let Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } = m {
                         if down && is_repeatable(code) && now.duration_since(settings_read) > Duration::from_secs(5) {
                             repeat.set_timing(repeat_setting());
@@ -1066,12 +1065,14 @@ async fn inject_loop(
                             continue;
                         }
                     }
-                    inj.apply(m);
+                    for message in text.input(m) { inj.apply(message); }
                 }
             }
             _ = tokio::time::sleep_until(wake), if deadline.is_some() => {
                 if let Some(code) = repeat.poll(Instant::now()) {
-                    inj.repeat_key(code);
+                    if let Some(messages) = text.repeat(code) {
+                        for message in messages { inj.apply(message); }
+                    } else { inj.repeat_key(code); }
                 }
             }
         }
@@ -1197,7 +1198,17 @@ impl Injector {
             Inject::ScrollStop => self.smooth.reset(),
             // Handled by the injection loop.
             Inject::Controlled(_) => {}
-            Inject::Text { .. } => tracing::warn!("text unsupported; sender must use physical fallback"),
+            Inject::Text { text } => {
+                let text: Vec<_> = text.as_str().encode_utf16().collect();
+                let (Some(press), Some(release)) = (
+                    CGEvent::new_keyboard_event(Some(&self.source), 0, true),
+                    CGEvent::new_keyboard_event(Some(&self.source), 0, false),
+                ) else { return };
+                for event in [press, release] {
+                    unsafe { CGEvent::keyboard_set_unicode_string(Some(&event), text.len() as u64, text.as_ptr()) };
+                    self.post(&event, 0);
+                }
+            }
             Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
                 // Each posted Caps Lock press toggles it; a repeat must not.
                 if self.mods.is_caps_repeat(code, down) {

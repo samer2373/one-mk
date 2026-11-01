@@ -115,8 +115,7 @@
             }
             return (false, Effect::None);
         }
-        // Auto-repeat (Caps Lock's too) is dropped; the peer repeats.
-        if !self.fwd.forward(code, down) {
+        if !self.fwd.forward(code, down) && Mods::is_modifier(code) {
             return (true, Effect::None);
         }
         (true, self.send(Event::Key { code, down }))

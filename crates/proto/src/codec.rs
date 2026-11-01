@@ -148,6 +148,8 @@ pub mod caps {
     /// can be asked for that alone. Per-app input rules use it.
     pub const FOCUS_APP: u32 = 32;
     pub const TEXT: u32 = 64;
+    pub const TEXT_SOURCE: u32 = 1024;
+    pub const TEXT_HOLD: u32 = 2048;
     /// Says [`Control::IdleRevoked`](crate::Control::IdleRevoked), not
     /// `Revoked`, when it lets go of a controller that sent nothing for a
     /// minute: a broadcast controller enters it again with the next input,

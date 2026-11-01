@@ -65,6 +65,8 @@ pub struct X11Keyboard {
     libraries: &'static (Xcb, XkbX11),
 }
 
+unsafe impl Send for X11Keyboard {}
+
 /// A coherent keymap and modifier snapshot, independent of later server changes.
 pub struct X11LayoutSnapshot {
     pub resolver: LayoutResolver,

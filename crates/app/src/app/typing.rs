@@ -4,7 +4,7 @@ use super::pages::card;
 impl App {
     pub(super) fn typing_card(&mut self, ui: &mut Ui, area: Rect) {
         let content = card(ui, area, "Typing on the other computer");
-        let choices = [("physical", "Same keys"), ("characters", "Letters (not yet)"), ("auto", "Auto (not yet)")];
+        let choices = [("physical", "Keys"), ("characters", "Letters"), ("auto", "Auto")];
         let track = Rect::from_min_size(pos2(content.left(), content.top()), vec2(content.width(), 28.0));
         let labels: Vec<_> = choices.iter().map(|(_, label)| *label).collect();
         let pills = Pills {
@@ -23,7 +23,12 @@ impl App {
             let mode = choices[index].0;
             self.set_pref("typing preference", &["typing", "--keys", mode], |prefs| prefs.typing = mode);
         }
-        let effective = self.running().map(|status| status.typing.as_str()).filter(|typing| !typing.is_empty()).unwrap_or("physical (daemon not running; native character injection unavailable)");
-        para(ui, pos2(content.left(), content.top() + 40.0), content.width(), &format!("Effective typing: {effective}. Changes apply on the next visit. Native character injection is not available yet."), regular(T_META), INK2);
+        let effective = self.running().map(|status| status.typing.as_str()).filter(|typing| !typing.is_empty()).unwrap_or("daemon not running");
+        let support = if cfg!(target_os = "linux") {
+            "On this computer, received letters follow its own layout. Letters can follow your layout when controlling a supported Mac or Windows computer."
+        } else {
+            "Letters follows your keyboard layout. Auto uses letters when layouts differ. Shortcuts stay physical keys; older peers use Keys."
+        };
+        para(ui, pos2(content.left(), content.top() + 40.0), content.width(), &format!("Effective typing: {effective}. {support} Changes apply on the next visit."), regular(T_META), INK2);
     }
 }

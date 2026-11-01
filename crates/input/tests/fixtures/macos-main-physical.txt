@@ -97,9 +97,8 @@
                 }
             }
             T::KeyDown => {
-                // The receiving side does its own key repeat.
-                let repeat = CGEvent::integer_value_field(e, CGEventField::KeyboardEventAutorepeat) != 0;
-                if !repeat && let Some(code) = logic::mac_to_evdev(keycode(ev)) {
+                if !st.local_keys.get(usize::from(keycode(ev))).copied().unwrap_or(false)
+                    && let Some(code) = logic::mac_to_evdev(keycode(ev)) {
                     send(Event::Key { code, down: true });
                 }
             }
