@@ -26,6 +26,9 @@ pub(super) fn card(ui: &Ui, r: Rect, title: &str) -> Rect {
 enum Fix {
     Start,
     Pair,
+    OpenPermissionGuide,
+    OpenPermissionSettings,
+    OpenFirewallSettings,
 }
 
 fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
@@ -72,6 +75,14 @@ impl App {
         if c.verdict == Verdict::Pass {
             return None;
         }
+        match c.action.as_deref() {
+            Some("Start") if self.off() => return Some(("Start", Fix::Start)),
+            Some("Pair") => return Some(("Pair a computer", Fix::Pair)),
+            Some("OpenPermissionGuide") => return Some(("Allow sharing", Fix::OpenPermissionGuide)),
+            Some("OpenPermissionSettings") => return Some(("Open permissions", Fix::OpenPermissionSettings)),
+            Some("OpenFirewallSettings") => return Some(("Open firewall settings", Fix::OpenFirewallSettings)),
+            _ => {}
+        }
         match c.id.as_str() {
             "daemon" if self.off() => Some(("Start one·mk", Fix::Start)),
             // Pairing works with one·mk off too; it connects once started.
@@ -88,9 +99,11 @@ impl App {
     /// Lines under the Health title that come from the daemon itself.
     fn live_lines(&self) -> Vec<(Color32, String)> {
         let Some(s) = self.running() else {
-            return vec![(ERROR, "one·mk isn't running on this computer. Start it with the button at the top.".into())];
+            return vec![(INK2, "Sharing is stopped. Choose Start to turn it on.".into())];
         };
-        let mut out: Vec<(Color32, String)> = s.input.iter().map(|l| (ERROR, l.clone())).collect();
+        let mut out: Vec<(Color32, String)> = s.input_lines().into_iter().map(|line| (
+            if line.severity == one_mk_ctl::status::Severity::Problem { ERROR } else { INK2 }, line.detail,
+        )).collect();
         if out.is_empty() {
             out.push((INK2, "Mouse and keyboard sharing works: the desktop allowed it.".into()));
         }
@@ -234,6 +247,12 @@ impl App {
                 self.link.start();
             }
             Some(Fix::Pair) => self.start_pairing(now),
+            Some(Fix::OpenPermissionGuide) => {
+                let lines = self.running().map(|status| status.input.clone()).unwrap_or_default();
+                self.guide.start(&crate::guide::Permission::ALL, Box::new(crate::guide::StatusPermissions { lines }), now);
+            }
+            Some(Fix::OpenFirewallSettings) => ui.ctx().open_url(egui::OpenUrl::new_tab("x-apple.systempreferences:com.apple.Network-Settings.extension?Firewall")),
+            Some(Fix::OpenPermissionSettings) => ui.ctx().open_url(egui::OpenUrl::new_tab("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")),
             _ => {}
         }
     }

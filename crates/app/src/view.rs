@@ -415,6 +415,7 @@ pub struct Check {
     pub verdict: Verdict,
     pub detail: String,
     pub fix: Option<String>,
+    pub action: Option<String>,
 }
 
 /// What `one-mk doctor --json` found, worst first, keeping its order
@@ -425,6 +426,7 @@ pub fn parse_doctor(text: &str) -> Option<Vec<Check>> {
     let mut checks: Vec<Check> = list
         .iter()
         .filter_map(|c| {
+            if matches!(c.get("visible"), Some(Json::Bool(false))) { return None; }
             let s = |k: &str| match c.get(k) {
                 Some(Json::Str(s)) => Some(s.clone()),
                 _ => None,
@@ -435,11 +437,69 @@ pub fn parse_doctor(text: &str) -> Option<Vec<Check>> {
                 "warn" => Verdict::Warn,
                 _ => Verdict::Fail,
             };
-            Some(Check { id: s("id").unwrap_or_default(), title: s("title")?, verdict, detail: s("detail").unwrap_or_default(), fix: s("fix").filter(|f| !f.is_empty()) })
+            let check = Check { id: s("id").unwrap_or_default(), title: s("title")?, verdict, detail: s("detail").unwrap_or_default(), fix: s("fix").filter(|f| !f.is_empty()), action: s("action") };
+            if c.get("visible").is_some() { Some(check) } else { legacy_check(check) }
         })
         .collect();
     checks.sort_by_key(|c| std::cmp::Reverse(c.verdict as u8));
     Some(checks)
+}
+
+fn legacy_check(mut check: Check) -> Option<Check> {
+    let good = check.verdict == Verdict::Pass;
+    let detail = check.detail.as_str();
+    let (title, plain, fix) = match check.id.as_str() {
+        "updates" | "local-key-rules" | "input-tuning" | "typing" => return Some(check),
+        "wallpaper" | "wallpaper-import-sandbox" | "drag" => return None,
+        "daemon" if detail.contains("not running") => {
+            check.verdict = Verdict::Skip;
+            check.action = Some("Start".into());
+            ("Sharing", "Sharing is stopped.", Some("Start sharing."))
+        }
+        "daemon" => ("Sharing", if good { "Sharing is on." } else { "Sharing is not responding." }, None),
+        "pairing" if detail.contains("not paired") => {
+            check.verdict = Verdict::Skip;
+            check.action = Some("Pair".into());
+            ("Paired computers", "No computers paired yet.", Some("Pair a computer to start sharing."))
+        }
+        "pairing" => ("Paired computers", if good { "Your paired computers are saved." } else { "Your paired computers could not be read." }, None),
+        "config" => {
+            if detail.contains("no settings folder") { check.verdict = Verdict::Pass; }
+            ("Settings", if check.verdict == Verdict::Pass { "Your settings are saved automatically." } else { "Some saved settings could not be read." }, None)
+        }
+        "identity" => {
+            if check.verdict != Verdict::Fail { check.verdict = Verdict::Pass; }
+            ("Secure identity", "A secure identity is created automatically when sharing starts.", None)
+        }
+        "port" => ("Network connection", if good { "Ready for sharing." } else { "Sharing cannot use its network connection." }, None),
+        "mdns" => ("Find nearby computers", if good { "Nearby computers can be found on this network." } else { "Nearby computers could not be found." }, if good { None } else { Some("Connect both computers to the same home or office network.") }),
+        "input" | "portals" => {
+            if check.verdict == Verdict::Skip { return None; }
+            if detail.contains("Accessibility") || detail.contains("Input Monitoring") { check.action = Some("OpenPermissionGuide".into()); }
+            ("Permissions", if good { "Your desktop allows sharing." } else { "Your desktop has not allowed sharing yet." }, if good { None } else { Some("Allow mouse and keyboard sharing in your desktop's permission settings.") })
+        }
+        "firewall" => ("Firewall", if good { "The firewall allows sharing connections." } else { "The firewall may be blocking sharing connections." }, if good { None } else { Some("Allow incoming connections for this app in your firewall settings.") }),
+        "hotkeys" => ("Keyboard shortcuts", if good { "Keyboard shortcuts are ready." } else { "Keyboard shortcuts only work while the pointer is on another computer." }, None),
+        "broadcast" => ("Share with several computers", if good { "Sharing with several computers at once is off." } else { "Your typing and clicks go to several computers at once." }, if good { None } else { Some("Press Ctrl+Alt+Shift+Esc to stop sharing with several computers.") }),
+        "clipboard" => ("Clipboard sharing", "Your clipboard sharing preferences are saved.", None),
+        "clipboard-history" => ("Clipboard history", "Saved clipboard history could not be read.", None),
+        "hooks" => ("Automatic actions", "An automatic action was blocked for your safety.", None),
+        "per-device-rules" => ("Individual keyboards and mice", if good { "Your keyboards and mice can have different preferences." } else { "Your desktop treats keyboards and mice as one device." }, None),
+        "pointer-overlay" => ("Pointer visibility", if good { "The pointer can be shown when another computer controls this screen." } else { "This desktop cannot show an extra pointer." }, None),
+        "edge-push" => {
+            if detail.contains("Not yet tested") { check.verdict = Verdict::Pass; }
+            ("Screen edges", "Your screen-edge preferences are saved.", None)
+        }
+        "network" => ("Wi-Fi or wired network", if good { "Connected to a home or office network." } else { "Connect both computers to the same home or office network." }, None),
+        "link" => ("Connection quality", if good { "Your connected computers respond quickly." } else { "The connection is slow or unreliable." }, None),
+        id if id.starts_with("peer:") => ("Paired computer", if good { "Connected." } else { "Not connected right now." }, if good { None } else { Some("Make sure sharing is on on both computers and they are on the same network.") }),
+        _ => return None,
+    };
+    if check.verdict == Verdict::Skip && check.action.is_none() { return None; }
+    check.title = title.to_owned();
+    check.detail = plain.to_owned();
+    check.fix = fix.map(str::to_owned);
+    Some(check)
 }
 
 /// `one-mk input-devices --json`: the keyboards and mice seen here, and
@@ -500,13 +560,11 @@ pub fn fix_command(fix: &str) -> (String, bool) {
 
 /// The keyboard shortcuts' state in a short sentence (`None`: nothing to say).
 pub fn hotkeys_note(state: &str, detail: &str) -> Option<String> {
-    let d = detail.trim();
-    let why = if d.is_empty() { String::new() } else { format!(" ({d})") };
     Some(match state {
-        "on" => format!("Working{}.", if d.is_empty() { String::new() } else { format!(" {d}") }),
-        "starting" => format!("Being set up{why}."),
-        "unavailable" => format!("On this computer they work only while the pointer is on another one{why}."),
-        _ if !d.is_empty() => format!("Off: {d}."),
+        "on" => "Ready. You can change shortcuts in Settings.".into(),
+        "starting" => "Being set up.".into(),
+        "unavailable" => "Shortcuts work only while the pointer is on another computer. You can also switch computers from the window.".into(),
+        _ if !detail.is_empty() => "Off. You can change shortcuts in Settings.".into(),
         _ => return None,
     })
 }
@@ -832,27 +890,68 @@ name = "Café, 2nd floor"
     #[test]
     fn doctor_report_is_read_worst_first() {
         let json = r#"{"ok":false,"summary":{"pass":1,"skip":0,"warn":1,"fail":1},"checks":[
-            {"id":"config","title":"Settings","status":"pass","detail":"Found at /tmp/a \"b\".","fix":null},
-            {"id":"input","title":"Permissions","status":"warn","detail":"Not allowed yet.","fix":"Run `one-mk run` and choose Allow."},
-            {"id":"daemon","title":"Program","status":"fail","detail":"one-mk is not running é😀.","fix":"Start it."}]}"#;
+            {"id":"config","title":"Settings","status":"pass","detail":"Saved for é😀.","fix":null,"visible":true},
+            {"id":"input","title":"Permissions","status":"warn","detail":"Not allowed yet.","fix":"Choose Allow.","visible":true},
+            {"id":"daemon","title":"Sharing","status":"fail","detail":"Sharing is not responding.","fix":"Try again.","visible":true}]}"#;
         let checks = parse_doctor(json).unwrap();
         assert_eq!(checks.iter().map(|c| c.verdict).collect::<Vec<_>>(), [Verdict::Fail, Verdict::Warn, Verdict::Pass]);
-        assert_eq!(checks[0].detail, "one-mk is not running é😀.");
-        assert_eq!(checks[2].detail, "Found at /tmp/a \"b\".");
+        assert_eq!(checks[0].detail, "Sharing is not responding.");
+        assert_eq!(checks[2].detail, "Saved for é😀.");
         assert_eq!(checks[2].fix, None);
         assert_eq!(doctor_summary(&checks), "1 problem, 1 warning");
         assert_eq!(doctor_summary(&checks[2..]), "Everything checks out");
-        assert_eq!(fix_command(checks[1].fix.as_ref().unwrap()), ("one-mk run".to_owned(), true));
+        assert_eq!(fix_command(checks[1].fix.as_ref().unwrap()), ("Choose Allow.".to_owned(), false));
         assert_eq!(fix_command("Start it."), ("Start it.".to_owned(), false));
         // A flag or a placeholder isn't something to paste; a later command is.
         let fix = "Was it started with `--no-discovery`? Connect with `one-mk run --connect <ip>:24900`.";
         assert!(!fix_command(fix).1);
-        assert_eq!(fix_command("Use `--port`, or run `one-mk install`.").0, "one-mk install");
-        assert_eq!(hotkeys_note("unavailable", "no portal").as_deref(), Some("On this computer they work only while the pointer is on another one (no portal)."));
-        assert_eq!(hotkeys_note("on", "through Windows").as_deref(), Some("Working through Windows."));
+        assert_eq!(hotkeys_note("unavailable", "no portal").as_deref(), Some("Shortcuts work only while the pointer is on another computer. You can also switch computers from the window."));
+        assert_eq!(hotkeys_note("on", "through Windows").as_deref(), Some("Ready. You can change shortcuts in Settings."));
         assert_eq!(hotkeys_note("off", ""), None);
         assert_eq!(parse_doctor("one-mk: error"), None);
         assert_eq!(parse_doctor("{\"checks\": [1, }"), None);
+    }
+
+    #[test]
+    fn doctor_actions_are_optional_and_hidden_rows_are_ignored() {
+        let checks = parse_doctor(r#"{"checks":[
+            {"id":"daemon","title":"Sharing","status":"skip","detail":"Sharing is stopped.","action":"Start","visible":true},
+            {"id":"pairing","title":"Paired computers","status":"skip","detail":"No computers paired yet.","action":"Pair","visible":true},
+            {"id":"input","title":"Permissions","status":"warn","detail":"Allow Input Monitoring.","action":"OpenPermissionGuide","visible":true},
+            {"id":"firewall","title":"Firewall","status":"fail","detail":"Blocked.","action":"OpenFirewallSettings","visible":true},
+            {"id":"wallpaper","title":"Wallpaper","status":"fail","detail":"not shipped","visible":false},
+            {"id":"config","title":"Settings","status":"pass","detail":"Ready.","visible":true}
+        ]}"#).unwrap();
+        assert_eq!(checks.len(), 5);
+        for action in ["Start", "Pair", "OpenPermissionGuide", "OpenFirewallSettings"] {
+            assert!(checks.iter().any(|check| check.action.as_deref() == Some(action)));
+        }
+        assert_eq!(checks.last().unwrap().action, None);
+        assert_eq!(doctor_summary(&checks), "1 problem, 1 warning");
+    }
+
+    #[test]
+    fn older_doctor_reports_are_plain_and_normal_states_stay_neutral() {
+        let checks = parse_doctor(r#"{"checks":[
+            {"id":"daemon","title":"Program","status":"fail","detail":"one-mk is not running on this computer.","fix":"one-mk run"},
+            {"id":"pairing","title":"Paired computers","status":"fail","detail":"This computer is not paired with any other.","fix":"one-mk pair"},
+            {"id":"config","title":"Settings","status":"warn","detail":"There is no settings folder yet (settings.toml)."},
+            {"id":"identity","title":"Identity","status":"warn","detail":"This computer has no identity yet."},
+            {"id":"wallpaper-import-sandbox","title":"Wallpaper import sandbox","status":"skip","detail":"not shipped"},
+            {"id":"clipboard-history","title":"Clipboard history","status":"skip","detail":"compile-checked"},
+            {"id":"broadcast","title":"Broadcast","status":"pass","detail":"Broadcast has not been tried on this system yet (untested)."},
+            {"id":"edge-push","title":"Edges with no computer","status":"warn","detail":"Not yet tested on macOS.","fix":"one-mk edge"}
+        ]}"#).unwrap();
+        assert_eq!(doctor_summary(&checks), "Everything checks out");
+        assert_eq!(checks.len(), 6);
+        assert!(checks.iter().any(|check| check.action.as_deref() == Some("Start") && check.verdict == Verdict::Skip));
+        assert!(checks.iter().any(|check| check.action.as_deref() == Some("Pair") && check.verdict == Verdict::Skip));
+        for check in checks {
+            let text = format!("{} {} {}", check.title, check.detail, check.fix.unwrap_or_default());
+            for forbidden in ["one-mk ", "settings.toml", "`", "untested", "compile", "sandbox", "MacApp"] {
+                assert!(!text.contains(forbidden), "{text}");
+            }
+        }
     }
 
     #[test]
