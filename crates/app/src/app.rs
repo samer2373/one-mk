@@ -36,8 +36,11 @@ const PANEL_H: f32 = 196.0;
 const PAD: f32 = 20.0;
 const GHOST: &str = "\u{0}pairing";
 /// Wallpapers for paired computers: low chroma, about equal lightness.
-const WALLS: [[u32; 2]; 4] = [[0x6A4A2E, 0x1C130C], [0x2F5A50, 0x0C1A17], [0x2E5578, 0x0B1724], [0x7A4330, 0x1F0F0A]];
-const ME_WALL: [u32; 2] = [0x2E5578, 0x0B1724];
+/// Each computer's wallpaper on the desk: a light colour and a deep one,
+/// as desktop pictures are (dusk violet, lagoon, ember, ocean); deep
+/// enough that white names on them stay readable.
+const WALLS: [[u32; 2]; 4] = [[0x7B68E0, 0x191338], [0x2E9F96, 0x08262D], [0xD9714A, 0x34101E], [0x3D7FE6, 0x0A1838]];
+const ME_WALL: [u32; 2] = [0x3D7FE6, 0x0A1838];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tab {

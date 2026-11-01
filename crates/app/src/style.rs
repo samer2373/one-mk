@@ -64,8 +64,8 @@ pub const INK_HOVER: Color32 = Color32::from_rgb(0xC4, 0xCA, 0xD2);
 pub const SIGNAL: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
 /// The accent for chosen and on states (a switch that is on). The signal
 /// for now; the brand's own colour when the new mark lands.
-pub const ACCENT: Color32 = SIGNAL;
-pub const ACCENT_LIT: Color32 = SIGNAL_LIT;
+pub const ACCENT: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
+pub const ACCENT_LIT: Color32 = Color32::from_rgb(0xFF, 0xC2, 0x66);
 pub const SIGNAL_LIT: Color32 = Color32::from_rgb(0xFF, 0xC2, 0x66);
 pub const SIGNAL_INK: Color32 = Color32::from_rgb(0x1E, 0x15, 0x05);
 pub const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6B, 0x5E);

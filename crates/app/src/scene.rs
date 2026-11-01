@@ -688,6 +688,55 @@ fn quad_colors(painter: &Painter, pts: [Pos2; 4], cols: [Color32; 4], edge: Opti
     }
 }
 
+/// The wallpaper for a computer with these two colours, made once and kept:
+/// a deep gradient between them, soft blooms of light and colour, and one
+/// slow wave of light across it, in the manner of a desktop picture.
+fn wallpaper(ctx: &egui::Context, wall: [u32; 2]) -> egui::TextureHandle {
+    let id = egui::Id::unique(("wallpaper", wall));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let img = wallpaper_image(hex(wall[0]), hex(wall[1]), 320, 200);
+    let t = ctx.load_texture(format!("wallpaper-{:06x}-{:06x}", wall[0], wall[1]), img, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
+}
+
+fn wallpaper_image(c0: [u8; 3], c1: [u8; 3], w: usize, h: usize) -> egui::ColorImage {
+    let f = |c: [u8; 3]| c.map(|x| x as f32 / 255.0);
+    let (a, b) = (f(c0), f(c1));
+    let lerp3 = |x: [f32; 3], y: [f32; 3], t: f32| [0, 1, 2].map(|i| x[i] + (y[i] - x[i]) * t);
+    let light = |x: [f32; 3], k: f32| x.map(|v| v + (1.0 - v) * k);
+    // Blooms: centre, radius, colour, strength.
+    let blooms = [((0.22, 0.28), 0.42, light(a, 0.45), 0.85), ((0.82, 0.78), 0.5, light(lerp3(a, b, 0.5), 0.3), 0.7), ((0.72, 0.18), 0.3, light(b, 0.55), 0.45)];
+    let mut px = Vec::with_capacity(w * h * 3);
+    let mut seed: u32 = 0x9E37_79B9;
+    for y in 0..h {
+        for x in 0..w {
+            let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+            let t = (0.65 * v + 0.35 * u).clamp(0.0, 1.0);
+            let mut c = lerp3(light(a, 0.08), b.map(|q| q * 0.7), t * t * (3.0 - 2.0 * t));
+            for ((cx, cy), r, col, k) in blooms {
+                let d2 = ((u - cx) * 1.6).powi(2) + (v - cy).powi(2);
+                let g = (-d2 / (r * r)).exp() * k;
+                c = lerp3(c, col, g.min(1.0) * 0.6);
+            }
+            let band = 0.56 + 0.11 * (u * 3.4 + 0.6).sin();
+            let wave = (-((v - band) / 0.07).powi(2)).exp();
+            c = lerp3(c, light(c, 0.5), wave * 0.35);
+            // A grain of noise against banding.
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let n = (seed % 3) as f32 - 1.0;
+            for q in c {
+                px.push((q * 255.0 + n).clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
+    egui::ColorImage::from_rgb([w, h], &px)
+}
+
 /// A soft disc on the desk (y = `y`): `col` at the centre fading to nothing.
 fn pool(painter: &Painter, cam: &Camera, c: V3, rx: f32, rz: f32, col: Color32) {
     let mut m = Mesh::default();
@@ -1427,11 +1476,40 @@ impl Scene {
         // Only a computer that is on, and solid, has its wallpaper lit.
         let lit = if d.online { d.a } else { 0.0 };
         if lit > 0.01 {
+            // The wallpaper: lighter where the light falls (top left),
+            // deeper in the far corner, so it reads as an image, not a tile.
             let [c0, c1] = d.wall.map(|c| fade(rgba(hex(c), 1.0, 1.0), lit));
             let mid = mix(c0, c1, 0.5);
             let edge = Some(fade(rgba(hex(0x30353E), 0.9, 1.0), lit));
-            quad_colors(painter, rect(0.0, 0.0, 1.0, 1.0), [c0, mid, c1, mid], edge);
+            let _ = mid;
+            // A real wallpaper, made from the computer's two colours, laid
+            // on the screen in perspective (a grid, so it doesn't skew).
+            let tex = wallpaper(painter.ctx(), d.wall);
+            const N: usize = 8;
+            let mut mesh = Mesh::with_texture(tex.id());
+            let tint = Color32::from_white_alpha((lit * 255.0) as u8);
+            for j in 0..=N {
+                for i in 0..=N {
+                    let (u, w) = (i as f32 / N as f32, j as f32 / N as f32);
+                    mesh.vertices.push(egui::epaint::Vertex { pos: at(u, w), uv: pos2(u, w), color: tint });
+                }
+            }
+            for j in 0..N as u32 {
+                for i in 0..N as u32 {
+                    let k = j * (N as u32 + 1) + i;
+                    mesh.add_triangle(k, k + 1, k + N as u32 + 2);
+                    mesh.add_triangle(k, k + N as u32 + 2, k + N as u32 + 1);
+                }
+            }
+            painter.add(Shape::mesh(mesh));
+            if let Some(e) = edge {
+                painter.add(Shape::closed_line(rect(0.0, 0.0, 1.0, 1.0).to_vec(), Stroke::new(1.0, e)));
+            }
         }
+        // Every screen is glass: it catches the room's light across its
+        // upper part, on or off.
+        let sheen = |k: f32| Color32::from_white_alpha((k * a * 255.0) as u8);
+        quad_colors(painter, rect(0.0, 0.0, 1.0, 0.5), [sheen(0.10), sheen(0.04), sheen(0.0), sheen(0.02)], None);
 
         if let Some((_, code, t0)) = self.code.as_ref().filter(|(ids, _, _)| ids.contains(&d.id)) {
             if !named {
@@ -1475,6 +1553,12 @@ impl Scene {
         let sub_font = regular((h * 0.07).clamp(11.0, 14.0));
         let room = width * if wall { 0.96 } else { 0.86 };
         if named {
+            // A soft dark bloom behind the words, as the system draws under
+            // desktop labels: they stay readable on any wallpaper.
+            if d.online && !ghost {
+                let c = at(0.5, 0.5);
+                crate::chrome::light(painter, c, (room * 0.42).min(h * 0.6), Color32::from_black_alpha((90.0 * a) as u8));
+            }
             painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, fit(painter, &d.name, &name_font, room), name_font, name_col);
             let k = d.sub_was.as_ref().map_or(1.0, |(_, t0)| motion::progress(now, *t0, motion::fade(0.18), motion::out_cubic));
             if let Some((was, _)) = &d.sub_was {

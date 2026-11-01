@@ -61,6 +61,11 @@ icon falls back to **one monitor + pointer**.
 | glass-clear | `rgba(45, 45, 49, 0.243)` | 24% over what is under it |
 | glass-solid-top | `#1C2027` | 1.1:1 on ground |
 | glass-solid | `#161A20` | ink on it 15.2:1 |
+| control-top | `rgba(146, 149, 160, 0.275)` | 27% over what is under it |
+| control | `rgba(108, 113, 123, 0.204)` | 20% over what is under it |
+| control-solid-top | `#2A2E35` | 1.4:1 on ground |
+| control-solid | `#22262C` | 1.2:1 on ground |
+| glass-hairline | `rgba(255, 255, 255, 0.047)` | 5% over what is under it |
 | glass-rim | `rgba(255, 255, 255, 0.102)` | 10% over what is under it |
 | glass-edge | `rgba(255, 255, 255, 0.22)` | 22% over what is under it |
 | popover | `#1A1E25` | ink on it 14.5:1 |
@@ -74,6 +79,8 @@ icon falls back to **one monitor + pointer**.
 | ink3 | `#8F98A4` | 6.4:1 on ground |
 | ink-hover | `#C4CAD2` | 11.4:1 on ground |
 | **signal** (amber) | `#FFB547` | 10.7:1 on ground; **1.8:1 on white** |
+| accent | `#FFB547` | 10.7:1 on ground |
+| accent-lit | `#FFC266` | 11.8:1 on ground |
 | signal-lit | `#FFC266` | 11.8:1 on ground |
 | signal-ink | `#1E1505` | 10.3:1 on signal |
 | error | `#FF6B5E` | 6.7:1 on ground |
