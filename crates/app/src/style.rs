@@ -5,9 +5,23 @@
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Painter, Stroke};
 use std::sync::Arc;
 
-pub const GROUND: Color32 = Color32::from_rgb(0x0F, 0x12, 0x16);
+pub const GROUND: Color32 = Color32::from_rgb(0x0B, 0x0D, 0x11);
 /// The room the desk stands in: the window's ground behind everything.
-pub const ROOM: Color32 = Color32::from_rgb(0x10, 0x13, 0x18);
+pub const ROOM: Color32 = Color32::from_rgb(0x0B, 0x0D, 0x11);
+/// The sidebar: solid, a step lighter than the room, a hairline at its edge.
+pub const SIDEBAR: Color32 = Color32::from_rgb(0x0E, 0x10, 0x15);
+pub const HAIRLINE: Color32 = Color32::from_rgba_premultiplied(15, 15, 15, 15);
+/// The chosen page in the sidebar, and a row under the pointer.
+pub const SIDE_CHOSEN: Color32 = Color32::from_rgb(0x1A, 0x1D, 0x24);
+pub const SIDE_CHOSEN_EDGE: Color32 = Color32::from_rgba_premultiplied(18, 18, 18, 18);
+pub const SIDE_HOVER: Color32 = Color32::from_rgb(0x15, 0x18, 0x1E);
+/// A raised surface over the desk (the panels, the toolbar): solid, a
+/// little lighter at the top, edged by a hairline.
+pub const ELEVATED_TOP: Color32 = Color32::from_rgb(0x17, 0x1A, 0x21);
+pub const ELEVATED: Color32 = Color32::from_rgb(0x12, 0x15, 0x1B);
+pub const ELEVATED_EDGE: Color32 = Color32::from_rgba_premultiplied(20, 20, 20, 20);
+/// Shortcut keys beside each page: there when looked for, not before.
+pub const SHORTCUT_INK: Color32 = Color32::from_rgb(0x52, 0x5A, 0x66);
 /// The room on a see-through window (macOS): a dark tint over the blurred
 /// desktop, 88% so grey text keeps 4.5:1 even over a white wallpaper.
 pub const ROOM_TINT: Color32 = Color32::from_rgba_premultiplied(14, 17, 21, 224);

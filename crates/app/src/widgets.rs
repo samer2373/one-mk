@@ -500,6 +500,18 @@ pub fn glass_panel(ui: &Ui, key: impl std::hash::Hash + std::fmt::Debug, rect: R
     }
 }
 
+/// A solid surface lifted off the window: what floats over the desk.
+pub fn raised_shapes(rect: Rect, r: f32, shadow: bool) -> Vec<egui::Shape> {
+    let radius = CornerRadius::same(r.round().clamp(0.0, 255.0) as u8);
+    let mut out = vec![];
+    if shadow {
+        out.push(egui::epaint::Shadow { offset: [0, 16], blur: 40, spread: 0, color: Color32::from_black_alpha(110) }.as_shape(rect, radius).into());
+    }
+    out.push(rounded_gradient(rect, r, ELEVATED_TOP, ELEVATED));
+    out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, ELEVATED_EDGE), StrokeKind::Inside)));
+    out
+}
+
 /// The content layer: a group of rows on a quiet fill and a hairline. Not
 /// glass: glass is for what floats above the content (the sidebar, the
 /// panels over the desk, the toolbar), as the system uses it.
@@ -522,6 +534,9 @@ pub fn glass_shapes(ctx: &egui::Context, key: u64, rect: Rect, radius: u8) -> Ve
 /// clearer and bends more, as it is small and sits on a panel.
 #[derive(Clone, Copy)]
 pub struct GlassKind {
+    /// Real glass (only the command palette in the Night design); else a
+    /// solid raised surface: a lifted fill, a hairline, a soft shadow.
+    glass: bool,
     see: [Color32; 2],
     solid: [Color32; 2],
     clear: [Color32; 2],
@@ -529,10 +544,16 @@ pub struct GlassKind {
     shadow: bool,
 }
 
-pub const PANEL_GLASS: GlassKind = GlassKind { see: [GLASS_TOP, GLASS], clear: [GLASS_CLEAR_TOP, GLASS_CLEAR], solid: [GLASS_SOLID_TOP, GLASS_SOLID], bend: 1.0, shadow: true };
-pub const CONTROL_GLASS: GlassKind = GlassKind { see: [CONTROL_TOP, CONTROL], clear: [CONTROL_TOP, CONTROL], solid: [CONTROL_SOLID_TOP, CONTROL_SOLID], bend: 1.6, shadow: false };
+pub const PANEL_GLASS: GlassKind = GlassKind { glass: false, see: [GLASS_TOP, GLASS], clear: [GLASS_CLEAR_TOP, GLASS_CLEAR], solid: [GLASS_SOLID_TOP, GLASS_SOLID], bend: 1.0, shadow: true };
+pub const CONTROL_GLASS: GlassKind = GlassKind { glass: false, see: [CONTROL_TOP, CONTROL], clear: [CONTROL_TOP, CONTROL], solid: [CONTROL_SOLID_TOP, CONTROL_SOLID], bend: 1.6, shadow: false };
+
+/// The command palette: the one piece of real glass, over a dimmed window.
+pub const PALETTE_GLASS: GlassKind = GlassKind { glass: true, see: [GLASS_TOP, GLASS], clear: [GLASS_CLEAR_TOP, GLASS_CLEAR], solid: [ELEVATED, ELEVATED], bend: 0.8, shadow: true };
 
 pub fn glass_shapes_as(ctx: &egui::Context, key: u64, rect: Rect, r: f32, kind: GlassKind) -> Vec<egui::Shape> {
+    if !kind.glass {
+        return raised_shapes(rect, r, kind.shadow);
+    }
     let g = glass(ctx);
     let radius = CornerRadius::same(r.round().clamp(0.0, 255.0) as u8);
     let mut out = vec![];

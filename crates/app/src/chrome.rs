@@ -9,9 +9,11 @@
 //! The desktop's "Reduce transparency" setting (and `ONE_MK_NO_GLASS=1`)
 //! turns all of it off: solid panels on a solid window.
 
-/// The window shows the desktop behind it, blurred.
+/// The window shows the desktop behind it, blurred. Not in the Night
+/// design (solid surfaces, glass only where things float), so only the
+/// debug preview turns it on.
 pub fn see_through() -> bool {
-    (cfg!(target_os = "macos") || fake::desktop()) && !crate::glass::refused() && !blur_failed()
+    fake::desktop() && !crate::glass::refused() && !blur_failed()
 }
 
 /// The desktop asks apps to draw solid surfaces (macOS: Accessibility >
@@ -29,17 +31,10 @@ pub fn reduce_transparency() -> bool {
 /// Where the macOS window buttons go, in points from the window's top left:
 /// centred in this strip, the close button this far in, inside the
 /// sidebar's top corner beside the logo.
-pub const BUTTONS_Y: egui::Rangef = egui::Rangef { min: 16.0, max: 44.0 };
-pub const BUTTONS_X: f32 = 28.0;
+pub const BUTTONS_Y: egui::Rangef = egui::Rangef { min: 0.0, max: 44.0 };
+pub const BUTTONS_X: f32 = 18.0;
 /// The buttons' width, margins included: the logo starts after them.
 pub const BUTTONS_W: f32 = 76.0;
-
-/// The page starts below this on macOS: the (invisible) title bar still
-/// takes clicks above it, to move the window, so nothing clickable goes
-/// there. Elsewhere the window's own frame has the title bar.
-pub fn page_top() -> f32 {
-    if mac_frame() { BUTTONS_Y.max + 4.0 } else { 0.0 }
-}
 
 /// The window buttons sit inside the sidebar (macOS).
 pub fn mac_frame() -> bool {

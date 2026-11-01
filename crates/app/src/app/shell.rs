@@ -1,20 +1,24 @@
-//! The window's frame: a glass sidebar on the left (in a narrow window, a
-//! rail of icons), the page to its right with its title on top. The
-//! sidebar holds what is true on every page: where to go, which computers
-//! there are and how they answer, where the pointer is, and the one
-//! action that matters most right now.
+//! The window's frame: a solid sidebar flush to the left edge (in a narrow
+//! window, a rail of icons), and the page to its right with its title in
+//! the band across the top, where the window is moved from. The sidebar
+//! holds what is true on every page: where to go (each page with its
+//! shortcut), which computers there are and how they answer, where the
+//! pointer is, the one action that matters most right now, and whether
+//! everything works (a status line that opens Health).
 
 use super::*;
 use crate::chrome;
 use crate::icons::{self, Icon};
 
-pub(super) const SIDE_W: f32 = 236.0;
-pub(super) const RAIL_W: f32 = 52.0;
+pub(super) const SIDE_W: f32 = 232.0;
+pub(super) const RAIL_W: f32 = 56.0;
 /// Narrower than this, the sidebar becomes a rail.
 pub(super) const RAIL_BELOW: f32 = 1000.0;
-/// The page title's row.
-pub(super) const HEAD_H: f32 = 48.0;
-const ROW_H: f32 = 34.0;
+/// The band across the top: the page title (and on macOS the window
+/// buttons, in the sidebar's part). The window is moved from it, so
+/// nothing in it takes a click.
+pub(super) const HEAD_H: f32 = 44.0;
+const ROW_H: f32 = 32.0;
 
 pub(super) struct Frame {
     pub side: Rect,
@@ -24,17 +28,31 @@ pub(super) struct Frame {
 
 pub(super) fn frame(full: Rect) -> Frame {
     let rail = full.width() < RAIL_BELOW;
-    // macOS: the window buttons sit in the sidebar's top corner, beside the
-    // logo; a rail is too narrow for them, so it starts below them.
-    let top = M.max(chrome::page_top());
-    let side_top = if rail { top } else { M };
-    let side = Rect::from_min_size(full.min + vec2(M, side_top), vec2(if rail { RAIL_W } else { SIDE_W }, (full.height() - side_top - M).max(0.0)));
-    let content = Rect::from_min_max(pos2(side.right() + M, full.top() + top), pos2(full.right() - M, full.bottom() - M));
+    let side = Rect::from_min_size(full.min, vec2(if rail { RAIL_W } else { SIDE_W }, full.height()));
+    // The page's title starts after the macOS window buttons when a rail
+    // is too narrow to hold them.
+    let left = if rail && chrome::mac_frame() { (chrome::BUTTONS_X + chrome::BUTTONS_W + 8.0).max(side.right() + M) } else { side.right() + 2.0 * M };
+    let content = Rect::from_min_max(pos2(left, full.top()), pos2(full.right() - M, full.bottom() - M));
     Frame { side, content, rail }
 }
 
-const NAV: [(Tab, Icon); 6] =
-    [(Tab::Desk, Icon::Desk), (Tab::Layout, Icon::Layout), (Tab::Files, Icon::Clipboard), (Tab::Keys, Icon::Keys), (Tab::Health, Icon::Health), (Tab::Advanced, Icon::Advanced)];
+/// The pages in the sidebar, each with its shortcut key (with ⌘ or Ctrl).
+/// Layout lives in Desk (its Arrange view), Health behind the status line
+/// at the bottom, Advanced is Settings.
+const NAV: [(Tab, Icon, &str); 4] = [(Tab::Desk, Icon::Desk, "1"), (Tab::Files, Icon::Clipboard, "3"), (Tab::Keys, Icon::Keys, "4"), (Tab::Advanced, Icon::Advanced, ",")];
+
+/// The sidebar's page that `tab` belongs to.
+fn nav_of(tab: Tab) -> Tab {
+    match tab {
+        Tab::Layout => Tab::Desk,
+        t => t,
+    }
+}
+
+/// The shortcut's modifier as this system writes it.
+pub(super) fn cmd() -> &'static str {
+    if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" }
+}
 
 /// How tall `text` sets in the sidebar's small paragraphs.
 fn para_h(ui: &Ui, text: &str, w: f32) -> f32 {
@@ -51,10 +69,9 @@ fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: b
     let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
     let p = ui.painter();
     if chosen {
-        p.rect_filled(rect, CornerRadius::same(8), ON_GLASS_LIT);
-        p.hline(rect.x_range().shrink(8.0), rect.top() + 0.5, Stroke::new(1.0, Color32::from_white_alpha(22)));
+        p.rect(rect, CornerRadius::same(8), SIDE_CHOSEN, Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
     } else if hover > 0.01 {
-        p.rect_filled(rect, CornerRadius::same(8), ON_GLASS.gamma_multiply(hover));
+        p.rect_filled(rect, CornerRadius::same(8), SIDE_HOVER.gamma_multiply(hover));
     }
     widgets::focus_ring(ui, &r, rect, 8);
     if r.hovered() && enabled {
@@ -97,7 +114,8 @@ impl App {
     }
 
     pub(super) fn sidebar(&mut self, ui: &mut Ui, f: &Frame, now: f64) {
-        widgets::glass_panel(ui, "sidebar", f.side, R_PANEL);
+        ui.painter().rect_filled(f.side, 0.0, SIDEBAR);
+        ui.painter().vline(f.side.right() - 0.5, f.side.y_range(), Stroke::new(1.0, HAIRLINE));
         let mut ui = ui.new_child(UiBuilder::new().max_rect(f.side).id_salt("sidebar"));
         ui.set_clip_rect(f.side);
         if f.rail { self.rail(&mut ui, f.side, now) } else { self.side_full(&mut ui, f.side, now) }
@@ -110,24 +128,22 @@ impl App {
     fn side_full(&mut self, ui: &mut Ui, side: Rect, now: f64) {
         let x = side.left() + 10.0;
         let w = side.width() - 20.0;
-        let mut y = side.top() + 18.0;
-        // On macOS the window buttons come first on this row (chrome.rs).
-        let (logo_x, logo_y) = if chrome::mac_frame() { (chrome::BUTTONS_X + chrome::BUTTONS_W - 4.0, chrome::BUTTONS_Y.center()) } else { (x + 10.0, y + 12.0) };
-        draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, logo_y), 26.0);
-        y += 46.0;
-        let trouble = self.health_trouble();
-        for (tab, icon) in NAV {
+        // The top band: the window buttons on macOS, the logo at its end.
+        let band = HEAD_H / 2.0;
+        let lock_w = self.lockup.size()[0] as f32 * 22.0 / self.lockup.size()[1] as f32;
+        let logo_x = if chrome::mac_frame() { side.right() - 14.0 - lock_w } else { x + 8.0 };
+        draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, band), 22.0);
+        let mut y = HEAD_H + 10.0;
+        for (tab, icon, key) in NAV {
             let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
             let name = TABS.iter().find(|t| t.0 == tab).map_or("", |t| t.1);
             let enabled = self.nav_enabled(tab);
-            let (resp, hover) = row_button(ui, r, Id::unique(("nav", name)), name, Role::Tab, self.tab == tab, enabled);
-            let on = self.tab == tab;
-            let col = if !enabled { mix(INK3, GLASS_SOLID, 0.45) } else if on { INK } else { mix(INK2, INK, hover) };
-            icons::draw(ui.painter(), icon, Rect::from_center_size(pos2(r.left() + 18.0, r.center().y), vec2(16.0, 16.0)), if on { INK } else if enabled { INK3 } else { col });
-            ui.painter().text(pos2(r.left() + 36.0, r.center().y), Align2::LEFT_CENTER, name, regular(T_BODY), col);
-            if tab == Tab::Health && trouble {
-                ui.painter().circle_filled(pos2(r.right() - 14.0, r.center().y), 3.5, ERROR);
-            }
+            let on = nav_of(self.tab) == tab;
+            let (resp, hover) = row_button(ui, r, Id::unique(("nav", name)), name, Role::Tab, on, enabled);
+            let col = if !enabled { INK3.gamma_multiply(0.6) } else if on { INK } else { mix(INK2, INK, hover) };
+            icons::draw(ui.painter(), icon, Rect::from_center_size(pos2(r.left() + 17.0, r.center().y), vec2(15.0, 15.0)), col);
+            ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, name, regular(T_BODY), col);
+            ui.painter().text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, format!("{}{key}", cmd()), mono(T_META - 1.0), SHORTCUT_INK);
             if resp.clicked() {
                 self.set_tab(tab);
             }
@@ -141,14 +157,14 @@ impl App {
         {
             let pointer = self.pointer_on();
             y += 14.0;
-            ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "This computer", regular(T_META), INK3);
+            ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "THIS COMPUTER", semibold(T_META - 1.5), INK3);
             y += 22.0;
             let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
             let here = pointer.as_deref() == Some("me");
             self.computer_row(ui, r, "me", &status.name, here, true, if here { "pointer here" } else { "" }, false);
             y += ROW_H + 12.0;
             if y + 22.0 + ROW_H <= list_bottom {
-                ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "Paired", regular(T_META), INK3);
+                ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "PAIRED", semibold(T_META - 1.5), INK3);
                 ui.painter().text(pos2(x + w - 10.0, y + 8.0), Align2::RIGHT_CENTER, status.peers.len().to_string(), mono(T_META), INK3);
                 y += 22.0;
                 if status.peers.is_empty() {
@@ -318,22 +334,31 @@ impl App {
             self.do_action(job, now);
         }
         y += 36.0 + 10.0;
+        // Whether everything works, in a word, and the way to Health.
         let row = Rect::from_min_size(pos2(x, y), vec2(w, 28.0));
-        let p = ui.painter();
+        let trouble = self.health_trouble();
         let (dot, text) = match self.status.as_ref() {
-            None => (INK3, "Looking for oneMK…"),
-            Some(None) => (INK3, "oneMK is off"),
-            Some(Some(_)) => (OK, "oneMK is running"),
+            None => (INK3, "Looking for oneMK…".to_owned()),
+            Some(None) => (INK3, "Sharing is off".to_owned()),
+            Some(Some(_)) if trouble => (ERROR, "Something needs you".to_owned()),
+            Some(Some(_)) => (OK, "Sharing is on · All good".to_owned()),
         };
-        p.circle_filled(pos2(row.left() + 14.0, row.center().y), 3.0, dot);
-        p.text(pos2(row.left() + 26.0, row.center().y), Align2::LEFT_CENTER, text, regular(T_META), INK2);
+        let stop_w = if self.running().is_some() { text_width(ui, "Stop", regular(T_META)) + 16.0 } else { 0.0 };
+        let status_r = Rect::from_min_max(row.min, pos2(row.right() - stop_w - 4.0, row.bottom()));
+        let (resp, hover) = row_button(ui, status_r, Id::unique("health-line"), &format!("{text}. Open Health"), Role::Link, self.tab == Tab::Health, true);
+        let p = ui.painter();
+        p.circle_filled(pos2(status_r.left() + 12.0, row.center().y), 3.0, dot);
+        p.text(pos2(status_r.left() + 24.0, row.center().y), Align2::LEFT_CENTER, fit(p, &text, &regular(T_META), status_r.width() - 30.0), regular(T_META), mix(INK2, INK, hover));
+        if resp.clicked() {
+            self.set_tab(Tab::Health);
+        }
         if self.running().is_some() {
             let busy = self.busy.contains(&Job::Stop);
             let label = if busy { "Stopping…" } else { "Stop" };
             let bw = text_width(ui, label, regular(T_META)) + 16.0;
             let b = Rect::from_min_size(pos2(row.right() - bw, row.top()), vec2(bw, 28.0));
             let (resp, hover) = row_button(ui, b, Id::unique("stop"), "Stop the sharing service, not just broadcast", Role::Button, false, !busy);
-            ui.painter().text(b.center(), Align2::CENTER_CENTER, label, regular(T_META), mix(INK2, INK, hover));
+            ui.painter().text(b.center(), Align2::CENTER_CENTER, label, regular(T_META), mix(INK3, INK, hover));
             if resp.clicked() {
                 self.busy.push(Job::Stop);
                 self.link.stop();
@@ -354,7 +379,7 @@ impl App {
         ui.painter().image(self.lockup.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(frac, 1.0)), Color32::WHITE);
         y += 40.0;
         let trouble = self.health_trouble();
-        for (tab, icon) in NAV {
+        for (tab, icon, _) in NAV {
             let r = Rect::from_center_size(pos2(cx, y + 18.0), vec2(40.0, 36.0));
             let name = TABS.iter().find(|t| t.0 == tab).map_or("", |t| t.1);
             let enabled = self.nav_enabled(tab);
@@ -457,20 +482,15 @@ impl App {
     pub(super) fn page_head(&self, ui: &Ui, content: Rect, title: &str, sub: &str) -> Rect {
         let r = Rect::from_min_size(content.min + vec2(4.0, 0.0), vec2(content.width() - 4.0, HEAD_H));
         let p = ui.painter();
-        // A firm title, and what is true now beside it, quieter and smaller,
-        // on the same baseline.
-        let big = semibold(24.0);
+        // Compact, as a tool's title bar: the page, and what is true now
+        // beside it, quieter.
+        let big = semibold(T_TITLE);
         let tw = text_width(ui, title, big.clone());
-        let g = p.layout_no_wrap(title.to_owned(), big.clone(), INK);
-        let top = r.center().y - g.size().y / 2.0;
-        let baseline = top + g.rows.first().map_or(g.size().y * 0.8, |row| row.pos.y + row.row.glyphs.first().map_or(0.0, |gl| gl.pos.y));
-        p.galley(pos2(r.left(), top), g, INK);
+        p.text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, title, big, INK);
         if !sub.is_empty() {
-            let small = regular(15.0);
-            let room = (r.width() * 0.6 - tw - 14.0).max(0.0);
-            let sg = p.layout_no_wrap(fit(p, sub, &small, room), small, INK3);
-            let ascent = sg.rows.first().map_or(sg.size().y * 0.8, |row| row.pos.y + row.row.glyphs.first().map_or(0.0, |gl| gl.pos.y));
-            p.galley(pos2(r.left() + tw + 12.0, baseline - ascent), sg, INK3);
+            let small = regular(T_BODY);
+            let room = (r.width() * 0.6 - tw - 12.0).max(0.0);
+            p.text(pos2(r.left() + tw + 10.0, r.center().y + 0.5), Align2::LEFT_CENTER, fit(p, sub, &small, room), small, INK3);
         }
         a11y_text(ui, Id::unique(("page", title)), r, Role::Heading, &format!("{title} {sub}"), None);
         r

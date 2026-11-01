@@ -61,7 +61,7 @@ const TABS: [(Tab, &str, &str); 6] = [
     (Tab::Files, "Clipboard & files", "Files"),
     (Tab::Keys, "Keys & mouse", "Keys"),
     (Tab::Health, "Health", "Health"),
-    (Tab::Advanced, "Advanced", "Advanced"),
+    (Tab::Advanced, "Settings", "Settings"),
 ];
 
 impl Tab {
@@ -2160,7 +2160,8 @@ impl eframe::App for App {
         }
         let (title, sub) = self.page_title();
         self.page_head(ui, head, &title, &sub);
-        self.desk_actions(ui, head);
+        // Below the title band (the window is moved from the band).
+        self.desk_actions(ui, head.translate(vec2(0.0, shell::HEAD_H)));
         if with_cards {
             self.panel(ui, cards, now);
         }
