@@ -1,0 +1,9 @@
+[
+  {"name": "wheel", "from": "Material.002", "box": [0.0, 11.0, 22.0, 45.0, -48.0, -19.0], "color": "#66625B", "gloss": 14, "spec": 0.1},
+  {"name": "left", "from": "Material.002", "box": [-26.0, -1.2, 10.0, 45.0, -70.0, 9.0], "front_of": [-25.0, 7.0, -1.0, 0.0], "up": 0.35, "color": "#40444B", "gloss": 22, "spec": 0.12},
+  {"name": "right", "from": "Material.002", "box": [12.8, 40.0, 10.0, 45.0, -70.0, -4.0], "front_of": [13.0, -6.0, 37.0, -12.5], "up": 0.35, "color": "#40444B", "gloss": 22, "spec": 0.12},
+  {"name": "forward", "from": "Material.001", "box": [-45.0, -20.0, 18.0, 34.0, -24.0, 4.5], "color": "#66625B", "gloss": 30, "spec": 0.2},
+  {"name": "back", "from": "Material.001", "box": [-45.0, -20.0, 18.0, 34.0, 4.5, 32.0], "color": "#66625B", "gloss": 30, "spec": 0.2},
+  {"name": "rest:Material.002", "color": "#4A4F58", "gloss": 40, "spec": 0.22},
+  {"name": "rest:Material.001", "color": "#66625B", "gloss": 30, "spec": 0.2}
+]
