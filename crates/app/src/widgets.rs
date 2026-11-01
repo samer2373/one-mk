@@ -548,7 +548,7 @@ pub const PANEL_GLASS: GlassKind = GlassKind { glass: false, see: [GLASS_TOP, GL
 pub const CONTROL_GLASS: GlassKind = GlassKind { glass: false, see: [CONTROL_TOP, CONTROL], clear: [CONTROL_TOP, CONTROL], solid: [CONTROL_SOLID_TOP, CONTROL_SOLID], bend: 1.6, shadow: false };
 
 /// The command palette: the one piece of real glass, over a dimmed window.
-pub const PALETTE_GLASS: GlassKind = GlassKind { glass: true, see: [GLASS_TOP, GLASS], clear: [GLASS_CLEAR_TOP, GLASS_CLEAR], solid: [ELEVATED, ELEVATED], bend: 0.8, shadow: true };
+pub const PALETTE_GLASS: GlassKind = GlassKind { glass: true, see: [PALETTE_TOP, PALETTE], clear: [PALETTE_TOP, PALETTE], solid: [ELEVATED, ELEVATED], bend: 0.8, shadow: true };
 
 pub fn glass_shapes_as(ctx: &egui::Context, key: u64, rect: Rect, r: f32, kind: GlassKind) -> Vec<egui::Shape> {
     if !kind.glass {

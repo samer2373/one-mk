@@ -14,6 +14,7 @@ mod desk_cards;
 mod typing;
 mod updates;
 mod settings_controls;
+mod palette;
 
 use crate::daemon::{Event, Job, Link};
 use crate::motion::{self, tween};
@@ -57,7 +58,7 @@ enum Tab {
 /// never change (Ctrl and Cmd, gaming mode, edge rules) live in Advanced.
 const TABS: [(Tab, &str, &str); 6] = [
     (Tab::Desk, "Desk", "Desk"),
-    (Tab::Layout, "Layout", "Layout"),
+    (Tab::Layout, "Desk", "Desk"),
     (Tab::Files, "Clipboard & files", "Files"),
     (Tab::Keys, "Keys & mouse", "Keys"),
     (Tab::Health, "Health", "Health"),
@@ -189,6 +190,7 @@ pub struct App {
     update_available: Option<String>,
     update_output: Option<String>,
     update_ui: updates::UpdateUi,
+    palette: palette::Palette,
     link: Link,
     rx: Receiver<Event>,
     /// `None` until the first look at the daemon.
@@ -445,6 +447,7 @@ impl App {
             update_available: None,
             update_output: None,
             update_ui: updates::UpdateUi::default(),
+            palette: palette::Palette::default(),
             scene,
             tab,
             drag: None,
@@ -2037,8 +2040,17 @@ impl App {
             return;
         }
         let off = self.off();
-        // Ctrl+1 to Ctrl+5: one key per tab, however many there are.
-        for (key, (tab, _, _)) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6].into_iter().zip(TABS) {
+        // ⌘K (Ctrl+K): the command palette, from anywhere.
+        if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
+            if self.palette.open { self.palette.open = false } else { self.open_palette(self.now) }
+            return;
+        }
+        if self.palette.open {
+            return;
+        }
+        // One key per page, as the sidebar shows them: ⌘1 Desk, ⌘2
+        // Wallpaper, ⌘3 Clipboard & files, ⌘4 Keys & mouse, ⌘, Settings.
+        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Comma, Tab::Advanced)] {
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || tab.when_off()) {
                 self.set_tab(tab);
             }
@@ -2173,6 +2185,7 @@ impl eframe::App for App {
         // what is being paired.
         self.sheet(ui, content, now);
         self.toast_view(ui, desk, now);
+        self.palette(ui.ctx(), now);
         #[cfg(debug_assertions)]
         crate::chrome::paint_fake_buttons(ui.painter());
         self.guide.show(ui.ctx());
@@ -2252,6 +2265,14 @@ mod debug {
             if once(&ctx, "update") {
                 app.update_output = out;
             }
+        }
+        // ONE_MK_APP_PALETTE=query: the command palette, open, with that typed.
+        if let Some(q) = var("ONE_MK_APP_PALETTE")
+            && now > 0.5
+            && once(&ctx, "palette")
+        {
+            app.open_palette(now);
+            app.palette.query = q;
         }
         // ONE_MK_APP_WHY=1: after 5 s, what asked for each frame.
         if var("ONE_MK_APP_WHY").is_some() && now > 5.0 && now < 8.0 {

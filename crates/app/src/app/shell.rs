@@ -133,7 +133,27 @@ impl App {
         let lock_w = self.lockup.size()[0] as f32 * 22.0 / self.lockup.size()[1] as f32;
         let logo_x = if chrome::mac_frame() { side.right() - 14.0 - lock_w } else { x + 8.0 };
         draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, band), 22.0);
-        let mut y = HEAD_H + 10.0;
+        let mut y = HEAD_H + 6.0;
+        // The way to everything: the command palette.
+        let sr = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));
+        let resp = ui.interact(sr, Id::unique("search"), widgets::sense(ui, Sense::click()));
+        let hover = tween(ui.ctx(), Id::unique("search-hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
+        ui.painter().rect(sr, CornerRadius::same(8), mix(SEARCH_FILL, SIDE_HOVER, hover), Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
+        icons::search(ui.painter(), pos2(sr.left() + 16.0, sr.center().y), INK3);
+        ui.painter().text(pos2(sr.left() + 30.0, sr.center().y), Align2::LEFT_CENTER, "Search", regular(T_BODY), INK3);
+        let kc = format!("{}K", cmd());
+        let kw = text_width(ui, &kc, regular(T_META - 1.0)) + 10.0;
+        let kr = Rect::from_min_size(pos2(sr.right() - 8.0 - kw, sr.center().y - 9.0), vec2(kw, 18.0));
+        ui.painter().rect(kr, CornerRadius::same(5), Color32::from_white_alpha(10), Stroke::new(0.5, Color32::from_white_alpha(36)), StrokeKind::Inside);
+        ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META - 1.0), INK3);
+        widgets::a11y(&resp, Role::SearchInput, "Search actions, computers and settings", None);
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            self.open_palette(now);
+        }
+        y += 30.0 + 12.0;
         for (tab, icon, key) in NAV {
             let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
             let name = TABS.iter().find(|t| t.0 == tab).map_or("", |t| t.1);

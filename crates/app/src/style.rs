@@ -20,6 +20,12 @@ pub const SIDE_HOVER: Color32 = Color32::from_rgb(0x15, 0x18, 0x1E);
 pub const ELEVATED_TOP: Color32 = Color32::from_rgb(0x17, 0x1A, 0x21);
 pub const ELEVATED: Color32 = Color32::from_rgb(0x12, 0x15, 0x1B);
 pub const ELEVATED_EDGE: Color32 = Color32::from_rgba_premultiplied(20, 20, 20, 20);
+/// The command palette's glass: dark enough that what is behind it is
+/// colour, not detail.
+pub const PALETTE_TOP: Color32 = Color32::from_rgba_premultiplied(18, 20, 25, 205);
+pub const PALETTE: Color32 = Color32::from_rgba_premultiplied(14, 16, 21, 215);
+/// The search row at the top of the sidebar.
+pub const SEARCH_FILL: Color32 = Color32::from_rgb(0x13, 0x16, 0x1C);
 /// Shortcut keys beside each page: there when looked for, not before.
 pub const SHORTCUT_INK: Color32 = Color32::from_rgb(0x52, 0x5A, 0x66);
 /// The room on a see-through window (macOS): a dark tint over the blurred

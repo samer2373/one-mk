@@ -142,3 +142,10 @@ pub fn pointer(p: &Painter, tip: Pos2, h: f32, col: Color32) {
     p.add(Shape::convex_polygon(vec![at(68.0, 103.0), at(136.0, 115.0), at(131.0, 166.0), at(108.0, 172.0)], body, Stroke::NONE));
     p.add(Shape::convex_polygon(vec![at(53.0, 46.0), at(100.0, 58.0), at(66.0, 95.0), at(43.0, 59.0)], col, Stroke::NONE));
 }
+
+/// A magnifier: search, centred on `c`.
+pub fn search(p: &Painter, c: Pos2, col: Color32) {
+    let lens = c + egui::vec2(-1.5, -1.5);
+    p.circle_stroke(lens, 5.0, Stroke::new(1.6, col));
+    p.line_segment([lens + egui::vec2(3.6, 3.6), lens + egui::vec2(7.0, 7.0)], Stroke::new(1.6, col));
+}

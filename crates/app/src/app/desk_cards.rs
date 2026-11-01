@@ -274,6 +274,25 @@ impl App {
     /// The page's actions for every computer at once, at the right of its
     /// title: typing on all of them, and locking every screen.
     pub(super) fn desk_actions(&mut self, ui: &mut Ui, head: Rect) {
+        // The Desk's two views: the computers, and arranging them (Layout).
+        if matches!(self.tab, Tab::Desk | Tab::Layout) && !self.off() {
+            let labels = ["Computers", "Arrange"];
+            let track = Rect::from_min_size(pos2(head.left(), head.center().y - 15.0), vec2(200.0, 30.0));
+            let pills = Pills {
+                id: Id::unique("desk-view"),
+                track,
+                cells: Pills::even(track, 2, 2.0),
+                labels: &labels,
+                names: vec!["Desk: your computers".into(), "Desk: arrange where each computer sits".into()],
+                chosen: Some(usize::from(self.tab == Tab::Layout)),
+                enabled: vec![true, true],
+                role: Role::Tab,
+                font: T_BODY,
+            };
+            if let Some(k) = pills.show(ui, self.arrowed) {
+                self.set_tab(if k == 1 { Tab::Layout } else { Tab::Desk });
+            }
+        }
         if self.tab != Tab::Desk || self.running().is_none_or(|s| s.peers.is_empty()) {
             return;
         }
