@@ -253,6 +253,8 @@ pub struct App {
     now: f64,
     ctx: egui::Context,
     lockup: egui::TextureHandle,
+    /// The macOS permission guide (guide.rs); idle unless started.
+    pub guide: crate::guide::Overlay,
 }
 
 fn me_kind() -> Kind {
@@ -460,6 +462,7 @@ impl App {
             now: 0.0,
             ctx: cc.egui_ctx.clone(),
             lockup: lockup_texture(&cc.egui_ctx),
+            guide: crate::guide::Overlay::from_env(),
         })
     }
 
@@ -2298,6 +2301,7 @@ impl eframe::App for App {
         // what is being paired.
         self.sheet(ui, full, now);
         self.toast_view(ui, desk, now);
+        self.guide.show(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
         // round trips only then (a minimised window draws nothing).
         let hidden = ui.input(|i| i.viewport().minimized == Some(true));

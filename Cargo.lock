@@ -3247,6 +3247,9 @@ version = "0.1.18"
 dependencies = [
  "anyhow",
  "directories",
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
  "one-mk-proto",
  "semver",
  "serde",
