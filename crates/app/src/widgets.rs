@@ -131,18 +131,32 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
     let hover = tween(&ctx, id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
     // Only the shape scales: glyphs re-rasterised at a new size shimmer.
     let rr = Rect::from_center_size(rect.center(), rect.size() * (1.0 - 0.03 * press));
-    let radius = if rect.height() >= 32.0 { 10 } else { 8 };
-    let (bg, lit, fg) = match (look, enabled) {
-        (_, false) => (RAISED, RAISED, INK2),
-        (Look::Primary, true) => (SIGNAL, SIGNAL_LIT, SIGNAL_INK),
-        (Look::Quiet, true) => (BUTTON, BUTTON_LIT, INK),
+    // Capsules, as the system's own glass buttons are.
+    let radius = (rr.height() / 2.0).round().min(255.0) as u8;
+    let fg = match (look, enabled) {
+        (_, false) => INK3,
+        (Look::Primary, true) => SIGNAL_INK,
+        (Look::Quiet, true) => INK,
     };
-    let p = ui.painter();
-    p.rect_filled(rr, CornerRadius::same(radius), mix(bg, lit, hover));
-    if look == Look::Quiet && enabled {
-        // On glass: a faint rim and a lit top edge, so it reads as a key.
-        p.rect_stroke(rr, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
-        p.hline(rr.x_range().shrink(f32::from(radius)), rr.top() + 1.0, Stroke::new(1.0, Color32::from_white_alpha(22)));
+    let p = ui.painter().clone();
+    match (look, enabled) {
+        (Look::Primary, true) => {
+            // Tinted glass: the colour lit from above, its rim catching light.
+            p.add(egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: SIGNAL.gamma_multiply(0.28) }.as_shape(rr, CornerRadius::same(radius)));
+            p.add(rounded_gradient(rr, rr.height() / 2.0, mix(SIGNAL_LIT, Color32::WHITE, 0.12 * hover + 0.04), mix(SIGNAL, SIGNAL_LIT, hover)));
+            p.add(lit_edge(rr.shrink(0.5), rr.height() / 2.0 - 0.5));
+        }
+        (Look::Quiet, true) => {
+            for s in glass_shapes_as(&ctx, id.with("glass").value(), rr, rr.height() / 2.0, CONTROL_GLASS) {
+                p.add(s);
+            }
+            if hover > 0.0 {
+                p.rect_filled(rr, CornerRadius::same(radius), Color32::from_white_alpha((14.0 * hover) as u8));
+            }
+        }
+        (_, false) => {
+            p.rect(rr, CornerRadius::same(radius), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        }
     }
     focus_ring(ui, &r, rr, radius);
     p.text(rr.center(), Align2::CENTER_CENTER, label, semibold(T_BODY), fg);
@@ -210,16 +224,17 @@ pub fn switch(ui: &mut Ui, row: Rect, id: Id, label: &str, on: bool, enabled: bo
     let p = ui.painter();
     let shown = fit(p, label, &regular(T_BODY), row.width() - 46.0);
     p.text(row.left_center(), Align2::LEFT_CENTER, &shown, regular(T_BODY), if enabled { INK } else { INK2 });
-    let track = Rect::from_min_size(pos2(row.right() - 34.0, row.center().y - 10.0), vec2(34.0, 20.0));
-    let off = mix(TRACK_OFF, Color32::from_rgb(0x46, 0x4F, 0x5C), hover);
-    // On is told by fill and knob side, in ink: amber stays for crossings
-    // and the main action.
-    let col = mix(off, if enabled { INK } else { INK2 }, fill);
-    p.rect_filled(track, CornerRadius::same(10), col);
-    p.rect_stroke(track, CornerRadius::same(10), Stroke::new(1.0, mix(TRACK_EDGE, Color32::TRANSPARENT, fill)), StrokeKind::Inside);
-    let knob = pos2(track.left() + 10.0 + 14.0 * knob_t, track.center().y);
-    p.circle_filled(knob, 7.5, mix(INK, PANEL, fill));
-    focus_ring(ui, &r, track, 10);
+    let track = Rect::from_min_size(pos2(row.right() - 38.0, row.center().y - 11.0), vec2(38.0, 22.0));
+    // Off: a recessed capsule. On: filled with the accent, as the system's
+    // switches are; the knob is a lit white bead that slides across.
+    let off = mix(Color32::from_white_alpha(34), Color32::from_white_alpha(46), hover);
+    let on_col = if enabled { mix(ACCENT, ACCENT_LIT, hover) } else { INK3 };
+    p.rect_filled(track, CornerRadius::same(11), mix(off, on_col, fill));
+    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, mix(Color32::from_white_alpha(22), Color32::from_white_alpha(30), fill)), StrokeKind::Inside);
+    let knob = pos2(track.left() + 11.0 + 16.0 * knob_t, track.center().y);
+    p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(Rect::from_center_size(knob, vec2(18.0, 18.0)), CornerRadius::same(9)));
+    p.circle_filled(knob, 9.0, if enabled { Color32::WHITE } else { INK2 });
+    focus_ring(ui, &r, track, 11);
     if r.hovered() && enabled {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -262,7 +277,9 @@ impl Pills<'_> {
     pub fn show(&self, ui: &mut Ui, arrowed: bool) -> Option<usize> {
         let ctx = ui.ctx().clone();
         let p = ui.painter().clone();
-        p.rect(self.track, CornerRadius::same(self.radius + 2), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        // A recessed track, and a glass lens that slides to the choice.
+        let round = |r: Rect| (r.height() / 2.0).round().min(255.0) as u8;
+        p.rect(self.track, CornerRadius::same(round(self.track)), Color32::from_black_alpha(60), Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
         let to = self.cells[self.chosen.unwrap_or(0).min(self.cells.len() - 1)];
         let secs = motion::space(0.22);
         let x = tween(&ctx, self.id.with("x"), to.left(), secs, motion::out_quart);
@@ -270,8 +287,13 @@ impl Pills<'_> {
         let shown = tween(&ctx, self.id.with("shown"), f32::from(self.chosen.is_some()), motion::fade(0.15), motion::linear);
         if shown > 0.0 {
             let pill = Rect::from_min_size(pos2(x, to.top()), vec2(w, to.height()));
-            p.rect_filled(pill, CornerRadius::same(self.radius), PILL.gamma_multiply(shown));
-            p.hline(pill.x_range().shrink(f32::from(self.radius)), pill.top() + 0.5, Stroke::new(1.0, Color32::from_white_alpha((20.0 * shown) as u8)));
+            if shown > 0.99 {
+                for s in glass_shapes_as(&ctx, self.id.with("lens").value(), pill, pill.height() / 2.0, CONTROL_GLASS) {
+                    p.add(s);
+                }
+            } else {
+                p.rect_filled(pill, CornerRadius::same(round(pill)), PILL.gamma_multiply(shown));
+            }
         }
         let mut picked = None;
         // egui moves focus with the arrows but doesn't report it as gained,
@@ -295,7 +317,7 @@ impl Pills<'_> {
             let font = if on { semibold(self.font) } else { regular(self.font) };
             let text = fit(&p, self.labels[k], &font, cell.width() - 8.0);
             p.text(cell.center(), Align2::CENTER_CENTER, text, font, mix(base, INK, lit));
-            focus_ring(ui, &r, *cell, self.radius);
+            focus_ring(ui, &r, *cell, round(*cell));
             if r.hovered() && enabled && !on {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -319,9 +341,12 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
     let focused = ui.memory(|m| m.has_focus(id));
     let hover = ui.rect_contains_pointer(rect) && enabled;
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(7), if enabled { GROUND } else { PANEL });
-    let edge = if focused { INK2 } else if hover { TRACK_EDGE } else { LINE };
-    p.rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, edge), StrokeKind::Inside);
+    // Recessed into the glass: darker than it, with a rim that lights up
+    // when the field has the keyboard.
+    let fr = CornerRadius::same(((rect.height() / 2.0).min(10.0)) as u8);
+    p.rect_filled(rect, fr, if enabled { Color32::from_black_alpha(70) } else { Color32::from_black_alpha(40) });
+    let edge = if focused { ACCENT } else if hover { Color32::from_white_alpha(40) } else { Color32::from_white_alpha(18) };
+    p.rect_stroke(rect, fr, Stroke::new(if focused { 1.5 } else { 1.0 }, edge), StrokeKind::Inside);
     let edit = egui::TextEdit::singleline(text)
         .id(id)
         .font(font)
@@ -474,20 +499,40 @@ pub fn glass_panel(ui: &Ui, key: impl std::hash::Hash + std::fmt::Debug, rect: R
 
 /// The same as shapes, to place behind contents drawn first.
 pub fn glass_shapes(ctx: &egui::Context, key: u64, rect: Rect, radius: u8) -> Vec<egui::Shape> {
+    glass_shapes_as(ctx, key, rect, f32::from(radius), PANEL_GLASS)
+}
+
+/// Which glass: a panel holds text, so it is tinted for it; a control is
+/// clearer and bends more, as it is small and sits on a panel.
+#[derive(Clone, Copy)]
+pub struct GlassKind {
+    see: [Color32; 2],
+    solid: [Color32; 2],
+    clear: [Color32; 2],
+    bend: f32,
+    shadow: bool,
+}
+
+pub const PANEL_GLASS: GlassKind = GlassKind { see: [GLASS_TOP, GLASS], clear: [GLASS_CLEAR_TOP, GLASS_CLEAR], solid: [GLASS_SOLID_TOP, GLASS_SOLID], bend: 1.0, shadow: true };
+pub const CONTROL_GLASS: GlassKind = GlassKind { see: [CONTROL_TOP, CONTROL], clear: [CONTROL_TOP, CONTROL], solid: [CONTROL_SOLID_TOP, CONTROL_SOLID], bend: 1.6, shadow: false };
+
+pub fn glass_shapes_as(ctx: &egui::Context, key: u64, rect: Rect, r: f32, kind: GlassKind) -> Vec<egui::Shape> {
     let g = glass(ctx);
-    let r = f32::from(radius);
-    let mut out = vec![egui::epaint::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(70) }.as_shape(rect, CornerRadius::same(radius)).into()];
-    g.backdrop_shapes(&mut out, key, rect, r);
-    let [top, bottom] = if !g.works() {
-        [GLASS_SOLID_TOP, GLASS_SOLID]
-    } else if crate::chrome::see_through() {
-        [GLASS_CLEAR_TOP, GLASS_CLEAR]
+    let radius = CornerRadius::same(r.round().clamp(0.0, 255.0) as u8);
+    let mut out = vec![];
+    if kind.shadow {
+        out.push(egui::epaint::Shadow { offset: [0, 12], blur: 32, spread: 0, color: Color32::from_black_alpha(80) }.as_shape(rect, radius).into());
+    }
+    if g.works() {
+        let [top, bottom] = if crate::chrome::see_through() { kind.clear } else { kind.see };
+        g.backdrop_shapes(&mut out, key, rect, r, crate::glass::Look { top, bottom, bend: kind.bend });
+        // A hairline for the shape's edge where the light doesn't reach.
+        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, GLASS_HAIRLINE), StrokeKind::Inside)));
     } else {
-        [GLASS_TOP, GLASS]
-    };
-    out.push(rounded_gradient(rect, r, top, bottom));
-    out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, GLASS_RIM), StrokeKind::Inside)));
-    out.push(lit_edge(rect.shrink(0.5), r - 0.5));
+        out.push(rounded_gradient(rect, r, kind.solid[0], kind.solid[1]));
+        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, GLASS_RIM), StrokeKind::Inside)));
+        out.push(lit_edge(rect.shrink(0.5), r - 0.5));
+    }
     out
 }
 

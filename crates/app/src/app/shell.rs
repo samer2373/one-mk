@@ -409,12 +409,20 @@ impl App {
     pub(super) fn page_head(&self, ui: &Ui, content: Rect, title: &str, sub: &str) -> Rect {
         let r = Rect::from_min_size(content.min + vec2(4.0, 0.0), vec2(content.width() - 4.0, HEAD_H));
         let p = ui.painter();
-        let big = regular(28.0);
+        // A firm title, and what is true now beside it, quieter and smaller,
+        // on the same baseline.
+        let big = semibold(24.0);
         let tw = text_width(ui, title, big.clone());
-        p.text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, title, big.clone(), INK);
+        let g = p.layout_no_wrap(title.to_owned(), big.clone(), INK);
+        let top = r.center().y - g.size().y / 2.0;
+        let baseline = top + g.rows.first().map_or(g.size().y * 0.8, |row| row.pos.y + row.row.glyphs.first().map_or(0.0, |gl| gl.pos.y));
+        p.galley(pos2(r.left(), top), g, INK);
         if !sub.is_empty() {
-            let room = (r.width() * 0.6 - tw - 10.0).max(0.0);
-            p.text(pos2(r.left() + tw + 10.0, r.center().y), Align2::LEFT_CENTER, fit(p, sub, &big, room), big, INK3);
+            let small = regular(15.0);
+            let room = (r.width() * 0.6 - tw - 14.0).max(0.0);
+            let sg = p.layout_no_wrap(fit(p, sub, &small, room), small, INK3);
+            let ascent = sg.rows.first().map_or(sg.size().y * 0.8, |row| row.pos.y + row.row.glyphs.first().map_or(0.0, |gl| gl.pos.y));
+            p.galley(pos2(r.left() + tw + 12.0, baseline - ascent), sg, INK3);
         }
         a11y_text(ui, Id::unique(("page", title)), r, Role::Heading, &format!("{title} {sub}"), None);
         r

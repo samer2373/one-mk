@@ -1214,12 +1214,33 @@ impl Scene {
         // desk's far edge melts into it, as the desk is the lit wood laid
         // over it at the light's strength (the same as mixing towards the
         // room's colour on a solid window, and see-through on a clear one).
-        let _ = rect;
+        // Each lit screen washes the wall behind it in its own colour, the
+        // way a monitor's glow does in a dim room: the glass over the desk
+        // has that colour to bend.
+        for (d, g) in self.devices.iter().zip(geo) {
+            if !d.online || d.a < 0.01 {
+                continue;
+            }
+            let (l, r) = (cam.pt(g.screen.at(0.0, 0.5)), cam.pt(g.screen.at(1.0, 0.5)));
+            let c = cam.pt(g.screen.at(0.5, 0.35));
+            let [cr, cg, cb] = hex(d.wall[0]);
+            let col = rgba([cr.saturating_add(60), cg.saturating_add(60), cb.saturating_add(60)], 1.0, 0.20 * d.a);
+            crate::chrome::light(painter, c, (r - l).length() * 1.15 + 90.0, col);
+        }
         // The desk is lit around the computers and falls off into the room:
         // no edges, nothing to suggest a box the computers sit in.
         let (cx, cz) = (self.focus_x, -4.0);
         // The desk's front edge, a little in front of the nearest device.
-        let front = geo.iter().map(|g| g.foot[1] + g.foot[3]).fold(f32::MIN, f32::max).max(cz) + 34.0;
+        let mut front = geo.iter().map(|g| g.foot[1] + g.foot[3]).fold(f32::MIN, f32::max).max(cz) + 34.0;
+        // On past the bottom of the window, so the glass over the lower
+        // part of the window floats over the desk, not over nothing.
+        let bottom = rect.bottom();
+        for _ in 0..24 {
+            if cam.pt(v(cx, 0.0, front)).y > bottom + 8.0 {
+                break;
+            }
+            front += 12.0;
+        }
         let (rx, rz) = (150.0 + self.dist * 0.4, (front - cz + 26.0).max(70.0));
         let light = |x: f32, z: f32| {
             let d = (((x - cx) / rx).powi(2) + ((z - cz) / rz).powi(2)).sqrt();

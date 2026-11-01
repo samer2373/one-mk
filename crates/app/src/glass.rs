@@ -28,6 +28,15 @@ use std::sync::{Arc, Mutex};
 /// what is beside them rather than a hard border.
 const MARGIN_PX: i32 = 48;
 
+/// How a piece of glass is tinted (premultiplied, top and bottom) and how
+/// strongly its rim bends what is behind (0: flat; 1: a thick lens).
+#[derive(Clone, Copy, Debug)]
+pub struct Look {
+    pub top: egui::Color32,
+    pub bottom: egui::Color32,
+    pub bend: f32,
+}
+
 #[derive(Clone)]
 pub struct Glass {
     res: Arc<Mutex<Option<Res>>>,
@@ -65,9 +74,10 @@ impl Glass {
         self.frame.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// The blurred backdrop for panel `key` at `rect` with corner `radius`
-    /// points, as shapes to place; draw its frost and contents after them.
-    pub fn backdrop_shapes(&self, out: &mut Vec<egui::Shape>, key: u64, rect: Rect, radius: f32) {
+    /// The glass for panel `key` at `rect` with corner `radius` points (the
+    /// backdrop bent and blurred, `look`'s tint, the lit rim), as shapes to
+    /// place; draw its contents after them.
+    pub fn backdrop_shapes(&self, out: &mut Vec<egui::Shape>, key: u64, rect: Rect, radius: f32, look: Look) {
         if !self.works() || !rect.is_positive() {
             return;
         }
@@ -92,7 +102,7 @@ impl Glass {
             }
             let Some(r) = guard.as_mut() else { return };
             r.evict(gl, frame);
-            if let Err(e) = unsafe { r.paint(gl, &info, radius, key, generation, frame) } {
+            if let Err(e) = unsafe { r.paint(gl, &info, radius, look, key, generation, frame) } {
                 log_once(&e);
                 ok.store(false, Ordering::Relaxed);
             }
@@ -133,12 +143,20 @@ struct Res {
     u_show_src: Option<glow::UniformLocation>,
     u_show_size: Option<glow::UniformLocation>,
     u_show_radius: Option<glow::UniformLocation>,
+    u_show_sharp: Option<glow::UniformLocation>,
+    u_show_texel: Option<glow::UniformLocation>,
+    u_show_ppp: Option<glow::UniformLocation>,
+    u_show_tint_top: Option<glow::UniformLocation>,
+    u_show_tint_bottom: Option<glow::UniformLocation>,
+    u_show_bend: Option<glow::UniformLocation>,
 }
 
 struct Kept {
     /// The frame it was last drawn in.
     used: u64,
     tex: glow::Texture,
+    /// What is behind at a quarter size, unblurred: the lens at the rim.
+    sharp: glow::Texture,
     texels: [i32; 2],
     region: Px,
     screen: [i32; 2],
@@ -175,23 +193,65 @@ void main() {
     FRAG_COLOR = c;
 }";
 
-// The blurred picture inside a rounded rectangle, antialiased at its edge,
-// with premultiplied alpha as egui expects (and the window's own alpha kept).
+// Liquid glass, inside a rounded rectangle, antialiased at its edge, in
+// premultiplied alpha (the window's own alpha kept, so a see-through
+// window stays see-through behind it):
+// - the inside shows what is behind, blurred, a little brighter and more
+//   saturated;
+// - towards the rim the glass bends light like a lens: it shows the less
+//   blurred picture, pulled in from outside the edge, with the colours
+//   parting very slightly;
+// - its tint, lighter at the top;
+// - light catches the rim, strongest where it faces the light (top left)
+//   and again, softer, on the opposite edge, as in a real slab of glass.
 const SHOW: &str = r"
 uniform sampler2D u_tex;
+uniform sampler2D u_sharp;
 uniform vec4 u_src;
 uniform vec2 u_size;
 uniform float u_radius;
+uniform vec2 u_texel;
+uniform float u_ppp;
+uniform vec4 u_tint_top;
+uniform vec4 u_tint_bottom;
+uniform float u_bend;
 IN vec2 v_uv;
 OUT_COLOR
+float sdf(vec2 p) {
+    vec2 q = abs(p - u_size * 0.5) - (u_size * 0.5 - vec2(u_radius));
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - u_radius;
+}
 void main() {
     vec2 p = v_uv * u_size;
-    vec2 q = abs(p - u_size * 0.5) - (u_size * 0.5 - vec2(u_radius));
-    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - u_radius;
+    float d = sdf(p);
     float a = clamp(0.5 - d, 0.0, 1.0);
-    // Premultiplied, alpha kept: where the window is see-through (macOS),
-    // so is the blur, and the desktop shows through it.
-    FRAG_COLOR = TEXTURE(u_tex, u_src.xy + v_uv * u_src.zw) * a;
+    vec2 h = vec2(0.75, 0.0);
+    vec2 n = vec2(sdf(p + h.xy) - sdf(p - h.xy), sdf(p + h.yx) - sdf(p - h.yx));
+    n = n / max(length(n), 1e-4);
+    float band = max(u_radius * 0.9, 10.0 * u_ppp);
+    float t = clamp(1.0 + d / band, 0.0, 1.0);
+    float bend = t * t * t;
+    vec2 uv = u_src.xy + v_uv * u_src.zw;
+    vec2 off = n * bend * u_bend * band * u_texel;
+    vec4 soft = TEXTURE(u_tex, uv + off * 0.7);
+    vec4 sr = TEXTURE(u_sharp, uv + off * 1.08);
+    vec4 sg = TEXTURE(u_sharp, uv + off);
+    vec4 sb = TEXTURE(u_sharp, uv + off * 0.92);
+    vec4 sharp = vec4(sr.r, sg.g, sb.b, sg.a);
+    vec4 c = mix(soft, sharp, 0.15 + 0.6 * bend);
+    float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+    c.rgb = max(mix(vec3(l), c.rgb, 1.35), 0.0) * (1.04 + 0.08 * bend);
+    vec4 tint = mix(u_tint_bottom, u_tint_top, v_uv.y);
+    c = tint + c * (1.0 - tint.a);
+    vec2 light = normalize(vec2(-0.55, 0.85));
+    float facing = max(dot(n, light), 0.0);
+    float away = max(dot(n, -light), 0.0);
+    float inside = max(-d, 0.0);
+    float rim = exp(-inside / (0.9 * u_ppp));
+    float sheen = exp(-inside / (5.0 * u_ppp));
+    float spec = rim * (0.06 + 0.42 * facing * facing + 0.16 * away * away) + sheen * (0.06 * facing + 0.025 * away);
+    c = vec4(c.rgb + vec3(spec), min(c.a + spec, 1.0));
+    FRAG_COLOR = c * a;
 }";
 
 fn source(version: ShaderVersion, body: &str, fragment: bool) -> String {
@@ -286,6 +346,12 @@ impl Res {
                 u_show_src: gl.get_uniform_location(show, "u_src"),
                 u_show_size: gl.get_uniform_location(show, "u_size"),
                 u_show_radius: gl.get_uniform_location(show, "u_radius"),
+                u_show_sharp: gl.get_uniform_location(show, "u_sharp"),
+                u_show_texel: gl.get_uniform_location(show, "u_texel"),
+                u_show_ppp: gl.get_uniform_location(show, "u_ppp"),
+                u_show_tint_top: gl.get_uniform_location(show, "u_tint_top"),
+                u_show_tint_bottom: gl.get_uniform_location(show, "u_tint_bottom"),
+                u_show_bend: gl.get_uniform_location(show, "u_bend"),
                 blur,
                 show,
                 _vbo: vbo,
@@ -328,7 +394,10 @@ impl Res {
         self.kept.retain(|_, k| {
             let keep = k.used + 2 >= frame;
             if !keep {
-                unsafe { gl.delete_texture(k.tex) };
+                unsafe {
+                    gl.delete_texture(k.tex);
+                    gl.delete_texture(k.sharp);
+                }
             }
             keep
         });
@@ -415,6 +484,23 @@ impl Res {
                 gl.uniform_4_f32(self.u_blur_src.as_ref(), src[0], src[1], src[2], src[3]);
                 gl.draw_arrays(glow::TRIANGLES, 0, 6);
             }
+            // The unblurred quarter, for the lens at the rim.
+            let sharp = match self.kept.get(&key).map(|k| (k.sharp, k.region)) {
+                Some((t, r)) if r.scaled(4).w == q.w && r.scaled(4).h == q.h => t,
+                Some((t, _)) => {
+                    gl.delete_texture(t);
+                    Self::texture(gl, [q.w, q.h])?
+                }
+                None => Self::texture(gl, [q.w, q.h])?,
+            };
+            let out = gl.create_framebuffer()?;
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.fbo));
+            gl.framebuffer_texture_2d(glow::READ_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(self.tex[0].0), 0);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(out));
+            gl.framebuffer_texture_2d(glow::DRAW_FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(sharp), 0);
+            gl.blit_framebuffer(q.x, q.y, q.x + q.w, q.y + q.h, 0, 0, q.w, q.h, glow::COLOR_BUFFER_BIT, glow::NEAREST);
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.delete_framebuffer(out);
             // 2. An eighth, then blurred twice each way.
             gl.use_program(Some(self.blur));
             gl.bind_vertex_array(Some(self.vao));
@@ -441,12 +527,13 @@ impl Res {
             gl.blit_framebuffer(e.x, e.y, e.x + e.w, e.y + e.h, 0, 0, e.w, e.h, glow::COLOR_BUFFER_BIT, glow::NEAREST);
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             gl.delete_framebuffer(out);
-            self.kept.insert(key, Kept { used: frame, tex: kept, texels, region, screen, generation });
+            self.kept.insert(key, Kept { used: frame, tex: kept, sharp, texels, region, screen, generation });
         }
         Ok(())
     }
 
-    unsafe fn paint(&mut self, gl: &glow::Context, info: &egui::PaintCallbackInfo, radius: f32, key: u64, generation: u64, frame: u64) -> Result<(), String> {
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn paint(&mut self, gl: &glow::Context, info: &egui::PaintCallbackInfo, radius: f32, look: Look, key: u64, generation: u64, frame: u64) -> Result<(), String> {
         let screen = [info.screen_size_px[0] as i32, info.screen_size_px[1] as i32];
         let [sw, sh] = screen;
         if sw <= 0 || sh <= 0 {
@@ -497,7 +584,18 @@ impl Res {
             gl.uniform_4_f32(self.u_show_src.as_ref(), src[0], src[1], src[2], src[3]);
             gl.uniform_2_f32(self.u_show_size.as_ref(), panel.w as f32, panel.h as f32);
             gl.uniform_1_f32(self.u_show_radius.as_ref(), radius * info.pixels_per_point);
+            gl.active_texture(glow::TEXTURE1);
+            gl.bind_texture(glow::TEXTURE_2D, Some(k.sharp));
+            gl.uniform_1_i32(self.u_show_sharp.as_ref(), 1);
+            gl.uniform_2_f32(self.u_show_texel.as_ref(), 1.0 / region.w as f32, 1.0 / region.h as f32);
+            gl.uniform_1_f32(self.u_show_ppp.as_ref(), info.pixels_per_point);
+            let [t, b] = [look.top, look.bottom].map(|c| egui::Rgba::from(c).to_array());
+            gl.uniform_4_f32(self.u_show_tint_top.as_ref(), t[0], t[1], t[2], t[3]);
+            gl.uniform_4_f32(self.u_show_tint_bottom.as_ref(), b[0], b[1], b[2], b[3]);
+            gl.uniform_1_f32(self.u_show_bend.as_ref(), look.bend);
             gl.draw_arrays(glow::TRIANGLES, 0, 6);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            gl.active_texture(glow::TEXTURE0);
             gl.bind_vertex_array(None);
             gl.bind_texture(glow::TEXTURE_2D, None);
             let err = gl.get_error();

@@ -24,7 +24,16 @@ pub const GLASS_CLEAR: Color32 = Color32::from_rgba_premultiplied(11, 11, 12, 62
 /// Without blur (old OpenGL, or reduce transparency): solid.
 pub const GLASS_SOLID_TOP: Color32 = Color32::from_rgb(0x1C, 0x20, 0x27);
 pub const GLASS_SOLID: Color32 = Color32::from_rgb(0x16, 0x1A, 0x20);
-/// A glass panel's rim, and its lit top edge.
+/// A control's glass (a button, the chosen segment): clearer than a
+/// panel's, a little lighter.
+pub const CONTROL_TOP: Color32 = Color32::from_rgba_premultiplied(40, 41, 44, 70);
+pub const CONTROL: Color32 = Color32::from_rgba_premultiplied(22, 23, 25, 52);
+pub const CONTROL_SOLID_TOP: Color32 = Color32::from_rgb(0x2A, 0x2E, 0x35);
+pub const CONTROL_SOLID: Color32 = Color32::from_rgb(0x22, 0x26, 0x2C);
+/// The edge of a glass shape where the light doesn't catch it.
+pub const GLASS_HAIRLINE: Color32 = Color32::from_rgba_premultiplied(12, 12, 12, 12);
+/// A glass panel's rim, and its lit top edge (drawn when there is no blur;
+/// with blur the glass lights its own rim).
 pub const GLASS_RIM: Color32 = Color32::from_rgba_premultiplied(26, 26, 26, 26);
 pub const GLASS_EDGE: Color32 = Color32::from_rgba_premultiplied(56, 56, 56, 56);
 /// What floats over everything (a sheet, a toast, a menu): solid, so it
@@ -36,6 +45,8 @@ pub const ON_GLASS_LIT: Color32 = Color32::from_rgba_premultiplied(30, 30, 30, 3
 /// Corners: panels, things inside them, small controls.
 pub const R_PANEL: u8 = 20;
 pub const R_INNER: u8 = 12;
+/// A group of rows on glass (settings).
+pub const R_GROUP: u8 = 16;
 /// The gap round and between panels.
 pub const M: f32 = 12.0;
 pub const PANEL: Color32 = Color32::from_rgb(0x13, 0x17, 0x1C);
@@ -51,6 +62,10 @@ pub const INK3: Color32 = Color32::from_rgb(0x8F, 0x98, 0xA4);
 pub const INK_HOVER: Color32 = Color32::from_rgb(0xC4, 0xCA, 0xD2);
 /// The one warm colour: something crossing, a drop target, the main action.
 pub const SIGNAL: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
+/// The accent for chosen and on states (a switch that is on). The signal
+/// for now; the brand's own colour when the new mark lands.
+pub const ACCENT: Color32 = SIGNAL;
+pub const ACCENT_LIT: Color32 = SIGNAL_LIT;
 pub const SIGNAL_LIT: Color32 = Color32::from_rgb(0xFF, 0xC2, 0x66);
 pub const SIGNAL_INK: Color32 = Color32::from_rgb(0x1E, 0x15, 0x05);
 pub const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6B, 0x5E);

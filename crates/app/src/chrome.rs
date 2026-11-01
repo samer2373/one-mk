@@ -63,7 +63,7 @@ pub fn paint_room(p: &egui::Painter, full: egui::Rect) {
 
 /// A soft round light: full colour in the middle, gone at `radius`, eased
 /// over three rings so it has no visible edge.
-fn light(p: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
+pub fn light(p: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32) {
     use egui::epaint::{Mesh, Vertex, WHITE_UV};
     const SIDES: u32 = 48;
     const RINGS: [(f32, f32); 4] = [(0.0, 1.0), (0.35, 0.62), (0.7, 0.2), (1.0, 0.0)];
