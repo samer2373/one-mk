@@ -144,6 +144,15 @@ fn parse_os(s: &str) -> Option<u8> {
 }
 
 impl Scope {
+    pub(crate) fn includes_local_os(&self, local_os: u8) -> bool {
+        match self {
+            Scope::All => true,
+            Scope::Os(target) => *target == local_os,
+            Scope::Device(_, target) => target.includes_local_os(local_os),
+            Scope::Peer(_) => false,
+        }
+    }
+
     /// `--os mac` / `--peer=NAME`, for the command line.
     pub fn args(&self) -> Vec<String> {
         match self {
@@ -416,6 +425,7 @@ pub struct ScrollRule {
 /// `[input]` in `settings.toml`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Input {
+    pub local_rules: bool,
     pub tap_ms: Option<u32>,
     pub keys: Vec<KeyRule>,
     pub pointer: Vec<PointerRule>,
@@ -468,7 +478,9 @@ fn repeats<'a>(e: &'a [Entry], array: &str) -> Vec<Vec<(String, &'a Val)>> {
 impl Input {
     pub fn read(e: &[Entry]) -> Input {
         let tap_ms = e.iter().find(|x| x.table == "input.keymap" && x.key == "tap_ms").and_then(|x| x.val.as_int()).map(|n| n.clamp(0, 60_000) as u32);
-        let mut input = Input { tap_ms, ..Default::default() };
+        let local_rules = e.iter().find(|entry| entry.table == "input" && entry.key == "local_rules")
+            .and_then(|entry| entry.val.as_bool()).unwrap_or(false);
+        let mut input = Input { tap_ms, local_rules, ..Default::default() };
         let get = |key: &str| e.iter().find(|entry| {
             (entry.table == "input.autoscroll" && entry.key == key)
                 || entry.table.strip_prefix("input.autoscroll.").is_some_and(|suffix| format!("{suffix}.{}", entry.key) == key)
@@ -1906,6 +1918,18 @@ os = "mac"
         let text = "[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nscope = { local = true }\n[[input.keymap.rule]]\nfrom = \"a\"\nto = \"c\"\n";
         let input = Input::read(&read_toml(text));
         assert_eq!(input.keys, [KeyRule::to("a", "c")]);
+    }
+
+    #[test]
+    fn local_switch_and_rule_badges_follow_preferences_and_os_scope() {
+        assert!(!Input::read(&read_toml("")).local_rules);
+        assert!(Input::read(&read_toml("[input]\nlocal_rules=true\n")).local_rules);
+        assert!(Scope::All.includes_local_os(os::MACOS));
+        assert!(Scope::Os(os::MACOS).includes_local_os(os::MACOS));
+        assert!(!Scope::Os(os::WINDOWS).includes_local_os(os::MACOS));
+        assert!(!Scope::Peer("Studio PC".into()).includes_local_os(os::MACOS));
+        assert!(Scope::Device("keyboard".into(), Box::new(Scope::All)).includes_local_os(os::MACOS));
+        assert!(!Scope::Device("keyboard".into(), Box::new(Scope::Os(os::WINDOWS))).includes_local_os(os::MACOS));
     }
 
     #[test]

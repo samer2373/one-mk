@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2024"
 
 [features]
-default = []
+default = ["native-local-remap"]
 native-local-remap = ["one-mk-input/native-local-remap"]
 # 6D-M1 laboratory presentation authority; never enabled in release builds.
 wallpaper-m1-lab = ["dep:one-mk-wall-sync"]
@@ -19,7 +19,7 @@ fs4 = "1.1.0"
 if-addrs = "0.15.0"
 one-mk-ctl = { path = "../ctl" }
 one-mk-clipboard = { path = "../clipboard" }
-one-mk-input = { path = "../input" }
+one-mk-input = { path = "../input", default-features = false }
 one-mk-net = { path = "../net" }
 one-mk-proto = { path = "../proto" }
 quinn = { version = "0.11.12", default-features = false }

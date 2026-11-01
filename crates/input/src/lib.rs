@@ -18,6 +18,8 @@ mod cursoroverlay_x11;
 pub mod localmap;
 pub mod localmap_handoff;
 pub mod localmap_runtime;
+#[cfg(any(all(target_os = "macos", feature = "native-local-remap"), test))]
+pub mod macos_hidmap;
 pub mod dropzone;
 pub mod hotkeys;
 #[cfg(any(target_os = "linux", test))]
@@ -161,6 +163,7 @@ pub enum Event {
     ScreenLocked(bool),
     /// A keyboard shortcut was pressed (from [`hotkeys::listen`]'s receiver).
     Hotkey(hotkeys::Action),
+    LocalRulesOff,
     /// Whether the system's shortcut service works (from the same receiver).
     Hotkeys(hotkeys::Availability),
     /// A part of the backend failed; the message is shown to the user.

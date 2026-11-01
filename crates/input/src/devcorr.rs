@@ -91,7 +91,10 @@ impl Correlator {
 
     #[cfg(any(feature = "native-local-remap", test))]
     pub(crate) fn local_key(&mut self, key: crate::localmap_runtime::Key, now: u64, out: &mut Vec<Correlated>) {
-        self.enqueue(Event::Key { code: key.code, down: key.down, device: None }, Some(key.sequence), now, out);
+        let event = if one_mk_proto::keynames::is_button(key.code) {
+            Event::Button { button: key.code, down: key.down, device: None }
+        } else { Event::Key { code: key.code, down: key.down, device: None } };
+        self.enqueue(event, Some(key.sequence), now, out);
     }
 
     /// A device said `token` happened on it.
@@ -338,6 +341,21 @@ mod tests {
             assert_eq!(out.iter().map(|event| event.local).collect::<Vec<_>>(), [None, Some(7)]);
             assert_eq!(devices(&out), [Some(A), None]);
         }
+    }
+
+    #[test]
+    fn local_button_envelopes_keep_their_type_sequence_and_device() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.configure(true, &mut out);
+        corr.local_key(crate::localmap_runtime::Key {
+            sequence: 9, code: 0x113, down: true, at: std::time::Instant::now(), keyboard_type: 0,
+        }, 0, &mut out);
+        corr.device_event(press(0x113, true), A, 1, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].local, Some(9));
+        assert!(matches!(out[0].event, Event::Button { button: 0x113, down: true, device: Some(A) }));
+        assert_eq!(corr.deadline(), None);
     }
 
     #[test]

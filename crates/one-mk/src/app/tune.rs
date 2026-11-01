@@ -23,12 +23,15 @@ use std::path::{Path, PathBuf};
 use tokio::sync::oneshot;
 
 #[cfg(any(all(feature = "native-local-remap", any(windows, target_os = "macos")), test))]
-fn local_rules_snapshot(settings: &crate::settings::Settings, devices: &[InputDevice], computers: usize) -> anyhow::Result<Option<std::sync::Arc<one_mk_input::localmap_runtime::Rules>>> {
+fn local_rules_snapshot(settings: &crate::settings::Settings, devices: &[InputDevice], apps: &[String], computers: usize) -> anyhow::Result<Option<std::sync::Arc<one_mk_input::localmap_runtime::Rules>>> {
     if !settings.input.local_rules { return Ok(None); }
+    let maps = settings.input.local_keymaps_for(devices, apps)?;
+    let count = if maps.base().is_empty() && !maps.has_device_rules() { 0 }
+        else { settings.input.keymap.rule.len() + settings.input.button.len() };
     Ok(Some(std::sync::Arc::new(one_mk_input::localmap_runtime::Rules {
-        maps: settings.input.local_keymaps(devices)?,
+        maps,
         hotkeys: settings.hotkeys.bindings_for(computers).map_err(anyhow::Error::msg)?,
-        count: settings.input.keymap.rule.iter().filter(|rule| *rule.scope.target() == crate::tuning::Scope::Local).count(),
+        count,
     })))
 }
 
@@ -40,15 +43,16 @@ impl App {
         #[cfg(not(feature = "native-local-remap"))]
         {
             if self.settings.input.local_rules {
-                self.input_problems.insert("local-key-rules", "Local key rules inactive: this build does not include the experimental native local remap".into());
+                self.input_problems.insert("local-key-rules", "Local key rules inactive: local rules are not included in this build".into());
             } else {
                 self.input_problems.remove("local-key-rules");
             }
         }
         #[cfg(feature = "native-local-remap")]
         {
-            self.input_problems.insert("local-key-rules", "Local key rules inactive: waiting for current settings acknowledgement; EXPERIMENTAL, native Windows/macOS UNTESTED (compile-checked only)".into());
-            let (rules, inactive) = match local_rules_snapshot(&self.settings, self.devices.list(), self.trust.devices().len() + 1) {
+            self.input_problems.insert("local-key-rules", "Local key rules inactive: applying your choices".into());
+            let apps = self.focus.focus().map(|focus| focus.apps).unwrap_or_default();
+            let (rules, inactive) = match local_rules_snapshot(&self.settings, self.devices.list(), &apps, self.trust.devices().len() + 1) {
                 Ok(rules) => (rules, None),
                 Err(error) => {
                     (None, Some(error.to_string()))
@@ -56,6 +60,7 @@ impl App {
             };
             let _ = self.capture.send(one_mk_input::CaptureCmd::LocalRules { rules, inactive });
         }
+        self.sync_focus_watch();
     }
 }
 
@@ -582,13 +587,24 @@ mod tests {
     #[test]
     fn local_snapshot_requires_opt_in_and_valid_physical_shortcuts() {
         let mut settings = crate::settings::Settings::default();
-        assert!(local_rules_snapshot(&settings, &[], 1).unwrap().is_none());
+        assert!(local_rules_snapshot(&settings, &[], &[], 1).unwrap().is_none());
         settings.input.local_rules = true;
         settings.input.keymap.rule.push(KeyRule { from: "capslock".into(), to: Some(crate::tuning::To::One("esc".into())), scope: crate::tuning::Scope::Local, ..Default::default() });
-        let snapshot = local_rules_snapshot(&settings, &[], 1).unwrap().unwrap();
+        let snapshot = local_rules_snapshot(&settings, &[], &[], 1).unwrap().unwrap();
         assert_eq!(snapshot.count, 1);
         settings.hotkeys.home = "not a valid key".into();
-        assert!(local_rules_snapshot(&settings, &[], 1).is_err());
+        assert!(local_rules_snapshot(&settings, &[], &[], 1).is_err());
+    }
+
+    #[test]
+    fn local_snapshot_without_applicable_rules_does_not_intercept_keys() {
+        let mut settings = crate::settings::Settings::default();
+        settings.input.local_rules = true;
+        settings.input.keymap.rule.push(KeyRule { from: "a".into(), to: Some(crate::tuning::To::One("b".into())),
+            scope: crate::tuning::Scope::Peer("another computer".into()), ..Default::default() });
+        let snapshot = local_rules_snapshot(&settings, &[], &[], 1).unwrap().unwrap();
+        assert_eq!(snapshot.count, 0);
+        assert!(snapshot.maps.base().is_empty());
     }
 
     fn tap_hold() -> Tune {

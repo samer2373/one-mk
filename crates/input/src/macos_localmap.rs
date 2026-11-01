@@ -7,7 +7,7 @@ use crate::macos::{Inbox, Msg};
 use crate::macos_localmap_logic::{self as logic, Flags};
 use crate::{DeviceRef, Event};
 use crossbeam_queue::ArrayQueue;
-use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventType};
+use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventType, CGMouseButton};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
@@ -17,6 +17,7 @@ enum Work {
     Key(Key, Option<DeviceRef>),
     Fence { serial: u64, watermark: u64, health: u64, destination: Destination, rules: Arc<Rules>, baseline: Option<Vec<u32>> },
     Fail,
+    Retire,
     Stop,
 }
 
@@ -38,6 +39,12 @@ struct Receipts {
     physical_held: AtomicBool,
 }
 
+impl Receipts {
+    fn observe(&self, sequence: u32) {
+        if self.receipt.observe(sequence) && let Some(worker) = self.worker.get() { worker.unpark(); }
+    }
+}
+
 struct Native {
     receipts: Arc<Receipts>,
     sequence: u32,
@@ -56,9 +63,14 @@ impl Injector for Native {
             if down && (self.receipts.feedback.get().is_none_or(|feedback| !feedback.healthy())
                 || crate::macos::secure_input() || crate::macos::session_inactive()
                 || !crate::macos::ax_trusted(false) || !objc2_core_graphics::CGPreflightListenEventAccess()) { return index; }
-            let Some(kc) = crate::macos_logic::evdev_to_mac(code) else { self.settled = false; return index };
+            let kc = crate::macos_logic::evdev_to_mac(code).unwrap_or(255);
             let Some(sequence) = self.sequence.checked_add(1) else { self.settled = false; return index };
-            let Some(event) = CGEvent::new_keyboard_event(Some(&source), kc, down) else {
+            let event = if let Some(button) = crate::macos_logic::evdev_to_mac_button(code) {
+                let Some(position) = CGEvent::new(None) else { return index };
+                let (pressed, released, _) = crate::macos_logic::mouse_event_types(button);
+                CGEvent::new_mouse_event(Some(&source), CGEventType(if down { pressed } else { released }), CGEvent::location(Some(&position)), CGMouseButton(button))
+            } else if kc != 255 { CGEvent::new_keyboard_event(Some(&source), kc, down) } else { None };
+            let Some(event) = event else {
                 return index;
             };
             self.sequence = sequence;
@@ -132,7 +144,11 @@ impl Dispatch {
 
     pub fn forward(&mut self, event: &Event, sequence: Option<u64>) -> bool {
         let Some(sequence) = sequence else { return false };
-        let Event::Key { code, down, device } = *event else { return false };
+        let (code, down, device) = match *event {
+            Event::Key { code, down, device } => (code, down, device),
+            Event::Button { button, down, device } => (button, down, device),
+            _ => return false,
+        };
         let Some(key) = self.waiting.pop_front() else { self.fail(); return true };
         if key.sequence != sequence { self.fail(); return true; }
         if key.code != code || key.down != down || self.work.send(Work::Key(key, device)).is_err() {
@@ -165,6 +181,25 @@ pub(crate) struct Local {
     watchdog: Option<std::thread::JoinHandle<()>>,
     stopped: Arc<AtomicBool>,
     failed: bool,
+}
+
+pub(crate) struct Recovery {
+    work: mpsc::Sender<Work>,
+    receipts: Arc<Receipts>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Recovery {
+    pub fn retry(&self) { let _ = self.work.send(Work::Fail); }
+    pub fn finished(&self) -> bool { self.thread.as_ref().is_none_or(|thread| thread.is_finished()) }
+    pub fn receipt(&self, sequence: u32) { self.receipts.observe(sequence); }
+}
+
+impl Drop for Recovery {
+    fn drop(&mut self) {
+        let _ = self.work.send(Work::Stop);
+        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+    }
 }
 
 impl Local {
@@ -237,6 +272,14 @@ impl Local {
 
     pub fn supported(rules: &Rules) -> bool { rules.maps.supports_local_keys(logic::eligible) }
 
+    pub fn retire(mut self) -> Recovery {
+        self.admission.fail();
+        self.stopped.store(true, Ordering::Release);
+        if let Some(watchdog) = self.watchdog.take() { watchdog.thread().unpark(); let _ = watchdog.join(); }
+        let _ = self.work.send(Work::Retire);
+        Recovery { work: self.work.clone(), receipts: self.receipts.clone(), thread: self.thread.take() }
+    }
+
     pub fn baseline(&mut self, held: impl Iterator<Item = u32>) {
         let held: Vec<_> = held.collect();
         self.flags = Flags::default();
@@ -248,7 +291,7 @@ impl Local {
     }
 
     pub fn receipt(&self, sequence: u32) {
-        if self.receipts.receipt.observe(sequence) && let Some(worker) = self.receipts.worker.get() { worker.unpark(); }
+        self.receipts.observe(sequence);
     }
 
     pub fn held(&self) -> bool { self.receipts.held.load(Ordering::Acquire) }
@@ -330,12 +373,15 @@ impl Drop for Local {
         self.admission.fail();
         self.stopped.store(true, Ordering::Release);
         if let Some(watchdog) = self.watchdog.take() { watchdog.thread().unpark(); let _ = watchdog.join(); }
-        let _ = self.work.send(Work::Stop);
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        if let Some(thread) = self.thread.take() {
+            let _ = self.work.send(Work::Stop);
+            let _ = thread.join();
+        }
     }
 }
 
 fn run(engine: &mut Engine<Native>, feedback: &Feedback, receiver: mpsc::Receiver<Work>, mut complete: impl FnMut(Completion), notify: impl Fn()) {
+    let mut retired = false;
     loop {
         let next = match engine.deadline() {
             Some(deadline) => match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
@@ -350,6 +396,11 @@ fn run(engine: &mut Engine<Native>, feedback: &Feedback, receiver: mpsc::Receive
             },
             None => receiver.recv().ok(),
         };
+        if retired {
+            if matches!(next, Some(Work::Stop) | None) || engine.fail() { break; }
+            notify();
+            continue;
+        }
         match next {
             Some(Work::Key(key, device)) => { engine.admitted_key(key, device, feedback); }
             Some(Work::Fence { serial, watermark, health, destination, rules, baseline }) => {
@@ -358,6 +409,7 @@ fn run(engine: &mut Engine<Native>, feedback: &Feedback, receiver: mpsc::Receive
                 complete(Completion { serial, destination, success, health: health & !1 });
             }
             Some(Work::Fail) => { engine.fail(); }
+            Some(Work::Retire) => { retired = true; if engine.fail() { break; } }
             Some(Work::Stop) | None => break,
         }
         notify();

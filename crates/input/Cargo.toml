@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2024"
 
 [features]
-default = []
+default = ["native-local-remap"]
 native-local-remap = []
 null-typing-tests = []
 portal-typing-probe = []

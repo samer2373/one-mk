@@ -610,7 +610,7 @@ impl State {
     fn local_status(&self, status: &str) {
         let _ = self.tx.send(Event::Status {
             part: "local-key-rules",
-            problem: Some(format!("Local key rules {status}; EXPERIMENTAL, native Windows UNTESTED (compile-checked only)")),
+            problem: Some(format!("Local key rules {status}")),
         });
     }
 
@@ -652,7 +652,7 @@ impl State {
         self.raw.corr.finish(&mut out);
         self.send_all(out);
         if let Some(local) = self.local_rules.as_mut() { local.fail(); }
-        if self.local_rules.is_some() { self.local_status("inactive: session/desktop/device change; reload local rules to resume"); }
+        if self.local_rules.is_some() { self.local_status("inactive: the session or device changed; release your keys, then turn local rules off and on to resume"); }
     }
 
     fn local_pump(&mut self) -> Effect {
@@ -662,7 +662,9 @@ impl State {
         let mut done = None;
         let mut failed = false;
         let mut input = false;
+        let mut emergency = false;
         if let Some(local) = self.local_rules.as_mut() {
+            emergency = local.admission.take_emergency();
             input = std::mem::take(&mut local.input);
             while let Some(next) = local.action() { action = Some(next); }
             if self.tx.is_closed() || local.pending.is_some_and(|(_, started)| started.elapsed() >= crate::localmap_runtime::LEASE)
@@ -684,11 +686,15 @@ impl State {
             }
         }
         if input { self.local_input(); }
-        if failed { self.local_status("inactive: worker failed, timed out, or emergency shortcut; reload to recover"); }
+        if failed { self.local_status("inactive: input was interrupted or the emergency shortcut was pressed; release your keys, then turn local rules off and on to resume"); }
+        if emergency {
+            let _ = self.tx.send(Event::LocalRulesOff);
+            action = Some(crate::hotkeys::Action::Home);
+        }
         if let Some(action) = action { let _ = self.tx.send(Event::Hotkey(action)); }
         if let Some(done) = done {
             if !done.success {
-                self.local_status("inactive: injection/fence failed; reload to retry releases");
+                self.local_status("inactive: some keys could not be released; release your keys, then turn local rules off and on to try again");
             } else if let Some(local) = self.local_rules.as_mut() {
                 let activation = local.activation.take();
                 let count = local.snapshots.load().count;
@@ -865,6 +871,11 @@ impl State {
         let (x, y) = (info.pt.x, info.pt.y);
 
         let Some(cap) = self.captured else {
+            if !injected && let Some(button) = button && let Some(local) = self.local_rules.as_mut() {
+                let swallow = local.hook(button, down, Instant::now());
+                unsafe { PostMessageW(self.hwnd, WM_APP_LOCAL, 0, 0) };
+                if swallow { return (true, Effect::None); }
+            }
             if let Some(b) = button {
                 self.local.set(b, down);
             }
@@ -1001,9 +1012,9 @@ impl State {
                         self.raw.unregister(&mut out);
                         self.send_all(out);
                     }
-                    let problem = rules.as_ref().filter(|rules| rules.count > 0).map(|_| {
-                        "Local key rules inactive: unsupported native output; EXPERIMENTAL, Windows UNTESTED".into()
-                    });
+                    let problem = inactive.map(|reason| format!("Local key rules inactive: {reason}")).or_else(|| rules.as_ref().filter(|rules| rules.count > 0).map(|_| {
+                        "Local key rules inactive: one of your rules uses an unsupported key or action".into()
+                    }));
                     let _ = self.tx.send(Event::Status { part: "local-key-rules", problem });
                     return Effect::None;
                 }
@@ -1019,14 +1030,14 @@ impl State {
                 }
                 if rules.is_some() && !self.session_notifications {
                     self.local_pause();
-                    self.local_status("inactive: Windows session notifications unavailable");
+                    self.local_status("inactive: Windows could not notify one-mk about locking; restart one-mk to try again");
                     return Effect::None;
                 }
                 if self.local_rules.is_none() && rules.is_some() {
                     match Local::start(self.hwnd) {
                         Ok(local) => self.local_rules = Some(local),
                         Err(error) => {
-                            self.local_status(&format!("inactive: worker could not start: {error}"));
+                            self.local_status(&format!("inactive: local input could not start: {error}"));
                             return Effect::None;
                         }
                     }
@@ -1040,7 +1051,7 @@ impl State {
                     local.gate.close();
                     local.enabled = supported && rules.count > 0;
                     local.paused = !active;
-                    local.inactive = if !supported { "only physical scancode outputs and layers are supported".into() }
+                    local.inactive = if !supported { "one of your rules uses an unsupported key or action".into() }
                         else { inactive.unwrap_or_else(|| "preference off or no local rules".into()) };
                     local.snapshots.replace(if supported { rules } else { Arc::default() });
                     self.raw.register(self.hwnd);
@@ -1049,7 +1060,7 @@ impl State {
                     } else {
                         self.local_pause();
                     }
-                    if !supported { self.local_status("inactive: only physical scancode outputs and layers are supported"); }
+                    if !supported { self.local_status("inactive: one of your rules uses an unsupported key or action"); }
                 } else {
                     self.local_status(&format!("inactive: {}", inactive.unwrap_or_else(|| "preference off".into())));
                 }
@@ -1494,7 +1505,7 @@ fn send_inputs(inputs: &mut Vec<INPUT>, tx: &mpsc::UnboundedSender<Event>, faili
     inputs.clear();
 }
 
-fn mouse(dx: i32, dy: i32, data: u32, flags: u32) -> INPUT {
+pub(crate) fn mouse(dx: i32, dy: i32, data: u32, flags: u32) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {

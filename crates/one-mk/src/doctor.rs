@@ -710,14 +710,12 @@ pub fn local_rules_check(runtime: Option<&DaemonStatus>) -> Check {
         Outcome::skip("Local key rules are not available on Linux; stored rules remain inactive.")
     } else if cfg!(any(windows, target_os = "macos")) {
         match runtime.and_then(|status| status.input.iter().find(|line| line.starts_with("Local key rules "))) {
-            Some(detail) => Outcome::warn(detail, "Default OFF. Native execution has not been accepted. Run `one-mk keymap local off` to disable. See docs/LOCAL-REMAP.md."),
-            None => Outcome::skip("Local key rules inactive; no native local-rules problem reported."),
+            Some(detail) if detail.starts_with("Local key rules active") => Outcome::pass("Your key and button rules also work on this computer."),
+            Some(detail) => Outcome::warn(detail, "Open Keys & mouse to turn local rules off or try again. Ctrl + Alt + Shift + Esc turns them off immediately."),
+            None => Outcome::skip("Local rules are off, or no local rules are needed."),
         }
     } else {
-        Outcome::warn(
-            "Experimental; untested on real Windows/macOS hardware. Native local hook integration is incomplete; rules remain inactive even with the preference on.",
-            "Keep `one-mk keymap local off` until native acknowledgement and real-hardware acceptance tests pass. See docs/LOCAL-REMAP.md.",
-        )
+        Outcome::skip("Not available on this desktop. Local rules need macOS or Windows.")
     };
     check("local-key-rules", "Local key rules", outcome)
 }
@@ -2261,9 +2259,8 @@ mod tests {
         } else if cfg!(any(windows, target_os = "macos")) {
             assert_eq!(st(&result), Status::Skip);
         } else {
-            assert_eq!(st(&result), Status::Warn);
-            assert!(result.outcome.detail.contains("untested on real Windows/macOS hardware") || result.outcome.detail.contains("UNTESTED (compile-checked only)"));
-            assert!(result.outcome.detail.contains("inactive"));
+            assert_eq!(st(&result), Status::Skip);
+            assert!(result.outcome.detail.contains("Not available"));
         }
     }
     #[test]

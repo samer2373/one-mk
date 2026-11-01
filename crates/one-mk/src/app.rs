@@ -1261,6 +1261,15 @@ impl App {
                 }
             }
             Event::Error(msg) => tracing::error!("{msg}"),
+            Event::LocalRulesOff => {
+                self.settings.input.local_rules = false;
+                if let Err(error) = crate::settings::Settings::update(&self.dir, |settings| {
+                    settings.input.local_rules = false;
+                    Ok(())
+                }) { tracing::error!(%error, "could not save emergency local-rules disable"); }
+                #[cfg(any(windows, target_os = "macos"))]
+                self.reload_local_rules();
+            }
             Event::Status { part, problem: Some(p) } => {
                 if self.input_problems.get(part) != Some(&p) {
                     println!("{p}");
@@ -1806,7 +1815,10 @@ impl App {
     /// Has the focus probe say when another window comes to the front while
     /// a controller watches the focus here, and stop when it doesn't.
     fn sync_focus_watch(&mut self) {
-        let want = self.owner.as_ref().is_some_and(|o| o.watch_focus);
+        let want = self.owner.as_ref().is_some_and(|o| o.watch_focus)
+            || cfg!(any(windows, target_os = "macos")) && self.settings.input.local_rules
+                && (self.settings.input.keymap.rule.iter().any(|rule| rule.app.is_some())
+                    || self.settings.input.button.iter().any(|rule| rule.app.is_some()));
         if want == std::mem::replace(&mut self.focus_watched, want) {
             return;
         }
@@ -1882,7 +1894,11 @@ impl App {
                 self.dialing.remove(&addr);
             }
             AppEvent::Network(net) => self.on_network(&net),
-            AppEvent::FocusMoved => self.check_focus_soon(),
+            AppEvent::FocusMoved => {
+                self.check_focus_soon();
+                #[cfg(any(windows, target_os = "macos"))]
+                if self.settings.input.local_rules { self.reload_local_rules(); }
+            }
         }
     }
 

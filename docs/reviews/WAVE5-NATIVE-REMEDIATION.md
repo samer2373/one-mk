@@ -1,5 +1,36 @@
 # 5H native review remediation — 2026-10-31
 
+## 2026-11-02 delivery follow-up
+
+The sections dated 2026-10-31 below are historical review evidence, not current
+feature-default or window behavior. At the owner's request this candidate
+includes native local adapters by default, adds the window switch and per-rule
+annotations, applies normal key/button rules locally when enabled, resolves
+local app focus, and persists emergency disable. Mouse buttons use the shared
+ledger. Ordinary maps no longer incur unnecessary per-device correlation waits.
+
+**Not release-accepted:** macOS Caps Lock is still explicitly refused. There
+is no native UserKeyMapping integration; preserving source identity across
+KVM crossings and safe restoration is unresolved. The pure mapping generator
+and its tests cover Caps-to-Esc/Control, swaps and rejection of complex or
+ambiguous mappings, but it is not connected to native activation. Per-device correlation can
+still take 8 ms. Native latency, LED state, idle CPU, OS release delivery and
+mixed local/remote acceptance have not been measured here. Do not interpret
+default inclusion, plain UI language or cross-compilation as native approval.
+See `../LOCAL-REMAP.md` for the current delivery boundary and remaining safety
+requirements. Neither the ordinary platform injectors nor wallpaper code was
+edited in this follow-up.
+
+Final follow-up validation: both requested input/app native target checks passed
+(compile-only), the focused input/local suite passed 65 tests, daemon/window local
+tests passed 15/2, and all 9 native source contracts passed. The single final
+`cargo clippy --workspace --all-targets -j 2 -- -D warnings` and
+`cargo test --workspace -j 2` runs both passed. Every Cargo command used the
+dedicated `localremap` target directory and two jobs; no `cargo fmt` was run.
+These results do not close the Caps Lock, end-to-end latency or native acceptance
+blockers. Current validation and the owner's Mac checklist are in
+`../LOCAL-REMAP.md#2026-11-02-validation-and-handoff`.
+
 > Historical first-round results below are superseded by **Owner-only feature
 > gate and regression remediation** at the end of this document. In particular,
 > the earlier best-effort-up / fail-open-capture policy is no longer used by

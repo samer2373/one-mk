@@ -13,6 +13,7 @@ use std::time::Instant;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, WAIT_TIMEOUT};
 use windows_sys::Win32::System::Threading::{CancelWaitableTimer, CreateEventW, CreateWaitableTimerExW, SetEvent, SetWaitableTimer, WaitForMultipleObjects, WaitForSingleObject, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS, INFINITE};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, SendInput};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP};
 use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 
@@ -58,6 +59,16 @@ impl Injector for Native {
     fn inject(&mut self, keys: &[(u32, bool)]) -> usize {
         let mut inputs = Vec::<INPUT>::with_capacity(keys.len());
         for &(code, down) in keys {
+            if (0x110..=0x114).contains(&code) {
+                let (flags, data) = match code {
+                    0x110 => (if down { MOUSEEVENTF_LEFTDOWN } else { MOUSEEVENTF_LEFTUP }, 0),
+                    0x111 => (if down { MOUSEEVENTF_RIGHTDOWN } else { MOUSEEVENTF_RIGHTUP }, 0),
+                    0x112 => (if down { MOUSEEVENTF_MIDDLEDOWN } else { MOUSEEVENTF_MIDDLEUP }, 0),
+                    _ => (if down { MOUSEEVENTF_XDOWN } else { MOUSEEVENTF_XUP }, code - 0x112),
+                };
+                inputs.push(super::windows::mouse(0, 0, data, flags));
+                continue;
+            }
             let Some(WinKey::Scan { scan, extended }) = evdev_to_win(code) else { return 0 };
             let flags = KEYEVENTF_SCANCODE | if extended { KEYEVENTF_EXTENDEDKEY } else { 0 }
                 | if down { 0 } else { KEYEVENTF_KEYUP };
@@ -220,7 +231,7 @@ impl Local {
     }
 
     pub fn supported(rules: &Rules) -> bool {
-        rules.maps.supports_local_keys(|code| matches!(evdev_to_win(code), Some(WinKey::Scan { .. })))
+        rules.maps.supports_local_keys(|code| (0x110..=0x114).contains(&code) || matches!(evdev_to_win(code), Some(WinKey::Scan { .. })))
     }
 
     pub fn retire(mut self) -> Recovery {
@@ -245,7 +256,7 @@ impl Local {
         let rules = self.snapshots.load();
         let swallow = self.physical.key(PhysicalKey {
             down, injected: false, shortcut: false, owner: Owner::Unknown,
-            eligible: matches!(evdev_to_win(code), Some(WinKey::Scan { .. })),
+            eligible: (0x110..=0x114).contains(&code) || matches!(evdev_to_win(code), Some(WinKey::Scan { .. })),
             healthy: self.enabled && !self.paused,
         }, code, now, &rules, &mut self.admission, |action| self.actions.push(action).is_ok());
         if self.admission.pending() { self.wake.signal(); }
@@ -254,7 +265,11 @@ impl Local {
 
     pub fn forward(&mut self, event: &Event, sequence: Option<u64>) -> bool {
         let Some(sequence) = sequence else { return false };
-        let Event::Key { code, down, device } = *event else { return false };
+        let (code, down, device) = match *event {
+            Event::Key { code, down, device } => (code, down, device),
+            Event::Button { button, down, device } => (button, down, device),
+            _ => return false,
+        };
         let Some(key) = self.waiting.pop_front() else { self.fail(); return true };
         if key.sequence != sequence { self.fail(); return true; }
         if key.code == code && key.down == down && !self.physical.correlated(code, down, device) {
