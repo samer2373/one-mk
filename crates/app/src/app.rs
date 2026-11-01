@@ -264,6 +264,7 @@ pub struct App {
     /// The profile whose options are open, and whether to scroll to it.
     profile_open: Option<String>,
     profile_scroll: bool,
+    wifi: Option<one_mk_ctl::wifi::Watch>,
     /// When the tab last changed (the page fades in).
     tab_at: f64,
     fonts: Fallbacks,
@@ -483,6 +484,7 @@ impl App {
             drafts: HashMap::new(),
             profile_open: None,
             profile_scroll: false,
+            wifi: None,
             tab_at: f64::NEG_INFINITY,
             fonts: Fallbacks::default(),
             size: vec2(size[0], size[1]),

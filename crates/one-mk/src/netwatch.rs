@@ -12,10 +12,8 @@
 //!   addresses from the interfaces. Without NetworkManager (systemd-networkd,
 //!   iwd alone, connman) nothing is watched and profiles only change with
 //!   `one-mk profile use`.
-//! - Windows and macOS: not done yet (TODO: `INetworkListManager` events or
-//!   `NotifyIpInterfaceChange` on Windows; `SCDynamicStore` notifications
-//!   for `State:/Network/Global/IPv4` and the AirPort SSID on macOS). The
-//!   daemon says so once, and `one-mk profile use` works as everywhere.
+//! - Windows and macOS: WlanAPI and CoreWLAN notifications through ctl's
+//!   cross-checkable Wi-Fi module. Location permission changes are events too.
 
 use crate::profiles::NetworkId;
 
@@ -40,7 +38,9 @@ pub fn system() -> Box<dyn NetworkWatcher> {
     let w: Box<dyn NetworkWatcher> = Box::new(fake::Fake);
     #[cfg(all(not(test), unix, not(target_os = "macos")))]
     let w: Box<dyn NetworkWatcher> = Box::new(nm::NetworkManager);
-    #[cfg(all(not(test), not(all(unix, not(target_os = "macos")))))]
+    #[cfg(all(not(test), any(target_os = "macos", windows)))]
+    let w: Box<dyn NetworkWatcher> = Box::new(NativeWifi);
+    #[cfg(all(not(test), not(any(unix, windows))))]
     let w: Box<dyn NetworkWatcher> = Box::new(Unsupported);
     w
 }
@@ -75,13 +75,27 @@ pub mod fake {
     }
 }
 
-/// Windows and macOS for now: says so, and never calls back.
-#[cfg_attr(any(test, all(unix, not(target_os = "macos"))), allow(dead_code))]
+/// Other platforms: says so, and never calls back.
+#[cfg(not(any(unix, windows)))]
 struct Unsupported;
 
+#[cfg(not(any(unix, windows)))]
 impl NetworkWatcher for Unsupported {
     fn start(self: Box<Self>, _on_change: OnChange) {
         tracing::info!("{UNSUPPORTED}");
+    }
+}
+
+#[cfg(any(target_os = "macos", windows))]
+struct NativeWifi;
+
+#[cfg(any(target_os = "macos", windows))]
+impl NetworkWatcher for NativeWifi {
+    fn start(self: Box<Self>, on_change: OnChange) {
+        let watch = one_mk_ctl::wifi::Watch::start(move |state| {
+            on_change(NetworkId { ssids: state.ssids, gateways: Vec::new(), addrs: local_addrs() });
+        });
+        std::mem::forget(watch);
     }
 }
 

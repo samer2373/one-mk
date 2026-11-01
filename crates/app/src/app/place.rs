@@ -176,6 +176,14 @@ impl App {
     /// in by itself on a Wi-Fi network.
     pub(super) fn profiles_cell(&mut self, ui: &mut Ui, c: Rect) {
         let Some(status) = self.running().cloned() else { return };
+        let wifi = self.wifi.get_or_insert_with(|| {
+            let context = ui.ctx().clone();
+            one_mk_ctl::wifi::Watch::start(move |_| context.request_repaint())
+        });
+        if ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(true)))) {
+            wifi.refresh();
+        }
+        let network = wifi.state();
         let current = status.layout.profile.clone();
         let names = status.layout.profiles.clone();
         let room = match &current {
@@ -203,15 +211,6 @@ impl App {
             self.link.profile("save", &n);
         }
         let list = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), save_y - 6.0));
-        if names.is_empty() {
-            let text = if status.peers.is_empty() {
-                "Once computers are paired, save where they are to switch back in one click."
-            } else {
-                "Save where every computer is now, to switch back in one click."
-            };
-            para(ui, list.min + vec2(0.0, 2.0), list.width(), text, regular(T_META), INK2);
-            return;
-        }
         let mut child = ui.new_child(UiBuilder::new().max_rect(list.expand2(vec2(4.0, 0.0))));
         child.set_clip_rect(list.expand2(vec2(6.0, 0.0)));
         let mut act: Option<(&'static str, String)> = None;
@@ -221,6 +220,38 @@ impl App {
         let just_opened = std::mem::take(&mut self.profile_scroll);
         egui::ScrollArea::vertical().id_salt("profiles").auto_shrink([false, false]).show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
+            let label = if !network.ssids.is_empty() {
+                format!("Current network: {}", network.ssids.join(", "))
+            } else if network.permission == one_mk_ctl::wifi::Permission::Allowed && !network.unavailable {
+                "Not connected to Wi-Fi".to_owned()
+            } else {
+                "Current network: unavailable".to_owned()
+            };
+            let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+            ui.painter().text(row.min + vec2(4.0, 12.0), Align2::LEFT_CENTER,
+                fit(ui.painter(), &label, &regular(T_META), row.width() - 8.0), regular(T_META), INK2);
+            if let Some(explanation) = network.explanation() {
+                let origin = ui.cursor().min + vec2(4.0, 0.0);
+                let height = para(ui, origin, ui.available_width() - 8.0, explanation, regular(T_META), INK2);
+                ui.allocate_space(vec2(ui.available_width(), height + 6.0));
+                if let Some(label) = network.permission_button() {
+                    let (row, _) = ui.allocate_exact_size(vec2(button_width(ui, label), 28.0), Sense::hover());
+                    if button(ui, row, Id::unique("wifi-permission"), label, Look::Quiet, true, None).clicked()
+                        && let Some(wifi) = &self.wifi
+                    {
+                        wifi.request_permission();
+                    }
+                    ui.allocate_space(vec2(0.0, 6.0));
+                }
+            }
+            if names.is_empty() {
+                let text = if status.peers.is_empty() {
+                    "Once computers are paired, save where they are to switch back in one click."
+                } else {
+                    "Save where every computer is now, to switch back in one click."
+                };
+                para(ui, ui.cursor().min + vec2(4.0, 2.0), ui.available_width() - 8.0, text, regular(T_META), INK2);
+            }
             for n in &names {
                 let expanded = open.as_ref() == Some(n);
                 let h = if expanded { 30.0 + 36.0 } else { 30.0 };
@@ -232,7 +263,7 @@ impl App {
                 let line = Rect::from_min_size(row.min, vec2(row.width(), 30.0));
                 let p = ui.painter().clone();
                 let in_use = current.as_ref() == Some(n);
-                let auto_text = cfg!(all(unix, not(target_os = "macos"))).then(|| self.prefs.auto.get(n).cloned()).flatten();
+                let auto_text = self.prefs.auto.get(n).cloned();
                 let more = Rect::from_min_size(pos2(line.right() - 26.0, line.center().y - 13.0), vec2(26.0, 26.0));
                 let use_w = button_width(ui, "In use") - 6.0;
                 let use_r = Rect::from_min_size(pos2(more.left() - 6.0 - use_w, line.center().y - 13.0), vec2(use_w, 26.0));
@@ -267,7 +298,7 @@ impl App {
                         r
                     };
                     let del = place(bw("Delete"));
-                    if cfg!(all(unix, not(target_os = "macos"))) {
+                    if cfg!(any(unix, windows)) {
                         let off = auto_text.is_some().then(|| place(bw("Turn off")));
                         let set = place(bw("Set"));
                         let fr = Rect::from_min_max(pos2(row.left(), y), pos2(x, y + 28.0));
