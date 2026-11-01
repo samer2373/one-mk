@@ -1225,8 +1225,9 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
             "unavailable: optional import package not installed; no decoder linked or process started"
         }
     )));
-    let (configured, managed, detail) = crate::update::doctor();
-    checks.push(check("updates", "Updates", if !configured || managed { Outcome::skip(detail) } else { Outcome::pass(detail) }));
+    let (available, detail) = crate::update::doctor(dir);
+    checks.push(check("updates", "Updates", if available { Outcome::warn(detail, "update-now") }
+        else if detail.starts_with("Couldn't check:") { Outcome::skip(detail) } else { Outcome::pass(detail) }));
     checks.push(check("drag", "File edge drops", Outcome::skip(one_mk_input::dropzone::availability())));
     checks.extend(config_checks(&config, dir));
     checks.push(port_check(&daemon, &port_facts));

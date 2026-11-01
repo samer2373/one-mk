@@ -34,6 +34,7 @@ enum Fix {
     OpenPermissionGuide,
     OpenPermissionSettings,
     OpenFirewallSettings,
+    Update,
 }
 
 fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
@@ -109,6 +110,7 @@ impl App {
             _ => {}
         }
         match c.id.as_str() {
+            "updates" if c.fix.as_deref() == Some("update-now") => Some(("Update now", Fix::Update)),
             "daemon" if self.off() => Some(("Start one·mk", Fix::Start)),
             // Pairing works with one·mk off too; it connects once started.
             "pairing" if self.running().is_none_or(|s| s.peers.is_empty()) => Some(("Pair a computer", Fix::Pair)),
@@ -346,6 +348,7 @@ impl App {
             ui.ctx().request_repaint_after_secs(1.6);
         }
         match fix_now {
+            Some(Fix::Update) => self.begin_update(),
             Some(Fix::Start) if !self.busy.contains(&Job::Start) => {
                 self.busy.push(Job::Start);
                 self.link.start();

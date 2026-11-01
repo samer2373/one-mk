@@ -56,6 +56,7 @@ impl Showing {
 }
 
 pub enum Event {
+    UpdateStatus(one_mk_ctl::update_logic::UpdateStatus),
     UpdateAvailable(Option<String>),
     UpdateOutput(String),
     /// `None`: one-mk is not running. Boxed: a status is large, and every
@@ -95,6 +96,7 @@ pub struct HistoryItem {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Job {
     Update,
+    UpdateSettings,
     Start,
     Layout { id: String, name: String, side: one_mk_proto::Side },
     Swap { id: String, name: String, swap: String },
@@ -248,7 +250,12 @@ impl Link {
             let mut gone = 0;
             let mut stamp = None;
             let opened = std::time::SystemTime::now();
+            let mut update_checked = None::<Instant>;
             loop {
+                if update_checked.is_none_or(|last| last.elapsed() >= Duration::from_secs(24 * 60 * 60)) {
+                    update_checked = Some(Instant::now());
+                    link.check_updates();
+                }
                 // The tray's "Quit one·mk" writes this file: the window goes too.
                 let quit = std::fs::metadata(link.dir.join(client::QUIT_FILE)).and_then(|m| m.modified());
                 if quit.is_ok_and(|t| t > opened) {
@@ -261,6 +268,7 @@ impl Link {
                     stamp = Some(now);
                     link.send(Event::Prefs(Box::new(link.prefs())));
                     link.send(Event::UpdateAvailable(one_mk_ctl::update_logic::cached_version(&link.dir, env!("CARGO_PKG_VERSION"))));
+                    link.update_status();
                 }
                 let Ok(now) = link.status() else {
                     std::thread::sleep(POLL);
@@ -392,11 +400,116 @@ impl Link {
     }
 
     pub fn update(&self) {
-        self.job(Job::Update, |link| {
-            let output = link.one_mk(&["update"])?;
-            link.send(Event::UpdateOutput(output));
-            Ok(())
+        self.install_update(None);
+    }
+
+    pub fn move_to_applications(&self) {
+        self.install_update(Some("--move-to-applications"));
+    }
+
+    pub fn rollback_update(&self) {
+        self.install_update(Some("--rollback"));
+    }
+
+    fn install_update(&self, action: Option<&'static str>) {
+        self.job(Job::Update, move |link| {
+            let result = link.stream_update(action);
+            link.update_status();
+            result
         });
+    }
+
+    fn stream_update(&self, action: Option<&str>) -> anyhow::Result<()> {
+        use std::io::BufRead;
+        let mut command = Command::new(&self.daemon);
+        command.arg("update");
+        if let Some(action) = action { command.arg(action); }
+        command.args(self.home_args()).stdin(Stdio::null()).stdout(Stdio::piped());
+        let errors = self.dir.join("update-error.log");
+        let error_file = std::fs::File::create(&errors)?;
+        command.stderr(Stdio::from(error_file));
+        let mut child = proc::hide_window(&mut command).spawn()?;
+        let mut restarting = false;
+        let mut read_error = None;
+        if let Some(output) = child.stdout.take() {
+            for line in std::io::BufReader::new(output).lines() {
+                match line {
+                    Ok(line) => {
+                        restarting |= line.contains("Restarting…");
+                        self.send(Event::UpdateOutput(line));
+                    }
+                    Err(error) => { read_error = Some(error); break; }
+                }
+            }
+        }
+        let status = child.wait()?;
+        if let Some(error) = read_error { return Err(error.into()); }
+        if !status.success() {
+            let error = std::fs::read_to_string(&errors).unwrap_or_default();
+            anyhow::bail!("{}", if error.trim().is_empty() { "Couldn't finish the update. Choose Download instead" } else { error.trim().trim_start_matches("one-mk: ") });
+        }
+        if restarting { self.restart_updated(action == Some("--move-to-applications"))?; }
+        Ok(())
+    }
+
+    fn restart_updated(&self, moved: bool) -> anyhow::Result<()> {
+        let _ = self.one_mk(&["stop"])?;
+        let mut daemon = self.daemon.clone();
+        let mut window = std::env::current_exe()?;
+        if moved {
+            daemon = PathBuf::from("/Applications/one-mk.app/Contents/MacOS/one-mk");
+            window = PathBuf::from("/Applications/one-mk.app/Contents/MacOS/one-mk-app");
+        }
+        let image = std::env::var_os("APPIMAGE").map(PathBuf::from)
+            .filter(|_| std::env::var_os("APPDIR").is_some_and(|dir| window.starts_with(dir)));
+        let mut args = vec!["run".to_owned()];
+        args.extend(self.home_args());
+        proc::spawn_detached(image.as_ref().unwrap_or(&daemon), &args, Some(&self.dir.join("daemon.log")))?;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !client::is_running(&self.dir) {
+            anyhow::ensure!(Instant::now() < deadline, "The update is installed, but sharing couldn't restart. Open one·mk again");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let mut args = Vec::new();
+        if image.is_some() { args.push("app".to_owned()); }
+        args.extend(self.home_args());
+        proc::spawn_detached(image.as_ref().unwrap_or(&window), &args, None)?;
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        Ok(())
+    }
+
+    pub fn acknowledge_app_start(&self) {
+        let link = self.clone();
+        std::thread::spawn(move || { let _ = link.one_mk(&["update", "--started-version", env!("CARGO_PKG_VERSION")]); });
+    }
+
+    pub fn update_status(&self) {
+        match self.one_mk(&["update", "--status-json"]).and_then(|output| Ok(serde_json::from_str(&output)?)) {
+            Ok(status) => self.send(Event::UpdateStatus(status)),
+            Err(_) => self.send(Event::UpdateOutput("Couldn't read update preferences. Choose Download instead".into())),
+        }
+    }
+
+    pub fn check_updates(&self) {
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ONE_MK_APP_STATUS").is_some() || std::env::var_os("ONE_MK_APP_NO_SETUP").is_some() { return; }
+        let link = self.clone();
+        std::thread::spawn(move || {
+            let _ = link.one_mk(&["update", "--startup-check"]);
+            link.update_status();
+        });
+    }
+
+    pub fn update_preference(&self, automatic: bool, enabled: bool) {
+        self.job(Job::UpdateSettings, move |link| {
+            let result = link.one_mk(&["update", if automatic { "--install-automatically" } else { "--check-on-start" }, if enabled { "on" } else { "off" }]);
+            link.update_status();
+            result.map(drop)
+        });
+    }
+
+    pub fn download_update(&self) {
+        self.ctx.open_url(egui::OpenUrl::new_tab("https://github.com/samer2373/one-mk/releases/latest"));
     }
 
     /// Moves a peer to `side`: with an offset, to that exact place; without,

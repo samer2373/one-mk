@@ -12,6 +12,7 @@ mod place;
 mod shell;
 mod desk_cards;
 mod typing;
+mod updates;
 
 use crate::daemon::{Event, Job, Link};
 use crate::motion::{self, tween};
@@ -186,6 +187,7 @@ pub struct App {
     status_seen: u64,
     update_available: Option<String>,
     update_output: Option<String>,
+    update_ui: updates::UpdateUi,
     link: Link,
     rx: Receiver<Event>,
     /// `None` until the first look at the daemon.
@@ -440,6 +442,7 @@ impl App {
             autostart: None,
             update_available: None,
             update_output: None,
+            update_ui: updates::UpdateUi::default(),
             scene,
             tab,
             drag: None,
@@ -556,6 +559,10 @@ impl App {
                     None => {}
                 },
                 Event::UpdateAvailable(version) => self.update_available = version,
+                Event::UpdateStatus(status) => {
+                    self.update_available.clone_from(&status.available);
+                    self.update_ui.status = Some(status);
+                }
                 Event::UpdateOutput(output) => self.update_output = Some(output),
                 Event::Latency(l) => {
                     self.measuring = None;
@@ -623,7 +630,8 @@ impl App {
         };
         let e = Some(e);
         match what {
-            Job::Update => self.update_output = e,
+            Job::Update => { self.update_output = e; self.update_ui.failed = true; }
+            Job::UpdateSettings => self.toast_error("Couldn't save update preferences.", e, now),
             Job::Measure(id) => {
                 // Not again by itself: it would fail again, forever.
                 self.measuring = None;
@@ -2160,6 +2168,7 @@ impl eframe::App for App {
         #[cfg(debug_assertions)]
         crate::chrome::paint_fake_buttons(ui.painter());
         self.guide.show(ui.ctx());
+        self.update_notice(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
         // round trips only then (a minimised window draws nothing).
         let hidden = ui.input(|i| i.viewport().minimized == Some(true));
