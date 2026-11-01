@@ -21,3 +21,4 @@ serde_json = "1.0"
 # The see-through window (chrome.rs): two messages to the window and one to
 # the shared workspace.
 objc2 = "0.6.5"
+raw-window-handle = "0.6"

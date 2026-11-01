@@ -136,7 +136,7 @@ pub fn blur_failed() -> bool {
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use eframe::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     use std::ffi::c_void;
