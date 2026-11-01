@@ -151,7 +151,17 @@ impl Method {
                 if address.is_empty() { return Err(std::io::Error::other("Enter the other computer's address.")); }
                 let address = if let Ok(ip) = address.parse::<std::net::IpAddr>() { std::net::SocketAddr::new(ip, one_mk_proto::DEFAULT_PORT).to_string() }
                     else if address.contains(':') { address.to_owned() } else { format!("{address}:{}", one_mk_proto::DEFAULT_PORT) };
-                let target = address.to_socket_addrs()?.next().ok_or_else(|| std::io::Error::other("That computer's address could not be found."))?;
+                // A name needs a lookup, which can hang on a broken network:
+                // it runs beside the window, which waits 1.5 s at most.
+                let (tx, rx) = std::sync::mpsc::channel();
+                let lookup = address.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(lookup.to_socket_addrs().map(|mut a| a.next()));
+                });
+                let target = match rx.recv_timeout(std::time::Duration::from_millis(1500)) {
+                    Ok(found) => found?.ok_or_else(|| std::io::Error::other("That computer's address could not be found."))?,
+                    Err(_) => return Err(std::io::Error::other("That computer's name took too long to look up. Try its IP address.")),
+                };
                 vec!["pair".into(), "--machine".into(), "--connect".into(), target.to_string()]
             }
         })

@@ -1018,7 +1018,11 @@ pub async fn run_command(dir: &Path, mut args: HooksArgs) -> Result<()> {
     use crate::settings::Settings;
     if let Some(computer) = args.computer.as_mut().filter(|computer| !computer.is_empty()) {
         let trust = one_mk_net::TrustStore::load(dir)?;
-        *computer = trust.find(computer).ok_or_else(|| anyhow::anyhow!("Choose one paired computer from the list."))?.fingerprint.clone();
+        // An id (what the window sends) matches fingerprints only; a name
+        // typed at the command line is looked up as before.
+        let looks_like_id = computer.len() >= 4 && computer.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
+        let found = if looks_like_id { trust.find_fingerprint(computer).or_else(|| trust.find(computer)) } else { trust.find(computer) };
+        *computer = found.ok_or_else(|| anyhow::anyhow!("Choose one paired computer from the list."))?.fingerprint.clone();
     }
     if args.trust_permissions {
         trust_permissions(dir)?;

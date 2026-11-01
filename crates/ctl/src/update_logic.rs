@@ -187,6 +187,21 @@ pub struct UpdateStatus {
     pub move_to_applications: bool,
     pub rollback_available: bool,
     pub advice: String,
+    /// A version the person went back from: it isn't installed by itself
+    /// again (Update now still offers it).
+    #[serde(default)]
+    pub skipped: Option<String>,
+}
+
+/// Where the version a rollback went back from is kept: a file of its own,
+/// so the older version that runs after the rollback, which doesn't know
+/// this field, still reads the update state.
+pub const SKIPPED: &str = "update-skipped";
+
+pub fn skipped_version(home: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(home.join(SKIPPED)).ok()?;
+    let v = text.trim();
+    (!v.is_empty() && v.len() <= 32 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')).then(|| v.to_owned())
 }
 
 pub fn install_kind(path: &str, home: &str, appimage: bool, flatpak: bool) -> InstallKind {
@@ -223,6 +238,18 @@ pub fn cached_version(home: &std::path::Path, current: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_skipped_version_is_read_only_when_it_looks_like_one() {
+        let dir = std::env::temp_dir().join(format!("omk-skip-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(skipped_version(&dir), None);
+        std::fs::write(dir.join(SKIPPED), "0.2.0\n").unwrap();
+        assert_eq!(skipped_version(&dir).as_deref(), Some("0.2.0"));
+        std::fs::write(dir.join(SKIPPED), "0.2.0; rm -rf").unwrap();
+        assert_eq!(skipped_version(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn fixture() -> Manifest {
         Manifest { version: "0.1.13".into(), release_time: "2026-10-30T00:00:00Z".into(), sequence: 2,

@@ -57,7 +57,6 @@ impl Showing {
 
 pub enum Event {
     UpdateStatus(one_mk_ctl::update_logic::UpdateStatus),
-    UpdateAvailable(Option<String>),
     UpdateOutput(String),
     /// `None`: one-mk is not running. Boxed: a status is large, and every
     /// other event would otherwise be as large too.
@@ -269,7 +268,9 @@ impl Link {
                 if stamp != Some(now) {
                     stamp = Some(now);
                     link.send(Event::Prefs(Box::new(link.prefs())));
-                    link.send(Event::UpdateAvailable(one_mk_ctl::update_logic::cached_version(&link.dir, env!("CARGO_PKG_VERSION"))));
+                    // Whether an update waits comes with the update status,
+                    // measured against the service's version, not this
+                    // window's (a portable update replaces the service).
                     link.update_status();
                 }
                 let Ok(now) = link.status() else {

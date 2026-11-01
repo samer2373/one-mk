@@ -587,11 +587,23 @@ fn window_status(home: &Path) -> Result<policy::UpdateStatus> {
     let rollback_available = kind == InstallKind::MacApp && bundle::rollback_available(&executable);
     #[cfg(not(target_os = "macos"))]
     let rollback_available = false;
+    // A portable copy updates only this program: with the window and tray
+    // beside it they would be left at the old version, so download instead.
+    let leaves_behind = kind == InstallKind::Portable && executable.parent().is_some_and(|dir| {
+        ["one-mk-app", "one-mk-app.exe", "one-mk-tray", "one-mk-tray.exe"].iter().any(|name| dir.join(name).exists())
+    });
     Ok(policy::UpdateStatus {
         check: settings.check, install_automatically: settings.install_automatically,
         available: policy::cached_version(home, env!("CARGO_PKG_VERSION")), error: state.error,
-        can_update: kind.automatic() && !movable, move_to_applications: movable, rollback_available,
-        advice: if movable { "Move oneMK to Applications before updating".into() } else { kind.advice().into() },
+        can_update: kind.automatic() && !movable && !leaves_behind, move_to_applications: movable, rollback_available,
+        advice: if movable {
+            "Move oneMK to Applications before updating".into()
+        } else if leaves_behind {
+            "Download the complete release to update this copy".into()
+        } else {
+            kind.advice().into()
+        },
+        skipped: policy::skipped_version(home),
     })
 }
 
@@ -639,9 +651,19 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
     }
     if options.rollback {
         ensure!(kind.automatic(), "this installation is managed: {}", kind.advice());
+        // Remember the version gone back from, so it isn't installed again
+        // by itself the next time the window opens.
+        let skip = || {
+            let _ = fs::write(home.join(policy::SKIPPED), env!("CARGO_PKG_VERSION"));
+        };
         #[cfg(target_os = "macos")]
-        if kind == InstallKind::MacApp { return bundle::rollback_bundle(&target, home); }
+        if kind == InstallKind::MacApp {
+            bundle::rollback_bundle(&target, home)?;
+            skip();
+            return Ok(());
+        }
         rollback(&target)?;
+        skip();
         println!("Previous oneMK restored. Restarting…");
         return Ok(());
     }

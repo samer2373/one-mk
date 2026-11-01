@@ -20,7 +20,10 @@ struct SystemCodeSign;
 
 impl CodeSign for SystemCodeSign {
     fn team(&self, path: &Path) -> Result<String> {
-        let verified = Command::new("/usr/bin/codesign").args(["--verify", "--deep", "--strict"])
+        // Signed through Apple's chain (a Developer ID), not just any
+        // signature with a team string in it: only then is the team the
+        // publisher's.
+        let verified = Command::new("/usr/bin/codesign").args(["--verify", "--deep", "--strict", "--test-requirement=anchor apple generic"])
             .arg(path).output().context("Couldn't verify the app's identity")?;
         ensure!(verified.status.success(), "The app's security check failed; nothing was replaced");
         let identity = Command::new("/usr/bin/codesign").args(["--display", "--verbose=4"])
@@ -44,6 +47,8 @@ fn matching_team(runner: &impl CodeSign, running: &Path, candidate: &Path) -> Re
 trait BundleFiles {
     fn exists(&self, path: &Path) -> Result<bool>;
     fn rename(&self, source: &Path, destination: &Path) -> Result<()>;
+    /// Swaps two folders in one step: there is never a moment with neither.
+    fn exchange(&self, a: &Path, b: &Path) -> Result<()>;
 }
 
 struct Disk;
@@ -56,18 +61,70 @@ impl BundleFiles for Disk {
             Err(error) => Err(error.into()),
         }
     }
-    fn rename(&self, source: &Path, destination: &Path) -> Result<()> { Ok(fs::rename(source, destination)?) }
+    fn rename(&self, source: &Path, destination: &Path) -> Result<()> { rename_new(source, destination) }
+    fn exchange(&self, a: &Path, b: &Path) -> Result<()> { exchange(a, b) }
 }
 
+#[cfg(target_os = "macos")]
+fn renamex(from: &Path, to: &Path, flags: libc::c_uint) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let (from, to) = (std::ffi::CString::new(from.as_os_str().as_bytes())?, std::ffi::CString::new(to.as_os_str().as_bytes())?);
+    // SAFETY: two valid NUL-terminated paths; renamex_np only reads them.
+    let r = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), flags) };
+    if r != 0 { return Err(std::io::Error::last_os_error().into()); }
+    Ok(())
+}
+
+/// Renames, refusing to replace anything already at `destination` (a plain
+/// rename would silently replace an empty folder made there meanwhile).
+fn rename_new(source: &Path, destination: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    return renamex(source, destination, libc::RENAME_EXCL);
+    #[cfg(not(target_os = "macos"))]
+    {
+        ensure!(!destination.try_exists()?, "{} already exists", destination.display());
+        Ok(fs::rename(source, destination)?)
+    }
+}
+
+fn exchange(a: &Path, b: &Path) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    return renamex(a, b, libc::RENAME_SWAP);
+    // Elsewhere only the tests run this: three renames will do.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let side = a.with_extension("exchange");
+        fs::rename(a, &side)?;
+        fs::rename(b, a)?;
+        Ok(fs::rename(side, b)?)
+    }
+}
+
+/// Puts `candidate` where `target` is and keeps the old one at `previous`.
+/// The swap itself is one step, so an interruption never leaves no app; a
+/// stop between it and the second step leaves the old app in the staging
+/// folder (only going back is lost, never the app).
 fn swap(files: &impl BundleFiles, candidate: &Path, target: &Path, previous: &Path) -> Result<()> {
     ensure!(files.exists(target)? && files.exists(candidate)?, "The app or its update is missing");
     ensure!(!files.exists(previous)?, "The previous app is still waiting for a successful restart");
-    files.rename(target, previous).context("This app's folder can't be changed by your account. Choose Download instead")?;
-    if let Err(error) = files.rename(candidate, target) {
-        files.rename(previous, target).context("Couldn't restore the previous app; it is saved beside the installation")?;
+    files.exchange(candidate, target).context("This app's folder can't be changed by your account. Choose Download instead")?;
+    if let Err(error) = files.rename(candidate, previous) {
+        files.exchange(candidate, target).context("Couldn't restore the previous app; it is saved beside the installation")?;
         return Err(error).context("Couldn't install the update; the previous app was restored");
     }
     Ok(())
+}
+
+/// Staging folders left by an update that was stopped (a crash, a forced
+/// quit): with the lock held no other update is running, so they are
+/// leftovers.
+fn clean_staging(parent: &Path) {
+    let Ok(entries) = fs::read_dir(parent) else { return };
+    for e in entries.flatten() {
+        if e.file_name().to_string_lossy().starts_with(".one-mk-bundle-") && e.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = fs::remove_dir_all(e.path());
+        }
+    }
 }
 
 struct Staging(PathBuf);
@@ -97,6 +154,7 @@ pub(super) fn apply_bundle(manifest: &Manifest, release: &Release, origin: &Url,
     let target = bundle(executable)?;
     ensure!(!policy::translocated(&target.to_string_lossy()), "Move oneMK to Applications before updating");
     let _lock = target_lock(&target).context("This app's folder can't be changed by your account. Choose Download instead")?;
+    clean_staging(target.parent().context("The app has no parent folder")?);
     let previous = backup(&target)?;
     ensure!(!Disk.exists(&previous)? && !receipt(&target).try_exists()?, "The previous app is still waiting for a successful restart");
     ensure!(Disk.exists(&target)?, "The running app is missing");
@@ -149,6 +207,7 @@ pub(super) fn rollback_available(executable: &Path) -> bool {
 pub(super) fn rollback_bundle(executable: &Path, home: &Path) -> Result<()> {
     let target = bundle(executable)?;
     let _lock = target_lock(&target)?;
+    clean_staging(target.parent().context("The app has no parent folder")?);
     let previous = backup(&target)?;
     matching_team(&SystemCodeSign, &target, &previous)?;
     let staging = Staging::new(target.parent().context("The app has no parent folder")?)?;
@@ -164,13 +223,17 @@ pub(super) fn move_to_applications(executable: &Path) -> Result<()> {
     let target = Path::new("/Applications/one-mk.app");
     ensure!(policy::translocated(&source.to_string_lossy()), "The app is already installed outside the disk image");
     let _lock = target_lock(target).context("Your account can't move this app to Applications. Drag it there in Finder")?;
+    clean_staging(Path::new("/Applications"));
     ensure!(!target.try_exists()?, "An app already exists in Applications. Open that copy instead");
     let staging = Staging::new(Path::new("/Applications"))?;
     let candidate = staging.0.join("one-mk.app");
-    let copied = Command::new("/usr/bin/ditto").arg(&source).arg(&candidate).output()?;
+    // Without the quarantine mark of the disk image: a quarantined app moved
+    // by anything but Finder is translocated again when it starts.
+    let copied = Command::new("/usr/bin/ditto").arg("--noqtn").arg(&source).arg(&candidate).output()?;
     ensure!(copied.status.success(), "Couldn't move the app to Applications. Drag it there in Finder");
+    let _ = Command::new("/usr/bin/xattr").args(["-dr", "com.apple.quarantine"]).arg(&candidate).output();
     matching_team(&SystemCodeSign, &source, &candidate)?;
-    fs::rename(&candidate, target)?;
+    rename_new(&candidate, target).context("An app already exists in Applications. Open that copy instead")?;
     println!("Moved to Applications. Restarting…");
     Ok(())
 }
@@ -205,6 +268,11 @@ mod tests {
             let mut paths = self.paths.borrow_mut();
             ensure!(!paths.contains(destination) && paths.remove(source), "invalid rename");
             paths.insert(destination.into());
+            Ok(())
+        }
+        fn exchange(&self, a: &Path, b: &Path) -> Result<()> {
+            let paths = self.paths.borrow();
+            ensure!(paths.contains(a) && paths.contains(b), "invalid exchange");
             Ok(())
         }
     }

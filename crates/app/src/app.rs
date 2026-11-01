@@ -559,7 +559,6 @@ impl App {
                     None if report.changed() => self.toast("oneMK is set up and starts when you log in.", now),
                     None => {}
                 },
-                Event::UpdateAvailable(version) => self.update_available = version,
                 Event::UpdateStatus(status) => {
                     self.update_available.clone_from(&status.available);
                     self.update_ui.status = Some(status);

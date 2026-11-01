@@ -28,6 +28,7 @@ impl App {
         let Some(status) = self.update_ui.status.clone() else { return; };
         if status.check && status.install_automatically && status.can_update && status.error.is_none()
             && let Some(version) = &self.update_available
+            && status.skipped.as_ref() != Some(version)
             && self.update_ui.attempted.as_ref() != Some(version) && !self.busy.contains(&Job::Update)
         {
             self.update_ui.attempted = Some(version.clone());
