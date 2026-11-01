@@ -328,6 +328,7 @@ impl Keyboard {
         let lit = Lighting { eye: cam.eye };
         let mut m = Mesh::default();
         desk(&mut m, &cam, p3(0.0, -16.0, 0.0), w * 0.9, d * 1.6);
+        fade_to_edges(&mut m, 0, rect, 48.0);
         let (hw, hd) = (w / 2.0 + margin, d / 2.0 + margin);
         let shadow = rring(0.0, 6.0, hw + 6.0, hd + 6.0, 14.0, -15.9);
         soft_blob(&mut m, &cam, &shadow, p3(0.0, -15.9, 6.0), 16.0, 150);
@@ -486,6 +487,16 @@ fn desk(m: &mut Mesh, cam: &Cam, c: P3, rx: f32, rz: f32) {
     }
 }
 
+/// The desk is drawn clipped to `rect`: fade it out over `feather` points
+/// before each edge, so it ends softly instead of in a hard box.
+fn fade_to_edges(m: &mut Mesh, from: usize, rect: Rect, feather: f32) {
+    for v in &mut m.vertices[from..] {
+        let d = (v.pos.x - rect.left()).min(rect.right() - v.pos.x).min(v.pos.y - rect.top()).min(rect.bottom() - v.pos.y);
+        let k = (d / feather).clamp(0.0, 1.0);
+        v.color = v.color.gamma_multiply(k * k * (3.0 - 2.0 * k));
+    }
+}
+
 /// A soft shadow following an outline on the desk.
 fn soft_blob(m: &mut Mesh, cam: &Cam, ring: &[P3], c: P3, feather: f32, alpha: u8) {
     let b = m.vertices.len() as u32;
@@ -616,6 +627,7 @@ impl ModelView {
         let lit = Lighting { eye: cam.eye };
         let mut mesh = Mesh::default();
         desk(&mut mesh, &cam, p3(mid.x, 0.0, mid.z), (hi.x - lo.x) * 1.6, (hi.z - lo.z) * 1.0);
+        fade_to_edges(&mut mesh, 0, room, 48.0);
         let foot: Vec<P3> = (0..40)
             .map(|i| {
                 let a = i as f32 / 40.0 * TAU;

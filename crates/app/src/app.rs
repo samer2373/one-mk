@@ -1529,7 +1529,8 @@ impl App {
                     area.max.y = rect.top() + PANEL_H - PAD;
                     area
                 };
-                let history = Rect::from_min_max(pos2(rect.left() + PAD, rect.top() + PANEL_H + PAD), pos2(rect.right() - PAD, rect.bottom() - PAD));
+                // The window's gap between the row of cards and the history below.
+                let history = Rect::from_min_max(pos2(rect.left() + PAD, rect.top() + PANEL_H + M + PAD), pos2(rect.right() - PAD, rect.bottom() - PAD));
                 vec![(Cell::FilesHead("Drop files on a computer".into(), sub.into()), row(0, 1)), (Cell::Clipboard, row(1, 2)), (Cell::FilesSettings, row(2, 3)), (Cell::ClipboardHistory, history)]
             }
         }
