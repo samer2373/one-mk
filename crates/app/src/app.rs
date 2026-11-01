@@ -1657,7 +1657,6 @@ impl App {
                 enabled: vec![true; 3],
                 role: Role::RadioButton,
                 font: T_META,
-                radius: 6,
             };
             if let Some(k) = pills.show(ui, arrowed) {
                 changes.push((peer.id.clone(), peer.name.clone(), SWAPS[k].0));

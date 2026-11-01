@@ -529,19 +529,6 @@ pub fn parse_input_devices(text: &str) -> Option<crate::tune::InputDevices> {
     Some(crate::tune::InputDevices { available: b(&json, "available"), note: s(&json, "note"), devices })
 }
 
-/// "2 problems, 1 warning" / "Everything checks out".
-pub fn doctor_summary(checks: &[Check]) -> String {
-    let n = |v: Verdict| checks.iter().filter(|c| c.verdict == v).count();
-    let (fail, warn) = (n(Verdict::Fail), n(Verdict::Warn));
-    let plural = |k: usize, one: &str, many: &str| if k == 1 { format!("1 {one}") } else { format!("{k} {many}") };
-    match (fail, warn) {
-        (0, 0) => "Everything checks out".into(),
-        (0, w) => plural(w, "warning", "warnings"),
-        (f, 0) => plural(f, "problem", "problems"),
-        (f, w) => format!("{}, {}", plural(f, "problem", "problems"), plural(w, "warning", "warnings")),
-    }
-}
-
 /// The command in a fix (`one-mk …` in backticks), which a Copy button
 /// copies; without one, the whole fix (a backticked flag or a placeholder
 /// alone is not a command to paste).
@@ -898,8 +885,6 @@ name = "Café, 2nd floor"
         assert_eq!(checks[0].detail, "Sharing is not responding.");
         assert_eq!(checks[2].detail, "Saved for é😀.");
         assert_eq!(checks[2].fix, None);
-        assert_eq!(doctor_summary(&checks), "1 problem, 1 warning");
-        assert_eq!(doctor_summary(&checks[2..]), "Everything checks out");
         assert_eq!(fix_command(checks[1].fix.as_ref().unwrap()), ("Choose Allow.".to_owned(), false));
         assert_eq!(fix_command("Start it."), ("Start it.".to_owned(), false));
         // A flag or a placeholder isn't something to paste; a later command is.
@@ -927,7 +912,6 @@ name = "Café, 2nd floor"
             assert!(checks.iter().any(|check| check.action.as_deref() == Some(action)));
         }
         assert_eq!(checks.last().unwrap().action, None);
-        assert_eq!(doctor_summary(&checks), "1 problem, 1 warning");
     }
 
     #[test]
@@ -942,7 +926,6 @@ name = "Café, 2nd floor"
             {"id":"broadcast","title":"Broadcast","status":"pass","detail":"Broadcast has not been tried on this system yet (untested)."},
             {"id":"edge-push","title":"Edges with no computer","status":"warn","detail":"Not yet tested on macOS.","fix":"one-mk edge"}
         ]}"#).unwrap();
-        assert_eq!(doctor_summary(&checks), "Everything checks out");
         assert_eq!(checks.len(), 6);
         assert!(checks.iter().any(|check| check.action.as_deref() == Some("Start") && check.verdict == Verdict::Skip));
         assert!(checks.iter().any(|check| check.action.as_deref() == Some("Pair") && check.verdict == Verdict::Skip));

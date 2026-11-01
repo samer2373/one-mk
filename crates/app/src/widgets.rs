@@ -263,7 +263,6 @@ pub struct Pills<'a> {
     pub enabled: Vec<bool>,
     pub role: Role,
     pub font: f32,
-    pub radius: u8,
 }
 
 impl Pills<'_> {
@@ -636,7 +635,6 @@ mod tests {
                         enabled: vec![true; 3],
                         role: Role::RadioButton,
                         font: T_BODY,
-                        radius: 6,
                     };
                     if let Some(k) = pills.show(ui, arrowed) {
                         chosen = k;

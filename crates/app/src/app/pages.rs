@@ -39,8 +39,9 @@ enum Fix {
 fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
     match v {
         Verdict::Pass => widgets::draw_check(p, c, 12.0, INK2, 1.0),
+        // A step still to take: an open ring in the accent.
         Verdict::Skip => {
-            p.line_segment([c - vec2(4.0, 0.0), c + vec2(4.0, 0.0)], Stroke::new(1.5, OFF));
+            p.circle_stroke(c, 5.5, Stroke::new(1.5, ACCENT));
         }
         Verdict::Warn => {
             // A triangle with a bar and a dot: not a ring, which reads as an
@@ -144,7 +145,9 @@ impl App {
     pub(super) fn health(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
         let running = self.busy.contains(&Job::Doctor);
         let checks: Option<Vec<Check>> = match &self.doctor {
-            Some((Ok(c), _)) => Some(c.iter().filter(|c| c.verdict != Verdict::Skip).cloned().collect()),
+            // A neutral check shows only when there is something to do
+            // about it (not paired yet: Pair); the others say nothing new.
+            Some((Ok(c), _)) => Some(c.iter().filter(|c| c.verdict != Verdict::Skip || self.window_fix(c).is_some()).cloned().collect()),
             _ => None,
         };
         // What needs the person: the daemon's own problems first (they are
@@ -159,7 +162,12 @@ impl App {
                 if c.verdict == Verdict::Pass { works.push(item) } else { needs.push(item) }
             }
         }
-        needs.sort_by_key(|i| i.verdict != Verdict::Fail);
+        // Worst first; steps still to take (neutral) last.
+        needs.sort_by_key(|i| match i.verdict {
+            Verdict::Fail => 0,
+            Verdict::Warn => 1,
+            _ => 2,
+        });
 
         let w = (rect.width() - 48.0).min(820.0);
         let x = rect.center().x - w / 2.0;
@@ -181,12 +189,15 @@ impl App {
 
             // The verdict, in one line, with Recheck.
             let fails = needs.iter().filter(|i| i.verdict == Verdict::Fail).count();
+            let steps_only = !needs.is_empty() && needs.iter().all(|i| i.verdict == Verdict::Skip);
             let (headline, tone) = if running && checks.is_none() {
                 ("Checking this computer…".to_owned(), INK2)
             } else if needs.is_empty() && checks.is_some() {
                 ("Everything is working".to_owned(), OK)
             } else if needs.is_empty() {
                 ("Not checked yet".to_owned(), INK2)
+            } else if steps_only {
+                (if needs.len() == 1 { "One step left".to_owned() } else { format!("{} steps left", needs.len()) }, ACCENT)
             } else if needs.len() == 1 {
                 ("One thing needs you".to_owned(), if fails > 0 { ERROR } else { INK })
             } else {
@@ -215,6 +226,8 @@ impl App {
                 widgets::draw_check(&p, medal, 18.0, OK, 1.0);
             } else if needs.is_empty() {
                 p.circle_filled(medal, 3.0, INK2);
+            } else if steps_only {
+                p.text(medal, Align2::CENTER_CENTER, needs.len().to_string(), semibold(T_TITLE + 1.0), tone);
             } else {
                 p.text(medal, Align2::CENTER_CENTER, "!", semibold(T_TITLE + 3.0), tone);
             }
@@ -245,7 +258,7 @@ impl App {
                 let heights: Vec<f32> = needs.iter().map(|i| item_height(ui, i, text_w)).collect();
                 let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
                 let r = col(ui, h);
-                card(ui, r, "Needs you");
+                card(ui, r, if steps_only { "Next" } else { "Needs you" });
                 let mut y = r.top() + 48.0;
                 for (n, (i, ih)) in needs.iter().zip(&heights).enumerate() {
                     let row = Rect::from_min_size(pos2(r.left() + 18.0, y), vec2(w - 36.0, *ih));
@@ -458,7 +471,6 @@ impl App {
             enabled: vec![true; 4],
             role: Role::RadioButton,
             font: T_META,
-            radius: 6,
         };
         if let Some(k) = pills.show(ui, self.arrowed) {
             let v = MODS[k].0;

@@ -509,7 +509,6 @@ impl App {
             enabled: vec![true; 2],
             role: Role::Tab,
             font: T_BODY,
-            radius: 7,
         };
         if let Some(k) = pills.show(ui, self.arrowed) {
             self.keys.view = if k == 0 { View::Keyboard } else { View::Mouse };
@@ -1688,7 +1687,6 @@ impl App {
             enabled: vec![true, can, can],
             role: Role::RadioButton,
             font: T_META,
-            radius: 6,
         };
         if let Some(k) = pills.show(ui, self.arrowed) {
             self.tune_cmds("the acceleration", "pointer", vec![tune::pointer_args(None, Some(values[k]), &self.keys.scope)], None);
@@ -1718,7 +1716,7 @@ impl App {
             let lw = if label.is_empty() { 0.0 } else { text_width(ui, label, regular(T_BODY)) + 16.0 };
             let track = Rect::from_min_max(pos2(r.left() + lw, r.center().y - 14.0), pos2(r.right(), r.center().y + 14.0));
             let n = labels.len();
-            Pills { id: Id::unique(id), track, cells: Pills::even(track, n, 2.0), labels, names, chosen, enabled: vec![true; n], role: Role::RadioButton, font: T_META, radius: 6 }.show(ui, app.arrowed)
+            Pills { id: Id::unique(id), track, cells: Pills::even(track, n, 2.0), labels, names, chosen, enabled: vec![true; n], role: Role::RadioButton, font: T_META }.show(ui, app.arrowed)
         };
         let devs = ["Both", "Wheel", "Touchpad"];
         let chosen = Some(match dev {

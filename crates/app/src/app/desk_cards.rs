@@ -158,7 +158,6 @@ impl App {
             enabled: vec![true; 4],
             role: Role::RadioButton,
             font: T_BODY,
-            radius: 6,
         };
         if let Some(k) = pills.show(ui, self.arrowed) {
             self.choose_side(&peer.id, PLACES[k].0, true);

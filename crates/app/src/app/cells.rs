@@ -139,7 +139,6 @@ impl App {
             enabled: vec![true; 3],
             role: Role::RadioButton,
             font: T_META,
-            radius: 6,
         };
         if let Some(k) = pills.show(ui, self.arrowed) {
             let v = GAMING[k].0;
