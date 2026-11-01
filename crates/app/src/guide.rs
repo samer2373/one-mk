@@ -841,7 +841,7 @@ fn draw_card(
     let close = Rect::from_center_size(pos2(card.right() - 10.0 - 13.0, card.top() + 10.0 + 13.0), vec2(26.0, 26.0));
     let mut action = None;
     if widgets::icon_button(ui, close, Id::unique("guide-close"), "Close this guide", true, |p, r, c| {
-        widgets::draw_cross(p, r, c.gamma_multiply(alpha))
+        draw_close(p, r, c.gamma_multiply(alpha))
     })
     .clicked()
     {
@@ -980,6 +980,15 @@ impl Default for Overlay {
             offered: false,
         }
     }
+}
+
+/// The card's close button: a small cross. Drawn here rather than borrowed
+/// from `widgets`, so the guide doesn't depend on the window's icon set.
+fn draw_close(p: &egui::Painter, rect: Rect, col: Color32) {
+    let (c, r) = (rect.center(), 4.0);
+    let st = Stroke::new(1.5, col);
+    p.line_segment([c + vec2(-r, -r), c + vec2(r, r)], st);
+    p.line_segment([c + vec2(-r, r), c + vec2(r, -r)], st);
 }
 
 const GUIDE_VIEWPORT: &str = "one-mk-permission-guide";
