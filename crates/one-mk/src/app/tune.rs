@@ -445,7 +445,9 @@ impl App {
 
     /// Lets go of everything the mapper sent (the visit ends).
     pub(super) fn release_tuned(&mut self) {
+        if let Some(keyboard) = &self.keyboard { keyboard.reset(); }
         let Some(r) = self.remote.as_mut() else { return };
+        r.composition.reset();
         let stopped = r.tune.release();
         self.send_tuned();
         if let Some(remote) = self.remote.as_mut() {
@@ -496,6 +498,13 @@ impl App {
         }
     }
 
+    pub(super) fn reset_composition(&mut self) {
+        if let Some(remote) = &mut self.remote { remote.composition.reset(); }
+        self.each_visit(|app| {
+            if let Some(remote) = &mut app.remote { remote.composition.reset(); }
+        });
+    }
+
     /// Sends what the mapper emitted: keys (swapped if this visit swaps
     /// Ctrl and Cmd) and buttons (with the pointer's position), then runs
     /// its actions, which may end the visit.
@@ -504,29 +513,46 @@ impl App {
         let mut out = std::mem::take(&mut r.tune.out);
         let mut actions = Vec::new();
         for e in out.drain(..) {
+            if let Some((peer, mode)) = self.remote.as_ref().map(|remote| (remote.peer, remote.typing_mode)) {
+                let characters = self.character_mode_for(peer, mode);
+                let description = self.typing_description_for(peer, mode);
+                if let Some(remote) = self.remote.as_mut() {
+                    remote.characters = characters;
+                    remote.typing_description = description;
+                }
+            }
             let Some(r) = self.remote.as_mut() else { break };
-            let msg = match e {
+            let messages = match e {
                 Emit::Key { code, down } if is_button(code) => {
-                    Control::Button { button: code, down, seq: r.cursor.seq(), pos: r.cursor.pos() }
+                    vec![Control::Button { button: code, down, seq: r.cursor.seq(), pos: r.cursor.pos() }]
                 }
                 Emit::Key { code, down } => {
                     r.typing_mods.update(code, down);
-                    let Some(mut message) = r.typing.key(code, down, || {
+                    if self.keyboard.as_ref().is_some_and(|keyboard| keyboard.is_shortcut(r.typing_mods)) { r.composition.reset(); }
+                    let mut messages = r.typing.key_events(code, down, || {
                         if r.characters {
-                            self.keyboard.as_ref().map_or(one_mk_proto::typing::Resolution::Physical, |keyboard| keyboard.resolve(code, r.typing_mods))
+                            let resolution = self.keyboard.as_ref().map_or(one_mk_proto::typing::Resolution::Physical, |keyboard| keyboard.resolve_with(code, r.typing_mods, &mut r.composition));
+                            if self.peers.get(&r.peer).is_some_and(|peer| peer.caps & one_mk_proto::caps::TEXT_HOLD != 0)
+                                && one_mk_proto::typing::character_key_code(code)
+                                && let one_mk_proto::typing::Resolution::Text(text) = &resolution
+                                && text.chars().count() == 1 {
+                                one_mk_proto::typing::Resolution::Character(text.chars().next().unwrap())
+                            } else { resolution }
                         } else {
                             one_mk_proto::typing::Resolution::Physical
                         }
-                    }) else { continue };
-                    if r.swap && let Control::Key { code, .. } = &mut message { *code = swap_ctrl_meta(*code); }
-                    message
+                    });
+                    for message in &mut messages {
+                        if r.swap && let Control::Key { code, .. } = message { *code = swap_ctrl_meta(*code); }
+                    }
+                    messages
                 }
                 Emit::Action(a) => {
                     actions.push(a);
                     continue;
                 }
             };
-            self.send_input(msg);
+            self.send_typing(messages);
         }
         if let Some(r) = self.remote.as_mut() {
             r.tune.out = out; // keeps the capacity
@@ -536,6 +562,21 @@ impl App {
             // once, after all of them (see `broadcast.rs`).
             if !self.defer_action(&a) {
                 self.run_action(&a);
+            }
+        }
+    }
+
+    fn send_typing(&mut self, messages: Vec<Control>) {
+        for message in messages {
+            if matches!(message, Control::Text { .. } | Control::CharacterKey { down: true, .. }) {
+                let Some(remote) = &self.remote else { return };
+                if self.keyboard.as_ref().is_none_or(|keyboard| keyboard.is_shortcut(remote.typing_mods)) { continue; }
+                let modifiers: Vec<_> = remote.typing_mods.keys().filter(|code| matches!(code, 42 | 54 | 56 | 100)).collect();
+                for code in &modifiers { self.send_input(Control::Key { code: *code, down: false }); }
+                self.send_input(message);
+                for code in modifiers.into_iter().rev() { self.send_input(Control::Key { code, down: true }); }
+            } else {
+                self.send_input(message);
             }
         }
     }

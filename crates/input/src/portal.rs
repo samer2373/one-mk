@@ -731,6 +731,7 @@ async fn run_capture(
     let context = ei::Context::new(UnixStream::from(fd))?;
     let handshake = context.handshake_tokio("one-mk", ei::handshake::ContextType::Receiver);
     let (_conn, mut ei_events) = timeout("libei handshake", handshake).await?;
+    let mut typing: Option<(reis::event::Device, crate::typing::KeyboardLayout)> = None;
 
     let mut activated = portal.receive_activated().await?;
     let mut deactivated = portal.receive_deactivated().await?;
@@ -864,8 +865,36 @@ async fn run_capture(
                     EiEvent::ScrollDelta(s) => Event::Scroll { dx: f64::from(s.dx), dy: f64::from(s.dy), device: None },
                     EiEvent::ScrollDiscrete(s) => Event::ScrollDiscrete { dx: s.discrete_dx, dy: s.discrete_dy, device: None },
                     EiEvent::ScrollStop(_) => Event::ScrollStop,
-                    EiEvent::KeyboardKey(k) => Event::Key { code: k.key, down: k.state == ei::keyboard::KeyState::Press, device: None },
-                    EiEvent::KeyboardModifiers(m) => Event::Modifiers(Mods::from_xkb(m.depressed | m.latched)),
+                    EiEvent::KeyboardKey(k) => {
+                        if typing.as_ref().is_none_or(|(device, _)| *device != k.device) {
+                            typing = portal_keyboard_layout(&k.device).map(|keyboard| {
+                                let _ = st.tx.send(Event::KeyboardLayout(keyboard.clone()));
+                                (k.device.clone(), keyboard)
+                            });
+                            if typing.is_none() { let _ = st.tx.send(Event::KeyboardLayoutUnavailable); }
+                        }
+                        Event::Key { code: k.key, down: k.state == ei::keyboard::KeyState::Press, device: None }
+                    }
+                    EiEvent::KeyboardModifiers(m) => {
+                        if typing.as_ref().is_none_or(|(device, _)| *device != m.device) {
+                            typing = portal_keyboard_layout(&m.device).map(|keyboard| {
+                                let _ = st.tx.send(Event::KeyboardLayout(keyboard.clone()));
+                                (m.device.clone(), keyboard)
+                            });
+                            if typing.is_none() { let _ = st.tx.send(Event::KeyboardLayoutUnavailable); }
+                        }
+                        if typing.is_some() {
+                            let _ = st.tx.send(Event::KeyboardModifiers { depressed: m.depressed, latched: m.latched, locked: m.locked, group: m.group });
+                        }
+                        Event::Modifiers(Mods::from_xkb(m.depressed | m.latched))
+                    }
+                    event @ (EiEvent::DeviceRemoved(_) | EiEvent::DevicePaused(_) | EiEvent::DeviceResumed(_)) => {
+                        if event.device().is_some_and(|changed| typing.as_ref().is_some_and(|(device, _)| device == changed)) {
+                            typing = None;
+                            let _ = st.tx.send(Event::KeyboardLayoutUnavailable);
+                        }
+                        continue;
+                    }
                     EiEvent::Disconnected(d) => bail!("input capture disconnected: {:?}", d.explanation),
                     _ => continue,
                 };
@@ -875,6 +904,17 @@ async fn run_capture(
             }
         }
     }
+}
+
+fn portal_keyboard_layout(device: &reis::event::Device) -> Option<crate::typing::KeyboardLayout> {
+    use std::os::unix::fs::FileExt;
+    let keymap = device.keymap()?;
+    if keymap.size == 0 || keymap.size > 1024 * 1024 || keymap.type_ != ei::keyboard::KeymapType::Xkb { return None; }
+    let file = std::fs::File::from(keymap.fd.try_clone().ok()?);
+    let mut bytes = vec![0; keymap.size as usize];
+    file.read_exact_at(&mut bytes, 0).ok()?;
+    if bytes.last() == Some(&0) { bytes.pop(); }
+    crate::typing::KeyboardLayout::from_keymap(&bytes, crate::LayoutState::default())
 }
 
 const NO_CAPTURE: &str = "Can't move the pointer to another computer right now: input capture is not ready.";

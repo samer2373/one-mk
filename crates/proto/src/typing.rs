@@ -66,6 +66,8 @@ pub enum Resolution {
     Physical,
     Text(String),
     Shortcut(char),
+    Character(char),
+    Pending,
 }
 
 #[derive(Default)]
@@ -75,22 +77,39 @@ pub struct Sender {
 
 impl Sender {
     pub fn key(&mut self, code: u32, down: bool, resolve: impl FnOnce() -> Resolution) -> Option<Control> {
+        self.key_events(code, down, resolve).into_iter().next()
+    }
+
+    pub fn key_events(&mut self, code: u32, down: bool, resolve: impl FnOnce() -> Resolution) -> Vec<Control> {
         if !valid_key_code(code) {
-            return None;
+            return Vec::new();
         }
+        let repeated = down && self.held.contains_key(&code);
         let resolution = if down {
             self.held.entry(code).or_insert_with(|| match if matches!(code, 29 | 42 | 54 | 56 | 58 | 69 | 70 | 97 | 100 | 125 | 126) { Resolution::Physical } else { resolve() } {
-                Resolution::Text(text) if valid_text(&text) => Resolution::Text(text),
+                Resolution::Text(text) if valid_sequence(&text) => Resolution::Text(text),
                 Resolution::Shortcut(character) if printable(character) => Resolution::Shortcut(character),
+                Resolution::Character(character) if printable(character) => Resolution::Character(character),
+                Resolution::Pending => Resolution::Pending,
                 _ => Resolution::Physical,
             }).clone()
         } else {
-            self.held.remove(&code)?
+            let Some(resolution) = self.held.remove(&code) else { return Vec::new() };
+            resolution
         };
         match resolution {
-            Resolution::Physical => Some(Control::Key { code, down }),
-            Resolution::Text(text) => down.then_some(Control::Text { text }),
-            Resolution::Shortcut(character) => Some(Control::CharacterKey { code, down, character }),
+            Resolution::Physical | Resolution::Character(_) if repeated => Vec::new(),
+            Resolution::Physical => vec![Control::Key { code, down }],
+            Resolution::Text(text) if down => text.graphemes(true).map(|text| Control::Text { text: text.into() }).collect(),
+            Resolution::Shortcut(character) | Resolution::Character(character) => vec![Control::CharacterKey { code, down, character }],
+            Resolution::Text(_) | Resolution::Pending => Vec::new(),
+        }
+    }
+
+    pub fn repeat(&self, code: u32) -> Vec<Control> {
+        match self.held.get(&code) {
+            Some(Resolution::Text(text)) => text.graphemes(true).map(|text| Control::Text { text: text.into() }).collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -99,6 +118,10 @@ impl Sender {
         codes.sort_unstable();
         codes.into_iter().filter_map(|code| self.key(code, false, || Resolution::Physical)).collect()
     }
+}
+
+pub fn valid_sequence(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 32 && text.graphemes(true).all(valid_text)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -207,6 +230,53 @@ impl TextBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typing_repeats_belong_to_exactly_one_side() {
+        for resolution in [Resolution::Physical, Resolution::Character('ä'), Resolution::Text("e\u{301}".into())] {
+            let mut sender = Sender::default();
+            let first = sender.key_events(30, true, || resolution.clone());
+            assert_eq!(first.len(), 1);
+            let repeated = sender.key_events(30, true, || panic!("a repeat must retain its resolution"));
+            if matches!(resolution, Resolution::Text(_)) {
+                assert_eq!(repeated, first);
+            } else {
+                assert!(repeated.is_empty());
+            }
+            let release = sender.key_events(30, false, || unreachable!());
+            assert_eq!(release.len(), usize::from(!matches!(resolution, Resolution::Text(_))));
+            assert!(sender.release_all().is_empty());
+        }
+    }
+
+    #[test]
+    fn compose_pairing_repeat_and_visit_release_are_balanced() {
+        let mut sender = Sender::default();
+        assert!(sender.key_events(40, true, || Resolution::Pending).is_empty());
+        assert!(sender.key_events(40, true, || panic!("repeat cannot advance composition")).is_empty());
+        assert!(sender.key_events(40, false, || unreachable!()).is_empty());
+        let sequence = vec![Control::Text { text: "'".into() }, Control::Text { text: "x".into() }];
+        assert_eq!(sender.key_events(45, true, || Resolution::Text("'x".into())), sequence);
+        assert_eq!(sender.repeat(45), sequence);
+        assert_eq!(sender.key(30, true, || Resolution::Character('😀')), Some(Control::CharacterKey { code: 30, down: true, character: '😀' }));
+        assert_eq!(sender.key(29, true, || unreachable!()), Some(Control::Key { code: 29, down: true }));
+        assert_eq!(sender.release_all(), vec![Control::Key { code: 29, down: false }, Control::CharacterKey { code: 30, down: false, character: '😀' }]);
+        assert!(sender.release_all().is_empty());
+    }
+
+    #[test]
+    fn source_only_and_old_receivers_do_not_negotiate_text() {
+        let local = LayoutDescriptor { name: "de".into(), variant: String::new(), rules: String::new(), model: String::new() };
+        let peer = LayoutDescriptor { name: "us".into(), ..local.clone() };
+        for bits in [0, crate::caps::LOCAL, crate::caps::TEXT_SOURCE, crate::caps::TEXT_HOLD] {
+            for mode in [Mode::Characters, Mode::Auto] {
+                assert!(!use_characters(mode, bits, true, Some(&local), Some(&peer)));
+            }
+        }
+        assert!(use_characters(Mode::Auto, crate::caps::TEXT, true, Some(&local), Some(&peer)));
+        assert!(!use_characters(Mode::Auto, crate::caps::TEXT, true, Some(&local), Some(&local)));
+        assert!(!use_characters(Mode::Physical, crate::caps::TEXT, true, Some(&local), Some(&peer)));
+    }
 
     #[test]
     fn text_is_one_printable_bounded_cluster() {

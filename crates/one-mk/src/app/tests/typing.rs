@@ -62,6 +62,24 @@ async fn missing_text_capability_and_equal_layouts_keep_physical_keys() {
 }
 
 #[tokio::test]
+async fn typing_preference_changes_wait_until_the_next_visit() {
+    let mut duo = Duo::start_typing("typing-next-visit", "de", "us").await;
+    duo.enter_b().await;
+    Settings::update(&duo.da, |settings| { settings.typing.keys = crate::typing::Mode::Physical; Ok(()) }).unwrap();
+    control::request(&duo.da, Request::Reload).await.unwrap();
+    duo.ha.key_from(21, true, None);
+    duo.ha.key_from(21, false, None);
+    assert_eq!(next_inject(&mut duo.hb).await, Inject::Text { text: "z".into() });
+    duo.leave_b().await;
+    duo.enter_b().await;
+    duo.ha.key_from(21, true, None);
+    duo.ha.key_from(21, false, None);
+    assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 21, down: true });
+    assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 21, down: false });
+    duo.stop().await;
+}
+
+#[tokio::test]
 async fn character_resolution_uses_mapper_output_before_control_meta_swap() {
     let mut duo = Duo::start_typing("typing-mapper", "de", "us").await;
     Settings::update(&duo.da, |settings| {
@@ -77,7 +95,7 @@ async fn character_resolution_uses_mapper_output_before_control_meta_swap() {
     duo.ha.key_from(29, true, None);
     duo.ha.key_from(30, true, None);
     assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 125, down: true });
-    assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 44, down: true });
+    assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 21, down: true });
     duo.stop().await;
 }
 
@@ -135,11 +153,23 @@ async fn national_levels_and_layout_change_mid_hold() {
             assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: modifier, down: true });
         }
         duo.ha.key_from(code, true, None);
+        for modifier in [shift.then_some(42), altgr.then_some(100)].into_iter().flatten() {
+            assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: modifier, down: false });
+        }
         assert_eq!(next_inject(&mut duo.hb).await, Inject::Text { text: expected.into() });
+        for modifier in [altgr.then_some(100), shift.then_some(42)].into_iter().flatten() {
+            assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: modifier, down: true });
+        }
         duo.ha.events.send(Event::KeyboardLayout(KeyboardLayout::fake("us"))).unwrap();
         duo.ha.key_from(code, true, None);
         duo.ha.key_from(code, false, None);
+        for modifier in [shift.then_some(42), altgr.then_some(100)].into_iter().flatten() {
+            assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: modifier, down: false });
+        }
         assert_eq!(next_inject(&mut duo.hb).await, Inject::Text { text: expected.into() });
+        for modifier in [altgr.then_some(100), shift.then_some(42)].into_iter().flatten() {
+            assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: modifier, down: true });
+        }
         duo.leave_b().await;
         duo.stop().await;
     }
@@ -152,10 +182,10 @@ async fn receiver_remembers_resolved_code_across_layout_change_and_disconnect() 
     duo.ha.key_from(29, true, None);
     duo.ha.key_from(21, true, None);
     assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 29, down: true });
-    assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 44, down: true });
+    assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 21, down: true });
     duo.hb.events.send(Event::KeyboardLayout(KeyboardLayout::fake("de"))).unwrap();
     duo.ha.key_from(21, false, None);
-    assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 44, down: false });
+    assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 21, down: false });
     duo.tasks[0].abort();
     assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 29, down: false });
     duo.stop.send(true).unwrap();

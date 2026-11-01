@@ -3282,6 +3282,7 @@ dependencies = [
  "subtle",
  "tokio",
  "tracing",
+ "unicode-normalization",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-misc",

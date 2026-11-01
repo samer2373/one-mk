@@ -1257,7 +1257,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         checks.push(check("typing", "Typing", if typing.starts_with("characters (") {
             Outcome::pass(typing)
         } else if settings.typing.has_character_request() {
-            Outcome::warn(typing, "Native character injection is not implemented yet. Use matching OS keyboard layouts or set `one-mk typing --keys physical`.")
+            Outcome::warn(typing, "Letters need a supported sender and receiver. On Linux, received letters follow this computer's own keyboard layout.")
         } else {
             Outcome::pass(typing)
         }));

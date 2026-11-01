@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
-pub const UNAVAILABLE: &str = "physical (native character resolution/injection is not implemented; use matching keyboard layouts on both computers)";
+pub const UNAVAILABLE: &str = "physical (letters follow the receiving computer's keyboard layout)";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -44,7 +44,7 @@ impl TypingSettings {
         if self.keys == Mode::Physical && self.peers.values().all(|mode| *mode == Mode::Physical) {
             "physical (same keys; receiver keyboard layout)".into()
         } else {
-            format!("{UNAVAILABLE}; requested {}, {} peer override(s)", self.keys, self.peers.len())
+            format!("requested {}; characters need a supported sender and receiver, otherwise {UNAVAILABLE}; {} peer override(s)", self.keys, self.peers.len())
         }
     }
 
@@ -78,7 +78,10 @@ pub async fn run(dir: &Path, keys: Option<Mode>, peer: Option<&str>) -> Result<(
         Settings::load(dir)?.typing
     };
     println!("Typing preference: {}{}.", typing.requested(peer.as_deref()), peer_name.as_ref().map_or(String::new(), |name| format!(" for {name}")));
-    println!("Typing effective: {UNAVAILABLE}.");
+    let effective = crate::control::request(dir, crate::control::Request::Status).await.ok().flatten()
+        .and_then(|text| crate::manage::Status::decode(&text)).map(|status| status.typing)
+        .unwrap_or_else(|| "no active daemon; Keys stays physical, Letters uses supported receivers, Auto also requires different layouts".into());
+    println!("Typing effective: {effective}.");
     if keys.is_some() {
         settings::apply(dir).await?;
     }
@@ -107,7 +110,7 @@ mod tests {
         assert_eq!(decoded, settings);
         assert_eq!(decoded.typing.requested(Some("peer-id")), Mode::Characters);
         assert_eq!(decoded.typing.requested(Some("other")), Mode::Auto);
-        assert!(decoded.typing.summary().contains("not implemented"));
+        assert!(decoded.typing.summary().contains("supported sender and receiver"));
     }
 
     #[test]

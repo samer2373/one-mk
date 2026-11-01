@@ -66,7 +66,7 @@ use windows_sys::Win32::UI::HiDpi::{
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
-    KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput,
 };
@@ -144,7 +144,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, shared, controlled))?;
-    Ok(Backend { keyboard: None, name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { keyboard: crate::typing::KeyboardLayout::native(), name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 fn set_thread_dpi_awareness() {
@@ -801,8 +801,8 @@ impl State {
             }
             return (false, Effect::None);
         }
-        // Auto-repeat (Caps Lock's too) is dropped; the peer repeats.
-        if !self.fwd.forward(code, down) {
+        // The protocol drops held-key repeats but keeps standalone text repeats.
+        if !self.fwd.forward(code, down) && Mods::is_modifier(code) {
             return (true, Effect::None);
         }
         (true, self.send(Event::Key { code, down, device: None }))
@@ -1064,8 +1064,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_WTSSESSION_CHANGE => {
             match wparam as u32 {
-                WTS_SESSION_LOCK => with_state(|s| s.tx.send(Event::ScreenLocked(true))),
-                WTS_SESSION_UNLOCK => with_state(|s| s.tx.send(Event::ScreenLocked(false))),
+                WTS_SESSION_LOCK => with_state(|s| s.tx.send(Event::ScreenLocked(true)).ok()),
+                WTS_SESSION_UNLOCK => with_state(|s| s.tx.send(Event::ScreenLocked(false)).ok()),
                 _ => None,
             };
             if matches!(wparam as u32, WTS_SESSION_LOCK | WTS_SESSION_LOGOFF | WTS_CONSOLE_DISCONNECT | WTS_REMOTE_CONNECT) {
@@ -1135,9 +1135,10 @@ async fn inject_loop(
     let mut rel = (0.0, 0.0);
     let mut inputs: Vec<INPUT> = Vec::new();
     let mut batch: Vec<Inject> = Vec::new();
-    // SendInput doesn't auto-repeat, and senders drop their repeats.
+    // SendInput doesn't auto-repeat; held keys and native characters repeat here.
     let mut repeat = KeyRepeat::new(repeat_setting());
     let mut failing = false;
+    let mut text = crate::typing::NativeText::default();
     loop {
         let deadline = repeat.deadline();
         let wake = tokio::time::Instant::from_std(deadline.unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(3600)));
@@ -1147,12 +1148,13 @@ async fn inject_loop(
                 // Everything already queued goes out in one SendInput call,
                 // without the moves that later ones make stale.
                 drain_coalesced(first, &mut rx, &mut batch);
-                if controlled.apply(&mut batch) {
-                    repeat.clear();
-                }
                 let now = std::time::Instant::now();
                 let Ok(space) = shared.lock() else { return };
                 for m in batch.drain(..) {
+                    if let Inject::Controlled(active) = m {
+                        controlled.set(active);
+                        if !active { repeat.clear(); }
+                    }
                     if let Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } = m {
                         if down && is_repeatable(code) {
                             repeat.set_timing(repeat_setting());
@@ -1161,13 +1163,17 @@ async fn inject_loop(
                             continue;
                         }
                     }
-                    build(&mut inputs, m, &space, &mut scroll, &mut rel);
+                    for message in text.input(m) { build(&mut inputs, message, &space, &mut scroll, &mut rel); }
                 }
             }
             _ = tokio::time::sleep_until(wake), if deadline.is_some() => {
                 let Some(code) = repeat.poll(std::time::Instant::now()) else { continue };
                 let Ok(space) = shared.lock() else { return };
-                build(&mut inputs, Inject::Key { code, down: true }, &space, &mut scroll, &mut rel);
+                if let Some(messages) = text.repeat(code) {
+                    for message in messages { build(&mut inputs, message, &space, &mut scroll, &mut rel); }
+                } else {
+                    build(&mut inputs, Inject::Key { code, down: true }, &space, &mut scroll, &mut rel);
+                }
             }
         }
         send_inputs(&mut inputs, &tx, &mut failing);
@@ -1181,9 +1187,18 @@ fn send_inputs(inputs: &mut Vec<INPUT>, tx: &mpsc::UnboundedSender<Event>, faili
     // SAFETY: `inputs` is a valid slice of initialized INPUTs.
     let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
     if (sent as usize) < inputs.len() {
+        let err = unsafe { GetLastError() };
+        if sent > 0 {
+            let last = &inputs[sent as usize - 1];
+            if last.r#type == INPUT_KEYBOARD {
+                let keyboard = unsafe { last.Anonymous.ki };
+                if keyboard.dwFlags & (KEYEVENTF_UNICODE | KEYEVENTF_KEYUP) == KEYEVENTF_UNICODE {
+                    let release = key(0, keyboard.wScan, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP);
+                    unsafe { SendInput(1, &release, size_of::<INPUT>() as i32) };
+                }
+            }
+        }
         if !*failing {
-            // SAFETY: plain call.
-            let err = unsafe { GetLastError() };
             tracing::warn!(sent, total = inputs.len(), err, "SendInput failed");
             let _ = tx.send(Event::Error(
                 "Windows blocked input from another computer. This happens on the lock screen, \
@@ -1265,7 +1280,11 @@ fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScro
         Inject::ScrollStop => scroll.stop(),
         // Handled by the injection loop.
         Inject::Controlled(_) => {}
-        Inject::Text { .. } => tracing::warn!("text unsupported; sender must use physical fallback"),
+        Inject::Text { text } => {
+            for (unit, down) in text.unicode_keys() {
+                out.push(key(0, unit, KEYEVENTF_UNICODE | if down { 0 } else { KEYEVENTF_KEYUP }));
+            }
+        }
         Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
             let up = if down { 0 } else { KEYEVENTF_KEYUP };
             match evdev_to_win(code) {

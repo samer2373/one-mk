@@ -171,6 +171,8 @@ pub enum Event {
     /// `part` tells the parts apart ("capture", "control"). Sent on changes.
     Status { part: &'static str, problem: Option<String> },
     KeyboardLayout(typing::KeyboardLayout),
+    KeyboardLayoutUnavailable,
+    KeyboardModifiers { depressed: u32, latched: u32, locked: u32, group: u32 },
 }
 
 /// From the daemon to the capture side.

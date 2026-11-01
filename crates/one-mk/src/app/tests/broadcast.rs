@@ -213,7 +213,7 @@ async fn next_capture_skipping_edges(h: &mut NullHandles) -> CaptureCmd {
 
 #[cfg(debug_assertions)]
 #[tokio::test]
-async fn characters_resolve_independently_on_each_broadcast_receiver() {
+async fn broadcast_characters_preserve_source_text_and_physical_shortcuts() {
     let keyboards = ["de", "us", "fr"].map(|name| Some(one_mk_input::typing::KeyboardLayout::fake(name)));
     let mut trio = Trio::start_keyboards("typing", Swap::Off, |dir| {
         Settings::update(dir, |settings| { settings.typing.keys = crate::typing::Mode::Auto; Ok(()) }).unwrap();
@@ -225,17 +225,36 @@ async fn characters_resolve_independently_on_each_broadcast_receiver() {
     trio.on(1).await;
     trio.a.keys(&[(29, true), (21, true)]);
     assert_eq!(trio.both().await, (Inject::Key { code: 29, down: true }, Inject::Key { code: 29, down: true }));
-    assert_eq!(trio.both().await, (Inject::Key { code: 44, down: true }, Inject::Key { code: 17, down: true }));
+    assert_eq!(trio.both().await, (Inject::Key { code: 21, down: true }, Inject::Key { code: 21, down: true }));
     trio.a.keys(&[(21, false), (29, false), (100, true), (16, true), (16, false)]);
-    assert_eq!(trio.both().await, (Inject::Key { code: 44, down: false }, Inject::Key { code: 17, down: false }));
+    assert_eq!(trio.both().await, (Inject::Key { code: 21, down: false }, Inject::Key { code: 21, down: false }));
     assert_eq!(trio.both().await, (Inject::Key { code: 29, down: false }, Inject::Key { code: 29, down: false }));
     assert_eq!(trio.both().await, (Inject::Key { code: 100, down: true }, Inject::Key { code: 100, down: true }));
+    assert_eq!(trio.both().await, (Inject::Key { code: 100, down: false }, Inject::Key { code: 100, down: false }));
     assert_eq!(trio.both().await, (Inject::Text { text: "@".into() }, Inject::Text { text: "@".into() }));
+    assert_eq!(trio.both().await, (Inject::Key { code: 100, down: true }, Inject::Key { code: 100, down: true }));
     trio.stop().await;
 }
 
 fn key(code: u32, down: bool) -> Inject {
     Inject::Key { code, down }
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn broadcast_composition_is_independent_per_visit() {
+    let keyboards = ["us-intl", "us", "fr"].map(|name| Some(one_mk_input::typing::KeyboardLayout::fake(name)));
+    let mut trio = Trio::start_keyboards("typing-compose", Swap::Off, |dir| {
+        Settings::update(dir, |settings| { settings.typing.keys = crate::typing::Mode::Characters; Ok(()) }).unwrap();
+    }, keyboards).await;
+    eventually_async("broadcast text capability", || async {
+        let reply = control::request(&trio.a.dir, Request::Status).await.unwrap().unwrap();
+        Status::decode(&reply).unwrap().typing.contains("characters (")
+    }).await;
+    trio.on(1).await;
+    trio.a.keys(&[(40, true), (40, false), (18, true), (18, false)]);
+    assert_eq!(trio.both().await, (Inject::Text { text: "é".into() }, Inject::Text { text: "é".into() }));
+    trio.stop().await;
 }
 
 /// Only pointer moves (and `Controlled`) arrived on `h` since last looked.

@@ -30,6 +30,8 @@ pub struct LayoutComposer {
     state: *mut c_void,
 }
 
+unsafe impl Send for LayoutComposer {}
+
 impl LayoutComposer {
     /// Absence of compose symbols or tables must fall back to physical keys for
     /// the whole sequence. The locale is supplied explicitly by the caller.
@@ -67,15 +69,15 @@ impl LayoutComposer {
         let symbol = unsafe { (query.lib.state_key_get_one_sym)(query.state, code + super::EVDEV_OFFSET) };
         unsafe { (self.library.state_feed)(self.state, symbol) };
         match unsafe { (self.library.state_status)(self.state) } {
-            0 => LayoutResolver::text(&query, code).map_or(Composition::Physical, Composition::Text),
+            0 => LayoutResolver::sequence(&query, code).map_or(Composition::Physical, Composition::Text),
             1 => Composition::Pending,
             2 => {
-                let mut bytes = [0u8; one_mk_proto::typing::MAX_TEXT_BYTES + 1];
+                let mut bytes = [0u8; 33];
                 let length = unsafe { (self.library.state_utf8)(self.state, bytes.as_mut_ptr().cast(), bytes.len()) };
                 self.reset();
                 usize::try_from(length).ok().filter(|length| *length < bytes.len())
                     .and_then(|length| std::str::from_utf8(&bytes[..length]).ok())
-                    .filter(|text| one_mk_proto::typing::valid_text(text))
+                    .filter(|text| one_mk_proto::typing::valid_sequence(text))
                     .map_or(Composition::Physical, |text| Composition::Text(text.to_owned()))
             }
             _ => {
