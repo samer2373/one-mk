@@ -149,6 +149,7 @@ struct Res {
     u_show_tint_top: Option<glow::UniformLocation>,
     u_show_tint_bottom: Option<glow::UniformLocation>,
     u_show_bend: Option<glow::UniformLocation>,
+    u_show_mask: Option<glow::UniformLocation>,
 }
 
 struct Kept {
@@ -215,6 +216,7 @@ uniform float u_ppp;
 uniform vec4 u_tint_top;
 uniform vec4 u_tint_bottom;
 uniform float u_bend;
+uniform float u_mask;
 IN vec2 v_uv;
 OUT_COLOR
 float sdf(vec2 p) {
@@ -251,7 +253,11 @@ void main() {
     float sheen = exp(-inside / (5.0 * u_ppp));
     float spec = rim * (0.06 + 0.42 * facing * facing + 0.16 * away * away) + sheen * (0.06 * facing + 0.025 * away);
     c = vec4(c.rgb + vec3(spec), min(c.a + spec, 1.0));
-    FRAG_COLOR = c * a;
+    // Two passes: the first takes the panel's shape out of what is there
+    // (its coverage, antialiased), the second puts the glass in. The
+    // backdrop it shows is what was there, so it must replace it, not be
+    // laid over it a second time.
+    FRAG_COLOR = u_mask > 0.5 ? vec4(a) : c * a;
 }";
 
 fn source(version: ShaderVersion, body: &str, fragment: bool) -> String {
@@ -352,6 +358,7 @@ impl Res {
                 u_show_tint_top: gl.get_uniform_location(show, "u_tint_top"),
                 u_show_tint_bottom: gl.get_uniform_location(show, "u_tint_bottom"),
                 u_show_bend: gl.get_uniform_location(show, "u_bend"),
+                u_show_mask: gl.get_uniform_location(show, "u_mask"),
                 blur,
                 show,
                 _vbo: vbo,
@@ -589,11 +596,21 @@ impl Res {
             gl.uniform_1_i32(self.u_show_sharp.as_ref(), 1);
             gl.uniform_2_f32(self.u_show_texel.as_ref(), 1.0 / region.w as f32, 1.0 / region.h as f32);
             gl.uniform_1_f32(self.u_show_ppp.as_ref(), info.pixels_per_point);
-            let [t, b] = [look.top, look.bottom].map(|c| egui::Rgba::from(c).to_array());
+            // In gamma space, as the window's own pixels (and egui's
+            // blending) are.
+            let [t, b] = [look.top, look.bottom].map(|c| c.to_normalized_gamma_f32());
             gl.uniform_4_f32(self.u_show_tint_top.as_ref(), t[0], t[1], t[2], t[3]);
             gl.uniform_4_f32(self.u_show_tint_bottom.as_ref(), b[0], b[1], b[2], b[3]);
             gl.uniform_1_f32(self.u_show_bend.as_ref(), look.bend);
+            // Out with what is under the panel (dst × (1 − coverage)), then
+            // in with the glass (+ glass × coverage).
+            gl.blend_func_separate(glow::ZERO, glow::ONE_MINUS_SRC_ALPHA, glow::ZERO, glow::ONE_MINUS_SRC_ALPHA);
+            gl.uniform_1_f32(self.u_show_mask.as_ref(), 1.0);
             gl.draw_arrays(glow::TRIANGLES, 0, 6);
+            gl.blend_func_separate(glow::ONE, glow::ONE, glow::ONE, glow::ONE);
+            gl.uniform_1_f32(self.u_show_mask.as_ref(), 0.0);
+            gl.draw_arrays(glow::TRIANGLES, 0, 6);
+            gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE_MINUS_DST_ALPHA, glow::ONE);
             gl.bind_texture(glow::TEXTURE_2D, None);
             gl.active_texture(glow::TEXTURE0);
             gl.bind_vertex_array(None);

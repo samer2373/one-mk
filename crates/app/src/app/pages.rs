@@ -315,9 +315,15 @@ impl App {
             if !works.is_empty() {
                 let text_w = w - 36.0 - 26.0;
                 let line = |i: &Item| if i.title.is_empty() { i.detail.clone() } else { i.title.clone() };
+                // A line from the daemon (no title) is its detail alone,
+                // wrapped like the body; a check is its title and a smaller
+                // detail.
                 let heights: Vec<f32> = works.iter().map(|i| {
-                    let detail = if i.title.is_empty() { 0.0 } else { text_height(ui, &i.detail, text_w) + 2.0 };
-                    10.0 + 20.0 + detail + 10.0
+                    if i.title.is_empty() {
+                        10.0 + text_height(ui, &i.detail, text_w).max(20.0) + 10.0
+                    } else {
+                        10.0 + 20.0 + text_height(ui, &i.detail, text_w) + 2.0 + 10.0
+                    }
                 }).collect();
                 let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
                 let r = col(ui, h);
