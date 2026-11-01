@@ -159,7 +159,7 @@ def draw_background(cfg, scale):
     W, H = cfg["WIDTH"], cfg["HEIGHT"]
     k = scale * SUPERSAMPLE
     size = (W * k, H * k)
-    ground, raised, line = rgb(t["ground"]), rgb(t["raised"]), rgb(t["line"])
+    ground = rgb(t["ground"])
     ink, ink2, signal = rgb(t["ink"]), rgb(t["ink2"]), rgb(t["signal"])
 
     # Ground, with a faint light from above (the app icon's tile does the same).

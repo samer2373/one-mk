@@ -49,22 +49,46 @@ icon falls back to **one monitor + pointer**.
 
 ## Colour
 
-| token | hex | contrast |
+<!-- tokens:start (scripts/brand-tokens.py writes this table) -->
+| token | value | contrast |
 |---|---|---|
 | ground | `#0F1216` | ink on it 16.3:1 |
+| room | `#101318` | ink on it 16.2:1 |
+| glass | `rgba(15, 18, 23, 0.659)` | 66% over what is under it |
+| glass-solid | `#161A20` | ink on it 15.2:1 |
+| popover | `#1A1E25` | ink on it 14.5:1 |
+| on-glass | `rgba(255, 255, 255, 0.071)` | 7% over what is under it |
+| on-glass-lit | `rgba(255, 255, 255, 0.118)` | 12% over what is under it |
 | panel | `#13171C` | ink on it 15.6:1 |
-| raised | `#171B21` | |
-| line | `#252B34` | 1.32:1, hairlines only |
+| raised | `rgba(255, 255, 255, 0.051)` | 5% over what is under it |
+| line | `rgba(255, 255, 255, 0.071)` | 7% over what is under it |
 | ink | `#EDEFF2` | 16.3:1 on ground |
-| ink2 | `#9DA6B1` | 7.6:1 on ground (AA for all text) |
+| ink2 | `#9DA6B1` | 7.6:1 on ground |
+| ink3 | `#8F98A4` | 6.4:1 on ground |
+| ink-hover | `#C4CAD2` | 11.4:1 on ground |
 | **signal** (amber) | `#FFB547` | 10.7:1 on ground; **1.8:1 on white** |
+| signal-lit | `#FFC266` | 11.8:1 on ground |
 | signal-ink | `#1E1505` | 10.3:1 on signal |
+| error | `#FF6B5E` | 6.7:1 on ground |
+| ok | `#5BC98F` | 9.1:1 on ground |
+| button | `rgba(255, 255, 255, 0.086)` | 9% over what is under it |
+| button-lit | `rgba(255, 255, 255, 0.133)` | 13% over what is under it |
+| pill | `rgba(255, 255, 255, 0.125)` | 13% over what is under it |
+| track-off | `#4A525E` | 2.4:1 on ground |
+| track-edge | `#707A86` | 4.3:1 on ground |
+| key-edge | `#697380` | 3.9:1 on ground |
+| off | `#707A86` | 4.3:1 on ground |
+<!-- tokens:end -->
 
 Amber is the only signal colour. Use it for the pointer, live state and the one primary action. Do not use it for
 decoration, large fills or text on light backgrounds. On amber, use the black one-colour mark.
 
-Type: **Geist** 400/600 at 15 / 13 / 12 px; **Geist Mono** for numbers, timings and keys.
-Tokens: [`tokens.json`](tokens.json) and [`tokens.css`](tokens.css).
+Type: **Geist** 400/600 at 15 px (panel and sheet titles), 13 px (body, rows, buttons) and 12 px (chips, keys,
+values), line height 1.45; **Geist Mono** for numbers, timings and keys. Corners: 20 px panels, 12 px inside them
+and on toasts; 12 px between panels.
+
+Tokens: [`tokens.json`](tokens.json) and [`tokens.css`](tokens.css), written from the window's own style
+(`crates/app/src/style.rs`) by `python3 scripts/brand-tokens.py`; never edit them by hand.
 
 ## Approved backgrounds
 

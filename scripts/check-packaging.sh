@@ -10,7 +10,9 @@
 #   - the Homebrew cask and formula: filled in from stand-in .dmg files named
 #     like the release's, no placeholder left;
 #   - the macOS installer window's artwork and settings (scripts/dmg/check.sh;
-#     needs Python 3 with Pillow).
+#     needs Python 3 with Pillow);
+#   - the brand tokens (docs/brand/tokens.json, tokens.css, the README table)
+#     still match the window's style (scripts/brand-tokens.py --check).
 # Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby, Pillow) are
 # used when present and reported as skipped when not.
 #   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app
@@ -128,5 +130,10 @@ if python3 -c 'import PIL' 2>/dev/null; then
     if sh "$ROOT/scripts/dmg/check.sh" >"$scratch/dmg-check.txt" 2>&1; then ok "macOS installer window artwork and settings ($(grep -c '^ok' "$scratch/dmg-check.txt") checks)"
     else cat "$scratch/dmg-check.txt"; bad "macOS installer window artwork and settings"; fi
 else skip "macOS installer window checks: Python 3 with Pillow not installed"; fi
+
+# The brand tokens are written from crates/app/src/style.rs; the DMG artwork
+# reads them, so a style change must regenerate them.
+if python3 "$ROOT/scripts/brand-tokens.py" --check >"$scratch/tokens.txt" 2>&1; then ok "brand tokens match the window's style"
+else cat "$scratch/tokens.txt"; bad "brand tokens are out of date: run python3 scripts/brand-tokens.py"; fi
 
 [ "$fail" = 0 ] && echo "all checks passed" || { echo "some checks failed"; exit 1; }

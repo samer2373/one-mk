@@ -1,28 +1,49 @@
-/* one·mk design tokens. Dark UI is primary; amber is the only signal colour. */
+/* one·mk design tokens, written by scripts/brand-tokens.py from crates/app/src/style.rs. Do not edit. */
 @font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-SemiBold.ttf") format("truetype"); font-weight: 600; font-display: swap; }
 @font-face { font-family: "Geist Mono"; src: url("../../crates/app/fonts/GeistMono-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 
 :root {
   /* colour */
-  --omk-ground: #0F1216;      /* app background */
-  --omk-panel: #13171C;       /* cards, sidebars */
-  --omk-raised: #171B21;      /* hover, popovers, inputs */
-  --omk-line: #252B34;        /* hairlines (decorative) */
-  --omk-ink: #EDEFF2;         /* primary text, 16.3:1 on ground */
-  --omk-ink2: #9DA6B1;        /* secondary text, 7.62:1 on ground */
-  --omk-signal: #FFB547;      /* amber: pointer, live state, primary action, 10.69:1 on ground */
-  --omk-signal-ink: #1E1505;  /* text on amber, 10.26:1 */
+  --omk-ground: #0F1216;
+  --omk-room: #101318;
+  --omk-glass: rgba(15, 18, 23, 0.659);
+  --omk-glass-solid: #161A20;
+  --omk-popover: #1A1E25;
+  --omk-on-glass: rgba(255, 255, 255, 0.071);
+  --omk-on-glass-lit: rgba(255, 255, 255, 0.118);
+  --omk-panel: #13171C;
+  --omk-raised: rgba(255, 255, 255, 0.051);
+  --omk-line: rgba(255, 255, 255, 0.071);
+  --omk-ink: #EDEFF2;
+  --omk-ink2: #9DA6B1;
+  --omk-ink3: #8F98A4;
+  --omk-ink-hover: #C4CAD2;
+  --omk-signal: #FFB547;
+  --omk-signal-lit: #FFC266;
+  --omk-signal-ink: #1E1505;
+  --omk-error: #FF6B5E;
+  --omk-ok: #5BC98F;
+  --omk-button: rgba(255, 255, 255, 0.086);
+  --omk-button-lit: rgba(255, 255, 255, 0.133);
+  --omk-pill: rgba(255, 255, 255, 0.125);
+  --omk-track-off: #4A525E;
+  --omk-track-edge: #707A86;
+  --omk-key-edge: #697380;
+  --omk-off: #707A86;
+
+  /* corners and spacing */
+  --omk-radius-panel: 20px;
+  --omk-radius-inner: 12px;
+  --omk-space-gap: 12px;
 
   /* type */
   --omk-font-sans: Geist, ui-sans-serif, system-ui, sans-serif;
   --omk-font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --omk-weight-regular: 400;
   --omk-weight-semibold: 600;
-  --omk-size-body: 15px;
-  --omk-size-small: 13px;
-  --omk-size-caption: 12px;
-  --omk-leading-body: 1.45;
-  --omk-leading-small: 1.4;
-  --omk-leading-caption: 1.35;
+  --omk-size-title: 15px;
+  --omk-size-body: 13px;
+  --omk-size-meta: 12px;
+  --omk-leading: 1.45;
 }
