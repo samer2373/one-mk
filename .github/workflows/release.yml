@@ -66,7 +66,7 @@ jobs:
         run: sh scripts/version.sh --check "$GITHUB_REF_NAME"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: stable, targets: "${{ matrix.target }}" }
-      - run: cargo build --release --locked --target ${{ matrix.target }} -p one-mk -p one-mk-tray -p one-mk-app
+      - run: cargo build --release --locked --target ${{ matrix.target }} -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper
       - name: Package
         shell: bash
         run: |
@@ -75,11 +75,11 @@ jobs:
           mkdir "$name"
           if [ "${{ runner.os }}" = Windows ]; then
             cp "$d/one-mk.exe" "one-mk-${{ matrix.target }}.exe"
-            cp $d/one-mk.exe $d/one-mk-tray.exe $d/one-mk-app.exe "$name"/
+            cp $d/one-mk.exe $d/one-mk-tray.exe $d/one-mk-app.exe $d/one-mk-wallpaper.exe "$name"/
             7z a "$name.zip" "$name" >/dev/null
           else
             cp "$d/one-mk" "one-mk-${{ matrix.target }}.bin"
-            cp $d/one-mk $d/one-mk-tray $d/one-mk-app "$name"/
+            cp $d/one-mk $d/one-mk-tray $d/one-mk-app $d/one-mk-wallpaper "$name"/
             tar czf "$name.tar.gz" "$name"
           fi
       - name: Mac app

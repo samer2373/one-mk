@@ -33,8 +33,8 @@ pub(super) fn frame(full: Rect) -> Frame {
     Frame { side, content, rail }
 }
 
-const NAV: [(Tab, Icon); 6] =
-    [(Tab::Desk, Icon::Desk), (Tab::Layout, Icon::Layout), (Tab::Files, Icon::Clipboard), (Tab::Keys, Icon::Keys), (Tab::Health, Icon::Health), (Tab::Advanced, Icon::Advanced)];
+const NAV: [(Tab, Icon); 7] =
+    [(Tab::Desk, Icon::Desk), (Tab::Layout, Icon::Layout), (Tab::Files, Icon::Clipboard), (Tab::Wallpaper, Icon::Wallpaper), (Tab::Keys, Icon::Keys), (Tab::Health, Icon::Health), (Tab::Advanced, Icon::Advanced)];
 
 /// How tall `text` sets in the sidebar's small paragraphs.
 fn para_h(ui: &Ui, text: &str, w: f32) -> f32 {

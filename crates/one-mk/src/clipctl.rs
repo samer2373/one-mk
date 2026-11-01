@@ -86,7 +86,7 @@ pub fn handle(dir: &Path, services: &Services, online: Vec<Online>, trust: &Trus
                 let _ = reply.send(match result { Ok(body) => format!("ok\n{body}"), Err(error) => format!("error {error}\n") });
             });
         }
-        Request::WallpaperStatus | Request::Invitation | Request::Status | Request::Reload | Request::TakeBack | Request::Stop | Request::Switch(_) | Request::LockPointer(_) | Request::LockAll | Request::DismissSuggestion | Request::Broadcast(_) => {
+        Request::LiveWallpaper(_) | Request::WallpaperStatus | Request::Invitation | Request::Status | Request::Reload | Request::TakeBack | Request::Stop | Request::Switch(_) | Request::LockPointer(_) | Request::LockAll | Request::DismissSuggestion | Request::Broadcast(_) => {
             let _ = reply.send("error unexpected request\n".to_owned());
         }
     }
@@ -287,6 +287,7 @@ mod tests {
 
     fn services(dir: &Path, clipboard: bool) -> Services {
         Services {
+            wallpaper: None,
             clip: clipboard.then(|| crate::clip::ClipSync::new(Clipboard::memory().0, node())),
             inbox: Inbox::new(dir.join("downloads")),
             trusted: tokio::sync::watch::channel(std::collections::HashSet::new()).0,

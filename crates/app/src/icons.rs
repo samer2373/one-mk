@@ -9,6 +9,7 @@ pub enum Icon {
     Desk,
     Layout,
     Clipboard,
+    Wallpaper,
     Keys,
     Health,
     Advanced,
@@ -42,6 +43,11 @@ pub fn draw(p: &Painter, icon: Icon, rect: Rect, col: Color32) {
         p.circle_stroke(at(x, y), r * k, st);
     };
     match icon {
+        Icon::Wallpaper => {
+            rrect(1.5, 2.5, 13.0, 11.0, 1.5);
+            line(&[(2.0, 11.5), (6.0, 7.5), (9.0, 10.5), (11.0, 8.5), (14.0, 11.5)]);
+            ring(10.75, 5.75, 1.0);
+        }
         Icon::Desk => {
             rrect(1.75, 2.5, 12.5, 8.5, 1.5);
             line(&[(8.0, 11.0), (8.0, 13.5)]);

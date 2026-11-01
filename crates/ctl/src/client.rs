@@ -20,6 +20,7 @@ use crate::status::TransferStatus;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     WallpaperStatus,
+    LiveWallpaper(String),
     /// Who we are, who is paired and online, and who controls whom.
     Status,
     /// Active invitation link and expiry (private bearer credential), or none.
@@ -164,6 +165,7 @@ impl Request {
             Request::LockAll => "lock-all",
             Request::Settings => "settings",
             Request::WallpaperStatus => "wallpaper-status",
+            Request::LiveWallpaper(_) => "wallpaper-live",
             Request::ClipSend(_) => "clip-send",
             Request::ClipGet(_) => "clip-get",
             Request::ClipHistory { .. } => "clip-history",
@@ -177,6 +179,7 @@ impl Request {
     /// The request line (without its newline).
     pub fn line(&self) -> String {
         match self {
+            Request::LiveWallpaper(json) => format!("wallpaper-live {json}"),
             Request::ClipHistory { action, json } => format!("clip-history {}{}", action.line(), if *json { " --json" } else { "" }),
             Request::Switch(to) => format!("switch {}", to.as_str()),
             Request::LockPointer(t) => format!("lock-pointer {}", t.as_str()),
@@ -222,6 +225,7 @@ impl Request {
             "broadcast" => Toggle::parse(arg).map(Request::Broadcast),
             "settings" if arg.is_empty() => Some(Request::Settings),
             "wallpaper-status" if arg.is_empty() => Some(Request::WallpaperStatus),
+            "wallpaper-live" if serde_json::from_str::<one_mk_wallpaper::Command>(arg).is_ok() => Some(Request::LiveWallpaper(arg.to_owned())),
             "clip-send" => Some(Request::ClipSend(device())),
             "clip-get" => Some(Request::ClipGet(device())),
             "transfer" if !arg.is_empty() => {
@@ -248,6 +252,7 @@ impl Request {
     /// while to cross a slow link.
     pub fn reply_timeout(&self) -> Duration {
         match self {
+            Request::LiveWallpaper(_) => Duration::from_secs(660),
             Request::ClipSend(_) | Request::ClipGet(_) | Request::FetchClipboard
                 | Request::ClipHistory { action: HistoryAction::Copy(_), .. } => Duration::from_secs(45),
             _ => Duration::from_secs(5),

@@ -87,6 +87,7 @@ pub fn os_name(code: u8) -> &'static str {
 /// What `one-mk status` shows, as the daemon reports it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Status {
+    pub wallpaper: Option<one_mk_wallpaper::Status>,
     pub name: String,
     pub id: String,
     pub port: u16,
@@ -398,6 +399,9 @@ impl Status {
     /// newlines: they are sanitized).
     pub fn encode(&self) -> String {
         let mut out = format!("ok\nname\t{}\nid\t{}\nport\t{}\n", self.name, self.id, self.port);
+        if let Some(wallpaper) = &self.wallpaper && let Ok(json) = serde_json::to_string(wallpaper) {
+            out += &format!("wallpaper\t{json}\n");
+        }
         for (key, who) in [("controlling", &self.controlling), ("controlled_by", &self.controlled_by)] {
             if let Some(w) = who {
                 out += &format!("{key}\t{w}\n");
@@ -518,6 +522,10 @@ impl Status {
         }
         let mut s = Status::default();
         for line in lines {
+            if let Some(json) = line.strip_prefix("wallpaper\t") {
+                s.wallpaper = serde_json::from_str(json).ok();
+                continue;
+            }
             if let Some(names) = line.strip_prefix("profiles\t") {
                 s.layout.profiles = names.split('\t').map(str::to_owned).collect();
                 continue;

@@ -68,7 +68,7 @@ async fn serve_conn<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, token: Option<S
     // A client that connects and says nothing is dropped after `TIMEOUT`.
     let read = tokio::time::timeout(TIMEOUT, async {
         let mut line = String::new();
-        let mut r = BufReader::new((&mut s).take(1024));
+        let mut r = BufReader::new((&mut s).take(4096));
         if let Some(t) = &token {
             r.read_line(&mut line).await?;
             if !same(line.trim_end(), &format!("auth {t}")) {

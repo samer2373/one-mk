@@ -18,7 +18,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 app="$tmp/one-mk.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$dir/one-mk" "$dir/one-mk-tray" "$dir/one-mk-app" "$app/Contents/MacOS/"
+cp "$dir/one-mk" "$dir/one-mk-tray" "$dir/one-mk-app" "$dir/one-mk-wallpaper" "$app/Contents/MacOS/"
 cp docs/brand/app-icon/macos/onemk.icns "$app/Contents/Resources/onemk.icns"
 
 cat > "$app/Contents/Info.plist" <<PLIST

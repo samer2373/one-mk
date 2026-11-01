@@ -4,7 +4,7 @@
 # Sets ROOT, VERSION, BIN_DIR (where the release build is), OUT_DIR (where
 # packages are written) and SOURCE_DATE_EPOCH (the commit's time, so that
 # building twice gives the same bytes). Build first with
-#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app
+#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper
 # (add --target T and set TARGET=T for a cross build); package scripts never
 # build the programs themselves, so CI and a developer use the same bits.
 # The .deb, the macOS app/.dmg and the Windows installer are not made here:
@@ -26,7 +26,7 @@ die() { echo "$(basename "$0"): $*" >&2; exit 1; }
 
 need_binaries() {
     for b in "$@"; do
-        [ -f "$BIN_DIR/$b" ] || die "$BIN_DIR/$b not found; build first: cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app"
+        [ -f "$BIN_DIR/$b" ] || die "$BIN_DIR/$b not found; build first: cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper"
     done
 }
 

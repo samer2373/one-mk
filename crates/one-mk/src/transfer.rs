@@ -67,10 +67,8 @@ pub const PEER_PARTIAL_CAP: u64 = 50 << 30;
 // ---------------------------------------------------------------- receiving
 
 /// Notifies nobody.
-#[cfg(test)]
-struct Quiet;
+pub(crate) struct Quiet;
 
-#[cfg(test)]
 impl Notifier for Quiet {
     fn files_received(&self, _: crate::notify::FilesReceived) {}
 }
@@ -304,6 +302,26 @@ impl Inbox {
         recv: quinn::RecvStream,
     ) {
         self.receive_inner(Some(conn), conn.fp, peer, send, recv).await
+    }
+
+    pub async fn receive_wallpaper_on(&self, conn: &ConnPermit, peer: &str, mut send: quinn::SendStream, mut recv: quinn::RecvStream) {
+        let Ok(Some(FileMsg::Offer { path, size, mtime, batch })) = read_file_msg(&mut recv).await else { return };
+        let valid = path.strip_suffix(".video").is_some_and(one_mk_wallpaper::valid_hash)
+            && size <= one_mk_wallpaper::MAX_MEDIA_BYTES && batch.files == 1 && batch.bytes == size;
+        if !valid { let _ = write_file_msg(&mut send, &FileMsg::Reject { reason: "Invalid wallpaper video".into() }).await; return; }
+        let Ok(_guard) = self.start_stream(conn.fp, Some(conn)) else { return };
+        let existing = self.root.join(&path);
+        let hash = path.trim_end_matches(".video").to_owned();
+        let check = existing.clone();
+        let cached = tokio::task::spawn_blocking(move || crate::live_wallpaper::digest(&check).is_ok_and(|actual| actual == hash)).await.unwrap_or(false);
+        if cached {
+            let _ = write_file_msg(&mut send, &FileMsg::Saved { name: path }).await;
+            let _ = send.finish();
+            return;
+        }
+        if existing.exists() { let _ = fs::remove_file(&existing); }
+        let _ = self.receive_file(conn.fp, peer, &mut send, &mut recv, &path, (size, mtime, batch)).await;
+        let _ = send.finish();
     }
 
     async fn receive_inner(
@@ -955,6 +973,16 @@ pub async fn send_files_as(
     progress: Arc<Progress>,
     id: u64,
 ) -> Vec<(Outgoing, Outcome)> {
+    send_files_kind(conn, files, progress, id, StreamKind::File).await
+}
+
+pub async fn send_files_kind(
+    conn: &quinn::Connection,
+    files: Vec<Outgoing>,
+    progress: Arc<Progress>,
+    id: u64,
+    kind: StreamKind,
+) -> Vec<(Outgoing, Outcome)> {
     let bytes = files.iter().map(|file| file.size).fold(0u64, u64::saturating_add);
     if files.len() > 10_000 || bytes > 1 << 40 {
         return files.into_iter().map(|file| (file, Outcome::Rejected("file batch exceeds the limit of 10000 files or 1 TiB".into()))).collect();
@@ -968,7 +996,7 @@ pub async fn send_files_as(
     for _ in 0..STREAMS.min(n) {
         let (conn, queue, results, progress) = (conn.clone(), queue.clone(), results.clone(), progress.clone());
         workers.spawn(async move {
-            let (mut send, mut recv) = match open_stream(&conn, StreamKind::File).await {
+            let (mut send, mut recv) = match open_stream(&conn, kind).await {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::debug!("opening a file stream: {e:#}");
@@ -1009,6 +1037,11 @@ async fn send_one(
 ) -> Result<Outcome> {
     write_file_msg(send, &FileMsg::Offer { path: file.rel.clone(), size: file.size, mtime: file.mtime, batch }).await?;
     let offset = match read_file_msg(recv).await? {
+        Some(FileMsg::Saved { name }) => {
+            add_progress(&progress.done, file.size);
+            add_progress(&progress.skipped, file.size);
+            return Ok(Outcome::Saved { name, resumed_from: file.size });
+        }
         Some(FileMsg::Accept { offset }) => offset,
         Some(FileMsg::Reject { reason }) => {
             add_progress(&progress.done, file.size);
@@ -1422,6 +1455,33 @@ mod tests {
         let addr = b.local_addr().unwrap();
         let (pa, pb) = tokio::join!(a.connect(addr), async { b.accept().await.unwrap() });
         (pa.unwrap(), pb.unwrap(), a, b)
+    }
+
+    #[tokio::test]
+    async fn wallpaper_cached_hash_skips_bytes_and_rejects_paths() {
+        let (sender, receiver, _first, _second) = linked().await;
+        let directory = tempfile::tempdir().unwrap();
+        let video = directory.path().join("source");
+        fs::write(&video, b"a verified wallpaper").unwrap();
+        let hash = crate::live_wallpaper::digest(&video).unwrap();
+        let name = format!("{hash}.video");
+        fs::rename(video, directory.path().join(&name)).unwrap();
+        let inbox = Inbox::with_notifier(directory.path().to_owned(), Arc::new(Quiet));
+        let permit = inbox.admit(receiver.fingerprint).unwrap();
+        for (offered, expected) in [(name.as_str(), true), ("../outside.video", false), ("ABC.video", false)] {
+            let (mut sending, mut receiving) = open_stream(&sender.conn, StreamKind::WallpaperVideo).await.unwrap();
+            let (_, reply, request) = receiver.accept_stream().await.unwrap();
+            let worker = inbox.receive_wallpaper_on(&permit, "desktop", reply, request);
+            let test = async {
+                write_file_msg(&mut sending, &FileMsg::Offer { path: offered.into(), size: 20, mtime: 0, batch: Batch { id: 7, files: 1, bytes: 20 } }).await.unwrap();
+                let response = read_file_msg(&mut receiving).await.unwrap().unwrap();
+                assert_eq!(matches!(response, FileMsg::Saved { .. }), expected);
+                if !expected { assert!(matches!(response, FileMsg::Reject { .. })); }
+                sending.finish().unwrap();
+            };
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(worker, test); }).await.unwrap();
+        }
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     async fn eventually(what: &str, mut ok: impl FnMut() -> bool) {

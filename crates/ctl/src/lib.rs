@@ -10,6 +10,7 @@ pub mod macos_windows;
 pub mod proc;
 pub mod setup;
 pub mod status;
+pub mod wallpaper;
 pub mod update_logic;
 
 use anyhow::{Context, Result};
