@@ -36,6 +36,14 @@ pub(super) fn frame(full: Rect) -> Frame {
 const NAV: [(Tab, Icon); 6] =
     [(Tab::Desk, Icon::Desk), (Tab::Layout, Icon::Layout), (Tab::Files, Icon::Clipboard), (Tab::Keys, Icon::Keys), (Tab::Health, Icon::Health), (Tab::Advanced, Icon::Advanced)];
 
+/// How tall `text` sets in the sidebar's small paragraphs.
+fn para_h(ui: &Ui, text: &str, w: f32) -> f32 {
+    let f = regular(T_META);
+    let mut job = egui::text::LayoutJob::simple(text.to_owned(), f.clone(), INK, w);
+    job.sections[0].format.line_height = Some((f.size * LEADING).round());
+    ui.painter().layout_job(job).size().y
+}
+
 /// A row that can be clicked: its hover and press state, focus ring and
 /// name for screen readers.
 fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: bool, enabled: bool) -> (egui::Response, f32) {
@@ -127,7 +135,7 @@ impl App {
         }
         // Computers: this one, then the paired ones, as many as fit above
         // the footer; the last row says how many more when they don't.
-        let list_bottom = side.bottom() - self.foot_h() - 8.0;
+        let list_bottom = side.bottom() - self.foot_h(ui, w) - 8.0;
         if let Some(status) = self.running().cloned()
             && y + 14.0 + 22.0 + ROW_H <= list_bottom
         {
@@ -205,57 +213,97 @@ impl App {
         }
     }
 
-    /// The update box's height: its title and button, and what the update
-    /// said (up to three lines) once it ran.
-    fn update_h(&self) -> f32 {
-        match (&self.update_available, &self.update_output) {
-            (None, _) => 0.0,
-            (Some(_), None) => 92.0,
-            (Some(_), Some(_)) => 92.0 + 50.0,
+    /// The update box's height: a title, a line, and a button or a bar.
+    fn update_h(&self, ui: &Ui, w: f32) -> f32 {
+        match self.update_box() {
+            None => 0.0,
+            Some(super::updates::UpdateBox::Ready { can: false, advice, .. }) => 44.0 + para_h(ui, &advice, w - 28.0) + 46.0,
+            Some(super::updates::UpdateBox::Failed { said }) => 44.0 + para_h(ui, &said, w - 28.0).min(54.0) + 46.0,
+            Some(_) => 44.0 + 22.0 + 46.0,
         }
     }
 
-    fn foot_h(&self) -> f32 {
-        let u = self.update_h();
+    fn foot_h(&self, ui: &Ui, w: f32) -> f32 {
+        let u = self.update_h(ui, w);
         36.0 + 10.0 + 28.0 + 12.0 + if u > 0.0 { u + 10.0 } else { 0.0 }
     }
 
     /// The bottom of the sidebar: an update when there is one, the action
     /// that matters most, and whether the service runs (with Stop).
     fn side_foot(&mut self, ui: &mut Ui, side: Rect, now: f64) {
+        use super::updates::UpdateBox;
         let x = side.left() + 10.0;
         let w = side.width() - 20.0;
         let mut y = side.bottom() - 12.0 - 28.0 - 10.0 - 36.0;
-        if let Some(version) = self.update_available.clone() {
-            let h = self.update_h();
-            let box_r = Rect::from_min_size(pos2(x, y - h - 10.0), vec2(w, h));
-            ui.painter().rect_filled(box_r, CornerRadius::same(R_INNER), ON_GLASS);
-            let title = format!("one-mk {version} is available");
+        if let Some(what) = self.update_box() {
+            let h = self.update_h(ui, w);
+            let r = Rect::from_min_size(pos2(x, y - h - 10.0), vec2(w, h));
+            for s in widgets::glass_shapes_as(ui.ctx(), Id::unique("update-box").value(), r, f32::from(R_INNER) + 2.0, widgets::CONTROL_GLASS) {
+                ui.painter().add(s);
+            }
             let p = ui.painter().clone();
-            p.text(pos2(box_r.left() + 12.0, box_r.top() + 18.0), Align2::LEFT_CENTER, fit(&p, &title, &regular(T_BODY), w - 24.0), regular(T_BODY), INK);
-            let busy = self.busy.contains(&Job::Update);
-            let b = Rect::from_min_size(pos2(box_r.left() + 10.0, box_r.top() + 36.0), vec2(w - 20.0, 30.0));
-            if button(ui, b, Id::unique("update"), if busy { "Updating…" } else { "Update" }, Look::Quiet, !busy && !self.sheet_open(), Some(&format!("Update one·mk to {version}"))).clicked() {
-                self.update_output = None;
-                self.busy.push(Job::Update);
-                self.link.update();
-            }
-            let notes = Rect::from_min_size(pos2(box_r.left() + 6.0, box_r.top() + 68.0), vec2(w - 12.0, 20.0));
-            let (resp, hover) = row_button(ui, notes, Id::unique("release-notes"), "Release notes", Role::Link, false, true);
-            p.text(pos2(notes.left() + 6.0, notes.center().y), Align2::LEFT_CENTER, "Release notes", regular(T_META), mix(INK2, INK, hover));
-            if resp.clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/samer2373/one-mk/releases/latest"));
-            }
-            // What the update said: shortened here, all of it on hover.
-            if let Some(out) = self.update_output.clone() {
-                let r = Rect::from_min_size(pos2(box_r.left() + 12.0, box_r.top() + 92.0), vec2(w - 24.0, 44.0));
-                let mut job = egui::text::LayoutJob::simple(out.trim().to_owned(), regular(T_META), INK2, r.width());
-                job.wrap.max_rows = 3;
-                let g = ui.painter().layout_job(job);
-                p.galley(r.min, g, INK2);
-                let resp = ui.interact(r, Id::unique("update-output"), Sense::hover());
-                widgets::a11y_text(ui, Id::unique("update-output-text"), r, Role::Label, out.trim(), Some(Live::Polite));
-                resp.on_hover_text(out.trim());
+            let (tx, tw) = (r.left() + 14.0, w - 28.0);
+            let line = |y: f32, text: &str, col: Color32| {
+                p.text(pos2(tx, y), Align2::LEFT_CENTER, fit(&p, text, &regular(T_META), tw), regular(T_META), col);
+            };
+            let title = match &what {
+                UpdateBox::Ready { version, .. } => format!("oneMK {version} is ready"),
+                UpdateBox::MoveFirst => "Move to Applications".into(),
+                UpdateBox::Working { .. } => "Updating oneMK".into(),
+                UpdateBox::Failed { .. } => "The update didn't finish".into(),
+            };
+            p.text(pos2(tx, r.top() + 22.0), Align2::LEFT_CENTER, fit(&p, &title, &semibold(T_BODY), tw), semibold(T_BODY), INK);
+            let b = Rect::from_min_size(pos2(r.left() + 10.0, r.bottom() - 42.0), vec2(w - 20.0, 32.0));
+            let locked = self.sheet_open();
+            match what {
+                UpdateBox::Ready { version, can: true, .. } => {
+                    line(r.top() + 44.0, "Restarts in a few seconds", INK2);
+                    if button(ui, b, Id::unique("update"), "Update now", Look::Quiet, !locked, Some(&format!("Update oneMK to {version}"))).clicked() {
+                        self.begin_update();
+                    }
+                }
+                UpdateBox::Ready { can: false, advice, .. } => {
+                    para(ui, pos2(tx, r.top() + 36.0), tw, &advice, regular(T_META), INK2);
+                    if button(ui, b, Id::unique("update-download"), "Download", Look::Quiet, !locked, Some("Open the download page")).clicked() {
+                        self.link.download_update();
+                    }
+                }
+                UpdateBox::MoveFirst => {
+                    line(r.top() + 44.0, "It's running from the disk image", INK2);
+                    if button(ui, b, Id::unique("update-move"), "Move to Applications", Look::Quiet, !locked, None).clicked() {
+                        self.update_ui.failed = false;
+                        self.busy.push(Job::Update);
+                        self.link.move_to_applications();
+                    }
+                }
+                UpdateBox::Working { done, said } => {
+                    line(r.top() + 44.0, &said, INK2);
+                    // A capsule that fills; without a percentage, a short
+                    // bead that travels along it.
+                    let track = Rect::from_min_size(pos2(b.left() + 4.0, b.center().y - 3.0), vec2(b.width() - 8.0, 6.0));
+                    p.rect_filled(track, CornerRadius::same(3), Color32::from_white_alpha(28));
+                    let fill = match done {
+                        Some(k) => Rect::from_min_size(track.min, vec2(track.width() * k.clamp(0.04, 1.0), track.height())),
+                        None => {
+                            let t = if motion::reduced() { 0.5 } else { ((now * 0.8).fract()) as f32 };
+                            let bw = track.width() * 0.28;
+                            Rect::from_min_size(pos2(track.left() + (track.width() - bw) * t, track.top()), vec2(bw, track.height()))
+                        }
+                    };
+                    p.rect_filled(fill, CornerRadius::same(3), ACCENT);
+                    ui.ctx().request_repaint_after_secs(1.0 / 30.0);
+                    widgets::a11y_text(ui, Id::unique("update-progress"), r, Role::ProgressIndicator, &said, Some(Live::Polite));
+                }
+                UpdateBox::Failed { said } => {
+                    let shown = if said.is_empty() { "Get the new version from the download page." } else { said.as_str() };
+                    let mut job = egui::text::LayoutJob::simple(shown.to_owned(), regular(T_META), INK2, tw);
+                    job.wrap.max_rows = 3;
+                    let g = p.layout_job(job);
+                    p.galley(pos2(tx, r.top() + 36.0), g, INK2);
+                    if button(ui, b, Id::unique("update-download"), "Download", Look::Quiet, !locked, Some("Open the download page")).clicked() {
+                        self.link.download_update();
+                    }
+                }
             }
         }
         let (label, look, enabled, job) = self.action();

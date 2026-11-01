@@ -384,13 +384,15 @@ impl App {
             48.0 + 22.0 + (SWAP_ROW * peers as f32).max(40.0) + 14.0,
             48.0 + if hooks == 0 { 44.0 } else { 22.0 * hooks as f32 + 20.0 } + 14.0,
             48.0 + 132.0 + 14.0,
+            self.updates_card_h(),
         ];
-        // Two columns: crossing, power and games on the left; keys and
-        // commands on the right. One column below 700 points.
-        let mut at = [(0usize, 0.0f32); 7];
+        // Two columns: crossing, power, games and updates on the left;
+        // keys and commands on the right. One column below 700 points.
+        let mut at = [(0usize, 0.0f32); 8];
         let mut ys = [0.0f32; 2];
         for (k, h) in heights.iter().enumerate() {
-            let col = if two { usize::from(k >= 3) } else { 0 };
+            // Updates goes under games, on the left.
+            let col = if two { usize::from((3..7).contains(&k)) } else { 0 };
             at[k] = (col, ys[col]);
             ys[col] += h + gap;
         }
@@ -422,6 +424,7 @@ impl App {
             self.swaps(ui, Rect::from_min_max(pos2(c.left(), c.top() + 18.0), c.max));
             self.hooks_card(ui, r(5));
             self.typing_card(ui, r(6));
+            self.updates_card(ui, r(7));
         });
     }
 

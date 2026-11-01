@@ -18,12 +18,14 @@ impl App {
         self.link.update();
     }
 
+    /// Once a frame: tells the daemon the new window started (so a kept
+    /// previous version can go), and installs by itself when asked to.
     pub(super) fn update_notice(&mut self, ctx: &egui::Context) {
         if !self.update_ui.acknowledged {
             self.update_ui.acknowledged = true;
             self.link.acknowledge_app_start();
         }
-        let Some(mut status) = self.update_ui.status.clone() else { return; };
+        let Some(status) = self.update_ui.status.clone() else { return; };
         if status.check && status.install_automatically && status.can_update && status.error.is_none()
             && let Some(version) = &self.update_available
             && self.update_ui.attempted.as_ref() != Some(version) && !self.busy.contains(&Job::Update)
@@ -31,54 +33,79 @@ impl App {
             self.update_ui.attempted = Some(version.clone());
             self.begin_update();
         }
-        let busy = self.busy.contains(&Job::Update);
-        if self.update_available.is_none() && !status.move_to_applications && !self.update_ui.failed && self.tab != Tab::Advanced && !busy { return; }
-        egui::Window::new("one·mk updates").id(Id::unique("update-notice"))
-            .anchor(egui::Align2::RIGHT_TOP, [-20.0, 72.0]).default_width(350.0).resizable(false).collapsible(false)
-            .show(ctx, |ui| {
-                if let Some(version) = &self.update_available {
-                    ui.label(format!("one·mk {version} is ready"));
-                }
-                if status.move_to_applications {
-                    ui.label("Move one·mk to Applications before updating.");
-                    if ui.add_enabled(!busy, egui::Button::new("Move to Applications")).clicked() {
-                        self.update_ui.failed = false;
-                        self.busy.push(Job::Update);
-                        self.link.move_to_applications();
-                    }
-                } else if !status.can_update {
-                    ui.label(&status.advice);
-                } else if self.update_available.is_some() && !busy
-                    && ui.button("Update now").clicked() { self.begin_update(); }
-                if busy {
-                    ui.spinner();
-                    if let Some(percent) = self.update_output.as_deref().and_then(|text| text.strip_prefix("Downloading… "))
-                        .and_then(|text| text.strip_suffix('%')).and_then(|text| text.parse::<f32>().ok()) {
-                        ui.add(egui::ProgressBar::new(percent / 100.0).show_percentage());
-                    }
-                }
-                if let Some(output) = &self.update_output { ui.label(output.trim()); }
-                if let Some(error) = &status.error { ui.label(format!("Couldn't check: {error}")); }
-                if (self.update_ui.failed || !status.can_update) && ui.button("Download").clicked() {
-                    self.link.download_update();
-                }
-                if status.rollback_available && ui.add_enabled(!busy, egui::Button::new("Restore previous version")).clicked() {
-                    self.busy.push(Job::Update);
-                    self.link.rollback_update();
-                }
-                ui.separator();
-                let saving = self.busy.contains(&Job::UpdateSettings);
-                ui.add_enabled_ui(!busy && !saving, |ui| {
-                    if ui.checkbox(&mut status.check, "Check for updates").changed() {
-                        self.busy.push(Job::UpdateSettings);
-                        self.link.update_preference(false, status.check);
-                    }
-                    if ui.checkbox(&mut status.install_automatically, "Update automatically").changed() {
-                        self.busy.push(Job::UpdateSettings);
-                        self.link.update_preference(true, status.install_automatically);
-                    }
-                });
-                ui.small("Checks happen at most once a day. By default, we ask before installing. Automatic installs happen only while this window is open.");
-            });
+        let _ = ctx;
+        // What to show lives in the sidebar's foot (shell.rs, update_box),
+        // and the choices in Advanced.
+    }
+}
+
+/// What the update box in the sidebar shows.
+pub(super) enum UpdateBox {
+    /// A newer version, and whether this install can replace itself.
+    Ready { version: String, can: bool, advice: String },
+    /// Running from the disk image (or translocated): move it first.
+    MoveFirst,
+    /// Downloading or installing: how far (0–1, when known) and what now.
+    Working { done: Option<f32>, said: String },
+    /// It didn't work: what happened, and a way to get it by hand.
+    Failed { said: String },
+}
+
+impl App {
+    pub(super) fn update_box(&self) -> Option<UpdateBox> {
+        let status = self.update_ui.status.as_ref();
+        let said = self.update_output.as_deref().map(str::trim).unwrap_or("").to_owned();
+        if self.busy.contains(&Job::Update) {
+            let done = said.strip_prefix("Downloading… ").and_then(|t| t.strip_suffix('%')).and_then(|t| t.parse::<f32>().ok()).map(|p| p / 100.0);
+            return Some(UpdateBox::Working { done, said: if said.is_empty() { "Preparing…".into() } else { said } });
+        }
+        if self.update_ui.failed {
+            return Some(UpdateBox::Failed { said });
+        }
+        if status.is_some_and(|s| s.move_to_applications) {
+            return Some(UpdateBox::MoveFirst);
+        }
+        let version = self.update_available.clone()?;
+        Some(UpdateBox::Ready { version, can: status.is_none_or(|s| s.can_update), advice: status.map(|s| s.advice.clone()).unwrap_or_default() })
+    }
+}
+
+impl App {
+    pub(super) fn updates_card_h(&self) -> f32 {
+        let rollback = self.update_ui.status.as_ref().is_some_and(|s| s.rollback_available);
+        48.0 + 2.0 * 36.0 + if rollback { 44.0 } else { 0.0 } + 26.0 + 14.0
+    }
+
+    /// Advanced > Updates: whether to look for new versions (at most once
+    /// a day) and whether to install them without asking; going back to
+    /// the previous version when one is kept.
+    pub(super) fn updates_card(&mut self, ui: &mut Ui, r: Rect) {
+        let c = super::pages::card(ui, r, "Updates");
+        let Some(status) = self.update_ui.status.clone() else {
+            ui.painter().text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, "Checking how updates work here…", regular(T_BODY), INK2);
+            return;
+        };
+        let busy = self.busy.contains(&Job::Update) || self.busy.contains(&Job::UpdateSettings);
+        let row = |k: f32| Rect::from_min_size(pos2(c.left(), c.top() - 6.0 + k * 36.0), vec2(c.width(), 36.0));
+        if widgets::switch(ui, row(0.0), Id::unique("update-check"), "Look for updates", status.check, !busy).clicked() {
+            self.busy.push(Job::UpdateSettings);
+            self.link.update_preference(false, !status.check);
+        }
+        if widgets::switch(ui, row(1.0), Id::unique("update-auto"), "Install them without asking", status.install_automatically, !busy && status.check && status.can_update).clicked() {
+            self.busy.push(Job::UpdateSettings);
+            self.link.update_preference(true, !status.install_automatically);
+        }
+        let mut y = c.top() - 6.0 + 2.0 * 36.0 + 8.0;
+        if status.rollback_available {
+            let label = "Go back to the previous version";
+            let b = Rect::from_min_size(pos2(c.left(), y), vec2(button_width(ui, label), 32.0));
+            if button(ui, b, Id::unique("update-rollback"), label, Look::Quiet, !busy, None).clicked() {
+                self.busy.push(Job::Update);
+                self.link.rollback_update();
+            }
+            y += 44.0;
+        }
+        let note = if status.can_update { "At most once a day. Installing restarts oneMK for a few seconds." } else { status.advice.as_str() };
+        ui.painter().text(pos2(c.left(), y + 6.0), Align2::LEFT_CENTER, fit(ui.painter(), note, &regular(T_META), c.width()), regular(T_META), INK3);
     }
 }
