@@ -89,7 +89,7 @@ impl App {
             title_row(ui, c, &status.name, room);
             let b = one_mk_proto::Desktop::new(status.screens.clone());
             let text = match status.screens.len() {
-                0 => "Its screen size isn't known yet: one·mk learns it once input sharing has started.".to_owned(),
+                0 => "Its screen size isn't known yet: oneMK learns it once input sharing has started.".to_owned(),
                 1 => format!("One monitor, {} × {}.", b.bounds().w, b.bounds().h),
                 n => format!("{n} monitors, {} × {} in all.", b.bounds().w, b.bounds().h),
             };

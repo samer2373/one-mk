@@ -3,12 +3,12 @@
 ; Installs for the current user only (no administrator rights needed).
 [Setup]
 AppId={{6B1F3C52-0D4A-4E8B-9C7A-1E2D5A4F7B90}
-AppName=one·mk
+AppName=oneMK
 AppVersion={#AppVersion}
 AppPublisher=Samer Abu-Sleem
 AppPublisherURL=https://github.com/samer2373/one-mk
 DefaultDirName={localappdata}\Programs\one-mk
-DefaultGroupName=one·mk
+DefaultGroupName=oneMK
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -31,14 +31,14 @@ Source: "{#ReleaseDir}\one-mk-tray.exe"; DestDir: "{app}"
 Source: "{#ReleaseDir}\one-mk-app.exe"; DestDir: "{app}"
 
 [Icons]
-Name: "{group}\one·mk"; Filename: "{app}\one-mk-app.exe"
-Name: "{autodesktop}\one·mk"; Filename: "{app}\one-mk-app.exe"; Tasks: desktopicon
+Name: "{group}\oneMK"; Filename: "{app}\one-mk-app.exe"
+Name: "{autodesktop}\oneMK"; Filename: "{app}\one-mk-app.exe"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addpath; Check: NeedsPath(ExpandConstant('{app}'))
 
 [Run]
-Filename: "{app}\one-mk-app.exe"; Description: "Open one·mk"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\one-mk-app.exe"; Description: "Open oneMK"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; Takes out the Explorer "Send to" entries `one-mk integrate` wrote (only

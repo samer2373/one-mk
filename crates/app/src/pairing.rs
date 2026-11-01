@@ -61,7 +61,7 @@ fn plain(why: &str) -> String {
 }
 
 /// What the window says when `one-mk pair` stops without saying why.
-pub const STOPPED: &str = "one·mk stopped unexpectedly while pairing. Try again.";
+pub const STOPPED: &str = "oneMK stopped unexpectedly while pairing. Try again.";
 
 /// The short id (`abcd-ef01`) of a full fingerprint, as status reports it.
 fn short(fp: &str) -> String {

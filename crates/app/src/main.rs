@@ -1,4 +1,4 @@
-//! `one-mk-app`: the one·mk window. It shows your computers on a desk,
+//! `one-mk-app`: the oneMK window. It shows your computers on a desk,
 //! lets you arrange them, pair new ones and send files by dropping them on
 //! a computer. It only talks to the running `one-mk` (through its control
 //! channel and the `one-mk` program), so closing it changes nothing, and it
@@ -47,7 +47,7 @@ fn main() {
         if arg == "--home" { let _ = input.next(); } else { args.push(arg); }
     }
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("one·mk window — arrange computers, pair and manage sharing\n\nUsage: one-mk-app [OPTIONS]\n\nOptions:\n      --home DIR  Use this settings folder (or ONE_MK_HOME)\n  -h, --help      Show this help\n  -V, --version   Show the version\n\nClosing the window does not stop sharing. Use Stop service to stop sharing entirely.");
+        println!("oneMK window — arrange computers, pair and manage sharing\n\nUsage: one-mk-app [OPTIONS]\n\nOptions:\n      --home DIR  Use this settings folder (or ONE_MK_HOME)\n  -h, --help      Show this help\n  -V, --version   Show the version\n\nClosing the window does not stop sharing. Use Stop service to stop sharing entirely.");
         return;
     }
     if args.iter().any(|arg| arg == "--version" || arg == "-V") {
@@ -82,7 +82,7 @@ fn main() {
     let options = eframe::NativeOptions {
         multisampling,
         viewport: chrome::viewport(egui::ViewportBuilder::default())
-            .with_title("one·mk")
+            .with_title("oneMK")
             .with_app_id("one-mk")
             .with_inner_size(size)
             .with_icon(window_icon())

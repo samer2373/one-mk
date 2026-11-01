@@ -27,9 +27,9 @@ Get it first. Every release has a file for each system (the
 
 | System | File | Notes |
 |---|---|---|
-| macOS, Apple silicon / Intel | `one-mk-aarch64-apple-darwin.dmg` / `one-mk-x86_64-apple-darwin.dmg` | Open it, drag one·mk onto Applications, then open one·mk; the window guides you through the rest |
+| macOS, Apple silicon / Intel | `one-mk-aarch64-apple-darwin.dmg` / `one-mk-x86_64-apple-darwin.dmg` | Open it, drag oneMK onto Applications, then open oneMK; the window guides you through the rest |
 | Windows 10/11, 64-bit | `one-mk-x86_64-pc-windows-msvc-setup.exe` | Installs for you alone, into `%LOCALAPPDATA%\Programs\one-mk` |
-| Debian, Ubuntu and relatives | `one-mk-x86_64-unknown-linux-gnu.deb` | `sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb`, then open one·mk from the apps menu: the first launch sets up start at login for you |
+| Debian, Ubuntu and relatives | `one-mk-x86_64-unknown-linux-gnu.deb` | `sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb`, then open oneMK from the apps menu: the first launch sets up start at login for you |
 | Any Linux | `one-mk-x86_64-unknown-linux-gnu.AppImage` | `chmod +x` it and run it; with no arguments it opens the window, otherwise it is `one-mk` |
 | Other Linux, by hand | `one-mk-x86_64-unknown-linux-gnu.tar.gz` (and `.zip` on Windows) | Just the programs |
 
@@ -39,15 +39,15 @@ On macOS and Linux the one-line installer picks the right file:
 curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh
 ```
 
-On a Mac, the easy way is the disk image: open the `.dmg`, drag **one·mk**
+On a Mac, the easy way is the disk image: open the `.dmg`, drag **oneMK**
 onto Applications as the window shows, then open it from Applications. The
 one-line installer above does the same for you. Either way, the first time the
 window opens it sets itself up (starts at login, runs in the background); you
 only pair from the window, and never need the terminal. macOS asks for
 Accessibility permission the
-first time: turn on one·mk in System Settings > Privacy & Security >
+first time: turn on oneMK in System Settings > Privacy & Security >
 Accessibility. If an update was not signed with an Apple Developer ID,
-macOS may ask again after it: remove one·mk from that list and add it back.
+macOS may ask again after it: remove oneMK from that list and add it back.
 
 Or build it yourself (see Building). How each package is made, and which
 are untested, is in [docs/PACKAGING.md](docs/PACKAGING.md).
@@ -890,7 +890,7 @@ press), and can try the rules before they are used. Details and the design:
 ## The window (optional)
 
 `one-mk-app` shows your computers standing on a desk, as they are arranged.
-Open it from the tray ("Open one·mk…", or a left click on Linux) or run
+Open it from the tray ("Open oneMK…", or a left click on Linux) or run
 `one-mk-app`. In it you can:
 
 - drag a computer to the side it is really on (right-click it for above or
@@ -973,11 +973,11 @@ The menu shows:
   desk: 45%");
 - **Switch to <computer>** and **Send clipboard to <computer>** for each
   connected computer (**Switch back here** while another one has control);
-- **Open one·mk…**, which opens the window;
+- **Open oneMK…**, which opens the window;
 - **Broadcast to all computers** (a checkmark; while a computer is
   connected), and the headline "Broadcasting to N computers" while it is on;
 - **Keep the pointer here** (a checkmark), **Lock every screen**, **Take
-  back control**, **Start one·mk** (when it is not running), **Pair a
+  back control**, **Start oneMK** (when it is not running), **Pair a
   computer…** (when none is paired; it opens the window) and **Start at
   login**;
 - **Quit tray**, which closes only the tray, not one-mk.

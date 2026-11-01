@@ -100,7 +100,7 @@ fn history_failure(status: Option<&Status>) -> Option<&str> {
 /// What the history area says instead of a list, if anything. An empty list
 /// while saved history failed to load is that failure, not "nothing yet".
 fn history_message<'a>(online: bool, history: Option<&'a Result<Vec<crate::daemon::HistoryItem>, String>>, enabled: bool, failure: Option<&'a str>) -> Option<&'a str> {
-    if !online { return Some("Start one·mk to see clipboard history."); }
+    if !online { return Some("Start oneMK to see clipboard history."); }
     match history {
         None => Some("Loading history…"),
         Some(Err(error)) => Some(error.as_str()),
@@ -129,6 +129,6 @@ mod tests {
         assert_eq!(history_failure(Some(&routine)), None);
         assert_eq!(history_failure(None), None);
         assert_eq!(history_message(true, Some(&empty), true, None), Some("No clipboard items yet. Copy something, then choose Refresh."));
-        assert_eq!(history_message(false, Some(&empty), true, failure), Some("Start one·mk to see clipboard history."));
+        assert_eq!(history_message(false, Some(&empty), true, failure), Some("Start oneMK to see clipboard history."));
     }
 }

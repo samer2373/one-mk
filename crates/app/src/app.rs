@@ -70,7 +70,7 @@ impl Tab {
     fn desk(self) -> bool {
         matches!(self, Tab::Desk | Tab::Files | Tab::Layout)
     }
-    /// Tabs that mean something while one·mk is off.
+    /// Tabs that mean something while oneMK is off.
     fn when_off(self) -> bool {
         matches!(self, Tab::Desk | Tab::Files | Tab::Keys | Tab::Health | Tab::Advanced)
     }
@@ -545,7 +545,7 @@ impl App {
                     let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).collect());
                     self.fonts.cover(&self.ctx, names.iter().map(String::as_str));
                     // A measurement belongs to one connection: once that
-                    // computer goes offline (or one·mk stops) it means nothing.
+                    // computer goes offline (or oneMK stops) it means nothing.
                     let online: Vec<String> = self.running().map_or(vec![], |s| s.peers.iter().filter(|p| p.online).map(|p| p.id.clone()).collect());
                     self.latency.retain(|id| online.contains(id));
                     self.failed_measure.retain(|id| online.contains(id));
@@ -556,7 +556,7 @@ impl App {
                 Event::Autostart(on) => self.autostart = Some(on),
                 Event::Setup(report) => match report.problems().first() {
                     Some(problem) => self.toast_error(format!("Setup didn't finish. {problem}"), None, now),
-                    None if report.changed() => self.toast("one·mk is set up and starts when you log in.", now),
+                    None if report.changed() => self.toast("oneMK is set up and starts when you log in.", now),
                     None => {}
                 },
                 Event::UpdateAvailable(version) => self.update_available = version,
@@ -656,9 +656,9 @@ impl App {
                 let word = if on { "on" } else { "off" };
                 self.toast_error(format!("Couldn't turn {word} start at login."), e, now);
             }
-            Job::Start => self.toast_error("one·mk didn't start.", e, now),
+            Job::Start => self.toast_error("oneMK didn't start.", e, now),
             Job::Forget(name) => self.toast_error(format!("Couldn't remove {name}. Try again."), e, now),
-            Job::Stop => self.toast_error("Couldn't stop one·mk. If it was started before an update, quit it once from Activity Monitor or Task Manager; after that Stop works.", e, now),
+            Job::Stop => self.toast_error("Couldn't stop oneMK. If it was started before an update, quit it once from Activity Monitor or Task Manager; after that Stop works.", e, now),
             Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
             Job::Profile { verb, name } => {
                 let what = match verb {
@@ -752,11 +752,11 @@ impl App {
             self.just_paired = Some((id.clone(), now));
             // Selecting it measures it: the first crossing, labelled, is the payoff.
             self.selected = Some(id);
-            // Pairing is for connecting: bring one·mk up if it isn't.
+            // Pairing is for connecting: bring oneMK up if it isn't.
             if matches!(self.status, Some(None)) && !self.busy.contains(&Job::Start) {
                 self.busy.push(Job::Start);
                 self.link.start();
-                self.toast(format!("Paired with {name}. Starting one·mk…"), now);
+                self.toast(format!("Paired with {name}. Starting oneMK…"), now);
             }
             let dir = self.link.dir.clone();
             std::thread::spawn(move || {
@@ -864,7 +864,7 @@ impl App {
             me.name = s.name.clone();
         }
         me.online = !off;
-        me.set_subtitle(if off { "one·mk is off" } else if self.tab == Tab::Files { "Here" } else { "This computer" }, now);
+        me.set_subtitle(if off { "oneMK is off" } else if self.tab == Tab::Files { "Here" } else { "This computer" }, now);
 
         // New computers come in staggered by how far they are from this one.
         let opening = self.scene.opening(now);
@@ -990,7 +990,7 @@ impl App {
                 let step = Step::Searching { me: me.clone(), port: None };
                 self.pairing = Some(PairUi { proc: Some(proc), step, since: now, opened: now, hint: false, retry: None, me, port: None });
             }
-            Err(e) => self.toast_error("Couldn't start pairing. Try restarting one·mk.", Some(e.to_string()), now),
+            Err(e) => self.toast_error("Couldn't start pairing. Try restarting oneMK.", Some(e.to_string()), now),
         }
     }
 
@@ -1006,7 +1006,7 @@ pub fn embedded(bytes: &[u8]) -> ([usize; 2], &[u8]) {
     ([n(0), n(4)], &bytes[8..])
 }
 
-/// The brand lockup (the Crossing mark and the one·mk wordmark), drawn at
+/// The brand lockup (the Crossing mark and the oneMK wordmark), drawn at
 /// 2x for sharpness on high-density screens.
 pub fn lockup_texture(ctx: &egui::Context) -> egui::TextureHandle {
     let (size, px) = embedded(include_bytes!("../assets/lockup.rgba"));
@@ -1143,7 +1143,7 @@ impl App {
             }
             Some(i) if online.contains(&i) => self.send_to(i, paths),
             _ if online.is_empty() => {
-                self.toast_error("No computer is connected right now. Start one·mk on the other computer, then drop the files again.", None, now)
+                self.toast_error("No computer is connected right now. Start oneMK on the other computer, then drop the files again.", None, now)
             }
             _ if online.len() == 1 => self.send_to(online[0], paths),
             _ => self.pending_drop = Some((paths, now)),
@@ -1393,7 +1393,7 @@ impl App {
         let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1).to_owned();
         let sub = match (self.tab, self.status.as_ref()) {
             (_, None) => String::new(),
-            (_, Some(None)) => "one·mk is off".to_owned(),
+            (_, Some(None)) => "oneMK is off".to_owned(),
             (Tab::Desk | Tab::Layout, Some(Some(s))) => match s.peers.len() {
                 0 => "nothing paired yet".to_owned(),
                 n => format!("{} of {n} connected", s.peers.iter().filter(|p| p.online).count()),
@@ -1425,7 +1425,7 @@ impl App {
         let narrow = self.ctx.content_rect().width() < 1100.0;
         let (label, look, enabled, job) = match self.status.as_ref() {
             Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
-            Some(None) => ("Start one·mk", Look::Primary, true, Some(Job::Start)),
+            Some(None) => ("Start oneMK", Look::Primary, true, Some(Job::Start)),
             _ if broadcasting && self.busy.contains(&Job::Broadcast(false)) => ("Stopping…", Look::Primary, false, None),
             _ if broadcasting => (if narrow { "Keyboard stop" } else { "Use keyboard to stop" }, Look::Quiet, false, None),
             _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
@@ -1451,9 +1451,9 @@ impl App {
     // ---------- the panel ----------
 
     fn headline_text(&self) -> (String, String) {
-        let Some(s) = self.status.as_ref() else { return ("Looking for one·mk…".into(), String::new()) };
+        let Some(s) = self.status.as_ref() else { return ("Looking for oneMK…".into(), String::new()) };
         let Some(s) = s else {
-            return ("one·mk isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
+            return ("oneMK isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
         };
         if !s.broadcast.is_empty() {
             let title = match &s.broadcast[..] {
@@ -1493,7 +1493,7 @@ impl App {
             [] if s.peers.is_empty() => ("No computers paired yet".into(), "Choose Pair a computer, then do the same on the other computer.".into()),
             [] => (
                 "Waiting for your computers".into(),
-                "Paired computers appear here when one·mk is running on them and they're on the same network.".into(),
+                "Paired computers appear here when oneMK is running on them and they're on the same network.".into(),
             ),
             [p] if self.apart.contains(&p.id) => (
                 format!("{} is apart from this computer", p.name),
@@ -1720,11 +1720,11 @@ impl App {
         let (title, sub, buttons, focus): (String, String, Vec<(String, Look, Act)>, usize) = match &pair.step {
             Step::Searching { .. } | Step::Hint => {
                 let me = if pair.me.is_empty() { String::new() } else { format!(" This one shows up there as “{}”.", pair.me) };
-                let mut sub = format!("On the other computer, open one·mk and choose Pair a computer.{me}");
+                let mut sub = format!("On the other computer, open oneMK and choose Pair a computer.{me}");
                 if let Some(why) = &pair.retry {
                     sub += &format!("\n\nThat attempt didn't finish: {why}. Still looking.");
                 } else if pair.hint {
-                    sub += "\n\nAllow one·mk through the firewall on both computers and keep them on the same network.";
+                    sub += "\n\nAllow oneMK through the firewall on both computers and keep them on the same network.";
                     if let Some(port) = pair.port {
                         sub += &format!(" This computer's pairing port is {port}.");
                     }
@@ -1748,7 +1748,7 @@ impl App {
             Step::Paired { name, .. } => {
                 let side = self.running().and_then(|s| s.peers.iter().find(|p| &p.name == name)).map(|p| edge_word(p.side));
                 let sub = match (self.running(), side) {
-                    (None, _) => "Start one·mk to connect.".into(),
+                    (None, _) => "Start oneMK to connect.".into(),
                     (_, Some(e)) => format!("Move the pointer off the {e} edge to cross over."),
                     _ => "It joins the desk in a moment.".into(),
                 };
@@ -2331,7 +2331,7 @@ mod debug {
             app.pending_drop = Some(((0..n).map(|i| PathBuf::from(format!("/tmp/file{i}"))).collect(), now));
         }
         if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
-            app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("one-mk didn't answer within 3 seconds".into()), now);
+            app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("oneMK didn't answer within 3 seconds".into()), now);
         }
         if ready && var("ONE_MK_APP_BROADCAST").is_some() && now > 1.0 && once(&ctx, "broadcast") {
             let on = !app.broadcasting();

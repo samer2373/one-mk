@@ -95,7 +95,7 @@ fn stop_daemon(home: &Path) -> Result<()> {
 
 pub(super) fn apply_bundle(manifest: &Manifest, release: &Release, origin: &Url, executable: &Path, home: &Path) -> Result<()> {
     let target = bundle(executable)?;
-    ensure!(!policy::translocated(&target.to_string_lossy()), "Move one·mk to Applications before updating");
+    ensure!(!policy::translocated(&target.to_string_lossy()), "Move oneMK to Applications before updating");
     let _lock = target_lock(&target).context("This app's folder can't be changed by your account. Choose Download instead")?;
     let previous = backup(&target)?;
     ensure!(!Disk.exists(&previous)? && !receipt(&target).try_exists()?, "The previous app is still waiting for a successful restart");

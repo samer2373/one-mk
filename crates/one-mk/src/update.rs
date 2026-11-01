@@ -591,7 +591,7 @@ fn window_status(home: &Path) -> Result<policy::UpdateStatus> {
         check: settings.check, install_automatically: settings.install_automatically,
         available: policy::cached_version(home, env!("CARGO_PKG_VERSION")), error: state.error,
         can_update: kind.automatic() && !movable, move_to_applications: movable, rollback_available,
-        advice: if movable { "Move one·mk to Applications before updating".into() } else { kind.advice().into() },
+        advice: if movable { "Move oneMK to Applications before updating".into() } else { kind.advice().into() },
     })
 }
 
@@ -642,7 +642,7 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
         #[cfg(target_os = "macos")]
         if kind == InstallKind::MacApp { return bundle::rollback_bundle(&target, home); }
         rollback(&target)?;
-        println!("Previous one·mk restored. Restarting…");
+        println!("Previous oneMK restored. Restarting…");
         return Ok(());
     }
     ensure!(crate::update_key::PRODUCTION_KEY, "release verification is not configured: publisher must replace the test key; install the complete release manually");
@@ -660,7 +660,7 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
     #[cfg(target_os = "macos")]
     if kind == InstallKind::MacApp { return bundle::apply_bundle(&manifest, &release, &origin, &target, home); }
     apply(&manifest, &release, &origin, &target, kind)?;
-    println!("one·mk {} installed. Restarting…", manifest.version);
+    println!("oneMK {} installed. Restarting…", manifest.version);
     Ok(())
 }
 

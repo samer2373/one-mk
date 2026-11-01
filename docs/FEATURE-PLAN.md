@@ -475,7 +475,7 @@ tests, cross-review by the other model, full validation before merging.
   `crates/app/src/app/links.rs` draws it.
 - States: Smooth (95th percentile at most 40 ms, no loss), Some stalls (over
   40 ms, or any lost packet), Slow (over 100 ms, or 8 lost packets), still
-  measuring (under 3 readings), offline, and "Restart one·mk" for a daemon
+  measuring (under 3 readings), offline, and "Restart oneMK" for a daemon
   from before this (after an upgrade). Amber only for the last two warnings
   and always with the word.
 - The Desk panel is taller (the inspector needed 58 pt more); Layout, Files and

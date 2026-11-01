@@ -59,7 +59,7 @@ impl Snapshot {
 
     /// The first line of the menu, and the icon's tooltip.
     pub fn headline(&self) -> String {
-        let Some(s) = &self.status else { return "one·mk isn't running".into() };
+        let Some(s) = &self.status else { return "oneMK isn't running".into() };
         match s.broadcast.len() {
             0 => {}
             1 => return format!("Broadcasting to {}", s.broadcast[0]),
@@ -122,7 +122,7 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
         m.extend(s.transfers.iter().map(|t| Entry::Label(transfer_line(t))));
     }
     m.push(Entry::Separator);
-    m.push(Entry::Item { label: "Open one·mk…".into(), action: Action::OpenApp, checked: None });
+    m.push(Entry::Item { label: "Open oneMK…".into(), action: Action::OpenApp, checked: None });
     m.push(Entry::Separator);
     match &snap.status {
         Some(s) => {
@@ -176,13 +176,13 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
             }
             m.push(Entry::Item { label: "Lock every screen".into(), action: Action::LockAll, checked: None });
             m.push(Entry::Item { label: "Take back control".into(), action: Action::TakeBack, checked: None });
-            m.push(Entry::Item { label: "Stop one-mk".into(), action: Action::Stop, checked: None });
+            m.push(Entry::Item { label: "Stop oneMK".into(), action: Action::Stop, checked: None });
         }
-        None => m.push(Entry::Item { label: "Start one·mk".into(), action: Action::StartDaemon, checked: None }),
+        None => m.push(Entry::Item { label: "Start oneMK".into(), action: Action::StartDaemon, checked: None }),
     }
     m.push(Entry::Separator);
     m.push(Entry::Item { label: "Start at login".into(), action: Action::ToggleAutostart, checked: Some(snap.autostart) });
-    m.push(Entry::Item { label: "Quit one·mk".into(), action: Action::Quit, checked: None });
+    m.push(Entry::Item { label: "Quit oneMK".into(), action: Action::Quit, checked: None });
     m
 }
 
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn headlines() {
-        assert_eq!(Snapshot::default().headline(), "one·mk isn't running");
+        assert_eq!(Snapshot::default().headline(), "oneMK isn't running");
         assert_eq!(snap(vec![]).headline(), "No computers paired yet");
         assert_eq!(snap(vec![peer("a", Side::Left, false)]).headline(), "Waiting for your computers");
         assert_eq!(snap(vec![peer("desk", Side::Right, true)]).headline(), "Connected to desk (on your right)");

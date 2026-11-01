@@ -18,7 +18,7 @@ install -m 644 docs/brand/app-icon/windows-linux/ico-png/onemk-256.png "$root/us
 cat > "$root/usr/share/applications/one-mk.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=one·mk
+Name=oneMK
 Comment=Share one mouse and keyboard across your computers
 Exec=one-mk-app
 Icon=one-mk

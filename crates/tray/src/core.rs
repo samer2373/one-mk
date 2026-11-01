@@ -97,7 +97,7 @@ impl Ctx {
     fn ask(&self, req: Request) -> anyhow::Result<()> {
         let timeout = req.reply_timeout();
         match client::request(&self.dir, req, timeout)? {
-            None => anyhow::bail!("one-mk is not running"),
+            None => anyhow::bail!("oneMK is not running"),
             Some(r) if r.starts_with("error") => anyhow::bail!("{}", r.trim_start_matches("error").trim()),
             Some(_) => Ok(()),
         }
@@ -115,7 +115,7 @@ impl Ctx {
         cmd.args(["forget", peer]).args(self.home_args());
         let out = proc::hide_window(&mut cmd).output()?;
         if !out.status.success() {
-            anyhow::bail!("one-mk forget failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+            anyhow::bail!("Couldn't remove the computer: {}", String::from_utf8_lossy(&out.stderr).trim());
         }
         client::request(&self.dir, Request::Reload, Duration::from_secs(5)).map(drop)
     }
@@ -126,7 +126,7 @@ impl Ctx {
         cmd.args(["layout", peer, side]).args(self.home_args());
         let out = proc::hide_window(&mut cmd).output()?;
         if !out.status.success() {
-            anyhow::bail!("one-mk layout failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+            anyhow::bail!("Couldn't change the layout: {}", String::from_utf8_lossy(&out.stderr).trim());
         }
         Ok(())
     }
@@ -136,7 +136,7 @@ impl Ctx {
             install::uninstall()?;
         } else {
             if !self.daemon.is_absolute() {
-                anyhow::bail!("cannot find one-mk next to the tray; run `one-mk install` instead");
+                anyhow::bail!("oneMK's service is missing; reinstall oneMK");
             }
             let running = client::is_running(&self.dir);
             install::install(&Launch {

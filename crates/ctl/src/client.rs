@@ -11,7 +11,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Written in the settings folder when the tray quits one·mk: an open
+/// Written in the settings folder when the tray quits oneMK: an open
 /// window closes when it finds one newer than itself.
 pub const QUIT_FILE: &str = "quit";
 

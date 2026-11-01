@@ -1,6 +1,6 @@
-# dmgbuild settings for the one·mk installer window (scripts/bundle-mac.sh).
+# dmgbuild settings for the oneMK installer window (scripts/bundle-mac.sh).
 #
-#   dmgbuild -s scripts/dmg/settings.py -D app=one-mk.app one·mk out.dmg
+#   dmgbuild -s scripts/dmg/settings.py -D app=one-mk.app oneMK out.dmg
 #
 # dmgbuild runs this file with exec(), so there is no __file__ and no import
 # of a sibling module: everything the window needs is written out here, and

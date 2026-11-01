@@ -174,7 +174,7 @@ impl App {
         if !peer.online {
             p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, "—", big.clone(), INK3);
             p.text(pos2(body.left(), body.top() + 46.0), Align2::LEFT_CENTER, "Not found on the network", regular(T_BODY), INK2);
-            let hint = fit(&p, "Start one·mk on it, on the same Wi-Fi.", &regular(T_META), col_w);
+            let hint = fit(&p, "Start oneMK on it, on the same Wi-Fi.", &regular(T_META), col_w);
             p.text(pos2(body.left(), body.top() + 66.0), Align2::LEFT_CENTER, hint, regular(T_META), INK3);
         } else if let Some(s) = summary {
             let n = rtt::ms_number(s.now_us);
@@ -190,7 +190,7 @@ impl App {
                 p.text(pos2(body.left() + ww, body.top() + 48.0), Align2::LEFT_CENTER, fit(&p, &usual, &regular(T_BODY), col_w - ww), regular(T_BODY), INK3);
             }
         } else {
-            let text = if self.older_daemon(&peer.id) { "Restart one·mk to see latency" } else { "Measuring…" };
+            let text = if self.older_daemon(&peer.id) { "Restart oneMK to see latency" } else { "Measuring…" };
             p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, "…", big, INK3);
             p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, fit(&p, text, &regular(T_BODY), col_w), regular(T_BODY), INK2);
         }

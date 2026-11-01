@@ -25,8 +25,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleName</key><string>one·mk</string>
-  <key>CFBundleDisplayName</key><string>one·mk</string>
+  <key>CFBundleName</key><string>oneMK</string>
+  <key>CFBundleDisplayName</key><string>oneMK</string>
   <key>CFBundleIdentifier</key><string>com.one-mk.app</string>
   <key>CFBundleExecutable</key><string>one-mk-app</string>
   <key>CFBundleIconFile</key><string>onemk</string>
@@ -35,8 +35,14 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>LSHasLocalizedDisplayName</key><true/>
 </dict></plist>
 PLIST
+# Finder, the Dock and Launchpad show the bundle's file name unless it has
+# a localized display name: they show "oneMK" while the file stays
+# one-mk.app (updates and login items find it by that name).
+mkdir -p "$app/Contents/Resources/en.lproj"
+printf '"CFBundleDisplayName" = "oneMK";\n"CFBundleName" = "oneMK";\n' > "$app/Contents/Resources/en.lproj/InfoPlist.strings"
 
 if [ -n "${SIGN_IDENTITY:-}" ]; then
   codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$app"
@@ -87,13 +93,13 @@ if [ "$use_dmgbuild" = 1 ]; then
     -D "app=$app" \
     -D "icon=$root/docs/brand/app-icon/macos/onemk.icns" \
     -D "background=$root/scripts/dmg/background.png" \
-    "one·mk" "$dmg"
+    "oneMK" "$dmg"
 else
   echo "note: writing the plain .dmg without the designed window: $why" >&2
   mkdir "$tmp/dmg"
   cp -R "$app" "$tmp/dmg/"
   ln -s /Applications "$tmp/dmg/Applications"
-  hdiutil create -quiet -volname "one·mk" -srcfolder "$tmp/dmg" -ov -format UDZO "$dmg"
+  hdiutil create -quiet -volname "oneMK" -srcfolder "$tmp/dmg" -ov -format UDZO "$dmg"
 fi
 
 # Open what was built before it is signed: the app must be in it, intact, next to

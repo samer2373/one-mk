@@ -100,7 +100,7 @@ impl App {
         }
         match self.summary_of(&peer.id) {
             Some(s) => s.describe(&peer.name),
-            None if self.older_daemon(&peer.id) => format!("Latency to {}: not shown, restart one·mk to see it.", peer.name),
+            None if self.older_daemon(&peer.id) => format!("Latency to {}: not shown, restart oneMK to see it.", peer.name),
             None => format!("Latency to {}: still measuring.", peer.name),
         }
     }
@@ -143,7 +143,7 @@ impl App {
                 p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, "offline", regular(T_META), INK2);
             } else {
                 let q = summary.and_then(|s| s.quality());
-                let waiting = if self.older_daemon(&peer.id) { "Restart one·mk" } else { "Measuring…" };
+                let waiting = if self.older_daemon(&peer.id) { "Restart oneMK" } else { "Measuring…" };
                 let word = q.map_or(waiting, Quality::word);
                 p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, word, regular(T_META), if q.is_some() { tone(q) } else { INK2 });
                 if let Some(s) = summary {

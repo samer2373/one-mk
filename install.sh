@@ -41,7 +41,7 @@ else
         *":$HOME/.local/bin:"*) ;;
         *) echo "Add it to your PATH:  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
     esac
-    echo "Opening one·mk. It sets itself up the first time, then you pair from the window."
+    echo "Opening oneMK. It sets itself up the first time, then you pair from the window."
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
         nohup "$HOME/.local/bin/one-mk-app" >/dev/null 2>&1 &
     else

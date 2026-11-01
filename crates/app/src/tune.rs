@@ -67,7 +67,7 @@ pub struct SeenDevice {
 pub fn devices_unavailable_text(note: Option<&str>) -> String {
     match note {
         Some(n) if n.contains("merges") => {
-            "Not on this desktop: it mixes all keyboards and mice together before one-mk sees them, so one-mk can't tell \
+            "Not on this desktop: it mixes all keyboards and mice together before oneMK sees them, so one-mk can't tell \
              which one you used. This works in an X11 session, on Windows and on macOS."
                 .into()
         }
@@ -1704,7 +1704,7 @@ fn fold(s: &str) -> String {
     if f.is_empty() { s.trim().to_owned() } else { f }
 }
 
-/// Everything in the list: what one·mk can do, then every named key
+/// Everything in the list: what oneMK can do, then every named key
 /// (and, for a mouse button, the other buttons and media keys first).
 pub fn choices(buttons: bool) -> Vec<Choice> {
     let choice = |label: &str, value: &str, extra: &[&str]| Choice {
@@ -2267,7 +2267,7 @@ to = "f1"
 
     #[test]
     fn devices_unavailable_reads_plainly() {
-        let merged = "per-device rules are not available on this desktop: the desktop merges all keyboards and mice before one-mk sees them";
+        let merged = "per-device rules are not available on this desktop: the desktop merges all keyboards and mice before oneMK sees them";
         assert!(devices_unavailable_text(Some(merged)).starts_with("Not on this desktop: it mixes all keyboards and mice together"));
         assert_eq!(devices_unavailable_text(Some("the null input backend captures no keyboard or mouse")), "The null input backend captures no keyboard or mouse.");
         assert!(!devices_unavailable_text(None).is_empty());

@@ -321,9 +321,9 @@ impl App {
         let row = Rect::from_min_size(pos2(x, y), vec2(w, 28.0));
         let p = ui.painter();
         let (dot, text) = match self.status.as_ref() {
-            None => (INK3, "Looking for one·mk…"),
-            Some(None) => (INK3, "one·mk is off"),
-            Some(Some(_)) => (OK, "one·mk is running"),
+            None => (INK3, "Looking for oneMK…"),
+            Some(None) => (INK3, "oneMK is off"),
+            Some(Some(_)) => (OK, "oneMK is running"),
         };
         p.circle_filled(pos2(row.left() + 14.0, row.center().y), 3.0, dot);
         p.text(pos2(row.left() + 26.0, row.center().y), Align2::LEFT_CENTER, text, regular(T_META), INK2);
@@ -421,9 +421,9 @@ impl App {
             let r = Rect::from_center_size(pos2(cx, by), vec2(40.0, 32.0));
             // What the last attempt said, on hover, with the version.
             let name = match &self.update_output {
-                Some(out) => format!("Update one·mk to {version}\n\n{}", out.trim()),
+                Some(out) => format!("Update oneMK to {version}\n\n{}", out.trim()),
                 None if busy => "Updating…".to_owned(),
-                None => format!("Update one·mk to {version}"),
+                None => format!("Update oneMK to {version}"),
             };
             let resp = widgets::icon_button(ui, r, Id::unique("update"), &name, !busy && !self.sheet_open(), |p, rr, col| icons::draw(p, Icon::Update, Rect::from_center_size(rr.center(), vec2(16.0, 16.0)), col));
             ui.painter().circle_filled(r.right_top() + vec2(-9.0, 7.0), 3.0, SIGNAL);

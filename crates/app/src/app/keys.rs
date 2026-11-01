@@ -650,7 +650,7 @@ impl App {
                 Some(Err(e)) => note(ui, &format!("Couldn't list the keyboards and mice: {e}")),
                 Some(Ok(d)) if !d.available => note(ui, &tune::devices_unavailable_text(d.note.as_deref())),
                 Some(Ok(d)) if !d.devices.iter().any(|x| !x.is_virtual()) => {
-                    note(ui, "None seen yet. A keyboard or mouse shows up here once it has been connected while one-mk runs.");
+                    note(ui, "None seen yet. A keyboard or mouse shows up here once it has been connected while oneMK runs.");
                 }
                 Some(Ok(d)) => {
                     // Devices made by software (X's own XTEST ones) are no
@@ -887,7 +887,7 @@ impl App {
         let c = card.inner;
         let mut y = c.top() - 6.0;
         if self.prefs.unreadable {
-            y += error_line(ui, c.left(), y, c.width(), "Preferences couldn't be read. Changes are paused to keep your saved choices safe. Try restarting one·mk.") + 8.0;
+            y += error_line(ui, c.left(), y, c.width(), "Preferences couldn't be read. Changes are paused to keep your saved choices safe. Try restarting oneMK.") + 8.0;
         }
         if let Some((_, e)) = self.keys.error.clone().filter(|(a, _)| *a == "list") {
             y += error_line(ui, c.left(), y, c.width(), &e) + 8.0;
@@ -1657,7 +1657,7 @@ impl App {
                     let (rects, bottom) = flow(ui, c.left(), y, c.width(), &labels);
                     for (k, r) in rects.iter().enumerate() {
                         let look = if k == 0 { Look::Primary } else { Look::Quiet };
-                        let full = [format!("{name}: press the key or shortcut it gives"), format!("{name}: choose what it does from a list"), format!("{name}: do what it does without one·mk")];
+                        let full = [format!("{name}: press the key or shortcut it gives"), format!("{name}: choose what it does from a list"), format!("{name}: do what it does without oneMK")];
                         if button(ui, *r, Id::unique(("button-act", k)), labels[k], look, !busy, Some(&full[k])).clicked() {
                             match k {
                                 0 => self.keys.capture = Some((Want::Button, Capture::default())),

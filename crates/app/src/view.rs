@@ -333,7 +333,7 @@ impl Prefs {
             clip_html: flag("clipboard", "html", true),
             clip_image: flag("clipboard", "image", true),
             clip_max_mb: num("clipboard", "max_mb", 25).clamp(1, 4096) as u32,
-            // Off unless the file says so: one·mk writes `allow_pull` only when it is on, and
+            // Off unless the file says so: oneMK writes `allow_pull` only when it is on, and
             // a file from before `settings_version = 2` has its old `true` switched off.
             clip_allow_fetch: num("", "settings_version", 1) >= 2 && flag("clipboard", "allow_pull", false),
             clip_skip_sensitive: flag("clipboard", "skip_sensitive", true),
@@ -454,8 +454,8 @@ pub struct Check {
 pub fn window_issue(text: &str) -> String {
     if text.contains("settings.toml") { "Check the options in Advanced, then try again.".into() }
     else if text.contains('`') || ["one-mk run", "one-mk install", "one-mk pair", "one-mk hooks", "one-mk edge", "one-mk send", "one-mk keymap", "one-mk clipboard", "one-mk hotkeys", "one-mk takeback", "one-mk gestures", "one-mk invite", "one-mk join", "one-mk doctor", "sudo ", "chmod "].iter().any(|command| text.contains(command)) {
-        "Review the options in this window, or restart one·mk and try again.".into()
-    } else { text.replace("one-mk", "one·mk") }
+        "Review the options in this window, or restart oneMK and try again.".into()
+    } else { text.replace("one-mk", "oneMK") }
 }
 
 /// What `one-mk doctor --json` found, worst first, keeping its order

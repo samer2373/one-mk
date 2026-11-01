@@ -66,7 +66,7 @@ impl App {
 
     /// This computer: start at login, the pointer kept here, broadcast and
     /// locking every screen. Until another computer is paired (or while
-    /// one·mk is off) only Start at login means anything, so only it shows;
+    /// oneMK is off) only Start at login means anything, so only it shows;
     /// broadcast shows while a computer is connected (or it is on).
     pub(super) fn controls(&mut self, ui: &mut Ui, c: Rect) {
         // This computer's own switches; what acts on every computer at
@@ -310,7 +310,7 @@ impl App {
                     let v = n.to_string();
                     self.set_pref("the clipboard size limit", &["clipboard", "--max-mb", &v], |p| p.clip_max_mb = n);
                 }
-                _ => self.toast_error(format!("“{text}” isn't a size one·mk can use. Type a whole number of MB, like 25."), None, self.now),
+                _ => self.toast_error(format!("“{text}” isn't a size oneMK can use. Type a whole number of MB, like 25."), None, self.now),
             }
         }
         if switch(ui, row(3), Id::unique("file-drop-zones"), "Drop files at screen edges", p.drop_zones, true).clicked() {

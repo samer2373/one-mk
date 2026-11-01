@@ -1,6 +1,6 @@
 # Design review: the window and the tray
 
-An independent review of the one·mk window (`crates/app`) and tray (`crates/tray`) after the wave-1
+An independent review of the oneMK window (`crates/app`) and tray (`crates/tray`) after the wave-1
 features (Desk, Layout, Clipboard & files, Keyboard, Health, Advanced), against
 [the brand guideline](brand/README.md) and general UI craft. It used the `impeccable` critique, audit and
 polish references. They are written for web and mobile, so the detector and browser steps don't apply to an
@@ -36,10 +36,10 @@ controls for each computer and one line saying what Auto does. In a narrow windo
 to Auto / Swap / No swap rather than being cut off (*39*). `ONE_MK_APP_TAB=keyboard` now opens Advanced. *(after: 03-desk-connected, 26-advanced-defaults, 18-many-advanced)*
 
 **M2. The Desk showed controls that do nothing yet.** *(before: 08-nothing-paired, 09-not-running)* With
-nothing paired, or with one·mk off, the Desk still showed "Keep the pointer here", "Gaming mode" and "Lock
+nothing paired, or with oneMK off, the Desk still showed "Keep the pointer here", "Gaming mode" and "Lock
 all". So the very first screen had four switches, three of them meaningless. Gaming mode is also a setting
 you set once, sitting among everyday actions.
-**Fix:** until a computer is paired (and while one·mk is off), only "Start at login" shows. Gaming mode
+**Fix:** until a computer is paired (and while oneMK is off), only "Start at login" shows. Gaming mode
 moved to a "Games" card in Advanced. With computers paired, the Desk column is now "Start at login", "Keep
 the pointer here" and "Lock every screen". *(after: 08-nothing-paired, 09-not-running, 03-desk-connected)*
 
@@ -50,11 +50,11 @@ icon alone it read as the least important row, not the second most.
 tick, and skipped checks the dash. *(after: 25, 34)*
 
 **M4. Health told window users to use the terminal for what the window does itself.** *(before:
-27-health-not-running)* When one·mk was off, the "Program" row offered "Copy command: `one-mk run`", and
-the "Paired computers" row offered `one-mk pair`, while the window's own top bar had "Start one·mk" and
+27-health-not-running)* When oneMK was off, the "Program" row offered "Copy command: `one-mk run`", and
+the "Paired computers" row offered `one-mk pair`, while the window's own top bar had "Start oneMK" and
 "Pair a computer".
-**Fix:** these two checks now show the window's own button ("Start one·mk", "Pair a computer"), with "Choose
-Start one·mk." as the fix text. All other checks keep Copy command. To make this possible, `view::Check`
+**Fix:** these two checks now show the window's own button ("Start oneMK", "Pair a computer"), with "Choose
+Start oneMK." as the fix text. All other checks keep Copy command. To make this possible, `view::Check`
 now carries doctor's `id`. *(after: 27)*
 
 **M5. On the Layout plan, nothing said whose second monitor was whose.** *(before: 29, 30, 41)* A
@@ -72,7 +72,7 @@ does, and that turning it off lines the two up like monitors side by side. The r
 "1:1" became "at the same scale". *(after: 24, 29)*
 
 **M7. The window and the tray used different words for the same things.** *(tray, no screenshot)* The
-window said "Keep the pointer here", "Above/Below", "one·mk isn't running" and "Lock every screen". The tray
+window said "Keep the pointer here", "Above/Below", "oneMK isn't running" and "Lock every screen". The tray
 said "Lock pointer here", "Top/Bottom", "one-mk is not running" and "Lock all computers". With nothing
 paired, the tray's only advice was "Run `one-mk pair` on both computers", a terminal command, although the
 window pairs in one click.
@@ -124,7 +124,7 @@ clipboard ___ MB", a label that makes sense outside the group. *(after: 04, 33)*
 
 - **Hierarchy.** Each tab has one job: Desk (where things are, cross over), Layout (line edges up),
   Clipboard & files, Health (what's wrong and the fix), Advanced (set once). There is one amber action in the
-  top bar, and it follows the state: Pair a computer → Pair another (quiet) → Start one·mk → Take back.
+  top bar, and it follows the state: Pair a computer → Pair another (quiet) → Start oneMK → Take back.
 - **Colour (brand).** Amber appears only for the main action, crossing edges, the pairing outline,
   progress and focus. Switches show "on" in ink, not amber. Status is shown by shape (dot or ring), never by
   colour alone.
@@ -162,7 +162,7 @@ colours exact.
 |---|---|---|
 | Body sub-text (INK2 on panel) | 7.30:1 | 7.30:1 |
 | Field placeholder ("Name this layout") | 6.34:1 | 6.34:1 |
-| Disabled tab label (one·mk off) | **2.76:1** | 4.10:1 |
+| Disabled tab label (oneMK off) | **2.76:1** | 4.10:1 |
 | Disabled "Lock all" label | 6.41:1 | (hidden while off) |
 | Focus ring (amber) against the raised track | 9.84:1 | 9.84:1 |
 | Health "Warning" word | 7.62:1 | 7.62:1 |
@@ -241,7 +241,7 @@ redrawn once a second, never animated, so reduced motion changes nothing.
 |---|---|---|---|
 | l1 | first draft of the Desk card | The inspector had no room left: the card sat below the panel's bottom edge, cut off. | The Desk panel is 58 pt taller (only on the Desk tab, once a computer is paired). The card is compact: the line on the left, the number now and its word beside it, min / avg / max below. |
 | l2 | first draft of the loss states | A lost packet was a short amber tick at the foot, where it hid behind the spike of the same moment and could not be told from a slow reading. | A thin line the full height of the graph that ends in a ring, so loss reads apart from slowness by shape, not only by colour. |
-| l3 | 82 | After an upgrade, a daemon that still runs the old version reports no round trips: the card said "Measuring…" for ever. | "Restart one·mk to see latency" (Desk) and "Restart one·mk" (Health), also in the accessible text. |
+| l3 | 82 | After an upgrade, a daemon that still runs the old version reports no round trips: the card said "Measuring…" for ever. | "Restart oneMK to see latency" (Desk) and "Restart oneMK" (Health), also in the accessible text. |
 | l4 | 70, 06 | A graph that is only seconds old fills a tenth of its width. | Kept: the time axis is fixed at two minutes so the line doesn't rescale under the eye; "Measuring…" shows until three readings exist. |
 
 Found by tests rather than by eye: a count of lost packets that goes down means another connection, so the

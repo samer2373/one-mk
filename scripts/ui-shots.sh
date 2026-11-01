@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Screenshots of every state of the one·mk window, for design review.
+# Screenshots of every state of the oneMK window, for design review.
 # Runs local test daemons (no real input) in throwaway settings folders.
 # Usage: scripts/ui-shots.sh [OUT_DIR]   (default /tmp/omk-shots; the
 # reviewed set is committed in docs/screens)

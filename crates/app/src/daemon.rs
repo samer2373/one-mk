@@ -185,8 +185,8 @@ impl Link {
         std::thread::spawn(move || {
             let read = || -> Result<Vec<HistoryItem>, String> {
                 let response = client::request(&link.dir, Request::ClipHistory { action: client::HistoryAction::List, json: true }, Duration::from_secs(5))
-                    .map_err(|_| "Could not read history. Try Refresh when one·mk is running.".to_owned())?
-                    .ok_or_else(|| "Start one·mk to see clipboard history.".to_owned())?;
+                    .map_err(|_| "Could not read history. Try Refresh when oneMK is running.".to_owned())?
+                    .ok_or_else(|| "Start oneMK to see clipboard history.".to_owned())?;
                 let body = response.strip_prefix("ok\n").ok_or_else(|| response.trim_start_matches("error ").trim().to_owned())?;
                 parse_history(body)
             };
@@ -258,7 +258,7 @@ impl Link {
                     update_checked = Some(Instant::now());
                     link.check_updates();
                 }
-                // The tray's "Quit one·mk" writes this file: the window goes too.
+                // The tray's "Quit oneMK" writes this file: the window goes too.
                 let quit = std::fs::metadata(link.dir.join(client::QUIT_FILE)).and_then(|m| m.modified());
                 if quit.is_ok_and(|t| t > opened) {
                     link.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -371,7 +371,7 @@ impl Link {
     fn login_launch(&self) -> anyhow::Result<Launch> {
         let exe = install::program_path().ok().filter(|p| std::env::var_os("APPIMAGE").is_some() && p.is_file()).unwrap_or_else(|| self.daemon.clone());
         if !exe.is_absolute() {
-            anyhow::bail!("The sharing service could not be found next to this app. Try reopening one·mk.");
+            anyhow::bail!("The sharing service could not be found next to this app. Try reopening oneMK.");
         }
         Ok(Launch {
             tray: install::sibling(&exe, "one-mk-tray"),
@@ -469,7 +469,7 @@ impl Link {
         proc::spawn_detached(image.as_ref().unwrap_or(&daemon), &args, Some(&self.dir.join("daemon.log")))?;
         let deadline = Instant::now() + Duration::from_secs(8);
         while !client::is_running(&self.dir) {
-            anyhow::ensure!(Instant::now() < deadline, "The update is installed, but sharing couldn't restart. Open one·mk again");
+            anyhow::ensure!(Instant::now() < deadline, "The update is installed, but sharing couldn't restart. Open oneMK again");
             std::thread::sleep(Duration::from_millis(100));
         }
         let mut args = Vec::new();
@@ -644,7 +644,7 @@ impl Link {
     fn run_keymap_check(&self) -> Result<Vec<String>, String> {
         let mut cmd = Command::new(&self.daemon);
         cmd.args(["keymap", "check"]).args(self.home_args()).stdin(Stdio::null());
-        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("one-mk didn't start: {e}"))?;
+        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("oneMK's service didn't start: {e}"))?;
         let text = String::from_utf8_lossy(&out.stdout);
         if out.status.success() {
             return Ok(vec![]);
@@ -667,11 +667,11 @@ impl Link {
         }
         let mut cmd = Command::new(&self.daemon);
         cmd.args(["input-devices", "--json"]).args(self.home_args()).stdin(Stdio::null());
-        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("one-mk didn't start: {e}"))?;
+        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("oneMK's service didn't start: {e}"))?;
         view::parse_input_devices(&String::from_utf8_lossy(&out.stdout)).ok_or_else(|| {
             let err = String::from_utf8_lossy(&out.stderr);
             let err = err.trim().trim_start_matches("one-mk: ");
-            if err.is_empty() { "one-mk gave no list".to_owned() } else { err.to_owned() }
+            if err.is_empty() { "oneMK gave no list".to_owned() } else { err.to_owned() }
         })
     }
 
@@ -695,7 +695,7 @@ impl Link {
         let mut cmd = Command::new(&self.daemon);
         cmd.args(["doctor", "--json"]).args(self.home_args()).stdin(Stdio::null());
         // It says what it found on stdout, also when something failed.
-        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("one-mk didn't start: {e}"))?;
+        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("oneMK's service didn't start: {e}"))?;
         let text = String::from_utf8_lossy(&out.stdout);
         view::parse_doctor(&text).ok_or_else(|| {
             let err = String::from_utf8_lossy(&out.stderr);
@@ -707,7 +707,7 @@ impl Link {
     /// One request to the running daemon; its error if it refused.
     fn ask(&self, req: Request) -> anyhow::Result<()> {
         let timeout = req.reply_timeout();
-        let Some(reply) = client::request(&self.dir, req, timeout)? else { anyhow::bail!("one-mk is not running") };
+        let Some(reply) = client::request(&self.dir, req, timeout)? else { anyhow::bail!("oneMK is not running") };
         let reply = reply.trim();
         match reply.strip_prefix("error") {
             Some(e) => anyhow::bail!("{}", e.trim_start_matches([' ', ':'])),
@@ -737,7 +737,7 @@ impl Link {
     pub fn stop(&self) {
         self.job(Job::Stop, |l| match client::request(&l.dir, Request::Stop, Duration::from_secs(5))? {
             // One started before an update answers "unknown request".
-            Some(r) if !r.starts_with("ok") => anyhow::bail!("this one·mk is older than the app"),
+            Some(r) if !r.starts_with("ok") => anyhow::bail!("this oneMK is older than the app"),
             _ => Ok(()),
         });
     }
@@ -834,7 +834,7 @@ fn parse_history(body: &str) -> Result<Vec<HistoryItem>, String> {
         timestamp: u64,
         origin: String,
     }
-    let bad = || "Could not read history. Update one·mk and try Refresh.".to_owned();
+    let bad = || "Could not read history. Update oneMK and try Refresh.".to_owned();
     if body.len() > 1000 * (2 * 80 * 4 + 128) { return Err(bad()); }
     let entries: Vec<Metadata> = serde_json::from_str(body).map_err(|_| bad())?;
     if entries.len() > 1000 { return Err(bad()); }

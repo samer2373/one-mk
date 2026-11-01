@@ -11,7 +11,7 @@ cask "one-mk" do
          intel: "@SHA256_X64@"
 
   url "https://github.com/samer2373/one-mk/releases/download/v#{version}/one-mk-#{arch}-apple-darwin.dmg"
-  name "one·mk"
+  name "oneMK"
   desc "Share one mouse and keyboard between computers"
   homepage "https://github.com/samer2373/one-mk"
 
@@ -37,8 +37,8 @@ cask "one-mk" do
   ]
 
   caveats <<~EOS
-    Open one·mk from Applications, click Start and turn on "Start at login"
+    Open oneMK from Applications, click Start and turn on "Start at login"
     in the window. macOS asks for Accessibility permission the first time:
-    turn on one·mk in System Settings > Privacy & Security > Accessibility.
+    turn on oneMK in System Settings > Privacy & Security > Accessibility.
   EOS
 end

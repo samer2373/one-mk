@@ -133,7 +133,7 @@ def build():
         return "%.1f:1 on ground" % contrast(solid, ground)
 
     data = {
-        "$description": "one·mk design tokens, written by scripts/brand-tokens.py from crates/app/src/style.rs "
+        "$description": "oneMK design tokens, written by scripts/brand-tokens.py from crates/app/src/style.rs "
                         "(the source of truth; do not edit by hand). Dark UI is primary. Amber is the only signal "
                         "colour: use it for the pointer, live state and the one primary action, never for decoration. "
                         "Translucent colours are straight (not premultiplied) rgba.",
@@ -146,7 +146,7 @@ def build():
         data["font"]["line-height"] = {"value": leading[0], "description": leading[1]}
     tokens_json = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
-    lines = ["/* one·mk design tokens, written by scripts/brand-tokens.py from crates/app/src/style.rs. Do not edit. */",
+    lines = ["/* oneMK design tokens, written by scripts/brand-tokens.py from crates/app/src/style.rs. Do not edit. */",
              '@font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }',
              '@font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-SemiBold.ttf") format("truetype"); font-weight: 600; font-display: swap; }',
              '@font-face { font-family: "Geist Mono"; src: url("../../crates/app/fonts/GeistMono-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }',

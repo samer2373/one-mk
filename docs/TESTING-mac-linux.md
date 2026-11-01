@@ -110,7 +110,7 @@ Write ✅ or ❌ (plus a note) for each.
 - [ ] `one-mk install`, then log out and back in: one-mk starts by itself.
 
 **The window**
-- [ ] "Open one·mk…" in the tray opens the window; both computers stand
+- [ ] "Open oneMK…" in the tray opens the window; both computers stand
       on the desk on the right sides.
 - [ ] Move the mouse to the other computer: the window draws the pointer
       crossing over, and the headline says "Controlling …".

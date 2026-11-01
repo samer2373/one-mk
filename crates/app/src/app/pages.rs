@@ -111,8 +111,8 @@ impl App {
         }
         match c.id.as_str() {
             "updates" if c.fix.as_deref() == Some("update-now") => Some(("Update now", Fix::Update)),
-            "daemon" if self.off() => Some(("Start one·mk", Fix::Start)),
-            // Pairing works with one·mk off too; it connects once started.
+            "daemon" if self.off() => Some(("Start oneMK", Fix::Start)),
+            // Pairing works with oneMK off too; it connects once started.
             "pairing" if self.running().is_none_or(|s| s.peers.is_empty()) => Some(("Pair a computer", Fix::Pair)),
             _ => None,
         }
@@ -402,7 +402,7 @@ impl App {
         scroll.show(&mut child, |ui| {
             let (all, _) = ui.allocate_exact_size(vec2(area.width(), total + 44.0), Sense::hover());
             // Credits for what the window draws and isn't ours.
-            let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for one·mk.";
+            let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for oneMK.";
             let credit_at = pos2(all.left() + 4.0, all.bottom() - 16.0);
             let shown = fit(ui.painter(), credit, &regular(T_META), all.width() - 8.0);
             ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), INK3);

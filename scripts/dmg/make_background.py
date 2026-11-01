@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The artwork behind the one·mk installer window, and the checks on it.
+"""The artwork behind the oneMK installer window, and the checks on it.
 
   python3 scripts/dmg/make_background.py            # (re)write background.png and background@2x.png
   python3 scripts/dmg/make_background.py --check    # validate everything, write a preview (see check.sh)
@@ -131,7 +131,7 @@ def segments_width(segs, scale):
 
 
 def message_segments(scale, ink, ink2, signal, pt=15):
-    """'Drag one·mk to Applications, then open it. Setup takes a minute.'
+    """'Drag oneMK to Applications, then open it. Setup takes a minute.'
     pt is the type size in points (the brand's 15 px body size); sizes in the
     result are in drawn pixels, so draw it with draw_segments(..., scale=1)."""
     px = pt * scale
@@ -347,7 +347,7 @@ def checks(cfg, out_preview):
     ok(seg_w <= W - 2 * 60, "the instruction line (%d points) fits with at least 60 points either side" % seg_w)
 
     # the preview
-    cfg = dict(cfg, volume_title="one·mk")
+    cfg = dict(cfg, volume_title="oneMK")
     preview(cfg, draw_background(cfg, 2), out_preview)
     ok(os.path.getsize(out_preview) > 10000, "preview written to %s" % out_preview)
     return fails

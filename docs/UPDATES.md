@@ -29,7 +29,7 @@ A compile-time guard refuses production with the RFC 8032 public test key.
 ## Window experience
 
 The default is **check and ask**: Check for updates is on, Update automatically
-is off. The notice says **one·mk VERSION is ready**, with **Update now**,
+is off. The notice says **oneMK VERSION is ready**, with **Update now**,
 download percentages, verification/install stages, then **Restarting…**. Advanced
 also exposes both switches. Automatic installation is opt-in and happens only
 while the window is open. Users need no terminal or configuration editor.
