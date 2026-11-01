@@ -21,8 +21,23 @@ const NOTES: &str = "https://github.com/samer2373/one-mk/releases/latest";
 const FLOOR: Option<&str> = option_env!("GITHUB_RUN_NUMBER");
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(any(target_os = "macos", test))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[path = "update_bundle.rs"]
+mod bundle;
+
 #[derive(Args, Debug)]
 pub struct Options {
+    #[arg(long)]
+    pub status_json: bool,
+    #[arg(long)]
+    pub startup_check: bool,
+    #[arg(long, value_parser = ["on", "off"])]
+    pub install_automatically: Option<String>,
+    #[arg(long)]
+    pub move_to_applications: bool,
+    #[arg(long)]
+    pub started_version: Option<String>,
     /// Check for a signed release without downloading or replacing the executable.
     #[arg(long, conflicts_with_all = ["rollback", "check_on_start"])]
     pub check: bool,
@@ -39,10 +54,10 @@ pub struct Options {
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
-pub struct Settings { pub check: bool, pub url: Option<String> }
+pub struct Settings { pub check: bool, pub install_automatically: bool, pub url: Option<String> }
 
 impl Default for Settings {
-    fn default() -> Self { Self { check: true, url: None } }
+    fn default() -> Self { Self { check: true, install_automatically: false, url: None } }
 }
 
 fn now() -> Result<u64> { Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs()) }
@@ -352,6 +367,7 @@ fn checked(home: &Path, endpoint: &str, key: &[u8], current: &str, state: &mut S
     state.digest = digest;
     state.highest_version = Some(manifest.version.clone());
     state.available = available.then(|| manifest.version.clone());
+    state.error = None;
     save_state(home, state)?;
     Ok((manifest, release, origin))
 }
@@ -365,7 +381,11 @@ fn target() -> Result<(PathBuf, InstallKind)> {
         .filter(|_| std::env::var_os("APPDIR").is_some_and(|dir| executable.starts_with(dir)));
     let executable = appimage.clone().unwrap_or(executable);
     let home = directories::BaseDirs::new().map(|base| base.home_dir().to_string_lossy().into_owned()).unwrap_or_default();
-    let kind = policy::install_kind(&executable.to_string_lossy(), &home, appimage.is_some(), std::env::var_os("FLATPAK_ID").is_some());
+    let mut kind = policy::install_kind(&executable.to_string_lossy(), &home, appimage.is_some(), std::env::var_os("FLATPAK_ID").is_some());
+    if kind == InstallKind::Deb && !Command::new("/usr/bin/dpkg-query").arg("--search").arg(&executable)
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success()) {
+        kind = InstallKind::Managed;
+    }
     Ok((executable, kind))
 }
 
@@ -477,29 +497,42 @@ fn replace(candidate: &Path, target: &Path) -> Result<()> {
     sync_directory(parent)
 }
 
-struct Hashed<'a> { file: &'a mut File, hash: digest::Context }
+struct Hashed<'a> { file: &'a mut File, hash: digest::Context, total: u64, size: u64, percent: u64 }
+fn progress(percent: u64) { println!("Downloading… {percent}%"); }
 impl Write for Hashed<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let count = self.file.write(bytes)?;
         self.hash.update(&bytes[..count]);
+        self.total += count as u64;
+        let percent = self.total.saturating_mul(100) / self.size.max(1);
+        if percent >= self.percent + 5 {
+            self.percent = percent;
+            progress(percent);
+        }
         Ok(count)
     }
     fn flush(&mut self) -> std::io::Result<()> { self.file.flush() }
 }
 
-fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, kind: InstallKind) -> Result<()> {
-    refuse_root()?;
-    let _lock = target_lock(target)?;
-    regular(target)?;
-    let asset = policy::select(manifest, std::env::consts::OS, std::env::consts::ARCH, if kind == InstallKind::AppImage { "appimage" } else { "binary" })?;
-    let parent = target.parent().context("update target has no directory")?;
+fn download(asset: &policy::Asset, release: &Release, origin: &Url, parent: &Path) -> Result<Temporary> {
+    println!("Downloading…");
     let mut temporary = Temporary::new(parent)?;
-    let mut output = Hashed { file: &mut temporary.file, hash: digest::Context::new(&digest::SHA256) };
+    let mut output = Hashed { file: &mut temporary.file, hash: digest::Context::new(&digest::SHA256), total: 0, size: asset.size, percent: 0 };
     let size = request(&asset_url(release, &asset.name, origin)?, origin, asset.size, &mut output)?;
     ensure!(size == asset.size, "download length does not match signed manifest; old executable was not replaced");
     ensure!(constant_time_eq::constant_time_eq(output.hash.finish().as_ref(), &policy::hex_bytes::<32>(&asset.sha256)?),
         "download checksum does not match signed manifest; old executable was not replaced");
     temporary.file.sync_all()?;
+    Ok(temporary)
+}
+
+fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, kind: InstallKind) -> Result<()> {
+    refuse_root()?;
+    let _lock = target_lock(target).context("This app's folder can't be changed by your account. Choose Download instead")?;
+    regular(target)?;
+    let asset = policy::select_install(manifest, std::env::consts::OS, std::env::consts::ARCH, kind)?;
+    let parent = target.parent().context("update target has no directory")?;
+    let mut temporary = download(asset, release, origin, parent)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -508,7 +541,9 @@ fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, ki
     temporary.file.sync_all()?;
     let candidate = temporary.path.clone();
     temporary.file = File::open(&candidate)?;
+    println!("Checking the update…");
     version_check(&candidate, Some(&manifest.version))?;
+    println!("Installing…");
     replace(&candidate, target)?;
     Ok(())
 }
@@ -543,44 +578,89 @@ pub fn run(home: &Path, options: Options) -> Result<()> {
     })
 }
 
+fn window_status(home: &Path) -> Result<policy::UpdateStatus> {
+    let settings = crate::settings::Settings::load(home)?.update;
+    let state = load_state(home)?;
+    let (executable, kind) = target()?;
+    let movable = kind == InstallKind::MacApp && policy::translocated(&executable.to_string_lossy());
+    #[cfg(target_os = "macos")]
+    let rollback_available = kind == InstallKind::MacApp && bundle::rollback_available(&executable);
+    #[cfg(not(target_os = "macos"))]
+    let rollback_available = false;
+    Ok(policy::UpdateStatus {
+        check: settings.check, install_automatically: settings.install_automatically,
+        available: policy::cached_version(home, env!("CARGO_PKG_VERSION")), error: state.error,
+        can_update: kind.automatic() && !movable, move_to_applications: movable, rollback_available,
+        advice: if movable { "Move one·mk to Applications before updating".into() } else { kind.advice().into() },
+    })
+}
+
+fn check_release(home: &Path, endpoint: &str, state: &mut State) -> Result<(Manifest, Release, Url)> {
+    state.last_attempt = now()?;
+    save_state(home, state)?;
+    match checked(home, endpoint, &crate::update_key::PUBLIC_KEY, env!("CARGO_PKG_VERSION"), state) {
+        Ok(release) => Ok(release),
+        Err(error) => {
+            state.error = Some(error.to_string());
+            save_state(home, state)?;
+            Err(error)
+        }
+    }
+}
+
 fn run_inner(home: &Path, options: Options) -> Result<()> {
     refuse_root()?;
+    if options.status_json {
+        println!("{}", serde_json::to_string(&window_status(home)?)?);
+        return Ok(());
+    }
+    if let Some(value) = options.install_automatically {
+        crate::settings::Settings::update(home, |settings| { settings.update.install_automatically = value == "on"; Ok(()) })?;
+        return Ok(());
+    }
     if let Some(value) = options.check_on_start {
         crate::settings::Settings::update(home, |settings| { settings.update.check = value == "on"; Ok(()) })?;
-        println!("Startup update checks are {}. Updates are never installed automatically.", if value == "on" { "on" } else { "off" });
+        println!("Update checks are {}.", if value == "on" { "on" } else { "off" });
         return Ok(());
     }
     let (target, kind) = target()?;
+    if let Some(started_version) = options.started_version {
+        #[cfg(target_os = "macos")]
+        if kind == InstallKind::MacApp { bundle::acknowledge(&target, &started_version)?; }
+        let _ = started_version;
+        return Ok(());
+    }
     let _lock = lock(home)?;
+    if options.move_to_applications {
+        #[cfg(target_os = "macos")]
+        { return bundle::move_to_applications(&target); }
+        #[cfg(not(target_os = "macos"))]
+        bail!("Moving to Applications is available only on a Mac");
+    }
     if options.rollback {
         ensure!(kind.automatic(), "this installation is managed: {}", kind.advice());
+        #[cfg(target_os = "macos")]
+        if kind == InstallKind::MacApp { return bundle::rollback_bundle(&target, home); }
         rollback(&target)?;
-        println!("Previous one-mk restored. Restart manually: one-mk stop && one-mk run");
+        println!("Previous one·mk restored. Restarting…");
         return Ok(());
     }
     ensure!(crate::update_key::PRODUCTION_KEY, "release verification is not configured: publisher must replace the test key; install the complete release manually");
     let settings = crate::settings::Settings::load(home)?.update;
     let endpoint = options.url.or(settings.url).unwrap_or_else(|| LATEST.into());
     let mut state = load_state(home)?;
-    state.last_attempt = now()?;
-    save_state(home, &state)?;
-    let (manifest, release, origin) = checked(home, &endpoint, &crate::update_key::PUBLIC_KEY, env!("CARGO_PKG_VERSION"), &mut state)?;
+    if options.startup_check && (!settings.check || !policy::startup_due(state.last_attempt, now()?)) { return Ok(()); }
+    let (manifest, release, origin) = check_release(home, &endpoint, &mut state)?;
     if state.available.is_none() { println!("one-mk {} is up to date.", env!("CARGO_PKG_VERSION")); return Ok(()); }
     println!("one-mk {} is available (you have {}).", manifest.version, env!("CARGO_PKG_VERSION"));
-    if options.check { return Ok(()); }
+    if options.check || options.startup_check { return Ok(()); }
     if !kind.automatic() {
-        println!("This installation is managed: {}. Release: {NOTES}", kind.advice());
-        let package_kind = match kind {
-            InstallKind::Deb => Some("deb"), InstallKind::WindowsInstaller => Some("installer"), InstallKind::MacApp => Some("app"), _ => None,
-        };
-        if let Some(asset) = package_kind.and_then(|kind| policy::select(&manifest, std::env::consts::OS, std::env::consts::ARCH, kind).ok()) {
-            println!("Download {}: {}", asset.name, asset_url(&release, &asset.name, &origin)?);
-            if kind == InstallKind::Deb { println!("Then run: sudo apt install ./{}", asset.name); }
-        }
-        return Ok(());
+        bail!("{}. Choose Download to open the release page: {NOTES}", kind.advice());
     }
+    #[cfg(target_os = "macos")]
+    if kind == InstallKind::MacApp { return bundle::apply_bundle(&manifest, &release, &origin, &target, home); }
     apply(&manifest, &release, &origin, &target, kind)?;
-    println!("one-mk {} installed. Restart manually: one-mk stop && one-mk run", manifest.version);
+    println!("one·mk {} installed. Restarting…", manifest.version);
     Ok(())
 }
 
@@ -612,9 +692,7 @@ pub fn startup(home: PathBuf) {
             let mut state = load_state(&home)?;
             let time = now()?;
             if !policy::startup_due(state.last_attempt, time) { return Ok(()); }
-            state.last_attempt = time;
-            save_state(&home, &state)?;
-            checked(&home, settings.url.as_deref().unwrap_or(LATEST), &crate::update_key::PUBLIC_KEY, env!("CARGO_PKG_VERSION"), &mut state)?;
+            check_release(&home, settings.url.as_deref().unwrap_or(LATEST), &mut state)?;
             Ok(())
         })();
         if let Err(error) = result { tracing::debug!(%error, "startup update check failed"); }
@@ -629,12 +707,17 @@ pub fn notice(home: &Path) -> Option<String> {
         .then(|| format!("one-mk {available} is available; run one-mk update"))
 }
 
-pub fn doctor() -> (bool, bool, String) {
-    let (managed, detail) = match target() {
-        Ok((_, kind)) => (!kind.automatic(), format!("{kind:?}: {}; Windows/macOS replacement untested on real OS", kind.advice())),
-        Err(_) => (true, "cannot identify installation; reinstall manually".into()),
-    };
-    (crate::update_key::PRODUCTION_KEY && !cfg!(any(windows, target_os = "macos")), managed, format!("{detail}{}", if crate::update_key::PRODUCTION_KEY { "" } else { "; publisher signing key not configured" }))
+pub fn doctor(home: &Path) -> (bool, String) {
+    match load_state(home) {
+        Ok(state) if state.error.is_some() => (false, format!("Couldn't check: {}", state.error.unwrap_or_default())),
+        Ok(state) if state.sequence > 0 => {
+            if policy::cached_version(home, env!("CARGO_PKG_VERSION")).is_some() {
+                (true, "Update available — Update now".into())
+            } else { (false, format!("Up to date ({})", env!("CARGO_PKG_VERSION"))) }
+        }
+        Ok(_) => (false, "Couldn't check: no completed update check yet".into()),
+        Err(_) => (false, "Couldn't check: saved update information couldn't be read".into()),
+    }
 }
 
 #[cfg(all(test, unix))]

@@ -114,6 +114,8 @@ pub struct State {
     pub highest_version: Option<String>,
     pub last_attempt: u64,
     pub available: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 pub fn startup_due(last_attempt: u64, now: u64) -> bool {
@@ -145,19 +147,46 @@ pub fn select<'a>(manifest: &'a Manifest, os: &str, arch: &str, kind: &str) -> R
 pub enum InstallKind { Portable, AppImage, Deb, Homebrew, Flatpak, WindowsInstaller, MacApp, Managed }
 
 impl InstallKind {
-    pub fn automatic(self) -> bool { matches!(self, Self::Portable | Self::AppImage) }
+    pub fn automatic(self) -> bool { matches!(self, Self::Portable | Self::AppImage | Self::MacApp) }
 
     pub fn advice(self) -> &'static str {
         match self {
-            Self::Portable | Self::AppImage => "one-mk update (restart manually afterward)",
-            Self::Deb => "download the new .deb and run sudo apt install ./one-mk-*.deb",
-            Self::Homebrew => "brew upgrade one-mk",
-            Self::Flatpak => "flatpak update io.github.onemk.OneMk",
-            Self::WindowsInstaller => "download and run the new Windows installer",
-            Self::MacApp => "download the new .dmg and replace one·mk in Applications",
-            Self::Managed => "use your package manager or reinstall the complete release manually",
+            Self::Portable | Self::AppImage | Self::MacApp => "Ready to update in place",
+            Self::Deb | Self::Homebrew | Self::Flatpak => "Updates come with your package manager",
+            Self::WindowsInstaller => "Download the new Windows installer to update this installation",
+            Self::Managed => "Download the complete release to update this installation",
         }
     }
+}
+
+pub fn select_install<'a>(manifest: &'a Manifest, os: &str, arch: &str, kind: InstallKind) -> Result<&'a Asset> {
+    ensure!((kind != InstallKind::MacApp || os == "macos") && (kind != InstallKind::AppImage || os == "linux"),
+        "This update doesn't match your operating system");
+    if kind == InstallKind::MacApp {
+        let mut matching = manifest.assets.iter().filter(|asset| asset.os == os && asset.arch == arch && asset.kind == "app" && asset.name.ends_with(".app.zip"));
+        let asset = matching.next().context("No app update is available for this computer yet")?;
+        ensure!(matching.next().is_none(), "The release contains more than one matching app update");
+        return Ok(asset);
+    }
+    ensure!(kind.automatic(), "{}", kind.advice());
+    select(manifest, os, arch, if kind == InstallKind::AppImage { "appimage" } else { "binary" })
+}
+
+pub fn translocated(path: &str) -> bool {
+    let path = path.replace('\\', "/");
+    path.contains("/AppTranslocation/") || path.starts_with("/Volumes/")
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct UpdateStatus {
+    pub check: bool,
+    pub install_automatically: bool,
+    pub available: Option<String>,
+    pub error: Option<String>,
+    pub can_update: bool,
+    pub move_to_applications: bool,
+    pub rollback_available: bool,
+    pub advice: String,
 }
 
 pub fn install_kind(path: &str, home: &str, appimage: bool, flatpak: bool) -> InstallKind {
@@ -175,7 +204,7 @@ pub fn install_kind(path: &str, home: &str, appimage: bool, flatpak: bool) -> In
         // The caller verified this process runs from that AppImage: whatever
         // the file is called, it is the AppImage (window, tray, libraries).
         if appimage { return InstallKind::AppImage; }
-        if path == format!("{home}/.local/bin/one-mk") || lower == format!("{home}/appdata/local/one-mk-portable/one-mk.exe").to_ascii_lowercase() { return InstallKind::Portable; }
+        if path.ends_with("/one-mk") || lower.ends_with("/one-mk.exe") { return InstallKind::Portable; }
     }
     InstallKind::Managed
 }
@@ -283,6 +312,36 @@ mod tests {
         assert_eq!(install_kind("/app/bin/one-mk", "/home/me", false, true), InstallKind::Flatpak);
         assert_eq!(install_kind("C:\\Users\\me\\AppData\\Local\\one-mk-portable\\one-mk.exe", "C:\\Users\\me", false, false), InstallKind::Portable);
         assert_eq!(install_kind("c:\\users\\ME\\AppData\\Local\\one-mk-portable\\one-mk.exe", "C:\\Users\\me", false, false), InstallKind::Portable);
+    }
+
+    #[test]
+    fn install_selection_matches_platform_architecture_and_container() -> Result<()> {
+        let mut manifest = fixture();
+        manifest.assets.clear();
+        for os in ["linux", "macos", "windows"] { for arch in ["x86_64", "aarch64"] {
+            for (kind, suffix) in [("binary", ".bin"), ("appimage", ".AppImage"), ("app", ".app.zip"), ("app", ".dmg")] {
+                manifest.assets.push(Asset { name: format!("one-mk-{os}-{arch}{suffix}"), size: 1,
+                    sha256: "ab".repeat(32), os: os.into(), arch: arch.into(), kind: kind.into() });
+            }
+        }}
+        for os in ["linux", "macos", "windows"] { for arch in ["x86_64", "aarch64"] {
+            for (kind, suffix) in [(InstallKind::Portable, ".bin"), (InstallKind::AppImage, ".AppImage"), (InstallKind::MacApp, ".app.zip")] {
+                if (kind == InstallKind::MacApp && os != "macos") || (kind == InstallKind::AppImage && os != "linux") {
+                    assert!(select_install(&manifest, os, arch, kind).is_err());
+                    continue;
+                }
+                let selected = select_install(&manifest, os, arch, kind)?;
+                assert_eq!(selected.name, format!("one-mk-{os}-{arch}{suffix}"));
+            }
+            for kind in [InstallKind::Deb, InstallKind::Homebrew, InstallKind::Flatpak, InstallKind::WindowsInstaller, InstallKind::Managed] {
+                assert!(select_install(&manifest, os, arch, kind).is_err());
+            }
+        }}
+        assert!(select_install(&manifest, "linux", "riscv64", InstallKind::Portable).is_err());
+        let duplicate = select_install(&manifest, "macos", "aarch64", InstallKind::MacApp)?.clone();
+        manifest.assets.push(duplicate);
+        assert!(select_install(&manifest, "macos", "aarch64", InstallKind::MacApp).is_err());
+        Ok(())
     }
 
     #[test]
