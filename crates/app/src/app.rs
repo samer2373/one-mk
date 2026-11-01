@@ -12,6 +12,7 @@ mod place;
 mod shell;
 mod desk_cards;
 mod typing;
+mod settings_controls;
 
 use crate::daemon::{Event, Job, Link};
 use crate::motion::{self, tween};
@@ -500,7 +501,7 @@ impl App {
     /// An error says what went wrong and what to do; the raw reason goes
     /// underneath. It stays until dismissed, or for ten seconds.
     fn toast_error(&mut self, text: impl Into<String>, detail: Option<String>, now: f64) {
-        let detail = detail.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
+        let detail = detail.map(|d| crate::view::window_issue(d.trim())).filter(|d| !d.is_empty());
         self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0 });
     }
 
@@ -638,7 +639,7 @@ impl App {
                 self.sync_scene();
                 self.toast_error(format!("Couldn't change Ctrl and Cmd for {name}. Try again."), e, now);
             }
-            Job::TakeBack => self.toast_error("Couldn't take back control. Press a key on this computer, or run `one-mk takeback`.", e, now),
+            Job::TakeBack => self.toast_error("Couldn't take back control. Press a key on this computer, then try again.", e, now),
             Job::Autostart(on) => {
                 let word = if on { "on" } else { "off" };
                 self.toast_error(format!("Couldn't turn {word} start at login."), e, now);
@@ -675,15 +676,16 @@ impl App {
                 let what = if send { format!("send this clipboard to {name}") } else { format!("get {name}'s clipboard") };
                 self.toast_error(format!("Couldn't {what}."), e, now);
             }
-            Job::Set { what, .. } => {
+            Job::Set { what, args } => {
                 // Show what is really saved.
                 self.prefs = self.link.prefs();
-                self.toast_error(format!("Couldn't change {what}."), e, now);
+                if args.first().is_some_and(|arg| arg == "hotkeys") {
+                    self.toast_error(settings_controls::shortcut_error(e.as_deref().unwrap_or("")), None, now);
+                } else { self.toast_error(format!("Couldn't change {what}."), e, now); }
             }
             Job::Doctor => {}
             // Shown where the change was made, not as a toast.
             Job::Tune { area, what, .. } => self.tuned(area, &what, e),
-            Job::EditSettings => self.toast_error("Couldn't open settings.toml.", e, now),
         }
     }
 
@@ -692,6 +694,7 @@ impl App {
         if let Some(p) = &mut self.pairing {
             while let Some(step) = p.proc.as_ref().and_then(|c| c.rx.try_recv().ok()) {
                 match step {
+                    Step::Invitation(link) => { self.ctx.data_mut(|data| data.insert_temp(Id::unique("invitation-link"), link)); }
                     Step::Searching { me, port } => { p.me = me; p.port = port; }
                     Step::Hint => p.hint = true,
                     Step::Retry(why) => {
@@ -963,6 +966,7 @@ impl App {
     }
 
     fn start_pairing(&mut self, now: f64) {
+        self.ctx.data_mut(|data| data.remove::<String>(Id::unique("invitation-link")));
         self.pending_drop = None;
         // The new computer joins the desk: show it.
         if !self.tab.desk() {
@@ -974,7 +978,7 @@ impl App {
                 let step = Step::Searching { me: me.clone(), port: None };
                 self.pairing = Some(PairUi { proc: Some(proc), step, since: now, opened: now, hint: false, retry: None, me, port: None });
             }
-            Err(e) => self.toast_error("Couldn't start pairing. Is one-mk installed next to this app?", Some(e.to_string()), now),
+            Err(e) => self.toast_error("Couldn't start pairing. Try restarting one·mk.", Some(e.to_string()), now),
         }
     }
 
@@ -1519,7 +1523,7 @@ impl App {
             Tab::Files => {
                 let any = self.running().is_some_and(|status| status.peers.iter().any(|peer| peer.online));
                 let sub = if any {
-                    "Drag files or folders onto a connected computer on the desk. They arrive in its Downloads/one-mk folder."
+                    "Drag files or folders onto a connected computer on the desk. They arrive in its received files folder."
                 } else {
                     "No computer is connected right now. Files can go to one once it's on and connected."
                 };
@@ -1708,9 +1712,9 @@ impl App {
                 if let Some(why) = &pair.retry {
                     sub += &format!("\n\nThat attempt didn't finish: {why}. Still looking.");
                 } else if pair.hint {
-                    sub += "\n\nNo discovery? Cancel, run one-mk invite here, then one-mk join LINK on the other computer. Treat the link as a secret.";
+                    sub += "\n\nAllow one·mk through the firewall on both computers and keep them on the same network.";
                     if let Some(port) = pair.port {
-                        sub += &format!("\n\nOr keep this search open and run one-mk pair --connect LAN_IP:{port} there. Use this computer’s LAN IP; allow UDP {port}.");
+                        sub += &format!(" This computer's pairing port is {port}.");
                     }
                 }
                 ("Looking for another computer".into(), sub, vec![quiet("Cancel", Act::Close)], 0)
@@ -1738,7 +1742,7 @@ impl App {
                 };
                 (format!("Paired with {name}"), sub, vec![], 0)
             }
-            Step::Retry(_) => return None,
+            Step::Retry(_) | Step::Invitation(_) => return None,
         };
         let code = match &pair.step {
             Step::Code { code, .. } => Some((code.clone(), pair.since)),
@@ -1788,7 +1792,8 @@ impl App {
         let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
         let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { widths.len() as f32 * 42.0 - 8.0 };
         let title_h = 22.0;
-        let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0;
+        let alternatives = leaving.is_none() && self.pairing.as_ref().is_some_and(|pair| matches!(pair.step, Step::Searching { .. } | Step::Hint));
+        let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0 + if alternatives { 212.0 } else { 0.0 };
         let rect = Rect::from_min_size(pos2(x - 18.0, desk.bottom() - height - 20.0), vec2(width, height));
         self.sheet_top = Some(rect.top());
 
@@ -1860,6 +1865,7 @@ impl App {
             a11y_text(&child, Id::unique("sheet-code"), Rect::from_min_size(pos2(x, y), vec2(inner, code_h)), Role::Label, &format!("Pairing code {spoken}"), None);
             y += code_h;
         }
+        if alternatives { self.pairing_controls(&mut child, Rect::from_min_size(pos2(x, y + 12.0), vec2(inner, 200.0)), now); y += 212.0; }
         if view.buttons.is_empty() {
             return;
         }
@@ -2014,7 +2020,7 @@ impl App {
 
     /// Ctrl+1 to 6 switch tabs (Cmd on a Mac).
     fn shortcuts(&mut self, ui: &Ui) {
-        if widgets::locked(ui) || self.keys_grab(ui.ctx()) {
+        if widgets::locked(ui) || self.keys_grab(ui.ctx()) || ui.ctx().data(|data| data.get_temp::<usize>(Id::unique("shortcut-recorder")).is_some() || data.get_temp::<bool>(Id::unique("gesture-recording")).unwrap_or(false)) {
             return;
         }
         let off = self.off();

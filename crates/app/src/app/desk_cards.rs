@@ -294,6 +294,16 @@ impl App {
         ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, label, semibold(T_BODY), INK);
         let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
         let on = self.broadcasting();
+        if online || on {
+            x -= 64.0 + 8.0;
+            let rect = Rect::from_min_size(pos2(x, y), vec2(64.0, 34.0));
+            let response = button(ui, rect, Id::unique("broadcast-options"), "Timer", Look::Quiet, !on, Some("Broadcast idle timer"));
+            egui::Popup::menu(&response).width(280.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
+                let (row, _) = ui.allocate_exact_size(vec2(280.0, 34.0), Sense::hover());
+                self.broadcast_timeout(ui, row);
+                ui.label("Use zero to keep broadcasting until you stop it.");
+            });
+        }
         if (online || on) && narrow {
             // Narrow: the same action as an icon, lit while it is on.
             x -= 34.0 + 8.0;

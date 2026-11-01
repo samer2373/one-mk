@@ -90,7 +90,7 @@ impl App {
         let Some(s) = self.running() else {
             return vec![(ERROR, "one·mk isn't running on this computer. Start it with the button at the top.".into())];
         };
-        let mut out: Vec<(Color32, String)> = s.input.iter().map(|l| (ERROR, l.clone())).collect();
+        let mut out: Vec<(Color32, String)> = s.input.iter().map(|l| (ERROR, view::window_issue(l))).collect();
         if out.is_empty() {
             out.push((INK2, "Mouse and keyboard sharing works: the desktop allowed it.".into()));
         }
@@ -245,26 +245,23 @@ impl App {
         let col_w = if two { (area.width() - gap) / 2.0 } else { area.width() };
         // Each card as tall as what it holds: a title (48), rows, a margin (14).
         let s = self.running();
-        let per_side = s.is_some_and(|s| s.edges.contains(" edge: "));
-        let peers = s.map_or(0, |s| s.peers.len());
-        let keys = self.prefs.hotkeys.len() + 1;
-        let note = s.is_some_and(|s| view::hotkeys_note(&s.hotkeys, &s.hotkeys_detail).is_some());
-        let hooks = self.prefs.hooks.len() + usize::from(self.prefs.unreadable);
+        let peers = s.map_or(0, |status| status.peers.len());
         let heights = [
-            48.0 + 4.0 * EDGE_ROW - 4.0 + if per_side { 22.0 } else { 0.0 } + 14.0,
+            48.0 + 6.0 * EDGE_ROW + 14.0,
             48.0 + 3.0 * 36.0 - 6.0 + 14.0,
             48.0 + 36.0 - 6.0 + 14.0,
-            48.0 + 44.0 + 22.0 * keys as f32 + if note { 40.0 } else { 0.0 } + 14.0,
+            48.0 + 46.0 + 56.0 * self.prefs.hotkeys.len() as f32 + 140.0,
             48.0 + 22.0 + (SWAP_ROW * peers as f32).max(40.0) + 14.0,
-            48.0 + if hooks == 0 { 44.0 } else { 22.0 * hooks as f32 + 20.0 } + 14.0,
+            48.0 + 4.0 * 166.0 + 90.0,
             48.0 + 132.0 + 14.0,
+            48.0 + 260.0 + 14.0,
         ];
         // Two columns: crossing, power and games on the left; keys and
         // commands on the right. One column below 700 points.
-        let mut at = [(0usize, 0.0f32); 7];
+        let mut at = [(0usize, 0.0f32); 8];
         let mut ys = [0.0f32; 2];
         for (k, h) in heights.iter().enumerate() {
-            let col = if two { usize::from(k >= 3) } else { 0 };
+            let col = if two { usize::from(k >= 3 && k != 7) } else { 0 };
             at[k] = (col, ys[col]);
             ys[col] += h + gap;
         }
@@ -296,13 +293,26 @@ impl App {
             self.swaps(ui, Rect::from_min_max(pos2(c.left(), c.top() + 18.0), c.max));
             self.hooks_card(ui, r(5));
             self.typing_card(ui, r(6));
+            let c = card(ui, r(7), "Pointer and layout");
+            self.extra_controls(ui, c);
         });
     }
 
     fn edges_card(&mut self, ui: &mut Ui, r: Rect) {
         let c = card(ui, r, "Crossing edges");
-        let p = self.prefs.clone();
-        let top = c.top() - 4.0;
+        let mut p = self.prefs.clone();
+        let scope_id = Id::unique("edge-scope");
+        let mut side = ui.ctx().data(|data| data.get_temp::<String>(scope_id)).unwrap_or_default();
+        let track = Rect::from_min_size(c.min, vec2(c.width(), 28.0));
+        if let Some(chosen) = self.settings_segment(ui, track, "Crossing edge", &[("", "Shared"), ("left", "Left"), ("right", "Right"), ("top", "Top"), ("bottom", "Bottom")], &side) { side = chosen; }
+        ui.ctx().data_mut(|data| data.insert_temp(scope_id, side.clone()));
+        if let Some((_, rules)) = p.edge_sides.iter().find(|(name, _)| *name == side) {
+            p.edge_corner = rules.corner;
+            p.edge_dwell_ms = rules.dwell;
+            p.edge_modifier = rules.modifier.clone();
+            p.edge_fullscreen = rules.fullscreen;
+        }
+        let top = c.top() + 34.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + EDGE_ROW * k as f32), vec2(c.width(), EDGE_ROW));
         // Numbers with a unit, typed; the fields line up whatever the unit.
         let uw = text_width(ui, "px", regular(T_META)).max(text_width(ui, "ms", regular(T_META))) + 8.0;
@@ -322,7 +332,7 @@ impl App {
                 match text.parse::<u32>() {
                     Ok(n) if n <= max => {
                         let v = n.to_string();
-                        self.set_pref("the edge rules", &["edge", flag, &v], |p| if key == "corner" { p.edge_corner = n } else { p.edge_dwell_ms = n });
+                        self.edge_setting(&side, flag, &v);
                     }
                     _ => self.toast_error(format!("{label}: type a whole number from 0 to {max}."), None, self.now),
                 }
@@ -352,18 +362,17 @@ impl App {
         };
         if let Some(k) = pills.show(ui, self.arrowed) {
             let v = MODS[k].0;
-            self.set_pref("the edge rules", &["edge", "--modifier", v], |p| p.edge_modifier = v.into());
+            self.edge_setting(&side, "--modifier", v);
         }
         let r = switch(ui, row(3), Id::unique("edge-fullscreen"), "Stay in fullscreen windows", p.edge_fullscreen, true);
         if r.clicked() {
             let v = if p.edge_fullscreen { "off" } else { "on" };
-            self.set_pref("the edge rules", &["edge", "--fullscreen-guard", v], |p| p.edge_fullscreen = !p.edge_fullscreen);
+            self.edge_setting(&side, "--fullscreen-guard", v);
         }
         r.on_hover_text("Don't cross while a fullscreen window (a game, a video) has the focus here.");
-        let per_side = self.running().is_some_and(|s| s.edges.contains(" edge: "));
-        if per_side {
-            let note = "Some edges have rules of their own: see `one-mk edge`.";
-            widgets::para_code(ui, pos2(c.left(), row(4).top() + 4.0), c.width(), note, regular(T_META), INK2);
+        let reset = Rect::from_min_size(pos2(c.left(), row(4).top()), vec2(c.width(), 28.0));
+        if !side.is_empty() && button(ui, reset, Id::unique("edge-reset-side"), "Use shared rules", Look::Quiet, true, None).clicked() {
+            self.settings_command("the edge rules", vec!["edge".into(), "--side".into(), side.clone(), "--reset".into()]);
         }
     }
 
@@ -391,76 +400,15 @@ impl App {
 
     fn keys_card(&mut self, ui: &mut Ui, r: Rect) {
         let c = card(ui, r, "Keyboard shortcuts");
-        let p = self.prefs.clone();
-        let top = c.top() - 6.0;
-        let r0 = Rect::from_min_size(pos2(c.left(), top), vec2(c.width(), 36.0));
-        if switch(ui, r0, Id::unique("hotkeys"), "Use keyboard shortcuts", p.hotkeys_on, true).clicked() {
-            let flag = if p.hotkeys_on { "--off" } else { "--on" };
-            self.set_pref("keyboard shortcuts", &["hotkeys", flag], |p| p.hotkeys_on = !p.hotkeys_on);
+        let row = Rect::from_min_size(c.min, vec2(c.width(), 34.0));
+        if switch(ui, row, Id::unique("hotkeys"), "Use keyboard shortcuts", self.prefs.hotkeys_on, true).clicked() {
+            self.set_pref("keyboard shortcuts", &["hotkeys", if self.prefs.hotkeys_on { "--off" } else { "--on" }], |prefs| prefs.hotkeys_on = !prefs.hotkeys_on);
         }
-        ui.painter().hline(c.x_range(), top + 36.0, Stroke::new(1.0, LINE));
-        let mac = cfg!(target_os = "macos");
-        let rows: Vec<(&str, String)> = p
-            .hotkeys
-            .iter()
-            .map(|(what, chord)| (*what, view::chord_label(chord, mac)))
-            .chain(std::iter::once(("Always back here", view::chord_label("ctrl+alt+shift+esc", mac))))
-            .collect();
-        let mut y = top + 50.0;
-        for (what, chord) in &rows {
-            let col = if p.hotkeys_on || *what == "Always back here" { INK } else { INK2 };
-            ui.painter().text(pos2(c.left(), y), Align2::LEFT_CENTER, *what, regular(T_BODY), INK2);
-            let cw = c.width() - text_width(ui, what, regular(T_BODY)) - 12.0;
-            ui.painter().text(pos2(c.right(), y), Align2::RIGHT_CENTER, fit(ui.painter(), chord, &mono(T_META), cw), mono(T_META), col);
-            let rr = Rect::from_min_max(pos2(c.left(), y - 10.0), pos2(c.right(), y + 10.0));
-            a11y_text(ui, Id::unique(("hotkey", *what)), rr, Role::Label, &format!("{what}: {chord}"), None);
-            y += 22.0;
-        }
-        if let Some(note) = self.running().and_then(|s| view::hotkeys_note(&s.hotkeys, &s.hotkeys_detail)) {
-            para(ui, pos2(c.left(), y), c.width(), &note, regular(T_META), INK2);
-        }
+        self.shortcut_controls(ui, Rect::from_min_max(c.min + vec2(0.0, 46.0), c.max));
     }
 
     fn hooks_card(&mut self, ui: &mut Ui, r: Rect) {
         let c = card(ui, r, "Run commands");
-        let p = self.prefs.clone();
-        let label = "Edit settings.toml";
-        let bw = button_width(ui, label) - 4.0;
-        let b = Rect::from_min_size(pos2(r.right() - 18.0 - bw, r.top() + 12.0), vec2(bw, 28.0));
-        let busy = self.busy.contains(&Job::EditSettings);
-        if button(ui, b, Id::unique("edit-settings"), label, Look::Quiet, !busy, Some("Open settings.toml to edit the commands")).clicked() {
-            self.busy.push(Job::EditSettings);
-            self.link.edit_settings();
-        }
-        let mut y = c.top() + 2.0;
-        if p.unreadable {
-            p_line(ui, c, y, ERROR, "settings.toml couldn't be read; showing the defaults.");
-            y += 22.0;
-        }
-        if p.hooks.is_empty() {
-            let text = "When the pointer arrives or leaves, or a computer connects. None are set yet.";
-            para(ui, pos2(c.left(), y - 8.0), c.width(), text, regular(T_BODY), INK2);
-            return;
-        }
-        for (when, cmd) in &p.hooks {
-            ui.painter().text(pos2(c.left(), y), Align2::LEFT_CENTER, *when, regular(T_BODY), INK2);
-            let kw = text_width(ui, when, regular(T_BODY)) + 12.0;
-            let shown = fit(ui.painter(), cmd, &mono(T_META), c.width() - kw);
-            widgets::mono_text(ui.painter(), pos2(c.right(), y), Align2::RIGHT_CENTER, cmd, T_META, INK, c.width() - kw);
-            let rr = Rect::from_min_max(pos2(c.left(), y - 10.0), pos2(c.right(), y + 10.0));
-            let resp = ui.interact(rr, Id::unique(("hook", *when)), Sense::hover());
-            if shown != *cmd {
-                resp.on_hover_text(cmd);
-            }
-            a11y_text(ui, Id::unique(("hook-node", *when)), rr, Role::Label, &format!("{when}: {cmd}"), None);
-            y += 22.0;
-        }
-        let meta = format!("Time limit {} s · {}", p.hooks_timeout, if p.hooks_shell { "through the shell" } else { "no shell" });
-        ui.painter().text(pos2(c.left(), y + 2.0), Align2::LEFT_CENTER, meta, regular(T_META), INK2);
+        self.hook_controls(ui, c);
     }
-}
-
-fn p_line(ui: &Ui, c: Rect, y: f32, dot: Color32, text: &str) {
-    ui.painter().circle_filled(pos2(c.left() + 3.0, y), 3.0, dot);
-    ui.painter().text(pos2(c.left() + 14.0, y), Align2::LEFT_CENTER, fit(ui.painter(), text, &regular(T_META), c.width() - 14.0), regular(T_META), INK);
 }

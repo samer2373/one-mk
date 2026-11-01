@@ -20,6 +20,31 @@ const UNIT_MAX: f32 = 34.0;
 const ROW: f32 = 36.0;
 const GAP: f32 = 16.0;
 
+fn gesture_args(button: &str, direction: &str, output: &str, scope: &Scope) -> Result<Vec<String>, String> {
+    if !["middle", "button4", "button5"].contains(&button) || !["up", "down", "left", "right"].contains(&direction) {
+        return Err("Choose a middle or side button and a swipe direction.".into());
+    }
+    output.parse::<one_mk_proto::remap::Output>().map_err(|_| "Choose a key or record a shortcut for this gesture.".to_owned())?;
+    let mut args = vec!["gestures".into(), "add".into(), button.into(), direction.into(), output.into()];
+    args.extend(scope.args());
+    Ok(args)
+}
+
+#[cfg(test)]
+mod gesture_tests {
+    use super::*;
+
+    #[test]
+    fn gesture_commands_validate_and_preserve_scope() {
+        assert_eq!(gesture_args("button4", "left", "ctrl+alt+k", &Scope::All).unwrap(), ["gestures", "add", "button4", "left", "ctrl+alt+k"]);
+        let scope = Scope::Os(one_mk_proto::os::MACOS);
+        assert!(gesture_args("middle", "up", "esc", &scope).unwrap().ends_with(&scope.args()));
+        for (button, direction, output) in [("left", "up", "esc"), ("middle", "diagonal", "esc"), ("middle", "up", "ctrl+")] {
+            assert!(gesture_args(button, direction, output, &Scope::All).is_err());
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub(super) enum View {
     #[default]
@@ -870,19 +895,15 @@ impl App {
         let c = card.inner;
         let mut y = c.top() - 6.0;
         if self.prefs.unreadable {
-            y += error_line(ui, c.left(), y, c.width(), "settings.toml couldn't be read, so nothing here can be shown or changed. Fix it, or open it from Advanced.") + 8.0;
+            y += error_line(ui, c.left(), y, c.width(), "Preferences couldn't be read. Changes are paused to keep your saved choices safe. Try restarting one·mk.") + 8.0;
         }
         if let Some((_, e)) = self.keys.error.clone().filter(|(a, _)| *a == "list") {
             y += error_line(ui, c.left(), y, c.width(), &e) + 8.0;
         }
         match &self.keys.problems {
             Some(Ok(list)) => {
-                for prob in list.iter().take(4) {
+                for prob in list {
                     y += error_line(ui, c.left(), y, c.width(), &tune::plain_problem(prob)) + 6.0;
-                }
-                if list.len() > 4 {
-                    ui.painter().text(pos2(c.left() + 14.0, y + 9.0), Align2::LEFT_CENTER, format!("and {} more: run `one-mk keymap check`", list.len() - 4), regular(T_META), INK2);
-                    y += 24.0;
                 }
             }
             Some(Err(e)) => y += error_line(ui, c.left(), y, c.width(), &format!("The rules couldn't be checked: {e}")) + 6.0,
@@ -1325,7 +1346,7 @@ impl App {
         }
         ui.painter().hline(c.x_range(), y, Stroke::new(1.0, LINE));
         y += 10.0;
-        let safe = format!("`{}` always brings the mouse and keyboard back here. No rule can change it.", crate::view::chord_label("ctrl+alt+shift+esc", mac()));
+        let safe = format!("{} always brings the mouse and keyboard back here. No rule can change it.", crate::view::chord_label("ctrl+alt+shift+esc", mac()));
         y += widgets::para_code(ui, pos2(c.left(), y), c.width(), &safe, regular(T_META), INK2);
         a11y_text(ui, Id::unique("keys-safe"), Rect::from_min_size(pos2(c.left(), y - 30.0), vec2(c.width(), 30.0)), Role::Label, &safe.replace('`', ""), None);
         let _ = now;
@@ -1414,7 +1435,7 @@ impl App {
         let gestures: Vec<_> = input.gestures.iter().filter(|row| !matches!(row.scope, Scope::Device(..)))
             .filter(|row| !tune::primary_mouse_button(&row.button)).filter(|row| row.scope.rank(facts).is_some()).collect();
         if gestures.is_empty() {
-            top += widgets::para_code(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add a gesture with `one-mk gestures add`.", regular(T_BODY), INK2);
+            top += para(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add your own below.", regular(T_BODY), INK2);
         }
         for row in gestures {
             let description = format!("Hold {} and swipe {} to {}{}.", tune::mouse_button_label(&row.button), row.direction, row.to.describe(), row.app.as_ref().map_or(String::new(), |app| format!(" in app {app}")));
@@ -1433,10 +1454,49 @@ impl App {
             }
             top += 38.0;
         }
+        top = self.gesture_editor(ui, content.left(), top + 8.0, content.width());
         if let Some((_, error)) = self.keys.error.clone().filter(|(area, _)| *area == "mouse-modes") {
             top += error_line(ui, content.left(), top, content.width(), &error);
         }
         card.end(ui, top)
+    }
+
+    fn gesture_editor(&mut self, ui: &mut Ui, left: f32, mut top: f32, width: f32) -> f32 {
+        top += para(ui, pos2(left, top), width, "Add a gesture", semibold(T_BODY), INK) + 8.0;
+        for (key, choices, default) in [
+            ("Gesture button", &[("middle", "Middle"), ("button4", "Back"), ("button5", "Forward")][..], "button4"),
+            ("Swipe direction", &[("left", "Left"), ("right", "Right"), ("up", "Up"), ("down", "Down")][..], "left"),
+        ] {
+            let current = self.drafts.get(key).map_or(default, String::as_str);
+            let track = Rect::from_min_size(pos2(left, top), vec2(width, 28.0));
+            if let Some(value) = self.settings_segment(ui, track, key, choices, current) { self.drafts.insert(key.into(), value); }
+            top += 36.0;
+        }
+        let capture_id = Id::unique("gesture-recording");
+        let mut recording = ui.ctx().data(|data| data.get_temp::<bool>(capture_id)).unwrap_or(false);
+        let mut value = self.drafts.get("gesture-output").cloned().unwrap_or_default();
+        let field = Rect::from_min_size(pos2(left, top), vec2(width - 86.0, 28.0));
+        widgets::field(ui, field, Id::unique("gesture-output"), &mut value, "Key or shortcut", "What the gesture types", !recording, false);
+        let capture = Rect::from_min_size(pos2(left + width - 80.0, top), vec2(80.0, 28.0));
+        let started = button(ui, capture, Id::unique("gesture-record"), if recording { "Cancel" } else { "Record" }, Look::Quiet, true, Some("Press a key or shortcut for this gesture")).clicked();
+        if started { recording = !recording; }
+        if recording && !started && let Some(result) = super::settings_controls::recorded(&ui.input(|input| input.events.clone()), false) {
+            if let Ok(chord) = result { value = chord; }
+            recording = false;
+        }
+        ui.ctx().data_mut(|data| data.insert_temp(capture_id, recording));
+        self.drafts.insert("gesture-output".into(), value.clone());
+        top += 36.0;
+        let rect = Rect::from_min_size(pos2(left, top), vec2(130.0, 28.0));
+        if button(ui, rect, Id::unique("gesture-add"), "Add gesture", Look::Primary, !recording && !value.trim().is_empty() && !self.tuning_busy(), None).clicked() {
+            let held = self.drafts.get("Gesture button").map_or("button4", String::as_str);
+            let direction = self.drafts.get("Swipe direction").map_or("left", String::as_str);
+            match gesture_args(held, direction, &value, &self.keys.scope) {
+                Ok(args) => self.tune_cmds("the gesture", "mouse-modes", vec![args], None),
+                Err(error) => self.keys.error = Some(("mouse-modes", error)),
+            }
+        }
+        top + 38.0
     }
 
     /// The mouse on the desk, each button labelled with what it does now:
@@ -1677,35 +1737,31 @@ impl App {
             self.tune_cmds("the pointer speed", "pointer", vec![tune::pointer_args(Some(x), None, &self.keys.scope)], Some("pointer-speed".into()));
         }
         y += ROW + 6.0;
-        let row = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), ROW));
-        let label = "Acceleration";
-        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
-        let lw = text_width(ui, label, regular(T_BODY)) + 16.0;
-        let track = Rect::from_min_max(pos2(row.left() + lw, row.center().y - 14.0), pos2(row.right(), row.center().y + 14.0));
-        let labels = ["Like here", "Off", "Curve"];
-        let values = ["system", "off", "curve"];
-        let can = tune::RAW_MOTION;
-        let pills = Pills {
-            id: Id::unique("pointer-accel"),
-            track,
-            cells: Pills::even(track, 3, 2.0),
-            labels: &labels,
-            names: vec!["Acceleration: as this computer does it".into(), "Acceleration off (not available here)".into(), "Acceleration curve (not available here)".into()],
-            chosen: values.iter().position(|v| *v == accel),
-            enabled: vec![true, can, can],
-            role: Role::RadioButton,
-            font: T_META,
-            radius: 6,
-        };
-        if let Some(k) = pills.show(ui, self.arrowed) {
-            self.tune_cmds("the acceleration", "pointer", vec![tune::pointer_args(None, Some(values[k]), &self.keys.scope)], None);
-        }
-        y += ROW + 4.0;
-        if !can {
-            y += para(ui, pos2(c.left(), y), c.width(), tune::accel_unavailable(), regular(T_META), INK2);
-        }
-        if accel != "system" && !can {
-            y += 6.0 + error_line(ui, c.left(), y + 6.0, c.width(), &format!("settings.toml asks for acceleration {accel}, which can't be done here: this computer's applies."));
+        if tune::RAW_MOTION {
+            let row = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), ROW));
+            let label = "Acceleration";
+            ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
+            let lw = text_width(ui, label, regular(T_BODY)) + 16.0;
+            let track = Rect::from_min_max(pos2(row.left() + lw, row.center().y - 14.0), pos2(row.right(), row.center().y + 14.0));
+            let labels = ["Like here", "Off", "Curve"];
+            let values = ["system", "off", "curve"];
+            let can = tune::RAW_MOTION;
+            let pills = Pills {
+                id: Id::unique("pointer-accel"),
+                track,
+                cells: Pills::even(track, 3, 2.0),
+                labels: &labels,
+                names: vec!["Acceleration: as this computer does it".into(), "Acceleration off".into(), "Acceleration curve".into()],
+                chosen: values.iter().position(|v| *v == accel),
+                enabled: vec![true, can, can],
+                role: Role::RadioButton,
+                font: T_META,
+                radius: 6,
+            };
+            if let Some(k) = pills.show(ui, self.arrowed) {
+                self.tune_cmds("the acceleration", "pointer", vec![tune::pointer_args(None, Some(values[k]), &self.keys.scope)], None);
+            }
+            y += ROW + 4.0;
         }
         if let Some((_, e)) = self.keys.error.clone().filter(|(a, _)| *a == "pointer") {
             y += 6.0 + error_line(ui, c.left(), y + 6.0, c.width(), &e);
@@ -1800,4 +1856,3 @@ impl App {
         card.end(ui, y - 4.0)
     }
 }
-

@@ -266,6 +266,12 @@ impl App {
             self.set_pref("who can get this clipboard", &["clipboard", "--allow-fetch", v], |p| p.clip_allow_fetch = !p.clip_allow_fetch);
         }
         r.on_hover_text("Any paired computer can copy this clipboard with Get clipboard, including passwords you copied.");
+        let sensitive_label = if c.width() < 220.0 { "Skip secrets" } else { "Skip sensitive copies" };
+        let sensitive = switch(ui, row(4), Id::unique("clip-sensitive"), sensitive_label, p.clip_skip_sensitive, true);
+        if sensitive.clicked() {
+            self.set_pref("sensitive copies", &["clipboard", "--skip-sensitive", if p.clip_skip_sensitive { "off" } else { "on" }], |prefs| prefs.clip_skip_sensitive = !p.clip_skip_sensitive);
+        }
+        sensitive.on_hover_text("Skip passwords and other copies marked as sensitive by their app.");
     }
 
     /// Notifications, the received files folder, and the clipboard's size limit.
@@ -307,6 +313,9 @@ impl App {
                 }
                 _ => self.toast_error(format!("“{text}” isn't a size one·mk can use. Type a whole number of MB, like 25."), None, self.now),
             }
+        }
+        if switch(ui, row(3), Id::unique("file-drop-zones"), "Drop files at screen edges", p.drop_zones, true).clicked() {
+            self.set_pref("file drop zones", &["drag", if p.drop_zones { "--off" } else { "--on" }], |prefs| prefs.drop_zones = !p.drop_zones);
         }
     }
 }

@@ -22,6 +22,8 @@ pub enum Operation {
     On,
     /// Stop retaining clipboard copies and clear retained history.
     Off,
+    /// Keep history across restarts, or remove its saved copy.
+    Persist { #[arg(value_parser = crate::settings::parse_on_off, action = clap::ArgAction::Set)] enabled: bool },
     /// List newest first, with stable item numbers.
     List,
     /// Print full text or HTML (terminal controls escaped); --json preserves exact text.
@@ -37,6 +39,15 @@ pub enum Operation {
 impl ClipboardCommand {
     pub async fn run(self, dir: &Path) -> Result<()> {
         let Self::History { operation, json } = self;
+        if let Some(Operation::Persist { enabled }) = operation {
+            crate::settings::Settings::update(dir, |settings| {
+                settings.clipboard.history_persist = enabled;
+                Ok(())
+            })?;
+            crate::settings::apply(dir).await?;
+            println!("History after restart: {}", if enabled { "on" } else { "off" });
+            return Ok(());
+        }
         if matches!(operation, Some(Operation::On | Operation::Off)) {
             let enabled = matches!(operation, Some(Operation::On));
             crate::settings::Settings::update(dir, |settings| {
@@ -49,7 +60,7 @@ impl ClipboardCommand {
             return Ok(());
         }
         let action = match operation.unwrap_or(Operation::List) {
-            Operation::On | Operation::Off => unreachable!(),
+            Operation::On | Operation::Off | Operation::Persist { .. } => unreachable!(),
             Operation::List => HistoryAction::List, Operation::Show { number } => HistoryAction::Show(number),
             Operation::Copy { number } => HistoryAction::Copy(number), Operation::Delete { number } => HistoryAction::Delete(number),
             Operation::Clear => HistoryAction::Clear,
