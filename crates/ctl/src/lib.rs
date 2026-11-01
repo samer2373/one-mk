@@ -6,6 +6,7 @@
 pub mod client;
 pub mod install;
 pub mod integrate;
+pub mod macos_windows;
 pub mod proc;
 pub mod status;
 pub mod update_logic;
