@@ -1,7 +1,7 @@
 //! The parts of one-mk that talk to an already running daemon or to the
-//! operating system's login settings, without any networking or async
-//! runtime: shared by the `one-mk` command line and the optional
-//! `one-mk-tray`.
+//! operating system's login settings, shared by the command line, tray and
+//! window. Wi-Fi observations use their own event-driven worker, not the
+//! daemon's runtime.
 
 pub mod client;
 pub mod install;
@@ -11,6 +11,7 @@ pub mod proc;
 pub mod setup;
 pub mod status;
 pub mod update_logic;
+pub mod wifi;
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;

@@ -35,6 +35,10 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSLocationUsageDescription</key><string>oneMK reads your Wi-Fi network name to switch layout profiles automatically, including while its window is closed. It does not track your location.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>oneMK reads your Wi-Fi network name to switch layout profiles automatically. It does not track your location.</string>
+  <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>oneMK reads your Wi-Fi network name to switch layout profiles automatically, even while its window is closed. It does not track your location.</string>
+  <key>NSLocationAlwaysUsageDescription</key><string>oneMK reads your Wi-Fi network name to switch layout profiles automatically while running in the background. It does not track your location.</string>
   <key>LSHasLocalizedDisplayName</key><true/>
 </dict></plist>
 PLIST
