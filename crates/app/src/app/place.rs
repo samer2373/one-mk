@@ -205,9 +205,9 @@ impl App {
         let list = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), save_y - 6.0));
         if names.is_empty() {
             let text = if status.peers.is_empty() {
-                "Once computers are paired, save where they are to switch back in one click, or by itself on a Wi-Fi network."
+                "Once computers are paired, save where they are to switch back in one click."
             } else {
-                "Save where every computer is now, to switch back in one click, or by itself on a Wi-Fi network."
+                "Save where every computer is now, to switch back in one click."
             };
             para(ui, list.min + vec2(0.0, 2.0), list.width(), text, regular(T_META), INK2);
             return;
@@ -232,7 +232,7 @@ impl App {
                 let line = Rect::from_min_size(row.min, vec2(row.width(), 30.0));
                 let p = ui.painter().clone();
                 let in_use = current.as_ref() == Some(n);
-                let auto_text = self.prefs.auto.get(n).cloned();
+                let auto_text = cfg!(all(unix, not(target_os = "macos"))).then(|| self.prefs.auto.get(n).cloned()).flatten();
                 let more = Rect::from_min_size(pos2(line.right() - 26.0, line.center().y - 13.0), vec2(26.0, 26.0));
                 let use_w = button_width(ui, "In use") - 6.0;
                 let use_r = Rect::from_min_size(pos2(more.left() - 6.0 - use_w, line.center().y - 13.0), vec2(use_w, 26.0));
@@ -267,24 +267,26 @@ impl App {
                         r
                     };
                     let del = place(bw("Delete"));
-                    let off = auto_text.is_some().then(|| place(bw("Turn off")));
-                    let set = place(bw("Set"));
-                    let fr = Rect::from_min_max(pos2(row.left(), y), pos2(x, y + 28.0));
-                    let key = format!("ssid-{n}");
-                    let mut ssid = self.drafts.get(&key).cloned().unwrap_or_default();
-                    let hint = if auto_text.is_some() { "Another Wi-Fi name" } else { "Wi-Fi name" };
-                    let r = widgets::field(ui, fr, Id::unique(("field", &key)), &mut ssid, hint, &format!("Wi-Fi network that switches to {n} by itself"), true, false);
-                    self.drafts.insert(key.clone(), ssid.clone());
-                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    let ok = !ssid.trim().is_empty();
-                    if (button(ui, set, Id::unique(("profile-auto", n)), "Set", Look::Quiet, ok, Some(&format!("Switch to {n} by itself on this Wi-Fi"))).clicked() || enter) && ok {
-                        auto = Some((n.clone(), Some(ssid.trim().to_owned())));
-                        self.drafts.remove(&key);
-                    }
-                    if let Some(or) = off
-                        && button(ui, or, Id::unique(("profile-auto-off", n)), "Turn off", Look::Quiet, true, Some(&format!("Stop switching to {n} by itself"))).clicked()
-                    {
-                        auto = Some((n.clone(), None));
+                    if cfg!(all(unix, not(target_os = "macos"))) {
+                        let off = auto_text.is_some().then(|| place(bw("Turn off")));
+                        let set = place(bw("Set"));
+                        let fr = Rect::from_min_max(pos2(row.left(), y), pos2(x, y + 28.0));
+                        let key = format!("ssid-{n}");
+                        let mut ssid = self.drafts.get(&key).cloned().unwrap_or_default();
+                        let hint = if auto_text.is_some() { "Another Wi-Fi name" } else { "Wi-Fi name" };
+                        let r = widgets::field(ui, fr, Id::unique(("field", &key)), &mut ssid, hint, &format!("Wi-Fi network that switches to {n} by itself"), true, false);
+                        self.drafts.insert(key.clone(), ssid.clone());
+                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        let ok = !ssid.trim().is_empty();
+                        if (button(ui, set, Id::unique(("profile-auto", n)), "Set", Look::Quiet, ok, Some(&format!("Switch to {n} by itself on this Wi-Fi"))).clicked() || enter) && ok {
+                            auto = Some((n.clone(), Some(ssid.trim().to_owned())));
+                            self.drafts.remove(&key);
+                        }
+                        if let Some(or) = off
+                            && button(ui, or, Id::unique(("profile-auto-off", n)), "Turn off", Look::Quiet, true, Some(&format!("Stop switching to {n} by itself"))).clicked()
+                        {
+                            auto = Some((n.clone(), None));
+                        }
                     }
                     if button(ui, del, Id::unique(("profile-del", n)), "Delete", Look::Quiet, true, Some(&format!("Delete profile {n}"))).clicked() {
                         act = Some(("delete", n.clone()));

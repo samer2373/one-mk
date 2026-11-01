@@ -124,7 +124,6 @@ pub enum Job {
     /// A setting changed with `one-mk <args>`; `what` names it in a sentence.
     Set { what: String, args: Vec<String> },
     Doctor,
-    EditSettings,
     /// Input tuning changed with `one-mk keymap|pointer|scroll|buttons`;
     /// `what` names it, `area` is where its error shows, `n` tells two
     /// changes apart.
@@ -163,6 +162,9 @@ pub struct Link {
 }
 
 impl Link {
+    pub fn pair_with(&self, method: crate::pairing::Method, port: u16) -> std::io::Result<crate::pairing::Pairing> {
+        crate::pairing::Pairing::with_method(&self.daemon, &self.home_args(), self.ctx.clone(), method, port)
+    }
     pub fn history_reveal(&self, id: u64, epoch: u64) {
         let link = self.clone();
         std::thread::spawn(move || {
@@ -369,7 +371,7 @@ impl Link {
     fn login_launch(&self) -> anyhow::Result<Launch> {
         let exe = install::program_path().ok().filter(|p| std::env::var_os("APPIMAGE").is_some() && p.is_file()).unwrap_or_else(|| self.daemon.clone());
         if !exe.is_absolute() {
-            anyhow::bail!("one-mk isn't next to this app. Run `one-mk install` instead");
+            anyhow::bail!("The sharing service could not be found next to this app. Try reopening one·mk.");
         }
         Ok(Launch {
             tray: install::sibling(&exe, "one-mk-tray"),
@@ -570,8 +572,11 @@ impl Link {
     /// Changes a setting with `one-mk <args>`; `what` names it for an error.
     pub fn set(&self, what: &str, args: &[&str]) {
         let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
-        let job = Job::Set { what: what.into(), args: args.clone() };
-        self.job(job, move |l| l.one_mk(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(drop));
+        self.setting(what, args);
+    }
+
+    pub fn setting(&self, what: &str, args: Vec<String>) {
+        self.tune(Job::Set { what: what.into(), args: args.clone() }, vec![args], None);
     }
 
     /// Changes input tuning: `cmds` are `one-mk` commands, run in order
@@ -695,33 +700,8 @@ impl Link {
         view::parse_doctor(&text).ok_or_else(|| {
             let err = String::from_utf8_lossy(&out.stderr);
             let err = err.trim().trim_start_matches("one-mk: ");
-            if err.is_empty() { "one-mk doctor gave no report".to_owned() } else { err.to_owned() }
+            if err.is_empty() { "The connection check gave no report. Try again.".to_owned() } else { view::window_issue(err) }
         })
-    }
-
-    /// Opens `settings.toml` in the system's editor (made first, private,
-    /// if there is none yet).
-    pub fn edit_settings(&self) {
-        self.job(Job::EditSettings, |l| {
-            let path = l.dir.join("settings.toml");
-            if !path.exists() {
-                std::fs::create_dir_all(&l.dir)?;
-                let mut o = std::fs::OpenOptions::new();
-                o.write(true).create_new(true);
-                #[cfg(unix)]
-                std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-                drop(o.open(&path));
-            }
-            let (opener, args): (&str, Vec<String>) = if cfg!(target_os = "macos") {
-                ("open", vec!["-t".into(), path.display().to_string()])
-            } else if cfg!(windows) {
-                ("notepad", vec![path.display().to_string()])
-            } else {
-                ("xdg-open", vec![path.display().to_string()])
-            };
-            proc::spawn_detached(std::path::Path::new(opener), &args, None)
-                .map_err(|e| anyhow::anyhow!("{opener} didn't start ({e}). The file is {}", path.display()))
-        });
     }
 
     /// One request to the running daemon; its error if it refused.

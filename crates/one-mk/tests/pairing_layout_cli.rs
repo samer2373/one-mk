@@ -70,13 +70,19 @@ impl Lab {
 
     fn pair(&mut self, host: &Path, joiner: &Path, invitation: bool, host_port: u16, join_port: u16) -> (String, String) {
         if invitation {
+            let prior_counts = [TrustStore::load(host).unwrap().devices().len(), TrustStore::load(joiner).unwrap().devices().len()];
             let address = if_addrs::get_if_addrs().unwrap().into_iter().map(|interface| interface.ip())
                 .find(|address| address.is_ipv4() && one_mk_net::invite::usable_address(*address)).expect("invitation needs a local non-loopback address");
-            let host_child = self.spawn(host, &["invite", "--listen", &format!("{address}:0"), "--no-discovery", "--no-confirm", "--service-port", &host_port.to_string()], "pair.log");
+            let host_child = self.spawn(host, &["invite", "--machine", "--listen", &format!("{address}:0"), "--no-discovery", "--service-port", &host_port.to_string()], "pair.log");
             let output = Self::wait_text(host, "pair.log", "onemk://");
-            let link = output.lines().find(|line| line.starts_with("onemk://")).unwrap();
-            let join_child = self.spawn(joiner, &["join", "--yes", "--service-port", &join_port.to_string()], "pair.log");
+            let link = output.lines().find_map(|line| line.strip_prefix("invitation\t")).unwrap();
+            let join_child = self.spawn(joiner, &["join", "--machine", "--service-port", &join_port.to_string()], "pair.log");
             writeln!(self.children[join_child].stdin.as_mut().unwrap(), "{link}").unwrap();
+            for ((child, home), prior_count) in [(host_child, host), (join_child, joiner)].into_iter().zip(prior_counts) {
+                Self::wait_text(home, "pair.log", "code\t");
+                assert_eq!(TrustStore::load(home).unwrap().devices().len(), prior_count);
+                writeln!(self.children[child].stdin.as_mut().unwrap(), "yes").unwrap();
+            }
             (self.finished(host_child, host, "pair.log"), self.finished(join_child, joiner, "pair.log"))
         } else {
             let host_child = self.spawn(host, &["pair", "--machine", "--no-discovery"], "pair.log");

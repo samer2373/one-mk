@@ -246,6 +246,13 @@ pub struct Prefs {
     pub clip_image: bool,
     pub clip_max_mb: u32,
     pub clip_allow_fetch: bool,
+    pub clip_skip_sensitive: bool,
+    pub drop_zones: bool,
+    pub broadcast_idle: u32,
+    pub pointer_draw: String,
+    pub edge_wrap: String,
+    pub edge_learn: String,
+    pub edge_sides: Vec<(String, EdgePrefs)>,
     pub history_persist: bool,
     pub history_enabled: bool,
     pub notify_files: bool,
@@ -268,12 +275,21 @@ pub struct Prefs {
     pub hooks: Vec<(&'static str, String)>,
     pub hooks_timeout: u64,
     pub hooks_shell: bool,
+    pub hook_options: HashMap<String, (String, u64, bool)>,
     /// Profile name: when it switches by itself, in words.
     pub auto: HashMap<String, String>,
     /// `[input]`: keys, buttons, pointer and scrolling.
     pub input: crate::tune::Input,
     /// `settings.toml` couldn't be read (the window shows defaults).
     pub unreadable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EdgePrefs {
+    pub corner: u32,
+    pub dwell: u32,
+    pub modifier: String,
+    pub fullscreen: bool,
 }
 
 impl Default for Prefs {
@@ -296,7 +312,7 @@ impl Prefs {
             .map(|shortcut| (shortcut.label, text("hotkeys", shortcut.key, shortcut.default))).collect();
         let hooks = HOOK_EVENTS
             .iter()
-            .filter_map(|(key, label)| get("hooks", key).map(|v| (*label, command_words(&v.words()))).filter(|(_, c)| !c.is_empty()))
+            .filter_map(|(key, label)| get("hooks", key).map(|value| (*label, match value { Val::Str(line) => line.clone(), _ => command_words(&value.words()) })).filter(|(_, command)| !command.is_empty()))
             .collect();
         let mut auto = HashMap::new();
         let p = read_toml(profiles);
@@ -320,6 +336,21 @@ impl Prefs {
             // Off unless the file says so: one·mk writes `allow_pull` only when it is on, and
             // a file from before `settings_version = 2` has its old `true` switched off.
             clip_allow_fetch: num("", "settings_version", 1) >= 2 && flag("clipboard", "allow_pull", false),
+            clip_skip_sensitive: flag("clipboard", "skip_sensitive", true),
+            drop_zones: flag("drag", "enabled", cfg!(any(windows, target_os = "macos")) || (cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_some())),
+            broadcast_idle: num("broadcast", "idle_off_minutes", 15).clamp(0, 1440) as u32,
+            pointer_draw: text("pointer", "draw_when_no_mouse", "auto"),
+            edge_wrap: get("edge", "wrap").and_then(Val::as_bool).map(|on| if on { "on" } else { "off" }.to_owned()).unwrap_or_else(|| text("edge", "wrap", "off")),
+            edge_learn: text("edge", "learn", "suggest"),
+            edge_sides: ["left", "right", "top", "bottom"].into_iter().map(|side| {
+                let table = format!("edge.{side}");
+                (side.to_owned(), EdgePrefs {
+                    corner: num(&table, "corner", num("edge", "corner", 0)).max(0) as u32,
+                    dwell: num(&table, "dwell_ms", num("edge", "dwell_ms", 0)).max(0) as u32,
+                    modifier: text(&table, "modifier", &text("edge", "modifier", "none")),
+                    fullscreen: flag(&table, "fullscreen_guard", flag("edge", "fullscreen_guard", false)),
+                })
+            }).collect(),
             history_persist: flag("clipboard", "history_persist", false),
             history_enabled: num("clipboard", "history_max", 0) > 0 && num("clipboard", "history_max_mb", 16) > 0,
             notify_files: flag("", "notify_files", true),
@@ -341,6 +372,11 @@ impl Prefs {
             hooks,
             hooks_timeout: num("hooks", "timeout_secs", 5).max(1) as u64,
             hooks_shell: flag("hooks", "shell", false),
+            hook_options: ["enter", "leave", "peer_connect", "peer_disconnect"].into_iter().map(|event| {
+                let table = format!("hooks.options.{event}");
+                let shell = !matches!(get("hooks", &format!("on_{event}")), Some(Val::List(_))) && flag(&table, "shell", flag("hooks", "shell", false));
+                (event.into(), (text(&table, "computer", ""), num(&table, "timeout_secs", num("hooks", "timeout_secs", 5)).clamp(1, 60) as u64, shell))
+            }).collect(),
             auto,
             input: crate::tune::Input::read(&e),
             unreadable: false,
@@ -350,12 +386,9 @@ impl Prefs {
 
 /// A command's words as one line, quoting the ones with spaces.
 fn command_words(words: &[String]) -> String {
-    if words.len() == 1 {
-        return words[0].clone();
-    }
     words
         .iter()
-        .map(|w| if w.is_empty() || w.contains(char::is_whitespace) { format!("'{}'", w.replace('\'', "'\\''")) } else { w.clone() })
+        .map(|word| format!("'{}'", word.replace('\'', "'\\''")))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -416,6 +449,13 @@ pub struct Check {
     pub detail: String,
     pub fix: Option<String>,
     pub action: Option<String>,
+}
+
+pub fn window_issue(text: &str) -> String {
+    if text.contains("settings.toml") { "Check the options in Advanced, then try again.".into() }
+    else if text.contains('`') || ["one-mk run", "one-mk install", "one-mk pair", "one-mk hooks", "one-mk edge", "one-mk send", "one-mk keymap", "one-mk clipboard", "one-mk hotkeys", "one-mk takeback", "one-mk gestures", "one-mk invite", "one-mk join", "one-mk doctor", "sudo ", "chmod "].iter().any(|command| text.contains(command)) {
+        "Review the options in this window, or restart one·mk and try again.".into()
+    } else { text.replace("one-mk", "one·mk") }
 }
 
 /// What `one-mk doctor --json` found, worst first, keeping its order
@@ -754,6 +794,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hook_editor_preserves_literal_words_and_existing_scripts() {
+        let prefs = Prefs::read("[hooks]\non_enter = [\"program with spaces\", \"it's\", \"$HOME\", \"\"]\non_leave = \"echo $HOME\"\nshell = true", "");
+        assert_eq!(prefs.hooks[0].1, "'program with spaces' 'it'\\''s' '$HOME' ''");
+        assert_eq!(prefs.hooks[1].1, "echo $HOME");
+        assert!(!prefs.hook_options["enter"].2, "argument arrays run without a shell, even with the old shell setting on");
+        assert!(prefs.hook_options["leave"].2);
+        assert_eq!(Prefs::read("[hooks]\non_enter = ['program with spaces']", "").hooks[0].1, "'program with spaces'");
+    }
+
+    #[test]
+    fn window_diagnostics_never_offer_terminal_steps() {
+        for text in ["Run one-mk invite", "Use one-mk takeback", "Edit settings.toml", "Try `one-mk hotkeys`", "sudo example"] {
+            let shown = window_issue(text);
+            assert!(!shown.contains("one-mk ") && !shown.contains("settings.toml") && !shown.contains('`'), "{shown}");
+        }
+    }
+
+    #[test]
+    fn desktop_settings_read_nested_overrides_and_defaults() {
+        let defaults = Prefs::read("", "");
+        assert!(defaults.clip_skip_sensitive && !defaults.history_persist);
+        assert_eq!((defaults.pointer_draw.as_str(), defaults.edge_wrap.as_str(), defaults.edge_learn.as_str(), defaults.broadcast_idle), ("auto", "off", "suggest", 15));
+        let settings = "[clipboard]\nskip_sensitive=false\nhistory_persist=true\nhistory_max=20\n[drag]\nenabled=true\n[broadcast]\nidle_off_minutes=7\n[pointer]\ndraw_when_no_mouse='always'\n[edge]\nwrap='all'\nlearn='suggest'\ncorner=12\ndwell_ms=100\nmodifier='ctrl'\n[edge.left]\ndwell_ms=250\n[hooks]\non_enter='echo hi'\ntimeout_secs=9\nshell=false\n[hooks.options.enter]\ncomputer='abcdef01'\ntimeout_secs=12\nshell=true\n";
+        let prefs = Prefs::read(settings, "");
+        assert!(!prefs.clip_skip_sensitive && prefs.history_persist && prefs.drop_zones);
+        assert_eq!(prefs.broadcast_idle, 7);
+        assert_eq!((prefs.pointer_draw.as_str(), prefs.edge_wrap.as_str(), prefs.edge_learn.as_str()), ("always", "all", "suggest"));
+        let left = &prefs.edge_sides.iter().find(|(side, _)| side == "left").unwrap().1;
+        assert_eq!((left.corner, left.dwell, left.modifier.as_str()), (12, 250, "ctrl"));
+        assert_eq!(prefs.hook_options["enter"], ("abcdef01".into(), 12, true));
+        assert_eq!(prefs.hook_options["leave"], (String::new(), 9, false));
+        assert_eq!(Prefs::read("[edge]\nwrap=true", "").edge_wrap, "on");
+    }
+
+    #[test]
     fn typing_preferences_default_and_parse_only_known_modes() {
         for (settings, expected) in [
             ("", "physical"),
@@ -827,7 +902,7 @@ name = "Café, 2nd floor"
         assert!(p.sleep_sync && !p.block_screensaver && !p.hotkeys_on);
         assert_eq!(p.hotkeys[1], ("The next computer", "ctrl+alt+n".to_owned()));
         assert_eq!(p.hotkeys[0].1, if cfg!(windows) { "ctrl+alt+shift+{n}" } else { "ctrl+alt+{n}" }, "unset shortcuts are the defaults");
-        assert_eq!(p.hooks, vec![("Pointer arrives", "notify-send 'hi there'".to_owned()), ("Pointer leaves", "echo # not a comment".to_owned())]);
+        assert_eq!(p.hooks, vec![("Pointer arrives", "'notify-send' 'hi there'".to_owned()), ("Pointer leaves", "echo # not a comment".to_owned())]);
         assert_eq!(p.hooks_timeout, 9);
         assert_eq!(p.auto.get("home").map(String::as_str), Some("Wi-Fi “Home Wi-Fi” or 192.168.1.0/24"));
         assert!(!p.auto.contains_key("Café, 2nd floor"));

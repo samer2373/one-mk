@@ -18,6 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Args)]
 pub struct InviteArgs {
+    #[arg(long, hide = true)]
+    machine: bool,
     /// Invitation lifetime: e.g. 30s, 10m, 1h (maximum 1 hour).
     #[arg(long, default_value = "10m", value_parser = duration)]
     expires: Duration,
@@ -40,6 +42,8 @@ pub struct InviteArgs {
 
 #[derive(Args)]
 pub struct JoinArgs {
+    #[arg(long, hide = true, conflicts_with = "yes")]
+    machine: bool,
     /// Invitation link. Omit to read one line from stdin (avoids shell history).
     link: Option<String>,
     /// Trust the pinned host without prompting (required for non-terminal stdin).
@@ -121,7 +125,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
     println!("Expires in {} minutes. One use; closing this process cancels it.", wall_expiry.saturating_sub(one_mk_net::invite::unix_now()).div_ceil(60));
     println!("Treat this link like a password: whoever uses it first can request trust.");
     println!("{}", link.as_str());
-    print_qr(&link)?;
+    if args.machine { println!("invitation\t{}", link.as_str()); } else { print_qr(&link)?; }
     println!("{}", if args.no_confirm { "WARNING: --no-confirm: the first valid joiner will be trusted automatically." } else { "Approval required here: you will see the joiner's name and fingerprint before trusting it." });
     std::io::stdout().flush()?;
 
@@ -163,7 +167,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                         // Continue serving the UI while approval is pending, but
                         // never expose the already-burned invitation again.
                         let saved = AtomicBool::new(false);
-                        let decision = approve_and_save(dir, &peer, session, !args.no_confirm, end, wall_expiry, &saved);
+                        let decision = approve_and_save(dir, &peer, session, !args.no_confirm, end, wall_expiry, &saved, args.machine);
                         let decision = approval_until_cancelled(decision, tokio::signal::ctrl_c(), &saved);
                         tokio::pin!(decision);
                         loop {
@@ -230,7 +234,8 @@ async fn approval_until_cancelled<T>(decision: impl std::future::Future<Output =
     }
 }
 
-async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, confirm: bool, expiry: tokio::time::Instant, wall_expiry: u64, saved: &AtomicBool) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, confirm: bool, expiry: tokio::time::Instant, wall_expiry: u64, saved: &AtomicBool, machine: bool) -> Result<()> {
     let name = session.peer_name.clone();
     let port = session.service_port;
     println!("\n>>> {} joined: certificate {} <<<", name, grouped(peer.fingerprint));
@@ -238,6 +243,7 @@ async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, c
     std::io::stdout().flush()?;
     let end = expiry.min(tokio::time::Instant::now() + Duration::from_secs(120));
     let accept = if confirm {
+        if machine { println!("code\t{}\t{}", sanitize_name(&name), session.code); }
         println!("Does the other computer show {}? Trust it with your keyboard, mouse and shared clipboard? [y/N]", grouped_code(&session.code));
         std::io::stdout().flush()?;
         read_approval(end, Some(wall_expiry)).await
@@ -248,11 +254,12 @@ async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, c
     save_marked(dir, peer, &name, port, true, saved).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}).", peer.fingerprint);
+    if machine { println!("paired\t{}\t{}\tleft", peer.fingerprint, sanitize_name(&name)); }
     Ok(())
 }
 
 pub async fn join(dir: &Path, args: JoinArgs) -> Result<()> {
-    ensure!(args.yes || std::io::stdin().is_terminal(), "non-interactive stdin requires --yes; this skips host trust approval");
+    ensure!(args.machine || args.yes || std::io::stdin().is_terminal(), "non-interactive stdin requires --yes; this skips host trust approval");
     let text = match args.link {
         Some(s) => { eprintln!("WARNING: positional invitation links are visible in process arguments and may remain in shell history; prefer `one-mk join`."); Zeroizing::new(s) }
         None => { eprintln!("Paste the invitation link, then Enter:"); read_stdin(MAX_LINK + 1).await? }
@@ -263,19 +270,20 @@ pub async fn join(dir: &Path, args: JoinArgs) -> Result<()> {
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let node = Node::bind_any(identity.clone(), 0)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    let mut result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline).await;
+    let mut result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline, args.machine).await;
     for _ in 0..3 {
         if !result.as_ref().is_err_and(|error| format!("{error:#}").contains("busy")) { break; }
         let wait = Duration::from_millis(300 + u64::from(rand::random::<u16>()) % 601);
         if tokio::time::Instant::now() + wait >= deadline { break; }
         tokio::time::sleep(wait).await;
-        result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline).await;
+        result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline, args.machine).await;
     }
     node.shutdown(Duration::from_millis(200)).await;
     result
 }
 
-async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &Invitation, service_port: u16, yes: bool, deadline: tokio::time::Instant) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &Invitation, service_port: u16, yes: bool, deadline: tokio::time::Instant, machine: bool) -> Result<()> {
     let mut connected = None;
     let mut tried = HashSet::new();
     for addr in &invitation.addrs {
@@ -314,6 +322,7 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
     let port = session.service_port;
     println!("Authenticated {name} ({}).", grouped(peer.fingerprint));
     println!("Your code: {} (the other computer will ask you to compare it)", grouped_code(&session.code));
+    if machine { println!("code\t{}\t{}", sanitize_name(&name), session.code); }
     let end = tokio::time::Instant::now() + Duration::from_secs(120);
     let accept = if yes {
         println!("WARNING: --yes skips the host trust prompt; verify the code on the host unless it uses --no-confirm.");
@@ -328,6 +337,7 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
     save(dir, &peer, &name, port, false).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}). Start `one-mk run` only on computers not already running.", peer.fingerprint);
+    if machine { println!("paired\t{}\t{}\tleft", peer.fingerprint, sanitize_name(&name)); }
     Ok(())
 }
 
@@ -341,7 +351,7 @@ async fn read_approval(end: tokio::time::Instant, wall_expiry: Option<u64>) -> b
     let mut clock = tokio::time::interval(Duration::from_millis(250));
     loop {
         tokio::select! {
-            result = &mut input => return result.is_ok_and(|text| text.trim().eq_ignore_ascii_case("y")),
+            result = &mut input => return result.is_ok_and(|text| text.trim().eq_ignore_ascii_case("y") || text.trim().eq_ignore_ascii_case("yes")),
             _ = tokio::time::sleep_until(end) => return false,
             _ = clock.tick() => {
                 if wall_expiry.is_some_and(|expiry| one_mk_net::invite::unix_now() >= expiry) { return false; }
@@ -595,7 +605,7 @@ mod tests {
         let host_dir = dir.join("host");
         let host_home = host_dir.clone();
         let host = tokio::spawn(async move {
-            run(&host_home, InviteArgs { expires: Duration::from_secs(30), confirm: false, no_confirm: true, listen: None, no_discovery: true, service_port: 24900 }).await
+            run(&host_home, InviteArgs { machine: false, expires: Duration::from_secs(30), confirm: false, no_confirm: true, listen: None, no_discovery: true, service_port: 24900 }).await
         });
         let invitation = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
@@ -618,7 +628,7 @@ mod tests {
         let joiner = Node::bind(identity.clone(), "127.0.0.5:0".parse().unwrap()).unwrap();
         let mut local_invitation = invitation;
         local_invitation.addrs = vec![address];
-        let result = tokio::time::timeout(Duration::from_secs(5), join_inner(&dir.join("joiner"), &joiner, &identity, &local_invitation, 24901, true, tokio::time::Instant::now() + Duration::from_secs(4))).await;
+        let result = tokio::time::timeout(Duration::from_secs(5), join_inner(&dir.join("joiner"), &joiner, &identity, &local_invitation, 24901, true, tokio::time::Instant::now() + Duration::from_secs(4), false)).await;
         stop.store(true, Ordering::SeqCst);
         let mut attempts = 0;
         while let Some(done) = attackers.join_next().await { attempts += done.unwrap(); }
@@ -676,7 +686,7 @@ mod tests {
             let join_dir = dir.join("joiner");
             let (host_result, join_result) = tokio::join!(async {
                 if !host_first { tokio::time::sleep(Duration::from_millis(100)).await; }
-                approve_and_save(&host_dir, &incoming, host_session, false, tokio::time::Instant::now() + Duration::from_millis(50), invitation.expires, &AtomicBool::new(false)).await
+                approve_and_save(&host_dir, &incoming, host_session, false, tokio::time::Instant::now() + Duration::from_millis(50), invitation.expires, &AtomicBool::new(false), false).await
             }, async {
                 if host_first { tokio::time::sleep(Duration::from_millis(150)).await; }
                 ensure!(join_session.confirm(true).await?, "host declined");
