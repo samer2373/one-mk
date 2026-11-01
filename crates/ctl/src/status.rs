@@ -156,6 +156,37 @@ pub struct Status {
     pub suggestion: Option<Suggestion>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Severity {
+    Info,
+    Problem,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InputLine {
+    pub detail: String,
+    pub severity: Severity,
+}
+
+pub fn input_line(line: &str) -> InputLine {
+    let (detail, severity) = if line.starts_with("one-mk needs Accessibility permission") {
+        ("Allow Accessibility in System Settings to share this Mac's mouse and keyboard.", Severity::Problem)
+    } else if line.starts_with("one-mk needs Input Monitoring permission") {
+        ("Allow Input Monitoring in System Settings to send this Mac's mouse and keyboard to other computers.", Severity::Problem)
+    } else if line.contains("Secure Keyboard Entry") || line.contains("password field") {
+        ("Keyboard sharing pauses while a password field or secure typing is active. Leave it to continue sharing.", Severity::Info)
+    } else if line.starts_with("Local key rules inactive") {
+        ("Local key rules are off.", Severity::Info)
+    } else if line.starts_with("Waiting for your approval") || line.contains("permission dialog") {
+        ("Approve the sharing request in your desktop's permission dialog.", Severity::Info)
+    } else if line.contains("session is locked") || line.contains("screen is locked") {
+        ("Sharing is paused while this computer is locked.", Severity::Info)
+    } else {
+        ("Mouse and keyboard sharing needs attention. Try starting sharing again.", Severity::Problem)
+    };
+    InputLine { detail: detail.to_owned(), severity }
+}
+
 /// What QUIC already knows about a connection, read on a status request
 /// (no probe traffic, no timer: quinn measures it with every packet).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -329,16 +360,18 @@ pub struct PeerStatus {
 pub const HOTKEYS_FALLBACK: &str = "bind `one-mk switch next` (and `one-mk switch here`) to a key in your desktop settings";
 
 impl Status {
+    pub fn input_lines(&self) -> Vec<InputLine> {
+        self.input.iter().map(|line| input_line(line)).collect()
+    }
+
     /// The keyboard shortcuts, in one line; `None` if there is nothing to say.
     pub fn hotkeys_line(&self) -> Option<String> {
         let d = &self.hotkeys_detail;
         Some(match self.hotkeys.as_str() {
-            "on" => format!("Keyboard shortcuts work {d} (`one-mk hotkeys` lists them)."),
-            "starting" => format!("Keyboard shortcuts are being set up: {d}."),
-            "unavailable" => format!(
-                "Keyboard shortcuts work only while the pointer is on another computer ({d}); here, {HOTKEYS_FALLBACK}."
-            ),
-            _ if !d.is_empty() => format!("Keyboard shortcuts are off: {d}."),
+            "on" => "Keyboard shortcuts are ready. You can change them in Settings.".to_owned(),
+            "starting" => "Keyboard shortcuts are being set up.".to_owned(),
+            "unavailable" => "Keyboard shortcuts work only while the pointer is on another computer. You can also switch computers from the window.".to_owned(),
+            _ if !d.is_empty() => "Keyboard shortcuts are off. You can change them in Settings.".to_owned(),
             _ => return None,
         })
     }
@@ -755,6 +788,36 @@ mod tests {
         assert!(warned.render().contains("does not overlap"));
     }
 
+    #[test]
+    fn live_input_has_plain_text_and_per_line_severity() {
+        let status = Status { input: vec![
+            "Waiting for your approval: allow one-mk in the desktop's dialog.".into(),
+            "A password field or an app using Secure Keyboard Entry is active on this Mac".into(),
+            "Local key rules inactive; no native local-rules problem reported.".into(),
+            "one-mk needs Accessibility permission to share this Mac's mouse and keyboard.".into(),
+            "one-mk needs Input Monitoring permission to send this Mac's mouse and keyboard.".into(),
+            "The Wayland compositor connection failed (decoder compile error).".into(),
+        ], ..Status::default() };
+        let lines = status.input_lines();
+        assert_eq!(lines.iter().map(|line| line.severity).collect::<Vec<_>>(),
+            [Severity::Info, Severity::Info, Severity::Info, Severity::Problem, Severity::Problem, Severity::Problem]);
+        assert!(lines[3].detail.contains("Accessibility"));
+        assert!(lines[4].detail.contains("Input Monitoring"));
+        for line in &lines {
+            for forbidden in ["one-mk ", "settings.toml", "`", "untested", "compile", "decoder", "native"] {
+                assert!(!line.detail.contains(forbidden), "{}", line.detail);
+            }
+        }
+        assert_eq!(Status::decode(&status.encode()).unwrap().input_lines(), lines);
+        let legacy = Status::decode("ok\ninput\tWaiting for your approval: allow sharing.\n").unwrap();
+        assert_eq!(legacy.input_lines()[0].severity, Severity::Info);
+        for state in ["on", "starting", "unavailable", "off"] {
+            let shortcuts = Status { hotkeys: state.into(), hotkeys_detail: "MacApp one-mk hotkeys `compile`".into(), ..Status::default() };
+            let text = shortcuts.hotkeys_line().unwrap();
+            assert!(!text.contains("one-mk ") && !text.contains('`') && !text.contains("MacApp"));
+        }
+    }
+
     /// Broadcast survives the wire, comes first in `one-mk status`, and
     /// replaces the "mouse and keyboard are on/controlling" sentence (it is
     /// neither). Older readers skip its lines; a name can't break the format.
@@ -824,10 +887,10 @@ mod tests {
         let s = Status { hotkeys: "unavailable".into(), hotkeys_detail: "this desktop has no GlobalShortcuts portal".into(), ..Status::default() };
         assert_eq!(Status::decode(&s.encode()), Some(s.clone()));
         let line = s.hotkeys_line().unwrap();
-        assert!(line.contains("only while the pointer is on another computer") && line.contains("`one-mk switch next`"), "{line}");
+        assert!(line.contains("only while the pointer is on another computer") && line.contains("from the window"), "{line}");
         assert!(s.render().contains(&line));
         let on = Status { hotkeys: "on".into(), hotkeys_detail: "through Windows".into(), ..Status::default() };
-        assert_eq!(on.hotkeys_line().unwrap(), "Keyboard shortcuts work through Windows (`one-mk hotkeys` lists them).");
+        assert_eq!(on.hotkeys_line().unwrap(), "Keyboard shortcuts are ready. You can change them in Settings.");
         assert_eq!(Status::decode(&on.encode()), Some(on));
         // Older daemons say nothing; off without a reason says nothing either.
         assert_eq!(Status::default().hotkeys_line(), None);
