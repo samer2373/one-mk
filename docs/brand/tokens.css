@@ -1,4 +1,4 @@
-/* one·mk design tokens, written by scripts/brand-tokens.py from crates/app/src/style.rs. Do not edit. */
+/* oneMK design tokens, written by scripts/brand-tokens.py from crates/app/src/style.rs. Do not edit. */
 @font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-SemiBold.ttf") format("truetype"); font-weight: 600; font-display: swap; }
 @font-face { font-family: "Geist Mono"; src: url("../../crates/app/fonts/GeistMono-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
@@ -18,6 +18,11 @@
   --omk-control: rgba(108, 113, 123, 0.204);
   --omk-control-solid-top: #2A2E35;
   --omk-control-solid: #22262C;
+  --omk-group: rgba(255, 255, 255, 0.047);
+  --omk-group-edge: rgba(255, 255, 255, 0.067);
+  --omk-track: rgba(0, 0, 0, 0.22);
+  --omk-thumb: rgba(255, 255, 255, 0.188);
+  --omk-control-edge: rgba(255, 255, 255, 0.078);
   --omk-glass-hairline: rgba(255, 255, 255, 0.047);
   --omk-glass-rim: rgba(255, 255, 255, 0.102);
   --omk-glass-edge: rgba(255, 255, 255, 0.22);

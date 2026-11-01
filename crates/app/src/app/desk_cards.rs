@@ -285,7 +285,7 @@ impl App {
         x -= w;
         let busy = self.busy.contains(&Job::LockAll);
         let r = Rect::from_min_size(pos2(x, y), vec2(w, 34.0));
-        if button(ui, r, Id::unique("lock-all"), "", Look::Quiet, !busy, Some("Lock this computer and every connected one")).clicked() {
+        if button(ui, r, Id::unique("lock-all"), "", Look::Glass, !busy, Some("Lock this computer and every connected one")).clicked() {
             self.busy.push(Job::LockAll);
             self.link.lock_all();
         }
@@ -296,7 +296,7 @@ impl App {
         if online || on {
             x -= 64.0 + 8.0;
             let rect = Rect::from_min_size(pos2(x, y), vec2(64.0, 34.0));
-            let response = button(ui, rect, Id::unique("broadcast-options"), "Timer", Look::Quiet, !on, Some("Broadcast idle timer"));
+            let response = button(ui, rect, Id::unique("broadcast-options"), "Timer", Look::Glass, !on, Some("Broadcast idle timer"));
             egui::Popup::menu(&response).width(280.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
                 let (row, _) = ui.allocate_exact_size(vec2(280.0, 34.0), Sense::hover());
                 self.broadcast_timeout(ui, row);

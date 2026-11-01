@@ -13,10 +13,10 @@ const EDGE_ROW: f32 = 38.0;
 const MODS: [(&str, &str); 4] = [("none", "None"), ("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
 
 /// A group of settings, as the system's own settings show them: its title
-/// above, quiet, and the rows on one piece of glass below it.
+/// above, quiet, and the rows on one quiet group below it.
 pub(super) fn card(ui: &Ui, r: Rect, title: &str) -> Rect {
     let glass = Rect::from_min_max(r.min + vec2(0.0, GROUP_TITLE), r.max);
-    widgets::glass_panel(ui, ("card", title), glass, R_GROUP);
+    widgets::group(ui, glass, R_GROUP);
     let p = ui.painter();
     p.text(r.left_top() + vec2(14.0, 13.0), Align2::LEFT_CENTER, title, semibold(T_BODY), INK2);
     a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(r.min, vec2(r.width(), GROUP_TITLE)), Role::Heading, title, None);
@@ -215,7 +215,7 @@ impl App {
                 None => String::new(),
             };
             let hero = col(ui, 92.0);
-            widgets::glass_panel(ui, "health-hero", hero, R_PANEL);
+            widgets::group(ui, hero, R_GROUP);
             let p = ui.painter().clone();
             let medal = pos2(hero.left() + 46.0, hero.center().y);
             p.circle_filled(medal, 22.0, tone.gamma_multiply(0.16));

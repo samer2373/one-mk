@@ -116,9 +116,13 @@ pub fn focus_ring(ui: &Ui, r: &Response, rect: Rect, radius: u8) {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Look {
-    /// The one action that matters most here: amber.
+    /// The one action that matters most here: the accent.
     Primary,
+    /// Everything else: a quiet solid capsule.
     Quiet,
+    /// A control floating over the desk (the toolbar): glass, like the
+    /// panels it sits among.
+    Glass,
 }
 
 /// A button that presses in a little. `a11y` names it for screen readers
@@ -136,7 +140,7 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
     let fg = match (look, enabled) {
         (_, false) => INK3,
         (Look::Primary, true) => SIGNAL_INK,
-        (Look::Quiet, true) => INK,
+        (Look::Quiet | Look::Glass, true) => INK,
     };
     let p = ui.painter().clone();
     match (look, enabled) {
@@ -146,13 +150,16 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
             p.add(rounded_gradient(rr, rr.height() / 2.0, mix(SIGNAL_LIT, Color32::WHITE, 0.12 * hover + 0.04), mix(SIGNAL, SIGNAL_LIT, hover)));
             p.add(lit_edge(rr.shrink(0.5), rr.height() / 2.0 - 0.5));
         }
-        (Look::Quiet, true) => {
+        (Look::Glass, true) => {
             for s in glass_shapes_as(&ctx, id.with("glass").value(), rr, rr.height() / 2.0, CONTROL_GLASS) {
                 p.add(s);
             }
             if hover > 0.0 {
                 p.rect_filled(rr, CornerRadius::same(radius), Color32::from_white_alpha((14.0 * hover) as u8));
             }
+        }
+        (Look::Quiet, true) => {
+            p.rect(rr, CornerRadius::same(radius), mix(BUTTON, BUTTON_LIT, hover), Stroke::new(1.0, CONTROL_EDGE), StrokeKind::Inside);
         }
         (_, false) => {
             p.rect(rr, CornerRadius::same(radius), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
@@ -276,9 +283,9 @@ impl Pills<'_> {
     pub fn show(&self, ui: &mut Ui, arrowed: bool) -> Option<usize> {
         let ctx = ui.ctx().clone();
         let p = ui.painter().clone();
-        // A recessed track, and a glass lens that slides to the choice.
+        // A recessed track, and a lighter capsule that slides to the choice.
         let round = |r: Rect| (r.height() / 2.0).round().min(255.0) as u8;
-        p.rect(self.track, CornerRadius::same(round(self.track)), Color32::from_black_alpha(60), Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
+        p.rect_filled(self.track, CornerRadius::same(round(self.track)), TRACK);
         let to = self.cells[self.chosen.unwrap_or(0).min(self.cells.len() - 1)];
         let secs = motion::space(0.22);
         let x = tween(&ctx, self.id.with("x"), to.left(), secs, motion::out_quart);
@@ -286,13 +293,10 @@ impl Pills<'_> {
         let shown = tween(&ctx, self.id.with("shown"), f32::from(self.chosen.is_some()), motion::fade(0.15), motion::linear);
         if shown > 0.0 {
             let pill = Rect::from_min_size(pos2(x, to.top()), vec2(w, to.height()));
-            if shown > 0.99 {
-                for s in glass_shapes_as(&ctx, self.id.with("lens").value(), pill, pill.height() / 2.0, CONTROL_GLASS) {
-                    p.add(s);
-                }
-            } else {
-                p.rect_filled(pill, CornerRadius::same(round(pill)), PILL.gamma_multiply(shown));
-            }
+            // The chosen one lifts out of the track: a lighter capsule on
+            // a soft shadow.
+            p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha((70.0 * shown) as u8) }.as_shape(pill, CornerRadius::same(round(pill))));
+            p.rect(pill, CornerRadius::same(round(pill)), THUMB.gamma_multiply(shown), Stroke::new(1.0, CONTROL_EDGE.gamma_multiply(shown)), StrokeKind::Inside);
         }
         let mut picked = None;
         // egui moves focus with the arrows but doesn't report it as gained,
@@ -494,6 +498,19 @@ pub fn glass_panel(ui: &Ui, key: impl std::hash::Hash + std::fmt::Debug, rect: R
     for s in glass_shapes(ui.ctx(), Id::unique(("glass", key)).value(), rect, radius) {
         ui.painter().add(s);
     }
+}
+
+/// The content layer: a group of rows on a quiet fill and a hairline. Not
+/// glass: glass is for what floats above the content (the sidebar, the
+/// panels over the desk, the toolbar), as the system uses it.
+pub fn group(ui: &Ui, rect: Rect, radius: u8) {
+    for s in group_shapes(rect, radius) {
+        ui.painter().add(s);
+    }
+}
+
+pub fn group_shapes(rect: Rect, radius: u8) -> Vec<egui::Shape> {
+    vec![egui::Shape::Rect(egui::epaint::RectShape::new(rect, CornerRadius::same(radius), GROUP, Stroke::new(1.0, GROUP_EDGE), StrokeKind::Inside))]
 }
 
 /// The same as shapes, to place behind contents drawn first.

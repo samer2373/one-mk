@@ -30,6 +30,15 @@ pub const CONTROL_TOP: Color32 = Color32::from_rgba_premultiplied(40, 41, 44, 70
 pub const CONTROL: Color32 = Color32::from_rgba_premultiplied(22, 23, 25, 52);
 pub const CONTROL_SOLID_TOP: Color32 = Color32::from_rgb(0x2A, 0x2E, 0x35);
 pub const CONTROL_SOLID: Color32 = Color32::from_rgb(0x22, 0x26, 0x2C);
+/// The content layer (settings groups, Health, the keys): a quiet fill and
+/// a hairline, no glass.
+pub const GROUP: Color32 = Color32::from_rgba_premultiplied(12, 12, 12, 12);
+pub const GROUP_EDGE: Color32 = Color32::from_rgba_premultiplied(17, 17, 17, 17);
+/// A segmented control's track, and the chosen segment's capsule.
+pub const TRACK: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 56);
+pub const THUMB: Color32 = Color32::from_rgba_premultiplied(48, 48, 48, 48);
+/// The hairline round a solid control.
+pub const CONTROL_EDGE: Color32 = Color32::from_rgba_premultiplied(20, 20, 20, 20);
 /// The edge of a glass shape where the light doesn't catch it.
 pub const GLASS_HAIRLINE: Color32 = Color32::from_rgba_premultiplied(12, 12, 12, 12);
 /// A glass panel's rim, and its lit top edge (drawn when there is no blur;

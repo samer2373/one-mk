@@ -127,7 +127,6 @@ fn mac() -> bool {
 /// background goes in first (behind), its shape is set at the end.
 struct Card {
     bg: egui::layers::ShapeIdx,
-    title: String,
     top: Pos2,
     w: f32,
     inner: Rect,
@@ -139,15 +138,15 @@ fn card_begin(ui: &Ui, top: Pos2, w: f32, title: &str) -> Card {
     let p = ui.painter();
     p.text(r.left_top() + vec2(18.0, 26.0), Align2::LEFT_CENTER, title, semibold(T_TITLE), INK);
     a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(r.min, vec2(w, 44.0)), Role::Heading, title, None);
-    Card { bg, title: title.to_owned(), top, w, inner: Rect::from_min_max(r.min + vec2(18.0, 48.0), pos2(r.right() - 18.0, f32::INFINITY)) }
+    Card { bg, top, w, inner: Rect::from_min_max(r.min + vec2(18.0, 48.0), pos2(r.right() - 18.0, f32::INFINITY)) }
 }
 
 impl Card {
     /// Closes the card below `bottom`; its height.
     fn end(self, ui: &Ui, bottom: f32) -> f32 {
         let r = Rect::from_min_max(self.top, pos2(self.top.x + self.w, bottom + 14.0));
-        // The card's glass goes behind what was drawn on it.
-        let shapes = widgets::glass_shapes(ui.ctx(), Id::unique(("keys-card", &self.title)).value(), r, R_PANEL);
+        // The group's fill goes behind what was drawn on it.
+        let shapes = widgets::group_shapes(r, R_GROUP);
         ui.painter().set(self.bg, egui::Shape::Vec(shapes));
         r.height()
     }
@@ -765,7 +764,7 @@ impl App {
     }
 
     fn keyboard_card(&mut self, ui: &mut Ui, r: Rect, _unit: f32, _side: bool, input: &Input, facts: &Facts) {
-        widgets::glass_panel(ui, "keys-board", r, R_PANEL);
+        widgets::group(ui, r, R_GROUP);
         let p = ui.painter().clone();
         let label = if self.keys.keypad { "Fewer keys" } else { "More keys" };
         let bw = button_width(ui, label) - 8.0;
@@ -1495,7 +1494,7 @@ impl App {
     /// click a part or its label to change it.
     fn mouse_stage(&mut self, ui: &mut Ui, r: Rect, input: &Input, facts: &Facts) {
         const PARTS: [(u32, &str); 5] = [(1, "left"), (2, "right"), (3, "wheel"), (4, "back"), (5, "forward")];
-        widgets::glass_panel(ui, "mouse-stage", r, R_PANEL);
+        widgets::group(ui, r, R_GROUP);
         let model = self.keys.mouse_model.get_or_insert_with(|| std::sync::Arc::new(crate::gear::Model::parse(include_bytes!("../../assets/gear/mouse.omkm")).expect("the mouse model is built in"))).clone();
         let narrow = r.width() < 720.0;
         let co_w = if narrow { 168.0 } else { 200.0 };

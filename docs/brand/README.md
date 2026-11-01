@@ -65,6 +65,11 @@ icon falls back to **one monitor + pointer**.
 | control | `rgba(108, 113, 123, 0.204)` | 20% over what is under it |
 | control-solid-top | `#2A2E35` | 1.4:1 on ground |
 | control-solid | `#22262C` | 1.2:1 on ground |
+| group | `rgba(255, 255, 255, 0.047)` | 5% over what is under it |
+| group-edge | `rgba(255, 255, 255, 0.067)` | 7% over what is under it |
+| track | `rgba(0, 0, 0, 0.22)` | 22% over what is under it |
+| thumb | `rgba(255, 255, 255, 0.188)` | 19% over what is under it |
+| control-edge | `rgba(255, 255, 255, 0.078)` | 8% over what is under it |
 | glass-hairline | `rgba(255, 255, 255, 0.047)` | 5% over what is under it |
 | glass-rim | `rgba(255, 255, 255, 0.102)` | 10% over what is under it |
 | glass-edge | `rgba(255, 255, 255, 0.22)` | 22% over what is under it |
