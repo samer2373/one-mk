@@ -5,8 +5,20 @@
 
 :root {
   /* colour */
-  --omk-ground: #0F1216;
-  --omk-room: #101318;
+  --omk-ground: #0B0D11;
+  --omk-room: #0B0D11;
+  --omk-sidebar: #0E1015;
+  --omk-hairline: rgba(255, 255, 255, 0.059);
+  --omk-side-chosen: #1A1D24;
+  --omk-side-chosen-edge: rgba(255, 255, 255, 0.071);
+  --omk-side-hover: #15181E;
+  --omk-elevated-top: #171A21;
+  --omk-elevated: #12151B;
+  --omk-elevated-edge: rgba(255, 255, 255, 0.078);
+  --omk-palette-top: rgba(22, 25, 31, 0.804);
+  --omk-palette: rgba(17, 19, 25, 0.843);
+  --omk-search-fill: #13161C;
+  --omk-shortcut-ink: #525A66;
   --omk-room-tint: rgba(16, 19, 24, 0.878);
   --omk-glass-top: rgba(54, 56, 61, 0.443);
   --omk-glass: rgba(31, 33, 38, 0.42);

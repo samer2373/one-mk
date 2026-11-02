@@ -96,19 +96,31 @@ until `style.rs` takes the palette above.
 <!-- tokens:start (scripts/brand-tokens.py writes this table) -->
 | token | value | contrast |
 |---|---|---|
-| ground | `#0F1216` | ink on it 16.3:1 |
-| room | `#101318` | ink on it 16.2:1 |
+| ground | `#0B0D11` | ink on it 16.9:1 |
+| room | `#0B0D11` | ink on it 16.9:1 |
+| sidebar | `#0E1015` | 1.0:1 on ground |
+| hairline | `rgba(255, 255, 255, 0.059)` | 6% over what is under it |
+| side-chosen | `#1A1D24` | 1.2:1 on ground |
+| side-chosen-edge | `rgba(255, 255, 255, 0.071)` | 7% over what is under it |
+| side-hover | `#15181E` | 1.1:1 on ground |
+| elevated-top | `#171A21` | 1.1:1 on ground |
+| elevated | `#12151B` | 1.1:1 on ground |
+| elevated-edge | `rgba(255, 255, 255, 0.078)` | 8% over what is under it |
+| palette-top | `rgba(22, 25, 31, 0.804)` | 80% over what is under it |
+| palette | `rgba(17, 19, 25, 0.843)` | 84% over what is under it |
+| search-fill | `#13161C` | 1.1:1 on ground |
+| shortcut-ink | `#525A66` | 2.8:1 on ground |
 | room-tint | `rgba(16, 19, 24, 0.878)` | 88% over what is under it |
 | glass-top | `rgba(54, 56, 61, 0.443)` | 44% over what is under it |
 | glass | `rgba(31, 33, 38, 0.42)` | 42% over what is under it |
 | glass-clear-top | `rgba(79, 83, 86, 0.278)` | 28% over what is under it |
 | glass-clear | `rgba(45, 45, 49, 0.243)` | 24% over what is under it |
-| glass-solid-top | `#1C2027` | 1.1:1 on ground |
+| glass-solid-top | `#1C2027` | 1.2:1 on ground |
 | glass-solid | `#161A20` | ink on it 15.2:1 |
 | control-top | `rgba(146, 149, 160, 0.275)` | 27% over what is under it |
 | control | `rgba(108, 113, 123, 0.204)` | 20% over what is under it |
 | control-solid-top | `#2A2E35` | 1.4:1 on ground |
-| control-solid | `#22262C` | 1.2:1 on ground |
+| control-solid | `#22262C` | 1.3:1 on ground |
 | group | `rgba(255, 255, 255, 0.047)` | 5% over what is under it |
 | group-edge | `rgba(255, 255, 255, 0.067)` | 7% over what is under it |
 | track | `rgba(0, 0, 0, 0.22)` | 22% over what is under it |
@@ -123,26 +135,26 @@ until `style.rs` takes the palette above.
 | panel | `#13171C` | ink on it 15.6:1 |
 | raised | `rgba(255, 255, 255, 0.051)` | 5% over what is under it |
 | line | `rgba(255, 255, 255, 0.071)` | 7% over what is under it |
-| ink | `#EDEFF2` | 16.3:1 on ground |
-| ink2 | `#9DA6B1` | 7.6:1 on ground |
-| ink3 | `#8F98A4` | 6.4:1 on ground |
-| ink-hover | `#C4CAD2` | 11.4:1 on ground |
-| **signal** (amber) | `#C6F432` | 14.7:1 on ground; **1.3:1 on white** |
-| accent | `#C6F432` | 14.7:1 on ground |
-| accent-lit | `#D7FF5E` | 16.4:1 on ground |
-| signal-lit | `#D7FF5E` | 16.4:1 on ground |
+| ink | `#EDEFF2` | 16.9:1 on ground |
+| ink2 | `#9DA6B1` | 7.9:1 on ground |
+| ink3 | `#8F98A4` | 6.7:1 on ground |
+| ink-hover | `#C4CAD2` | 11.8:1 on ground |
+| **signal** (amber) | `#C6F432` | 15.2:1 on ground; **1.3:1 on white** |
+| accent | `#C6F432` | 15.2:1 on ground |
+| accent-lit | `#D7FF5E` | 17.0:1 on ground |
+| signal-lit | `#D7FF5E` | 17.0:1 on ground |
 | signal-ink | `#141A06` | 13.9:1 on signal |
-| error | `#FF6B5E` | 6.7:1 on ground |
-| warn | `#FFB547` | 10.7:1 on ground |
-| lamp | `#FFB547` | 10.7:1 on ground |
-| ok | `#3CCFE6` | 10.1:1 on ground |
+| error | `#FF6B5E` | 7.0:1 on ground |
+| warn | `#FFB547` | 11.1:1 on ground |
+| lamp | `#FFB547` | 11.1:1 on ground |
+| ok | `#3CCFE6` | 10.4:1 on ground |
 | button | `rgba(255, 255, 255, 0.086)` | 9% over what is under it |
 | button-lit | `rgba(255, 255, 255, 0.133)` | 13% over what is under it |
 | pill | `rgba(255, 255, 255, 0.125)` | 13% over what is under it |
-| track-off | `#4A525E` | 2.4:1 on ground |
-| track-edge | `#707A86` | 4.3:1 on ground |
-| key-edge | `#697380` | 3.9:1 on ground |
-| off | `#707A86` | 4.3:1 on ground |
+| track-off | `#4A525E` | 2.5:1 on ground |
+| track-edge | `#707A86` | 4.5:1 on ground |
+| key-edge | `#697380` | 4.0:1 on ground |
+| off | `#707A86` | 4.5:1 on ground |
 <!-- tokens:end -->
 
 Type in the window: **Geist** 400/600 and **Geist Mono**, as before (see `crates/app/src/style.rs`).
