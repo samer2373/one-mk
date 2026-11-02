@@ -129,6 +129,35 @@ pub fn is_installed() -> bool {
     }
 }
 
+/// True if the login entry starts oneMK with this settings folder (`None`:
+/// the usual one). A window opened on another folder (`--home`) doesn't
+/// show the usual folder's entry as its own, nor replace it unasked.
+pub fn is_installed_for(home: Option<&Path>) -> bool {
+    login_entry().is_some_and(|entry| entry_starts(&entry, home))
+}
+
+/// The text of this user's login entry.
+fn login_entry() -> Option<String> {
+    if cfg!(target_os = "linux") {
+        let home = home_dir().ok()?;
+        let text: String = [unit_path(&home), desktop_path(&home)].iter().filter_map(|path| std::fs::read_to_string(path).ok()).collect();
+        (!text.is_empty()).then_some(text)
+    } else if cfg!(target_os = "macos") {
+        std::fs::read_to_string(plist_path(&home_dir().ok()?, LABEL)).ok()
+    } else {
+        windows_startup_value().ok().flatten()
+    }
+}
+
+fn entry_starts(entry: &str, home: Option<&Path>) -> bool {
+    let Some(home) = home else { return !entry.contains("--home") };
+    let home = home.display().to_string();
+    let windows = format!("--home {}", quote_win(&home));
+    entry.contains(&format!("<string>--home</string>\n    <string>{}</string>", xml_escape(&home)))
+        || entry.contains(&format!("\"--home\" {}", quote(&home)))
+        || entry.trim_end().ends_with(&windows) || entry.contains(&format!("{windows} "))
+}
+
 pub fn absolute(p: &Path) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
 }
@@ -491,6 +520,7 @@ mod tests {
         assert!(unit.contains("Restart=on-failure"));
         let with_home = systemd_unit(&launch(Some("/tmp/a b")));
         assert!(with_home.contains("ExecStart=\"/opt/my apps/one-mk\" \"run\" \"--home\" \"/tmp/a b\"\n"), "{with_home}");
+        assert!(entry_starts(&with_home, Some(Path::new("/tmp/a b"))) && !entry_starts(&with_home, None));
     }
 
     // Linux package contents: Windows would join the paths with backslashes.
@@ -550,6 +580,8 @@ mod tests {
         let plist = launch_agent(LABEL, &l.exe, &l.args(), Path::new("/Users/me/Library/Logs/one-mk.log"), true);
         assert!(plist.contains("<string>com.one-mk.daemon</string>"));
         assert!(plist.contains("<string>/opt/my apps/one-mk</string>\n    <string>run</string>\n    <string>--home</string>\n    <string>/Users/a&amp;b</string>"), "{plist}");
+        assert!(entry_starts(&plist, Some(Path::new("/Users/a&b"))));
+        assert!(!entry_starts(&plist, Some(Path::new("/Users/a"))) && !entry_starts(&plist, None));
         assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
         assert!(plist.contains("<key>KeepAlive</key>"));
         assert!(plist.contains("<string>/Users/me/Library/Logs/one-mk.log</string>"));
@@ -563,6 +595,8 @@ mod tests {
         assert_eq!(run_value(&launch(None)), "\"/opt/my apps/one-mk\" run");
         let l = Launch { tray: Some("C:/Program Files/one-mk/one-mk-tray.exe".into()), ..launch(Some("D:/x"))};
         assert_eq!(run_value(&l), "\"C:/Program Files/one-mk/one-mk-tray.exe\" --start-daemon --home D:/x");
+        assert!(entry_starts(&run_value(&l), Some(Path::new("D:/x"))));
+        assert!(!entry_starts(&run_value(&l), Some(Path::new("D:/"))) && !entry_starts(&run_value(&l), None));
     }
 
     #[test]

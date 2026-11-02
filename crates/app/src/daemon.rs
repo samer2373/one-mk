@@ -221,6 +221,10 @@ impl Link {
         Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default(), showing: Showing::new() })
     }
 
+    /// The settings folder a login entry for this window names: `None`
+    /// for the usual one.
+    fn login_home(&self) -> Option<PathBuf> { self.custom_home.then(|| install::absolute(&self.dir)) }
+
     pub fn home_args(&self) -> Vec<String> {
         if self.custom_home { vec!["--home".into(), install::absolute(&self.dir).display().to_string()] } else { vec![] }
     }
@@ -262,7 +266,7 @@ impl Link {
     pub fn watch(&self) {
         let link = self.clone();
         std::thread::spawn(move || {
-            link.send(Event::Autostart(install::is_installed()));
+            link.send(Event::Autostart(install::is_installed_for(link.login_home().as_deref())));
             link.show_tray();
             // What changed apart from the round-trip times, which change at
             // every look: those go as samples, only while a graph shows.
@@ -416,7 +420,7 @@ impl Link {
         let link = self.clone();
         std::thread::spawn(move || {
             if let Some(report) = one_mk_ctl::setup::run(&link.dir, &link) {
-                link.send(Event::Autostart(install::is_installed()));
+                link.send(Event::Autostart(install::is_installed_for(link.login_home().as_deref())));
                 link.send(Event::Setup(report));
             }
         });
@@ -775,7 +779,7 @@ impl Link {
             } else {
                 install::uninstall()
             };
-            l.send(Event::Autostart(install::is_installed()));
+            l.send(Event::Autostart(install::is_installed_for(l.login_home().as_deref())));
             done.map(drop)
         });
     }
@@ -887,7 +891,7 @@ pub fn parse_bench(out: &str, peer: &str) -> Option<Latency> {
 
 impl one_mk_ctl::setup::Host for Link {
     fn login_installed(&self) -> bool {
-        install::is_installed()
+        install::is_installed_for(self.login_home().as_deref())
     }
 
     fn install_login(&self) -> Result<(), String> {
