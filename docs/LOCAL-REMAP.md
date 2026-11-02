@@ -26,7 +26,9 @@ latency, idle CPU and memory acceptance have **not** passed.
 - The macOS intercepting tap is session-level. Tagged replacements still enter
   through HID posting and bypass remapping at the tap. Windows retains the
   low-level keyboard/mouse hooks and injected-input bypass. Both now route the
-  five standard mouse buttons through the same ownership/release ledger.
+  ownership/release ledger only for mouse buttons that are rule sources. Ordinary
+  unmapped clicks pass through untouched; reposted macOS clicks carry their
+  original per-event click count, including double/triple clicks.
 - The physical Ctrl+Alt+Shift+Esc emergency closes admission immediately,
   releases worker output and tells the daemon to persist the preference off.
   A later focus or device notification cannot silently turn it back on.
@@ -43,9 +45,12 @@ latency, idle CPU and memory acceptance have **not** passed.
   enter the 8 ms waiting queue or arm its timer, even behind remote input.
   Remote KVM attribution retains its existing correlation behavior. This removes
   the intentional wait; it does not measure the complete native latency budget.
-- Normal window quit turns the switch off and requests native restoration over
-  IPC; macOS acknowledges restoration before replying. A window crash does not
-  kill the daemon or discard its held-key ledger. Daemon normal exit and
+- Closing or crashing the window does not change the saved switch or the
+  daemon's rules. Daemon stop restores native mappings and owned outputs without
+  saving the preference off; the next start recovers first and reapplies the
+  saved preference. macOS and Windows acknowledge releases before a normal stop
+  finishes (with a bounded timeout and an explicit error if not confirmed).
+  Daemon normal exit and
   SIGINT/SIGTERM/SIGHUP/SIGQUIT all run the same restore path. SIGKILL/abort,
   unavailable permissions and OS refusal cannot promise immediate delivered ups;
   the persistent journal allows recovery on the next daemon start.
@@ -78,10 +83,18 @@ overwritten, and failed restoration retains the recovery record. IOKit has no
 compare-and-swap for this property: an external tool must not race the final
 property write with an indistinguishable replacement of oneMK's exact entry.
 
-Startup recovery finishes before any new plan is applied. Disable, rule changes,
-emergency off, sleep/lock, tap timeout/user-disable, normal window quit and daemon
-shutdown restore the native plan. Mapping property work and journal I/O run on
-control/run-loop transitions, never in the tap callback. Changed held sources or
+Startup recovery finishes before any new plan is applied. Its failure disables
+local rules with a window-visible reason, not input capture or edge crossing.
+IOKit registry IDs are borrowed CFNumbers, read as signed 64-bit values and
+preserved as u64; a Get result is never released by oneMK. Disable, real rule
+changes, emergency off, sleep/lock, tap timeout/user-disable and daemon shutdown
+restore the native plan. A dedicated worker owns IOKit and all journal I/O,
+including fsync; the tap/run loop only queues work and consumes acknowledgments.
+Services are retained in a cache for property reads/writes, refreshed once per
+nonempty apply rather than rescanned for every operation. Equal desired plans
+are skipped, empty plans do not enumerate keyboards, and no empty recovery
+record is rewritten before deletion. Real changes still require durable journal
+writes before native changes, and remote activation waits for restoration. Changed held sources or
 outputs receive tagged release events before property changes. Physical HID
 source state repairs the crossing modifier snapshot when native maps are removed
 before forwarding; only oneMK-owned mappings participate in that repair. The raw
@@ -98,7 +111,50 @@ Reference: https://developer.apple.com/library/archive/technotes/tn2450/_index.h
 The contracts below remain the safety design; historical default-OFF and
 remote-only scope statements are superseded by this delivery-change section.
 
-## 2026-11-02 validation and handoff
+## Review fixes: owner hardware checks — NOT RUN
+
+This follow-up is implemented on Linux. Portable tests execute here; native
+macOS/Windows backends and their text-capability tests are cross-compiled, not
+run. CI now denies warnings for all-target cross-checks of input, ctl, proto and
+app on both native targets. The daemon itself is not cross-compiled on this box.
+No native delivery, latency, permission or zero-idle-CPU result is implied.
+
+Validation on this Linux host (default features, dedicated target directory):
+
+| Check | Result |
+| --- | --- |
+| `cargo clippy -j 4 --workspace --all-targets` | PASS, no warnings |
+| `RUST_TEST_THREADS=4 cargo test -j 4 --workspace` | PASS: 1,361 passed, 0 failed, 18 ignored |
+| input/ctl/proto/app, `--all-targets --target aarch64-apple-darwin`, `RUSTFLAGS="-D warnings"` | PASS, including text-capability test compilation |
+| input/ctl/proto/app, `--all-targets --target x86_64-pc-windows-msvc`, `RUSTFLAGS="-D warnings"` | PASS, including text-capability test compilation |
+
+An initial unrestricted-concurrency workspace run timed out in
+`portal::tests::keysym_pairing_repeats_aliases_and_visit_cleanup`; it passed
+alone and in the complete four-thread retry. Both previously known flaky
+tests also passed in the complete retry. No portal implementation was changed.
+
+- [ ] Hold remapped Ctrl/Alt across unrelated focus changes and Alt+Tab. Outputs
+  must stay held. Change an actually applicable rule while held: the old rule
+  lasts until all keys/buttons are released, then the new snapshot takes over.
+- [ ] Enter/leave Secure Input, sleep, lock, tap-disable or UAC/secure desktop.
+  Release every key; local rules must resume without toggling the preference.
+  The emergency chord is different: it persists off and must NOT auto-resume.
+- [ ] With a mouse rule on only button4, ordinary left/right/middle clicks must
+  remain native. Test double/triple clicks on an explicitly mapped macOS button;
+  on Windows verify unmapped clicks in elevated apps and protected games.
+- [ ] Corrupt/version-bump the recovery journal in a disposable Mac account.
+  Expect a clear local-rules-unavailable status, unchanged foreign properties
+  and working pointer sharing. Restore the journal and restart for recovery.
+- [ ] Trace rapid crossings with several keyboards and a slow settings disk.
+  Confirm IOKit/journal work is off the tap thread, ordering is journal-before-
+  install and restore-before-forward, and no modifier gets stranded.
+- [ ] Close/reopen the window, relaunch/update, stop/restart the daemon and log
+  out/in with local rules enabled. Closing alone must not disable; daemon stop
+  restores original mappings, keeps the preference, and next start reapplies it.
+- [ ] Crash/restart on the same keyboard registry IDs; verify the journal finds
+  exactly those keyboards, preserves foreign mappings and removes owned entries.
+
+## Earlier 2026-11-02 validation and handoff (before review fixes)
 
 All Cargo commands used `-j 2` and the dedicated target directory
 `/home/samer/.t3/cargo-target/localremap`. No formatter was run.
@@ -126,22 +182,25 @@ Owner's Mac acceptance checklist (not results):
    only one keyboard is selected. Existing mappings from another keyboard tool
    must remain unchanged before, during and after activation.
 3. Add a non-Caps chord, then an app-specific rule. Hold each source while
-   editing/disabling its rule or changing foreground application. Verify the old
-   output releases and the next press follows the new rule/application. Conditional
+   editing/disabling its rule or changing foreground application. An unchanged
+   effective rule must keep its output held. A real swap waits until all keys
+   are released; the next press follows the new rule/application. Conditional
    Caps rules must explain that they are unavailable rather than partially run.
 4. Hold mapped keyboard/mouse output and press physical Ctrl+Alt+Shift+Escape.
    Verify releases, pointer back here, switch off, and no automatic re-enable on
    focus/device changes. Repeat with Escape or a modifier itself remapped.
 5. Sleep/wake and lock/unlock mid-press for Caps → Control and a tap chord.
-   Verify no stuck modifier/output, native restoration, and clear paused status.
+   Verify no stuck modifier/output, native restoration, clear paused status,
+   and automatic resumption after the session is available and every key is up.
    Also exercise macOS tap timeout/user-disable in a disposable test session.
 6. Cross to a peer with Caps or another mapped source held; check raw source
    identity/modifiers remotely, return, and release. Repeat rapidly on both
    keyboards, with a mouse-button device rule and with unknown attribution. There
    must be no 8 ms local delay; measure the requested ≤1 ms budget separately.
-7. With mappings enabled, quit the window; confirm local rules turn off and the
-   recovery record is cleared. Repeat with daemon normal stop and each handled
-   signal. Kill only the window mid-press: the live daemon must retain release
+7. With mappings enabled, quit the window; confirm rules and saved preference
+   stay on. Stop the daemon normally and with each handled signal: the recovery
+   record must clear, original mappings return, and the saved preference stay on.
+   Restart and verify rules reapply. Kill only the window mid-press: the live daemon must retain release
    ownership and the emergency chord must still work.
 8. In a disposable session, abruptly kill the daemon after applying mappings.
    Restart it with the preference off and verify recovery occurs before any new
@@ -204,7 +263,7 @@ independent differences; `win_logic.rs` is byte-identical to main:
 | macOS `Ctx.hid`, IOHID startup, capture enable/disable on start/end/release/quit, correlated remote send path | 5I equivalent; queued events flush before unplug notification |
 | `device: None` on captured keys/buttons/motion/scroll | 5I event-schema metadata; disabled correlator forwards immediately without a deadline |
 | `CaptureCmd::DeviceRules` and correlator opt-in; lazy macOS timer allocation | R6 removes unconditional 5I delay/timer; only per-device rules opt in while the backend captures input |
-| `Backend.keyboard: None`, unsupported `Inject::Text`, `CharacterKey` physical fallback including repeat | Independent typing integration; native character composition is not claimed |
+| Shared `macos_inject.rs` / `windows_inject.rs`, keyboard capability construction and CharacterKey/Text repeat/cleanup | The review follow-up shares the complete typing injector with both feature configurations; the original physical-only exception was a defect |
 | `macos::ax_trusted` visibility only | Existing permission query in `lib.rs`; no permission behavior change |
 
 There are no remaining 5H native-local hooks in these default files. The
@@ -358,11 +417,13 @@ guaranteed recovery of an up already lost by the OS.
 ## Reload and status semantics
 
 `one-mk keymap local on|off` changes settings; ordinary settings reloads and
-`Event::Devices` also resolve/reapply snapshots. Consequently mapping **can
-resume automatically on a settings/device reload**, including re-enumeration
-after wake. It is not an explicit-reload-only policy. Unlock/desktop return
-retry cleanup; they do not themselves promise local mapping resumed. Ask
-`one-mk status` again after asynchronous reload. `active (N)` means the local
+`Event::Devices` also resolve snapshots. Unchanged effective snapshots are
+not resent, including on focus changes. Real snapshot changes wait until all
+physical keys/buttons and owned outputs are released. Transient interruptions
+such as Secure Input, sleep, lock, tap disable or desktop switches retry
+cleanup and resume automatically once the condition clears and no keys are
+held; no preference toggle or settings reload is required. Ask
+`one-mk status` again after asynchronous recovery. `active (N)` means the local
 worker fence completed, never that native acceptance passed. Both active and
 inactive status use plain window-facing words; preference off and zero rules
 are silent. Doctor never infers activation from preference alone. The emergency

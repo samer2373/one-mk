@@ -24,6 +24,10 @@ pub struct Rules {
     pub count: usize,
 }
 
+impl Rules {
+    pub fn captures(&self, code: u32) -> bool { !(0x110..=0x114).contains(&code) || self.maps.maps_source(code) }
+}
+
 impl Default for Rules {
     fn default() -> Self {
         Self { system: Default::default(), maps: KeymapSet::new(Keymap::default()), hotkeys: Bindings::default(), count: 0 }
@@ -61,6 +65,7 @@ impl Snapshots {
 #[derive(Clone, Copy, Debug)]
 pub struct Key {
     pub keyboard_type: u32,
+    pub click_state: i64,
     pub sequence: u64,
     pub code: u32,
     pub down: bool,
@@ -79,6 +84,7 @@ pub struct Physical {
 }
 
 impl Physical {
+    pub fn held(&self) -> bool { !self.down.is_empty() }
     pub fn correlated(&mut self, code: u32, down: bool, device: Option<DeviceRef>) -> bool {
         if let Some((_, held)) = self.sources.iter_mut().find(|(source, _)| *source == device) {
             held.update(code, down);
@@ -209,6 +215,7 @@ pub struct Admission {
     gate: Arc<HookGate>,
     emergency: AtomicBool,
     pub keyboard_type: u32,
+    pub click_state: i64,
 }
 
 pub struct Feedback {
@@ -264,7 +271,7 @@ impl Admission {
         Self {
             keys: ArrayQueue::new(CAPACITY),
             feedback: Arc::new(Feedback { health: AtomicU64::new(0), acknowledged: AtomicU64::new(0), submitted: AtomicU64::new(0) }),
-            submitted: 0, oldest: None, gate, emergency: AtomicBool::new(false), keyboard_type: 0,
+            submitted: 0, oldest: None, gate, emergency: AtomicBool::new(false), keyboard_type: 0, click_state: 0,
         }
     }
 
@@ -310,7 +317,7 @@ impl Admission {
             self.fail();
             return false;
         };
-        if self.keys.push(Key { keyboard_type: self.keyboard_type, sequence, code, down, at }).is_err() {
+        if self.keys.push(Key { click_state: self.click_state, keyboard_type: self.keyboard_type, sequence, code, down, at }).is_err() {
             self.fail();
             return false;
         }
@@ -345,6 +352,7 @@ pub trait Injector {
     fn inject(&mut self, keys: &[(u32, bool)]) -> usize;
     fn settled(&self) -> bool { true }
     fn keyboard_type(&mut self, _keyboard_type: u32) {}
+    fn click_state(&mut self, _click_state: i64) {}
 }
 
 pub struct Engine<I: Injector> {
@@ -407,6 +415,7 @@ impl<I: Injector> Engine<I> {
         }
         self.sequence = key.sequence;
         self.injector.keyboard_type(key.keyboard_type);
+        self.injector.click_state(key.click_state);
         if self.handoff.state() != State::Local || self.failed {
             if !key.down { self.mapper.key_from(key.code, false, device, key.at, &mut |_| {}); }
             return true;
@@ -511,7 +520,7 @@ mod tests {
         let rules = rules();
         assert!(engine.fence(0, Destination::Local, Some(&rules)));
         let now = Instant::now();
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 1, code: 58, down: true, at: now }, None));
         assert!(!record.lock().unwrap().held.is_empty());
         let empty = Rules::default();
         if let Some(destination) = destination {
@@ -523,6 +532,47 @@ mod tests {
         let record = record.lock().unwrap();
         assert!(record.held.is_empty());
         assert_eq!(record.downs, record.ups);
+    }
+
+    #[test]
+    fn only_mapped_mouse_sources_are_admitted() {
+        let map = Keymap::compile(&[RuleSpec { from: "button4".parse().unwrap(), layer: None,
+            what: What::To("button1".parse().unwrap()) }], Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map;
+        let rules = Rules { maps: KeymapSet::new(map), count: 1, ..Rules::default() };
+        let mut physical = Physical::default();
+        let mut engine = Engine::new(Fake(Arc::default()));
+        assert!(engine.fence(0, Destination::Local, Some(&rules)));
+        let mut admission = Admission::new(engine.gate());
+        for button in 0x110..=0x114 {
+            for down in [true, false] {
+                let key = PhysicalKey { down, injected: false, shortcut: false, owner: Owner::Unknown, eligible: rules.captures(button), healthy: true };
+                assert_eq!(physical.key(key, button, Instant::now(), &rules, &mut admission, |_| true), button == 0x113);
+            }
+        }
+        assert_eq!(admission.watermark(), 2);
+    }
+
+    #[test]
+    fn queued_click_counts_are_owned_by_each_event_not_the_latest_click() {
+        struct Clicks { count: i64, posted: Arc<Mutex<Vec<i64>>> }
+        impl Injector for Clicks {
+            fn click_state(&mut self, count: i64) { self.count = count; }
+            fn inject(&mut self, keys: &[(u32, bool)]) -> usize {
+                self.posted.lock().unwrap().extend(keys.iter().map(|_| self.count));
+                keys.len()
+            }
+        }
+        let posted = Arc::new(Mutex::new(Vec::new()));
+        let mut engine = Engine::new(Clicks { count: 0, posted: posted.clone() });
+        assert!(engine.fence(0, Destination::Local, Some(&Rules::default())));
+        let mut admission = Admission::new(engine.gate());
+        for (count, down) in [(1, true), (1, false), (2, true), (2, false)] {
+            admission.click_state = count;
+            assert!(admission.admit(0x110, down, Instant::now()));
+        }
+        admission.click_state = 99;
+        while let Some(key) = admission.pop() { assert!(engine.key(key, None)); }
+        assert_eq!(*posted.lock().unwrap(), [1, 1, 2, 2]);
     }
 
     #[test]
@@ -554,7 +604,7 @@ mod tests {
             let mut engine = Engine::new(Fake(record.clone()));
             let rules = Rules { maps: KeymapSet::new(map), count: 1, ..Rules::default() };
             assert!(engine.fence(0, Destination::Local, Some(&rules)));
-            assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 30, down: true, at: Instant::now() }, None));
+            assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 1, code: 30, down: true, at: Instant::now() }, None));
             assert!(record.lock().unwrap().held.contains(&0x113));
         }
         let record = record.lock().unwrap();
@@ -665,7 +715,7 @@ mod tests {
         let mut engine = Engine::new(Fake(record.clone()));
         let rules = rules();
         assert!(engine.fence(0, Destination::Local, Some(&rules)));
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
         record.lock().unwrap().limit = Some(0);
         for _ in 0..3 {
             assert!(!engine.fail());
@@ -702,14 +752,14 @@ mod tests {
         let rules = rules();
         assert!(engine.fence(0, Destination::Local, Some(&rules)));
         let now = Instant::now();
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 1, code: 58, down: true, at: now }, None));
         assert!(engine.fence(1, Destination::Local, Some(&rules)));
         let downs = record.lock().unwrap().downs;
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 2, code: 58, down: true, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 2, code: 58, down: true, at: now }, None));
         assert_eq!(record.lock().unwrap().downs, downs);
-        assert!(!engine.key(Key { keyboard_type: 0, sequence: 4, code: 58, down: false, at: now }, None));
+        assert!(!engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 4, code: 58, down: false, at: now }, None));
         assert!(engine.fence(4, Destination::Local, Some(&rules)));
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 5, code: 58, down: false, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 5, code: 58, down: false, at: now }, None));
     }
 
     #[test]
@@ -753,7 +803,7 @@ mod tests {
         let mut engine = Engine::new(Posted { settled: true });
         assert!(engine.fence(0, Destination::Local, Some(&rules())));
         engine.injector.settled = false;
-        assert!(!engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+        assert!(!engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
         assert!(!engine.fence(1, Destination::Remote, None));
         assert_eq!(engine.handoff.state(), State::Disabled);
         engine.injector.settled = true;
@@ -851,7 +901,7 @@ mod tests {
         let feedback = admission.feedback();
         let mut engine = Engine::new(FailOnRelease { feedback: feedback.clone(), fail: false });
         assert!(engine.recover_fence(0, Destination::Local, Some(&rules()), &feedback, feedback.token()));
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
         engine.injector.fail = true;
         let health = feedback.token();
         assert!(!engine.recover_fence(1, Destination::Local, None, &feedback, health));
@@ -871,7 +921,7 @@ mod tests {
         assert!(!engine.fence(1, Destination::Remote, None));
         assert!(record.lock().unwrap().held.is_empty());
         assert!(engine.fence(0, Destination::Local, None));
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
         record.lock().unwrap().limit = Some(1);
         assert!(!engine.fence(1, Destination::Remote, None));
         assert_eq!(engine.handoff.state(), State::Disabled);
@@ -917,7 +967,7 @@ mod tests {
                     _ => {
                         sequence += 1;
                         engine.key(Key {
-                            keyboard_type: 0, sequence, code: [58, 30, 42, 100][((random >> 8) % 4) as usize],
+                            keyboard_type: 0, click_state: 0, sequence, code: [58, 30, 42, 100][((random >> 8) % 4) as usize],
                             down: random & 64 != 0, at: Instant::now(),
                         }, Some(DeviceRef(1 + ((random >> 16) % 3) as u32)));
                     }
@@ -1096,18 +1146,18 @@ mod tests {
         assert!(engine.fence(0, Destination::Local, Some(&rules)));
         assert!(engine.deadline().is_none());
         let now = Instant::now();
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 1, code: 58, down: true, at: now }, None));
         assert_eq!(engine.deadline(), Some(now + Duration::from_millis(200)));
         assert!(engine.fence(1, Destination::Remote, None));
         assert!(engine.deadline().is_none());
         assert_eq!(record.lock().unwrap().downs, 0);
         assert!(engine.fence(1, Destination::Local, Some(&rules)));
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 2, code: 58, down: true, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 2, code: 58, down: true, at: now }, None));
         assert!(engine.timer(now + Duration::from_millis(200)));
         assert!(engine.deadline().is_none());
         assert!(record.lock().unwrap().held.is_empty());
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 3, code: 58, down: false, at: now }, None));
-        assert!(engine.key(Key { keyboard_type: 0, sequence: 4, code: 58, down: true, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 3, code: 58, down: false, at: now }, None));
+        assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 4, code: 58, down: true, at: now }, None));
         assert!(engine.timer(now + Duration::from_millis(200)));
         let held = record.lock().unwrap().held.contains(&29);
         assert!(engine.fail());
@@ -1121,7 +1171,7 @@ mod tests {
         let unwind = std::panic::catch_unwind(move || {
             let mut engine = Engine::new(Fake(record));
             assert!(engine.fence(0, Destination::Local, Some(&rules())));
-            assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
+            assert!(engine.key(Key { keyboard_type: 0, click_state: 0, sequence: 1, code: 58, down: true, at: Instant::now() }, None));
             panic!("worker panic after injection");
         });
         assert!(unwind.is_err());
@@ -1154,18 +1204,18 @@ mod tests {
         let rules = rules();
         assert!(engine.fence(0, Destination::Local, Some(&rules)));
         let now = Instant::now();
-        assert!(engine.key(Key { code: 58, down: true, at: now, sequence: 1, keyboard_type: 0 }, None));
+        assert!(engine.key(Key { code: 58, down: true, at: now, sequence: 1, keyboard_type: 0, click_state: 0 }, None));
         assert!(engine.fail());
         engine.baseline(std::iter::once(58));
         assert!(engine.fence(1, Destination::Local, Some(&rules)));
         let downs = record.lock().unwrap().downs;
-        assert!(engine.key(Key { code: 58, down: true, at: now, sequence: 2, keyboard_type: 0 }, None));
+        assert!(engine.key(Key { code: 58, down: true, at: now, sequence: 2, keyboard_type: 0, click_state: 0 }, None));
         assert_eq!(record.lock().unwrap().downs, downs, "held tombstone must not be repressed");
         assert!(engine.fail());
         engine.baseline(std::iter::empty());
         assert!(engine.fence(2, Destination::Local, Some(&rules)));
         let downs = record.lock().unwrap().downs;
-        assert!(engine.key(Key { code: 58, down: true, at: now, sequence: 3, keyboard_type: 0 }, None));
+        assert!(engine.key(Key { code: 58, down: true, at: now, sequence: 3, keyboard_type: 0, click_state: 0 }, None));
         assert!(record.lock().unwrap().downs > downs, "fresh press must not be an old repeat");
     }
 }

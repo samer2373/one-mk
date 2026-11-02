@@ -7,6 +7,8 @@ use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, mpsc};
 
+include!("macos_network.rs");
+
 struct Control {
     sender: mpsc::Sender<Action>,
     wake: Mutex<Option<(usize, usize)>>,
@@ -89,7 +91,7 @@ impl Local {
                 state.unavailable = true;
             }
         }
-        self.shared.publish(state);
+        self.shared.publish_network(state);
     }
 
     fn permission(&self) {
@@ -125,7 +127,7 @@ pub(super) fn start(shared: Arc<Shared>) -> Box<dyn Fn(Action) + Send + Sync> {
     let worker_control = control.clone();
     std::thread::spawn(move || autoreleasepool(|_| unsafe {
         let Some(run_loop) = CFRunLoop::current() else {
-            shared.publish(State { unavailable: true, ..State::default() });
+            shared.publish_network(State { unavailable: true, ..State::default() });
             return;
         };
         let manager = CLLocationManager::new();
@@ -142,10 +144,12 @@ pub(super) fn start(shared: Arc<Shared>) -> Box<dyn Fn(Action) + Send + Sync> {
         let source = CFRunLoopSource::new(None, 0, &mut context).unwrap();
         run_loop.add_source(Some(&source), kCFRunLoopDefaultMode);
         *worker_control.wake.lock().unwrap() = Some(((&*source as *const CFRunLoopSource) as usize, (&*run_loop as *const CFRunLoop) as usize));
+        let network = NetworkChanges::start(worker_control.clone(), &run_loop);
         local.refresh();
         source.signal();
         CFRunLoop::run();
         *worker_control.wake.lock().unwrap() = None;
+        drop(network);
         source.invalidate();
         let _ = local.client.stopMonitoringAllEventsAndReturnError();
         local.client.setDelegate(None);

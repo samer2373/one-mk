@@ -93,7 +93,7 @@ struct NativeWifi;
 impl NetworkWatcher for NativeWifi {
     fn start(self: Box<Self>, on_change: OnChange) {
         let watch = one_mk_ctl::wifi::Watch::start(move |state| {
-            on_change(NetworkId { ssids: state.ssids, gateways: Vec::new(), addrs: local_addrs() });
+            on_change(NetworkId { ssids: state.ssids, gateways: state.gateways, addrs: state.addrs });
         });
         std::mem::forget(watch);
     }

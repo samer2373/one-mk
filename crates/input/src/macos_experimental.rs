@@ -88,10 +88,11 @@ pub(crate) async fn open(state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-capture".into())
         .spawn(move || capture_thread(tx, cap_rx, t, c, state_dir))?;
+    crate::typing::watch_native(ev_tx.clone());
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, trusted, controlled))?;
-    Ok(Backend { keyboard: None, name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { keyboard: keyboard_layout(), name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 // ------------------------------------------------------------ permissions
@@ -246,7 +247,7 @@ impl Inbox {
 /// Everything the capture callbacks share. Leaked, and used only on the
 /// capture thread (callbacks run on its run loop, one at a time).
 struct Ctx {
-    system: RefCell<crate::macos_hidmap_native::Native>,
+    system: RefCell<Option<crate::macos_hidmap_native::Native>>,
     system_plan: RefCell<Option<crate::macos_hidmap::Plan>>,
     tx: mpsc::UnboundedSender<Event>,
     /// Accessibility granted; read by the injection thread.
@@ -291,6 +292,8 @@ struct State {
     local_power: Option<crate::macos_localmap_power::Power>,
     session_paused: bool,
     quitting: bool,
+    restore_ticket: Option<u64>,
+    pending_rules: Option<CaptureCmd>,
 }
 
 impl State {
@@ -318,6 +321,8 @@ impl State {
             local_power: None,
             session_paused: false,
             quitting: false,
+            restore_ticket: None,
+            pending_rules: None,
         }
     }
 
@@ -373,14 +378,6 @@ fn capture_thread(
     controlled: Arc<Controlled>,
     state_dir: PathBuf,
 ) {
-    let system = match crate::macos_hidmap_native::System::new()
-        .and_then(|runner| crate::macos_hidmap::Lifecycle::recover(runner, &state_dir)) {
-        Ok(system) => system,
-        Err(error) => {
-            let _ = tx.send(Event::Error(format!("Can't restore this Mac's keyboard mappings: {error:#}. Local rules were not started.")));
-            return;
-        }
-    };
     allow_cursor_hiding_in_background();
     let Some(run_loop) = CFRunLoop::current() else {
         let _ = tx.send(Event::Error("Can't share this Mac's mouse: no run loop for input capture.".into()));
@@ -390,6 +387,13 @@ fn capture_thread(
     let modes = unsafe { kCFRunLoopCommonModes };
 
     let inbox = Arc::new(Inbox::default());
+    let system = match crate::macos_hidmap_native::Native::start(state_dir, inbox.clone()) {
+        Ok(system) => Some(system),
+        Err(error) => {
+            let _ = tx.send(Event::Status { part: "local-key-rules", problem: Some(format!("Local key rules unavailable: {error}. Sharing still works.")) });
+            None
+        }
+    };
     let hid = crate::macos_devices::Hid::start(tx.clone(), &run_loop);
     let ctx: &'static Ctx =
         Box::leak(Box::new(Ctx { system: RefCell::new(system), system_plan: RefCell::new(None), tx, trusted, controlled, inbox: inbox.clone(), st: RefCell::new(State::new()), hid }));
@@ -473,6 +477,7 @@ fn capture_thread(
     ctx.tick();
     CFRunLoop::run();
     ctx.restore_system(&mut ctx.st.borrow_mut());
+    ctx.system.borrow_mut().take();
     ctx.hid.local(None);
     *ctx.inbox.interlock.lock().unwrap_or_else(|error| error.into_inner()) = None;
     ctx.st.borrow_mut().local_power = None;
@@ -517,6 +522,21 @@ impl Ctx {
     }
 
     fn local_pump(&self, st: &mut State) {
+        self.system_pump(st);
+        self.restore_ack(st);
+        let system_ready = self.system.borrow().as_ref().is_some_and(|system| !system.pending() && system.error.is_none());
+        let idle = !(0..128u16).any(|code| CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, code))
+            && !(0..5u32).any(|button| CGEventSource::button_state(CGEventSourceStateID::HIDSystemState, CGMouseButton(button)))
+            && st.local_rules.as_ref().is_none_or(|local| (local.paused || !local.physical_held()) && !local.held() && local.pending.is_none());
+        if system_ready && idle && let Some(command) = st.pending_rules.take() { self.inbox.post(Msg::Cmd(command)); }
+        if system_ready && idle && !st.quitting && !st.session_paused && !session_inactive() && !secure_input()
+            && st.tap.is_some() && st.problem.is_none()
+            && let Some(local) = st.local_rules.as_mut() && local.enabled && local.paused {
+            st.local_keys.fill(false);
+            local.paused = false;
+            local.baseline(std::iter::empty());
+            self.local_fence(st, if st.active { Destination::Remote } else { Destination::Local });
+        }
         self.local_drain(st);
         if st.local_recovery.as_ref().is_some_and(|recovery| recovery.finished()) {
             st.local_recovery = None;
@@ -533,37 +553,34 @@ impl Ctx {
         if local.pending.is_some_and(|(_, start, _)| start.elapsed() >= crate::localmap_runtime::LEASE * 4)
             || !feedback.healthy() && local.pending.is_none_or(|(_, _, health)| health != feedback.token()) && !local.paused
         {
-            self.local_pause(st, "inactive: local input was interrupted; release all keys, then turn the switch off and on in Keys & mouse");
+            self.local_pause(st, "inactive: local input was interrupted; release all keys to resume automatically");
             if st.quitting {
                 self.local_status("inactive: some keys could not be released while stopping; release all keys and restart one-mk");
-                if let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
+                if self.system.borrow().as_ref().is_none_or(|system| !system.pending())
+                    && let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
             }
         } else if let Some(done) = local.completion() {
             if st.quitting {
                 if !done.success { self.local_status("inactive: some keys could not be released while stopping; release all keys and restart one-mk"); }
-                if let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
+                if self.system.borrow().as_ref().is_none_or(|system| !system.pending())
+                    && let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
                 return;
             }
             if !done.success {
-                self.local_pause(st, "inactive: macOS did not confirm a key release; release all keys, then turn the switch off and on in Keys & mouse");
+                self.local_pause(st, "inactive: macOS did not confirm a key release; release all keys to resume automatically");
             } else if done.destination == Destination::Remote {
-                let activation = local.activation.take();
+                let activation = local.activation;
                 self.local_status("inactive: forwarding to another computer");
                 if self.restore_system(st) {
+                    if let Some(local) = st.local_rules.as_mut() { local.activation = None; }
                     if let Some((side, pos)) = activation { self.start_now(st, side, pos); }
-                } else { self.local_pause(st, "inactive: keyboard mappings could not be restored; sharing stayed here"); }
+                }
             } else if local.enabled && !local.paused {
                 let rules = local.snapshots.load();
                 if self.system_plan.borrow().as_ref() != Some(&rules.system) {
-                    if !self.restore_system(st) {
-                        self.local_pause(st, "inactive: keyboard mappings could not be restored");
-                        return;
-                    }
-                    if let Err(error) = self.system.borrow_mut().apply(&rules.system) {
-                        self.local_pause(st, &format!("inactive: {error:#}"));
-                        return;
-                    }
-                    *self.system_plan.borrow_mut() = Some(rules.system.clone());
+                    local.gate.close();
+                    if let Some(system) = self.system.borrow_mut().as_mut() { system.request(Some(rules.system.clone())); }
+                    return;
                 }
                 self.local_status(&format!("active ({})", rules.count));
             } else {
@@ -571,32 +588,63 @@ impl Ctx {
             }
         }
         if emergency {
+            if let Some(local) = st.local_rules.as_mut() { local.enabled = false; }
             self.local_pause(st, "inactive: emergency off");
             let _ = self.tx.send(Event::LocalRulesOff);
             action = Some(crate::hotkeys::Action::Home);
         }
         if let Some(action) = action { let _ = self.tx.send(Event::Hotkey(action)); }
+        if st.quitting && self.system.borrow().as_ref().is_none_or(|system| !system.pending())
+            && st.local_rules.as_ref().is_none_or(|local| !local.held())
+            && let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
         self.update_timer(st);
     }
 
-    fn restore_system(&self, st: &mut State) -> bool {
-        let mappings = self.system.borrow().owned_mappings();
-        match self.system.borrow_mut().restore() {
-            Ok(()) => {
-                *self.system_plan.borrow_mut() = None;
-                if !mappings.is_empty() {
+    fn restore_system(&self, _st: &mut State) -> bool {
+        self.system.borrow_mut().as_mut().is_none_or(|system| system.request(None))
+    }
+
+    fn restore_ack(&self, st: &mut State) {
+        if self.system.borrow().as_ref().is_some_and(|system| system.pending())
+            || st.local_rules.as_ref().is_some_and(|local| local.held())
+            || st.local_recovery.as_ref().is_some_and(|recovery| !recovery.finished()) { return; }
+        if let Some(ticket) = st.restore_ticket.take() {
+            let error = self.system.borrow().as_ref().map_or_else(|| Some("Keyboard mapping service unavailable; restoration is not confirmed".into()), |system| system.error.clone());
+            let _ = self.tx.send(Event::LocalRulesRestored { ticket, error });
+        }
+    }
+
+    fn system_pump(&self, st: &mut State) {
+        let completion = self.system.borrow_mut().as_mut().and_then(|system| system.poll());
+        let Some(completion) = completion else { return };
+        match completion.result {
+            Err(reason) => {
+                tracing::warn!(%reason, "local keyboard mappings unavailable; capture continues");
+                if let Some(local) = st.local_rules.as_mut() { local.fail(); }
+                self.local_status(&format!("unavailable: {reason}"));
+            }
+            Ok(plan) => {
+                *self.system_plan.borrow_mut() = plan;
+                if !completion.restored.is_empty() {
                     let observed: Vec<_> = (0..128u16).filter(|&code| st.local_keys[usize::from(code)]).filter_map(logic::mac_to_evdev).collect();
-                    let keys = crate::macos_hidmap::restored_keys(&mappings, &observed, &self.hid.physical_keys());
+                    let keys = crate::macos_hidmap::restored_keys(&completion.restored, &observed, &self.hid.physical_keys());
                     st.local_keys.fill(false);
                     for code in keys.into_iter().filter_map(logic::evdev_to_mac) { st.set_local_key(code, true); }
                 }
-                true
-            }
-            Err(error) => {
-                self.local_status(&format!("inactive: keyboard restoration needs another try: {error:#}"));
-                false
+                if let Some(local) = st.local_rules.as_mut() {
+                    if let Some((side, pos)) = local.activation.take() { self.start_now(st, side, pos); }
+                    else if local.enabled && !local.paused && !st.active && !st.quitting {
+                        let held = (0..128u16).filter(|&code| CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, code)).filter_map(logic::mac_to_evdev);
+                        local.baseline(held);
+                        self.local_fence(st, Destination::Local);
+                    }
+                }
             }
         }
+        self.restore_ack(st);
+        if st.quitting && self.system.borrow().as_ref().is_none_or(|system| !system.pending())
+            && st.local_rules.as_ref().is_none_or(|local| !local.held())
+            && let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
     }
 
     /// Runs once a second: keeps the screen list current, and waits for
@@ -609,7 +657,7 @@ impl Ctx {
         st.refresh_desktop(&self.tx);
         self.check_permissions(&mut st);
         if st.local_rules.is_some() && (slept || secure_input() || session_inactive() || st.problem.is_some()) {
-            self.local_pause(&mut st, "inactive: this Mac slept, locked or stopped allowing input; release all keys, then turn the switch off and on in Keys & mouse");
+            self.local_pause(&mut st, "inactive: this Mac slept, locked or stopped allowing input; release all keys to resume automatically");
         }
         self.local_pump(&mut st);
         if st.active {
@@ -629,7 +677,8 @@ impl Ctx {
 
     /// Schedules the 1 s check only while it has something to watch.
     fn update_timer(&self, st: &mut State) {
-        let want = st.problem.is_some() || st.tap.is_none() || st.active
+        let want = st.problem.is_some() || st.tap.is_none() || st.active || st.pending_rules.is_some() || st.quitting
+            || st.local_rules.as_ref().is_some_and(|local| local.enabled && local.paused)
             || st.local_rules.as_ref().is_some_and(|local| local.pending.is_some() || local.held());
         if want == st.timer_on {
             return;
@@ -759,6 +808,23 @@ impl Ctx {
         };
         match msg {
             Msg::Cmd(CaptureCmd::LocalRules { rules, inactive }) => {
+                let system = self.system.borrow();
+                if system.as_ref().is_none_or(|system| system.error.is_some()) {
+                    let reason = system.as_ref().and_then(|system| system.error.as_deref()).unwrap_or("Keyboard mapping worker unavailable; sharing still works").to_owned();
+                    drop(system);
+                    self.local_status(&format!("unavailable: {reason}"));
+                    return;
+                }
+                let held = st.local_rules.as_ref().is_some_and(|local| (!local.paused && local.physical_held()) || local.held() || local.pending.is_some())
+                    || (0..128u16).any(|code| CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, code))
+                    || (0..5u32).any(|button| CGEventSource::button_state(CGEventSourceStateID::HIDSystemState, CGMouseButton(button)));
+                if system.as_ref().is_some_and(|system| system.pending()) || held {
+                    st.pending_rules = Some(CaptureCmd::LocalRules { rules, inactive });
+                    self.update_timer(&mut st);
+                    return;
+                }
+                drop(system);
+                st.local_keys.fill(false);
                 if rules.as_ref().is_none_or(|rules| rules.count == 0 || !Local::supported(rules)) {
                     self.local_pause(&mut st, "inactive: local rules disabled");
                     self.hid.local(None);
@@ -775,7 +841,9 @@ impl Ctx {
                 }
                 if st.local_recovery.as_ref().is_some_and(|recovery| !recovery.finished()) {
                     if let Some(recovery) = &st.local_recovery { recovery.retry(); }
-                    self.local_status("inactive: macOS has not confirmed that every key is released; release all keys, then turn the switch off and on in Keys & mouse");
+                    st.pending_rules = Some(CaptureCmd::LocalRules { rules, inactive });
+                    self.update_timer(&mut st);
+                    self.local_status("inactive: macOS has not confirmed that every key is released; release all keys to resume automatically");
                     return;
                 }
                 st.local_recovery = None;
@@ -821,14 +889,17 @@ impl Ctx {
             Msg::Local => self.local_pump(&mut st),
             Msg::RestoreSystem => { self.restore_system(&mut st); }
             Msg::Cmd(CaptureCmd::RestoreLocalRules(ticket)) => {
+                if let Some(local) = st.local_rules.as_mut() { local.enabled = false; }
                 self.local_pause(&mut st, "inactive: local rules stopped");
-                let error = (!self.restore_system(&mut st)).then(|| "Keyboard restoration failed; the recovery record was kept".into());
-                let _ = self.tx.send(Event::LocalRulesRestored { ticket, error });
+                st.pending_rules = None;
+                st.restore_ticket = Some(ticket);
+                self.restore_system(&mut st);
+                self.restore_ack(&mut st);
             }
             Msg::Session(active) => {
                 if st.local_rules.is_none() && st.local_recovery.is_none() { return; }
                 st.session_paused = !active;
-                self.local_pause(&mut st, "inactive: this Mac slept or changed users; release all keys, then turn the switch off and on in Keys & mouse");
+                self.local_pause(&mut st, "inactive: this Mac slept or changed users; release all keys to resume automatically");
                 self.end(&mut st);
             }
             Msg::Cmd(CaptureCmd::DeviceRules(enabled)) => self.hid.rules(enabled),
@@ -845,7 +916,7 @@ impl Ctx {
             Msg::Displays => st.refresh_desktop(&self.tx),
             Msg::Locked => {
                 st.session_paused = true;
-                self.local_pause(&mut st, "inactive: screen locked; unlock and release all keys, then turn the switch off and on in Keys & mouse");
+                self.local_pause(&mut st, "inactive: screen locked; unlock and release all keys to resume automatically");
                 let _ = self.tx.send(Event::ScreenLocked(true));
                 self.end(&mut st);
             }
@@ -864,6 +935,8 @@ impl Ctx {
                 }
             }
             Msg::Quit => {
+                if let Some(local) = st.local_rules.as_mut() { local.enabled = false; }
+                st.pending_rules = None;
                 self.local_pause(&mut st, "inactive: shutting down");
                 self.restore_system(&mut st);
                 if st.active || st.cursor_hidden {
@@ -871,9 +944,10 @@ impl Ctx {
                     self.hid.capture(false);
                 }
                 st.quitting = true;
-                if let Some(rl) = CFRunLoop::current() {
-                    rl.stop();
-                }
+                if self.system.borrow().as_ref().is_none_or(|system| !system.pending())
+                    && st.local_rules.as_ref().is_none_or(|local| !local.held())
+                    && let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
+                self.update_timer(&mut st);
             }
         }
     }
@@ -884,7 +958,7 @@ impl Ctx {
             tracing::debug!(?ty, "event tap disabled by macOS; re-enabling");
             if let Ok(mut st) = self.st.try_borrow_mut() {
                 let held = st.local_rules.as_ref().is_some_and(|local| local.held());
-                self.local_pause(&mut st, "inactive: macOS interrupted local input; release all keys, then turn the switch off and on in Keys & mouse");
+                self.local_pause(&mut st, "inactive: macOS interrupted local input; release all keys to resume automatically");
                 if held { self.end(&mut st); }
                 if let Some(tap) = &st.tap { CGEvent::tap_enable(tap, true); }
             }
@@ -921,10 +995,11 @@ impl Ctx {
         if let Some((code, down)) = key {
             let injected = CGEvent::integer_value_field(e, CGEventField::EventSourceStateID) != i64::from(CGEventSourceStateID::HIDSystemState.0);
             if !injected && st.local_rules.is_some() && (secure_input() || st.session_paused) {
-                self.local_pause(&mut st, "inactive: a password field or the lock screen is hiding input; leave it and release all keys, then turn the switch off and on in Keys & mouse");
+                self.local_pause(&mut st, "inactive: a password field or the lock screen is hiding input; leave it and release all keys to resume automatically");
             }
             let remote = st.active;
             if let Some(local) = st.local_rules.as_mut() {
+                local.admission.click_state = CGEvent::integer_value_field(e, CGEventField::MouseEventClickState);
                 local.admission.keyboard_type = CGEvent::integer_value_field(e, CGEventField::KeyboardEventKeyboardType) as u32;
                 let swallowed = local.hook(code, down, injected, CGEvent::flags(e).0, remote);
                 self.inbox.signal();
@@ -987,6 +1062,9 @@ impl Ctx {
     /// Starts capturing for `side`, telling the daemon which modifiers are
     /// held (for modifier-to-cross). False if the daemon is gone.
     fn start(&self, st: &mut State, side: Side, pos: Pos) -> bool {
+        if st.local_rules.as_ref().is_some_and(|local| local.paused && !local.held()) {
+            return self.start_now(st, side, pos);
+        }
         if let Some(local) = st.local_rules.as_ref() {
             if local.activation.is_some() { return false; }
             self.local_fence(st, Destination::Remote);
@@ -1043,9 +1121,8 @@ impl Ctx {
                 }
             }
             T::KeyDown => {
-                // The receiving side does its own key repeat.
-                let repeat = CGEvent::integer_value_field(e, CGEventField::KeyboardEventAutorepeat) != 0;
-                if !repeat && let Some(code) = logic::mac_to_evdev(keycode(ev)) {
+                if !st.local_keys.get(usize::from(keycode(ev))).copied().unwrap_or(false)
+                    && let Some(code) = logic::mac_to_evdev(keycode(ev)) {
                     send(Event::Key { code, down: true, device: None });
                 }
             }
@@ -1143,7 +1220,7 @@ unsafe extern "C-unwind" fn on_tap(
     // SAFETY: `info` is the leaked `Ctx`; the event is valid for this call.
     let (ctx, ev) = unsafe { (&*(info as *const Ctx), event.as_ref()) };
     let keep = std::panic::catch_unwind(AssertUnwindSafe(|| ctx.on_event(ty, ev))).unwrap_or_else(|_| {
-        if let Ok(mut st) = ctx.st.try_borrow_mut() { ctx.local_pause(&mut st, "inactive: local input stopped unexpectedly; release all keys, then turn the switch off and on in Keys & mouse"); }
+        if let Ok(mut st) = ctx.st.try_borrow_mut() { ctx.local_pause(&mut st, "inactive: local input stopped unexpectedly; release all keys to resume automatically"); }
         true
     });
     if keep { event.as_ptr() } else { null_mut() }
@@ -1269,305 +1346,4 @@ fn allow_cursor_hiding_in_background() {
 
 // --------------------------------------------------------------- injection
 
-fn inject_thread(
-    tx: mpsc::UnboundedSender<Event>,
-    rx: mpsc::UnboundedReceiver<Inject>,
-    trusted: Arc<AtomicBool>,
-    controlled: Arc<Controlled>,
-) {
-    let Some(source) = CGEventSource::new(CGEventSourceStateID::HIDSystemState) else {
-        let _ = tx.send(Event::Error("Other computers can't control this Mac: couldn't create an input source.".into()));
-        return;
-    };
-    CGEventSource::set_user_data(Some(&source), OUR_EVENTS);
-    // By default, posting an event mutes the local mouse and keyboard for
-    // a quarter second. Don't.
-    CGEventSource::set_local_events_suppression_interval(Some(&source), 0.0);
-    // A small runtime of its own, for the key repeat timer.
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_time().build() {
-        Ok(rt) => rt,
-        Err(e) => {
-            let _ = tx.send(Event::Error(format!("Other computers can't control this Mac: {e}")));
-            return;
-        }
-    };
-    let inj = Injector::new(source);
-    tracing::info!("input injection ready");
-    rt.block_on(inject_loop(inj, rx, trusted, controlled));
-}
-
-/// A number from the global preferences domain (`defaults read -g key`).
-fn global_pref(key: &'static str) -> Option<i64> {
-    let key = CFString::from_static_str(key);
-    // SAFETY: an immutable CF constant.
-    let app = unsafe { kCFPreferencesAnyApplication };
-    CFPreferencesCopyAppValue(&key, app)?.downcast_ref::<CFNumber>()?.as_i64()
-}
-
-/// The user's key repeat settings (System Settings > Keyboard).
-fn repeat_setting() -> Option<(Duration, Duration)> {
-    logic::repeat_timing(global_pref("InitialKeyRepeat"), global_pref("KeyRepeat"))
-}
-
-async fn inject_loop(
-    mut inj: Injector,
-    mut rx: mpsc::UnboundedReceiver<Inject>,
-    trusted: Arc<AtomicBool>,
-    controlled: Arc<Controlled>,
-) {
-    let mut warned = false;
-    let mut batch = Vec::new();
-    // CGEventPost doesn't auto-repeat, and senders drop their repeats.
-    let mut repeat = KeyRepeat::new(repeat_setting());
-    let mut settings_read = Instant::now();
-    loop {
-        let deadline = repeat.deadline();
-        let wake = tokio::time::Instant::from_std(deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(3600)));
-        tokio::select! {
-            msg = rx.recv() => {
-                let Some(first) = msg else { return };
-                // Everything already queued, without the moves that later
-                // ones make stale: a burst costs one move, not latency.
-                drain_coalesced(first, &mut rx, &mut batch);
-                let was = controlled.get();
-                if controlled.apply(&mut batch) {
-                    repeat.clear();
-                }
-                // A Mac with no mouse of its own can leave the pointer
-                // undrawn: ask for it at the start of each visit.
-                if !was && controlled.get() {
-                    let _ = CGDisplayShowCursor(kCGNullDirectDisplay);
-                }
-                if !trusted.load(Ordering::Relaxed) {
-                    if !warned {
-                        tracing::warn!("ignoring input from peers until Accessibility permission is granted");
-                        warned = true;
-                    }
-                    batch.clear();
-                    repeat.clear();
-                    continue;
-                }
-                warned = false;
-                let now = Instant::now();
-                for m in batch.drain(..) {
-                    if let Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } = m {
-                        if down && is_repeatable(code) && now.duration_since(settings_read) > Duration::from_secs(5) {
-                            repeat.set_timing(repeat_setting());
-                            settings_read = now;
-                        }
-                        if !repeat.key(code, down, now) {
-                            continue;
-                        }
-                    }
-                    inj.apply(m);
-                }
-            }
-            _ = tokio::time::sleep_until(wake), if deadline.is_some() => {
-                if let Some(code) = repeat.poll(Instant::now()) {
-                    inj.repeat_key(code);
-                }
-            }
-        }
-    }
-}
-
-struct Injector {
-    source: CFRetained<CGEventSource>,
-    pos: CGPoint,
-    /// The displays, for keeping relative moves on them; read again when a
-    /// move would leave them (they may have changed), at most once a second.
-    desktop: Option<Desktop>,
-    desktop_read: Instant,
-    /// Held buttons, bit n = macOS button number n.
-    buttons: u32,
-    mods: logic::Modifiers,
-    clicks: logic::ClickCounter,
-    smooth: logic::Accum,
-    wheel: logic::Accum,
-    epoch: Instant,
-}
-
-impl Injector {
-    fn new(source: CFRetained<CGEventSource>) -> Self {
-        // Start from wherever the cursor is.
-        let pos = CGEvent::new(None).map_or(CGPoint::new(0.0, 0.0), |e| CGEvent::location(Some(&e)));
-        Self {
-            source,
-            pos,
-            desktop: read_desktop(),
-            desktop_read: Instant::now(),
-            buttons: 0,
-            mods: logic::Modifiers::default(),
-            clicks: logic::ClickCounter::new(DOUBLE_CLICK_SECS, DOUBLE_CLICK_SLOP),
-            smooth: logic::Accum::default(),
-            wheel: logic::Accum::default(),
-            epoch: Instant::now(),
-        }
-    }
-
-    fn post(&self, ev: &CGEvent, extra_flags: u64) {
-        CGEvent::set_flags(Some(ev), CGEventFlags(self.mods.flags() | extra_flags));
-        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(ev));
-    }
-
-    fn mouse_event(&self, ty: u32, button: u32) -> Option<CFRetained<CGEvent>> {
-        let ev = CGEvent::new_mouse_event(Some(&self.source), CGEventType(ty), self.pos, CGMouseButton(button))?;
-        if button >= 2 {
-            CGEvent::set_integer_value_field(Some(&ev), CGEventField::MouseEventButtonNumber, i64::from(button));
-        }
-        Some(ev)
-    }
-
-    /// A move to `self.pos` that moved by `(dx, dy)`.
-    fn post_move(&self, dx: f64, dy: f64) {
-        // With a button held, apps expect drags, not moves
-        // (selection, drag and drop).
-        let held = (0..32).find(|n| self.buttons & (1 << n) != 0);
-        let (ty, button) = match held {
-            Some(n) => (logic::mouse_event_types(n).2, n),
-            None => (CGEventType::MouseMoved.0, 0),
-        };
-        let Some(ev) = self.mouse_event(ty, button) else { return };
-        CGEvent::set_double_value_field(Some(&ev), CGEventField::MouseEventDeltaX, dx);
-        CGEvent::set_double_value_field(Some(&ev), CGEventField::MouseEventDeltaY, dy);
-        self.post(&ev, 0);
-    }
-
-    fn apply(&mut self, msg: Inject) {
-        match msg {
-            Inject::MoveTo(p) => {
-                let (dx, dy) = (p.x - self.pos.x, p.y - self.pos.y);
-                self.pos = CGPoint::new(p.x, p.y);
-                self.post_move(dx, dy);
-            }
-            // Games read the delta fields. The location is tracked here and
-            // kept on the displays, as macOS keeps the cursor, so later
-            // absolute moves start from the truth: reading it back right
-            // after the (asynchronous) post could return the old one.
-            Inject::MoveBy { dx, dy } => {
-                let (dx, dy) = (f64::from(dx), f64::from(dy));
-                let to = Pos::new(self.pos.x + dx, self.pos.y + dy);
-                let off = self.desktop.as_ref().is_none_or(|d| d.screen_at(to).is_none());
-                if off && self.desktop_read.elapsed() > Duration::from_secs(1) {
-                    self.desktop = read_desktop().or(self.desktop.take());
-                    self.desktop_read = Instant::now();
-                }
-                let p = logic::moved_by(self.desktop.as_ref(), Pos::new(self.pos.x, self.pos.y), dx, dy);
-                self.pos = CGPoint::new(p.x, p.y);
-                self.post_move(dx, dy);
-            }
-            Inject::Button { button, down } => {
-                let Some(n) = logic::evdev_to_mac_button(button) else {
-                    tracing::debug!(button, "unsupported mouse button");
-                    return;
-                };
-                let (down_ty, up_ty, _) = logic::mouse_event_types(n);
-                let count = if down {
-                    let t = self.epoch.elapsed().as_secs_f64();
-                    self.clicks.press(n, t, Pos::new(self.pos.x, self.pos.y))
-                } else {
-                    self.clicks.release(n)
-                };
-                let Some(ev) = self.mouse_event(if down { down_ty } else { up_ty }, n) else { return };
-                CGEvent::set_integer_value_field(Some(&ev), CGEventField::MouseEventClickState, count);
-                if down {
-                    self.buttons |= 1 << n;
-                } else {
-                    self.buttons &= !(1 << n);
-                }
-                self.post(&ev, 0);
-            }
-            Inject::Scroll { dx, dy } => {
-                let (v, h) = logic::wire_to_mac_scroll(dx, dy);
-                let (h, v) = self.smooth.take(h, v);
-                self.scroll(CGScrollEventUnit::Pixel, v, h);
-            }
-            Inject::ScrollDiscrete { dx, dy } => {
-                let (v, h) = logic::wire_discrete_to_mac_lines(dx, dy);
-                let (h, v) = self.wheel.take(h, v);
-                self.scroll(CGScrollEventUnit::Line, v, h);
-            }
-            Inject::ScrollStop => self.smooth.reset(),
-            // Handled by the injection loop.
-            Inject::Controlled(_) => {}
-            Inject::Text { .. } => tracing::warn!("text unsupported; sender must use physical fallback"),
-            Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
-                // Each posted Caps Lock press toggles it; a repeat must not.
-                if self.mods.is_caps_repeat(code, down) {
-                    return;
-                }
-                self.mods.update(code, down);
-                if code == KEY_CAPSLOCK && !down {
-                    return; // a toggle: one event per press
-                }
-                // Media keys are system-defined events; key events for the
-                // volume and brightness keys do nothing.
-                if let Some(nx) = mediakeys::to_mac_nx(code) {
-                    self.media_key(nx, down, false);
-                    return;
-                }
-                if mediakeys::is_media(code) {
-                    tracing::debug!(code, "no Mac media key for this key code");
-                    return;
-                }
-                let Some(kc) = logic::evdev_to_mac(code) else {
-                    tracing::debug!(code, "no Mac key for this key code");
-                    return;
-                };
-                let Some(ev) = CGEvent::new_keyboard_event(Some(&self.source), kc, down) else { return };
-                if logic::is_mac_modifier(kc) {
-                    CGEvent::set_type(Some(&ev), CGEventType::FlagsChanged);
-                }
-                self.post(&ev, logic::key_extra_flags(kc));
-            }
-        }
-    }
-
-    /// Another "down" for a held key, marked as auto-repeat like a real one.
-    fn repeat_key(&self, code: u32) {
-        if let Some(nx) = mediakeys::to_mac_nx(code) {
-            self.media_key(nx, true, true);
-            return;
-        }
-        let Some(kc) = logic::evdev_to_mac(code) else { return };
-        let Some(ev) = CGEvent::new_keyboard_event(Some(&self.source), kc, true) else { return };
-        CGEvent::set_integer_value_field(Some(&ev), CGEventField::KeyboardEventAutorepeat, 1);
-        self.post(&ev, logic::key_extra_flags(kc));
-    }
-
-    /// Posts a media key press or release (`NX_SYSDEFINED`, subtype 8). In
-    /// an autorelease pool: this thread has none, and AppKit autoreleases.
-    fn media_key(&self, nx: u8, down: bool, repeat: bool) {
-        objc2::rc::autoreleasepool(|_| self.post_media_key(nx, down, repeat));
-    }
-
-    fn post_media_key(&self, nx: u8, down: bool, repeat: bool) {
-        let state = if down { 0xA00 } else { 0xB00 };
-        let Some(ns) = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2(
-            NSEventType::SystemDefined,
-            CGPoint::new(0.0, 0.0),
-            NSEventModifierFlags(state),
-            0.0,
-            0,
-            None,
-            logic::NX_SUBTYPE_AUX_CONTROL_BUTTONS,
-            logic::media_data1(nx, down, repeat) as isize,
-            -1,
-        ) else {
-            return;
-        };
-        let Some(ev) = ns.CGEvent() else { return };
-        // Our own tap must let it through, and see it is not local input.
-        CGEvent::set_integer_value_field(Some(&ev), CGEventField::EventSourceUserData, OUR_EVENTS);
-        CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&ev));
-    }
-
-    fn scroll(&self, unit: CGScrollEventUnit, vertical: i32, horizontal: i32) {
-        if vertical == 0 && horizontal == 0 {
-            return;
-        }
-        if let Some(ev) = CGEvent::new_scroll_wheel_event2(Some(&self.source), unit, 2, vertical, horizontal, 0) {
-            self.post(&ev, 0);
-        }
-    }
-}
+include!("macos_inject.rs");

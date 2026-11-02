@@ -602,6 +602,8 @@ impl Owner {
 
 struct App {
     discovery: bool,
+    #[cfg(all(feature = "native-local-remap", any(windows, target_os = "macos")))]
+    local_rules_snapshot: Option<(Option<Arc<one_mk_input::localmap_runtime::Rules>>, Option<String>)>,
     keyboard: Option<one_mk_input::typing::KeyboardLayout>,
     dropzones: Option<one_mk_input::dropzone::Handle>,
     dir: PathBuf,
@@ -672,7 +674,7 @@ struct App {
     network_seen: bool,
     /// What the input backend says needs the user, by part (`Event::Status`).
     input_problems: std::collections::BTreeMap<&'static str, String>,
-    #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+    #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
     local_stop_replies: Vec<(tokio::sync::oneshot::Sender<String>, String)>,
     /// The keyboards and mice connected, for per-device rules.
     devices: tune::Devices,
@@ -753,6 +755,7 @@ pub async fn serve(
     };
 
     let settings = Settings::load_or_default(&dir);
+    one_mk_input::typing::character_mode(settings.typing.has_character_request());
     let (dropzones, mut drops) = match one_mk_input::dropzone::start(name) {
         Ok((handle, events)) => (Some(handle), events),
         Err(error) => {
@@ -765,6 +768,8 @@ pub async fn serve(
     let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys, computers);
     let devices = tune::Devices::load(&dir, name);
     let mut app = App {
+        #[cfg(all(feature = "native-local-remap", any(windows, target_os = "macos")))]
+        local_rules_snapshot: None,
         keyboard,
         dropzones,
         dir,
@@ -811,7 +816,7 @@ pub async fn serve(
         auto_profile: None,
         network_seen: false,
         input_problems: Default::default(),
-        #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+        #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
         local_stop_replies: Vec::new(),
         devices,
         focus_watched: false,
@@ -910,7 +915,7 @@ pub async fn serve(
     }
     app.end_owner(false);
     app.devices.stopped();
-    #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+    #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
     if app.backend_name == "native" {
         let _ = app.capture.send(CaptureCmd::LocalRules { rules: None, inactive: None });
         if app.capture.send(CaptureCmd::RestoreLocalRules(0)).is_ok() {
@@ -1198,6 +1203,7 @@ impl App {
         self.settings.typing.summary()
     }
     fn refresh_keyboard(&mut self) {
+        if !self.settings.typing.has_character_request() { return; }
         if let Some(keyboard) = &mut self.keyboard && keyboard.refresh() {
             for peer in self.peers.values() {
                 if peer.caps & (caps::TEXT | caps::TEXT_SOURCE) != 0 {
@@ -1209,7 +1215,7 @@ impl App {
     // ------------------------------------------------------------ local input
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
-        if matches!(ev, Event::Key { .. } | Event::Activated { .. }) { self.refresh_keyboard(); }
+        if matches!(ev, Event::Activated { .. }) || cfg!(not(target_os = "macos")) && matches!(ev, Event::Key { .. }) { self.refresh_keyboard(); }
         match ev {
             Event::KeyboardModifiers { depressed, latched, locked, group } => {
                 #[cfg(target_os = "linux")]
@@ -1349,7 +1355,7 @@ impl App {
                 #[cfg(any(windows, target_os = "macos"))]
                 self.reload_local_rules();
             }
-            #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+            #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
             Event::LocalRulesRestored { error, .. } => {
                 for (reply, text) in self.local_stop_replies.drain(..) {
                     let _ = reply.send(error.as_ref().map_or(text, |error| format!("error {error}\n")));
@@ -2491,6 +2497,7 @@ impl App {
     fn reload_settings(&mut self) -> Result<()> {
         let previous_caps = self.local_caps();
         self.settings = Settings::load(&self.dir)?;
+        one_mk_input::typing::character_mode(self.settings.typing.has_character_request());
         self.wallpaper.refresh(&self.settings.wallpaper);
         let peers: Vec<_> = self.peers.keys().copied().collect();
         for peer in peers { self.announce_wallpaper(peer); }
@@ -2527,7 +2534,7 @@ impl App {
                 #[cfg(any(windows, target_os = "macos"))]
                 self.reload_local_rules();
                 let text = match result { Ok(_) => "ok\n".to_owned(), Err(error) => format!("error {error:#}\n") };
-                #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+                #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
                 if self.backend_name == "native" {
                     if self.capture.send(CaptureCmd::RestoreLocalRules(1)).is_err() {
                         let _ = reply.send("error Keyboard restoration could not be requested; restart oneMK to recover\n".into());

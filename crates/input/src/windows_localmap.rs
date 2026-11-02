@@ -152,9 +152,7 @@ impl Local {
             let mut engine = engine;
             run(&mut engine, &feedback, receiver, |done| {
                     let _ = completion.send(done);
-                    // SAFETY: posting to the capture window, possibly already gone.
-                    unsafe { PostMessageW(hwnd as HWND, super::windows::WM_APP_LOCAL, 0, 0) };
-            });
+            }, || { unsafe { PostMessageW(hwnd as HWND, super::windows::WM_APP_LOCAL, 0, 0) }; });
             feedback.fail();
             engine.fail();
             unsafe { PostMessageW(hwnd as HWND, super::windows::WM_APP_LOCAL, 0, 0) };
@@ -256,7 +254,7 @@ impl Local {
         let rules = self.snapshots.load();
         let swallow = self.physical.key(PhysicalKey {
             down, injected: false, shortcut: false, owner: Owner::Unknown,
-            eligible: (0x110..=0x114).contains(&code) || matches!(evdev_to_win(code), Some(WinKey::Scan { .. })),
+            eligible: rules.captures(code) && ((0x110..=0x114).contains(&code) || matches!(evdev_to_win(code), Some(WinKey::Scan { .. }))),
             healthy: self.enabled && !self.paused,
         }, code, now, &rules, &mut self.admission, |action| self.actions.push(action).is_ok());
         if self.admission.pending() { self.wake.signal(); }
@@ -283,6 +281,7 @@ impl Local {
     }
 
     pub fn fail(&mut self) {
+        self.paused = true;
         self.admission.fail();
         self.admission.acknowledge(self.admission.watermark());
         self.activation = None;
@@ -318,6 +317,8 @@ impl Local {
         }
         None
     }
+
+    pub fn physical_held(&self) -> bool { self.physical.held() }
 
     pub fn action(&self) -> Option<Action> { self.actions.pop() }
 
@@ -360,7 +361,7 @@ impl Drop for Local {
 
 fn run(
     engine: &mut Engine<Native>, feedback: &Feedback, receiver: mpsc::Receiver<Work>,
-    mut complete: impl FnMut(Completion),
+    mut complete: impl FnMut(Completion), mut notify: impl FnMut(),
 ) {
     let mut retired = false;
     loop {
@@ -370,6 +371,7 @@ fn run(
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if !feedback.healthy() { engine.fail(); }
                     else if !engine.timer(Instant::now()) { feedback.fail(); }
+                    notify();
                     continue;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => None,
@@ -389,5 +391,6 @@ fn run(
             Some(Work::Retire) => { retired = true; if engine.fail() { break; } }
             Some(Work::Stop) | None => break,
         }
+        notify();
     }
 }

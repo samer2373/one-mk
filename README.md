@@ -462,15 +462,21 @@ on one of the two computers. On Linux it listens to NetworkManager, which
 tells one-mk about every network change (it never checks on its own, so it
 costs nothing while nothing changes); without NetworkManager (systemd-networkd
 or iwd on their own), profiles only change with `profile use`. On macOS,
-CoreWLAN reports Wi-Fi changes; on Windows, WlanAPI reports connections and
-disconnections. These listeners sleep until an event arrives, with no polling.
+CoreWLAN plus SCDynamicStore report Wi-Fi, IP and route changes; on Windows,
+WlanAPI plus IP Helper notifications report connections, routes and addresses.
+DHCP/address-only changes re-evaluate subnet rules, even without a new SSID.
+These listeners sleep until an event arrives, with no polling.
 macOS 14 and later and Windows 11 24H2 require Location Services permission
 to read Wi-Fi names. The window's Profiles card shows the current network
 and an explanation and permission/settings button when access is needed.
 oneMK does not request location updates or track your location. On macOS,
 use the installed app bundle so its permission description and identity are
-available to both the window and background agent. Router MAC rules remain
-Linux-only. Profiles are kept in
+available to both the window and background agent. Router MAC rules also read
+native default-router neighbors on macOS and Windows; an unresolved neighbor
+cannot match. On macOS, an absent IPv4 neighbor triggers one bounded probe per
+network refresh, not an idle poll; IPv6 router identity needs a cached neighbor.
+See [Wi-Fi/profile behavior and hardware checks](docs/WIFI-PROFILES.md).
+Profiles are kept in
 `profiles.toml` next to `devices.toml`.
 
 **Switching without an edge.** `one-mk switch desk` puts the pointer in the
