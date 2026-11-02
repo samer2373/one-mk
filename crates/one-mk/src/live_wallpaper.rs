@@ -903,6 +903,7 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     fn plan() -> Plan {
         Plan { hash: "a".repeat(64), title: "test".into(), media: Media { width: 640, height: 360, duration_ms: 10000, frame_rate: 30 },
             canvas: one_mk_wallpaper::Canvas { monitors: ["host", "remote"].into_iter().enumerate().map(|(index, computer)| one_mk_wallpaper::Monitor {

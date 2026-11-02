@@ -85,6 +85,7 @@ impl FilesReceived {
 
     /// Plain text; [`escape_markup`] before handing it to a server that
     /// reads markup.
+    #[cfg_attr(windows, allow(dead_code))] // Windows shows only the title
     pub fn body(&self) -> String {
         const SHOWN: usize = 3;
         let groups = self.groups();
@@ -124,6 +125,7 @@ fn display(name: &str) -> String {
     one_mk_proto::sanitize_name(name)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn human(n: u64) -> String {
     one_mk_ctl::status::human_bytes(n)
 }

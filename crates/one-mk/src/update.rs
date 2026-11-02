@@ -459,6 +459,8 @@ fn version_check(path: &Path, expected: Option<&str>) -> Result<()> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+    // Retried only where a just-written file can be busy (unix ETXTBSY).
+    #[cfg_attr(not(unix), allow(clippy::never_loop))]
     let child = loop {
         match command.spawn() {
             Ok(child) => break child,
