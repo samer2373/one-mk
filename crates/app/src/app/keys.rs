@@ -581,7 +581,7 @@ impl App {
                 if input.local_rules { "off".into() } else { "on".into() }]], None);
         }
         let text = if available {
-            "Apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here."
+            "Apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here. Closing this window also turns local rules off."
         } else {
             "Not available on this desktop. Local rules need macOS or Windows; your rules still work on the other computers."
         };
@@ -595,7 +595,7 @@ impl App {
         if cfg!(target_os = "macos") {
             bottom += 6.0;
             bottom += para(ui, pos2(content.left(), bottom), content.width(),
-                "Caps Lock, Fn, media and function keys cannot be used in local rules yet.", regular(T_META), INK2);
+                "Simple key swaps, including Caps Lock, use this Mac’s keyboard settings. Caps Lock can only map to one key, not a chord, layer or app-only rule. Fn and media keys are not available.", regular(T_META), INK2);
         }
         if let Some((_, error)) = self.keys.error.clone().filter(|(area, _)| *area == "local-rules") {
             bottom += 6.0 + error_line(ui, content.left(), bottom + 6.0, content.width(), &error);

@@ -18,6 +18,7 @@ pub const LEASE: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rules {
+    pub system: crate::macos_hidmap::Plan,
     pub maps: KeymapSet,
     pub hotkeys: Bindings,
     pub count: usize,
@@ -25,7 +26,7 @@ pub struct Rules {
 
 impl Default for Rules {
     fn default() -> Self {
-        Self { maps: KeymapSet::new(Keymap::default()), hotkeys: Bindings::default(), count: 0 }
+        Self { system: Default::default(), maps: KeymapSet::new(Keymap::default()), hotkeys: Bindings::default(), count: 0 }
     }
 }
 
@@ -501,7 +502,7 @@ mod tests {
             from: "capslock".parse().unwrap(), layer: None,
             what: What::To("lctrl+a".parse().unwrap()),
         }], Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map;
-        Rules { maps: KeymapSet::new(map), count: 1, hotkeys: Bindings::default() }
+        Rules { maps: KeymapSet::new(map), count: 1, ..Rules::default() }
     }
 
     fn held_output_is_released_on_interruption(destination: Option<Destination>, replace: bool) {
@@ -551,7 +552,7 @@ mod tests {
             what: What::To("button4".parse().unwrap()) }], Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map;
         {
             let mut engine = Engine::new(Fake(record.clone()));
-            let rules = Rules { maps: KeymapSet::new(map), count: 1, hotkeys: Bindings::default() };
+            let rules = Rules { maps: KeymapSet::new(map), count: 1, ..Rules::default() };
             assert!(engine.fence(0, Destination::Local, Some(&rules)));
             assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 30, down: true, at: Instant::now() }, None));
             assert!(record.lock().unwrap().held.contains(&0x113));
@@ -956,7 +957,7 @@ mod tests {
         let mut engine = Engine::new(Fake(record.clone()));
         let specs: Vec<_> = [("lctrl", "z"), ("lalt", "x"), ("lshift", "c"), ("esc", "a")].into_iter()
             .map(|(from, to)| RuleSpec { from: from.parse().unwrap(), layer: None, what: What::To(to.parse().unwrap()) }).collect();
-        let rules = Rules { maps: KeymapSet::new(Keymap::compile(&specs, Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map), count: specs.len(), hotkeys: Bindings::default() };
+        let rules = Rules { maps: KeymapSet::new(Keymap::compile(&specs, Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map), count: specs.len(), ..Rules::default() };
         assert!(engine.fence(0, Destination::Local, Some(&rules)));
         let mut admission = Admission::new(engine.gate());
         let mut hook = Physical::default();

@@ -3278,6 +3278,8 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "one-mk-proto",
  "reis",
+ "serde",
+ "serde_json",
  "sha2",
  "subtle",
  "tokio",

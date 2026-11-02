@@ -1,8 +1,40 @@
 const WINDOWS: &str = include_str!("../src/windows_experimental.rs");
 const MACOS: &str = include_str!("../src/macos_experimental.rs");
 
+#[test]
+fn native_keyboard_properties_have_recovery_and_never_run_in_the_tap_callback() {
+    let native = include_str!("../src/macos_hidmap_native.rs");
+    assert!(native.contains("IOHIDServiceClientSetProperty"));
+    assert!(native.contains("IOHIDServiceClientGetRegistryID"));
+    assert!(native.contains("\"UserKeyMapping\""));
+    assert!(native.contains("if previous != expected"));
+    let startup = MACOS.split("fn capture_thread(").nth(1).unwrap();
+    assert!(startup.find("Lifecycle::recover").unwrap() < startup.find("Ctx {").unwrap());
+    for name in ["on_event", "local_pause"] {
+        let body = function(MACOS, name);
+        assert!(!body.contains("restore_system("));
+        assert!(!body.contains(".apply("));
+        assert!(!body.contains("std::fs::"));
+    }
+    assert!(function(MACOS, "local_pause").contains("self.inbox.post(Msg::RestoreSystem)"));
+    let control = function(MACOS, "handle");
+    assert!(control.contains("CaptureCmd::RestoreLocalRules(ticket)"));
+    assert!(control.contains("Event::LocalRulesRestored"));
+    assert!(control.contains("self.restore_system(&mut st)"));
+    assert!(include_str!("../../app/src/app.rs").contains("self.link.local_rules_off_on_quit()"));
+}
+
+#[test]
+fn local_attribution_has_no_waiting_or_timer_path() {
+    let local = function(include_str!("../src/devcorr.rs"), "local_key");
+    assert!(local.contains("out.push(Correlated"));
+    for forbidden in ["self.enqueue(", "self.waiting", "sleep(", "recv(", "recv_timeout(", "park("] {
+        assert!(!local.contains(forbidden), "local attribution unexpectedly contains {forbidden}");
+    }
+}
+
 fn function<'a>(source: &'a str, name: &str) -> &'a str {
-    let start = source.find(&format!("    fn {name}(" )).unwrap();
+    let start = source.find(&format!("fn {name}(" )).unwrap();
     let end = source[start..].find("\n    }").unwrap() + start + 6;
     &source[start..end]
 }

@@ -655,6 +655,8 @@ struct App {
     network_seen: bool,
     /// What the input backend says needs the user, by part (`Event::Status`).
     input_problems: std::collections::BTreeMap<&'static str, String>,
+    #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+    local_stop_replies: Vec<(tokio::sync::oneshot::Sender<String>, String)>,
     /// The keyboards and mice connected, for per-device rules.
     devices: tune::Devices,
     /// The focus probe is asked to say when the front window changes.
@@ -791,6 +793,8 @@ pub async fn serve(
         auto_profile: None,
         network_seen: false,
         input_problems: Default::default(),
+        #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+        local_stop_replies: Vec::new(),
         devices,
         focus_watched: false,
         dial_at: None,
@@ -886,6 +890,19 @@ pub async fn serve(
     }
     app.end_owner(false);
     app.devices.stopped();
+    #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+    if app.backend_name == "native" {
+        let _ = app.capture.send(CaptureCmd::LocalRules { rules: None, inactive: None });
+        if app.capture.send(CaptureCmd::RestoreLocalRules(0)).is_ok() {
+            let restored = tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(event) = events.recv().await {
+                    if let Event::LocalRulesRestored { ticket: 0, error } = event { return error; }
+                }
+                Some("Input capture stopped before keyboard restoration was confirmed".into())
+            }).await;
+            if !matches!(restored, Ok(None)) { tracing::error!(?restored, "keyboard restoration needs recovery on next start"); }
+        }
+    }
     node.close();
     tokio::time::sleep(Duration::from_millis(50)).await; // let the Leave and close go out
     Ok(())
@@ -902,9 +919,15 @@ async fn shutdown_signal() {
     {
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("signal handler");
+        let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("signal handler");
+        let mut quit = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::quit())
+            .expect("signal handler");
         tokio::select! {
             _ = ctrl_c => {}
             _ = term.recv() => {}
+            _ = hangup.recv() => {}
+            _ = quit.recv() => {}
         }
     }
     #[cfg(not(unix))]
@@ -1269,6 +1292,12 @@ impl App {
                 }) { tracing::error!(%error, "could not save emergency local-rules disable"); }
                 #[cfg(any(windows, target_os = "macos"))]
                 self.reload_local_rules();
+            }
+            #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+            Event::LocalRulesRestored { error, .. } => {
+                for (reply, text) in self.local_stop_replies.drain(..) {
+                    let _ = reply.send(error.as_ref().map_or(text, |error| format!("error {error}\n")));
+                }
             }
             Event::Status { part, problem: Some(p) } => {
                 if self.input_problems.get(part) != Some(&p) {
@@ -2419,6 +2448,21 @@ impl App {
         self.reload_trust();
         let stop = req == Request::Stop;
         let text = match req {
+            Request::LocalRulesOff => {
+                self.settings.input.local_rules = false;
+                let result = crate::settings::Settings::update(&self.dir, |settings| { settings.input.local_rules = false; Ok(()) });
+                #[cfg(any(windows, target_os = "macos"))]
+                self.reload_local_rules();
+                let text = match result { Ok(_) => "ok\n".to_owned(), Err(error) => format!("error {error:#}\n") };
+                #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+                if self.backend_name == "native" {
+                    if self.capture.send(CaptureCmd::RestoreLocalRules(1)).is_err() {
+                        let _ = reply.send("error Keyboard restoration could not be requested; restart oneMK to recover\n".into());
+                    } else { self.local_stop_replies.push((reply, text)); }
+                    return false;
+                }
+                text
+            }
             Request::WallpaperStatus => self.wallpaper.status(),
             Request::Status => self.status().encode(),
             Request::Invitation => {

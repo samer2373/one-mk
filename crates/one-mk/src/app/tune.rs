@@ -25,11 +25,15 @@ use tokio::sync::oneshot;
 #[cfg(any(all(feature = "native-local-remap", any(windows, target_os = "macos")), test))]
 fn local_rules_snapshot(settings: &crate::settings::Settings, devices: &[InputDevice], apps: &[String], computers: usize) -> anyhow::Result<Option<std::sync::Arc<one_mk_input::localmap_runtime::Rules>>> {
     if !settings.input.local_rules { return Ok(None); }
-    let maps = settings.input.local_keymaps_for(devices, apps)?;
-    let count = if maps.base().is_empty() && !maps.has_device_rules() { 0 }
+    #[cfg(target_os = "macos")]
+    let (maps, system) = settings.input.local_native_keymaps_for(devices, apps)?;
+    #[cfg(not(target_os = "macos"))]
+    let (maps, system) = (settings.input.local_keymaps_for(devices, apps)?, one_mk_input::macos_hidmap::Plan::default());
+    let count = if maps.base().is_empty() && !maps.has_device_rules() && system.base.is_empty() && system.devices.iter().all(|(_, mappings)| mappings.is_empty()) { 0 }
         else { settings.input.keymap.rule.len() + settings.input.button.len() };
     Ok(Some(std::sync::Arc::new(one_mk_input::localmap_runtime::Rules {
         maps,
+        system,
         hotkeys: settings.hotkeys.bindings_for(computers).map_err(anyhow::Error::msg)?,
         count,
     })))

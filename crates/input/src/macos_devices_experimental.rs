@@ -58,12 +58,17 @@ struct Inner {
     run_loop: Option<CFRetained<CFRunLoop>>,
     info: usize,
     local: Option<crate::macos_localmap::Dispatch>,
+    physical: Vec<(DeviceRef, u32)>,
 }
 
 /// "Never", for a timer: a century away.
 const NEVER: f64 = 3.0e9;
 
 impl Hid {
+    pub(crate) fn physical_keys(&self) -> Vec<u32> {
+        self.inner.borrow().physical.iter().map(|(_, code)| *code).collect()
+    }
+
     pub(crate) fn rules(&self, enabled: bool) {
         let mut inner = self.inner.borrow_mut();
         let mut out = Vec::new();
@@ -275,6 +280,7 @@ unsafe extern "C-unwind" fn on_removed(context: *mut c_void, _result: i32, _send
         let Ok(mut inner) = hid.inner.try_borrow_mut() else { return };
         let Some(at) = inner.table.iter().position(|(d, _)| *d == device as usize) else { return };
         let (_, gone) = inner.table.remove(at);
+        inner.physical.retain(|(device, _)| *device != gone.id);
         let mut out = Vec::new();
         inner.corr.forget(gone.id, &mut out);
         // What waited for the device goes before the news that it is gone.
@@ -306,6 +312,14 @@ unsafe extern "C-unwind" fn on_value(context: *mut c_void, _result: i32, sender:
         match (page, usage) {
             (7, u) => {
                 if let Some(code) = hid_key_to_evdev(u) {
+                    if v == 0 { inner.physical.retain(|entry| *entry != (device, code)); }
+                    else if !inner.physical.contains(&(device, code)) { inner.physical.push((device, code)); }
+                    if code == 1 && v != 0 && let Some(local) = &inner.local
+                        && crate::macos_hidmap::emergency_keys(&inner.physical.iter().map(|(_, code)| *code).collect::<Vec<_>>()) {
+                        local.fail();
+                        let _ = hid.tx.send(Event::LocalRulesOff);
+                        let _ = hid.tx.send(Event::Hotkey(crate::hotkeys::Action::Home));
+                    }
                     inner.corr.device_event(Token::Press { code, down: v != 0 }, device, now, &mut out);
                 }
             }

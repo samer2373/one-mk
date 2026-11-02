@@ -76,7 +76,7 @@ const SLEPT_SECS: f64 = 5.0;
 const ACCESSIBILITY_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 const INPUT_MONITORING_PANE: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
 
-pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
+pub(crate) async fn open(state_dir: PathBuf) -> Result<Backend> {
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
     let (cap_tx, cap_rx) = mpsc::unbounded_channel();
     let (inj_tx, inj_rx) = mpsc::unbounded_channel();
@@ -87,7 +87,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let (tx, t, c) = (ev_tx.clone(), trusted.clone(), controlled.clone());
     std::thread::Builder::new()
         .name("one-mk-capture".into())
-        .spawn(move || capture_thread(tx, cap_rx, t, c))?;
+        .spawn(move || capture_thread(tx, cap_rx, t, c, state_dir))?;
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, trusted, controlled))?;
@@ -197,6 +197,7 @@ pub(crate) enum Msg {
     Unlocked,
     Local,
     Session(bool),
+    RestoreSystem,
     Quit,
 }
 
@@ -245,6 +246,8 @@ impl Inbox {
 /// Everything the capture callbacks share. Leaked, and used only on the
 /// capture thread (callbacks run on its run loop, one at a time).
 struct Ctx {
+    system: RefCell<crate::macos_hidmap_native::Native>,
+    system_plan: RefCell<Option<crate::macos_hidmap::Plan>>,
     tx: mpsc::UnboundedSender<Event>,
     /// Accessibility granted; read by the injection thread.
     trusted: Arc<AtomicBool>,
@@ -368,7 +371,16 @@ fn capture_thread(
     mut cmds: mpsc::UnboundedReceiver<CaptureCmd>,
     trusted: Arc<AtomicBool>,
     controlled: Arc<Controlled>,
+    state_dir: PathBuf,
 ) {
+    let system = match crate::macos_hidmap_native::System::new()
+        .and_then(|runner| crate::macos_hidmap::Lifecycle::recover(runner, &state_dir)) {
+        Ok(system) => system,
+        Err(error) => {
+            let _ = tx.send(Event::Error(format!("Can't restore this Mac's keyboard mappings: {error:#}. Local rules were not started.")));
+            return;
+        }
+    };
     allow_cursor_hiding_in_background();
     let Some(run_loop) = CFRunLoop::current() else {
         let _ = tx.send(Event::Error("Can't share this Mac's mouse: no run loop for input capture.".into()));
@@ -380,7 +392,7 @@ fn capture_thread(
     let inbox = Arc::new(Inbox::default());
     let hid = crate::macos_devices::Hid::start(tx.clone(), &run_loop);
     let ctx: &'static Ctx =
-        Box::leak(Box::new(Ctx { tx, trusted, controlled, inbox: inbox.clone(), st: RefCell::new(State::new()), hid }));
+        Box::leak(Box::new(Ctx { system: RefCell::new(system), system_plan: RefCell::new(None), tx, trusted, controlled, inbox: inbox.clone(), st: RefCell::new(State::new()), hid }));
     let info = ctx as *const Ctx as *mut c_void;
 
     // Commands arrive through a custom run loop source.
@@ -460,6 +472,7 @@ fn capture_thread(
 
     ctx.tick();
     CFRunLoop::run();
+    ctx.restore_system(&mut ctx.st.borrow_mut());
     ctx.hid.local(None);
     *ctx.inbox.interlock.lock().unwrap_or_else(|error| error.into_inner()) = None;
     ctx.st.borrow_mut().local_power = None;
@@ -491,6 +504,7 @@ impl Ctx {
     }
 
     fn local_pause(&self, st: &mut State, reason: &str) {
+        self.inbox.post(Msg::RestoreSystem);
         if let Some(recovery) = &st.local_recovery { recovery.retry(); }
         if let Some(local) = st.local_rules.as_mut() { local.admission.fail(); }
         self.local_drain(st);
@@ -535,19 +549,54 @@ impl Ctx {
             } else if done.destination == Destination::Remote {
                 let activation = local.activation.take();
                 self.local_status("inactive: forwarding to another computer");
-                if let Some((side, pos)) = activation { self.start_now(st, side, pos); }
+                if self.restore_system(st) {
+                    if let Some((side, pos)) = activation { self.start_now(st, side, pos); }
+                } else { self.local_pause(st, "inactive: keyboard mappings could not be restored; sharing stayed here"); }
             } else if local.enabled && !local.paused {
-                self.local_status(&format!("active ({})", local.snapshots.load().count));
+                let rules = local.snapshots.load();
+                if self.system_plan.borrow().as_ref() != Some(&rules.system) {
+                    if !self.restore_system(st) {
+                        self.local_pause(st, "inactive: keyboard mappings could not be restored");
+                        return;
+                    }
+                    if let Err(error) = self.system.borrow_mut().apply(&rules.system) {
+                        self.local_pause(st, &format!("inactive: {error:#}"));
+                        return;
+                    }
+                    *self.system_plan.borrow_mut() = Some(rules.system.clone());
+                }
+                self.local_status(&format!("active ({})", rules.count));
             } else {
                 self.local_status(&format!("inactive: {}", local.inactive));
             }
         }
         if emergency {
+            self.local_pause(st, "inactive: emergency off");
             let _ = self.tx.send(Event::LocalRulesOff);
             action = Some(crate::hotkeys::Action::Home);
         }
         if let Some(action) = action { let _ = self.tx.send(Event::Hotkey(action)); }
         self.update_timer(st);
+    }
+
+    fn restore_system(&self, st: &mut State) -> bool {
+        let mappings = self.system.borrow().owned_mappings();
+        match self.system.borrow_mut().restore() {
+            Ok(()) => {
+                *self.system_plan.borrow_mut() = None;
+                if !mappings.is_empty() {
+                    let observed: Vec<_> = (0..128u16).filter(|&code| st.local_keys[usize::from(code)]).filter_map(logic::mac_to_evdev).collect();
+                    let keys = crate::macos_hidmap::restored_keys(&mappings, &observed, &self.hid.physical_keys());
+                    st.local_keys.fill(false);
+                    for code in keys.into_iter().filter_map(logic::evdev_to_mac) { st.set_local_key(code, true); }
+                }
+                true
+            }
+            Err(error) => {
+                self.local_status(&format!("inactive: keyboard restoration needs another try: {error:#}"));
+                false
+            }
+        }
     }
 
     /// Runs once a second: keeps the screen list current, and waits for
@@ -719,7 +768,7 @@ impl Ctx {
                     self.hid.capture(st.active);
                     self.update_timer(&mut st);
                     let problem = inactive.map(|reason| format!("Local key rules inactive: {reason}")).or_else(|| rules.as_ref().filter(|rules| rules.count > 0).map(|_| {
-                        "Local key rules inactive: Caps Lock, Fn, media/function keys or actions are not supported yet".into()
+                        "Local key rules inactive: a conditional Caps Lock rule, Fn, media/function keys or actions are not supported yet".into()
                     }));
                     let _ = self.tx.send(Event::Status { part: "local-key-rules", problem });
                     return;
@@ -760,7 +809,7 @@ impl Ctx {
                     local.baseline(held.into_iter());
                     local.enabled = supported && rules.count > 0;
                     local.paused = !active;
-                    local.inactive = if !supported { "Caps Lock, Fn, media/function keys and actions are not supported yet".into() }
+                    local.inactive = if !supported { "conditional Caps Lock rules, Fn, media/function keys and actions are not supported yet".into() }
                         else { inactive.unwrap_or_else(|| "preference off or no local rules".into()) };
                     local.snapshots.replace(if supported { rules } else { Arc::default() });
                     if active {
@@ -770,6 +819,12 @@ impl Ctx {
                 } else { self.local_status("inactive: preference off"); }
             }
             Msg::Local => self.local_pump(&mut st),
+            Msg::RestoreSystem => { self.restore_system(&mut st); }
+            Msg::Cmd(CaptureCmd::RestoreLocalRules(ticket)) => {
+                self.local_pause(&mut st, "inactive: local rules stopped");
+                let error = (!self.restore_system(&mut st)).then(|| "Keyboard restoration failed; the recovery record was kept".into());
+                let _ = self.tx.send(Event::LocalRulesRestored { ticket, error });
+            }
             Msg::Session(active) => {
                 if st.local_rules.is_none() && st.local_recovery.is_none() { return; }
                 st.session_paused = !active;
@@ -810,6 +865,7 @@ impl Ctx {
             }
             Msg::Quit => {
                 self.local_pause(&mut st, "inactive: shutting down");
+                self.restore_system(&mut st);
                 if st.active || st.cursor_hidden {
                     st.deactivate(None);
                     self.hid.capture(false);
