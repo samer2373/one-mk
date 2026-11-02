@@ -108,7 +108,7 @@ async fn keysym_session_close_releases_physical_and_symbolic_holds() {
 
 #[tokio::test]
 async fn keysym_shutdown_and_power_changes_release_holds() {
-    for paused in [None, Some(Power { locked: true, asleep: false }), Some(Power { locked: false, asleep: true })] {
+    for paused in [None, Some(Power { locked: true, ..Power::default() }), Some(Power { asleep: true, ..Power::default() })] {
         let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
         harness.ready().await;
         harness.inject(Inject::CharacterKey { code: 30, down: true, character: 'ą' });
@@ -1310,7 +1310,7 @@ async fn locking_and_sleeping_let_go_and_waking_reads_the_screens_again() {
     let zones = h.world().count("ic.GetZones");
     h.power.send_modify(|p| p.asleep = true);
     h.until("keys let go", |w| w.pressed.is_empty()).await;
-    h.power.send_modify(|p| p.asleep = false);
+    h.power.send_modify(Power::wake);
     h.until("zones again", |w| w.count("ic.GetZones") == zones + 1).await;
     // The sessions stayed: no new permission dialog after waking.
     assert_eq!(h.count("ic.CreateSession"), 1);

@@ -1094,6 +1094,7 @@ impl App {
     fn placing(&self, rect: Rect, i: usize, start: Pos2) -> Option<Box<Placing>> {
         let d = &self.scene.devices[i];
         let fit = self.scene.fit(d.kind, &d.screens)?;
+        if d.screens.is_empty() || self.scene.devices[0].screens.is_empty() { return None; }
         let mine = Desktop::new(self.scene.devices[0].screens.clone());
         let edges: Vec<Edge> = Side::ALL.into_iter().flat_map(|s| mine.exposed_edges(s)).collect();
         let peer = Desktop::new(d.screens.clone()).bounds();

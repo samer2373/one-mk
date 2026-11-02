@@ -146,11 +146,24 @@ impl Env {
 struct Power {
     locked: bool,
     asleep: bool,
+    /// Counts wake-ups. A watcher only sees the latest state, so a short
+    /// sleep can look like no change at all; the count still moves.
+    wakes: u32,
 }
 
 impl Power {
     fn paused(self) -> bool {
         self.locked || self.asleep
+    }
+
+    fn wake(&mut self) {
+        self.asleep = false;
+        self.wakes = self.wakes.wrapping_add(1);
+    }
+
+    /// Whether `self` came after a wake-up that `before` didn't.
+    fn woke_since(self, before: Power) -> bool {
+        self.wakes != before.wakes || (before.asleep && !self.asleep)
     }
 }
 
@@ -459,7 +472,7 @@ async fn watch_power(
                 }
                 Some(false) => {
                     tracing::debug!("woke up");
-                    power.send_modify(|p| p.asleep = false);
+                    power.send_modify(Power::wake);
                     if let Some(s) = sleep.as_mut() {
                         s.inhibit().await;
                     }
@@ -832,7 +845,7 @@ async fn run_capture(
                     st.deactivated();
                     cap.release(portal_id, None, &st.edges).await?;
                 }
-                if was.asleep && !now.asleep {
+                if now.woke_since(was) {
                     // Monitors may have changed while asleep. A session
                     // that can't say where the screens are is no good.
                     cap.refresh_zones().await.context("after waking up")?;

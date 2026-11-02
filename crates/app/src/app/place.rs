@@ -87,11 +87,11 @@ impl App {
         let Some(peer) = status.peers.iter().find(|p| Some(&p.id) == sel.as_ref()).cloned() else {
             let room = chip(ui, c, "This computer", None);
             title_row(ui, c, &status.name, room);
-            let b = one_mk_proto::Desktop::new(status.screens.clone());
+            let b = if status.screens.is_empty() { one_mk_proto::Rect::new(0, 0, 0, 0) } else { one_mk_proto::Desktop::new(status.screens.clone()).bounds() };
             let text = match status.screens.len() {
                 0 => "Its screen size isn't known yet: oneMK learns it once input sharing has started.".to_owned(),
-                1 => format!("One monitor, {} × {}.", b.bounds().w, b.bounds().h),
-                n => format!("{n} monitors, {} × {} in all.", b.bounds().w, b.bounds().h),
+                1 => format!("One monitor, {} × {}.", b.w, b.h),
+                n => format!("{n} monitors, {} × {} in all.", b.w, b.h),
             };
             let h = para(ui, pos2(c.left(), c.top() + 30.0), c.width(), &text, regular(T_BODY), INK2);
             let more = if status.peers.is_empty() { "Pair a computer to place it around this one." } else { "Choose a computer on the desk to place it." };
