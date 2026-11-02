@@ -27,6 +27,8 @@ pub enum Action {
     LockAll,
     /// This clipboard to a peer, by id.
     ClipSend(String),
+    /// A peer's clipboard to this computer, by id.
+    ClipGet(String),
     Forget { peer: String },
     ToggleAutostart,
     Quit,
@@ -143,6 +145,11 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
                     .map(|p| Entry::Item { label: format!("Send clipboard to {}", p.name), action: Action::ClipSend(p.id.clone()), checked: None })
                     .collect();
                 grouped(&mut m, "Send clipboard to", clip);
+                let get = online
+                    .iter()
+                    .map(|p| Entry::Item { label: format!("Get clipboard from {}", p.name), action: Action::ClipGet(p.id.clone()), checked: None })
+                    .collect();
+                grouped(&mut m, "Get clipboard from", get);
                 m.push(Entry::Separator);
             }
             for p in &s.peers {
@@ -172,7 +179,7 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
             // Only with somewhere to broadcast to (or to stop it).
             let broadcasting = !s.broadcast.is_empty();
             if broadcasting || s.peers.iter().any(|p| p.online) {
-                m.push(Entry::Item { label: "Broadcast to all computers".into(), action: Action::Broadcast(!broadcasting), checked: Some(broadcasting) });
+                m.push(Entry::Item { label: "Type on every computer".into(), action: Action::Broadcast(!broadcasting), checked: Some(broadcasting) });
             }
             m.push(Entry::Item { label: "Lock every screen".into(), action: Action::LockAll, checked: None });
             m.push(Entry::Item { label: "Take back control".into(), action: Action::TakeBack, checked: None });
@@ -272,7 +279,7 @@ mod tests {
     /// on (which stops it), and said in the headline and the icon.
     #[test]
     fn broadcast_is_a_checkmark_said_in_the_headline() {
-        let item = |on: bool| Entry::Item { label: "Broadcast to all computers".into(), action: Action::Broadcast(!on), checked: Some(on) };
+        let item = |on: bool| Entry::Item { label: "Type on every computer".into(), action: Action::Broadcast(!on), checked: Some(on) };
         assert!(!menu(&snap(vec![peer("old", Side::Left, false)])).contains(&item(false)), "nobody to broadcast to");
         assert!(!menu(&snap(vec![])).contains(&item(false)));
         let mut s = snap(vec![peer("desk", Side::Right, true), peer("mac", Side::Left, true), peer("old", Side::Top, false)]);
