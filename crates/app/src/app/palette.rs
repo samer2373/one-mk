@@ -142,7 +142,7 @@ impl App {
                     out.push(act(if kept { "Let the pointer cross again".into() } else { "Keep the pointer here".into() }, "", Act::KeepHere(!kept)));
                 }
                 if let Some(w) = s.wallpaper.as_ref().filter(|w| w.available) {
-                    out.push(act("Choose a wallpaper video…".into(), "", Act::WallChoose));
+                    out.push(act("Choose a wallpaper video or picture…".into(), "", Act::WallChoose));
                     if let Some(plan) = &w.plan {
                         out.push(act(if plan.paused { "Play the wallpaper".into() } else { "Pause the wallpaper".into() }, "", Act::WallPause(!plan.paused)));
                         out.push(act("Turn the wallpaper off".into(), "", Act::WallOff));
