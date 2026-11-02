@@ -2268,6 +2268,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -3552,7 +3554,10 @@ name = "one-mk-wallpaper"
 version = "0.1.19"
 dependencies = [
  "anyhow",
+ "block2 0.6.2",
+ "dispatch2",
  "image",
+ "libc",
  "libloading",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",

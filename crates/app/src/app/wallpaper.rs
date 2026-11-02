@@ -19,8 +19,8 @@ impl App {
         self.wallpaper_ui.picker = Some(receiver);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let file = rfd::FileDialog::new().set_title("Choose a video")
-                .add_filter("Video", &["mp4", "mov", "m4v", "webm", "mkv"]).pick_file();
+            let file = rfd::FileDialog::new().set_title("Choose a video or picture")
+                .add_filter("Video or picture", &["mp4", "mov", "m4v", "webm", "mkv", "png", "jpg", "jpeg", "heic", "webp"]).pick_file();
             let _ = sender.send(file);
             ctx.request_repaint();
         });
@@ -74,11 +74,13 @@ impl App {
             if let Some(plan) = plan {
                 let paused = plan.paused;
                 let play = Rect::from_min_size(pos2(x, foot_y), vec2(96.0, 32.0));
-                if button(ui, play, Id::unique("wallpaper-play"), if paused { "Play" } else { "Pause" }, Look::Glass, enabled, None).clicked() {
-                    self.wallpaper_command(Command::Pause { paused: !paused });
+                if !plan.picture {
+                    if button(ui, play, Id::unique("wallpaper-play"), if paused { "Play" } else { "Pause" }, Look::Glass, enabled, None).clicked() {
+                        self.wallpaper_command(Command::Pause { paused: !paused });
+                    }
+                    x = play.right() + 8.0;
                 }
-                x = play.right() + 8.0;
-                let what = format!("{} · {} loop", plan.title, clock(plan.media.duration_ms));
+                let what = if plan.picture { plan.title.clone() } else { format!("{} · {} loop", plan.title, clock(plan.media.duration_ms)) };
                 let room = (stage.right() - 18.0 - 180.0 - 110.0 - x).max(0.0);
                 let shown = fit_text(ui, &what, room - 28.0);
                 if room > 60.0 {
@@ -88,11 +90,11 @@ impl App {
                     p.text(chip.center(), Align2::CENTER_CENTER, shown, regular(T_META), INK2);
                 }
             } else {
-                let hint = if status.is_none() { "Start oneMK to choose a wallpaper" } else if !wallpaper.available { "Wallpaper isn't available on this computer" } else { "Choose a video, or drop one here" };
+                let hint = if status.is_none() { "Start oneMK to choose a wallpaper" } else if !wallpaper.available { "Wallpaper isn't available on this computer" } else { "Choose a video or picture" };
                 ui.painter().text(pos2(x + 2.0, foot_y + 16.0), Align2::LEFT_CENTER, hint, regular(T_BODY), INK2);
             }
             let choose = Rect::from_min_size(pos2(stage.right() - 18.0 - 170.0, foot_y), vec2(170.0, 32.0));
-            if button(ui, choose, Id::unique("choose-video"), "Choose a video…", Look::Primary, enabled && self.wallpaper_ui.picker.is_none(), None).clicked() {
+            if button(ui, choose, Id::unique("choose-video"), "Choose…", Look::Primary, enabled && self.wallpaper_ui.picker.is_none(), None).clicked() {
                 self.choose_video(ui.ctx());
             }
             if selected {
@@ -116,7 +118,7 @@ impl App {
                 self.wallpaper_command(Command::Fit { fit: [Fit::Fill, Fit::Fit, Fit::Stretch][chosen] });
             }
             let battery = plan.is_none_or(|plan| plan.pause_on_battery);
-            if switch(ui, rows[1], Id::unique("wallpaper-battery"), "Pause on battery", battery, enabled && selected).clicked() {
+            if switch(ui, rows[1], Id::unique("wallpaper-battery"), "Pause on battery", battery, enabled && selected && plan.is_none_or(|plan| !plan.picture)).clicked() {
                 self.wallpaper_command(Command::Battery { enabled: !battery });
             }
 
@@ -133,12 +135,12 @@ impl App {
                 if *online { p.circle_filled(dot, 3.5, OK); } else { p.circle_stroke(dot, 3.0, Stroke::new(1.5, INK3)); }
                 let on = plan.is_none_or(|plan| plan.computers.contains(id));
                 let screens = canvas.monitors.iter().filter(|monitor| &monitor.computer == id).count();
-                let note = match (*online, screens) {
+                let note = if *online && on && let Some(playback) = wallpaper.computers.get(id) { playback.message().to_owned() } else { match (*online, screens) {
                     (false, _) => "offline · its part is kept".to_owned(),
                     (true, 0) => String::new(),
                     (true, 1) => "1 screen".to_owned(),
                     (true, n) => format!("{n} screens"),
-                };
+                } };
                 let label_w = text_width(ui, name, regular(T_BODY)).min(row.width() * 0.5);
                 if !note.is_empty() {
                     let room = row.width() - 18.0 - label_w - 10.0 - 50.0;
@@ -201,7 +203,7 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
     let scale = (area.width() as f64 / bounds.width).min(area.height() as f64 / bounds.height);
     let top = area.center() - vec2((bounds.width * scale) as f32, (bounds.height * scale) as f32) / 2.0;
     let map = |rect: one_mk_wallpaper::Rect| Rect::from_min_size(top + vec2(((rect.x - bounds.x) * scale) as f32, ((rect.y - bounds.y) * scale) as f32), vec2((rect.width * scale) as f32, (rect.height * scale) as f32));
-    let fallback = poster.map(|texture| Media { width: texture.size()[0] as u32, height: texture.size()[1] as u32, duration_ms: 1 }).unwrap_or_default();
+    let fallback = poster.map(|texture| Media { width: texture.size()[0] as u32, height: texture.size()[1] as u32, duration_ms: 1, frame_rate: 0 }).unwrap_or_default();
     let image_rect = canvas.image_rect(media.unwrap_or(&fallback), fit).map(map);
     let p = ui.painter();
     let mut named = std::collections::BTreeSet::new();

@@ -5,11 +5,29 @@ use one_mk_wallpaper::{Correction, Hold, Holds, Media, PlayerConfig, correction,
 use std::ffi::{CString, c_char, c_int, c_uint, c_ulong, c_void};
 use std::path::Path;
 use std::ptr;
+use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::net::UnixStream;
+use std::sync::OnceLock;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 use x11_dl::xlib;
 
 type Object = *mut c_void;
+
+static INPUT: OnceLock<(UnixStream, UnixStream)> = OnceLock::new();
+fn input_socket() -> &'static (UnixStream, UnixStream) {
+    INPUT.get_or_init(|| {
+        let sockets = UnixStream::pair().expect("wallpaper command socket");
+        sockets.0.set_nonblocking(true).expect("nonblocking wallpaper commands");
+        sockets.1.set_nonblocking(true).expect("nonblocking wallpaper commands");
+        sockets
+    })
+}
+pub fn wake() { let _ = (&input_socket().1).write(&[1]); }
+
+#[repr(C)]
+struct PollDescriptor { fd: c_int, events: u16, revents: u16 }
 
 macro_rules! api {
     ($library:expr, $name:literal, $signature:ty) => { *$library.get::<$signature>(concat!($name, "\0").as_bytes())? };
@@ -24,6 +42,7 @@ struct Gst {
     wait: unsafe extern "C" fn(Object, *mut c_int, *mut c_int, u64) -> c_int,
     bus: unsafe extern "C" fn(Object) -> Object,
     pop: unsafe extern "C" fn(Object, u64, c_uint) -> Object,
+    poll: unsafe extern "C" fn(Object, *mut PollDescriptor),
     duration: unsafe extern "C" fn(Object, c_int, *mut i64) -> c_int,
     position: unsafe extern "C" fn(Object, c_int, *mut i64) -> c_int,
     seek: unsafe extern "C" fn(Object, f64, c_int, c_uint, c_int, i64, c_int, i64) -> c_int,
@@ -82,6 +101,7 @@ impl Gst {
                 wait: api!(core, "gst_element_get_state", unsafe extern "C" fn(Object, *mut c_int, *mut c_int, u64) -> c_int),
                 bus: api!(core, "gst_element_get_bus", unsafe extern "C" fn(Object) -> Object),
                 pop: api!(core, "gst_bus_timed_pop_filtered", unsafe extern "C" fn(Object, u64, c_uint) -> Object),
+                poll: api!(core, "gst_bus_get_pollfd", unsafe extern "C" fn(Object, *mut PollDescriptor)),
                 duration: api!(core, "gst_element_query_duration", unsafe extern "C" fn(Object, c_int, *mut i64) -> c_int),
                 position: api!(core, "gst_element_query_position", unsafe extern "C" fn(Object, c_int, *mut i64) -> c_int),
                 seek: api!(core, "gst_element_seek", unsafe extern "C" fn(Object, f64, c_int, c_uint, c_int, i64, c_int, i64) -> c_int),
@@ -191,6 +211,9 @@ pub fn probe(path: &Path, poster: Option<&Path>) -> Result<Media> {
         let (mut width, mut height, mut duration) = (0, 0, 0);
         (gst.integer)(structure, c"width".as_ptr(), &mut width);
         (gst.integer)(structure, c"height".as_ptr(), &mut height);
+        let fraction = api!(gst._core, "gst_structure_get_fraction", unsafe extern "C" fn(Object, *const c_char, *mut c_int, *mut c_int) -> c_int);
+        let (mut numerator, mut denominator) = (30, 1);
+        fraction(structure, c"framerate".as_ptr(), &mut numerator, &mut denominator);
         (gst.mini_unref)(caps);
         ensure!((gst.duration)(pipeline.raw, 3, &mut duration) != 0 && duration > 0, "This video has no known duration");
         if let Some(poster) = poster {
@@ -201,7 +224,40 @@ pub fn probe(path: &Path, poster: Option<&Path>) -> Result<Media> {
             if !message.is_null() { (gst.mini_unref)(message); }
             (gst.unref)(bus);
         }
-        Ok(Media { width: width as u32, height: height as u32, duration_ms: duration as u64 / 1_000_000 })
+        Ok(Media { width: width as u32, height: height as u32, duration_ms: duration as u64 / 1_000_000, frame_rate: (f64::from(numerator) / f64::from(denominator.max(1))).ceil() as u32 })
+    }
+}
+
+pub fn prepare(path: &Path, output: &Path, target: one_mk_wallpaper::ImportTarget) -> Result<()> {
+    let gst = Gst::load()?;
+    let encoder = unsafe {
+        let find = api!(gst._core, "gst_element_factory_find", unsafe extern "C" fn(*const c_char) -> Object);
+        ["vah264enc", "vaapih264enc"].into_iter().find(|name| {
+            let factory = find(CString::new(*name).unwrap().as_ptr());
+            if factory.is_null() { false } else { (gst.unref)(factory); true }
+        }).context("No supported hardware video encoder was found")?
+    };
+    let media = probe(path, None)?;
+    let pipeline = gst.pipeline(&format!("uridecodebin uri={} caps=video/x-raw name=source source. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! videoconvert ! videoscale ! videorate max-rate=60 ! video/x-raw,width={},height={},pixel-aspect-ratio=1/1 ! {encoder} bitrate={} ! video/x-h264,profile=high ! h264parse ! mp4mux faststart=true ! filesink location={}", quoted(&uri(path)?), target.width, target.height, target.bitrate / 1000, quoted(&output.to_string_lossy())))?;
+    unsafe {
+        ensure!((gst.state)(pipeline.raw, 4) != 0, "The hardware encoder could not start");
+        let bus = (gst.bus)(pipeline.raw);
+        let mut progress = 0;
+        loop {
+            let message = (gst.pop)(bus, 250_000_000, 1 | 2);
+            if !message.is_null() {
+                let error = (gst.has_name)(message, c"GstMessageError".as_ptr()) != 0;
+                (gst.mini_unref)(message); (gst.unref)(bus);
+                ensure!(!error, "The hardware encoder could not prepare this video");
+                println!("progress 100");
+                return Ok(());
+            }
+            let mut position = 0;
+            if (gst.position)(pipeline.raw, 3, &mut position) != 0 {
+                let percent = (position.max(0) as u64 / 1_000_000 * 100 / media.duration_ms.max(1)).min(99);
+                if percent != progress { println!("progress {percent}"); progress = percent; }
+            }
+        }
     }
 }
 
@@ -230,6 +286,7 @@ impl Desktop {
         unsafe {
             let root = (self.xlib.XDefaultRootWindow)(self.display);
             let clients = self.property(root, c"_NET_CLIENT_LIST_STACKING");
+            for window in &clients { (self.xlib.XSelectInput)(self.display, *window, xlib::StructureNotifyMask | xlib::PropertyChangeMask); }
             let desktop = (self.xlib.XInternAtom)(self.display, c"_NET_WM_WINDOW_TYPE_DESKTOP".as_ptr(), 0);
             let dock = (self.xlib.XInternAtom)(self.display, c"_NET_WM_WINDOW_TYPE_DOCK".as_ptr(), 0);
             let rectangles: Vec<_> = clients.into_iter().filter(|window| !self.windows.contains(window)).filter_map(|window| {
@@ -248,7 +305,7 @@ impl Desktop {
                 rectangles.iter().any(|window| {
                     let width = ((monitor.x + monitor.width).min(window.x + window.width) - monitor.x.max(window.x)).max(0.0);
                     let height = ((monitor.y + monitor.height).min(window.y + window.height) - monitor.y.max(window.y)).max(0.0);
-                    width * height >= monitor.width * monitor.height * 0.25
+                    width * height >= monitor.width * monitor.height * 0.999
                 })
             })
         }
@@ -260,6 +317,7 @@ impl Desktop {
         ensure!(!display.is_null(), "Cannot open the X11 desktop");
         unsafe { (xlib.XSetErrorHandler)(Some(ignore_x_error)); }
         let mut desktop = Self { xlib, display, windows: Vec::new() };
+        unsafe { (desktop.xlib.XSelectInput)(display, (desktop.xlib.XDefaultRootWindow)(display), xlib::PropertyChangeMask | xlib::SubstructureNotifyMask); }
         for monitor in config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer) {
             let rect = monitor.local.unwrap_or(monitor.rect);
             unsafe {
@@ -295,18 +353,32 @@ fn on_battery() -> bool {
         && std::fs::read_to_string(entry.path().join("status")).is_ok_and(|state| state.trim() == "Discharging"))
 }
 
+fn power_events() -> Option<OwnedFd> {
+    unsafe {
+        let descriptor = libc::socket(libc::AF_NETLINK, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, libc::NETLINK_KOBJECT_UEVENT);
+        if descriptor < 0 { return None; }
+        let socket = OwnedFd::from_raw_fd(descriptor);
+        let mut address: libc::sockaddr_nl = std::mem::zeroed();
+        address.nl_family = libc::AF_NETLINK as u16;
+        address.nl_groups = 1;
+        (libc::bind(descriptor, (&address as *const libc::sockaddr_nl).cast(), std::mem::size_of_val(&address) as u32) == 0).then_some(socket)
+    }
+}
+
 pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let desktop = Desktop::new(&config)?;
     ensure!(!desktop.windows.is_empty(), "No monitors selected on this computer");
     let gst = Gst::load()?;
-    let mut pipeline_text = format!("uridecodebin uri={} caps=video/x-raw name=source source. ! queue max-size-bytes=16777216 max-size-time=2000000000 ! videoconvert ! tee name=picture ", quoted(&uri(&config.path)?));
+    let image = config.plan.canvas.image_rect(&config.plan.media, config.plan.fit).context("Empty canvas")?;
+    let scale = config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer).map(|monitor| monitor.scale).fold(1.0, f64::max);
+    let width = (image.width * scale).min(f64::from(config.plan.media.width)).round().max(1.0);
+    let height = (image.height * scale).min(f64::from(config.plan.media.height)).round().max(1.0);
+    let mut pipeline_text = format!("uridecodebin uri={} caps=video/x-raw name=source source. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! videoscale ! video/x-raw,width={},height={},pixel-aspect-ratio=1/1 ! videoconvert ! tee name=picture ", quoted(&uri(&config.path)?), width as u32, height as u32);
     let mut visible = Vec::new();
     for (index, monitor) in config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer).enumerate() {
         let slice = config.plan.canvas.slice(monitor, &config.plan.media, config.plan.fit).context("Empty canvas")?;
         if slice.x >= 1.0 || slice.y >= 1.0 || slice.x + slice.width <= 0.0 || slice.y + slice.height <= 0.0 { continue; }
         visible.push(index);
-        let width = f64::from(config.plan.media.width);
-        let height = f64::from(config.plan.media.height);
         let left = (slice.x * width).round() as i32;
         let top = (slice.y * height).round() as i32;
         let right = (width - (slice.x + slice.width) * width).round() as i32;
@@ -324,30 +396,36 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     }
     pipeline.preroll()?;
     pipeline.segment(position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms), config.plan.media.duration_ms, true);
+    pipeline.preroll()?;
+    unsafe {
+        for window in &desktop.windows { (desktop.xlib.XRaiseWindow)(desktop.display, *window); }
+        (desktop.xlib.XSync)(desktop.display, 0);
+    }
+    one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready);
     let bus = unsafe { (gst.bus)(pipeline.raw) };
     let mut holds = Holds::default();
     holds.set(Hold::User, config.plan.paused);
     let mut playing = false;
+    let mut started = false;
     let mut last_sync = Instant::now();
     let mut rate = 1.0;
     let mut last_message = "";
-    let mut last_power = Instant::now() - Duration::from_secs(5);
+    let power = power_events();
+    let mut bus_descriptor = PollDescriptor { fd: -1, events: 0, revents: 0 };
+    unsafe { (gst.poll)(bus, &mut bus_descriptor); }
     loop {
-        match receiver.recv_timeout(Duration::from_millis(if playing { 10 } else { 1000 })) {
-            Ok(Input::End) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            Ok(Input::Offset(offset)) => config.clock_offset_ms = offset,
-            _ => {}
+        while let Ok(input) = receiver.try_recv() {
+            match input { Input::End => { unsafe { (gst.unref)(bus); } return Ok(()); }, Input::Offset(offset) => config.clock_offset_ms = offset }
         }
-        if last_power.elapsed() >= Duration::from_secs(1) {
-            holds.set(Hold::Battery, config.plan.pause_on_battery && on_battery());
-            holds.set(Hold::Occluded, desktop.covered(&config));
-            last_power = Instant::now();
-        }
+        holds.set(Hold::Battery, config.plan.pause_on_battery && on_battery());
+        holds.set(Hold::Occluded, desktop.covered(&config));
         if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); }
         if playing != holds.playing() {
             playing = holds.playing();
-            if playing { pipeline.segment(position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms), config.plan.media.duration_ms, true); }
+            if playing && started { pipeline.segment(position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms), config.plan.media.duration_ms, true); }
+            started = true;
             unsafe { (gst.state)(pipeline.raw, if playing { 4 } else { 3 }); }
+            if playing { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); }
         }
         if playing && last_sync.elapsed() >= Duration::from_secs(2) {
             let mut actual = 0;
@@ -377,7 +455,15 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
                 (desktop.xlib.XNextEvent)(desktop.display, &mut event);
             }
         }
+        let mut descriptors = [
+            libc::pollfd { fd: input_socket().0.as_raw_fd(), events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: unsafe { (desktop.xlib.XConnectionNumber)(desktop.display) }, events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: bus_descriptor.fd, events: libc::POLLIN, revents: 0 },
+            libc::pollfd { fd: power.as_ref().map_or(-1, AsRawFd::as_raw_fd), events: libc::POLLIN, revents: 0 },
+        ];
+        unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, if playing { 2000 } else { -1 }); }
+        let mut buffer = [0u8; 4096];
+        while (&input_socket().0).read(&mut buffer).is_ok_and(|count| count > 0) {}
+        if let Some(power) = &power { unsafe { while libc::recv(power.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), libc::MSG_DONTWAIT) > 0 {} } }
     }
-    unsafe { (gst.unref)(bus); }
-    Ok(())
 }
