@@ -53,9 +53,12 @@ jobs:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with: { toolchain: stable }
+        with: { toolchain: stable, components: clippy }
       - run: cargo test --workspace --locked --no-fail-fast
         env: { RUST_BACKTRACE: "1" }
+      # On each system itself: the daemon (one-mk-net) can't be linted
+      # cross-compiled, and some code only exists on one system.
+      - run: cargo clippy --workspace --locked --all-targets -- -D warnings
 
   # The Linux packages and the package-manager files, built from a debug
   # build and checked without installing anything (scripts/check-packaging.sh).
