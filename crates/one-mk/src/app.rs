@@ -2090,7 +2090,9 @@ impl App {
                 if self.owner.as_ref().is_some_and(|o| o.peer == fp) {
                     self.end_owner(false);
                 }
-                println!("{} disconnected; reconnecting automatically.", peer.name);
+                // Forgotten (not trusted any more): nothing reconnects.
+                if self.trust.is_trusted(&fp) { println!("{} disconnected; reconnecting automatically.", peer.name); }
+                else { println!("{} disconnected (no longer paired).", peer.name); }
                 self.redial_soon();
                 if let Some(clip) = &self.services.clip {
                     clip.forget(fp);

@@ -349,6 +349,8 @@ impl Runtime {
             }
         }
         let mut status = state.status.clone();
+        // Counted from what each computer said, not from the plan alone.
+        if let Some(plan) = status.plan.as_ref() && status.message == plan.playing_message() { status.message = plan.playing_summary(&status.computers); }
         if let Some(Playback::Paused(message) | Playback::Error(message)) = status.computers.get(&state.computer) { status.message = message.clone(); }
         if let Some((name, progress)) = &state.progress {
             use std::sync::atomic::Ordering::Relaxed;

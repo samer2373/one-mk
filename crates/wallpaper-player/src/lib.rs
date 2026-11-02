@@ -125,10 +125,18 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub fn playing_message(&self) -> String {
-        let monitors: Vec<_> = self.canvas.monitors.iter().filter(|monitor| monitor.online && self.computers.contains(&monitor.computer)).collect();
+    pub fn playing_message(&self) -> String { self.playing_summary(&std::collections::BTreeMap::new()) }
+
+    /// What is playing, leaving out computers that said they can't play it
+    /// (a Wayland desktop, a decoder missing), and saying how many those are.
+    pub fn playing_summary(&self, playback: &std::collections::BTreeMap<String, Playback>) -> String {
+        let failed = |computer: &String| matches!(playback.get(computer), Some(Playback::Error(_)));
+        let monitors: Vec<_> = self.canvas.monitors.iter().filter(|monitor| monitor.online && self.computers.contains(&monitor.computer) && !failed(&monitor.computer)).collect();
         let computers = monitors.iter().map(|monitor| &monitor.computer).collect::<BTreeSet<_>>().len();
-        format!("Playing on {} {} on {computers} {}", monitors.len(), if monitors.len() == 1 { "monitor" } else { "monitors" }, if computers == 1 { "computer" } else { "computers" })
+        let not = self.computers.iter().filter(|computer| failed(computer)).count();
+        let mut text = format!("Playing on {} {} on {computers} {}", monitors.len(), if monitors.len() == 1 { "monitor" } else { "monitors" }, if computers == 1 { "computer" } else { "computers" });
+        if not > 0 { text += &format!(" · {not} {} can't play it", if not == 1 { "computer" } else { "computers" }); }
+        text
     }
 
     pub fn valid(&self) -> bool {
@@ -353,6 +361,12 @@ mod tests {
         let plan = Plan { hash: "a".repeat(64), title: "Video".into(), media, canvas, start_ms: 1, fit: Fit::Fill,
             computers: vec!["mac".into(), "pc".into()], pause_on_battery: true, paused: false, picture: false, asset_hash: None };
         assert_eq!(plan.playing_message(), "Playing on 1 monitor on 1 computer");
+        // A computer that said it can't play it isn't counted as playing.
+        let mut plan = plan;
+        for monitor in &mut plan.canvas.monitors { monitor.online = true; }
+        assert_eq!(plan.playing_message(), "Playing on 2 monitors on 2 computers");
+        let said = std::collections::BTreeMap::from([("pc".to_owned(), Playback::Error("Video wallpapers are not available on Wayland yet".into())), ("mac".to_owned(), Playback::Ready)]);
+        assert_eq!(plan.playing_summary(&said), "Playing on 1 monitor on 1 computer · 1 computer can't play it");
     }
     #[test]
     fn fit_modes_keep_one_canvas_transform() {

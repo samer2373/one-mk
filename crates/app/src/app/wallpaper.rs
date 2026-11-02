@@ -136,7 +136,11 @@ impl App {
                 if *online { p.circle_filled(dot, 3.5, OK); } else { p.circle_stroke(dot, 3.0, Stroke::new(1.5, INK3)); }
                 let on = plan.is_none_or(|plan| plan.computers.contains(id));
                 let screens = canvas.monitors.iter().filter(|monitor| &monitor.computer == id).count();
-                let note = if *online && on && let Some(playback) = wallpaper.computers.get(id) { playback.message().to_owned() } else { match (*online, screens) {
+                // Why a computer can't play it is often a sentence: the row
+                // says so briefly, the whole reason shows on hover.
+                let failed = match wallpaper.computers.get(id) { Some(one_mk_wallpaper::Playback::Error(reason)) if *online && on => Some(reason.clone()), _ => None };
+                let note = if failed.is_some() { "can't play it here".to_owned() }
+                    else if *online && on && let Some(playback) = wallpaper.computers.get(id) { playback.message().to_owned() } else { match (*online, screens) {
                     (false, _) => "offline · its part is kept".to_owned(),
                     (true, 0) => String::new(),
                     (true, 1) => "1 screen".to_owned(),
@@ -147,12 +151,14 @@ impl App {
                     let room = row.width() - 18.0 - label_w - 10.0 - 50.0;
                     if room > 40.0 {
                         let shown = fit_text(ui, &note, room);
-                        ui.painter().text(pos2(row.left() + 18.0 + label_w + 10.0, row.center().y), Align2::LEFT_CENTER, shown, regular(T_META), INK3);
+                        ui.painter().text(pos2(row.left() + 18.0 + label_w + 10.0, row.center().y), Align2::LEFT_CENTER, shown, regular(T_META), if failed.is_some() { WARN } else { INK3 });
                     }
                 }
                 let switch_row = Rect::from_min_max(pos2(row.left() + 18.0, row.top()), row.max);
                 let label = fit(ui.painter(), name, &regular(T_BODY), label_w);
-                if switch(ui, switch_row, Id::unique(("wallpaper-computer", id)), &label, on, enabled && selected).clicked() {
+                let response = switch(ui, switch_row, Id::unique(("wallpaper-computer", id)), &label, on, enabled && selected);
+                let response = match &failed { Some(reason) => response.on_hover_text(reason), None => response };
+                if response.clicked() {
                     self.wallpaper_command(Command::Computer { id: id.clone(), enabled: !on });
                 }
             }
