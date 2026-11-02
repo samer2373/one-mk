@@ -8,6 +8,9 @@ use super::*;
 use crate::icons::{self, Icon};
 use crate::rtt::{Quality, Ring};
 
+/// The row the Computers / Arrange switch takes at the desk's top.
+pub(super) const DESK_VIEWS_H: f32 = 46.0;
+
 /// Text with an icon before it, as a quiet button with no fill until
 /// hovered; its width.
 #[allow(clippy::too_many_arguments)]
@@ -174,8 +177,10 @@ impl App {
         if !peer.online {
             p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, "—", big.clone(), INK3);
             p.text(pos2(body.left(), body.top() + 46.0), Align2::LEFT_CENTER, "Not found on the network", regular(T_BODY), INK2);
-            let hint = fit(&p, "Start oneMK on it, on the same Wi-Fi.", &regular(T_META), col_w);
-            p.text(pos2(body.left(), body.top() + 66.0), Align2::LEFT_CENTER, hint, regular(T_META), INK3);
+            // Two lines rather than cut short in a narrow column.
+            let mut hint = egui::text::LayoutJob::simple("Start oneMK on it, on the same Wi-Fi.".into(), regular(T_META), INK3, col_w);
+            hint.wrap.max_rows = 2;
+            p.galley(pos2(body.left(), body.top() + 58.0), p.layout_job(hint), INK3);
         } else if let Some(s) = summary {
             let n = rtt::ms_number(s.now_us);
             let nw = text_width(ui, &n, big.clone());
@@ -275,7 +280,7 @@ impl App {
     /// title: typing on all of them, and locking every screen.
     pub(super) fn desk_actions(&mut self, ui: &mut Ui, head: Rect) {
         // The Desk's two views: the computers, and arranging them (Layout).
-        if matches!(self.tab, Tab::Desk | Tab::Layout) && !self.off() {
+        if self.desk_views_shown() {
             let labels = ["Computers", "Arrange"];
             let track = Rect::from_min_size(pos2(head.left(), head.center().y - 15.0), vec2(200.0, 30.0));
             let pills = Pills {
@@ -372,7 +377,8 @@ impl App {
         }
         // What needs saying right now (broadcasting, being controlled,
         // waiting for permission...): a banner over the desk, read out.
-        let mut top = desk.top();
+        // Under the Computers / Arrange switch, which sits at the desk's top.
+        let mut top = desk.top() + if self.desk_views_shown() { DESK_VIEWS_H } else { 0.0 };
         if let Some((title, sub)) = self.desk_notice() {
             let w = 560.0f32.min(desk.width());
             let job = |text: &str, font: egui::FontId, col: Color32| {
@@ -421,6 +427,9 @@ impl App {
             }
         }
     }
+
+    /// Whether the Computers / Arrange switch is on the desk's top row.
+    pub(super) fn desk_views_shown(&self) -> bool { matches!(self.tab, Tab::Desk | Tab::Layout) && !self.off() }
 
     /// The status worth a banner over the desk: what isn't plain sharing.
     pub(super) fn desk_notice(&self) -> Option<(String, String)> {

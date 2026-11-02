@@ -2144,7 +2144,7 @@ impl eframe::App for App {
         let mut frame = scene;
         if self.tab.desk() {
             if self.desk_notice().is_some() {
-                frame.min.y += 92.0;
+                frame.min.y += 92.0 + if self.desk_views_shown() { desk_cards::DESK_VIEWS_H } else { 0.0 };
             } else if desk.width() < 780.0 && self.running().is_some_and(|s| !s.transfers.is_empty()) {
                 frame.min.y += 60.0;
             }
