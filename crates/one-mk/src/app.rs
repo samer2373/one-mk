@@ -3212,10 +3212,14 @@ mod tests {
     /// daemon would then fail to start (seen on macOS CI).
     fn free_port() -> u16 {
         static NEXT: std::sync::Mutex<Option<u16>> = std::sync::Mutex::new(None);
-        let mut next = NEXT.lock().unwrap();
+        // A test that failed while holding it leaves nothing half done.
+        let mut next = NEXT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // Each test process starts elsewhere in the range.
         let mut port = next.unwrap_or(20_000 + (std::process::id() % 1_000) as u16 * 12);
-        loop {
+        // One pass over the range at most: where binding is refused (a
+        // sandbox without network) every test fails at once, instead of
+        // all of them waiting forever on this lock.
+        for _ in 20_000..=32_000 {
             port = if port >= 32_000 { 20_000 } else { port + 1 };
             let free = std::net::UdpSocket::bind(("0.0.0.0", port)).is_ok() && std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
             if free {
@@ -3223,6 +3227,8 @@ mod tests {
                 return port;
             }
         }
+        drop(next);
+        panic!("No port from 20000 to 32000 could be bound for a test daemon: is network access denied here?");
     }
 
     /// Pairs `dir` with `other`, placed on `side` by the user (so layout
