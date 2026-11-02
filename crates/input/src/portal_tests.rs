@@ -165,10 +165,21 @@ async fn keysym_already_ended_visit_does_not_ask_permission() {
     harness.ready().await;
     harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'z' });
     harness.inject(Inject::Controlled(false));
-    harness.inject(Inject::Key { code: 57, down: true });
-    harness.until("physical sentinel after visit", |world| world.pressed.contains(&('k', 57))).await;
-    assert_eq!(harness.count("rd.CreateSession"), 1);
+    // Two safe orders: the visit's end arrives with the character (nothing
+    // is asked), or just after it, while keyboard symbols are being set up
+    // (the setup is cancelled with the session, whose replacement drops
+    // what comes meanwhile). Either way no symbol is typed, and a physical
+    // key works again once injection is back.
+    let deadline = Instant::now() + WAIT;
+    loop {
+        harness.inject(Inject::Key { code: 57, down: true });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if harness.world().pressed.contains(&('k', 57)) { break; }
+        assert!(Instant::now() < deadline, "physical sentinel never pressed; log: {:#?}", harness.world().log);
+    }
     assert!(harness.world().keysym_calls.is_empty());
+    let sessions = harness.count("rd.CreateSession");
+    assert!(sessions == 1 || harness.count("rd.Close") >= 1, "a second session ({sessions}) without the first closed");
     harness.inject(Inject::Key { code: 57, down: false });
 }
 
