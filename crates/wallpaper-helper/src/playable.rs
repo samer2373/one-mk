@@ -33,29 +33,35 @@ pub fn path(path: &Path) -> Result<PathBuf> {
     let links = one_mk_wallpaper::links_dir(cache);
     fs::create_dir_all(&links)?;
     // Links to videos the cache no longer has: their wallpaper is gone.
+    // (Names being made, `.…part`, belong to a caller still at work.)
     for entry in fs::read_dir(&links)?.flatten() {
         let link = entry.path();
+        if entry.file_name().to_string_lossy().starts_with('.') { continue; }
         let kept = link.file_stem().is_some_and(|stem| cache.join(stem).with_extension("video").is_file());
         if !kept { let _ = fs::remove_file(link); }
     }
     let stem = path.file_stem().context("The wallpaper video has no name")?;
     let link = links.join(stem).with_extension(extension);
-    if !same_file(&link, path) {
-        let _ = fs::remove_file(&link);
-        fs::hard_link(path, &link).context("Couldn't open the wallpaper video")?;
-    }
+    if same_file(&link, path) { return Ok(link); }
+    // Made under a name of its own, then put in place in one step: a player
+    // or probe opening the same video meanwhile never finds the link
+    // missing, and two of them making it at once both end with a good one.
+    let unique = links.join(format!(".{}-{}-{}.part", stem.to_string_lossy(), std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_nanos())));
+    fs::hard_link(path, &unique).context("Couldn't open the wallpaper video")?;
+    let placed = fs::rename(&unique, &link);
+    let _ = fs::remove_file(&unique);
+    // On Windows a link a player has open can't be replaced: fine if it is
+    // already this video.
+    if placed.is_err() && !same_file(&link, path) { placed.context("Couldn't open the wallpaper video")?; }
     Ok(link)
 }
 
+/// Whether `a` and `b` are the same file (hard links of one another): the
+/// same device and file number, not just the same size and dates.
 fn same_file(a: &Path, b: &Path) -> bool {
-    let (Ok(a), Ok(b)) = (fs::metadata(a), fs::metadata(b)) else { return false };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        a.dev() == b.dev() && a.ino() == b.ino()
-    }
-    #[cfg(not(unix))]
-    { a.len() == b.len() && a.modified().ok() == b.modified().ok() && a.created().ok() == b.created().ok() }
+    let identity = |path: &Path| fs::File::open(path).ok().and_then(|file| one_mk_wallpaper::file_identity(&file).ok());
+    identity(a).is_some_and(|a| Some(a) == identity(b))
 }
 
 #[cfg(test)]
@@ -100,6 +106,18 @@ mod tests {
         // Again: the same link, not a new one.
         assert_eq!(path(&video).unwrap(), opened);
         assert!(same_file(&opened, &video));
+
+        // Opened by many at once: every caller gets the link, none fails.
+        let _ = fs::remove_file(&opened);
+        let handles: Vec<_> = (0..8).map(|_| { let video = video.clone(); std::thread::spawn(move || path(&video)) }).collect();
+        for handle in handles { assert_eq!(handle.join().unwrap().unwrap(), opened); }
+        assert!(same_file(&opened, &video));
+        assert!(!fs::read_dir(&links).unwrap().flatten().any(|entry| entry.file_name().to_string_lossy().ends_with(".part")));
+
+        // A separate copy with the same size and dates is not the same file.
+        let copy = home.path().join("copy.mp4");
+        fs::copy(&video, &copy).unwrap();
+        assert!(!same_file(&copy, &video));
 
         // Anything that isn't a cached `.video` opens as it is.
         let original = home.path().join("holiday.mov");

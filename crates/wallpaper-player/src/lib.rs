@@ -278,7 +278,10 @@ pub fn prune_cache_except(root: &Path, keep: &BTreeSet<String>) -> std::io::Resu
     if let Ok(entries) = std::fs::read_dir(links_dir(root)) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.file_stem().and_then(|name| name.to_str()).is_some_and(|hash| keep.contains(hash)) { let _ = std::fs::remove_file(path); }
+            // `<hash>.<type>`, or `.<hash>-….part` while a player makes it.
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let hash = name.strip_prefix('.').map_or_else(|| path.file_stem().and_then(|name| name.to_str()).unwrap_or(""), |rest| rest.get(..64).unwrap_or(""));
+            if !keep.contains(hash) { let _ = std::fs::remove_file(path); }
         }
     }
     Ok(())

@@ -72,7 +72,19 @@ impl Flags {
         for code in self.physical.iter() {
             if self.suppressed.is_held(code) { swallowed.update(code, true); } else { passed.update(code, true); }
         }
-        original & !(swallowed.flags() & !passed.flags() & !(flags::NON_COALESCED | flags::ALPHA_SHIFT))
+        // The swallowed keys' own side flags come off first; a modifier's
+        // general flag stays while a side flag of it remains (a program's
+        // right Shift while the left one is swallowed).
+        let sides = swallowed.flags() & !passed.flags() & flags::DEV_ALL;
+        let mut kept = original & !sides;
+        for (general, side) in [
+            (flags::SHIFT, flags::DEV_LSHIFT | flags::DEV_RSHIFT), (flags::CONTROL, flags::DEV_LCTL | flags::DEV_RCTL),
+            (flags::ALTERNATE, flags::DEV_LALT | flags::DEV_RALT), (flags::COMMAND, flags::DEV_LCMD | flags::DEV_RCMD),
+        ] {
+            let lost = swallowed.flags() & !passed.flags() & general != 0;
+            if lost && kept & side == 0 { kept &= !general; }
+        }
+        kept
     }
 }
 
@@ -93,6 +105,13 @@ mod tests {
         // Right ⌘ held and passed on: ⌘ stays.
         state.key(126, true, false);
         assert_ne!(state.apply_posted(command) & flags::COMMAND, 0);
+        // Left Shift swallowed; a program posts right Shift + A: still shifted.
+        let mut state = Flags::default();
+        state.key(42, true, true);
+        let right_shift = flags::SHIFT | flags::DEV_RSHIFT | flags::NON_COALESCED;
+        assert_eq!(state.apply_posted(right_shift), right_shift);
+        // …but its left Shift is the swallowed key's and comes off.
+        assert_eq!(state.apply_posted(flags::SHIFT | flags::DEV_LSHIFT | flags::NON_COALESCED), flags::NON_COALESCED);
     }
 
     #[test]

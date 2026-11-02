@@ -890,8 +890,11 @@ pub fn parse_bench(out: &str, peer: &str) -> Option<Latency> {
 }
 
 impl one_mk_ctl::setup::Host for Link {
+    /// First-run setup only adds a login entry where there is none: one
+    /// for another settings folder (the usual one, seen from a test copy)
+    /// is left alone rather than replaced unasked.
     fn login_installed(&self) -> bool {
-        install::is_installed_for(self.login_home().as_deref())
+        install::is_installed()
     }
 
     fn install_login(&self) -> Result<(), String> {

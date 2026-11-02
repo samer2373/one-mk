@@ -97,15 +97,17 @@ struct WallpaperPolicy {
     peer: Option<Fingerprint>,
     hashes: std::collections::BTreeSet<String>,
     last_offer: Option<std::time::Instant>,
-    /// A cached video whose contents were checked against its hash, and its
-    /// length: offered again (Pause, Play, Fit resend the plan), it is
-    /// acknowledged without the offer limit or another full read.
-    verified: Option<(String, u64)>,
+    /// A cached video whose contents were checked against its hash, and the
+    /// file's identity then (size, file number, change times): offered again
+    /// (Pause, Play, Fit resend the plan), the same unchanged file is
+    /// acknowledged without the offer limit or another full read. A file
+    /// replaced or rewritten since has another identity and is read again.
+    verified: Option<(String, Vec<u64>)>,
 }
 impl WallpaperPolicy {
-    fn already_have(&self, peer: Fingerprint, hash: &str, size: u64, on_disk: Option<u64>) -> bool {
-        self.peer == Some(peer) && self.hashes.contains(hash) && on_disk == Some(size)
-            && self.verified.as_ref().is_some_and(|(verified, length)| verified == hash && *length == size)
+    fn already_have(&self, peer: Fingerprint, hash: &str, size: u64, on_disk: Option<&[u64]>) -> bool {
+        self.peer == Some(peer) && self.hashes.contains(hash) && on_disk.is_some_and(|identity| identity.first() == Some(&size))
+            && self.verified.as_ref().is_some_and(|(verified, identity)| verified == hash && Some(identity.as_slice()) == on_disk)
     }
 
     fn accept(&mut self, peer: Fingerprint, hash: &str, size: u64, now: std::time::Instant) -> bool {
@@ -355,8 +357,9 @@ impl Inbox {
         let Ok(_transfer) = self.wallpaper_transfer.try_lock() else { return };
         let existing = self.root.join(&path);
         let hash = path.trim_end_matches(".video").to_owned();
-        let on_disk = fs::symlink_metadata(&existing).ok().filter(|metadata| metadata.is_file()).map(|metadata| metadata.len());
-        if self.wallpaper.lock().unwrap().already_have(conn.fp, &hash, size, on_disk) {
+        let identity = |path: &Path| fs::symlink_metadata(path).ok().filter(|metadata| metadata.is_file())
+            .and_then(|_| fs::File::open(path).ok()).and_then(|file| one_mk_wallpaper::file_identity(&file).ok());
+        if self.wallpaper.lock().unwrap().already_have(conn.fp, &hash, size, identity(&existing).as_deref()) {
             let _ = write_file_msg(&mut send, &FileMsg::Saved { name: path }).await;
             let _ = send.finish();
             return;
@@ -375,10 +378,12 @@ impl Inbox {
         let admitted = { let policy = self.wallpaper.lock().unwrap(); policy.peer == Some(conn.fp) && policy.hashes.contains(&hash) }
             && wallpaper_fits(media_occupied, total_occupied, size, largest);
         if !admitted { let _ = write_file_msg(&mut send, &FileMsg::Reject { reason: "Wallpaper was not requested, offered too often, or exceeds its cache limit".into() }).await; return; }
+        // Its identity before the read: a change during it doesn't count as checked.
+        let before = identity(&existing);
         let (check, expected) = (existing.clone(), hash.clone());
         let cached = tokio::task::spawn_blocking(move || crate::live_wallpaper::digest(&check).is_ok_and(|actual| actual == expected)).await.unwrap_or(false);
         if cached {
-            self.wallpaper.lock().unwrap().verified = Some((hash, size));
+            self.wallpaper.lock().unwrap().verified = before.map(|before| (hash, before));
             let _ = write_file_msg(&mut send, &FileMsg::Saved { name: path }).await;
             let _ = send.finish();
             return;
@@ -1573,13 +1578,17 @@ mod tests {
         assert!(!policy.accept(peer, "pending", 100, now));
         assert!(policy.accept(peer, "pending", 100, now + Duration::from_secs(2)));
         // Checked once, the same video offered again right away is acknowledged.
-        assert!(!policy.already_have(peer, "current", 100, Some(100)));
-        policy.verified = Some(("current".into(), 100));
-        assert!(policy.already_have(peer, "current", 100, Some(100)));
-        assert!(!policy.already_have(peer, "current", 100, Some(99)));
+        let file = [100, 7, 42, 1_700_000_000];
+        assert!(!policy.already_have(peer, "current", 100, Some(&file)));
+        policy.verified = Some(("current".into(), file.to_vec()));
+        assert!(policy.already_have(peer, "current", 100, Some(&file)));
+        // Rewritten since (same size, other times or file number): read again.
+        assert!(!policy.already_have(peer, "current", 100, Some(&[100, 7, 42, 1_700_000_001])));
+        assert!(!policy.already_have(peer, "current", 100, Some(&[100, 7, 43, 1_700_000_000])));
+        assert!(!policy.already_have(peer, "current", 99, Some(&file)));
         assert!(!policy.already_have(peer, "current", 100, None));
-        assert!(!policy.already_have(stranger, "current", 100, Some(100)));
-        assert!(!policy.already_have(peer, "pending", 100, Some(100)));
+        assert!(!policy.already_have(stranger, "current", 100, Some(&file)));
+        assert!(!policy.already_have(peer, "pending", 100, Some(&file)));
         assert!(wallpaper_fits(1000, 2000, 10, 1000));
         assert!(!wallpaper_fits(1000, 2000, 10, 10));
         assert!(!wallpaper_fits(0, WALLPAPER_CACHE_CAP, 1, 1));
