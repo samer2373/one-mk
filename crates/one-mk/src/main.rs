@@ -506,10 +506,7 @@ fn main() -> ExitCode {
     }
 
     #[cfg(target_os = "macos")]
-    let native_daemon = match cli.cmd.as_ref() {
-        None | Some(Cmd::Run(_)) => true,
-        _ => false,
-    };
+    let native_daemon = matches!(cli.cmd.as_ref(), None | Some(Cmd::Run(_)));
     #[cfg(target_os = "macos")]
     let result = if native_daemon
     {

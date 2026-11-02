@@ -69,7 +69,7 @@ impl App {
             }
             let screens = Rect::from_min_max(stage.min + vec2(24.0, 26.0), stage.max - vec2(24.0, 84.0));
             draw_canvas(ui, screens, &canvas, plan.map(|plan| &plan.media), fit_now, self.wallpaper_ui.poster.as_ref(), &computers);
-            a11y_text(ui, Id::unique("wallpaper-stage"), stage, Role::Image, &match plan { Some(plan) => plan.playing_message(), None => "No wallpaper playing".into() }, None);
+            a11y_text(ui, Id::unique("wallpaper-stage"), stage, Role::Image, &match plan { Some(plan) => plan.playing_summary(&wallpaper.computers), None => "No wallpaper playing".into() }, None);
             let foot_y = stage.bottom() - 18.0 - 32.0;
             let mut x = stage.left() + 18.0;
             if let Some(plan) = plan {
@@ -164,7 +164,7 @@ impl App {
             }
 
             let mut bottom = fills.bottom().max(play_on.bottom());
-            let message = if status.is_none() || wallpaper.message.is_empty() || plan.is_some_and(|plan| plan.playing_message() == wallpaper.message) { String::new() } else { wallpaper.message.clone() };
+            let message = if status.is_none() || wallpaper.message.is_empty() || plan.is_some_and(|plan| [plan.playing_message(), plan.playing_summary(&wallpaper.computers)].contains(&wallpaper.message)) { String::new() } else { wallpaper.message.clone() };
             if !message.is_empty() {
                 bottom += 14.0;
                 bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &message, regular(T_BODY), INK2);

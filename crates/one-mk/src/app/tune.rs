@@ -62,11 +62,10 @@ impl App {
                 }
             };
             let snapshot = (rules.clone(), inactive.clone());
-            if self.local_rules_snapshot.as_ref() != Some(&snapshot) {
-                if self.capture.send(one_mk_input::CaptureCmd::LocalRules { rules, inactive }).is_ok() {
-                    self.local_rules_snapshot = Some(snapshot);
-                    self.input_problems.insert("local-key-rules", "Local key rules inactive: applying your choices when all keys are released".into());
-                }
+            if self.local_rules_snapshot.as_ref() != Some(&snapshot)
+                && self.capture.send(one_mk_input::CaptureCmd::LocalRules { rules, inactive }).is_ok() {
+                self.local_rules_snapshot = Some(snapshot);
+                self.input_problems.insert("local-key-rules", "Local key rules inactive: applying your choices when all keys are released".into());
             }
         }
         self.sync_focus_watch();

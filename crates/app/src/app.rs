@@ -1409,9 +1409,10 @@ impl App {
                 0 => "nothing paired yet".to_owned(),
                 n => format!("{} of {n} connected", s.peers.iter().filter(|p| p.online).count()),
             },
-            (Tab::Wallpaper, Some(Some(s))) => match s.wallpaper.as_ref().and_then(|w| w.plan.as_ref()) {
-                Some(plan) if plan.paused => "paused".to_owned(),
-                Some(plan) => plan.playing_message().to_lowercase(),
+            (Tab::Wallpaper, Some(Some(s))) => match s.wallpaper.as_ref().and_then(|w| Some((w, w.plan.as_ref()?))) {
+                Some((_, plan)) if plan.paused => "paused".to_owned(),
+                // Counted from what each computer said, as the page says it.
+                Some((wallpaper, plan)) => plan.playing_summary(&wallpaper.computers).to_lowercase(),
                 None => "one video across all your screens".to_owned(),
             },
             _ => String::new(),

@@ -881,7 +881,18 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
     if reply.starts_with("error ") { bail!("{}", reply.trim_start_matches("error ").trim()); }
     // A change answers with an acknowledgement, not the wallpaper's state:
     // what it says now comes from a status request.
-    if !asked_status { reply = crate::control::request(dir, crate::control::Request::Status).await?.context("Start oneMK first")?; }
+    // Each computer says within moments whether it plays: until then the
+    // count would include one that can't, and `status` would then disagree.
+    if !asked_status {
+        for attempt in 0..12 {
+            reply = crate::control::request(dir, crate::control::Request::Status).await?.context("Start oneMK first")?;
+            let heard = Status::decode(&reply).and_then(|status| status.wallpaper).is_none_or(|wallpaper| wallpaper.plan.as_ref().is_none_or(|plan|
+                plan.canvas.monitors.iter().filter(|monitor| monitor.online && plan.computers.contains(&monitor.computer))
+                    .all(|monitor| wallpaper.computers.contains_key(&monitor.computer))));
+            if heard || attempt == 11 { break; }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
     match Status::decode(&reply) {
         Some(status) => println!("{}", status.wallpaper.filter(|wallpaper| wallpaper.plan.is_some()).map_or_else(|| "Wallpaper is off".into(), |status| status.message)),
         None => println!("Wallpaper updated."),
