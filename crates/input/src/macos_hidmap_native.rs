@@ -144,13 +144,13 @@ impl Runner for System {
         let mut keyboards = Vec::new();
         self.refresh_services()?;
         for (registry_id, service) in &self.services {
-            if unsafe { IOHIDServiceClientConformsTo(&service, 1, 6) } == 0 { continue; }
-            let vendor = number(&service, "VendorID").and_then(|value| u16::try_from(value).ok()).unwrap_or(0);
-            let product = number(&service, "ProductID").and_then(|value| u16::try_from(value).ok()).unwrap_or(0);
-            let serial = string(&service, "SerialNumber");
-            let name = string(&service, "Product").unwrap_or_else(|| "Keyboard".into());
-            let transport = string(&service, "Transport").unwrap_or_default().to_ascii_lowercase();
-            let builtin = property(&service, "Built-In").and_then(|value| value.downcast_ref::<CFBoolean>().map(|value| value.as_bool())).unwrap_or(false);
+            if unsafe { IOHIDServiceClientConformsTo(service, 1, 6) } == 0 { continue; }
+            let vendor = number(service, "VendorID").and_then(|value| u16::try_from(value).ok()).unwrap_or(0);
+            let product = number(service, "ProductID").and_then(|value| u16::try_from(value).ok()).unwrap_or(0);
+            let serial = string(service, "SerialNumber");
+            let name = string(service, "Product").unwrap_or_else(|| "Keyboard".into());
+            let transport = string(service, "Transport").unwrap_or_default().to_ascii_lowercase();
+            let builtin = property(service, "Built-In").and_then(|value| value.downcast_ref::<CFBoolean>().map(|value| value.as_bool())).unwrap_or(false);
             let bus = if builtin || transport == "spi" || transport == "fifo" { Bus::Internal }
                 else if transport.starts_with("bluetooth") { Bus::Bluetooth }
                 else if transport == "usb" { Bus::Usb } else { Bus::Unknown };

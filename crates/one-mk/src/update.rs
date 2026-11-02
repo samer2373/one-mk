@@ -405,12 +405,24 @@ fn target() -> Result<(PathBuf, InstallKind)> {
     let executable = appimage.clone().unwrap_or(executable);
     let home = directories::BaseDirs::new().map(|base| base.home_dir().to_string_lossy().into_owned()).unwrap_or_default();
     let mut kind = policy::install_kind(&executable.to_string_lossy(), &home, appimage.is_some(), std::env::var_os("FLATPAK_ID").is_some());
-    if kind == InstallKind::Deb && !Command::new("/usr/bin/dpkg-query").arg("--search").arg(&executable)
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success()) {
-        kind = InstallKind::Managed;
-    }
+    if kind == InstallKind::Deb && !from_package(&executable) { kind = InstallKind::Managed; }
     Ok((executable, kind))
 }
+
+/// Whether the one-mk package installed this file: its file list, read
+/// directly (`dpkg-query --search` reads every package's list, on each
+/// status the window asks for).
+fn from_package(executable: &Path) -> bool {
+    let wanted = executable.to_string_lossy();
+    let Ok(entries) = fs::read_dir("/var/lib/dpkg/info") else { return false };
+    entries.flatten().filter(|entry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        name == "one-mk.list" || (name.starts_with("one-mk:") && name.ends_with(".list"))
+    }).any(|entry| fs::read_to_string(entry.path()).is_ok_and(|list| package_lists(&list, &wanted)))
+}
+
+fn package_lists(list: &str, path: &str) -> bool { list.lines().any(|line| line == path) }
 
 fn refuse_root() -> Result<()> {
     #[cfg(unix)]

@@ -155,6 +155,19 @@ async fn inspect_file(path: &Path, poster: Option<&Path>) -> Result<Media> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+/// Saves what is chosen, so it comes back after a restart: written beside,
+/// flushed, then swapped in, so a crash leaves the old or the new one whole.
+fn save_selection(dir: &Path, saved: &Saved) -> Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(cache(dir))?;
+    let temporary = cache(dir).join("selection.tmp");
+    let mut file = std::fs::File::create(&temporary)?;
+    file.write_all(&serde_json::to_vec(saved)?)?;
+    file.sync_all()?;
+    std::fs::rename(temporary, cache(dir).join("selection.json"))?;
+    Ok(())
+}
+
 struct Prepared(PathBuf);
 impl Drop for Prepared {
     fn drop(&mut self) {
@@ -445,9 +458,7 @@ impl Runtime {
         state.progress = None;
         state.status.poster = cache(dir).join(format!("{hash}.png")).exists().then(|| cache(dir).join(format!("{hash}.png")));
         let saved = Saved { status: state.status.clone(), coordinator: state.coordinator.map(|fingerprint| fingerprint.to_string()), previous: state.previous.clone(), authority_off: false };
-        let temporary = cache(dir).join("selection.tmp");
-        std::fs::write(&temporary, serde_json::to_vec(&saved)?)?;
-        std::fs::rename(temporary, cache(dir).join("selection.json"))?;
+        save_selection(dir, &saved)?;
         prune_selection(dir, state.status.plan.as_ref().unwrap(), state.previous.as_deref())?;
         Self::start(dir, &mut state)?;
         drop(state);
@@ -536,10 +547,7 @@ impl Runtime {
             let state = self.state.lock().unwrap();
             ensure!(state.generation == generation, "Wallpaper selection changed");
             let saved = Saved { status: state.status.clone(), coordinator: None, previous: state.previous.clone(), authority_off: true };
-            std::fs::create_dir_all(cache(dir))?;
-            let temporary = cache(dir).join("selection.tmp");
-            std::fs::write(&temporary, serde_json::to_vec(&saved)?)?;
-            std::fs::rename(temporary, cache(dir).join("selection.json"))?;
+            save_selection(dir, &saved)?;
             return restored;
         }
         let mut plan = self.state.lock().unwrap().status.plan.clone();
@@ -678,8 +686,7 @@ impl Runtime {
                 state.progress = None;
                 state.authority_off = false;
                 let saved = Saved { status: state.status.clone(), coordinator: Some(sender.to_string()), previous: state.previous.clone(), authority_off: false };
-                let temporary = cache(&dir).join("selection.tmp");
-                if let Ok(bytes) = serde_json::to_vec(&saved) && std::fs::write(&temporary, bytes).is_ok() { let _ = std::fs::rename(temporary, cache(&dir).join("selection.json")); }
+                if let Err(error) = save_selection(&dir, &saved) { tracing::warn!("Couldn't save the wallpaper selection: {error}"); }
             }
             Wire::Plan { plan } => {
                 if !plan.valid() { return; }

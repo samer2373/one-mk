@@ -1,14 +1,5 @@
 fn keyboard_layout() -> Option<crate::typing::KeyboardLayout> { crate::typing::KeyboardLayout::native() }
 
-#[cfg(test)]
-mod typing_capability_tests {
-    #[test]
-    fn selected_native_backend_advertises_text_and_character_holds() {
-        let keyboard = super::keyboard_layout().expect("native backend must advertise a keyboard even before layout discovery");
-        assert!(keyboard.can_inject());
-        assert!(keyboard.native_text());
-    }
-}
 
 fn inject_thread(
     tx: mpsc::UnboundedSender<Event>,
@@ -224,5 +215,15 @@ fn push_wheel(out: &mut Vec<INPUT>, h: i32, v: i32) {
     }
     if h != 0 {
         out.push(mouse(0, 0, h as u32, MOUSEEVENTF_HWHEEL));
+    }
+}
+
+#[cfg(test)]
+mod typing_capability_tests {
+    #[test]
+    fn selected_native_backend_advertises_text_and_character_holds() {
+        let keyboard = super::keyboard_layout().expect("native backend must advertise a keyboard even before layout discovery");
+        assert!(keyboard.can_inject());
+        assert!(keyboard.native_text());
     }
 }

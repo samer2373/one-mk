@@ -109,6 +109,7 @@ impl FilesReceived {
 
     /// What "Show in folder" opens: the one file or folder that arrived,
     /// or the download folder when it is several things.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // Linux notifications' Show in folder
     pub fn reveal(&self) -> PathBuf {
         match self.groups().as_slice() {
             [(name, _)] => self.folder.join(name.trim_end_matches('/')),

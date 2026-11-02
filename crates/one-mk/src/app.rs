@@ -3203,13 +3203,21 @@ mod tests {
 
     /// A port nothing listens on. Tests run in parallel and the OS may hand
     /// out a just-released port again, so none is given out twice.
+    /// A port for a test daemon, below every system's automatic range
+    /// (Linux from 32768, macOS and Windows from 49152). A port the system
+    /// handed out and took back could go to the next socket that asks for
+    /// any port (a QUIC client here) before the daemon binds it, and the
+    /// daemon would then fail to start (seen on macOS CI).
     fn free_port() -> u16 {
-        static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
-        let mut given = GIVEN.lock().unwrap();
+        static NEXT: std::sync::Mutex<Option<u16>> = std::sync::Mutex::new(None);
+        let mut next = NEXT.lock().unwrap();
+        // Each test process starts elsewhere in the range.
+        let mut port = next.unwrap_or(20_000 + (std::process::id() % 1_000) as u16 * 12);
         loop {
-            let port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-            if !given.contains(&port) {
-                given.push(port);
+            port = if port >= 32_000 { 20_000 } else { port + 1 };
+            let free = std::net::UdpSocket::bind(("0.0.0.0", port)).is_ok() && std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+            if free {
+                *next = Some(port);
                 return port;
             }
         }

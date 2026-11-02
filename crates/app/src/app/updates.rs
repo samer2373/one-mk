@@ -106,7 +106,11 @@ impl App {
             }
             y += 44.0;
         }
-        let note = if status.can_update { "At most once a day. Installing restarts oneMK for a few seconds." } else { status.advice.as_str() };
+        // The last check failed (offline, or a release without its signed
+        // list): say so rather than look up to date.
+        let failed = status.check && status.error.is_some() && status.available.is_none();
+        let note = if failed { "The last check for updates didn't work. oneMK tries again tomorrow." }
+            else if status.can_update { "At most once a day. Installing restarts oneMK for a few seconds." } else { status.advice.as_str() };
         ui.painter().text(pos2(c.left(), y + 6.0), Align2::LEFT_CENTER, fit(ui.painter(), note, &regular(T_META), c.width()), regular(T_META), INK3);
     }
 }

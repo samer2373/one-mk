@@ -22,6 +22,7 @@ use one_mk_input::cursoroverlay::{DrawMode, Support};
 /// How the daemon is asked, and how long mDNS gets to answer.
 const DAEMON_TIMEOUT: Duration = Duration::from_millis(1500);
 const MDNS_WINDOW: Duration = Duration::from_millis(1500);
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // the desktop portals are Linux's
 const PORTAL_TIMEOUT: Duration = Duration::from_millis(2500);
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
 const MDNS_PORT: u16 = 5353;

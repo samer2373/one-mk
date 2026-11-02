@@ -411,3 +411,11 @@ fn python_http_portable_end_to_end() -> Result<()> {
     println!("E2E: rollback starts 0.1.19; signed 0.1.20 high-water mark retained; PASS");
     Ok(())
 }
+
+#[test]
+fn a_package_file_list_names_the_executable_exactly() {
+    let list = "/.\n/usr\n/usr/bin\n/usr/bin/one-mk\n/usr/bin/one-mk-app\n";
+    assert!(package_lists(list, "/usr/bin/one-mk"));
+    assert!(!package_lists(list, "/usr/bin/one"));
+    assert!(!package_lists(list, "/usr/local/bin/one-mk"));
+}

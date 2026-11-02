@@ -87,6 +87,7 @@ impl NetworkWatcher for Unsupported {
 }
 
 #[cfg(any(target_os = "macos", windows))]
+#[cfg_attr(test, allow(dead_code))] // tests use the fake watcher
 struct NativeWifi;
 
 #[cfg(any(target_os = "macos", windows))]
@@ -100,12 +101,14 @@ impl NetworkWatcher for NativeWifi {
 }
 
 /// This computer's addresses, loopback left out.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))] // NetworkManager's
 pub fn local_addrs() -> Vec<std::net::IpAddr> {
     if_addrs::get_if_addrs().unwrap_or_default().into_iter().filter(|i| !i.is_loopback()).map(|i| i.ip()).collect()
 }
 
 /// The default routers in a `/proc/net/route` table (hex, little-endian
 /// addresses), as IPv4 addresses.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))] // NetworkManager's
 pub fn default_gateways(route: &str) -> Vec<std::net::Ipv4Addr> {
     route
         .lines()
@@ -123,6 +126,7 @@ pub fn default_gateways(route: &str) -> Vec<std::net::Ipv4Addr> {
 }
 
 /// The MAC address of `ip` in a `/proc/net/arp` table, lowercase.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))] // NetworkManager's
 pub fn arp_mac(arp: &str, ip: std::net::Ipv4Addr) -> Option<String> {
     let ip = ip.to_string();
     arp.lines().skip(1).find_map(|line| {
@@ -134,6 +138,7 @@ pub fn arp_mac(arp: &str, ip: std::net::Ipv4Addr) -> Option<String> {
 
 /// The MAC addresses of this computer's default routers (Linux; empty
 /// elsewhere).
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))] // NetworkManager's
 pub fn gateway_macs() -> Vec<String> {
     let (Ok(route), Ok(arp)) = (std::fs::read_to_string("/proc/net/route"), std::fs::read_to_string("/proc/net/arp")) else {
         return Vec::new();
