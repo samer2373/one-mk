@@ -156,7 +156,18 @@ async fn inspect_file(path: &Path, poster: Option<&Path>) -> Result<Media> {
 }
 
 struct Prepared(PathBuf);
-impl Drop for Prepared { fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); } }
+impl Drop for Prepared {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        // macOS's exporter writes `<name>.sb-…` beside it first; a stopped
+        // or failed export leaves that behind.
+        let (Some(folder), Some(name)) = (self.0.parent(), self.0.file_name().and_then(|name| name.to_str())) else { return };
+        let Ok(entries) = std::fs::read_dir(folder) else { return };
+        for entry in entries.flatten() {
+            if entry.file_name().to_str().is_some_and(|other| other.starts_with(&format!("{name}.sb-"))) { let _ = std::fs::remove_file(entry.path()); }
+        }
+    }
+}
 
 fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
     let key = ring::digest::digest(&SHA256, &serde_json::to_vec(&(&plan.hash, &plan.canvas, plan.fit, computer))?);
@@ -986,8 +997,14 @@ mod tests {
         let (second, second_path) = import(directory.path(), &source).unwrap();
         std::fs::write(&source, b"third video").unwrap();
         let (third, third_path) = import(directory.path(), &source).unwrap();
+        let links = one_mk_wallpaper::links_dir(&cache(directory.path()));
+        std::fs::create_dir_all(&links).unwrap();
+        std::fs::hard_link(&first_path, links.join(format!("{first}.mp4"))).unwrap();
+        std::fs::hard_link(&third_path, links.join(format!("{third}.mov"))).unwrap();
         prune_cache(&cache(directory.path()), &third, Some(&second)).unwrap();
         assert!(!first_path.exists()); assert!(second_path.exists() && third_path.exists()); assert_ne!(first, second);
+        // The pruned video's link goes too (it would keep its bytes on disk).
+        assert!(!links.join(format!("{first}.mp4")).exists() && links.join(format!("{third}.mov")).exists());
     }
     #[cfg(unix)]
     #[test]

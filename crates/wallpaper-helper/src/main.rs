@@ -12,6 +12,8 @@ mod macos;
 mod windows;
 
 mod picture;
+#[cfg(any(target_os = "macos", windows, test))]
+mod playable;
 
 #[derive(Debug)]
 enum Input { End, Offset(i64) }

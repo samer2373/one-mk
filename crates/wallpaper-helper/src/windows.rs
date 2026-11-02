@@ -56,6 +56,7 @@ unsafe fn frame_ready(media: &IMFMediaEngine) -> windows::core::Result<bool> {
 }
 impl Engine {
     unsafe fn new(path: &Path) -> Result<Self> {
+        let path = &crate::playable::path(path)?;
         unsafe {
             CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
             MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
@@ -142,7 +143,7 @@ unsafe fn save_poster(engine: &Engine, media: &Media, path: &Path) -> Result<()>
         let mut rgba = Vec::with_capacity((width * height * 4) as usize);
         for row in 0..height {
             let bytes = std::slice::from_raw_parts(mapped.pData.cast::<u8>().add(row as usize * mapped.RowPitch as usize), width as usize * 4);
-            for pixel in bytes.chunks_exact(4) { rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]); }
+            for pixel in bytes.as_chunks::<4>().0 { rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]); }
         }
         context.Unmap(&staging, 0);
         image::save_buffer_with_format(path, &rgba, width, height, image::ColorType::Rgba8, image::ImageFormat::Png)?;
@@ -351,6 +352,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
 }
 
 fn frame_rate(path: &Path) -> Result<f64> {
+    let path = &crate::playable::path(path)?;
     unsafe {
         let path: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
         let reader = MFCreateSourceReaderFromURL(windows::core::PCWSTR(path.as_ptr()), None)?;

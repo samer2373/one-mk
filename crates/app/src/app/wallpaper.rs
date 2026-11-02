@@ -37,9 +37,10 @@ impl App {
         let wallpaper = status.as_ref().and_then(|status| status.wallpaper.clone()).unwrap_or_default();
         let plan = wallpaper.plan.as_ref();
         let canvas = plan.map(|plan| plan.canvas.clone()).unwrap_or_else(|| status.as_ref().map(one_mk_ctl::wallpaper::canvas).unwrap_or_default());
-        let mut poster_path = wallpaper.poster.clone();
         #[cfg(debug_assertions)]
-        if let Some(path) = std::env::var_os("ONE_MK_APP_WALLPAPER") { poster_path = Some(path.into()); }
+        let poster_path = std::env::var_os("ONE_MK_APP_WALLPAPER").map(Into::into).or_else(|| wallpaper.poster.clone());
+        #[cfg(not(debug_assertions))]
+        let poster_path = wallpaper.poster.clone();
         if self.wallpaper_ui.poster_path != poster_path {
             self.wallpaper_ui.poster = poster_path.as_ref().and_then(|path| {
                 let image = image::ImageReader::open(path).ok()?.decode().ok()?.into_rgba8();

@@ -85,6 +85,8 @@ impl Drop for PowerSource {
 fn time(milliseconds: u64) -> CMTime { CMTime { value: milliseconds.min(i64::MAX as u64) as i64, timescale: 1000, flags: objc2_core_media::CMTimeFlags(1), epoch: 0 } }
 fn millis(value: CMTime) -> u64 { if value.timescale <= 0 { 0 } else { (value.value.max(0) as u64).saturating_mul(1000) / value.timescale as u64 } }
 fn asset(path: &Path) -> Retained<AVURLAsset> {
+    // Opened as `<hash>.video`, AVFoundation finds no video track.
+    let path = &crate::playable::path(path).unwrap_or_else(|_| path.to_owned());
     unsafe { AVURLAsset::URLAssetWithURL_options(&NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())), None) }
 }
 

@@ -1541,7 +1541,7 @@ fn local_rules_note() -> &'static str {
     } else if cfg!(target_os = "linux") {
         "Local key rules are not available on Linux; stored rules remain inactive."
     } else {
-        "Your key and button rules also apply here. Caps Lock, Fn, media and function keys are not supported yet. Ctrl + Alt + Shift + Esc turns local rules off. After an interruption, turn the switch off and on to resume."
+        "Your key and button rules also apply here. Caps Lock can become one other key; a Caps Lock rule with a condition, Fn, media and function keys are not supported yet. Ctrl + Alt + Shift + Esc turns local rules off. After an interruption, turn the switch off and on to resume."
     }
 }
 

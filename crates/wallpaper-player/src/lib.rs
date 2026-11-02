@@ -261,6 +261,11 @@ pub fn prune_cache(root: &Path, current: &str, previous: Option<&str>) -> std::i
     prune_cache_except(root, &std::iter::once(current.to_owned()).chain(previous.map(str::to_owned)).collect())
 }
 
+/// Where the player opens cached videos from on macOS and Windows: hard
+/// links named with each video's real type (their players go by the
+/// extension), beside the cache so its size limits don't count them twice.
+pub fn links_dir(root: &Path) -> PathBuf { root.with_file_name("wallpaper-links") }
+
 pub fn prune_cache_except(root: &Path, keep: &BTreeSet<String>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
@@ -268,6 +273,13 @@ pub fn prune_cache_except(root: &Path, keep: &BTreeSet<String>) -> std::io::Resu
         if path.extension().is_some_and(|extension| extension == "video" || extension == "png")
             && path.file_stem().and_then(|name| name.to_str()).is_some_and(|hash| valid_hash(hash) && !keep.contains(hash))
         { std::fs::remove_file(path)?; }
+    }
+    // A link keeps its video's bytes on disk: it goes with the video.
+    if let Ok(entries) = std::fs::read_dir(links_dir(root)) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.file_stem().and_then(|name| name.to_str()).is_some_and(|hash| keep.contains(hash)) { let _ = std::fs::remove_file(path); }
+        }
     }
     Ok(())
 }

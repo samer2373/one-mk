@@ -212,6 +212,12 @@ fn fonts(extra: &[(String, Vec<u8>)]) -> FontDefinitions {
     // system's fonts for scripts Geist doesn't cover.
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "geist".into());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "geist-mono".into());
+    // The ⌘ in shortcut hints: neither Geist nor egui's fonts have it.
+    if let Some(bytes) = mac_symbols() {
+        fonts.font_data.insert("mac-symbols".into(), Arc::new(FontData::from_static(bytes)));
+        fonts.families.entry(FontFamily::Proportional).or_default().push("mac-symbols".into());
+        fonts.families.entry(FontFamily::Monospace).or_default().push("mac-symbols".into());
+    }
     for (name, bytes) in extra {
         fonts.font_data.insert(name.clone(), Arc::new(FontData::from_owned(bytes.clone())));
         fonts.families.entry(FontFamily::Proportional).or_default().push(name.clone());
@@ -220,6 +226,16 @@ fn fonts(extra: &[(String, Vec<u8>)]) -> FontDefinitions {
     fonts.families.insert(FontFamily::Name("semibold".into()), [vec!["geist-semibold".into()], fallback.clone()].concat());
     fonts.families.insert(FontFamily::Name("mono-medium".into()), [vec!["geist-mono-medium".into()], fallback].concat());
     fonts
+}
+
+/// macOS's own symbol font, read once (the window's fonts are rebuilt when
+/// a name needs another script).
+fn mac_symbols() -> Option<&'static [u8]> {
+    static BYTES: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        if !cfg!(target_os = "macos") { return None; }
+        std::fs::read("/System/Library/Fonts/Apple Symbols.ttf").ok().map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
+    })
 }
 
 /// Names can be in any script. When one has letters no loaded font

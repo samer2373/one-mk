@@ -22,9 +22,8 @@ pub(super) fn gateways() -> Vec<String> {
         let routes = std::slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
         for route in routes.iter().filter(|route| route.DestinationPrefix.PrefixLength == 0 && !route.Loopback) {
             let mut neighbor = MIB_IPNET_ROW2 { Address: route.NextHop, InterfaceIndex: route.InterfaceIndex, InterfaceLuid: route.InterfaceLuid, ..Default::default() };
-            if GetIpNetEntry2(&mut neighbor) != ERROR_SUCCESS || neighbor.PhysicalAddressLength != 6 {
-                if ResolveIpNetEntry2(&mut neighbor, null()) != ERROR_SUCCESS { continue; }
-            }
+            if (GetIpNetEntry2(&mut neighbor) != ERROR_SUCCESS || neighbor.PhysicalAddressLength != 6)
+                && ResolveIpNetEntry2(&mut neighbor, null()) != ERROR_SUCCESS { continue; }
             if neighbor.PhysicalAddressLength == 6 {
                 gateways.push(neighbor.PhysicalAddress[..6].iter().map(|byte| format!("{byte:02x}")).collect::<Vec<_>>().join(":"));
             }
