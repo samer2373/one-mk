@@ -16,7 +16,7 @@ mod picture;
 mod playable;
 
 #[derive(Debug)]
-enum Input { End, Offset(i64) }
+enum Input { End, Offset(i64), Pause(bool) }
 
 fn input() -> Receiver<Input> {
     let (sender, receiver) = mpsc::channel();
@@ -26,6 +26,11 @@ fn input() -> Receiver<Input> {
             if line == "quit" { break; }
             if let Some(offset) = line.strip_prefix("offset ").and_then(|offset| offset.parse().ok()) {
                 let _ = sender.send(Input::Offset(offset));
+                wake();
+            }
+            // Pause holds the frame on screen; play goes on in step.
+            if line == "pause" || line == "play" {
+                let _ = sender.send(Input::Pause(line == "pause"));
                 wake();
             }
         }

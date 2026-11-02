@@ -421,7 +421,11 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     unsafe { (gst.poll)(bus, &mut bus_descriptor); }
     loop {
         while let Ok(input) = receiver.try_recv() {
-            match input { Input::End => { unsafe { (gst.unref)(bus); } return Ok(()); }, Input::Offset(offset) => config.clock_offset_ms = offset }
+            match input {
+                Input::End => { unsafe { (gst.unref)(bus); } return Ok(()); }
+                Input::Offset(offset) => config.clock_offset_ms = offset,
+                Input::Pause(paused) => { config.plan.paused = paused; holds.set(Hold::User, paused); }
+            }
         }
         unsafe {
             while (desktop.xlib.XPending)(desktop.display) != 0 {

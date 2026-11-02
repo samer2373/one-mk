@@ -285,7 +285,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let mut latency_ready = vec![false; desktop.chains.len()];
     loop {
         while let Ok(input) = receiver.try_recv() {
-            match input { Input::End => return Ok(()), Input::Offset(offset) => config.clock_offset_ms = offset }
+            match input { Input::End => return Ok(()), Input::Offset(offset) => config.clock_offset_ms = offset, Input::Pause(paused) => config.plan.paused = paused }
         }
         unsafe {
             ensure!(engine.events.load(Ordering::Relaxed) != MF_MEDIA_ENGINE_EVENT_ERROR.0 as u32, "Windows could not keep playing this video. Try an H.264 MP4 video.");

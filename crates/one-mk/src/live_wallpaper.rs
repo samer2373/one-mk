@@ -397,13 +397,23 @@ impl Runtime {
             state.retire();
             return Ok(());
         }
-        if state.locked || state.asleep || plan.paused || !plan.computers.contains(&state.computer) {
+        // Paused by the person, a playing wallpaper holds its frame (the
+        // player pauses itself); nothing starts one just to show a still.
+        let held = plan.paused && state.player.is_some();
+        if state.locked || state.asleep || (plan.paused && !held) || !plan.computers.contains(&state.computer) {
             state.stop();
             state.status.computers.insert(state.computer.clone(), Playback::Paused("Paused".into()));
             state.status.message = "Paused".into();
             return Ok(());
         }
-        if state.player.is_some() { return Ok(()); }
+        if let Some(child) = &mut state.player {
+            if let Some(input) = child.stdin.as_mut() { let _ = writeln!(input, "{}", if held { "pause" } else { "play" }); }
+            if held {
+                state.status.computers.insert(state.computer.clone(), Playback::Paused("Paused".into()));
+                state.status.message = "Paused".into();
+            } else if let Some(plan) = state.status.plan.as_ref() { state.status.message = plan.playing_message(); }
+            return Ok(());
+        }
         one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?;
         let config = PlayerConfig { plan: plan.clone(), computer: state.computer.clone(), path: cache_path(&cache(dir), &plan.hash)?, clock_offset_ms: state.offset };
         let config_path = cache(dir).join("player.json");
@@ -439,11 +449,17 @@ impl Runtime {
         } else { restore_picture(&cache(dir).join("pictures"))?; }
         let mut state = self.state.lock().unwrap();
         ensure!(state.generation == generation, "Wallpaper selection changed");
-        if let Some(mut child) = state.player.take() {
-            if state.status.computers.get(&state.computer) == Some(&Playback::Ready) { state.retiring.push(child); }
-            else { let _ = child.kill(); let _ = child.wait(); }
+        // Only paused or played: the running player is told (it holds or
+        // resumes its frame); anything else starts a player for the new plan.
+        let same_but_paused = state.coordinator == coordinator && state.player.is_some()
+            && state.status.plan.as_ref().is_some_and(|old| Plan { paused: plan.paused, ..old.clone() } == plan);
+        if !same_but_paused {
+            if let Some(mut child) = state.player.take() {
+                if state.status.computers.get(&state.computer) == Some(&Playback::Ready) { state.retiring.push(child); }
+                else { let _ = child.kill(); let _ = child.wait(); }
+            }
+            state.launch += 1;
         }
-        state.launch += 1;
         state.previous = state.status.plan.as_ref().map(|old| old.hash.clone()).filter(|hash| hash != &plan.hash).or(state.previous.take());
         state.computer = computer;
         if state.coordinator != coordinator && coordinator.is_none() { state.offset = 0; state.best_rtt = None; state.clocks.clear(); }
@@ -499,6 +515,8 @@ impl Runtime {
     }
 
     pub fn request(&self, dir: PathBuf, status: Status, command: Command, peers: Vec<Peer>, node: Node, reply: tokio::sync::oneshot::Sender<String>) {
+        // Every change, in the log: what turned a wallpaper off is then known.
+        tracing::info!("wallpaper: {}", match &command { Command::Set { path } => format!("set {}", path.display()), other => format!("{other:?}") });
         let generation = {
             let mut state = self.state.lock().unwrap();
             state.generation += 1;
@@ -669,6 +687,7 @@ impl Runtime {
             Wire::Off => {
                 let mut state = self.state.lock().unwrap();
                 if state.coordinator != Some(sender) { return; }
+                tracing::info!("wallpaper: off, by the computer that chose it ({sender})");
                 if let Some(worker) = state.worker.take() { worker.abort(); }
                 state.generation += 1; state.stop(); state.status.plan = None; state.status.poster = None; state.status.message = "Wallpaper is off".into();
                 let runtime = self.clone();

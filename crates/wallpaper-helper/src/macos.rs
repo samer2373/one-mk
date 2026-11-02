@@ -320,7 +320,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             match input { Input::End => {
                 unsafe { player.pause(); looper.disableLooping(); center.removeObserver(&observer); workspace.removeObserver(&observer); distributed.removeObserver(&observer); }
                 return Ok(());
-            }, Input::Offset(offset) => config.clock_offset_ms = offset }
+            }, Input::Offset(offset) => config.clock_offset_ms = offset, Input::Pause(paused) => config.plan.paused = paused }
         }
         let flags = observer.ivars().get() | if POWER_DIRTY.swap(false, std::sync::atomic::Ordering::Relaxed) { 8 } else { 0 };
         if flags & 4 != 0 {

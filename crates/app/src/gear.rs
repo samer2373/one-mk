@@ -364,9 +364,11 @@ impl Keyboard {
             let at = cam.pt(p3(cx - k.w * U / 2.0 + 4.2, y_top, cz - k.h * U / 2.0 + 4.0));
             legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier, max_w: f32::INFINITY });
             if let Some(to) = &k.to {
-                // On the cap's front, as side legends are on real keycaps.
-                let at = cam.pt(p3(cx, 1.0 + (y_top - 1.0) * 0.42, cz + k.h * U / 2.0 - 1.1));
-                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier, max_w: px * 0.92 });
+                // On the cap's top, low and centred, under its own legend:
+                // from this camera the front face is too thin to hold text
+                // (drawn there, it fell onto the next row's key).
+                let at = cam.pt(p3(cx, y_top, cz + k.h * U * 0.2));
+                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier, max_w: px * 0.88 });
             }
         }
         keys.into_mesh(&mut m);
