@@ -75,6 +75,7 @@ fn signatures_refuse_every_mutation() -> Result<()> {
     let pair = pair()?;
     let message = b"signed release manifest";
     let signed = pair.sign(message);
+    assert!(verify_embedded(message, signed.as_ref()).is_err(), "the shipped key must never trust the published test seed");
     verify(pair.public_key().as_ref(), message, signed.as_ref())?;
     for index in 0..signed.as_ref().len() {
         let mut changed = signed.as_ref().to_vec();
@@ -86,6 +87,39 @@ fn signatures_refuse_every_mutation() -> Result<()> {
     assert!(verify(&[], message, signed.as_ref()).is_err());
     assert!(verify(pair.public_key().as_ref(), b"tampered", signed.as_ref()).is_err());
     assert!(verify(pair.public_key().as_ref(), &[], signed.as_ref()).is_err());
+    Ok(())
+}
+
+#[test]
+fn update_preferences_default_to_check_and_ask() -> Result<()> {
+    let defaults = Settings::default();
+    assert!(defaults.check);
+    assert!(!defaults.install_automatically);
+    let legacy: Settings = toml::from_str("check = true")?;
+    assert_eq!(legacy, defaults);
+    let automatic: Settings = toml::from_str("check = true\ninstall_automatically = true")?;
+    assert!(automatic.install_automatically);
+    assert_eq!(toml::from_str::<Settings>(&toml::to_string(&automatic)?)?, automatic);
+    Ok(())
+}
+
+#[test]
+fn doctor_uses_only_plain_cached_results() -> Result<()> {
+    let scratch = Scratch::new()?;
+    assert_eq!(doctor(&scratch.0), (false, "Couldn't check: no completed update check yet".into()));
+    let current = env!("CARGO_PKG_VERSION");
+    let mut state = State { sequence: 1, digest: "00".repeat(32), highest_version: Some(current.into()), ..State::default() };
+    save_state(&scratch.0, &state)?;
+    assert_eq!(doctor(&scratch.0), (false, format!("Up to date ({current})")));
+    let current = policy::version(current)?;
+    state.available = Some(format!("{}.0.0", current.major + 1));
+    save_state(&scratch.0, &state)?;
+    assert_eq!(doctor(&scratch.0), (true, "Update available — Update now".into()));
+    state.error = Some("Check your internet connection and try again".into());
+    save_state(&scratch.0, &state)?;
+    assert_eq!(doctor(&scratch.0), (false, "Couldn't check: Check your internet connection and try again".into()));
+    fs::write(scratch.0.join(STATE), b"broken")?;
+    assert_eq!(doctor(&scratch.0), (false, "Couldn't check: saved update information couldn't be read".into()));
     Ok(())
 }
 
@@ -241,7 +275,7 @@ fn kill_mid_download_preserves_original_and_cleans_on_retry() -> Result<()> {
     ready?;
     killed?;
     assert_eq!(fs::read(&target)?, b"original executable is never replaced");
-    let _lock = target_lock(&target)?;
+    let _lock = target_lock(&target, "denied")?;
     assert!(!fs::read_dir(&scratch.0)?.filter_map(Result::ok).any(|entry| entry.file_name().to_string_lossy().starts_with(".one-mk-update-payload-")));
     Ok(())
 }
@@ -318,4 +352,70 @@ fn a_symlink_is_never_an_update_target_or_backup() -> Result<()> {
     assert!(replace(&candidate, &link).is_err());
     assert_eq!(fs::read_to_string(&real)?, "x", "the file behind the link is untouched");
     Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+#[ignore = "starts a local Python HTTP server; run explicitly"]
+fn python_http_portable_end_to_end() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new()?;
+    let release_dir = scratch.0.join("release");
+    let installation = scratch.0.join("portable");
+    let home = scratch.0.join("state");
+    fs::create_dir(&release_dir)?;
+    fs::create_dir(&installation)?;
+    fs::create_dir(&home)?;
+    let target = installation.join("one-mk");
+    let original = b"#!/bin/sh\necho 'one-mk 0.1.19'\n";
+    let replacement = b"#!/bin/sh\necho 'one-mk 0.1.20'\n";
+    fs::write(&target, original)?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+    fs::write(release_dir.join("portable.bin"), replacement)?;
+    let mut manifest = fixture(replacement);
+    manifest.version = "0.1.20".into();
+    let bytes = serde_json::to_vec(&manifest)?;
+    let key = pair()?;
+    let signed = key.sign(&bytes);
+    fs::write(release_dir.join("update-manifest.json"), &bytes)?;
+    fs::write(release_dir.join("update-manifest.json.sig"), signed.as_ref())?;
+    let reservation = TcpListener::bind("127.0.0.1:0")?;
+    let port = reservation.local_addr()?.port();
+    drop(reservation);
+    let endpoint = format!("http://127.0.0.1:{port}/latest.json");
+    let assets = ["portable.bin", "update-manifest.json", "update-manifest.json.sig"].map(|name|
+        serde_json::json!({"name":name, "browser_download_url":format!("http://127.0.0.1:{port}/{name}")}));
+    fs::write(release_dir.join("latest.json"), serde_json::to_vec(&serde_json::json!({"tag_name":"v0.1.20", "assets":assets}))?)?;
+    struct ServerProcess(std::process::Child);
+    impl Drop for ServerProcess { fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); } }
+    let mut server = ServerProcess(Command::new("python3").args(["-m", "http.server", &port.to_string(), "--bind", "127.0.0.1", "--directory"])
+        .arg(&release_dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while TcpStream::connect(("127.0.0.1", port)).is_err() {
+        ensure!(server.0.try_wait()?.is_none() && Instant::now() < deadline, "local Python server did not start");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    println!("E2E: python3 -m http.server bound to 127.0.0.1 (temporary release directory)");
+    assert!(verify_embedded(&bytes, signed.as_ref()).is_err());
+    println!("E2E: production verification refuses the RFC 8032 test signature");
+    let mut state = State::default();
+    let (manifest, release, origin) = checked(&home, &endpoint, key.public_key().as_ref(), "0.1.19", &mut state)?;
+    println!("E2E: TEST-ONLY explicit key verified signed 0.1.20 manifest; installed version 0.1.19");
+    apply(&manifest, &release, &origin, &target, InstallKind::Portable)?;
+    version_check(&target, Some("0.1.20"))?;
+    assert_eq!(fs::read(installation.join("one-mk.old"))?, original);
+    println!("E2E: signed SHA-256 and size verified; portable 0.1.20 starts; 0.1.19 backup retained");
+    rollback(&target)?;
+    version_check(&target, Some("0.1.19"))?;
+    assert_eq!(load_state(&home)?.highest_version.as_deref(), Some("0.1.20"));
+    println!("E2E: rollback starts 0.1.19; signed 0.1.20 high-water mark retained; PASS");
+    Ok(())
+}
+
+#[test]
+fn a_package_file_list_names_the_executable_exactly() {
+    let list = "/.\n/usr\n/usr/bin\n/usr/bin/one-mk\n/usr/bin/one-mk-app\n";
+    assert!(package_lists(list, "/usr/bin/one-mk"));
+    assert!(!package_lists(list, "/usr/bin/one"));
+    assert!(!package_lists(list, "/usr/local/bin/one-mk"));
 }

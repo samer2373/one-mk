@@ -12,7 +12,7 @@ pub(super) const ROW_H: f32 = 34.0;
 /// The word beside it says the same, so colour is never the only signal.
 fn tone(q: Option<Quality>) -> Color32 {
     match q {
-        Some(Quality::Stalls | Quality::Slow) => SIGNAL,
+        Some(Quality::Stalls | Quality::Slow) => WARN,
         _ => INK2,
     }
 }
@@ -43,8 +43,8 @@ fn sparkline(p: &Painter, r: Rect, ring: &Ring, now: f64, q: Option<Quality>) {
     // it reads apart from a slow reading and not only by colour.
     for x in &t.losses {
         let x = r.left() + x;
-        p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom())], Stroke::new(1.0, SIGNAL.gamma_multiply(0.6)));
-        p.circle_stroke(pos2(x, r.top() + 2.5), 2.5, Stroke::new(1.0, SIGNAL));
+        p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom())], Stroke::new(1.0, WARN.gamma_multiply(0.6)));
+        p.circle_stroke(pos2(x, r.top() + 2.5), 2.5, Stroke::new(1.0, WARN));
     }
 }
 
@@ -100,7 +100,7 @@ impl App {
         }
         match self.summary_of(&peer.id) {
             Some(s) => s.describe(&peer.name),
-            None if self.older_daemon(&peer.id) => format!("Latency to {}: not shown, restart one·mk to see it.", peer.name),
+            None if self.older_daemon(&peer.id) => format!("Latency to {}: not shown, restart oneMK to see it.", peer.name),
             None => format!("Latency to {}: still measuring.", peer.name),
         }
     }
@@ -143,7 +143,7 @@ impl App {
                 p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, "offline", regular(T_META), INK2);
             } else {
                 let q = summary.and_then(|s| s.quality());
-                let waiting = if self.older_daemon(&peer.id) { "Restart one·mk" } else { "Measuring…" };
+                let waiting = if self.older_daemon(&peer.id) { "Restart oneMK" } else { "Measuring…" };
                 let word = q.map_or(waiting, Quality::word);
                 p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, word, regular(T_META), if q.is_some() { tone(q) } else { INK2 });
                 if let Some(s) = summary {

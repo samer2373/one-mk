@@ -1,8 +1,8 @@
-//! The permission guide: while one·mk waits for a macOS permission, a
+//! The permission guide: while oneMK waits for a macOS permission, a
 //! small card floats next to System Settings with an arrow at the list
 //! where the switch is, says what to do, and watches. When the switch is
 //! on it ticks, moves on to the next permission or leaves, and brings
-//! one·mk back to the front. If System Settings is closed first, it says
+//! oneMK back to the front. If System Settings is closed first, it says
 //! so and offers to open it again.
 //!
 //! Three layers, each testable on its own:
@@ -26,16 +26,16 @@ pub use one_mk_ctl::macos_windows::{Frame, Pane, SettingsWindow};
 
 // ------------------------------------------------------------ permissions
 
-/// A macOS permission one·mk needs, in the order they are asked for.
+/// A macOS permission oneMK needs, in the order they are asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Permission {
     Accessibility,
     InputMonitoring,
 }
 
-/// The name one·mk has in System Settings' lists. The daemon (`one-mk`)
+/// The name oneMK has in System Settings' lists. The daemon (`one-mk`)
 /// is the program that needs both permissions; see the TCC notes in
-/// docs/PERMISSION-GUIDE.md for why this is not "one·mk".
+/// docs/PERMISSION-GUIDE.md for why this is not "oneMK".
 pub const LIST_NAME: &str = "one-mk";
 
 impl Permission {
@@ -60,7 +60,7 @@ impl Permission {
         self as usize
     }
 
-    /// What it lets one·mk do.
+    /// What it lets oneMK do.
     fn ability(self) -> &'static str {
         match self {
             Permission::Accessibility => "move the pointer and type on this Mac",
@@ -633,11 +633,11 @@ fn words(v: &View) -> Words {
     let p = v.permission;
     match v.shown {
         Phase::Waiting => Words {
-            title: "Turn on one·mk".into(),
+            title: "Turn on oneMK".into(),
             body: match p {
                 Permission::Accessibility => {
                     format!(
-                        "Find {LIST_NAME} in the {} list and switch it on, so one·mk can {}.",
+                        "Find {LIST_NAME} in the {} list and switch it on, so oneMK can {}.",
                         p.name(),
                         p.ability()
                     )
@@ -654,12 +654,12 @@ fn words(v: &View) -> Words {
         Phase::Granted { .. } | Phase::Done { dismissed: false, .. } => Words {
             title: format!("{} is on", p.name()),
             body: match v.next {
-                Some(n) => format!("one·mk can now {}. One more to go: {}.", p.ability(), n.name()),
-                None => format!("one·mk can now {}. That's everything it needs.", p.ability()),
+                Some(n) => format!("oneMK can now {}. One more to go: {}.", p.ability(), n.name()),
+                None => format!("oneMK can now {}. That's everything it needs.", p.ability()),
             },
             footer: Footer::Note(match v.next {
                 Some(n) => format!("Opening {}…", n.name()),
-                None => "Taking you back to one·mk…".into(),
+                None => "Taking you back to oneMK…".into(),
             }),
         },
         Phase::SettingsGone { hidden: true } => Words {
@@ -822,7 +822,7 @@ fn draw_card(
     // Header: step bars and "Step 1 of 2"; the close button.
     let hy = inner.top() + HEADER_H / 2.0;
     let mut x = inner.left();
-    let label = if v.of > 1 { format!("Step {} of {}", v.step, v.of) } else { "one·mk setup".into() };
+    let label = if v.of > 1 { format!("Step {} of {}", v.step, v.of) } else { "oneMK setup".into() };
     if v.of > 1 {
         for i in 0..v.of.min(2) {
             let r = Rect::from_min_size(pos2(x, hy - 2.0), vec2(18.0, 4.0));
@@ -1260,7 +1260,7 @@ impl Overlay {
         let origin = f.window.min;
         let local = |p: Pos2| pos2((p.x + slide.x - origin.x) / zoom, (p.y + slide.y - origin.y) / zoom);
         let builder = egui::ViewportBuilder::default()
-            .with_title("one·mk permission guide")
+            .with_title("oneMK permission guide")
             .with_app_id("one-mk")
             .with_decorations(false)
             .with_transparent(true)
@@ -1529,7 +1529,7 @@ mod debug {
     }
 
     /// A drawing of System Settings' privacy list (not a copy of it): a
-    /// sidebar, a title, a few apps with switches, one·mk's off.
+    /// sidebar, a title, a few apps with switches, oneMK's off.
     fn settings_window(p: &egui::Painter, r: Rect, dark: bool, view: &View) {
         let (bg, side, card, line, ink, ink2, off) = if dark {
             (

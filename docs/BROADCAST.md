@@ -14,7 +14,7 @@ one-mk broadcast toggle    # what the keyboard shortcut does
 Default keyboard shortcut: **Ctrl+Alt+B** (**Ctrl+Alt+Shift+B** on Windows,
 see below). Change it with `one-mk hotkeys --broadcast <chord>` or turn it off
 with `one-mk hotkeys --broadcast none`. The tray and the window's Desk tab
-have a "Broadcast to all computers" checkmark/switch (shown while a computer
+have a "Type on every computer" checkmark/switch (shown while a computer
 is connected). While it is on, the Desk headline says so, the window displays
 the daemon's configured stop shortcut, and its broadcast-stop controls are
 disabled. **Stop service** shuts down sharing entirely; it is not a broadcast
@@ -168,7 +168,7 @@ keepalives); off again, back to 10 ms. Memory: 34 MB resident, against
 - `one-mk status` includes "Broadcasting to 3 computers: A, B and C.
   Everything you type, click and scroll goes to all of them."
 - The tray headline says "Broadcasting to 3 computers" and the item
-  "Broadcast to all computers" is checked.
+  "Type on every computer" is checked.
 - The window: the Desk headline "Broadcasting to 3 computers" and to whom,
   a keyboard-stop hint, and the disabled Desk switch on.
 - Notifications at start and end (checked on GNOME; macOS untested; on

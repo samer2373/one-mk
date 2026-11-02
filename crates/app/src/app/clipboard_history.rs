@@ -4,7 +4,7 @@ impl App {
     pub(super) fn clipboard_history_cell(&mut self, ui: &mut Ui, rect: Rect) {
         title_row(ui, rect, "History", 125.0);
         let refresh = Rect::from_min_size(pos2(rect.right() - 124.0, rect.top() - 4.0), vec2(72.0, 28.0));
-        if button(ui, refresh, Id::unique("history-refresh"), "Refresh", Look::Quiet, true, Some("Refresh clipboard history")).clicked() {
+        if button(ui, refresh, Id::unique("history-refresh"), "Refresh", Look::Quiet, self.prefs.history_enabled && self.running().is_some(), Some("Refresh clipboard history")).clicked() {
             self.clipboard_reveal = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
             self.clipboard_clear_confirm = false;
@@ -26,12 +26,18 @@ impl App {
             self.clipboard_reveal = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
         }
+        let persist = Rect::from_min_size(pos2(rect.left(), rect.top() + 62.0), vec2(rect.width(), 28.0));
+        if switch(ui, persist, Id::unique("history-persist"), "Keep history after restart", self.prefs.history_persist, self.prefs.history_enabled).clicked() {
+            let enabled = !self.prefs.history_persist;
+            self.set_pref("saved clipboard history", &["clipboard", "history", "persist", if enabled { "on" } else { "off" }], |prefs| prefs.history_persist = enabled);
+        }
+        let rect = Rect::from_min_max(rect.min + vec2(0.0, 32.0), rect.max);
         let privacy = if !self.prefs.history_enabled {
-            "Off: copies are not retained. Turning history on may retain unmarked secrets."
+            "Off: nothing you copy is kept. Turned on, it may keep passwords their app didn't mark as secret."
         } else if self.prefs.history_persist {
             "Saved unencrypted on disk. Previews are hidden until Show. Clear deletes saved items too. Unmarked secrets may be retained."
         } else {
-            "Memory only; hidden until Show. Unmarked secrets may be retained. App skipping is X11-only."
+            "Memory only; hidden until Show. Unmarked secrets may be retained."
         };
         let mut height = para(ui, pos2(rect.left(), rect.top() + 64.0), rect.width(), privacy, regular(T_META), INK2);
         let failure = history_failure(self.running());
@@ -94,12 +100,13 @@ fn history_failure(status: Option<&Status>) -> Option<&str> {
 /// What the history area says instead of a list, if anything. An empty list
 /// while saved history failed to load is that failure, not "nothing yet".
 fn history_message<'a>(online: bool, history: Option<&'a Result<Vec<crate::daemon::HistoryItem>, String>>, enabled: bool, failure: Option<&'a str>) -> Option<&'a str> {
-    if !online { return Some("Start one·mk to see clipboard history."); }
+    if !online { return Some("Start oneMK to see clipboard history."); }
     match history {
         None => Some("Loading history…"),
         Some(Err(error)) => Some(error.as_str()),
         Some(Ok(items)) if items.is_empty() && failure.is_some() => failure,
-        Some(Ok(items)) if items.is_empty() && !enabled => Some("Clipboard history is disabled. No copies are being retained."),
+        // Off and empty: the line above already says nothing is kept.
+        Some(Ok(items)) if items.is_empty() && !enabled => None,
         Some(Ok(items)) if items.is_empty() => Some("No clipboard items yet. Copy something, then choose Refresh."),
         _ => None,
     }
@@ -111,7 +118,7 @@ mod tests {
 
     #[test]
     fn damaged_saved_history_is_not_shown_as_an_empty_history() {
-        let error = "Could not load clipboard history: invalid header; clear it with one-mk clipboard history clear.";
+        let error = "Could not load clipboard history. Use Clear to remove unreadable saved copies, then Refresh.";
         let status = Status { clipboard_history_enabled: true, clipboard_history_note: error.into(), ..Default::default() };
         let failure = history_failure(Some(&status));
         assert_eq!(failure, Some(error));
@@ -123,6 +130,6 @@ mod tests {
         assert_eq!(history_failure(Some(&routine)), None);
         assert_eq!(history_failure(None), None);
         assert_eq!(history_message(true, Some(&empty), true, None), Some("No clipboard items yet. Copy something, then choose Refresh."));
-        assert_eq!(history_message(false, Some(&empty), true, failure), Some("Start one·mk to see clipboard history."));
+        assert_eq!(history_message(false, Some(&empty), true, failure), Some("Start oneMK to see clipboard history."));
     }
 }

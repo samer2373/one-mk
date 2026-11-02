@@ -67,7 +67,7 @@ pub struct SeenDevice {
 pub fn devices_unavailable_text(note: Option<&str>) -> String {
     match note {
         Some(n) if n.contains("merges") => {
-            "Not on this desktop: it mixes all keyboards and mice together before one-mk sees them, so one-mk can't tell \
+            "Not on this desktop: it mixes all keyboards and mice together before oneMK sees them, so one-mk can't tell \
              which one you used. This works in an X11 session, on Windows and on macOS."
                 .into()
         }
@@ -80,15 +80,8 @@ pub fn devices_unavailable_text(note: Option<&str>) -> String {
 }
 
 /// What isn't tested about telling keyboards apart here, in plain words.
-pub fn devices_untested_text(note: &str) -> String {
-    let what = if note.contains("Windows") {
-        "on a real Windows PC"
-    } else if note.contains("Mac") {
-        "on a real Mac"
-    } else {
-        "on this kind of computer"
-    };
-    format!("Not yet tested {what}: treat this as a trial, and check that the rule works.")
+pub fn devices_untested_text(_note: &str) -> String {
+    "Try your rule in the test box before using it on another computer.".into()
 }
 
 impl SeenDevice {
@@ -151,6 +144,15 @@ fn parse_os(s: &str) -> Option<u8> {
 }
 
 impl Scope {
+    pub(crate) fn includes_local_os(&self, local_os: u8) -> bool {
+        match self {
+            Scope::All => true,
+            Scope::Os(target) => *target == local_os,
+            Scope::Device(_, target) => target.includes_local_os(local_os),
+            Scope::Peer(_) => false,
+        }
+    }
+
     /// `--os mac` / `--peer=NAME`, for the command line.
     pub fn args(&self) -> Vec<String> {
         match self {
@@ -423,6 +425,7 @@ pub struct ScrollRule {
 /// `[input]` in `settings.toml`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Input {
+    pub local_rules: bool,
     pub tap_ms: Option<u32>,
     pub keys: Vec<KeyRule>,
     pub pointer: Vec<PointerRule>,
@@ -475,7 +478,9 @@ fn repeats<'a>(e: &'a [Entry], array: &str) -> Vec<Vec<(String, &'a Val)>> {
 impl Input {
     pub fn read(e: &[Entry]) -> Input {
         let tap_ms = e.iter().find(|x| x.table == "input.keymap" && x.key == "tap_ms").and_then(|x| x.val.as_int()).map(|n| n.clamp(0, 60_000) as u32);
-        let mut input = Input { tap_ms, ..Default::default() };
+        let local_rules = e.iter().find(|entry| entry.table == "input" && entry.key == "local_rules")
+            .and_then(|entry| entry.val.as_bool()).unwrap_or(false);
+        let mut input = Input { tap_ms, local_rules, ..Default::default() };
         let get = |key: &str| e.iter().find(|entry| {
             (entry.table == "input.autoscroll" && entry.key == key)
                 || entry.table.strip_prefix("input.autoscroll.").is_some_and(|suffix| format!("{suffix}.{}", entry.key) == key)
@@ -1629,17 +1634,6 @@ pub fn buttons_shown(input: &Input, f: &Facts) -> Vec<(u32, String, bool)> {
 /// Pointer acceleration this computer can do: only the system's, for now.
 pub const RAW_MOTION: bool = false;
 
-/// Why Off and Curve can't be chosen here, in one sentence.
-pub fn accel_unavailable() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "Off and Curve need the mouse's raw movement, which one·mk doesn't read on macOS yet: turn off Pointer acceleration in System Settings, Mouse instead."
-    } else if cfg!(windows) {
-        "Off and Curve need the mouse's raw movement, which one·mk doesn't read on Windows yet: turn off “Enhance pointer precision” in Windows instead."
-    } else {
-        "Off and Curve need the mouse's raw movement, which Linux desktops don't give one·mk: turn mouse acceleration off in your desktop's settings instead."
-    }
-}
-
 /// Pointer speed and acceleration for `f`, field by field, the most
 /// specific last (like `one-mk`).
 pub fn pointer_shown(input: &Input, f: &Facts) -> (f64, String) {
@@ -1722,7 +1716,7 @@ fn fold(s: &str) -> String {
     if f.is_empty() { s.trim().to_owned() } else { f }
 }
 
-/// Everything in the list: what one·mk can do, then every named key
+/// Everything in the list: what oneMK can do, then every named key
 /// (and, for a mouse button, the other buttons and media keys first).
 pub fn choices(buttons: bool) -> Vec<Choice> {
     let choice = |label: &str, value: &str, extra: &[&str]| Choice {
@@ -1924,6 +1918,18 @@ os = "mac"
         let text = "[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nscope = { local = true }\n[[input.keymap.rule]]\nfrom = \"a\"\nto = \"c\"\n";
         let input = Input::read(&read_toml(text));
         assert_eq!(input.keys, [KeyRule::to("a", "c")]);
+    }
+
+    #[test]
+    fn local_switch_and_rule_badges_follow_preferences_and_os_scope() {
+        assert!(!Input::read(&read_toml("")).local_rules);
+        assert!(Input::read(&read_toml("[input]\nlocal_rules=true\n")).local_rules);
+        assert!(Scope::All.includes_local_os(os::MACOS));
+        assert!(Scope::Os(os::MACOS).includes_local_os(os::MACOS));
+        assert!(!Scope::Os(os::WINDOWS).includes_local_os(os::MACOS));
+        assert!(!Scope::Peer("Studio PC".into()).includes_local_os(os::MACOS));
+        assert!(Scope::Device("keyboard".into(), Box::new(Scope::All)).includes_local_os(os::MACOS));
+        assert!(!Scope::Device("keyboard".into(), Box::new(Scope::Os(os::WINDOWS))).includes_local_os(os::MACOS));
     }
 
     #[test]
@@ -2285,11 +2291,11 @@ to = "f1"
 
     #[test]
     fn devices_unavailable_reads_plainly() {
-        let merged = "per-device rules are not available on this desktop: the desktop merges all keyboards and mice before one-mk sees them";
+        let merged = "per-device rules are not available on this desktop: the desktop merges all keyboards and mice before oneMK sees them";
         assert!(devices_unavailable_text(Some(merged)).starts_with("Not on this desktop: it mixes all keyboards and mice together"));
         assert_eq!(devices_unavailable_text(Some("the null input backend captures no keyboard or mouse")), "The null input backend captures no keyboard or mouse.");
         assert!(!devices_unavailable_text(None).is_empty());
-        assert_eq!(devices_untested_text("untested on real Windows hardware (Raw Input, compile-checked only)"), "Not yet tested on a real Windows PC: treat this as a trial, and check that the rule works.");
+        assert_eq!(devices_untested_text(""), "Try your rule in the test box before using it on another computer.");
         let d = SeenDevice { bus: "bluetooth".into(), connection: "Bluetooth".into(), keyboard: true, ..Default::default() };
         assert_eq!(d.about(), "Asleep or unplugged · Bluetooth keyboard");
         let d = SeenDevice { bus: "unknown".into(), connection: "connection unknown".into(), pointer: true, connected: true, ..Default::default() };

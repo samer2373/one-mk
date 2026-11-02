@@ -1,3 +1,4 @@
+#![cfg(feature = "wallpaper-m1-lab")]
 use std::process::Command;
 
 #[test]

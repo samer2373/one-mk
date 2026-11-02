@@ -12,10 +12,8 @@
 //!   addresses from the interfaces. Without NetworkManager (systemd-networkd,
 //!   iwd alone, connman) nothing is watched and profiles only change with
 //!   `one-mk profile use`.
-//! - Windows and macOS: not done yet (TODO: `INetworkListManager` events or
-//!   `NotifyIpInterfaceChange` on Windows; `SCDynamicStore` notifications
-//!   for `State:/Network/Global/IPv4` and the AirPort SSID on macOS). The
-//!   daemon says so once, and `one-mk profile use` works as everywhere.
+//! - Windows and macOS: WlanAPI and CoreWLAN notifications through ctl's
+//!   cross-checkable Wi-Fi module. Location permission changes are events too.
 
 use crate::profiles::NetworkId;
 
@@ -40,7 +38,9 @@ pub fn system() -> Box<dyn NetworkWatcher> {
     let w: Box<dyn NetworkWatcher> = Box::new(fake::Fake);
     #[cfg(all(not(test), unix, not(target_os = "macos")))]
     let w: Box<dyn NetworkWatcher> = Box::new(nm::NetworkManager);
-    #[cfg(all(not(test), not(all(unix, not(target_os = "macos")))))]
+    #[cfg(all(not(test), any(target_os = "macos", windows)))]
+    let w: Box<dyn NetworkWatcher> = Box::new(NativeWifi);
+    #[cfg(all(not(test), not(any(unix, windows))))]
     let w: Box<dyn NetworkWatcher> = Box::new(Unsupported);
     w
 }
@@ -75,23 +75,40 @@ pub mod fake {
     }
 }
 
-/// Windows and macOS for now: says so, and never calls back.
-#[cfg_attr(any(test, all(unix, not(target_os = "macos"))), allow(dead_code))]
+/// Other platforms: says so, and never calls back.
+#[cfg(not(any(unix, windows)))]
 struct Unsupported;
 
+#[cfg(not(any(unix, windows)))]
 impl NetworkWatcher for Unsupported {
     fn start(self: Box<Self>, _on_change: OnChange) {
         tracing::info!("{UNSUPPORTED}");
     }
 }
 
+#[cfg(any(target_os = "macos", windows))]
+#[cfg_attr(test, allow(dead_code))] // tests use the fake watcher
+struct NativeWifi;
+
+#[cfg(any(target_os = "macos", windows))]
+impl NetworkWatcher for NativeWifi {
+    fn start(self: Box<Self>, on_change: OnChange) {
+        let watch = one_mk_ctl::wifi::Watch::start(move |state| {
+            on_change(NetworkId { ssids: state.ssids, gateways: state.gateways, addrs: state.addrs });
+        });
+        std::mem::forget(watch);
+    }
+}
+
 /// This computer's addresses, loopback left out.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))] // NetworkManager's
 pub fn local_addrs() -> Vec<std::net::IpAddr> {
     if_addrs::get_if_addrs().unwrap_or_default().into_iter().filter(|i| !i.is_loopback()).map(|i| i.ip()).collect()
 }
 
 /// The default routers in a `/proc/net/route` table (hex, little-endian
 /// addresses), as IPv4 addresses.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))] // NetworkManager's
 pub fn default_gateways(route: &str) -> Vec<std::net::Ipv4Addr> {
     route
         .lines()
@@ -109,6 +126,7 @@ pub fn default_gateways(route: &str) -> Vec<std::net::Ipv4Addr> {
 }
 
 /// The MAC address of `ip` in a `/proc/net/arp` table, lowercase.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))] // NetworkManager's
 pub fn arp_mac(arp: &str, ip: std::net::Ipv4Addr) -> Option<String> {
     let ip = ip.to_string();
     arp.lines().skip(1).find_map(|line| {
@@ -120,6 +138,7 @@ pub fn arp_mac(arp: &str, ip: std::net::Ipv4Addr) -> Option<String> {
 
 /// The MAC addresses of this computer's default routers (Linux; empty
 /// elsewhere).
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))] // NetworkManager's
 pub fn gateway_macs() -> Vec<String> {
     let (Ok(route), Ok(arp)) = (std::fs::read_to_string("/proc/net/route"), std::fs::read_to_string("/proc/net/arp")) else {
         return Vec::new();

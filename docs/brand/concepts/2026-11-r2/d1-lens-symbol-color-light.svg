@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">oneMK Lens (colour, for light grounds)</title>
+  <defs>
+    <linearGradient id="p1w" x1="0" y1="36" x2="0" y2="220" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFA45C"/><stop offset="0.55" stop-color="#FF5A6E"/><stop offset="1" stop-color="#E2337E"/></linearGradient>
+    <linearGradient id="p1c" x1="0" y1="36" x2="0" y2="220" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#B49CFF"/><stop offset="0.55" stop-color="#7F5BFF"/><stop offset="1" stop-color="#5532E0"/></linearGradient>
+    <linearGradient id="p1h" x1="74" y1="0" x2="182" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FF6672"/><stop offset="0.5" stop-color="#EC5FB6"/><stop offset="1" stop-color="#8F66FF"/></linearGradient>
+  </defs>
+  <path fill="url(#p1w)" d="M100 36 H119 V60.6 A68 68 0 0 0 119 195.4 V220 H100 C46 220 36 210 36 156 V100 C36 46 46 36 100 36 Z"/>
+  <path fill="url(#p1c)" d="M137 36 H156 C210 36 220 46 220 100 V156 C220 210 210 220 156 220 H137 V195.4 A68 68 0 0 0 137 60.6 Z"/>
+  <path fill="url(#p1h)" d="M74 128 A54 54 0 1 1 182 128 A54 54 0 1 1 74 128 Z"/>
+</svg>

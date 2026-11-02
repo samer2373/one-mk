@@ -29,6 +29,20 @@ jobs:
       - run: cargo install --locked -j 2 --version 0.20.2 cargo-deny
       - run: cargo deny --locked --manifest-path crates/wall-import/Cargo.toml --all-features --config crates/wall-import/deny.toml check
 
+  native-cross-check:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-pc-windows-msvc]
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with: { toolchain: stable, targets: "${{ matrix.target }}", components: clippy }
+      # Clippy, not just check: the macOS and Windows code is only linted here.
+      - run: cargo clippy --locked -j 2 -p one-mk-wallpaper -p one-mk-wallpaper-helper -p one-mk-input -p one-mk-ctl -p one-mk-proto -p one-mk-app -p one-mk-tray --all-targets --target ${{ matrix.target }} -- -D warnings
+
   test:
     strategy:
       fail-fast: false
@@ -39,9 +53,12 @@ jobs:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with: { toolchain: stable }
+        with: { toolchain: stable, components: clippy }
       - run: cargo test --workspace --locked --no-fail-fast
         env: { RUST_BACKTRACE: "1" }
+      # On each system itself: the daemon (one-mk-net) can't be linted
+      # cross-compiled, and some code only exists on one system.
+      - run: cargo clippy --workspace --locked --all-targets -- -D warnings
 
   # The Linux packages and the package-manager files, built from a debug
   # build and checked without installing anything (scripts/check-packaging.sh).
@@ -53,6 +70,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: stable }
       - run: sh scripts/version.sh
-      - run: cargo build --locked -p one-mk -p one-mk-tray -p one-mk-app
+      - run: cargo build --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
       - run: sudo apt-get install -y --no-install-recommends python3-pil   # the installer window's artwork check
       - run: BIN_DIR=target/debug sh scripts/check-packaging.sh

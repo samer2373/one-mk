@@ -11,8 +11,8 @@ pub const fn defaults(windows: bool) -> [Shortcut; 6] {
         Shortcut { key: "cycle", label: "The next computer", default: "ctrl+alt+pagedown" },
         Shortcut { key: "lock_pointer", label: "Lock the pointer here", default: "ctrl+alt+p" },
         Shortcut { key: "home", label: "Back to this computer", default: "ctrl+alt+h" },
-        Shortcut { key: "broadcast", label: "Broadcast to all computers", default: if windows { "ctrl+alt+shift+b" } else { "ctrl+alt+b" } },
-        Shortcut { key: "fetch_clipboard", label: "Fetch the next computer's clipboard", default: if windows { "ctrl+alt+shift+v" } else { "ctrl+alt+v" } },
+        Shortcut { key: "broadcast", label: "Type on every computer", default: if windows { "ctrl+alt+shift+b" } else { "ctrl+alt+b" } },
+        Shortcut { key: "fetch_clipboard", label: "Get the next computer's clipboard", default: if windows { "ctrl+alt+shift+v" } else { "ctrl+alt+v" } },
     ]
 }
 

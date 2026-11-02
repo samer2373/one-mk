@@ -27,9 +27,9 @@ Get it first. Every release has a file for each system (the
 
 | System | File | Notes |
 |---|---|---|
-| macOS, Apple silicon / Intel | `one-mk-aarch64-apple-darwin.dmg` / `one-mk-x86_64-apple-darwin.dmg` | Open it, drag one·mk onto Applications, then open one·mk; the window guides you through the rest |
+| macOS, Apple silicon / Intel | `one-mk-aarch64-apple-darwin.dmg` / `one-mk-x86_64-apple-darwin.dmg` | Open it, drag oneMK onto Applications, then open oneMK; the window guides you through the rest |
 | Windows 10/11, 64-bit | `one-mk-x86_64-pc-windows-msvc-setup.exe` | Installs for you alone, into `%LOCALAPPDATA%\Programs\one-mk` |
-| Debian, Ubuntu and relatives | `one-mk-x86_64-unknown-linux-gnu.deb` | `sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb`, then open one·mk from the apps menu: the first launch sets up start at login for you |
+| Debian, Ubuntu and relatives | `one-mk-x86_64-unknown-linux-gnu.deb` | `sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb`, then open oneMK from the apps menu: the first launch sets up start at login for you |
 | Any Linux | `one-mk-x86_64-unknown-linux-gnu.AppImage` | `chmod +x` it and run it; with no arguments it opens the window, otherwise it is `one-mk` |
 | Other Linux, by hand | `one-mk-x86_64-unknown-linux-gnu.tar.gz` (and `.zip` on Windows) | Just the programs |
 
@@ -39,15 +39,15 @@ On macOS and Linux the one-line installer picks the right file:
 curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh
 ```
 
-On a Mac, the easy way is the disk image: open the `.dmg`, drag **one·mk**
+On a Mac, the easy way is the disk image: open the `.dmg`, drag **oneMK**
 onto Applications as the window shows, then open it from Applications. The
 one-line installer above does the same for you. Either way, the first time the
 window opens it sets itself up (starts at login, runs in the background); you
 only pair from the window, and never need the terminal. macOS asks for
 Accessibility permission the
-first time: turn on one·mk in System Settings > Privacy & Security >
+first time: turn on oneMK in System Settings > Privacy & Security >
 Accessibility. If an update was not signed with an Apple Developer ID,
-macOS may ask again after it: remove one·mk from that list and add it back.
+macOS may ask again after it: remove oneMK from that list and add it back.
 
 Or build it yourself (see Building). How each package is made, and which
 are untested, is in [docs/PACKAGING.md](docs/PACKAGING.md).
@@ -182,7 +182,7 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 | `one-mk autoscroll --help` / `one-mk gestures --help` | Configure autoscroll and mouse gestures (whole computer, not per-device) |
 | `one-mk update --check` / `one-mk update` | Check/install signed updates when the publisher key is configured |
 | `one-mk stop` | Stop the sharing service; closing the window does not stop sharing |
-| `one-mk wallpaper status` / `one-mk wallpaper doctor` | Inspect experimental, disabled-by-default wallpaper scaffolding; no playback |
+| `one-mk wallpaper set FILE` / `off` / `status` | Choose a shared video wallpaper, turn it off, or inspect playback; also available in the Wallpaper page |
 | `one-mk invite` / `one-mk join LINK` | Pair without discovery using an expiring secret invitation |
 | `one-mk drag --on` / `one-mk drag --off` | Enable/disable the edge file-drop zone |
 | `one-mk clipboard history` / `one-mk clipboard history on\|off` | Inspect or opt into clipboard history; `history show ID`, `copy ID`, `clear` manage items |
@@ -461,8 +461,22 @@ so a `one-mk layout` change afterwards stays until you move on. Set this up
 on one of the two computers. On Linux it listens to NetworkManager, which
 tells one-mk about every network change (it never checks on its own, so it
 costs nothing while nothing changes); without NetworkManager (systemd-networkd
-or iwd on their own), profiles only change with `profile use`. On Windows and
-macOS automatic switching is not done yet. Profiles are kept in
+or iwd on their own), profiles only change with `profile use`. On macOS,
+CoreWLAN plus SCDynamicStore report Wi-Fi, IP and route changes; on Windows,
+WlanAPI plus IP Helper notifications report connections, routes and addresses.
+DHCP/address-only changes re-evaluate subnet rules, even without a new SSID.
+These listeners sleep until an event arrives, with no polling.
+macOS 14 and later and Windows 11 24H2 require Location Services permission
+to read Wi-Fi names. The window's Profiles card shows the current network
+and an explanation and permission/settings button when access is needed.
+oneMK does not request location updates or track your location. On macOS,
+use the installed app bundle so its permission description and identity are
+available to both the window and background agent. Router MAC rules also read
+native default-router neighbors on macOS and Windows; an unresolved neighbor
+cannot match. On macOS, an absent IPv4 neighbor triggers one bounded probe per
+network refresh, not an idle poll; IPv6 router identity needs a cached neighbor.
+See [Wi-Fi/profile behavior and hardware checks](docs/WIFI-PROFILES.md).
+Profiles are kept in
 `profiles.toml` next to `devices.toml`.
 
 **Switching without an edge.** `one-mk switch desk` puts the pointer in the
@@ -525,7 +539,7 @@ Linux the desktop still takes the chord, and one-mk ignores it.
 - Windows and macOS shortcuts are not tested on real hardware yet.
 
 **Broadcast: type on every computer at once.** `one-mk broadcast on` (or
-`Ctrl+Alt+B`, or the tray's or window's "Broadcast to all computers") sends
+`Ctrl+Alt+B`, or the tray's or window's "Type on every computer") sends
 everything you type, click and scroll here to every connected computer at
 the same time, for setting up several computers alike or running the same
 command on all of them. Each computer gets its own pointer, starting at the
@@ -890,7 +904,7 @@ press), and can try the rules before they are used. Details and the design:
 ## The window (optional)
 
 `one-mk-app` shows your computers standing on a desk, as they are arranged.
-Open it from the tray ("Open one·mk…", or a left click on Linux) or run
+Open it from the tray ("Open oneMK…", or a left click on Linux) or run
 `one-mk-app`. In it you can:
 
 - drag a computer to the side it is really on (right-click it for above or
@@ -973,11 +987,11 @@ The menu shows:
   desk: 45%");
 - **Switch to <computer>** and **Send clipboard to <computer>** for each
   connected computer (**Switch back here** while another one has control);
-- **Open one·mk…**, which opens the window;
-- **Broadcast to all computers** (a checkmark; while a computer is
+- **Open oneMK…**, which opens the window;
+- **Type on every computer** (a checkmark; while a computer is
   connected), and the headline "Broadcasting to N computers" while it is on;
 - **Keep the pointer here** (a checkmark), **Lock every screen**, **Take
-  back control**, **Start one·mk** (when it is not running), **Pair a
+  back control**, **Start oneMK** (when it is not running), **Pair a
   computer…** (when none is paired; it opens the window) and **Start at
   login**;
 - **Quit tray**, which closes only the tray, not one-mk.
@@ -1166,18 +1180,16 @@ background apps, so there it goes through XWayland.
 - Local native key remapping requires a separate build feature and is **not in
   release builds**. Character/letter typing is not available in this release;
   physical-key typing remains the supported path.
-- Wallpaper policy, consent and diagnostics are experimental scaffolding only.
-  `one-mk wallpaper enable` does not start playback. The optional Linux developer
-  importer (`one-mk wallpaper import`) is not packaged in releases and needs an
-  audited sandbox runtime; it saves validated media, not a playable scene.
-  The optional GNOME extension stays static. Never disable GNOME version
-  validation or restart the live Shell to bypass a refusal.
-  See [wallpaper consent](docs/WALLPAPER-CANVAS.md),
-  [import development](docs/WALLPAPER-IMPORT.md) and
-  [GNOME limitations](docs/spikes/gnome/production-component.md).
-- Native Windows service/UAC input, wallpaper playback and native character
-  injection remain outside this release. Native Windows/macOS acceptance testing
-  and qualifying wallpaper renderers remain future work.
+- Video wallpaper has a window-driven implementation with a separate player,
+  shared canvas, automatic file copying and best-effort clock alignment. X11
+  playback is exercised under Xvfb; macOS and Windows are compile-only here.
+  Wayland is explicitly unavailable. Mac per-screen/Spaces handling, seamless
+  replacement, hardware performance and real cross-computer acceptance remain
+  incomplete. See [verified behavior, limitations and Mac checklist](docs/LIVE-WALLPAPER.md).
+  Old importer/consent/extension documentation describes the separate Wave 6
+  laboratory, not the normal wallpaper setup.
+- Native Windows service/UAC input and native character injection remain outside
+  this release. Native Windows/macOS acceptance testing remains future work.
 
 ## Updating
 

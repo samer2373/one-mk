@@ -85,6 +85,7 @@ impl FilesReceived {
 
     /// Plain text; [`escape_markup`] before handing it to a server that
     /// reads markup.
+    #[cfg_attr(windows, allow(dead_code))] // Windows shows only the title
     pub fn body(&self) -> String {
         const SHOWN: usize = 3;
         let groups = self.groups();
@@ -109,6 +110,7 @@ impl FilesReceived {
 
     /// What "Show in folder" opens: the one file or folder that arrived,
     /// or the download folder when it is several things.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // Linux notifications' Show in folder
     pub fn reveal(&self) -> PathBuf {
         match self.groups().as_slice() {
             [(name, _)] => self.folder.join(name.trim_end_matches('/')),
@@ -123,6 +125,7 @@ fn display(name: &str) -> String {
     one_mk_proto::sanitize_name(name)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn human(n: u64) -> String {
     one_mk_ctl::status::human_bytes(n)
 }

@@ -219,6 +219,8 @@ pub fn split(line: &str) -> Result<Vec<String>> {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Hooks {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub options: std::collections::BTreeMap<String, HookOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_enter: Option<Command>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -240,7 +242,27 @@ pub struct Hooks {
     pub blocked: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HookOptions {
+    pub computer: String,
+    pub timeout_secs: Option<u64>,
+    pub shell: Option<bool>,
+}
+
 impl Hooks {
+    fn accepts(&self, event: Event, peer: &str) -> bool {
+        self.options.get(event.as_str()).is_none_or(|options| {
+            let computer = options.computer.replace('-', "");
+            computer.is_empty() || (computer.len() == 64 && peer.replace('-', "").eq_ignore_ascii_case(&computer))
+        })
+    }
+
+    fn event_shell(&self, event: Event) -> bool { self.options.get(event.as_str()).and_then(|options| options.shell).unwrap_or(self.shell) }
+
+    fn event_timeout(&self, event: Event) -> Duration {
+        self.options.get(event.as_str()).and_then(|options| options.timeout_secs).map_or_else(|| self.timeout(), |seconds| Duration::from_secs(seconds.clamp(1, MAX_TIMEOUT_SECS)))
+    }
     pub fn get(&self, ev: Event) -> Option<&Command> {
         match ev {
             Event::Enter => self.on_enter.as_ref(),
@@ -273,7 +295,7 @@ impl Hooks {
             .iter()
             .filter_map(|&e| {
                 let cmd = self.get(e)?;
-                cmd.argv(self.shell).err().map(|err| format!("hooks.on_{}: {err}", e.as_str()))
+                cmd.argv(self.event_shell(e)).err().map(|err| format!("hooks.on_{}: {err}", e.as_str()))
             })
             .collect()
     }
@@ -285,7 +307,7 @@ impl Hooks {
         let mut out = String::new();
         for e in Event::ALL {
             if let Some(c) = self.get(e) {
-                let actual = c.argv(self.shell).map(|words| words.iter().map(|word| quote(word)).collect::<Vec<_>>().join(" "));
+                let actual = c.argv(self.event_shell(e)).map(|words| words.iter().map(|word| quote(word)).collect::<Vec<_>>().join(" "));
                 out += &format!("  on_{}: {}\n", e.as_str(), actual.unwrap_or_else(|error| format!("INVALID: {error}")));
             }
         }
@@ -316,6 +338,7 @@ fn shell_value(value: &str) -> String {
 pub struct PeerInfo {
     pub name: String,
     pub id: String,
+    pub fingerprint: String,
     /// Which side of this computer's screen the peer is on.
     pub side: Side,
 }
@@ -476,6 +499,7 @@ pub fn warn_if_unsafe(dir: &Path, hooks: &Hooks) {
 
 struct Pending {
     command: Option<Command>,
+    fingerprint: String,
     generation: u64,
     event: Event,
     argv: Vec<String>,
@@ -538,9 +562,10 @@ impl Queue {
         self.configuration = Some(cfg.clone());
         self.pending.retain(|_, pending| {
             pending.generation = self.generation;
+            if !cfg.accepts(pending.event, &pending.fingerprint) { return false; }
             if pending.command.as_ref() != cfg.get(pending.event) { return false; }
-            cfg.get(pending.event).is_some_and(|command| command.argv(cfg.shell).is_ok_and(|argv| argv == pending.argv)
-                && (cfg.shell && matches!(command, Command::Line(_))) == pending.shell && cfg.timeout() == pending.timeout)
+            cfg.get(pending.event).is_some_and(|command| command.argv(cfg.event_shell(pending.event)).is_ok_and(|argv| argv == pending.argv)
+                && (cfg.event_shell(pending.event) && matches!(command, Command::Line(_))) == pending.shell && cfg.event_timeout(pending.event) == pending.timeout)
         });
     }
 
@@ -644,7 +669,7 @@ impl Engine {
                     }
                 }
                 None => {
-                    let info = PeerInfo { name: name.to_owned(), id: fp.short(), side };
+                    let info = PeerInfo { name: name.to_owned(), id: fp.short(), fingerprint: fp.to_string(), side };
                     if !quiet {
                         out.push((Event::PeerConnect, info.clone()));
                     }
@@ -689,7 +714,9 @@ impl Engine {
         lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel_opposite(ev, &peer.id);
         wake.notify_one();
         let Some(cmd) = cfg.get(ev) else { return };
-        let argv = match cmd.argv(cfg.shell) {
+        if !cfg.accepts(ev, &peer.fingerprint) { return; }
+        let shell = cfg.event_shell(ev);
+        let argv = match cmd.argv(shell) {
             Ok(a) => a,
             Err(e) => {
                 tracing::warn!(event = ev.as_str(), "hook not run: {e}");
@@ -697,14 +724,14 @@ impl Engine {
             }
         };
         let mut environment = env(ev, peer);
-        if cfg.shell && matches!(cmd, Command::Line(_)) {
+        if shell && matches!(cmd, Command::Line(_)) {
             for (_, value) in &mut environment[1..] {
                 *value = shell_value(value);
             }
         }
         let now = Instant::now();
         let mut queue = lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        queue.insert(Pending { command: Some(cmd.clone()), generation: 0, event: ev, argv, env: environment, shell: cfg.shell && matches!(cmd, Command::Line(_)), timeout: cfg.timeout(), due: now, sequence: 0 }, now);
+        queue.insert(Pending { command: Some(cmd.clone()), fingerprint: peer.fingerprint.clone(), generation: 0, event: ev, argv, env: environment, shell: shell && matches!(cmd, Command::Line(_)), timeout: cfg.event_timeout(ev), due: now, sequence: 0 }, now);
         wake.notify_one();
         if queue.active {
             return;
@@ -872,6 +899,12 @@ async fn run(label: &'static str, argv: &[String], env: &[(&'static str, String)
 /// (`--on-enter ""`) removes that hook.
 #[derive(clap::Args, Debug, Default)]
 pub struct HooksArgs {
+    #[arg(long, value_name = "COMPUTER")]
+    pub computer: Option<String>,
+    #[arg(long, value_name = "SECS")]
+    pub event_timeout: Option<u64>,
+    #[arg(long, value_parser = crate::settings::parse_on_off, action = clap::ArgAction::Set)]
+    pub event_shell: Option<bool>,
     /// Run when the pointer arrives on this computer.
     #[arg(long, value_name = "CMD")]
     pub on_enter: Option<String>,
@@ -905,11 +938,16 @@ impl HooksArgs {
             || self.trust_permissions
             || self.timeout.is_some()
             || self.shell.is_some()
+            || self.computer.is_some() || self.event_timeout.is_some() || self.event_shell.is_some()
             || [&self.on_enter, &self.on_leave, &self.on_peer_connect, &self.on_peer_disconnect].iter().any(|c| c.is_some())
     }
 
     /// Applies the options to `h`, retaining command text for runtime mode changes.
     pub fn apply(&self, h: &mut Hooks) -> Result<()> {
+        if (self.computer.is_some() || self.event_timeout.is_some() || self.event_shell.is_some())
+            && [&self.on_enter, &self.on_leave, &self.on_peer_connect, &self.on_peer_disconnect].iter().all(|command| command.is_none()) {
+            bail!("Choose when this command should run.");
+        }
         if self.off {
             *h = Hooks::default();
         }
@@ -949,11 +987,22 @@ impl HooksArgs {
         ];
         for (ev, text) in given {
             let Some(text) = text else { continue };
+            if self.computer.is_some() || self.event_timeout.is_some() || self.event_shell.is_some() {
+                if self.event_timeout.is_some_and(|seconds| !(1..=MAX_TIMEOUT_SECS).contains(&seconds)) { bail!("The time limit must be from 1 to {MAX_TIMEOUT_SECS} seconds."); }
+                let options = h.options.entry(ev.as_str().into()).or_default();
+                if let Some(computer) = &self.computer {
+                    if !computer.is_empty() && (computer.len() != 64 || !computer.bytes().all(|byte| byte.is_ascii_hexdigit())) { bail!("Choose a paired computer from the list."); }
+                    options.computer = computer.clone();
+                }
+                options.timeout_secs = self.event_timeout.or(options.timeout_secs);
+                options.shell = self.event_shell.or(options.shell);
+            }
             *h.slot(ev) = if text.trim().is_empty() {
                 None
             } else {
                 Some(Command::Line(text.clone()))
             };
+            if text.trim().is_empty() { h.options.remove(ev.as_str()); }
         }
         let problems = h.problems();
         if !problems.is_empty() {
@@ -965,8 +1014,16 @@ impl HooksArgs {
 
 pub const SECURITY_NOTE: &str = "Hooks run with your rights, from settings.toml: keep that file writable by you only.";
 
-pub async fn run_command(dir: &Path, args: HooksArgs) -> Result<()> {
+pub async fn run_command(dir: &Path, mut args: HooksArgs) -> Result<()> {
     use crate::settings::Settings;
+    if let Some(computer) = args.computer.as_mut().filter(|computer| !computer.is_empty()) {
+        let trust = one_mk_net::TrustStore::load(dir)?;
+        // An id (what the window sends) matches fingerprints only; a name
+        // typed at the command line is looked up as before.
+        let looks_like_id = computer.len() >= 4 && computer.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
+        let found = if looks_like_id { trust.find_fingerprint(computer).or_else(|| trust.find(computer)) } else { trust.find(computer) };
+        *computer = found.ok_or_else(|| anyhow::anyhow!("Choose one paired computer from the list."))?.fingerprint.clone();
+    }
     if args.trust_permissions {
         trust_permissions(dir)?;
     }
@@ -1005,6 +1062,57 @@ pub async fn run_command(dir: &Path, args: HooksArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn computer_hooks_match_full_identity_and_reload_pending_targets() {
+        use super::*;
+        let fingerprint = Fingerprint([0xab; 32]);
+        let mut hooks = Hooks::default();
+        HooksArgs { on_leave: Some("echo matched".into()), computer: Some(fingerprint.to_string()), ..Default::default() }.apply(&mut hooks).unwrap();
+        let mut engine = Engine::default();
+        engine.queue.lock().unwrap().active = true;
+        engine.sync(&hooks, None, None, std::iter::once((fingerprint, "Laptop", Side::Left)));
+        engine.sync(&hooks, Some(fingerprint), None, std::iter::once((fingerprint, "Laptop", Side::Left)));
+        let queue = engine.queue.lock().unwrap();
+        let pending = queue.pending.values().next().expect("the selected computer runs its hook");
+        assert_eq!(pending.fingerprint, fingerprint.to_string());
+        assert_eq!(pending.env[2].1, fingerprint.short());
+        drop(queue);
+        let mut another = fingerprint;
+        another.0[31] = 0xcd;
+        assert_eq!(another.short(), fingerprint.short());
+        hooks.options.get_mut("leave").unwrap().computer = another.to_string();
+        engine.sync(&hooks, Some(fingerprint), None, std::iter::once((fingerprint, "Laptop", Side::Left)));
+        assert!(engine.queue.lock().unwrap().pending.is_empty(), "a reload discards commands for a different identity, even with the same short name");
+    }
+
+    #[test]
+    fn event_options_round_trip_and_validate() {
+        use super::*;
+        let fingerprint = "ab".repeat(32);
+        let args = HooksArgs { on_enter: Some("echo 'hello world'".into()), computer: Some(fingerprint.clone()), event_timeout: Some(17), event_shell: Some(true), ..Default::default() };
+        let mut hooks = Hooks::default();
+        args.apply(&mut hooks).unwrap();
+        assert!(hooks.accepts(Event::Enter, &fingerprint));
+        assert!(!hooks.accepts(Event::Enter, &"cd".repeat(32)));
+        assert!(hooks.accepts(Event::Leave, &"cd".repeat(32)));
+        assert_eq!(hooks.event_timeout(Event::Enter), Duration::from_secs(17));
+        assert_eq!(hooks.event_timeout(Event::Leave), Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+        assert!(hooks.event_shell(Event::Enter));
+        assert!(!hooks.event_shell(Event::Leave));
+        let settings = crate::settings::Settings { hooks: hooks.clone(), ..Default::default() };
+        let encoded = toml::to_string(&settings).unwrap();
+        let decoded: crate::settings::Settings = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded.hooks.options, hooks.options);
+        for seconds in [0, 61] {
+            assert!(HooksArgs { on_enter: Some("echo ok".into()), event_timeout: Some(seconds), ..Default::default() }.apply(&mut Hooks::default()).is_err());
+        }
+        assert!(HooksArgs { event_shell: Some(true), ..Default::default() }.apply(&mut Hooks::default()).is_err());
+        assert!(HooksArgs { on_enter: Some("echo ok".into()), computer: Some("not-a-computer".into()), ..Default::default() }.apply(&mut Hooks::default()).is_err());
+        assert!(HooksArgs { on_enter: Some("echo '".into()), event_shell: Some(false), ..Default::default() }.apply(&mut Hooks::default()).is_err());
+        HooksArgs { on_enter: Some(String::new()), ..Default::default() }.apply(&mut hooks).unwrap();
+        assert!(hooks.on_enter.is_none() && hooks.options.is_empty());
+    }
+
     #[test]
     fn oversized_settings_are_rejected_before_parsing() {
         let directory = tempfile::tempdir().unwrap();
@@ -1048,8 +1156,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn newest_peer_transition_cancels_the_opposite() {
         let mut queue = Queue::default();
-        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
-        let pending = |event| Pending { command: None, generation: 0, event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), fingerprint: String::new(), side: Side::Left };
+        let pending = |event| Pending { command: None, fingerprint: String::new(), generation: 0, event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
         queue.insert(pending(Event::PeerConnect), Instant::now());
         assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::PeerConnect);
         tokio::time::advance(Duration::from_millis(100)).await;
@@ -1071,7 +1179,7 @@ mod tests {
         for index in 0..MAX_RUNNING {
             engine.run_action(&cfg, &format!("/bin/sh -c 'sleep 30' unused{index}"), None);
         }
-        engine.fire(&cfg, Event::Enter, &PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left });
+        engine.fire(&cfg, Event::Enter, &PeerInfo { name: "peer".into(), id: "id".into(), fingerprint: String::new(), side: Side::Left });
         for _ in 0..32 { tokio::task::yield_now().await; }
         assert_eq!(engine.running.load(Ordering::SeqCst), 1, "hook budget is independent of actions");
     }
@@ -1082,7 +1190,7 @@ mod tests {
         let mut engine = Engine::default();
         let slow = Some(Command::Argv(vec!["/bin/sleep".into(), "30".into()]));
         let cfg = Hooks { on_enter: slow.clone(), on_peer_connect: slow, ..Hooks::default() };
-        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), fingerprint: String::new(), side: Side::Left };
         engine.fire(&cfg, Event::PeerConnect, &peer);
         engine.fire(&cfg, Event::Enter, &peer);
         for _ in 0..32 { tokio::task::yield_now().await; }
@@ -1102,7 +1210,7 @@ mod tests {
         let cfg = Hooks { on_enter: Some(Command::Argv(argv)), timeout_secs: Some(30), ..Hooks::default() };
         let mut engine = Engine::default();
         engine.sync(&cfg, None, None, std::iter::empty());
-        engine.fire(&cfg, Event::Enter, &PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left });
+        engine.fire(&cfg, Event::Enter, &PeerInfo { name: "peer".into(), id: "id".into(), fingerprint: String::new(), side: Side::Left });
         for _ in 0..100 {
             if started.exists() { break; }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -1118,7 +1226,7 @@ mod tests {
         let mut engine = Engine::default();
         let mut cfg = Hooks { on_enter: Some(Command::Argv(vec!["echo".into(), "old".into()])), ..Hooks::default() };
         engine.sync(&cfg, None, None, std::iter::empty());
-        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), fingerprint: String::new(), side: Side::Left };
         engine.fire(&cfg, Event::Enter, &peer);
         cfg.on_enter = Some(Command::Argv(vec!["echo".into(), "new".into()]));
         engine.sync(&cfg, None, None, std::iter::empty());
@@ -1145,8 +1253,8 @@ mod tests {
     async fn different_peers_are_not_coalesced() {
         let mut queue = Queue::default();
         for id in ["first", "second"] {
-            let peer = PeerInfo { name: id.into(), id: id.into(), side: Side::Left };
-            queue.insert(Pending { command: None, generation: 0, event: Event::PeerConnect, argv: vec!["echo".into()], env: env(Event::PeerConnect, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 }, Instant::now());
+            let peer = PeerInfo { name: id.into(), id: id.into(), fingerprint: String::new(), side: Side::Left };
+            queue.insert(Pending { command: None, fingerprint: String::new(), generation: 0, event: Event::PeerConnect, argv: vec!["echo".into()], env: env(Event::PeerConnect, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 }, Instant::now());
         }
         assert!(queue.take_ready(Instant::now()).is_some());
         assert!(queue.take_ready(Instant::now()).is_some());
@@ -1180,15 +1288,15 @@ mod tests {
         assert_eq!(shell_value("مكتب 日本-é._- 12"), "مكتب 日本-é._- 12");
         let long = "&a".repeat(10_000);
         assert_eq!(shell_value(&long), "_a".repeat(10_000));
-        let peer = PeerInfo { name: "& calc".into(), id: "%PATH%".into(), side: Side::Left };
+        let peer = PeerInfo { name: "& calc".into(), id: "%PATH%".into(), fingerprint: String::new(), side: Side::Left };
         assert_eq!(env(Event::Enter, &peer)[1].1, "& calc", "argv hooks keep the exact peer name");
     }
 
     #[tokio::test(start_paused = true)]
     async fn coalescing_preserves_the_newest_transition() {
         let mut queue = Queue::default();
-        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
-        let pending = |event| Pending { command: None, generation: 0, event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), fingerprint: String::new(), side: Side::Left };
+        let pending = |event| Pending { command: None, fingerprint: String::new(), generation: 0, event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
         queue.insert(pending(Event::Leave), Instant::now());
         assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::Leave);
         tokio::time::advance(Duration::from_millis(200)).await;
@@ -1210,9 +1318,9 @@ mod tests {
     #[test]
     fn a_transition_without_a_hook_cancels_stale_opposite_work() {
         let mut engine = Engine::default();
-        let peer = PeerInfo { name: "peer".into(), id: "id".into(), side: Side::Left };
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), fingerprint: String::new(), side: Side::Left };
         engine.queue.lock().unwrap().insert(Pending {
-            command: None, generation: 0,
+            command: None, fingerprint: String::new(), generation: 0,
             event: Event::Leave, argv: vec!["echo".into()], env: env(Event::Leave, &peer),
             shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0,
         }, Instant::now());
@@ -1314,7 +1422,7 @@ mod tests {
 
     #[test]
     fn environment_names_the_event_and_the_peer() {
-        let p = PeerInfo { name: "laptop".into(), id: "ab12".into(), side: Side::Left };
+        let p = PeerInfo { name: "laptop".into(), id: "ab12".into(), fingerprint: String::new(), side: Side::Left };
         let e = env(Event::PeerDisconnect, &p);
         assert_eq!(
             e.map(|(k, v)| format!("{k}={v}")),
@@ -1460,7 +1568,7 @@ mod tests {
         let out = dir.join("out");
         let script = format!("echo \"$ONE_MK_EVENT $ONE_MK_PEER $ONE_MK_SIDE\" >> {}", out.display());
         let argv = vec!["/bin/sh".to_owned(), "-c".to_owned(), script];
-        let p = PeerInfo { name: "other pc".into(), id: "x".into(), side: Side::Right };
+        let p = PeerInfo { name: "other pc".into(), id: "x".into(), fingerprint: String::new(), side: Side::Right };
         run(Event::Enter.as_str(), &argv, &env(Event::Enter, &p), Duration::from_secs(5), false).await;
         assert_eq!(std::fs::read_to_string(&out).unwrap(), "enter other pc right\n");
 

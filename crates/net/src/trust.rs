@@ -227,6 +227,19 @@ impl TrustStore {
         hits.next().is_none().then_some(first)
     }
 
+    /// By fingerprint (or its leading part, as the window shows it) only:
+    /// a paired computer can't capture the match by naming itself after
+    /// another one's id.
+    pub fn find_fingerprint(&self, prefix: &str) -> Option<&Device> {
+        let q = prefix.replace('-', "").to_ascii_lowercase();
+        if q.len() < 4 || !q.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let mut hits = self.file.devices.iter().filter(|d| d.fingerprint.starts_with(&q));
+        let first = hits.next()?;
+        hits.next().is_none().then_some(first)
+    }
+
     pub fn remove(&mut self, query: &str) -> Option<Device> {
         let fp = self.find(query)?.fingerprint.clone();
         let i = self.file.devices.iter().position(|d| d.fingerprint == fp)?;
@@ -237,6 +250,21 @@ impl TrustStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fingerprint_lookup_ignores_names() {
+        let dir = std::env::temp_dir().join(format!("omk-trust-fp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = TrustStore::load(&dir).unwrap();
+        let mk = |fp: &str, name: &str| Device { fingerprint: fp.into(), name: name.into(), ..Default::default() };
+        store.file.devices = vec![mk("abcd1234ffff", "Studio"), mk("5555666677", "abcd-1234")];
+        // The window sends a short id: the computer named like it can't take the match.
+        assert_eq!(store.find_fingerprint("abcd-1234").map(|d| d.name.as_str()), Some("Studio"));
+        assert!(store.find_fingerprint("Studio").is_none());
+        assert!(store.find_fingerprint("ab").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn automatic_and_pending_placements_round_trip_without_becoming_user_choices() {

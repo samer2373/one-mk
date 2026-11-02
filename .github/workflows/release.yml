@@ -66,7 +66,7 @@ jobs:
         run: sh scripts/version.sh --check "$GITHUB_REF_NAME"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: stable, targets: "${{ matrix.target }}" }
-      - run: cargo build --release --locked --target ${{ matrix.target }} -p one-mk -p one-mk-tray -p one-mk-app
+      - run: cargo build --release --locked --target ${{ matrix.target }} -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
       - name: Package
         shell: bash
         run: |
@@ -75,11 +75,11 @@ jobs:
           mkdir "$name"
           if [ "${{ runner.os }}" = Windows ]; then
             cp "$d/one-mk.exe" "one-mk-${{ matrix.target }}.exe"
-            cp $d/one-mk.exe $d/one-mk-tray.exe $d/one-mk-app.exe "$name"/
+            cp $d/one-mk.exe $d/one-mk-tray.exe $d/one-mk-app.exe $d/one-mk-wallpaper.exe "$name"/
             7z a "$name.zip" "$name" >/dev/null
           else
             cp "$d/one-mk" "one-mk-${{ matrix.target }}.bin"
-            cp $d/one-mk $d/one-mk-tray $d/one-mk-app "$name"/
+            cp $d/one-mk $d/one-mk-tray $d/one-mk-app $d/one-mk-wallpaper "$name"/
             tar czf "$name.tar.gz" "$name"
           fi
       - name: Mac app
@@ -205,7 +205,7 @@ jobs:
           On macOS and Linux the one-line installer picks the right file:
           `curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh`
 
-          On macOS, open the `.dmg` and drag one·mk onto Applications (the `.app.zip` is what the installer uses). The AppImage runs where it is: make it executable and open it (`./one-mk-x86_64-unknown-linux-gnu.AppImage pair` and the other commands work too). The `.zip` and `.tar.gz` files hold only the programs, for people who prefer to unpack them by hand. `SHA256SUMS` lists checksums for every file.
+          On macOS, open the `.dmg` and drag oneMK onto Applications (the `.app.zip` is what the installer uses). The AppImage runs where it is: make it executable and open it (`./one-mk-x86_64-unknown-linux-gnu.AppImage pair` and the other commands work too). The `.zip` and `.tar.gz` files hold only the programs, for people who prefer to unpack them by hand. `SHA256SUMS` lists checksums for every file.
 
           For packagers: `one-mk.rb` (Homebrew cask), `one-mk-source.rb` (Homebrew formula, builds from source) and `one-mk-flatpak-sources.tar.gz` (Flatpak manifest and the files it names) are attached too.
           MD

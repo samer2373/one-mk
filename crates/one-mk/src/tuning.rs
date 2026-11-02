@@ -759,24 +759,82 @@ impl TuningSettings {
         self.specs_in(peer, false)
     }
 
+    #[cfg(test)]
     pub fn local_keymap(&self) -> Result<Keymap> {
-        Ok(self.local_compiled()?.map)
+        Ok(self.local_compiled_for(None)?.map)
     }
 
     pub fn local_keymaps(&self, devices: &[InputDevice]) -> Result<KeymapSet> {
-        let mut set = KeymapSet::new(self.local_keymap()?);
+        self.local_keymaps_for(devices, &[])
+    }
+
+    pub fn local_keymaps_for(&self, devices: &[InputDevice], apps: &[String]) -> Result<KeymapSet> {
+        let mut set = KeymapSet::new(self.local_compiled_for_apps(None, apps)?.map);
         for device in devices {
-            set.add(&[device.id], self.local_compiled_for(Some(&device.fingerprint))?.map);
+            let map = self.local_compiled_for_apps(Some(&device.fingerprint), apps)?.map;
+            if &map != set.base() { set.add(&[device.id], map); }
         }
         Ok(set)
     }
 
-    fn local_compiled(&self) -> Result<remap::Compiled> {
-        self.local_compiled_for(None)
+    #[cfg(any(target_os = "macos", test))]
+    pub fn local_native_keymaps_for(&self, devices: &[InputDevice], apps: &[String]) -> Result<(KeymapSet, one_mk_input::macos_hidmap::Plan)> {
+        let resolve = |device| -> Result<_> {
+            let peer = PeerFacts { name: "", id: "", os: os::MACOS, apps, device };
+            let (specs, warnings) = self.specs_in(&peer, true);
+            if !warnings.is_empty() { bail!("{}", warnings.join("; ")); }
+            Ok(specs)
+        };
+        let base = resolve(None)?;
+        let device_specs = devices.iter().map(|device| resolve(Some(&device.fingerprint))).collect::<Result<Vec<_>>>()?;
+        let profiles: Vec<_> = std::iter::once(&base).chain(&device_specs).collect();
+        let mut splits: Vec<_> = profiles.iter().map(|specs| one_mk_input::macos_hidmap::partition(specs)).collect();
+        let conditional: Vec<_> = self.keymap.rule.iter().filter(|rule| rule.app.is_some()).filter(|rule| {
+            let applies = |device: Option<&Fingerprint>| {
+                if *rule.scope.target() == Scope::Local {
+                    rule.scope.device().is_none_or(|fingerprint| device.is_some_and(|device| {
+                        fingerprint.parse::<Fingerprint>().is_ok_and(|fingerprint| fingerprint.matches(device))
+                    }))
+                } else {
+                    self.local_rules && rule.scope.rank(&PeerFacts { name: "", id: "", os: os::MACOS, apps, device }).is_some()
+                }
+            };
+            applies(None) || devices.iter().filter(|device| device.kinds.keyboard).any(|device| applies(Some(&device.fingerprint)))
+        })
+            .filter_map(|rule| rule.spec().ok()).filter_map(|spec| one_mk_input::macos_hidmap::key_usage(spec.from.key)).collect();
+        loop {
+            let blocked: Vec<_> = splits.iter().flat_map(|(_, tap)| tap.iter())
+                .filter_map(|spec| one_mk_input::macos_hidmap::key_usage(spec.from.key)).chain(conditional.iter().copied()).collect();
+            let mut changed = false;
+            for (specs, (system, tap)) in profiles.iter().zip(&mut splits) {
+                system.retain(|mapping| {
+                    if !blocked.contains(&mapping.source) && !blocked.contains(&mapping.destination) { return true; }
+                    tap.extend(specs.iter().filter(|spec| one_mk_input::macos_hidmap::key_usage(spec.from.key) == Some(mapping.source)).cloned());
+                    changed = true;
+                    false
+                });
+            }
+            if !changed { break; }
+        }
+        let mut splits = splits.into_iter();
+        let (base_system, base_tap) = splits.next().unwrap_or_default();
+        let compile = |specs: &[RuleSpec]| -> Result<_> { Ok(Keymap::compile(specs, remap::Target { os: os::MACOS, swap: false }, self.keymap.tap())?.map) };
+        let mut plan = one_mk_input::macos_hidmap::Plan { base: base_system, devices: Vec::new() };
+        let mut maps = KeymapSet::new(compile(&base_tap)?);
+        for (device, (system, tap)) in devices.iter().zip(splits) {
+            let map = compile(&tap)?;
+            if &map != maps.base() { maps.add(&[device.id], map); }
+            if device.kinds.keyboard { plan.devices.push((device.fingerprint.clone(), system)); }
+        }
+        Ok((maps, plan))
     }
 
     fn local_compiled_for(&self, device: Option<&Fingerprint>) -> Result<remap::Compiled> {
-        let peer = PeerFacts { name: "", id: "", os: os::local(), apps: &[], device };
+        self.local_compiled_for_apps(device, &[])
+    }
+
+    fn local_compiled_for_apps(&self, device: Option<&Fingerprint>, apps: &[String]) -> Result<remap::Compiled> {
+        let peer = PeerFacts { name: "", id: "", os: os::local(), apps, device };
         let (specs, warnings) = self.specs_in(&peer, true);
         if !warnings.is_empty() {
             bail!("{}", warnings.join("; "));
@@ -789,16 +847,17 @@ impl TuningSettings {
         let mut found: Vec<(u8, usize, RuleSpec, String)> = Vec::new();
         let keys = self.keymap.rule.iter().enumerate().map(|(i, r)| (place("input.keymap.rule", i), &r.scope, &r.app, r.spec()));
         let buttons = self.button.iter().enumerate().map(|(i, r)| (place("input.button", i), &r.scope, &r.app, r.spec()));
-        for (n, (at, scope, app, spec)) in keys.chain(buttons.filter(|_| !local)).enumerate() {
+        for (n, (at, scope, app, spec)) in keys.chain(buttons).enumerate() {
             let rank = if local {
-                if *scope.target() != Scope::Local {
+                if *scope.target() != Scope::Local && (!self.local_rules || scope.rank(peer).is_none()) {
                     continue;
                 }
-                if app.is_some() {
-                    warnings.push(format!("{at}: --app is not supported for local rules; the app probe describes a remote computer"));
-                    continue; // a local rule can't follow the focused app of another computer
-                }
-                match scope.device() {
+                let app_priority = match app_rank(app, peer) {
+                    Ok(Some(rank)) => rank,
+                    Ok(None) => continue,
+                    Err(error) => { warnings.push(format!("{at}: {error}")); continue; }
+                };
+                let scope_priority = if *scope.target() != Scope::Local { scope.rank(peer).unwrap_or(0) } else { match scope.device() {
                     Some(fingerprint) => {
                         let Some(device) = peer.device else { continue };
                         match fingerprint.parse::<Fingerprint>() {
@@ -807,7 +866,8 @@ impl TuningSettings {
                         }
                     }
                     None => 0,
-                }
+                } };
+                scope_priority + app_priority + if *scope.target() == Scope::Local { 2 * APP_RANK } else { 0 }
             } else {
                 let Some(rank) = scope.rank(peer) else { continue };
                 match app_rank(app, peer) {
@@ -1140,8 +1200,6 @@ impl TuningSettings {
             if *s.target() == Scope::Local {
                 if !cfg!(any(windows, target_os = "macos")) {
                     out.push("local rules need Windows or macOS and are ignored on this platform".into());
-                } else if !cfg!(windows) {
-                    out.push("local key rules are inactive: native hook integration is not implemented yet (5H); experimental, untested on real Windows/macOS hardware".into());
                 }
                 let device = s.device().and_then(|device| device.parse::<Fingerprint>().ok());
                 match self.local_compiled_for(device.as_ref()) {
@@ -1254,10 +1312,8 @@ impl TuningSettings {
         let has_local = self.local_rules || self.keymap.rule.iter().any(|rule| *rule.scope.target() == Scope::Local);
         let local = if cfg!(target_os = "linux") && has_local {
             "\nlocal key rules are not available on Linux"
-        } else if has_local && cfg!(windows) {
-            "\nlocal key rules: EXPERIMENTAL, native Windows UNTESTED (compile-checked only); see backend acknowledgement in status/doctor"
         } else if has_local {
-            "\nlocal key rules are inactive: native hook integration is not implemented yet (5H); experimental, untested on real Windows/macOS hardware"
+            "\nLocal rules are also applied on this computer when the input service is ready."
         } else {
             ""
         };
@@ -1385,7 +1441,7 @@ impl ScopeArgs {
 
 #[derive(clap::Args, Debug, Default, Clone)]
 pub struct KeyScopeArgs {
-    /// Add an experimental local keyboard rule (Windows native UNTESTED).
+    /// Add a rule for this computer's keyboard.
     #[arg(long, conflicts_with_all = ["peer", "os"])]
     pub local: bool,
     #[command(flatten)]
@@ -1411,12 +1467,7 @@ impl KeyScopeArgs {
         Ok(s)
     }
 
-    /// `--app`, checked. A local rule (this computer's own keyboard) can't
-    /// follow the app focused on another computer, so `--local --app` is refused.
     fn app(&self) -> Result<Option<String>> {
-        if self.local && self.remote.app.is_some() {
-            bail!("--app is for rules about another computer; a --local rule applies to this computer's own keyboard");
-        }
         self.remote.app()
     }
 }
@@ -1426,8 +1477,7 @@ impl KeyScopeArgs {
 pub enum KeymapCmd {
     /// Show the key rules.
     List,
-    /// Save the experimental preference for remapping keys on this computer.
-    /// Requires a separately enabled native build feature; not included in release builds.
+    /// Also apply key and button rules on this computer.
     Local {
         /// Save whether native local remapping is requested.
         #[arg(value_name = "on|off", value_parser = settings::parse_on_off, action = clap::ArgAction::Set)]
@@ -1485,13 +1535,13 @@ fn find_key_rule(rules: &[KeyRule], from: &Trigger, layer: &Option<String>, scop
 
 fn local_rules_note() -> &'static str {
     if !cfg!(feature = "native-local-remap") {
-        "this build does not include the experimental native local remap"
+        "Local rules are not included in this build."
     } else if cfg!(windows) {
-        "EXPERIMENTAL, native Windows UNTESTED (compile-checked only); default OFF. Activation requires a healthy worker acknowledgement. Session/desktop/power changes require reload to resume."
+        "Your key and button rules also apply here. Ctrl + Alt + Shift + Esc turns local rules off. After a session or power interruption, turn the switch off and on to resume."
     } else if cfg!(target_os = "linux") {
         "Local key rules are not available on Linux; stored rules remain inactive."
     } else {
-        "EXPERIMENTAL, native macOS UNTESTED (compile-checked only); default OFF. Activation requires event-tap receipts. Caps Lock/Fn/media/function-key rules are refused; session/power/Secure Input failures require release and reload."
+        "Your key and button rules also apply here. Caps Lock can become one other key; a Caps Lock rule with a condition, Fn, media and function keys are not supported yet. Ctrl + Alt + Shift + Esc turns local rules off. After an interruption, turn the switch off and on to resume."
     }
 }
 
@@ -1504,7 +1554,7 @@ async fn local_runtime_status(dir: &Path) {
     };
     match status.as_ref().and_then(|status| status.input.iter().find(|line| line.starts_with("Local key rules "))) {
         Some(line) => println!("{line}"),
-        None => println!("Local key rules inactive: no native backend acknowledgement; native Windows/macOS UNTESTED (compile-checked only)."),
+        None => println!("Local key rules inactive: the input service has not confirmed that they are ready."),
     }
 }
 
@@ -1517,8 +1567,8 @@ fn list_keymap(s: &TuningSettings) {
     for r in &s.keymap.rule {
         let state = if *r.scope.target() == Scope::Local {
             if cfg!(target_os = "linux") { " [inactive: local key rules are not available on Linux]" }
-            else if cfg!(any(windows, target_os = "macos")) { " [experimental; activation requires backend acknowledgement; native Windows/macOS UNTESTED]" }
-            else { " [inactive: native integration incomplete; experimental, untested on real hardware]" }
+            else if cfg!(any(windows, target_os = "macos")) { " [on this computer]" }
+            else { " [not available on this desktop]" }
         } else { "" };
         println!("  {}{}{state}", r.describe(), where_suffix(&r.scope, &r.app));
     }
@@ -1541,7 +1591,8 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
                 settings.input.local_rules = enabled;
                 Ok(())
             })?;
-            println!("Local key preference {}. {}", if enabled { "on" } else { "off" }, local_rules_note());
+            if enabled { println!("Key rules on this computer: on. {}", local_rules_note()); }
+            else { println!("Key rules on this computer: off. Your rules still apply to the computers you share with."); }
             if let Some(reply) = crate::control::request(dir, crate::control::Request::Settings).await? && let Some(error) = reply.strip_prefix("error ") { bail!("{error}"); }
             local_runtime_status(dir).await;
         }
@@ -2400,6 +2451,62 @@ scope = { peer = "Laptop" }
     }
 
     #[test]
+    fn local_native_caps_swaps_leave_no_duplicate_tap_rules() {
+        let tuning = load("input.local_rules = true\n[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"esc\"\n[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\n[[input.keymap.rule]]\nfrom = \"b\"\nto = \"a\"\n");
+        let (maps, plan) = tuning.local_native_keymaps_for(&[], &[]).unwrap();
+        assert!(maps.base().is_empty());
+        assert_eq!(plan.base.len(), 3);
+        assert!(plan.base.contains(&one_mk_input::macos_hidmap::Mapping { source: 0x700000039, destination: 0x700000029 }));
+    }
+
+    #[test]
+    fn local_native_app_rules_stay_in_the_tap_and_follow_focus() {
+        let tuning = load("input.local_rules = true\n[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"ctrl\"\n[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\napp = \"editor\"\n[[input.keymap.rule]]\nfrom = \"ctrl+h\"\nto = \"ctrl+left\"\n");
+        let (base, plan) = tuning.local_native_keymaps_for(&[], &[]).unwrap();
+        let (focused, focused_plan) = tuning.local_native_keymaps_for(&[], &["editor".into()]).unwrap();
+        assert!(!base.base().is_empty());
+        assert_ne!(base.base(), focused.base());
+        assert_eq!(plan, focused_plan);
+        assert_eq!(plan.base, [one_mk_input::macos_hidmap::Mapping { source: 0x700000039, destination: 0x7000000e0 }]);
+    }
+
+    #[test]
+    fn local_native_unrelated_app_scopes_do_not_block_caps_mapping() {
+        for scope in ["os = \"windows\"", "peer = \"Other\"", &format!("device = \"{TRAVEL}\""), &format!("device = \"{TRAVEL}\", local = true")] {
+            let tuning = load(&format!("input.local_rules = true\n[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"esc\"\n[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"ctrl\"\napp = \"editor\"\nscope = {{ {scope} }}\n"));
+            let (maps, plan) = tuning.local_native_keymaps_for(&[], &[]).unwrap();
+            assert!(maps.base().is_empty(), "{scope}");
+            assert_eq!(plan.base.len(), 1, "{scope}");
+            assert_eq!(plan.base[0].destination, 0x700000029, "{scope}");
+        }
+    }
+
+    #[test]
+    fn local_native_scopes_keyboards_without_losing_mouse_overrides() {
+        let tuning = load(&format!("input.local_rules = true\n[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"esc\"\n[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"ctrl\"\nscope = {{ device = \"{TRAVEL}\" }}\n[[input.button]]\nfrom = 4\nto = \"button5\"\nscope = {{ device = \"{BIG}\" }}\n"));
+        let devices = [
+            InputDevice { id: DeviceRef(1), fingerprint: fp(TRAVEL), kinds: one_mk_proto::device::Kinds { keyboard: true, pointer: false } },
+            InputDevice { id: DeviceRef(2), fingerprint: fp(BIG), kinds: one_mk_proto::device::Kinds { keyboard: false, pointer: true } },
+        ];
+        let (maps, plan) = tuning.local_native_keymaps_for(&devices, &[]).unwrap();
+        assert_eq!(plan.devices.len(), 1);
+        assert_eq!(plan.for_keyboard(&devices[0].fingerprint)[0].destination, 0x7000000e0);
+        assert_eq!(plan.for_keyboard(&devices[1].fingerprint)[0].destination, 0x700000029);
+        assert_ne!(maps.for_device(Some(DeviceRef(2))), maps.base());
+    }
+
+    #[test]
+    fn local_native_cross_profile_collisions_reach_a_fixed_point() {
+        let tuning = load(&format!("input.local_rules = true\n[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\n[[input.keymap.rule]]\nfrom = \"b\"\nto = \"c\"\n[[input.keymap.rule]]\nfrom = \"a\"\nto = \"z\"\nscope = {{ device = \"{TRAVEL}\" }}\n[[input.keymap.rule]]\nfrom = \"b\"\nto = \"y\"\nscope = {{ device = \"{TRAVEL}\" }}\n[[input.keymap.rule]]\nfrom = \"c\"\nto = \"ctrl+d\"\nscope = {{ device = \"{TRAVEL}\" }}\n"));
+        let keyboard = InputDevice { id: DeviceRef(1), fingerprint: fp(TRAVEL), kinds: one_mk_proto::device::Kinds { keyboard: true, pointer: false } };
+        let (maps, plan) = tuning.local_native_keymaps_for(&[keyboard], &[]).unwrap();
+        assert!(plan.base.is_empty());
+        assert!(plan.devices.iter().all(|(_, mappings)| mappings.is_empty()));
+        assert!(!maps.base().is_empty());
+        assert!(maps.has_device_rules());
+    }
+
+    #[test]
     fn local_cli_scope_is_only_for_keys_and_cannot_select_a_peer() {
         use clap::Parser;
 
@@ -2428,7 +2535,7 @@ scope = { peer = "Laptop" }
         assert_eq!(scope.selected(Path::new("/nonexistent")).unwrap(), Scope::Local.for_device(Some(TRAVEL.into())));
         let parsed = Keys::try_parse_from(["keymap", "add", "a", "b", "--local", "--app", "editor"]).unwrap();
         let KeymapCmd::Add { scope, .. } = parsed.command else { panic!("not an add") };
-        assert!(scope.app().is_err());
+        assert_eq!(scope.app().unwrap(), Some("editor".into()));
         assert!(Remote::try_parse_from(["pointer", "--local"]).is_err());
         assert_eq!(Remote::try_parse_from(["pointer", "--os", "mac"]).unwrap().scope.selected(Path::new("/nonexistent")).unwrap(), Scope::Os(os::MACOS));
     }
@@ -2453,11 +2560,34 @@ scope = { peer = "Laptop" }
         assert_eq!(summary.lines().count(), 2);
         if cfg!(target_os = "linux") {
             assert_eq!(summary.lines().nth(1), Some("local key rules are not available on Linux"));
-        } else if cfg!(windows) {
-            assert!(summary.contains("native Windows UNTESTED"), "{summary}");
         } else {
-            assert!(summary.contains("native hook integration is not implemented yet"), "{summary}");
+            assert!(summary.contains("also applied on this computer"), "{summary}");
         }
+    }
+
+    #[test]
+    fn global_local_switch_resolves_os_and_app_rules_without_changing_remote_maps() {
+        let text = format!("[input]\nlocal_rules=true\n[[input.keymap.rule]]\nfrom='a'\nto='b'\n[[input.keymap.rule]]\nfrom='a'\nto='c'\nscope={{os='{}'}}\n[[input.keymap.rule]]\nfrom='a'\nto='d'\napp='editor'\n[[input.button]]\nfrom='4'\nto='esc'\n", os_name(os::local()));
+        let mut tuning = load(&text);
+        let current = facts(os::local());
+        let base = tuning.specs_in(&current, true).0;
+        assert_eq!(base[0].what, What::To("c".parse().unwrap()));
+        assert!(base.iter().any(|rule| one_mk_proto::keynames::is_button(u32::from(rule.from.key))));
+        let apps = vec!["editor".into()];
+        let focused = tuning.specs_in(&PeerFacts { apps: &apps, ..current }, true).0;
+        assert_eq!(focused[0].what, What::To("d".parse().unwrap()));
+        let remote = tuning.resolve(&current, false).keymap;
+        tuning.local_rules = false;
+        assert!(tuning.specs_in(&current, true).0.is_empty());
+        assert_eq!(remote, tuning.resolve(&current, false).keymap);
+    }
+
+    #[test]
+    fn ordinary_local_rules_do_not_wait_for_device_correlation() {
+        let tuning = load("[input]\nlocal_rules=true\n[[input.keymap.rule]]\nfrom='a'\nto='b'\n");
+        let device = InputDevice { id: DeviceRef(1), fingerprint: fp(TRAVEL),
+            kinds: one_mk_proto::device::Kinds { keyboard: true, pointer: false } };
+        assert!(!tuning.local_keymaps(&[device]).unwrap().has_device_rules());
     }
 
     #[test]
@@ -2470,7 +2600,8 @@ scope = { peer = "Laptop" }
         let invalid = load(&format!("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"not-a-key\"\nscope = {{ local = true, device = \"{TRAVEL}\" }}\n"));
         assert!(invalid.check(&[]).iter().any(|line| line.starts_with("local rules:")));
         let app = load("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\napp = \"editor\"\nscope = { local = true }\n");
-        assert!(app.local_keymap().unwrap_err().to_string().contains("--app is not supported"));
+        assert!(app.local_keymap().unwrap().is_empty());
+        assert!(!app.local_keymaps_for(&[], &["editor".into()]).unwrap().base().is_empty());
     }
 
     #[test]

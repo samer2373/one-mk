@@ -1,5 +1,8 @@
 # Wallpaper import: M1b development implementation
 
+> Separate development laboratory, not the normal release setup. See
+> [LIVE-WALLPAPER.md](LIVE-WALLPAPER.md) for the current video path and its limits.
+
 Security follow-up evidence: **2026-10-31**. Baseline reset: local `wave5`,
 commit `c5bdfe7`; implementation branch `t3/wallpaper-import-security`.
 This is an optional, finite **source admission and poster** pipeline, not a

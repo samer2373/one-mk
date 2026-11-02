@@ -402,7 +402,7 @@ mod tests {
         );
         // Our own window in front, or another app's window behind, is fine.
         assert_eq!(
-            settings_state(&[front(9, "one·mk"), s.clone()], Some(&[42]), 9),
+            settings_state(&[front(9, "oneMK"), s.clone()], Some(&[42]), 9),
             Some(SettingsWindow::Visible(settings))
         );
         assert_eq!(

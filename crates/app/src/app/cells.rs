@@ -66,7 +66,7 @@ impl App {
 
     /// This computer: start at login, the pointer kept here, broadcast and
     /// locking every screen. Until another computer is paired (or while
-    /// one·mk is off) only Start at login means anything, so only it shows;
+    /// oneMK is off) only Start at login means anything, so only it shows;
     /// broadcast shows while a computer is connected (or it is on).
     pub(super) fn controls(&mut self, ui: &mut Ui, c: Rect) {
         // This computer's own switches; what acts on every computer at
@@ -139,7 +139,6 @@ impl App {
             enabled: vec![true; 3],
             role: Role::RadioButton,
             font: T_META,
-            radius: 6,
         };
         if let Some(k) = pills.show(ui, self.arrowed) {
             let v = GAMING[k].0;
@@ -266,20 +265,25 @@ impl App {
             self.set_pref("who can get this clipboard", &["clipboard", "--allow-fetch", v], |p| p.clip_allow_fetch = !p.clip_allow_fetch);
         }
         r.on_hover_text("Any paired computer can copy this clipboard with Get clipboard, including passwords you copied.");
+        let sensitive_label = if c.width() < 220.0 { "Skip secrets" } else { "Skip sensitive copies" };
+        let sensitive = switch(ui, row(4), Id::unique("clip-sensitive"), sensitive_label, p.clip_skip_sensitive, true);
+        if sensitive.clicked() {
+            self.set_pref("sensitive copies", &["clipboard", "--skip-sensitive", if p.clip_skip_sensitive { "off" } else { "on" }], |prefs| prefs.clip_skip_sensitive = !p.clip_skip_sensitive);
+        }
+        sensitive.on_hover_text("Skip passwords and other copies marked as sensitive by their app.");
     }
 
     /// Notifications, the received files folder, and the clipboard's size limit.
     pub(super) fn files_settings(&mut self, ui: &mut Ui, c: Rect) {
-        let row_h = 36.0;
-        let top = c.top() - 8.0;
+        // Titled and spaced as the Clipboard card beside it.
+        title_row(ui, c, "Files", 0.0);
+        let row_h = 30.0;
+        let top = c.top() + 24.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
         let p = self.prefs.clone();
         if switch(ui, row(0), Id::unique("notify"), "Notify when files arrive", p.notify_files, true).clicked() {
             let v = if p.notify_files { "off" } else { "on" };
             self.set_pref("notifications", &["notify", v], |p| p.notify_files = !p.notify_files);
-        }
-        for k in 1..3 {
-            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
         }
         let r1 = row(1);
         ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), INK);
@@ -305,8 +309,11 @@ impl App {
                     let v = n.to_string();
                     self.set_pref("the clipboard size limit", &["clipboard", "--max-mb", &v], |p| p.clip_max_mb = n);
                 }
-                _ => self.toast_error(format!("“{text}” isn't a size one·mk can use. Type a whole number of MB, like 25."), None, self.now),
+                _ => self.toast_error(format!("“{text}” isn't a size oneMK can use. Type a whole number of MB, like 25."), None, self.now),
             }
+        }
+        if switch(ui, row(3), Id::unique("file-drop-zones"), "Drop files at screen edges", p.drop_zones, true).clicked() {
+            self.set_pref("file drop zones", &["drag", if p.drop_zones { "--off" } else { "--on" }], |prefs| prefs.drop_zones = !p.drop_zones);
         }
     }
 }

@@ -22,6 +22,7 @@ use one_mk_input::cursoroverlay::{DrawMode, Support};
 /// How the daemon is asked, and how long mDNS gets to answer.
 const DAEMON_TIMEOUT: Duration = Duration::from_millis(1500);
 const MDNS_WINDOW: Duration = Duration::from_millis(1500);
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // the desktop portals are Linux's
 const PORTAL_TIMEOUT: Duration = Duration::from_millis(2500);
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
 const MDNS_PORT: u16 = 5353;
@@ -180,6 +181,8 @@ pub struct Firewall {
     /// `/etc/ufw/user.rules`, when this user may read it (usually not).
     pub ufw_rules: Option<String>,
     pub firewalld: Option<Firewalld>,
+    pub mac_enabled: Option<bool>,
+    pub mac_blocked: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,9 +242,9 @@ const fn this_os() -> Os {
 pub fn daemon_check(d: &Daemon) -> Check {
     let out = match d {
         Daemon::Running(s) => Outcome::pass(format!("one-mk is running on {} (listening on UDP {}).", s.name, s.port)),
-        Daemon::NotRunning => Outcome::fail(
+        Daemon::NotRunning => Outcome::new(Status::Skip,
             "one-mk is not running on this computer.",
-            "Start it with `one-mk run`, or run `one-mk install` so it starts when you log in.",
+            Some("Start it with `one-mk run`, or run `one-mk install` so it starts when you log in."),
         ),
         Daemon::Broken(why) => Outcome::fail(
             format!("one-mk seems to be running but does not answer ({why})."),
@@ -264,23 +267,19 @@ pub fn config_checks(c: &Config, dir: &Path) -> Vec<Check> {
     } else if c.dir_exists {
         Outcome::pass(format!("Found at {}.", dir.display()))
     } else {
-        Outcome::warn(
+        Outcome::pass(
             format!("There is no settings folder yet ({}).", dir.display()),
-            "This computer has not been set up: run `one-mk pair` on it and on the other computer.",
         )
     };
     let identity = match (c.dir_exists, c.has_identity) {
         (_, true) => Outcome::pass("This computer has its identity (key and certificate)."),
         (false, false) => Outcome::skip("No identity yet; it is created the first time one-mk starts."),
-        (true, false) => Outcome::warn(
-            "This computer has no identity yet.",
-            "It is created automatically the first time you run `one-mk run` or `one-mk pair`.",
-        ),
+        (true, false) => Outcome::skip("No identity yet; it is created automatically when sharing starts."),
     };
     let pairing = match &c.paired {
-        Ok(p) if p.is_empty() => Outcome::fail(
+        Ok(p) if p.is_empty() => Outcome::new(Status::Skip,
             "This computer is not paired with any other.",
-            "Run `one-mk pair` on both computers and confirm the same code on each.",
+            Some("Run `one-mk pair` on both computers and confirm the same code on each."),
         ),
         Ok(p) => Outcome::pass(format!("Paired with {} computer{}.", p.len(), if p.len() == 1 { "" } else { "s" })),
         Err(e) => Outcome::fail(
@@ -416,10 +415,12 @@ pub fn firewall_check(os: Os, f: &Firewall, port: u16) -> Check {
             "Not checked on Windows. If Windows Defender Firewall asked about one-mk, choose Allow (at least on Private networks); \
              otherwise allow one-mk.exe under Windows Security > Firewall & network protection > Allow an app.",
         ),
-        Os::Mac => Outcome::skip(
-            "Not checked on macOS. If it asked \"accept incoming network connections?\", choose Allow; \
-             otherwise allow one-mk under System Settings > Network > Firewall > Options.",
-        ),
+        Os::Mac => match (f.mac_enabled, f.mac_blocked) {
+            (Some(false), _) => Outcome::pass("The firewall is off."),
+            (Some(true), Some(false)) => Outcome::pass("Incoming connections are allowed."),
+            (Some(true), Some(true)) => Outcome::fail("The firewall blocks incoming connections.", "Allow one-mk in System Settings > Network > Firewall > Options."),
+            _ => Outcome::skip("The firewall's rules could not be checked."),
+        },
         Os::Other => Outcome::skip("Not checked on this system."),
         Os::Linux => linux_firewall(f, port),
     };
@@ -518,11 +519,36 @@ fn macos_permissions() -> Outcome {
 
 #[cfg(any(target_os = "macos", test))]
 fn macos_permission_result(accessibility: bool, input_monitoring: bool) -> Outcome {
-    let state = |granted| if granted { "granted" } else { "not granted" };
-    Outcome::warn(
-        format!("This process: Accessibility {}; Input Monitoring {}. Native macOS UNTESTED (compile-checked only).", state(accessibility), state(input_monitoring)),
-        "Check the daemon's state separately with `one-mk status`; its launch context may differ. Manage one-mk/the launching terminal under System Settings > Privacy & Security. No permission prompt or event tap is installed by this check.",
-    )
+    match (accessibility, input_monitoring) {
+        (true, true) => Outcome::pass("Allowed. Accessibility and Input Monitoring are on."),
+        (false, true) => Outcome::warn("Accessibility is not allowed.", "Allow Accessibility in System Settings > Privacy & Security."),
+        (true, false) => Outcome::warn("Input Monitoring is not allowed.", "Allow Input Monitoring in System Settings > Privacy & Security."),
+        (false, false) => Outcome::warn("Accessibility and Input Monitoring are not allowed.", "Allow Accessibility and Input Monitoring in System Settings > Privacy & Security."),
+    }
+}
+
+fn macos_daemon_permissions(status: Option<&DaemonStatus>) -> Check {
+    let out = match status {
+        None => Outcome::new(Status::Skip, "Start sharing to check permissions.", Some("Start sharing.")),
+        Some(status) if status.backend.as_str() != "native" => Outcome::skip("Permissions are checked when sharing starts."),
+        Some(status) => {
+            let permission = status.input.iter().find(|line| line.starts_with("one-mk needs Accessibility permission")
+                || line.starts_with("one-mk needs Input Monitoring permission")
+                || line.starts_with("one-mk couldn't start watching this Mac"));
+            match permission {
+                Some(line) if line.starts_with("one-mk needs Accessibility permission") => Outcome::warn(
+                    "Accessibility is not allowed. Input Monitoring can be checked after it is allowed.",
+                    "Allow Accessibility in System Settings > Privacy & Security."),
+                Some(line) if line.starts_with("one-mk needs Input Monitoring permission") => Outcome::warn(
+                    "Input Monitoring is not allowed. Accessibility is allowed.",
+                    "Allow Input Monitoring in System Settings > Privacy & Security."),
+                Some(_) => Outcome::fail("The mouse and keyboard could not be shared, even though permissions are on.",
+                    "Turn Accessibility and Input Monitoring off and on in System Settings."),
+                None => Outcome::pass("Allowed. Accessibility and Input Monitoring are on."),
+            }
+        }
+    };
+    check("input", "Permissions", out)
 }
 
 fn linux_portals(p: &Portals) -> Outcome {
@@ -685,14 +711,12 @@ pub fn local_rules_check(runtime: Option<&DaemonStatus>) -> Check {
         Outcome::skip("Local key rules are not available on Linux; stored rules remain inactive.")
     } else if cfg!(any(windows, target_os = "macos")) {
         match runtime.and_then(|status| status.input.iter().find(|line| line.starts_with("Local key rules "))) {
-            Some(detail) => Outcome::warn(detail, "Default OFF. Native execution has not been accepted. Run `one-mk keymap local off` to disable. See docs/LOCAL-REMAP.md."),
-            None => Outcome::skip("Local key rules inactive; no native local-rules problem reported."),
+            Some(detail) if detail.starts_with("Local key rules active") => Outcome::pass("Your key and button rules also work on this computer."),
+            Some(detail) => Outcome::warn(detail, "Open Keys & mouse to turn local rules off or try again. Ctrl + Alt + Shift + Esc turns them off immediately."),
+            None => Outcome::skip("Local rules are off, or no local rules are needed."),
         }
     } else {
-        Outcome::warn(
-            "Experimental; untested on real Windows/macOS hardware. Native local hook integration is incomplete; rules remain inactive even with the preference on.",
-            "Keep `one-mk keymap local off` until native acknowledgement and real-hardware acceptance tests pass. See docs/LOCAL-REMAP.md.",
-        )
+        Outcome::skip("Not available on this desktop. Local rules need macOS or Windows.")
     };
     check("local-key-rules", "Local key rules", outcome)
 }
@@ -993,20 +1017,118 @@ pub(crate) fn json_str(s: &str) -> String {
     out
 }
 
-/// `{"ok":bool,"summary":{...},"checks":[{"id","title","status","detail","fix"}]}`
-/// where status is `pass`, `skip`, `warn` or `fail` and `fix` may be null.
+fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
+    let mut shown = source.clone();
+    let status = source.outcome.status;
+    let original = source.outcome.detail.as_str();
+    let good = status == Status::Pass;
+    let mut action = None;
+    let (title, detail, fix) = match source.id.as_str() {
+        "updates" | "local-key-rules" | "input-tuning" | "typing" => return (shown, None, true),
+        "wallpaper" | "wallpaper-import-sandbox" | "drag" => return (shown, None, false),
+        "daemon" => {
+            if !good { action = Some("Start"); }
+            ("Sharing", if good { "Sharing is on." } else if status == Status::Skip { "Sharing is stopped." }
+                else { "Sharing is not responding or stopped unexpectedly." },
+                if good { None } else { Some("Start sharing again.") })
+        }
+        "config" => ("Settings", if good { "Your settings are ready. New settings are saved automatically." }
+            else { "Some saved settings could not be read. Default settings will be used next time sharing starts." },
+            if good { None } else { Some("Review your preferences in Settings.") }),
+        "identity" => {
+            shown.outcome.status = Status::Pass;
+            ("Secure identity", if good { "This computer is ready to connect securely." }
+                else { "A secure identity will be created automatically when sharing starts." }, None)
+        }
+        "pairing" => {
+            if status == Status::Skip { action = Some("Pair"); }
+            ("Paired computers", if good { "Your paired computers are saved." } else if status == Status::Skip { "No computers paired yet." }
+                else { "The list of paired computers could not be read." },
+                if status == Status::Skip { Some("Pair a computer to start sharing.") }
+                else if good { None } else { Some("Try pairing your computers again.") })
+        }
+        "port" => ("Network connection", if good {
+            if original.contains("free") { "Ready for sharing to start." } else { "Ready to connect to your other computers." }
+        } else if status == Status::Fail { "Sharing cannot use its network connection." }
+            else { "The network connection could not be checked." },
+            if good { None } else { Some("Close other keyboard and mouse sharing apps, then try starting sharing again.") }),
+        "mdns" => ("Find nearby computers", if good { "Nearby computers can be found on this network." }
+            else if status == Status::Skip { "Finding nearby computers is turned off." }
+            else { "Nearby computers could not be found." },
+            if good || status == Status::Skip { None } else { Some("Connect both computers to the same Wi-Fi or wired network, not a guest network.") }),
+        "firewall" => {
+            if original == "The firewall blocks incoming connections." { action = Some("OpenFirewallSettings"); }
+            ("Firewall", if good {
+                if original == "The firewall is off." { original } else { "The firewall allows sharing connections." }
+            } else if status == Status::Fail { "The firewall is blocking sharing connections." }
+                else { "The firewall's rules could not be checked." },
+                if good || status == Status::Skip { None } else { Some("Allow incoming connections for this app in your firewall settings.") })
+        }
+        "input" => {
+            let mac = original.contains("Accessibility") || original.contains("Input Monitoring")
+                || source.outcome.fix.as_deref().is_some_and(|fix| fix.contains("Accessibility"));
+            if mac && !good { action = Some(if status == Status::Fail { "OpenPermissionSettings" } else { "OpenPermissionGuide" }); }
+            if original == "Start sharing to check permissions." { action = Some("Start"); }
+            ("Permissions", if mac || action == Some("Start") { original }
+                else if good { "Your desktop allows mouse and keyboard sharing." }
+                else { "Your desktop has not allowed mouse and keyboard sharing yet." },
+                if mac && !good { Some("Follow the permission guide to allow sharing in System Settings.") }
+                else if action == Some("Start") { Some("Start sharing to check permissions.") }
+                else if good { None } else { Some("Approve the sharing request in your desktop's permission dialog.") })
+        }
+        "hotkeys" => ("Keyboard shortcuts", if good { "Keyboard shortcuts are ready." }
+            else if status == Status::Skip { "Keyboard shortcuts are turned off or still being set up." }
+            else { "Keyboard shortcuts only work while the pointer is on another computer." },
+            if good || status == Status::Skip { None } else { Some("You can still switch computers from the window.") }),
+        "broadcast" => ("Share with several computers", if good { "Sharing with several computers at once is off." }
+            else { "Your typing, clicks and scrolling go to several computers at once." },
+            if status == Status::Warn { Some("Press Ctrl+Alt+Shift+Esc to stop sharing with several computers.") } else { None }),
+        "clipboard" => ("Clipboard sharing", "Your clipboard sharing preferences are saved.", None),
+        "clipboard-history" => ("Clipboard history", "Saved clipboard history could not be read.", Some("Review clipboard history in Settings.")),
+        "hooks" => ("Automatic actions", "An automatic action was blocked for your safety.", Some("Review automatic actions in Settings.")),
+        "per-device-rules" => ("Individual keyboards and mice", if good { "Your keyboards and mice can have different preferences." }
+            else { "Your desktop treats keyboards and mice as one device." },
+            if status == Status::Warn { Some("Use preferences that apply to all keyboards and mice.") } else { None }),
+        "pointer-overlay" => ("Pointer visibility", if good { "The pointer can be shown when another computer controls this screen." }
+            else { "This desktop cannot show an extra pointer." },
+            if status == Status::Warn { Some("Choose automatic pointer visibility in Settings.") } else { None }),
+        "edge-push" => {
+            if original.contains("Not yet tested") { shown.outcome.status = Status::Pass; }
+            ("Screen edges", "Your screen-edge preferences are saved.", None)
+        }
+        "network" => ("Wi-Fi or wired network", if good { "Connected to a home or office network." }
+            else if status == Status::Fail { "This computer is not connected to a network." }
+            else { "This may be a guest or public network." },
+            if good { None } else { Some("Connect both computers to the same home or office Wi-Fi or wired network.") }),
+        "link" => ("Connection quality", if good { "Your connected computers respond quickly." }
+            else { "The connection is slow or unreliable. Pointer movement may pause." },
+            if status == Status::Warn { Some("Move closer to the Wi-Fi router or use a network cable. Pause large downloads.") } else { None }),
+        id if id.starts_with("peer:") => (source.title.as_str(), if good { "Connected." } else { "Not connected right now." },
+            if good { None } else { Some("Make sure sharing is on on both computers and they are on the same network.") }),
+        _ => return (shown, None, false),
+    };
+    shown.title = title.to_owned();
+    shown.outcome.detail = detail.to_owned();
+    shown.outcome.fix = fix.map(str::to_owned);
+    let visible = shown.outcome.status != Status::Skip || action.is_some();
+    (shown, action, visible)
+}
+
 pub fn render_json(checks: &[Check]) -> String {
-    let s = summarize(checks);
-    let items: Vec<String> = checks
+    let projected: Vec<_> = checks.iter().map(window_check).collect();
+    let s = summarize(&projected.iter().filter(|(_, _, visible)| *visible).map(|(check, _, _)| check.clone()).collect::<Vec<_>>());
+    let items: Vec<String> = projected
         .iter()
-        .map(|c| {
+        .map(|(c, action, visible)| {
             format!(
-                "{{\"id\":{},\"title\":{},\"status\":\"{}\",\"detail\":{},\"fix\":{}}}",
+                "{{\"id\":{},\"title\":{},\"status\":\"{}\",\"detail\":{},\"fix\":{},\"action\":{},\"visible\":{}}}",
                 json_str(&c.id),
                 json_str(&c.title),
                 c.outcome.status.word(),
                 json_str(&c.outcome.detail),
                 c.outcome.fix.as_deref().map_or("null".to_owned(), json_str),
+                action.map_or("null".to_owned(), json_str),
+                visible,
             )
         })
         .collect();
@@ -1033,7 +1155,12 @@ pub async fn run(dir: &Path, json: bool) -> Result<()> {
         let _ = out.write_all(text.as_bytes());
         let _ = out.flush();
     }
-    if summarize(&checks).fail > 0 {
+    let failed = if json {
+        checks.iter().map(window_check).any(|(check, _, visible)| visible && check.outcome.status == Status::Fail)
+    } else {
+        summarize(&checks).fail > 0
+    };
+    if failed {
         std::process::exit(1);
     }
     Ok(())
@@ -1085,29 +1212,24 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     }
 
     let mut checks = vec![daemon_check(&daemon)];
-    checks.push(check("wallpaper", "Wallpaper", match Settings::load(dir) {
-        Ok(settings) if settings.wallpaper.enabled => Outcome::warn(crate::wallpaper::summary(&settings.wallpaper).trim_start_matches("Wallpaper: "), "This build has no qualified renderer. No playback is available; use one-mk wallpaper disable to turn the feature off."),
-        Ok(settings) => Outcome::pass(crate::wallpaper::summary(&settings.wallpaper).trim_start_matches("Wallpaper: ")),
-        Err(_) => Outcome::warn("Wallpaper settings could not be read.", "Repair settings.toml before enabling wallpaper."),
-    }));
-    checks.push(check("wallpaper-import-sandbox", "Wallpaper import sandbox", Outcome::skip(
-        if crate::wallpaper_import::installed().is_some() {
-            "unavailable until explicitly qualified: optional helper installed; run one-mk wallpaper doctor --runtime DIR; no media process started by general doctor"
-        } else {
-            "unavailable: optional import package not installed; no decoder linked or process started"
-        }
-    )));
-    let (configured, managed, detail) = crate::update::doctor();
-    checks.push(check("updates", "Updates", if !configured || managed { Outcome::skip(detail) } else { Outcome::pass(detail) }));
+    if let Some(status) = daemon.status().and_then(|status| status.wallpaper.as_ref())
+        && (status.plan.is_some() || !status.available)
+    {
+        checks.push(check("wallpaper", "Wallpaper", if status.available { Outcome::pass(&status.message) }
+            else { Outcome::skip(&status.message) }));
+    }
+    let (available, detail) = crate::update::doctor(dir);
+    checks.push(check("updates", "Updates", if available { Outcome::warn(detail, "update-now") }
+        else if detail.starts_with("Couldn't check:") { Outcome::skip(detail) } else { Outcome::pass(detail) }));
     checks.push(check("drag", "File edge drops", Outcome::skip(one_mk_input::dropzone::availability())));
     checks.extend(config_checks(&config, dir));
     checks.push(port_check(&daemon, &port_facts));
     checks.push(mdns_check(&daemon, &mdns));
     checks.push(firewall_check(os, &firewall, port));
-    checks.push(match non_portal {
+    checks.push(if os == Os::Mac { macos_daemon_permissions(daemon.status()) } else { match non_portal {
         Some(status) => check("portals", "Permissions", Outcome::skip(format!("this daemon uses the {} backend", status.backend.as_str()))),
         None => portal_check(os, portals.as_ref(), daemon.status().map_or(&[], |s| &s.input)),
-    });
+    }});
     if let Ok(settings) = crate::settings::Settings::load(dir) {
         if let Some(reason) = &settings.hooks.blocked {
             checks.push(check("hooks", "Hooks", Outcome::fail(format!("Hooks REFUSED: {reason}"), "Fix settings.toml ownership and permissions and remove group/world write access from its folder; alternatively explicitly use `one-mk hooks --trust-permissions`.")));
@@ -1128,7 +1250,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         checks.push(check("typing", "Typing", if typing.starts_with("characters (") {
             Outcome::pass(typing)
         } else if settings.typing.has_character_request() {
-            Outcome::warn(typing, "Native character injection is not implemented yet. Use matching OS keyboard layouts or set `one-mk typing --keys physical`.")
+            Outcome::warn(typing, "Letters need a supported sender and receiver. On Linux, received letters follow this computer's own keyboard layout.")
         } else {
             Outcome::pass(typing)
         }));
@@ -1165,7 +1287,13 @@ async fn probe_daemon(dir: &Path) -> Daemon {
         Ok(Err(e)) => Err(format!("{e:#}")),
         Err(_) => Err("it did not answer in time".to_owned()),
     };
-    Daemon::from_reply(reply)
+    let daemon = Daemon::from_reply(reply);
+    let endpoint = if cfg!(unix) { one_mk_ctl::client::unix_socket_path(dir) } else { one_mk_ctl::client::tcp_port_path(dir) };
+    if matches!(daemon, Daemon::NotRunning) && endpoint.exists() {
+        Daemon::Broken("the previous process stopped unexpectedly".into())
+    } else {
+        daemon
+    }
 }
 
 fn probe_config(dir: &Path) -> Config {
@@ -1279,6 +1407,16 @@ async fn probe_mdns(wanted: Vec<String>) -> MdnsFacts {
 }
 
 async fn probe_firewall(os: Os) -> Firewall {
+    if os == Os::Mac {
+        return blocking(|| {
+            let global = run_with_timeout("/usr/libexec/ApplicationFirewall/socketfilterfw", &["--getglobalstate"]);
+            let enabled = global.as_deref().and_then(mac_firewall_enabled);
+            let blocked = global.filter(|text| text.contains("State = 2)")).map(|_| true).or_else(|| std::env::current_exe().ok().and_then(|path| {
+                run_with_timeout("/usr/libexec/ApplicationFirewall/socketfilterfw", &["--getappblocked", path.to_str()?])
+            }).and_then(|text| mac_firewall_blocked(&text)));
+            Firewall { mac_enabled: enabled, mac_blocked: blocked, ..Firewall::default() }
+        }, Firewall::default()).await;
+    }
     if os != Os::Linux {
         return Firewall::default();
     }
@@ -1297,11 +1435,24 @@ async fn probe_firewall(os: Os) -> Firewall {
                 .filter(|s| s.trim() == "running")
                 .and_then(|_| run_with_timeout("firewall-cmd", &["--list-all"]))
                 .map(|all| Firewalld { ports: field(&all, "ports:"), services: field(&all, "services:") });
-            Firewall { ufw_active, ufw_rules, firewalld }
+            Firewall { ufw_active, ufw_rules, firewalld, ..Firewall::default() }
         },
         Firewall::default(),
     )
     .await
+}
+
+fn mac_firewall_enabled(text: &str) -> Option<bool> {
+    if text.contains("State = 0") { Some(false) }
+    else if text.contains("State = 1") || text.contains("State = 2") { Some(true) }
+    else { None }
+}
+
+fn mac_firewall_blocked(text: &str) -> Option<bool> {
+    if text.contains("is not registered") || text.contains("not part of the firewall") { None }
+    else if text.contains("non-blocked") || text.contains("not blocked") || text.contains("Allow incoming connections") { Some(false) }
+    else if text.contains("is blocked") || text.contains("Block incoming connections") { Some(true) }
+    else { None }
 }
 
 /// The value of a `key: value` line in `firewall-cmd --list-all` output.
@@ -1402,15 +1553,122 @@ mod tests {
     use one_mk_proto::Side;
 
     #[test]
-    fn macos_permission_report_distinguishes_both_grants_without_claiming_acceptance() {
+    fn macos_permission_report_distinguishes_both_grants() {
         for accessibility in [false, true] {
             for input_monitoring in [false, true] {
                 let result = macos_permission_result(accessibility, input_monitoring);
-                assert_eq!(result.status, Status::Warn);
-                assert!(result.detail.contains(if accessibility { "Accessibility granted" } else { "Accessibility not granted" }));
-                assert!(result.detail.contains(if input_monitoring { "Input Monitoring granted" } else { "Input Monitoring not granted" }));
-                assert!(result.detail.contains("UNTESTED"));
+                assert_eq!(result.status, if accessibility && input_monitoring { Status::Pass } else { Status::Warn });
+                if !accessibility { assert!(result.detail.contains("Accessibility")); }
+                if !input_monitoring { assert!(result.detail.contains("Input Monitoring")); }
+                assert!(!result.detail.contains("UNTESTED"));
             }
+        }
+    }
+
+    #[test]
+    fn macos_permissions_use_the_daemon_not_the_doctor_process() {
+        let mut daemon = DaemonStatus { backend: "native".into(), ..DaemonStatus::default() };
+        let allowed = macos_daemon_permissions(Some(&daemon));
+        assert_eq!(st(&allowed), Status::Pass);
+        assert_eq!(allowed.outcome.detail, "Allowed. Accessibility and Input Monitoring are on.");
+        for (line, missing) in [
+            ("one-mk needs Accessibility permission to share this Mac", "Accessibility"),
+            ("one-mk needs Input Monitoring permission to send this Mac", "Input Monitoring"),
+            ("one-mk couldn't start watching this Mac's mouse and keyboard", "could not be shared"),
+        ] {
+            daemon.input = vec![line.into()];
+            let (shown, action, visible) = window_check(&macos_daemon_permissions(Some(&daemon)));
+            assert!(visible && shown.outcome.detail.contains(missing));
+            assert_eq!(action, Some(if missing == "could not be shared" { "OpenPermissionSettings" } else { "OpenPermissionGuide" }));
+            assert_eq!(st(&shown), if missing == "could not be shared" { Status::Fail } else { Status::Warn });
+        }
+        daemon.input = vec!["A password field or an app using Secure Keyboard Entry is active".into()];
+        assert_eq!(st(&macos_daemon_permissions(Some(&daemon))), Status::Pass);
+        let (stopped, action, visible) = window_check(&macos_daemon_permissions(None));
+        assert_eq!((st(&stopped), action, visible), (Status::Skip, Some("Start"), true));
+    }
+
+    #[test]
+    fn fresh_install_has_neutral_actions_not_problems() {
+        let mut checks = cfg(false, false, Ok(Vec::new()));
+        checks.push(daemon_check(&Daemon::NotRunning));
+        let json: serde_json::Value = serde_json::from_str(&render_json(&checks)).unwrap();
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["summary"]["warn"], 0);
+        assert_eq!(json["summary"]["fail"], 0);
+        for (id, action) in [("pairing", "Pair"), ("daemon", "Start")] {
+            let row = json["checks"].as_array().unwrap().iter().find(|row| row["id"] == id).unwrap();
+            assert_eq!(row["status"], "skip");
+            assert_eq!(row["action"], action);
+            assert_eq!(row["visible"], true);
+        }
+        assert_eq!(json["checks"][1]["status"], "pass");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn clean_stop_and_crashed_process_are_different() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(probe_daemon(home.path()).await, Daemon::NotRunning);
+        let listener = std::os::unix::net::UnixListener::bind(one_mk_ctl::client::unix_socket_path(home.path())).unwrap();
+        drop(listener);
+        let crashed = probe_daemon(home.path()).await;
+        assert!(matches!(crashed, Daemon::Broken(_)));
+        assert_eq!(st(&daemon_check(&crashed)), Status::Fail);
+        std::fs::remove_file(one_mk_ctl::client::unix_socket_path(home.path())).unwrap();
+        let server = control::Server::start(home.path()).await.unwrap();
+        drop(server);
+        assert_eq!(probe_daemon(home.path()).await, Daemon::NotRunning);
+    }
+
+    #[test]
+    fn macos_firewall_is_checked_or_not_shown() {
+        for (enabled, blocked, expected) in [
+            (Some(false), None, Status::Pass),
+            (Some(true), Some(false), Status::Pass),
+            (Some(true), Some(true), Status::Fail),
+            (Some(true), None, Status::Skip),
+            (None, None, Status::Skip),
+        ] {
+            let facts = Firewall { mac_enabled: enabled, mac_blocked: blocked, ..Firewall::default() };
+            let (shown, action, visible) = window_check(&firewall_check(Os::Mac, &facts, 24900));
+            assert_eq!(st(&shown), expected);
+            assert_eq!(visible, expected != Status::Skip);
+            assert_eq!(action, if expected == Status::Fail { Some("OpenFirewallSettings") } else { None });
+        }
+        assert_eq!(mac_firewall_enabled("Firewall is disabled. (State = 0)"), Some(false));
+        assert_eq!(mac_firewall_enabled("Firewall is enabled. (State = 1)"), Some(true));
+        assert_eq!(mac_firewall_enabled("Firewall is set to block all non-essential incoming connections. (State = 2)"), Some(true));
+        assert_eq!(mac_firewall_enabled("Operation not permitted"), None);
+        assert_eq!(mac_firewall_blocked("The application is not part of the firewall"), None);
+        assert_eq!(mac_firewall_blocked("The app is non-blocked"), Some(false));
+        assert_eq!(mac_firewall_blocked("The app is blocked"), Some(true));
+        assert_eq!(mac_firewall_blocked("(Allow incoming connections)"), Some(false));
+        assert_eq!(mac_firewall_blocked("(Block incoming connections)"), Some(true));
+    }
+
+    #[test]
+    fn window_text_is_plain_and_checks_without_actions_are_hidden() {
+        for status in [Status::Pass, Status::Skip, Status::Warn, Status::Fail] {
+            for id in ["daemon", "config", "identity", "pairing", "port", "mdns", "firewall", "input", "hotkeys", "broadcast",
+                "clipboard", "clipboard-history", "hooks", "per-device-rules", "pointer-overlay", "edge-push", "network", "link", "peer:abcd"] {
+                let source = check(id, "A computer", Outcome::new(status, "one-mk developer settings.toml `untested` compile", Some("one-mk run")));
+                let (shown, _, visible) = window_check(&source);
+                if !visible { continue; }
+                let text = format!("{} {} {}", shown.title, shown.outcome.detail, shown.outcome.fix.unwrap_or_default());
+                for forbidden in ["one-mk ", "settings.toml", "`", "untested", "compile", "arboard", "native backend", "sandbox", "decoder", "MacApp"] {
+                    assert!(!text.contains(forbidden), "{id} {status:?}: {text}");
+                }
+            }
+        }
+        for id in ["wallpaper", "wallpaper-import-sandbox", "drag", "clipboard-history", "link", "hotkeys"] {
+            assert!(!window_check(&check(id, "", Outcome::skip("not shipped"))).2, "{id}");
+        }
+        let source = check("edge-push", "", Outcome::warn("Not yet tested on macOS.", "one-mk edge"));
+        assert_eq!(st(&window_check(&source).0), Status::Pass);
+        for id in ["updates", "local-key-rules", "input-tuning", "typing"] {
+            let source = check(id, "Owned by another agent", Outcome::skip("unchanged"));
+            assert_eq!(window_check(&source), (source, None, true));
         }
     }
 
@@ -1506,7 +1764,7 @@ mod tests {
     fn daemon_states() {
         assert_eq!(st(&daemon_check(&running())), Status::Pass);
         let down = daemon_check(&Daemon::NotRunning);
-        assert_eq!(st(&down), Status::Fail);
+        assert_eq!(st(&down), Status::Skip);
         assert!(down.outcome.fix.unwrap().contains("one-mk run"));
         assert_eq!(st(&daemon_check(&Daemon::Broken("x".into()))), Status::Fail);
     }
@@ -1531,16 +1789,16 @@ mod tests {
     #[test]
     fn config_fresh_machine_is_not_paired() {
         let c = cfg(false, false, Ok(vec![]));
-        assert_eq!(c.iter().map(st).collect::<Vec<_>>(), [Status::Warn, Status::Skip, Status::Fail]);
+        assert_eq!(c.iter().map(st).collect::<Vec<_>>(), [Status::Pass, Status::Skip, Status::Skip]);
         assert!(c[2].outcome.fix.as_ref().unwrap().contains("one-mk pair"));
     }
 
     #[test]
     fn config_identity_without_peers() {
         let c = cfg(true, true, Ok(vec![]));
-        assert_eq!(c.iter().map(st).collect::<Vec<_>>(), [Status::Pass, Status::Pass, Status::Fail]);
+        assert_eq!(c.iter().map(st).collect::<Vec<_>>(), [Status::Pass, Status::Pass, Status::Skip]);
         let c = cfg(true, false, Ok(vec![]));
-        assert_eq!(st(&c[1]), Status::Warn);
+        assert_eq!(st(&c[1]), Status::Skip);
     }
 
     #[test]
@@ -1661,6 +1919,7 @@ mod tests {
             ufw_active: ufw,
             ufw_rules: rules.map(str::to_owned),
             firewalld: firewalld.map(|(p, s)| Firewalld { ports: p.into(), services: s.into() }),
+            ..Firewall::default()
         }
     }
 
@@ -1810,7 +2069,7 @@ mod tests {
         let c = portal_check(Os::Linux, Some(&portals(ok, ok, false, true)), &[]);
         assert_eq!(st(&c), Status::Warn);
         assert_eq!(st(&portal_check(Os::Windows, None, &[])), Status::Skip);
-        assert_eq!(st(&portal_check(Os::Mac, None, &[])), if cfg!(target_os = "macos") { Status::Warn } else { Status::Skip });
+        if !cfg!(target_os = "macos") { assert_eq!(st(&portal_check(Os::Mac, None, &[])), Status::Skip); }
         // What the running daemon reports comes first, unless the desktop
         // can't do it at all.
         let waiting = ["Waiting for your approval: allow one-mk in the desktop's dialog.".to_owned()];
@@ -1931,16 +2190,17 @@ mod tests {
 
     #[test]
     fn render_json_escapes_and_reports() {
+        assert_eq!(json_str("Say \"hi\"\n\\ \u{1}"), "\"Say \\\"hi\\\"\\n\\\\ \\u0001\"");
         let checks = vec![
-            check("a", "Say \"hi\"", Outcome::pass("line\nbreak\\ \u{1}")),
-            check("b", "B", Outcome::fail("d", "fix it")),
+            daemon_check(&running()),
+            daemon_check(&Daemon::Broken("not answering".into())),
         ];
         let j = render_json(&checks);
         assert!(j.starts_with("{\"ok\":false,\"summary\":{\"pass\":1,\"skip\":0,\"warn\":0,\"fail\":1},\"checks\":["));
-        assert!(j.contains(r#""title":"Say \"hi\"""#));
-        assert!(j.contains(r#""detail":"line\nbreak\\ \u0001""#));
-        assert!(j.contains(r#""status":"pass","detail":"line\nbreak\\ \u0001","fix":null"#));
-        assert!(j.contains(r#""status":"fail","detail":"d","fix":"fix it""#));
+        let parsed: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(parsed["checks"][0]["detail"], "Sharing is on.");
+        assert_eq!(parsed["checks"][1]["status"], "fail");
+        assert_eq!(parsed["checks"][0]["visible"], true);
         assert!(render_json(&checks[..1]).starts_with("{\"ok\":true"));
     }
 
@@ -1994,9 +2254,8 @@ mod tests {
         } else if cfg!(any(windows, target_os = "macos")) {
             assert_eq!(st(&result), Status::Skip);
         } else {
-            assert_eq!(st(&result), Status::Warn);
-            assert!(result.outcome.detail.contains("untested on real Windows/macOS hardware") || result.outcome.detail.contains("UNTESTED (compile-checked only)"));
-            assert!(result.outcome.detail.contains("inactive"));
+            assert_eq!(st(&result), Status::Skip);
+            assert!(result.outcome.detail.contains("Not available"));
         }
     }
     #[test]

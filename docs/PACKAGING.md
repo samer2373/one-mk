@@ -135,8 +135,8 @@ one-mk.app/Contents/Info.plist
 ### The installer window
 
 Opening the `.dmg` shows a fixed 660 x 400 window in the brand's dark look:
-the one·mk icon on the left, the Applications folder on the right, an amber
-arrow between them and one line, "Drag one·mk to Applications, then open it.
+the oneMK icon on the left, the Applications folder on the right, an amber
+arrow between them and one line, "Drag oneMK to Applications, then open it.
 Setup takes a minute." No toolbar, sidebar or status bar. The app then guides
 the user through pairing, so there is no terminal step.
 
@@ -185,7 +185,7 @@ artwork filling it and no white strip at the bottom, no toolbar or sidebar; the 
 and the Applications folder sit on the glows with the arrow between them at the same
 height; the names are readable on their plates in both light and dark appearance
 (System Settings > Appearance); the art is sharp on a Retina display; the volume has
-the one·mk icon; dragging onto Applications works. If the window is the wrong size or
+the oneMK icon; dragging onto Applications works. If the window is the wrong size or
 the plates are off, change `TITLE_BAR` or `PLATE_DY` and regenerate.
 
 ## Windows installer

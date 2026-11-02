@@ -246,6 +246,13 @@ pub struct Prefs {
     pub clip_image: bool,
     pub clip_max_mb: u32,
     pub clip_allow_fetch: bool,
+    pub clip_skip_sensitive: bool,
+    pub drop_zones: bool,
+    pub broadcast_idle: u32,
+    pub pointer_draw: String,
+    pub edge_wrap: String,
+    pub edge_learn: String,
+    pub edge_sides: Vec<(String, EdgePrefs)>,
     pub history_persist: bool,
     pub history_enabled: bool,
     pub notify_files: bool,
@@ -268,12 +275,21 @@ pub struct Prefs {
     pub hooks: Vec<(&'static str, String)>,
     pub hooks_timeout: u64,
     pub hooks_shell: bool,
+    pub hook_options: HashMap<String, (String, u64, bool)>,
     /// Profile name: when it switches by itself, in words.
     pub auto: HashMap<String, String>,
     /// `[input]`: keys, buttons, pointer and scrolling.
     pub input: crate::tune::Input,
     /// `settings.toml` couldn't be read (the window shows defaults).
     pub unreadable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EdgePrefs {
+    pub corner: u32,
+    pub dwell: u32,
+    pub modifier: String,
+    pub fullscreen: bool,
 }
 
 impl Default for Prefs {
@@ -296,7 +312,7 @@ impl Prefs {
             .map(|shortcut| (shortcut.label, text("hotkeys", shortcut.key, shortcut.default))).collect();
         let hooks = HOOK_EVENTS
             .iter()
-            .filter_map(|(key, label)| get("hooks", key).map(|v| (*label, command_words(&v.words()))).filter(|(_, c)| !c.is_empty()))
+            .filter_map(|(key, label)| get("hooks", key).map(|value| (*label, match value { Val::Str(line) => line.clone(), _ => command_words(&value.words()) })).filter(|(_, command)| !command.is_empty()))
             .collect();
         let mut auto = HashMap::new();
         let p = read_toml(profiles);
@@ -317,9 +333,24 @@ impl Prefs {
             clip_html: flag("clipboard", "html", true),
             clip_image: flag("clipboard", "image", true),
             clip_max_mb: num("clipboard", "max_mb", 25).clamp(1, 4096) as u32,
-            // Off unless the file says so: one·mk writes `allow_pull` only when it is on, and
+            // Off unless the file says so: oneMK writes `allow_pull` only when it is on, and
             // a file from before `settings_version = 2` has its old `true` switched off.
             clip_allow_fetch: num("", "settings_version", 1) >= 2 && flag("clipboard", "allow_pull", false),
+            clip_skip_sensitive: flag("clipboard", "skip_sensitive", true),
+            drop_zones: flag("drag", "enabled", cfg!(any(windows, target_os = "macos")) || (cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_some())),
+            broadcast_idle: num("broadcast", "idle_off_minutes", 15).clamp(0, 1440) as u32,
+            pointer_draw: text("pointer", "draw_when_no_mouse", "auto"),
+            edge_wrap: get("edge", "wrap").and_then(Val::as_bool).map(|on| if on { "on" } else { "off" }.to_owned()).unwrap_or_else(|| text("edge", "wrap", "off")),
+            edge_learn: text("edge", "learn", "suggest"),
+            edge_sides: ["left", "right", "top", "bottom"].into_iter().map(|side| {
+                let table = format!("edge.{side}");
+                (side.to_owned(), EdgePrefs {
+                    corner: num(&table, "corner", num("edge", "corner", 0)).max(0) as u32,
+                    dwell: num(&table, "dwell_ms", num("edge", "dwell_ms", 0)).max(0) as u32,
+                    modifier: text(&table, "modifier", &text("edge", "modifier", "none")),
+                    fullscreen: flag(&table, "fullscreen_guard", flag("edge", "fullscreen_guard", false)),
+                })
+            }).collect(),
             history_persist: flag("clipboard", "history_persist", false),
             history_enabled: num("clipboard", "history_max", 0) > 0 && num("clipboard", "history_max_mb", 16) > 0,
             notify_files: flag("", "notify_files", true),
@@ -341,6 +372,11 @@ impl Prefs {
             hooks,
             hooks_timeout: num("hooks", "timeout_secs", 5).max(1) as u64,
             hooks_shell: flag("hooks", "shell", false),
+            hook_options: ["enter", "leave", "peer_connect", "peer_disconnect"].into_iter().map(|event| {
+                let table = format!("hooks.options.{event}");
+                let shell = !matches!(get("hooks", &format!("on_{event}")), Some(Val::List(_))) && flag(&table, "shell", flag("hooks", "shell", false));
+                (event.into(), (text(&table, "computer", ""), num(&table, "timeout_secs", num("hooks", "timeout_secs", 5)).clamp(1, 60) as u64, shell))
+            }).collect(),
             auto,
             input: crate::tune::Input::read(&e),
             unreadable: false,
@@ -350,12 +386,9 @@ impl Prefs {
 
 /// A command's words as one line, quoting the ones with spaces.
 fn command_words(words: &[String]) -> String {
-    if words.len() == 1 {
-        return words[0].clone();
-    }
     words
         .iter()
-        .map(|w| if w.is_empty() || w.contains(char::is_whitespace) { format!("'{}'", w.replace('\'', "'\\''")) } else { w.clone() })
+        .map(|word| format!("'{}'", word.replace('\'', "'\\''")))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -415,6 +448,14 @@ pub struct Check {
     pub verdict: Verdict,
     pub detail: String,
     pub fix: Option<String>,
+    pub action: Option<String>,
+}
+
+pub fn window_issue(text: &str) -> String {
+    if text.contains("settings.toml") { "Check the options in Advanced, then try again.".into() }
+    else if text.contains('`') || ["one-mk run", "one-mk install", "one-mk pair", "one-mk hooks", "one-mk edge", "one-mk send", "one-mk keymap", "one-mk clipboard", "one-mk hotkeys", "one-mk takeback", "one-mk gestures", "one-mk invite", "one-mk join", "one-mk doctor", "sudo ", "chmod "].iter().any(|command| text.contains(command)) {
+        "Review the options in this window, or restart oneMK and try again.".into()
+    } else { text.replace("one-mk", "oneMK") }
 }
 
 /// What `one-mk doctor --json` found, worst first, keeping its order
@@ -425,6 +466,7 @@ pub fn parse_doctor(text: &str) -> Option<Vec<Check>> {
     let mut checks: Vec<Check> = list
         .iter()
         .filter_map(|c| {
+            if matches!(c.get("visible"), Some(Json::Bool(false))) { return None; }
             let s = |k: &str| match c.get(k) {
                 Some(Json::Str(s)) => Some(s.clone()),
                 _ => None,
@@ -435,11 +477,70 @@ pub fn parse_doctor(text: &str) -> Option<Vec<Check>> {
                 "warn" => Verdict::Warn,
                 _ => Verdict::Fail,
             };
-            Some(Check { id: s("id").unwrap_or_default(), title: s("title")?, verdict, detail: s("detail").unwrap_or_default(), fix: s("fix").filter(|f| !f.is_empty()) })
+            let check = Check { id: s("id").unwrap_or_default(), title: s("title")?, verdict, detail: s("detail").unwrap_or_default(), fix: s("fix").filter(|f| !f.is_empty()), action: s("action") };
+            if c.get("visible").is_some() { Some(check) } else { legacy_check(check) }
         })
         .collect();
     checks.sort_by_key(|c| std::cmp::Reverse(c.verdict as u8));
     Some(checks)
+}
+
+fn legacy_check(mut check: Check) -> Option<Check> {
+    let good = check.verdict == Verdict::Pass;
+    let detail = check.detail.as_str();
+    let (title, plain, fix) = match check.id.as_str() {
+        "updates" | "local-key-rules" | "input-tuning" | "typing" => return Some(check),
+        "wallpaper" if check.detail != "not shipped" => return Some(check),
+        "wallpaper" | "wallpaper-import-sandbox" | "drag" => return None,
+        "daemon" if detail.contains("not running") => {
+            check.verdict = Verdict::Skip;
+            check.action = Some("Start".into());
+            ("Sharing", "Sharing is stopped.", Some("Start sharing."))
+        }
+        "daemon" => ("Sharing", if good { "Sharing is on." } else { "Sharing is not responding." }, None),
+        "pairing" if detail.contains("not paired") => {
+            check.verdict = Verdict::Skip;
+            check.action = Some("Pair".into());
+            ("Paired computers", "No computers paired yet.", Some("Pair a computer to start sharing."))
+        }
+        "pairing" => ("Paired computers", if good { "Your paired computers are saved." } else { "Your paired computers could not be read." }, None),
+        "config" => {
+            if detail.contains("no settings folder") { check.verdict = Verdict::Pass; }
+            ("Settings", if check.verdict == Verdict::Pass { "Your settings are saved automatically." } else { "Some saved settings could not be read." }, None)
+        }
+        "identity" => {
+            if check.verdict != Verdict::Fail { check.verdict = Verdict::Pass; }
+            ("Secure identity", "A secure identity is created automatically when sharing starts.", None)
+        }
+        "port" => ("Network connection", if good { "Ready for sharing." } else { "Sharing cannot use its network connection." }, None),
+        "mdns" => ("Find nearby computers", if good { "Nearby computers can be found on this network." } else { "Nearby computers could not be found." }, if good { None } else { Some("Connect both computers to the same home or office network.") }),
+        "input" | "portals" => {
+            if check.verdict == Verdict::Skip { return None; }
+            if detail.contains("Accessibility") || detail.contains("Input Monitoring") { check.action = Some("OpenPermissionGuide".into()); }
+            ("Permissions", if good { "Your desktop allows sharing." } else { "Your desktop has not allowed sharing yet." }, if good { None } else { Some("Allow mouse and keyboard sharing in your desktop's permission settings.") })
+        }
+        "firewall" => ("Firewall", if good { "The firewall allows sharing connections." } else { "The firewall may be blocking sharing connections." }, if good { None } else { Some("Allow incoming connections for this app in your firewall settings.") }),
+        "hotkeys" => ("Keyboard shortcuts", if good { "Keyboard shortcuts are ready." } else { "Keyboard shortcuts only work while the pointer is on another computer." }, None),
+        "broadcast" => ("Share with several computers", if good { "Sharing with several computers at once is off." } else { "Your typing and clicks go to several computers at once." }, if good { None } else { Some("Press Ctrl+Alt+Shift+Esc to stop sharing with several computers.") }),
+        "clipboard" => ("Clipboard sharing", "Your clipboard sharing preferences are saved.", None),
+        "clipboard-history" => ("Clipboard history", "Saved clipboard history could not be read.", None),
+        "hooks" => ("Automatic actions", "An automatic action was blocked for your safety.", None),
+        "per-device-rules" => ("Individual keyboards and mice", if good { "Your keyboards and mice can have different preferences." } else { "Your desktop treats keyboards and mice as one device." }, None),
+        "pointer-overlay" => ("Pointer visibility", if good { "The pointer can be shown when another computer controls this screen." } else { "This desktop cannot show an extra pointer." }, None),
+        "edge-push" => {
+            if detail.contains("Not yet tested") { check.verdict = Verdict::Pass; }
+            ("Screen edges", "Your screen-edge preferences are saved.", None)
+        }
+        "network" => ("Wi-Fi or wired network", if good { "Connected to a home or office network." } else { "Connect both computers to the same home or office network." }, None),
+        "link" => ("Connection quality", if good { "Your connected computers respond quickly." } else { "The connection is slow or unreliable." }, None),
+        id if id.starts_with("peer:") => ("Paired computer", if good { "Connected." } else { "Not connected right now." }, if good { None } else { Some("Make sure sharing is on on both computers and they are on the same network.") }),
+        _ => return None,
+    };
+    if check.verdict == Verdict::Skip && check.action.is_none() { return None; }
+    check.title = title.to_owned();
+    check.detail = plain.to_owned();
+    check.fix = fix.map(str::to_owned);
+    Some(check)
 }
 
 /// `one-mk input-devices --json`: the keyboards and mice seen here, and
@@ -469,19 +570,6 @@ pub fn parse_input_devices(text: &str) -> Option<crate::tune::InputDevices> {
     Some(crate::tune::InputDevices { available: b(&json, "available"), note: s(&json, "note"), devices })
 }
 
-/// "2 problems, 1 warning" / "Everything checks out".
-pub fn doctor_summary(checks: &[Check]) -> String {
-    let n = |v: Verdict| checks.iter().filter(|c| c.verdict == v).count();
-    let (fail, warn) = (n(Verdict::Fail), n(Verdict::Warn));
-    let plural = |k: usize, one: &str, many: &str| if k == 1 { format!("1 {one}") } else { format!("{k} {many}") };
-    match (fail, warn) {
-        (0, 0) => "Everything checks out".into(),
-        (0, w) => plural(w, "warning", "warnings"),
-        (f, 0) => plural(f, "problem", "problems"),
-        (f, w) => format!("{}, {}", plural(f, "problem", "problems"), plural(w, "warning", "warnings")),
-    }
-}
-
 /// The command in a fix (`one-mk …` in backticks), which a Copy button
 /// copies; without one, the whole fix (a backticked flag or a placeholder
 /// alone is not a command to paste).
@@ -500,13 +588,11 @@ pub fn fix_command(fix: &str) -> (String, bool) {
 
 /// The keyboard shortcuts' state in a short sentence (`None`: nothing to say).
 pub fn hotkeys_note(state: &str, detail: &str) -> Option<String> {
-    let d = detail.trim();
-    let why = if d.is_empty() { String::new() } else { format!(" ({d})") };
     Some(match state {
-        "on" => format!("Working{}.", if d.is_empty() { String::new() } else { format!(" {d}") }),
-        "starting" => format!("Being set up{why}."),
-        "unavailable" => format!("On this computer they work only while the pointer is on another one{why}."),
-        _ if !d.is_empty() => format!("Off: {d}."),
+        "on" => "Ready. You can change shortcuts in Settings.".into(),
+        "starting" => "Being set up.".into(),
+        "unavailable" => "Shortcuts work only while the pointer is on another computer. You can also switch computers from the window.".into(),
+        _ if !detail.is_empty() => "Off. You can change shortcuts in Settings.".into(),
         _ => return None,
     })
 }
@@ -709,6 +795,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hook_editor_preserves_literal_words_and_existing_scripts() {
+        let prefs = Prefs::read("[hooks]\non_enter = [\"program with spaces\", \"it's\", \"$HOME\", \"\"]\non_leave = \"echo $HOME\"\nshell = true", "");
+        assert_eq!(prefs.hooks[0].1, "'program with spaces' 'it'\\''s' '$HOME' ''");
+        assert_eq!(prefs.hooks[1].1, "echo $HOME");
+        assert!(!prefs.hook_options["enter"].2, "argument arrays run without a shell, even with the old shell setting on");
+        assert!(prefs.hook_options["leave"].2);
+        assert_eq!(Prefs::read("[hooks]\non_enter = ['program with spaces']", "").hooks[0].1, "'program with spaces'");
+    }
+
+    #[test]
+    fn window_diagnostics_never_offer_terminal_steps() {
+        for text in ["Run one-mk invite", "Use one-mk takeback", "Edit settings.toml", "Try `one-mk hotkeys`", "sudo example"] {
+            let shown = window_issue(text);
+            assert!(!shown.contains("one-mk ") && !shown.contains("settings.toml") && !shown.contains('`'), "{shown}");
+        }
+    }
+
+    #[test]
+    fn desktop_settings_read_nested_overrides_and_defaults() {
+        let defaults = Prefs::read("", "");
+        assert!(defaults.clip_skip_sensitive && !defaults.history_persist);
+        assert_eq!((defaults.pointer_draw.as_str(), defaults.edge_wrap.as_str(), defaults.edge_learn.as_str(), defaults.broadcast_idle), ("auto", "off", "suggest", 15));
+        let settings = "[clipboard]\nskip_sensitive=false\nhistory_persist=true\nhistory_max=20\n[drag]\nenabled=true\n[broadcast]\nidle_off_minutes=7\n[pointer]\ndraw_when_no_mouse='always'\n[edge]\nwrap='all'\nlearn='suggest'\ncorner=12\ndwell_ms=100\nmodifier='ctrl'\n[edge.left]\ndwell_ms=250\n[hooks]\non_enter='echo hi'\ntimeout_secs=9\nshell=false\n[hooks.options.enter]\ncomputer='abcdef01'\ntimeout_secs=12\nshell=true\n";
+        let prefs = Prefs::read(settings, "");
+        assert!(!prefs.clip_skip_sensitive && prefs.history_persist && prefs.drop_zones);
+        assert_eq!(prefs.broadcast_idle, 7);
+        assert_eq!((prefs.pointer_draw.as_str(), prefs.edge_wrap.as_str(), prefs.edge_learn.as_str()), ("always", "all", "suggest"));
+        let left = &prefs.edge_sides.iter().find(|(side, _)| side == "left").unwrap().1;
+        assert_eq!((left.corner, left.dwell, left.modifier.as_str()), (12, 250, "ctrl"));
+        assert_eq!(prefs.hook_options["enter"], ("abcdef01".into(), 12, true));
+        assert_eq!(prefs.hook_options["leave"], (String::new(), 9, false));
+        assert_eq!(Prefs::read("[edge]\nwrap=true", "").edge_wrap, "on");
+    }
+
+    #[test]
     fn typing_preferences_default_and_parse_only_known_modes() {
         for (settings, expected) in [
             ("", "physical"),
@@ -782,7 +903,7 @@ name = "Café, 2nd floor"
         assert!(p.sleep_sync && !p.block_screensaver && !p.hotkeys_on);
         assert_eq!(p.hotkeys[1], ("The next computer", "ctrl+alt+n".to_owned()));
         assert_eq!(p.hotkeys[0].1, if cfg!(windows) { "ctrl+alt+shift+{n}" } else { "ctrl+alt+{n}" }, "unset shortcuts are the defaults");
-        assert_eq!(p.hooks, vec![("Pointer arrives", "notify-send 'hi there'".to_owned()), ("Pointer leaves", "echo # not a comment".to_owned())]);
+        assert_eq!(p.hooks, vec![("Pointer arrives", "'notify-send' 'hi there'".to_owned()), ("Pointer leaves", "echo # not a comment".to_owned())]);
         assert_eq!(p.hooks_timeout, 9);
         assert_eq!(p.auto.get("home").map(String::as_str), Some("Wi-Fi “Home Wi-Fi” or 192.168.1.0/24"));
         assert!(!p.auto.contains_key("Café, 2nd floor"));
@@ -832,27 +953,64 @@ name = "Café, 2nd floor"
     #[test]
     fn doctor_report_is_read_worst_first() {
         let json = r#"{"ok":false,"summary":{"pass":1,"skip":0,"warn":1,"fail":1},"checks":[
-            {"id":"config","title":"Settings","status":"pass","detail":"Found at /tmp/a \"b\".","fix":null},
-            {"id":"input","title":"Permissions","status":"warn","detail":"Not allowed yet.","fix":"Run `one-mk run` and choose Allow."},
-            {"id":"daemon","title":"Program","status":"fail","detail":"one-mk is not running é😀.","fix":"Start it."}]}"#;
+            {"id":"config","title":"Settings","status":"pass","detail":"Saved for é😀.","fix":null,"visible":true},
+            {"id":"input","title":"Permissions","status":"warn","detail":"Not allowed yet.","fix":"Choose Allow.","visible":true},
+            {"id":"daemon","title":"Sharing","status":"fail","detail":"Sharing is not responding.","fix":"Try again.","visible":true}]}"#;
         let checks = parse_doctor(json).unwrap();
         assert_eq!(checks.iter().map(|c| c.verdict).collect::<Vec<_>>(), [Verdict::Fail, Verdict::Warn, Verdict::Pass]);
-        assert_eq!(checks[0].detail, "one-mk is not running é😀.");
-        assert_eq!(checks[2].detail, "Found at /tmp/a \"b\".");
+        assert_eq!(checks[0].detail, "Sharing is not responding.");
+        assert_eq!(checks[2].detail, "Saved for é😀.");
         assert_eq!(checks[2].fix, None);
-        assert_eq!(doctor_summary(&checks), "1 problem, 1 warning");
-        assert_eq!(doctor_summary(&checks[2..]), "Everything checks out");
-        assert_eq!(fix_command(checks[1].fix.as_ref().unwrap()), ("one-mk run".to_owned(), true));
+        assert_eq!(fix_command(checks[1].fix.as_ref().unwrap()), ("Choose Allow.".to_owned(), false));
         assert_eq!(fix_command("Start it."), ("Start it.".to_owned(), false));
         // A flag or a placeholder isn't something to paste; a later command is.
         let fix = "Was it started with `--no-discovery`? Connect with `one-mk run --connect <ip>:24900`.";
         assert!(!fix_command(fix).1);
-        assert_eq!(fix_command("Use `--port`, or run `one-mk install`.").0, "one-mk install");
-        assert_eq!(hotkeys_note("unavailable", "no portal").as_deref(), Some("On this computer they work only while the pointer is on another one (no portal)."));
-        assert_eq!(hotkeys_note("on", "through Windows").as_deref(), Some("Working through Windows."));
+        assert_eq!(hotkeys_note("unavailable", "no portal").as_deref(), Some("Shortcuts work only while the pointer is on another computer. You can also switch computers from the window."));
+        assert_eq!(hotkeys_note("on", "through Windows").as_deref(), Some("Ready. You can change shortcuts in Settings."));
         assert_eq!(hotkeys_note("off", ""), None);
         assert_eq!(parse_doctor("one-mk: error"), None);
         assert_eq!(parse_doctor("{\"checks\": [1, }"), None);
+    }
+
+    #[test]
+    fn doctor_actions_are_optional_and_hidden_rows_are_ignored() {
+        let checks = parse_doctor(r#"{"checks":[
+            {"id":"daemon","title":"Sharing","status":"skip","detail":"Sharing is stopped.","action":"Start","visible":true},
+            {"id":"pairing","title":"Paired computers","status":"skip","detail":"No computers paired yet.","action":"Pair","visible":true},
+            {"id":"input","title":"Permissions","status":"warn","detail":"Allow Input Monitoring.","action":"OpenPermissionGuide","visible":true},
+            {"id":"firewall","title":"Firewall","status":"fail","detail":"Blocked.","action":"OpenFirewallSettings","visible":true},
+            {"id":"wallpaper","title":"Wallpaper","status":"fail","detail":"not shipped","visible":false},
+            {"id":"config","title":"Settings","status":"pass","detail":"Ready.","visible":true}
+        ]}"#).unwrap();
+        assert_eq!(checks.len(), 5);
+        for action in ["Start", "Pair", "OpenPermissionGuide", "OpenFirewallSettings"] {
+            assert!(checks.iter().any(|check| check.action.as_deref() == Some(action)));
+        }
+        assert_eq!(checks.last().unwrap().action, None);
+    }
+
+    #[test]
+    fn older_doctor_reports_are_plain_and_normal_states_stay_neutral() {
+        let checks = parse_doctor(r#"{"checks":[
+            {"id":"daemon","title":"Program","status":"fail","detail":"one-mk is not running on this computer.","fix":"one-mk run"},
+            {"id":"pairing","title":"Paired computers","status":"fail","detail":"This computer is not paired with any other.","fix":"one-mk pair"},
+            {"id":"config","title":"Settings","status":"warn","detail":"There is no settings folder yet (settings.toml)."},
+            {"id":"identity","title":"Identity","status":"warn","detail":"This computer has no identity yet."},
+            {"id":"wallpaper-import-sandbox","title":"Wallpaper import sandbox","status":"skip","detail":"not shipped"},
+            {"id":"clipboard-history","title":"Clipboard history","status":"skip","detail":"compile-checked"},
+            {"id":"broadcast","title":"Broadcast","status":"pass","detail":"Broadcast has not been tried on this system yet (untested)."},
+            {"id":"edge-push","title":"Edges with no computer","status":"warn","detail":"Not yet tested on macOS.","fix":"one-mk edge"}
+        ]}"#).unwrap();
+        assert_eq!(checks.len(), 6);
+        assert!(checks.iter().any(|check| check.action.as_deref() == Some("Start") && check.verdict == Verdict::Skip));
+        assert!(checks.iter().any(|check| check.action.as_deref() == Some("Pair") && check.verdict == Verdict::Skip));
+        for check in checks {
+            let text = format!("{} {} {}", check.title, check.detail, check.fix.unwrap_or_default());
+            for forbidden in ["one-mk ", "settings.toml", "`", "untested", "compile", "sandbox", "MacApp"] {
+                assert!(!text.contains(forbidden), "{text}");
+            }
+        }
     }
 
     #[test]

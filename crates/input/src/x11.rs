@@ -78,7 +78,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     let (cap_tx, cap_rx) = mpsc::unbounded_channel();
     let (inj_tx, inj_rx) = mpsc::unbounded_channel();
     spawn_thread("one-mk-x11", move || run(Some(first), Target::default(), ev_tx, cap_rx, inj_rx, locked))?;
-    Ok(Backend { keyboard: None, name: "x11", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { keyboard: crate::typing::KeyboardLayout::native(), name: "x11", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 /// Which X server, and (for tests) whether pointer barriers may be used.

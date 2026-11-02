@@ -67,10 +67,8 @@ pub const PEER_PARTIAL_CAP: u64 = 50 << 30;
 // ---------------------------------------------------------------- receiving
 
 /// Notifies nobody.
-#[cfg(test)]
-struct Quiet;
+pub(crate) struct Quiet;
 
-#[cfg(test)]
 impl Notifier for Quiet {
     fn files_received(&self, _: crate::notify::FilesReceived) {}
 }
@@ -84,6 +82,49 @@ pub struct Inbox {
     partial_cap: u64,
     /// Progress of what is arriving, and the "files received" notification.
     transfers: Arc<Transfers>,
+    wallpaper: Mutex<WallpaperPolicy>,
+    wallpaper_transfer: tokio::sync::Mutex<()>,
+    pub wallpaper_changed: Notify,
+}
+
+const WALLPAPER_CACHE_CAP: u64 = 8 << 30;
+fn wallpaper_fits(media_occupied: u64, total_occupied: u64, size: u64, largest: u64) -> bool {
+    media_occupied.saturating_add(size) <= largest.max(size).saturating_mul(2).min(WALLPAPER_CACHE_CAP)
+        && total_occupied.saturating_add(size) <= WALLPAPER_CACHE_CAP
+}
+#[derive(Default)]
+struct WallpaperPolicy {
+    peer: Option<Fingerprint>,
+    hashes: std::collections::BTreeSet<String>,
+    last_offer: Option<std::time::Instant>,
+    /// A cached video whose contents were checked against its hash, and the
+    /// file's identity then (size, file number, change times): offered again
+    /// (Pause, Play, Fit resend the plan), the same unchanged file is
+    /// acknowledged without the offer limit or another full read. A file
+    /// replaced or rewritten since has another identity and is read again.
+    verified: Option<(String, Vec<u64>)>,
+}
+impl WallpaperPolicy {
+    fn already_have(&self, peer: Fingerprint, hash: &str, size: u64, on_disk: Option<&[u64]>) -> bool {
+        self.peer == Some(peer) && self.hashes.contains(hash) && on_disk.is_some_and(|identity| identity.first() == Some(&size))
+            && self.verified.as_ref().is_some_and(|(verified, identity)| verified == hash && Some(identity.as_slice()) == on_disk)
+    }
+
+    fn accept(&mut self, peer: Fingerprint, hash: &str, size: u64, now: std::time::Instant) -> bool {
+        if self.peer != Some(peer) || !self.hashes.contains(hash) || size == 0 || size > one_mk_wallpaper::MAX_MEDIA_BYTES
+            || self.last_offer.is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(2)) { return false; }
+        self.last_offer = Some(now);
+        true
+    }
+}
+
+pub(crate) fn cache_bytes(root: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(root) else { return 0 };
+    entries.flatten().fold(0u64, |total, entry| {
+        let size = entry.file_type().ok().map_or(0, |kind| if kind.is_file() { entry.metadata().map_or(u64::MAX, |metadata| metadata.len()) }
+            else if kind.is_dir() { cache_bytes(&entry.path()) } else { 0 });
+        total.saturating_add(size)
+    })
 }
 
 #[derive(Default)]
@@ -215,7 +256,8 @@ impl Inbox {
 
     fn build(root: PathBuf, partial_cap: u64, notifier: Arc<dyn Notifier>) -> Arc<Self> {
         let transfers = Transfers::new(root.clone(), notifier);
-        let inbox = Arc::new(Self { root, active: Mutex::default(), limits: Arc::default(), partial_cap, transfers });
+        let inbox = Arc::new(Self { root, active: Mutex::default(), limits: Arc::default(), partial_cap, transfers,
+            wallpaper: Mutex::default(), wallpaper_transfer: tokio::sync::Mutex::new(()), wallpaper_changed: Notify::new() });
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let weak: Weak<Inbox> = Arc::downgrade(&inbox);
             rt.spawn(async move {
@@ -305,6 +347,60 @@ impl Inbox {
     ) {
         self.receive_inner(Some(conn), conn.fp, peer, send, recv).await
     }
+
+    pub async fn receive_wallpaper_on(&self, conn: &ConnPermit, peer: &str, mut send: quinn::SendStream, mut recv: quinn::RecvStream) {
+        let Ok(Some(FileMsg::Offer { path, size, mtime, batch })) = read_file_msg(&mut recv).await else { return };
+        let valid = path.strip_suffix(".video").is_some_and(one_mk_wallpaper::valid_hash)
+            && size <= one_mk_wallpaper::MAX_MEDIA_BYTES && batch.files == 1 && batch.bytes == size;
+        if !valid { let _ = write_file_msg(&mut send, &FileMsg::Reject { reason: "Invalid wallpaper video".into() }).await; return; }
+        let Ok(_guard) = self.start_stream(conn.fp, Some(conn)) else { return };
+        let Ok(_transfer) = self.wallpaper_transfer.try_lock() else { return };
+        let existing = self.root.join(&path);
+        let hash = path.trim_end_matches(".video").to_owned();
+        let identity = |path: &Path| fs::symlink_metadata(path).ok().filter(|metadata| metadata.is_file())
+            .and_then(|_| fs::File::open(path).ok()).and_then(|file| one_mk_wallpaper::file_identity(&file).ok());
+        if self.wallpaper.lock().unwrap().already_have(conn.fp, &hash, size, identity(&existing).as_deref()) {
+            let _ = write_file_msg(&mut send, &FileMsg::Saved { name: path }).await;
+            let _ = send.finish();
+            return;
+        }
+        let admitted = self.wallpaper.lock().unwrap().accept(conn.fp, &hash, size, std::time::Instant::now());
+        if !admitted { let _ = write_file_msg(&mut send, &FileMsg::Reject { reason: "Wallpaper was not requested or was offered too often".into() }).await; return; }
+        let root = self.root.clone();
+        let keep = self.wallpaper.lock().unwrap().hashes.clone();
+        let offered = existing.clone();
+        let (media_occupied, total_occupied, largest) = tokio::task::spawn_blocking(move || {
+            let _ = one_mk_wallpaper::prune_cache_except(&root, &keep);
+            let lengths: Vec<_> = keep.iter().filter_map(|hash| fs::symlink_metadata(root.join(format!("{hash}.video"))).ok()).map(|metadata| metadata.len()).collect();
+            let replaced = fs::symlink_metadata(offered).map_or(0, |metadata| metadata.len());
+            (lengths.iter().sum::<u64>().saturating_sub(replaced), cache_bytes(&root).saturating_sub(replaced), lengths.into_iter().max().unwrap_or(0))
+        }).await.unwrap_or((u64::MAX, u64::MAX, 0));
+        let admitted = { let policy = self.wallpaper.lock().unwrap(); policy.peer == Some(conn.fp) && policy.hashes.contains(&hash) }
+            && wallpaper_fits(media_occupied, total_occupied, size, largest);
+        if !admitted { let _ = write_file_msg(&mut send, &FileMsg::Reject { reason: "Wallpaper was not requested, offered too often, or exceeds its cache limit".into() }).await; return; }
+        // Its identity before the read: a change during it doesn't count as checked.
+        let before = identity(&existing);
+        let (check, expected) = (existing.clone(), hash.clone());
+        let cached = tokio::task::spawn_blocking(move || crate::live_wallpaper::digest(&check).is_ok_and(|actual| actual == expected)).await.unwrap_or(false);
+        if cached {
+            self.wallpaper.lock().unwrap().verified = before.map(|before| (hash, before));
+            let _ = write_file_msg(&mut send, &FileMsg::Saved { name: path }).await;
+            let _ = send.finish();
+            return;
+        }
+        if existing.exists() { let _ = fs::remove_file(&existing); }
+        let _ = self.receive_file(conn.fp, peer, &mut send, &mut recv, &path, (size, mtime, batch)).await;
+        self.wallpaper_changed.notify_waiters();
+        let _ = send.finish();
+    }
+
+    pub fn expect_wallpaper(&self, peer: Fingerprint, current: Option<&str>, incoming: &str) {
+        let mut policy = self.wallpaper.lock().unwrap();
+        policy.peer = Some(peer);
+        policy.hashes = current.into_iter().chain(Some(incoming)).map(str::to_owned).collect();
+    }
+
+    pub fn forget_wallpaper(&self) { let mut policy = self.wallpaper.lock().unwrap(); policy.peer = None; policy.hashes.clear(); }
 
     async fn receive_inner(
         &self,
@@ -955,6 +1051,16 @@ pub async fn send_files_as(
     progress: Arc<Progress>,
     id: u64,
 ) -> Vec<(Outgoing, Outcome)> {
+    send_files_kind(conn, files, progress, id, StreamKind::File).await
+}
+
+pub async fn send_files_kind(
+    conn: &quinn::Connection,
+    files: Vec<Outgoing>,
+    progress: Arc<Progress>,
+    id: u64,
+    kind: StreamKind,
+) -> Vec<(Outgoing, Outcome)> {
     let bytes = files.iter().map(|file| file.size).fold(0u64, u64::saturating_add);
     if files.len() > 10_000 || bytes > 1 << 40 {
         return files.into_iter().map(|file| (file, Outcome::Rejected("file batch exceeds the limit of 10000 files or 1 TiB".into()))).collect();
@@ -968,7 +1074,7 @@ pub async fn send_files_as(
     for _ in 0..STREAMS.min(n) {
         let (conn, queue, results, progress) = (conn.clone(), queue.clone(), results.clone(), progress.clone());
         workers.spawn(async move {
-            let (mut send, mut recv) = match open_stream(&conn, StreamKind::File).await {
+            let (mut send, mut recv) = match open_stream(&conn, kind).await {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::debug!("opening a file stream: {e:#}");
@@ -1009,6 +1115,11 @@ async fn send_one(
 ) -> Result<Outcome> {
     write_file_msg(send, &FileMsg::Offer { path: file.rel.clone(), size: file.size, mtime: file.mtime, batch }).await?;
     let offset = match read_file_msg(recv).await? {
+        Some(FileMsg::Saved { name }) => {
+            add_progress(&progress.done, file.size);
+            add_progress(&progress.skipped, file.size);
+            return Ok(Outcome::Saved { name, resumed_from: file.size });
+        }
         Some(FileMsg::Accept { offset }) => offset,
         Some(FileMsg::Reject { reason }) => {
             add_progress(&progress.done, file.size);
@@ -1422,6 +1533,77 @@ mod tests {
         let addr = b.local_addr().unwrap();
         let (pa, pb) = tokio::join!(a.connect(addr), async { b.accept().await.unwrap() });
         (pa.unwrap(), pb.unwrap(), a, b)
+    }
+
+    #[tokio::test]
+    async fn wallpaper_cached_hash_skips_bytes_and_rejects_paths() {
+        let (sender, receiver, _first, _second) = linked().await;
+        let directory = tempfile::tempdir().unwrap();
+        let video = directory.path().join("source");
+        fs::write(&video, b"a verified wallpaper").unwrap();
+        let hash = crate::live_wallpaper::digest(&video).unwrap();
+        let name = format!("{hash}.video");
+        fs::rename(video, directory.path().join(&name)).unwrap();
+        let inbox = Inbox::with_notifier(directory.path().to_owned(), Arc::new(Quiet));
+        inbox.expect_wallpaper(receiver.fingerprint, None, &hash);
+        let permit = inbox.admit(receiver.fingerprint).unwrap();
+        for (offered, expected) in [(name.as_str(), true), ("../outside.video", false), ("ABC.video", false)] {
+            let (mut sending, mut receiving) = open_stream(&sender.conn, StreamKind::WallpaperVideo).await.unwrap();
+            let (_, reply, request) = receiver.accept_stream().await.unwrap();
+            let worker = inbox.receive_wallpaper_on(&permit, "desktop", reply, request);
+            let test = async {
+                write_file_msg(&mut sending, &FileMsg::Offer { path: offered.into(), size: 20, mtime: 0, batch: Batch { id: 7, files: 1, bytes: 20 } }).await.unwrap();
+                let response = read_file_msg(&mut receiving).await.unwrap().unwrap();
+                assert_eq!(matches!(response, FileMsg::Saved { .. }), expected);
+                if !expected { assert!(matches!(response, FileMsg::Reject { .. })); }
+                sending.finish().unwrap();
+            };
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(worker, test); }).await.unwrap();
+        }
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn wallpaper_admission_requires_a_plan_and_limits_rotating_offers() {
+        let peer = one_mk_net::Identity::ephemeral().unwrap().fingerprint;
+        let stranger = one_mk_net::Identity::ephemeral().unwrap().fingerprint;
+        let now = std::time::Instant::now();
+        let mut policy = WallpaperPolicy::default();
+        assert!(!policy.accept(peer, "current", 100, now));
+        policy.peer = Some(peer); policy.hashes = ["current".into(), "pending".into()].into_iter().collect();
+        assert!(!policy.accept(stranger, "current", 100, now));
+        assert!(!policy.accept(peer, "unsolicited", 100, now));
+        assert!(!policy.accept(peer, "pending", one_mk_wallpaper::MAX_MEDIA_BYTES + 1, now));
+        assert!(policy.accept(peer, "current", 100, now));
+        assert!(!policy.accept(peer, "pending", 100, now));
+        assert!(policy.accept(peer, "pending", 100, now + Duration::from_secs(2)));
+        // Checked once, the same video offered again right away is acknowledged.
+        let file = [100, 7, 42, 1_700_000_000];
+        assert!(!policy.already_have(peer, "current", 100, Some(&file)));
+        policy.verified = Some(("current".into(), file.to_vec()));
+        assert!(policy.already_have(peer, "current", 100, Some(&file)));
+        // Rewritten since (same size, other times or file number): read again.
+        assert!(!policy.already_have(peer, "current", 100, Some(&[100, 7, 42, 1_700_000_001])));
+        assert!(!policy.already_have(peer, "current", 100, Some(&[100, 7, 43, 1_700_000_000])));
+        assert!(!policy.already_have(peer, "current", 99, Some(&file)));
+        assert!(!policy.already_have(peer, "current", 100, None));
+        assert!(!policy.already_have(stranger, "current", 100, Some(&file)));
+        assert!(!policy.already_have(peer, "pending", 100, Some(&file)));
+        assert!(wallpaper_fits(1000, 2000, 10, 1000));
+        assert!(!wallpaper_fits(1000, 2000, 10, 10));
+        assert!(!wallpaper_fits(0, WALLPAPER_CACHE_CAP, 1, 1));
+        assert!(!wallpaper_fits(u64::MAX, u64::MAX, 1, u64::MAX));
+    }
+
+    #[test]
+    fn wallpaper_cache_usage_includes_pictures_and_partials() {
+        let directory = tempfile::tempdir().unwrap();
+        for (folder, size) in [("pictures", 20), (PARTIAL_DIR, 30)] {
+            fs::create_dir(directory.path().join(folder)).unwrap();
+            fs::write(directory.path().join(folder).join("data"), vec![0; size]).unwrap();
+        }
+        fs::write(directory.path().join("media.video"), [0; 10]).unwrap();
+        assert_eq!(cache_bytes(directory.path()), 60);
     }
 
     async fn eventually(what: &str, mut ok: impl FnMut() -> bool) {

@@ -76,7 +76,7 @@ pub struct Report {
 impl Report {
     /// Every failure, one sentence each, for the window to show.
     pub fn problems(&self) -> Vec<String> {
-        [("Start at login", &self.login), ("File manager menu", &self.integrations), ("Starting one·mk", &self.service)]
+        [("Start at login", &self.login), ("File manager menu", &self.integrations), ("Starting oneMK", &self.service)]
             .into_iter()
             .filter_map(|(what, step)| step.failed().map(|e| format!("{what}: {e}")))
             .collect()
@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(report.service, Step::Failed("one-mk didn't start".into()));
         assert_eq!(
             report.problems(),
-            ["Start at login: no home directory", "Starting one·mk: one-mk didn't start"]
+            ["Start at login: no home directory", "Starting oneMK: one-mk didn't start"]
         );
         assert_eq!(run(&dir, &host), None, "the error is not repeated at every launch");
         let _ = std::fs::remove_dir_all(&dir);

@@ -116,9 +116,13 @@ pub fn focus_ring(ui: &Ui, r: &Response, rect: Rect, radius: u8) {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Look {
-    /// The one action that matters most here: amber.
+    /// The one action that matters most here: the accent.
     Primary,
+    /// Everything else: a quiet solid capsule.
     Quiet,
+    /// A control floating over the desk (the toolbar): glass, like the
+    /// panels it sits among.
+    Glass,
 }
 
 /// A button that presses in a little. `a11y` names it for screen readers
@@ -131,18 +135,35 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
     let hover = tween(&ctx, id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
     // Only the shape scales: glyphs re-rasterised at a new size shimmer.
     let rr = Rect::from_center_size(rect.center(), rect.size() * (1.0 - 0.03 * press));
-    let radius = if rect.height() >= 32.0 { 10 } else { 8 };
-    let (bg, lit, fg) = match (look, enabled) {
-        (_, false) => (RAISED, RAISED, INK2),
-        (Look::Primary, true) => (SIGNAL, SIGNAL_LIT, SIGNAL_INK),
-        (Look::Quiet, true) => (BUTTON, BUTTON_LIT, INK),
+    // Capsules, as the system's own glass buttons are.
+    let radius = (rr.height() / 2.0).round().min(255.0) as u8;
+    let fg = match (look, enabled) {
+        (_, false) => INK3,
+        (Look::Primary, true) => SIGNAL_INK,
+        (Look::Quiet | Look::Glass, true) => INK,
     };
-    let p = ui.painter();
-    p.rect_filled(rr, CornerRadius::same(radius), mix(bg, lit, hover));
-    if look == Look::Quiet && enabled {
-        // On glass: a faint rim and a lit top edge, so it reads as a key.
-        p.rect_stroke(rr, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
-        p.hline(rr.x_range().shrink(f32::from(radius)), rr.top() + 1.0, Stroke::new(1.0, Color32::from_white_alpha(22)));
+    let p = ui.painter().clone();
+    match (look, enabled) {
+        (Look::Primary, true) => {
+            // Tinted glass: the colour lit from above, its rim catching light.
+            p.add(egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: SIGNAL.gamma_multiply(0.28) }.as_shape(rr, CornerRadius::same(radius)));
+            p.add(rounded_gradient(rr, rr.height() / 2.0, mix(SIGNAL_LIT, Color32::WHITE, 0.12 * hover + 0.04), mix(SIGNAL, SIGNAL_LIT, hover)));
+            p.add(lit_edge(rr.shrink(0.5), rr.height() / 2.0 - 0.5));
+        }
+        (Look::Glass, true) => {
+            for s in glass_shapes_as(&ctx, id.with("glass").value(), rr, rr.height() / 2.0, CONTROL_GLASS) {
+                p.add(s);
+            }
+            if hover > 0.0 {
+                p.rect_filled(rr, CornerRadius::same(radius), Color32::from_white_alpha((14.0 * hover) as u8));
+            }
+        }
+        (Look::Quiet, true) => {
+            p.rect(rr, CornerRadius::same(radius), mix(BUTTON, BUTTON_LIT, hover), Stroke::new(1.0, CONTROL_EDGE), StrokeKind::Inside);
+        }
+        (_, false) => {
+            p.rect(rr, CornerRadius::same(radius), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        }
     }
     focus_ring(ui, &r, rr, radius);
     p.text(rr.center(), Align2::CENTER_CENTER, label, semibold(T_BODY), fg);
@@ -210,16 +231,17 @@ pub fn switch(ui: &mut Ui, row: Rect, id: Id, label: &str, on: bool, enabled: bo
     let p = ui.painter();
     let shown = fit(p, label, &regular(T_BODY), row.width() - 46.0);
     p.text(row.left_center(), Align2::LEFT_CENTER, &shown, regular(T_BODY), if enabled { INK } else { INK2 });
-    let track = Rect::from_min_size(pos2(row.right() - 34.0, row.center().y - 10.0), vec2(34.0, 20.0));
-    let off = mix(TRACK_OFF, Color32::from_rgb(0x46, 0x4F, 0x5C), hover);
-    // On is told by fill and knob side, in ink: amber stays for crossings
-    // and the main action.
-    let col = mix(off, if enabled { INK } else { INK2 }, fill);
-    p.rect_filled(track, CornerRadius::same(10), col);
-    p.rect_stroke(track, CornerRadius::same(10), Stroke::new(1.0, mix(TRACK_EDGE, Color32::TRANSPARENT, fill)), StrokeKind::Inside);
-    let knob = pos2(track.left() + 10.0 + 14.0 * knob_t, track.center().y);
-    p.circle_filled(knob, 7.5, mix(INK, PANEL, fill));
-    focus_ring(ui, &r, track, 10);
+    let track = Rect::from_min_size(pos2(row.right() - 38.0, row.center().y - 11.0), vec2(38.0, 22.0));
+    // Off: a recessed capsule. On: filled with the accent, as the system's
+    // switches are; the knob is a lit white bead that slides across.
+    let off = mix(Color32::from_white_alpha(34), Color32::from_white_alpha(46), hover);
+    let on_col = if enabled { mix(ACCENT, ACCENT_LIT, hover) } else { INK3 };
+    p.rect_filled(track, CornerRadius::same(11), mix(off, on_col, fill));
+    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, mix(Color32::from_white_alpha(22), Color32::from_white_alpha(30), fill)), StrokeKind::Inside);
+    let knob = pos2(track.left() + 11.0 + 16.0 * knob_t, track.center().y);
+    p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(Rect::from_center_size(knob, vec2(18.0, 18.0)), CornerRadius::same(9)));
+    p.circle_filled(knob, 9.0, if enabled { Color32::WHITE } else { INK2 });
+    focus_ring(ui, &r, track, 11);
     if r.hovered() && enabled {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -248,7 +270,6 @@ pub struct Pills<'a> {
     pub enabled: Vec<bool>,
     pub role: Role,
     pub font: f32,
-    pub radius: u8,
 }
 
 impl Pills<'_> {
@@ -262,7 +283,9 @@ impl Pills<'_> {
     pub fn show(&self, ui: &mut Ui, arrowed: bool) -> Option<usize> {
         let ctx = ui.ctx().clone();
         let p = ui.painter().clone();
-        p.rect(self.track, CornerRadius::same(self.radius + 2), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        // A recessed track, and a lighter capsule that slides to the choice.
+        let round = |r: Rect| (r.height() / 2.0).round().min(255.0) as u8;
+        p.rect_filled(self.track, CornerRadius::same(round(self.track)), TRACK);
         let to = self.cells[self.chosen.unwrap_or(0).min(self.cells.len() - 1)];
         let secs = motion::space(0.22);
         let x = tween(&ctx, self.id.with("x"), to.left(), secs, motion::out_quart);
@@ -270,8 +293,10 @@ impl Pills<'_> {
         let shown = tween(&ctx, self.id.with("shown"), f32::from(self.chosen.is_some()), motion::fade(0.15), motion::linear);
         if shown > 0.0 {
             let pill = Rect::from_min_size(pos2(x, to.top()), vec2(w, to.height()));
-            p.rect_filled(pill, CornerRadius::same(self.radius), PILL.gamma_multiply(shown));
-            p.hline(pill.x_range().shrink(f32::from(self.radius)), pill.top() + 0.5, Stroke::new(1.0, Color32::from_white_alpha((20.0 * shown) as u8)));
+            // The chosen one lifts out of the track: a lighter capsule on
+            // a soft shadow.
+            p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha((70.0 * shown) as u8) }.as_shape(pill, CornerRadius::same(round(pill))));
+            p.rect(pill, CornerRadius::same(round(pill)), THUMB.gamma_multiply(shown), Stroke::new(1.0, CONTROL_EDGE.gamma_multiply(shown)), StrokeKind::Inside);
         }
         let mut picked = None;
         // egui moves focus with the arrows but doesn't report it as gained,
@@ -295,7 +320,7 @@ impl Pills<'_> {
             let font = if on { semibold(self.font) } else { regular(self.font) };
             let text = fit(&p, self.labels[k], &font, cell.width() - 8.0);
             p.text(cell.center(), Align2::CENTER_CENTER, text, font, mix(base, INK, lit));
-            focus_ring(ui, &r, *cell, self.radius);
+            focus_ring(ui, &r, *cell, round(*cell));
             if r.hovered() && enabled && !on {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -319,9 +344,12 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
     let focused = ui.memory(|m| m.has_focus(id));
     let hover = ui.rect_contains_pointer(rect) && enabled;
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(7), if enabled { GROUND } else { PANEL });
-    let edge = if focused { INK2 } else if hover { TRACK_EDGE } else { LINE };
-    p.rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, edge), StrokeKind::Inside);
+    // Recessed into the glass: darker than it, with a rim that lights up
+    // when the field has the keyboard.
+    let fr = CornerRadius::same(((rect.height() / 2.0).min(10.0)) as u8);
+    p.rect_filled(rect, fr, if enabled { Color32::from_black_alpha(70) } else { Color32::from_black_alpha(40) });
+    let edge = if focused { ACCENT } else if hover { Color32::from_white_alpha(40) } else { Color32::from_white_alpha(18) };
+    p.rect_stroke(rect, fr, Stroke::new(if focused { 1.5 } else { 1.0 }, edge), StrokeKind::Inside);
     let edit = egui::TextEdit::singleline(text)
         .id(id)
         .font(font)
@@ -340,7 +368,7 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
     r
 }
 
-/// A thin bar `frac` full (amber: something crossing); `None` while the
+/// A thin bar `frac` full (Volt: something crossing); `None` while the
 /// size isn't known: a short segment instead, still.
 pub fn progress_bar(ui: &Ui, rect: Rect, id: Id, frac: Option<f32>) {
     let p = ui.painter();
@@ -463,17 +491,150 @@ pub fn glass(ctx: &egui::Context) -> crate::glass::Glass {
     ctx.data(|d| d.get_temp::<crate::glass::Glass>(Id::unique("glass"))).unwrap_or_default()
 }
 
-/// A glass panel: a soft shadow, the blurred backdrop, its tint, a lit
-/// top edge and a faint rim. `key` names the panel so its blur is kept.
+/// A glass panel: a soft shadow, the blurred backdrop, its frost (lit
+/// from above: lighter at the top), a bright top edge and a faint rim.
+/// `key` names the panel so its blur is kept.
 pub fn glass_panel(ui: &Ui, key: impl std::hash::Hash + std::fmt::Debug, rect: Rect, radius: u8) {
-    let g = glass(ui.ctx());
-    let p = ui.painter();
-    let r = f32::from(radius);
-    p.add(egui::epaint::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(70) }.as_shape(rect, CornerRadius::same(radius)));
-    g.backdrop(p, Id::unique(("glass", key)).value(), rect, r);
-    p.rect_filled(rect, CornerRadius::same(radius), if g.works() { GLASS } else { GLASS_SOLID });
-    p.rect_stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_white_alpha(14)), egui::StrokeKind::Inside);
-    p.hline(rect.x_range().shrink(r), rect.top() + 1.0, Stroke::new(1.0, Color32::from_white_alpha(26)));
+    for s in glass_shapes(ui.ctx(), Id::unique(("glass", key)).value(), rect, radius) {
+        ui.painter().add(s);
+    }
+}
+
+/// A solid surface lifted off the window: what floats over the desk.
+pub fn raised_shapes(rect: Rect, r: f32, shadow: bool) -> Vec<egui::Shape> {
+    let radius = CornerRadius::same(r.round().clamp(0.0, 255.0) as u8);
+    let mut out = vec![];
+    if shadow {
+        out.push(egui::epaint::Shadow { offset: [0, 16], blur: 40, spread: 0, color: Color32::from_black_alpha(110) }.as_shape(rect, radius).into());
+    }
+    out.push(rounded_gradient(rect, r, ELEVATED_TOP, ELEVATED));
+    out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, ELEVATED_EDGE), StrokeKind::Inside)));
+    out
+}
+
+/// The content layer: a group of rows on a quiet fill and a hairline. Not
+/// glass: glass is for what floats above the content (the sidebar, the
+/// panels over the desk, the toolbar), as the system uses it.
+pub fn group(ui: &Ui, rect: Rect, radius: u8) {
+    for s in group_shapes(rect, radius) {
+        ui.painter().add(s);
+    }
+}
+
+pub fn group_shapes(rect: Rect, radius: u8) -> Vec<egui::Shape> {
+    vec![egui::Shape::Rect(egui::epaint::RectShape::new(rect, CornerRadius::same(radius), GROUP, Stroke::new(1.0, GROUP_EDGE), StrokeKind::Inside))]
+}
+
+/// The same as shapes, to place behind contents drawn first.
+pub fn glass_shapes(ctx: &egui::Context, key: u64, rect: Rect, radius: u8) -> Vec<egui::Shape> {
+    glass_shapes_as(ctx, key, rect, f32::from(radius), PANEL_GLASS)
+}
+
+/// Which glass: a panel holds text, so it is tinted for it; a control is
+/// clearer and bends more, as it is small and sits on a panel.
+#[derive(Clone, Copy)]
+pub struct GlassKind {
+    /// Real glass (only the command palette in the Night design); else a
+    /// solid raised surface: a lifted fill, a hairline, a soft shadow.
+    glass: bool,
+    see: [Color32; 2],
+    solid: [Color32; 2],
+    clear: [Color32; 2],
+    bend: f32,
+    shadow: bool,
+}
+
+pub const PANEL_GLASS: GlassKind = GlassKind { glass: false, see: [GLASS_TOP, GLASS], clear: [GLASS_CLEAR_TOP, GLASS_CLEAR], solid: [GLASS_SOLID_TOP, GLASS_SOLID], bend: 1.0, shadow: true };
+pub const CONTROL_GLASS: GlassKind = GlassKind { glass: false, see: [CONTROL_TOP, CONTROL], clear: [CONTROL_TOP, CONTROL], solid: [CONTROL_SOLID_TOP, CONTROL_SOLID], bend: 1.6, shadow: false };
+
+/// The command palette: the one piece of real glass, over a dimmed window.
+pub const PALETTE_GLASS: GlassKind = GlassKind { glass: true, see: [PALETTE_TOP, PALETTE], clear: [PALETTE_TOP, PALETTE], solid: [ELEVATED, ELEVATED], bend: 0.8, shadow: true };
+
+pub fn glass_shapes_as(ctx: &egui::Context, key: u64, rect: Rect, r: f32, kind: GlassKind) -> Vec<egui::Shape> {
+    if !kind.glass {
+        return raised_shapes(rect, r, kind.shadow);
+    }
+    let g = glass(ctx);
+    let radius = CornerRadius::same(r.round().clamp(0.0, 255.0) as u8);
+    let mut out = vec![];
+    if kind.shadow {
+        out.push(egui::epaint::Shadow { offset: [0, 12], blur: 32, spread: 0, color: Color32::from_black_alpha(80) }.as_shape(rect, radius).into());
+    }
+    if g.works() {
+        let [top, bottom] = if crate::chrome::see_through() { kind.clear } else { kind.see };
+        g.backdrop_shapes(&mut out, key, rect, r, crate::glass::Look { top, bottom, bend: kind.bend });
+        // A hairline for the shape's edge where the light doesn't reach.
+        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, GLASS_HAIRLINE), StrokeKind::Inside)));
+    } else {
+        out.push(rounded_gradient(rect, r, kind.solid[0], kind.solid[1]));
+        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, GLASS_RIM), StrokeKind::Inside)));
+        out.push(lit_edge(rect.shrink(0.5), r - 0.5));
+    }
+    out
+}
+
+/// Light catching a panel's top edge: along the top and round both top
+/// corners, fading out as the corners turn down.
+fn lit_edge(rect: Rect, r: f32) -> egui::Shape {
+    use egui::epaint::{Mesh, Vertex, WHITE_UV};
+    const STEPS: usize = 10;
+    let mut pts: Vec<(Pos2, f32)> = vec![];
+    // Left corner from its side (dark) to the top (lit), then the right.
+    for i in 0..=STEPS {
+        let a = std::f32::consts::PI + i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2;
+        pts.push((pos2(rect.left() + r + r * a.cos(), rect.top() + r + r * a.sin()), i as f32 / STEPS as f32));
+    }
+    for i in 0..=STEPS {
+        let a = -std::f32::consts::FRAC_PI_2 + i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2;
+        pts.push((pos2(rect.right() - r + r * a.cos(), rect.top() + r + r * a.sin()), 1.0 - i as f32 / STEPS as f32));
+    }
+    // A 1-point band, inward from the edge, its alpha eased along it.
+    let mut m = Mesh::default();
+    for (k, &(p, t)) in pts.iter().enumerate() {
+        let next = pts[(k + 1).min(pts.len() - 1)].0;
+        let prev = pts[k.saturating_sub(1)].0;
+        let d = (next - prev).normalized();
+        let inward = vec2(-d.y, d.x);
+        let c = GLASS_EDGE.gamma_multiply(t * t * (3.0 - 2.0 * t));
+        m.vertices.push(Vertex { pos: p, uv: WHITE_UV, color: c });
+        m.vertices.push(Vertex { pos: p + inward, uv: WHITE_UV, color: c });
+    }
+    for k in 0..pts.len() as u32 - 1 {
+        let (a, b) = (2 * k, 2 * k + 2);
+        m.add_triangle(a, a + 1, b + 1);
+        m.add_triangle(a, b + 1, b);
+    }
+    egui::Shape::mesh(m)
+}
+
+/// A rounded rectangle filled from `top` at its top to `bottom` at its
+/// bottom (premultiplied colours), as rows of quads: corners follow the
+/// arc; the rim drawn over it smooths their edge.
+pub fn rounded_gradient(rect: Rect, radius: f32, top: Color32, bottom: Color32) -> egui::Shape {
+    use egui::epaint::{Mesh, Vertex, WHITE_UV};
+    let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0).max(0.0);
+    // Rows: down the top arc, the straight middle, down the bottom arc.
+    const STEPS: usize = 8;
+    let mut ys: Vec<f32> = (0..=STEPS).map(|i| rect.top() + r * (1.0 - (i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2).cos())).collect();
+    ys.extend((0..=STEPS).map(|i| rect.bottom() - r + r * (i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2).sin()));
+    let inset = |y: f32| {
+        let d = if y < rect.top() + r { rect.top() + r - y } else if y > rect.bottom() - r { y - (rect.bottom() - r) } else { 0.0 };
+        r - (r * r - d * d).max(0.0).sqrt()
+    };
+    let mut m = Mesh::default();
+    for &y in &ys {
+        let t = ((y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0);
+        let c = mix(top, bottom, t);
+        let dx = inset(y);
+        m.vertices.push(Vertex { pos: pos2(rect.left() + dx, y), uv: WHITE_UV, color: c });
+        m.vertices.push(Vertex { pos: pos2(rect.right() - dx, y), uv: WHITE_UV, color: c });
+    }
+    for k in 0..ys.len() as u32 - 1 {
+        let (a, b) = (2 * k, 2 * k + 2);
+        m.add_triangle(a, a + 1, b + 1);
+        m.add_triangle(a, b + 1, b);
+    }
+    egui::Shape::mesh(m)
 }
 
 #[cfg(test)]
@@ -512,7 +673,6 @@ mod tests {
                         enabled: vec![true; 3],
                         role: Role::RadioButton,
                         font: T_BODY,
-                        radius: 6,
                     };
                     if let Some(k) = pills.show(ui, arrowed) {
                         chosen = k;

@@ -28,6 +28,7 @@ pub fn receipt(tag: i64) -> Option<u32> {
 }
 
 pub fn eligible(code: u32) -> bool {
+    if (0x110..=0x114).contains(&code) { return true; }
     code != 58 && code != 464 && !(59..=68).contains(&code) && !(87..=88).contains(&code) && !(183..=194).contains(&code)
         && !one_mk_proto::mediakeys::MEDIA_KEYS.iter().any(|key| key.evdev == code)
         && logic::evdev_to_mac(code).is_some()
@@ -62,11 +63,56 @@ impl Flags {
         let mask = flags::SHIFT | flags::CONTROL | flags::ALTERNATE | flags::COMMAND | flags::DEV_ALL;
         (original & !mask) | (original & passed.flags() & !flags::NON_COALESCED) | injected
     }
+
+    /// An event another program posted: its modifiers are its own (System
+    /// Events, an automation tool), so only those of keys a rule swallowed
+    /// come off it, unless a key still passed on gives the same flag.
+    pub fn apply_posted(&self, original: u64) -> u64 {
+        let (mut swallowed, mut passed) = (logic::Modifiers::default(), logic::Modifiers::default());
+        for code in self.physical.iter() {
+            if self.suppressed.is_held(code) { swallowed.update(code, true); } else { passed.update(code, true); }
+        }
+        // The swallowed keys' own side flags come off first; a modifier's
+        // general flag stays while a side flag of it remains (a program's
+        // right Shift while the left one is swallowed).
+        let sides = swallowed.flags() & !passed.flags() & flags::DEV_ALL;
+        let mut kept = original & !sides;
+        for (general, side) in [
+            (flags::SHIFT, flags::DEV_LSHIFT | flags::DEV_RSHIFT), (flags::CONTROL, flags::DEV_LCTL | flags::DEV_RCTL),
+            (flags::ALTERNATE, flags::DEV_LALT | flags::DEV_RALT), (flags::COMMAND, flags::DEV_LCMD | flags::DEV_RCMD),
+        ] {
+            let lost = swallowed.flags() & !passed.flags() & general != 0;
+            if lost && kept & side == 0 { kept &= !general; }
+        }
+        kept
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_posted_event_keeps_its_own_modifiers_and_loses_only_swallowed_ones() {
+        let mut state = Flags::default();
+        // System Events' ⌘4: no key held here.
+        let command = flags::COMMAND | flags::DEV_LCMD | flags::NON_COALESCED;
+        assert_eq!(state.apply_posted(command), command);
+        assert_eq!(state.apply(command, 0), flags::NON_COALESCED, "a physical event without a held ⌘ loses it");
+        // Left ⌘ held and swallowed by a rule: it comes off a posted event too.
+        state.key(125, true, true);
+        assert_eq!(state.apply_posted(command) & (flags::COMMAND | flags::DEV_LCMD), 0);
+        // Right ⌘ held and passed on: ⌘ stays.
+        state.key(126, true, false);
+        assert_ne!(state.apply_posted(command) & flags::COMMAND, 0);
+        // Left Shift swallowed; a program posts right Shift + A: still shifted.
+        let mut state = Flags::default();
+        state.key(42, true, true);
+        let right_shift = flags::SHIFT | flags::DEV_RSHIFT | flags::NON_COALESCED;
+        assert_eq!(state.apply_posted(right_shift), right_shift);
+        // …but its left Shift is the swallowed key's and comes off.
+        assert_eq!(state.apply_posted(flags::SHIFT | flags::DEV_LSHIFT | flags::NON_COALESCED), flags::NON_COALESCED);
+    }
 
     #[test]
     fn missed_modifier_release_cannot_add_phantom_flags() {
@@ -127,6 +173,8 @@ mod tests {
     fn caps_fn_media_and_function_keys_are_not_local_physical_keys() {
         for code in [58, 464, 59, 60, 88, 183, 194, 115, 164] { assert!(!eligible(code)); }
         for code in [30, 42, 54, 29, 125] { assert!(eligible(code)); }
+        for code in 0x110..=0x114 { assert!(eligible(code)); }
+        assert!(!eligible(0x115));
     }
 
     #[test]

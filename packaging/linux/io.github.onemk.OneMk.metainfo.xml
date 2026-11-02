@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>io.github.onemk.OneMk</id>
-  <name>one·mk</name>
+  <name>oneMK</name>
   <summary>Share one mouse and keyboard between your computers</summary>
   <developer id="io.github.onemk">
     <name>Samer Abu-Sleem</name>
@@ -10,7 +10,7 @@
   <project_license>MIT OR Apache-2.0</project_license>
   <description>
     <p>
-      one·mk moves your mouse and keyboard from one computer to the next when the pointer crosses the edge of the
+      oneMK moves your mouse and keyboard from one computer to the next when the pointer crosses the edge of the
       screen, and shares the clipboard and files between them. It is a small, encrypted, peer-to-peer program for
       Linux, macOS and Windows.
     </p>

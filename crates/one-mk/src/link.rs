@@ -124,7 +124,7 @@ impl Link {
             loop {
                 match read_frame(&mut recv, &mut buf).await {
                     Ok(Some(msg)) => {
-                        if matches!(msg, Control::Wallpaper(_)) && !wallpaper_ingress.admit() { continue; }
+                        if matches!(msg, Control::Wallpaper(_) | Control::LiveWallpaper(_)) && !wallpaper_ingress.admit() { continue; }
                         if ctl_events.send((fp, id, LinkEvent::Control(msg))).is_err() {
                             break;
                         }

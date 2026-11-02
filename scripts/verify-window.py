@@ -271,7 +271,7 @@ def main():
                   small.click_named(r"^Stop the sharing service") and waited(audit, lambda: not audit.request(first).startswith("ok\n"), "stopped"))
             time.sleep(2)
             small.shot(out / "09-narrow-stopped.png")
-            check("stopped: the window offers Start", small.has(r"Start one·mk", 6))
+            check("stopped: the window offers Start", small.has(r"Start oneMK", 6))
             small.close()
             windows.remove(small)
 

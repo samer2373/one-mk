@@ -68,7 +68,7 @@ use windows_sys::Win32::UI::HiDpi::{
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, INPUT, INPUT_0, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
-    KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput,
 };
@@ -149,7 +149,7 @@ pub(crate) async fn open(_state_dir: PathBuf) -> Result<Backend> {
     std::thread::Builder::new()
         .name("one-mk-inject".into())
         .spawn(move || inject_thread(ev_tx, inj_rx, shared, controlled))?;
-    Ok(Backend { keyboard: None, name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
+    Ok(Backend { keyboard: keyboard_layout(), name: "native", events: ev_rx, capture: cap_tx, inject: inj_tx, focus, locker })
 }
 
 fn set_thread_dpi_awareness() {
@@ -257,6 +257,8 @@ struct State {
     session_active: bool,
     awake: bool,
     session_notifications: bool,
+    pending_rules: Option<CaptureCmd>,
+    restore_ticket: Option<(u64, Instant)>,
 }
 
 #[derive(Clone, Copy)]
@@ -481,6 +483,8 @@ fn capture_thread(
             elevated_cache: None,
             raw: Default::default(),
             local_rules: None,
+            pending_rules: None,
+            restore_ticket: None,
             local_recovery: None,
             session_active: true,
             awake: true,
@@ -610,7 +614,7 @@ impl State {
     fn local_status(&self, status: &str) {
         let _ = self.tx.send(Event::Status {
             part: "local-key-rules",
-            problem: Some(format!("Local key rules {status}; EXPERIMENTAL, native Windows UNTESTED (compile-checked only)")),
+            problem: Some(format!("Local key rules {status}")),
         });
     }
 
@@ -652,43 +656,69 @@ impl State {
         self.raw.corr.finish(&mut out);
         self.send_all(out);
         if let Some(local) = self.local_rules.as_mut() { local.fail(); }
-        if self.local_rules.is_some() { self.local_status("inactive: session/desktop/device change; reload local rules to resume"); }
+        if self.local_rules.is_some() { self.local_status("inactive: the session or device changed; release your keys, they resume automatically"); }
     }
 
     fn local_pump(&mut self) -> Effect {
+        let held = async_held();
+        let idle = !(0..one_mk_proto::keynames::CODE_LIMIT).any(|code| held.has(code)) && !async_any_button();
+        if idle && self.local_rules.as_ref().is_none_or(|local| (local.paused || !local.physical_held()) && local.pending.is_none() && !local.admission.pending())
+            && let Some(command) = self.pending_rules.take() { return self.command(command); }
+        if idle && self.session_active && self.awake && desktop_active() && !self.foreground_elevated()
+            && let Some(local) = self.local_rules.as_mut() && local.enabled && local.paused && local.pending.is_none() {
+            local.paused = false;
+            local.baseline(std::iter::empty());
+            self.local_fence(if self.captured.is_some() { Destination::Remote } else { Destination::Local });
+        }
         if self.local_recovery.as_ref().is_some_and(|recovery| recovery.finished()) { self.local_recovery = None; }
+        if let Some((ticket, started)) = self.restore_ticket
+            && (self.local_rules.is_none() && self.local_recovery.is_none() || started.elapsed() >= crate::localmap_runtime::LEASE) {
+            self.restore_ticket = None;
+            let error = (self.local_rules.is_some() || self.local_recovery.is_some())
+                .then(|| "Windows has not confirmed every local key release; return to the normal desktop to retry".into());
+            let _ = self.tx.send(Event::LocalRulesRestored { ticket, error });
+        }
         self.local_drain();
         let mut action = None;
         let mut done = None;
         let mut failed = false;
         let mut input = false;
+        let mut emergency = false;
         if let Some(local) = self.local_rules.as_mut() {
+            emergency = local.admission.take_emergency();
             input = std::mem::take(&mut local.input);
             while let Some(next) = local.action() { action = Some(next); }
-            if self.tx.is_closed() || local.pending.is_some_and(|(_, started)| started.elapsed() >= crate::localmap_runtime::LEASE)
+            if !local.paused && (self.tx.is_closed() || local.pending.is_some_and(|(_, started)| started.elapsed() >= crate::localmap_runtime::LEASE)
                 || !local.admission.healthy(Instant::now())
-                    && (local.pending.is_none() || local.admission.feedback().token() != local.recovery)
+                    && (local.pending.is_none() || local.admission.feedback().token() != local.recovery))
             {
                 local.fail();
                 failed = true;
             } else {
                 done = local.completion();
             }
-            // SAFETY: our own event-driven watchdog, never armed at idle.
-            unsafe {
-                if local.pending.is_some() || local.admission.pending() {
-                    SetTimer(self.hwnd, TIMER_LOCAL, 10, None);
-                } else {
-                    KillTimer(self.hwnd, TIMER_LOCAL);
-                }
-            }
+        }
+        unsafe {
+            if self.pending_rules.is_some() || self.restore_ticket.is_some()
+                || self.local_rules.as_ref().is_some_and(|local| local.pending.is_some() || local.admission.pending()) {
+                SetTimer(self.hwnd, TIMER_LOCAL, 10, None);
+            } else { KillTimer(self.hwnd, TIMER_LOCAL); }
         }
         if input { self.local_input(); }
-        if failed { self.local_status("inactive: worker failed, timed out, or emergency shortcut; reload to recover"); }
+        if failed { self.local_status("inactive: input was interrupted or the emergency shortcut was pressed; release your keys, they resume automatically"); }
+        if emergency {
+            if let Some(local) = self.local_rules.as_mut() { local.enabled = false; }
+            let _ = self.tx.send(Event::LocalRulesOff);
+            action = Some(crate::hotkeys::Action::Home);
+        }
         if let Some(action) = action { let _ = self.tx.send(Event::Hotkey(action)); }
         if let Some(done) = done {
+            if let Some((ticket, _)) = self.restore_ticket.take() {
+                let error = (!done.success).then(|| "Windows could not release every local output; return to the normal desktop to retry".into());
+                let _ = self.tx.send(Event::LocalRulesRestored { ticket, error });
+            }
             if !done.success {
-                self.local_status("inactive: injection/fence failed; reload to retry releases");
+                self.local_status("inactive: some keys could not be released; release your keys, they resume automatically");
             } else if let Some(local) = self.local_rules.as_mut() {
                 let activation = local.activation.take();
                 let count = local.snapshots.load().count;
@@ -865,6 +895,11 @@ impl State {
         let (x, y) = (info.pt.x, info.pt.y);
 
         let Some(cap) = self.captured else {
+            if !injected && let Some(button) = button && let Some(local) = self.local_rules.as_mut() {
+                let swallow = local.hook(button, down, Instant::now());
+                unsafe { PostMessageW(self.hwnd, WM_APP_LOCAL, 0, 0) };
+                if swallow { return (true, Effect::None); }
+            }
             if let Some(b) = button {
                 self.local.set(b, down);
             }
@@ -991,7 +1026,23 @@ impl State {
 
     fn command(&mut self, cmd: CaptureCmd) -> Effect {
         match cmd {
+            CaptureCmd::RestoreLocalRules(ticket) => {
+                self.pending_rules = None;
+                if let Some(local) = self.local_rules.as_mut() { local.enabled = false; }
+                self.local_pause();
+                self.restore_ticket = Some((ticket, Instant::now()));
+                if self.local_rules.is_some() { self.local_fence(Destination::Local); }
+                else if let Some(recovery) = &self.local_recovery { recovery.retry(); }
+                unsafe { SetTimer(self.hwnd, TIMER_LOCAL, 10, None) };
+                Effect::None
+            }
             CaptureCmd::LocalRules { rules, inactive } => {
+                if self.local_rules.as_ref().is_some_and(|local| (!local.paused && local.physical_held()) || local.pending.is_some() || local.admission.pending())
+                    || { let held = async_held(); (0..one_mk_proto::keynames::CODE_LIMIT).any(|code| held.has(code)) } || async_any_button() {
+                    self.pending_rules = Some(CaptureCmd::LocalRules { rules, inactive });
+                    unsafe { SetTimer(self.hwnd, TIMER_LOCAL, 10, None) };
+                    return Effect::None;
+                }
                 if rules.as_ref().is_none_or(|rules| rules.count == 0 || !Local::supported(rules)) {
                     self.local_pause();
                     if let Some(local) = self.local_rules.take() { self.local_recovery = Some(local.retire()); }
@@ -1001,15 +1052,17 @@ impl State {
                         self.raw.unregister(&mut out);
                         self.send_all(out);
                     }
-                    let problem = rules.as_ref().filter(|rules| rules.count > 0).map(|_| {
-                        "Local key rules inactive: unsupported native output; EXPERIMENTAL, Windows UNTESTED".into()
-                    });
+                    let problem = inactive.map(|reason| format!("Local key rules inactive: {reason}")).or_else(|| rules.as_ref().filter(|rules| rules.count > 0).map(|_| {
+                        "Local key rules inactive: one of your rules uses an unsupported key or action".into()
+                    }));
                     let _ = self.tx.send(Event::Status { part: "local-key-rules", problem });
                     return Effect::None;
                 }
                 if self.local_recovery.as_ref().is_some_and(|recovery| !recovery.finished()) {
                     if let Some(recovery) = &self.local_recovery { recovery.retry(); }
-                    self.local_status("inactive: pending releases from previous local rules; retry after returning to the normal desktop");
+                    self.pending_rules = Some(CaptureCmd::LocalRules { rules, inactive });
+                    unsafe { SetTimer(self.hwnd, TIMER_LOCAL, 10, None) };
+                    self.local_status("inactive: waiting for previous releases; resumes on the normal desktop");
                     return Effect::None;
                 }
                 self.local_recovery = None;
@@ -1019,14 +1072,14 @@ impl State {
                 }
                 if rules.is_some() && !self.session_notifications {
                     self.local_pause();
-                    self.local_status("inactive: Windows session notifications unavailable");
+                    self.local_status("inactive: Windows could not notify one-mk about locking; restart one-mk to try again");
                     return Effect::None;
                 }
                 if self.local_rules.is_none() && rules.is_some() {
                     match Local::start(self.hwnd) {
                         Ok(local) => self.local_rules = Some(local),
                         Err(error) => {
-                            self.local_status(&format!("inactive: worker could not start: {error}"));
+                            self.local_status(&format!("inactive: local input could not start: {error}"));
                             return Effect::None;
                         }
                     }
@@ -1040,7 +1093,7 @@ impl State {
                     local.gate.close();
                     local.enabled = supported && rules.count > 0;
                     local.paused = !active;
-                    local.inactive = if !supported { "only physical scancode outputs and layers are supported".into() }
+                    local.inactive = if !supported { "one of your rules uses an unsupported key or action".into() }
                         else { inactive.unwrap_or_else(|| "preference off or no local rules".into()) };
                     local.snapshots.replace(if supported { rules } else { Arc::default() });
                     self.raw.register(self.hwnd);
@@ -1049,7 +1102,7 @@ impl State {
                     } else {
                         self.local_pause();
                     }
-                    if !supported { self.local_status("inactive: only physical scancode outputs and layers are supported"); }
+                    if !supported { self.local_status("inactive: one of your rules uses an unsupported key or action"); }
                 } else {
                     self.local_status(&format!("inactive: {}", inactive.unwrap_or_else(|| "preference off".into())));
                 }
@@ -1199,6 +1252,7 @@ pub(crate) unsafe extern "system" fn desktop_changed(
                 local.retry_releases();
                 local.baseline((0..one_mk_proto::keynames::CODE_LIMIT).filter(|&code| held.has(code)));
             }
+            unsafe { PostMessageW(state.hwnd, WM_APP_LOCAL, 0, 0) };
             return;
         }
         if let Some(local) = state.local_rules.as_mut() { local.retry_releases(); local.paused = true; }
@@ -1219,7 +1273,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if msg == 0x218 && matches!(wparam, 7 | 18) { state.awake = true; }
                 if let Some(recovery) = &state.local_recovery { recovery.retry(); }
                 if state.local_rules.is_none() { return Effect::None; }
+                if let Some(local) = state.local_rules.as_mut() { local.retry_releases(); }
                 state.local_pause();
+                unsafe { PostMessageW(state.hwnd, WM_APP_LOCAL, 0, 0) };
                 state.end()
             }) { apply(effect, hwnd); }
             1
@@ -1345,6 +1401,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_WTSSESSION_CHANGE => {
+            unsafe { PostMessageW(hwnd, WM_APP_LOCAL, 0, 0) };
             with_state(|state| {
                 if wparam as u32 == WTS_SESSION_UNLOCK {
                     state.session_active = true;
@@ -1360,8 +1417,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             });
             match wparam as u32 {
-                WTS_SESSION_LOCK => with_state(|s| s.tx.send(Event::ScreenLocked(true))),
-                WTS_SESSION_UNLOCK => with_state(|s| s.tx.send(Event::ScreenLocked(false))),
+                WTS_SESSION_LOCK => with_state(|s| s.tx.send(Event::ScreenLocked(true)).ok()),
+                WTS_SESSION_UNLOCK => with_state(|s| s.tx.send(Event::ScreenLocked(false)).ok()),
                 _ => None,
             };
             if matches!(wparam as u32, WTS_SESSION_LOCK | WTS_SESSION_LOGOFF | WTS_CONSOLE_DISCONNECT | WTS_REMOTE_CONNECT) {
@@ -1391,200 +1448,4 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 // --------------------------------------------------------------- injection
 
-fn inject_thread(
-    tx: mpsc::UnboundedSender<Event>,
-    rx: mpsc::UnboundedReceiver<Inject>,
-    shared: Arc<Mutex<Space>>,
-    controlled: Arc<Controlled>,
-) {
-    set_thread_dpi_awareness();
-    // A small runtime of its own, for the key repeat timer.
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_time().build() {
-        Ok(rt) => rt,
-        Err(e) => {
-            let _ = tx.send(Event::Error(format!("Other computers can't control this one: {e}")));
-            return;
-        }
-    };
-    tracing::info!("input injection ready");
-    rt.block_on(inject_loop(tx, rx, shared, controlled));
-}
-
-/// The user's key repeat delay and rate (Control Panel > Keyboard).
-fn repeat_setting() -> Option<(Duration, Duration)> {
-    let (mut delay, mut speed) = (1u32, 31u32);
-    // SAFETY: both actions write one u32 to the valid out-pointer.
-    unsafe {
-        SystemParametersInfoW(SPI_GETKEYBOARDDELAY, 0, (&mut delay as *mut u32).cast(), 0);
-        SystemParametersInfoW(SPI_GETKEYBOARDSPEED, 0, (&mut speed as *mut u32).cast(), 0);
-    }
-    Some(repeat_timing(delay, speed))
-}
-
-async fn inject_loop(
-    tx: mpsc::UnboundedSender<Event>,
-    mut rx: mpsc::UnboundedReceiver<Inject>,
-    shared: Arc<Mutex<Space>>,
-    controlled: Arc<Controlled>,
-) {
-    let mut scroll = SmoothScroll::default();
-    let mut rel = (0.0, 0.0);
-    let mut inputs: Vec<INPUT> = Vec::new();
-    let mut batch: Vec<Inject> = Vec::new();
-    // SendInput doesn't auto-repeat, and senders drop their repeats.
-    let mut repeat = KeyRepeat::new(repeat_setting());
-    let mut failing = false;
-    loop {
-        let deadline = repeat.deadline();
-        let wake = tokio::time::Instant::from_std(deadline.unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(3600)));
-        tokio::select! {
-            msg = rx.recv() => {
-                let Some(first) = msg else { return };
-                // Everything already queued goes out in one SendInput call,
-                // without the moves that later ones make stale.
-                drain_coalesced(first, &mut rx, &mut batch);
-                if controlled.apply(&mut batch) {
-                    repeat.clear();
-                }
-                let now = std::time::Instant::now();
-                let Ok(space) = shared.lock() else { return };
-                for m in batch.drain(..) {
-                    if let Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } = m {
-                        if down && is_repeatable(code) {
-                            repeat.set_timing(repeat_setting());
-                        }
-                        if !repeat.key(code, down, now) {
-                            continue;
-                        }
-                    }
-                    build(&mut inputs, m, &space, &mut scroll, &mut rel);
-                }
-            }
-            _ = tokio::time::sleep_until(wake), if deadline.is_some() => {
-                let Some(code) = repeat.poll(std::time::Instant::now()) else { continue };
-                let Ok(space) = shared.lock() else { return };
-                build(&mut inputs, Inject::Key { code, down: true }, &space, &mut scroll, &mut rel);
-            }
-        }
-        send_inputs(&mut inputs, &tx, &mut failing);
-    }
-}
-
-fn send_inputs(inputs: &mut Vec<INPUT>, tx: &mpsc::UnboundedSender<Event>, failing: &mut bool) {
-    if inputs.is_empty() {
-        return;
-    }
-    // SAFETY: `inputs` is a valid slice of initialized INPUTs.
-    let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
-    if (sent as usize) < inputs.len() {
-        if !*failing {
-            // SAFETY: plain call.
-            let err = unsafe { GetLastError() };
-            tracing::warn!(sent, total = inputs.len(), err, "SendInput failed");
-            let _ = tx.send(Event::Error(
-                "Windows blocked input from another computer. This happens on the lock screen, \
-                 on administrator (UAC) prompts, and in programs running as administrator."
-                    .into(),
-            ));
-            *failing = true;
-        }
-    } else {
-        *failing = false;
-    }
-    inputs.clear();
-}
-
-fn mouse(dx: i32, dy: i32, data: u32, flags: u32) -> INPUT {
-    INPUT {
-        r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 {
-            mi: MOUSEINPUT { dx, dy, mouseData: data, dwFlags: flags, time: 0, dwExtraInfo: OUR_INPUT },
-        },
-    }
-}
-
-pub(crate) fn key(vk: u16, scan: u16, flags: u32) -> INPUT {
-    INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: OUR_INPUT } },
-    }
-}
-
-/// `rel` keeps the fraction of a physical pixel that relative moves (in
-/// logical pixels) did not use yet, so scaling never drifts.
-fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScroll, rel: &mut (f64, f64)) {
-    const ABS_MOVE: u32 = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-    match m {
-        Inject::MoveTo(p) => {
-            let (x, y) = space.to_phys(p);
-            let (nx, ny) = space.normalize(x, y);
-            out.push(mouse(nx, ny, 0, ABS_MOVE));
-        }
-        // A plain relative move: what games reading raw input see. (Windows
-        // applies the pointer speed setting to it for the desktop cursor.)
-        Inject::MoveBy { dx, dy } => {
-            let fx = rel.0 + f64::from(dx) * space.scale();
-            let fy = rel.1 + f64::from(dy) * space.scale();
-            let (px, py) = (fx.round(), fy.round());
-            *rel = (fx - px, fy - py);
-            if px != 0.0 || py != 0.0 {
-                out.push(mouse(px as i32, py as i32, 0, MOUSEEVENTF_MOVE));
-            }
-        }
-        Inject::Button { button, down } => {
-            let (flags, data) = match (button, down) {
-                (BTN_LEFT, true) => (MOUSEEVENTF_LEFTDOWN, 0),
-                (BTN_LEFT, false) => (MOUSEEVENTF_LEFTUP, 0),
-                (BTN_RIGHT, true) => (MOUSEEVENTF_RIGHTDOWN, 0),
-                (BTN_RIGHT, false) => (MOUSEEVENTF_RIGHTUP, 0),
-                (BTN_MIDDLE, true) => (MOUSEEVENTF_MIDDLEDOWN, 0),
-                (BTN_MIDDLE, false) => (MOUSEEVENTF_MIDDLEUP, 0),
-                (BTN_SIDE, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON1)),
-                (BTN_SIDE, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON1)),
-                (BTN_EXTRA, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON2)),
-                (BTN_EXTRA, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON2)),
-                _ => {
-                    tracing::debug!(button, "no Windows equivalent for mouse button");
-                    return;
-                }
-            };
-            out.push(mouse(0, 0, data, flags));
-        }
-        Inject::ScrollDiscrete { dx, dy } => {
-            let (h, v) = wire_to_wheel(dx, dy);
-            push_wheel(out, h, v);
-        }
-        Inject::Scroll { dx, dy } => {
-            let (h, v) = scroll.push(dx, dy);
-            push_wheel(out, h, v);
-        }
-        Inject::ScrollStop => scroll.stop(),
-        // Handled by the injection loop.
-        Inject::Controlled(_) => {}
-        Inject::Text { .. } => tracing::warn!("text unsupported; sender must use physical fallback"),
-        Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
-            let up = if down { 0 } else { KEYEVENTF_KEYUP };
-            match evdev_to_win(code) {
-                Some(WinKey::Scan { scan, extended }) => {
-                    let ext = if extended { KEYEVENTF_EXTENDEDKEY } else { 0 };
-                    out.push(key(0, scan, KEYEVENTF_SCANCODE | ext | up));
-                }
-                Some(WinKey::Vk { vk, scan, extended }) => {
-                    let ext = if extended { KEYEVENTF_EXTENDEDKEY } else { 0 };
-                    out.push(key(vk, scan, ext | up));
-                }
-                None => tracing::debug!(code, "no Windows equivalent for key"),
-            }
-        }
-    }
-}
-
-/// Wheel amounts are signed but travel in the unsigned `mouseData`.
-fn push_wheel(out: &mut Vec<INPUT>, h: i32, v: i32) {
-    if v != 0 {
-        out.push(mouse(0, 0, v as u32, MOUSEEVENTF_WHEEL));
-    }
-    if h != 0 {
-        out.push(mouse(0, 0, h as u32, MOUSEEVENTF_HWHEEL));
-    }
-}
+include!("windows_inject.rs");

@@ -1,58 +1,201 @@
 # Keyboard layouts and AltGr (Wave 5E)
 
-## Status and safety boundary
+## Status and safety boundary — November 2, 2026
 
-This is an **incomplete native implementation**, not a claim of desktop
-cross-layout support. The default remains physical keys. Slice 5E-3 wires
-descriptor exchange, per-visit negotiation, sender routing, receiver validation,
-reverse lookup and held-key cleanup through the real daemon control path.
-Debug test null backends provide per-instance fixture layouts and record Text.
-Native snapshots and compose are **not connected to capture events or visits**.
-Slice 5E-5 adds a fake-portal-tested, unadvertised keysym injector and an
-owner-only manual probe; native end-to-end text delivery remains unqualified.
-Native and normal null backends therefore
-send physical keys, even when characters or auto is requested, and never
-advertise TEXT. Test support requires both `null-typing-tests` and debug
-assertions; release builds cannot construct fixture keyboards, even with that
-feature. No polling or background timer is introduced by character routing.
+**Character typing ships in ordinary release builds on macOS and Windows
+receivers.** Keys remains the default, preserving existing shortcuts, raw-input
+applications and old-peer compatibility. The window's Keys, Letters and Auto
+choices are enabled. Preferences apply to outgoing typing.
 
-## Wave 6 X11 qualification (October 31, 2026): blocked
+| Platform | Sender | Receiver |
+| --- | --- | --- |
+| macOS | Current TIS keyboard layout and UCKeyTranslate, with visit-owned dead-key state and Option levels | CGEventKeyboardSetUnicodeString on keyboard down/up events with the existing source/tag |
+| Windows 10 1607+ | Foreground thread's HKL and ToUnicodeEx flag 0x4, with visit-owned accent composition and AltGr | SendInput KEYEVENTF_UNICODE down/up pairs, including UTF-16 surrogate pairs and the existing tag |
+| Linux X11 | Read-only live XKB snapshot and xkbcommon compose | **Physical keys only: received letters follow this computer's own layout** |
+| Linux Wayland portal/libei | Captured keyboard's supplied XKB map and modifier/group events, with xkbcommon compose | **Physical keys only**; NotifyKeyboardKeysym stays unadvertised |
+| Linux wlroots | Seat XKB map and modifier/group events, with xkbcommon compose | **Physical keys only** |
+| Null | Explicit debug fixture layouts only | Fixtures record Text; ordinary/release null does not advertise text |
 
-**Production TEXT remains disabled.** Fifty strict immediate-remap delivery
-runs produced **zero successes and fifty delivery failures**, not the required
-fifty lossless passes. Each run used a new private Xvfb and a SIGSTOP-delayed
-real xev/Xlib reader. Server round trips did not prevent the first character
-from becoming NoSymbol. This is a rejected design, not a production fix.
+macOS and Windows are **compile-checked only here**, not hardware-validated. The
+checklists below remain owner validation, not a completed application matrix.
+The default `native-local-remap` capture adapters and the feature-off adapters
+now include the same OS-specific injector (`macos_inject.rs` / `windows_inject.rs`),
+including Text, CharacterKey ownership, repeat and cleanup. This avoids a second
+copy of the typing implementation; the different capture/local-remap adapters
+remain separate to avoid a risky wholesale capture rewrite. Both advertise TEXT
+and native held characters, with cfg'd tests compiled for each default backend.
+Windows before build 14393 falls back physically rather than use an unsupported
+non-mutating flag. No clipboard transport, X11 keymap remapping, polling loop or
+idle timer is introduced; native held letters reuse existing receiver repeat.
 
-A new `--pool-reuse` regression also tests the case where mappings are **not
-restored until readers finish**, but four slots are reassigned during a burst.
-On `us(intl)` with another client's letter and Shift held, 10,000 ordered
-presses translate to 10,000 symbols, but only **1,432** match their original
-characters; the other **8,568** resolve through the slots' final mappings.
-The alphabet includes `ı`, `ł`, `@`, `z`, `λ`, `🦀` and `é`. xev independently
-verifies the final-generation keysym on every press and release. Full core and
-XKB maps and the original down-key bitmap are restored afterward. This checks
-keysyms on a dead-key layout, **not** compose/XIM commits or editor text.
+### Main-thread macOS layout cache
 
-```sh
-# Passing counterexample regression, not successful text delivery:
-bash scripts/test-x11-typing-safety.sh --pool-reuse
-# Fails with exit 101 because the original character sequence is corrupted:
-bash scripts/test-x11-typing-safety.sh --pool-reuse --require-delivery
-```
+TISCopyCurrentKeyboardLayoutInputSource, TISGetInputSourceProperty and keyboard
+kind discovery run on the main dispatch queue. An owned Unicode layout snapshot
+is updated from the distributed selected-input-source notification; Tokio typing
+resolves against that cache, never against borrowed Carbon objects. Keys mode
+does not initialize/read TIS, and notifications do no layout work while Keys is
+selected. No per-key TIS refresh remains. A temporarily unavailable layout falls
+back physically; text injection capability does not depend on layout discovery.
 
-A local generation counter cannot make a delayed unmodified client look up an
-old mapping. A fixed pool that never reassigns symbols only covers its fixed
-alphabet; a finite retirement deadline still has the earlier counterexample.
-No generally safe destination-consumption acknowledgement or alternative
-injection design was implemented. No runtime TEXT capability, capture wiring,
-portal advertisement, Windows behavior or macOS behavior was changed.
+Additional owner checks (NOT RUN on this Linux box):
 
-The runner now keeps all Cargo artifacts in `target-x11-typing` under the
-checkout, places temporary test files under its disposable TMPDIR, and refuses
-to connect to reserved desktop displays `:0` and `:1`. It requires `setxkbmap`
-as well as Xvfb, xkbcomp, xev and stdbuf. Remove `target-x11-typing` after use.
-See [the Wave 6 evidence and outstanding acceptance gates](reviews/WAVE6-X11-TYPING-REPORT.md).
+- [ ] In the ordinary default-feature release, confirm Letters/Auto negotiate
+  TEXT and CharacterKey with native peers. Repeat, release, end visits and
+  disconnect mid-character; no held native character may survive cleanup.
+- [ ] On macOS switch US/German/French/Arabic/IME input sources, including dead
+  keys and Option levels; confirm Auto updates on notification. Trace TIS calls
+  on the main thread only, with none per key and none in Keys mode.
+- [ ] Repeat with local remaps enabled and disabled, Caps-to-Control, shortcuts,
+  held Shift, two keyboards and both directions of a cross-layout visit.
+- [ ] On Windows repeat the AltGr/dead-key/UTF-16 exercises with differing HKLs
+  and verify physical shortcut ownership and partial SendInput cleanup.
+
+## Current preferences, protocol and cleanup
+
+- **Keys** (`physical`): physical evdev-position keys, always.
+- **Letters** (`characters`): characters whenever sender translation and receiver
+  TEXT support are available, including matching layouts.
+- **Auto**: characters only with valid, different descriptors and receiver TEXT;
+  equal/missing descriptors or unsupported translation means physical keys.
+
+`one-mk typing --keys physical|characters|auto [--peer ID]` saves a global or
+full-fingerprint peer preference. Preference changes take effect next visit.
+Source layout changes are read on keyboard activity or supplied by the Wayland
+seat; Auto re-evaluates descriptors without changing a held key's release.
+Receiver descriptors refresh at entry, without a background watcher.
+
+Native descriptors include their operating-system layout family: German on
+macOS and German on Windows are not treated as equal because their Option and
+AltGr levels differ. Matching names alone do not force Auto to physical keys.
+
+Protocol 2 retains its existing Text, CharacterKey, KeyboardLayout and physical
+Key frames. TEXT (64) means receiver support; TEXT_SOURCE (1024) means sender
+translation without promising text reception; TEXT_HOLD (2048) means the receiver
+can hold/repeat native CharacterKey Unicode until its up. No text goes to a peer
+without TEXT. Unknown bits are ignored by old peers. A TEXT receiver without
+TEXT_HOLD gets bounded Text events, retaining the older reverse-chord receiver
+for legacy CharacterKey messages.
+
+Emergency/local hotkeys precede mapping, then translation, then Ctrl/Cmd swap.
+Ctrl, Cmd/Super and ordinary left Alt shortcuts stay physical. Right Alt selects
+AltGr; on macOS Option selects text unless Ctrl/Cmd is also held. Windows capture
+filters AltGr's synthetic Ctrl (scan 0x21d); real Ctrl is never guessed to be
+AltGr. No text is emitted with a shortcut modifier held, including repeats after
+Ctrl/Cmd is added. Shift/AltGr/Option are lifted/restored around Unicode commits
+in reliable-stream order, and locally around native text repeats.
+
+Every down retains its resolution until up. Pending dead-key downs/ups are
+suppressed; shortcuts, layout changes and visit end reset composition. Text is
+printable, one grapheme, at most eight UTF-8 bytes; resolved sequences are bounded
+to 32 bytes and split into validated graphemes. Source-key spoofing, controls,
+format characters, mismatched releases and non-owner text are refused. Text and
+character downs share a 200-per-second budget; matching ups are never rate-limited,
+including after source capability loss. Disconnect, revoke, timeout and visit end
+release all remembered keys and clear native text/repeat ownership.
+
+Unsupported layout data falls back physically. IME candidate/pre-edit state and
+arbitrary custom Windows dead-key tables are not qualified. Windows composition
+handles standard Unicode accents, dead+space, repeated accents and noncombining
+fallback, not a custom DLL's arbitrary dead-key table. Multi-scalar or multi-
+grapheme commits have no native held-character representation: their repeat
+follows source repeat events, which libei does not guarantee.
+
+## X11 and Wayland receiver decisions
+
+The X11 rejection stands: immediate remapping failed **50/50** strict runs.
+Four retained/reassigned slots produced only **1,432 correct symbols out of
+10,000**, despite complete map/down-state restoration. A finite pool or local
+generation counter is not destination-consumption acknowledgement. **No X11
+keymap-remapping receiver was retried or shipped.** See
+[the original evidence](reviews/WAVE6-X11-TYPING-REPORT.md).
+
+The existing fake-tested NotifyKeyboardKeysym helper stays unadvertised.
+RemoteDesktop forbids Notify after ConnectToEIS on the same session, so it uses a
+second keyboard session. Ordering between libei modifiers and Notify text, real
+GNOME/KDE application delivery and session-loss behavior remain unqualified;
+fakes cannot close those gaps. Physical reception is the safe fallback.
+
+## Current verification
+
+Targeted tests cover US, German, French AZERTY, US-International and Arabic
+fixtures; real xkbcommon tables/compose; shortcuts; dead sequences; UTF-16 BMP,
+combining and surrogate pairing; modifier release/restore; repeat suppression;
+visit cleanup; hostile input and old-peer negotiation. Composition belongs to
+each visit: a three-daemon broadcast regression commits apostrophe+e as **é**
+independently on both receivers, and supplied-XKB tests exercise the same
+isolation without fixture translation.
+
+The two-process debug-null test starts authenticated daemons with German → US
+Auto, records **äöü@€ ß** as ordered Text, holds physical Ctrl+key21 (German Z),
+SIGKILLs the controller and checks both releases with no shortcut Text. This is
+real daemon/control-path evidence, not native desktop evidence. Input/protocol
+crates compile for both requested native targets. Full daemon checks additionally
+need cross C toolchains for ring, not just installed Rust targets.
+
+Final validation on this Linux host:
+
+- `cargo clippy --workspace --all-targets -j 2 -- -D warnings` passed. A final
+  input/protocol/daemon clippy pass also passed after the visit-isolation change.
+- The single `cargo test --workspace -j 2` invocation found two stale
+  shortcut/repeat assertions. Those assertions and the obsolete capture-source
+  snapshots were updated. Final partitioned runs (`-p one-mk -p one-mk-input`
+  and `--workspace --exclude one-mk --exclude one-mk-input`, both `-j 2`)
+  passed every workspace package and doctest: daemon units **420 passed,
+  5 ignored**; input units **278 passed, 6 ignored**, plus their integration
+  suites and the remaining crates. The original whole-workspace invocation
+  itself did not pass; it was not rerun.
+- Both requested native Rust targets are installed. Input and protocol checks
+  passed for `x86_64-apple-darwin` and `x86_64-pc-windows-msvc`. The requested
+  checks including the daemon could not complete: ring's C build used a Linux
+  compiler that rejects Apple's flags, and the Windows build lacks `lib.exe`.
+  No macOS or Windows executable was linked or run here.
+
+Validation used `CARGO_TARGET_DIR=/home/samer/.t3/cargo-target/typing`, `-j 2`,
+no formatting command and no fat LTO. Logs are retained in `/tmp/one-mk-typing-*`;
+the dedicated build directory is removed at handoff.
+
+## Manual Mac checklist (ordinary release build)
+
+1. Grant Accessibility/Input Monitoring. Pair a supported receiver, open a text
+   editor there, set German controller / US receiver and verify Keys first.
+   Choose Letters, re-enter, and type **äöü@€ ß**, Shift levels and Option text.
+2. On US, try Option+e then e (é), dead+space and cancelled sequences. Switch the
+   controller's current source through US, French AZERTY and Arabic; each new
+   press must follow it. Check Auto with equal/different layouts and Letters
+   with matching layouts.
+3. Hold/release letters, Shift and Option in both orders; verify repeat stops.
+   Add Cmd/Ctrl while held. Try Cmd+Z/C/V, Ctrl shortcuts, Enter/Tab/Escape and
+   arrows: shortcuts must not insert text.
+4. Hold keys/modifiers while switching home, revoking, SIGKILLing either daemon
+   and reconnecting. Nothing may stay stuck/repeating. Repeat with the Mac as
+   Unicode receiver; include a non-BMP character and a combining grapheme.
+5. Verify older peers and Linux receivers remain physical. Record OS/editor/
+   layout combinations and failures; Unicode-ignoring/secure apps may need Keys.
+
+## Manual Windows checklist (Windows 10 1607+ / Windows 11)
+
+1. Run ordinary releases at equal integrity levels. In Notepad on a US receiver,
+   choose Letters and type **äöü@€ ß** from a German Mac/Windows sender. AltGr+Q/E
+   must produce @/€ without menus or fake-Ctrl shortcuts.
+2. Change the foreground input language through US, French AZERTY and Arabic.
+   On US-International test apostrophe+e, quotation+u, dead+space, repeated accents
+   and noncombining sequences. Returning home must preserve local dead-key state.
+3. Check Keys, Letters, and Auto with matching/different layouts. Test Ctrl+Z/C/V,
+   real Ctrl+Alt, Win shortcuts, Alt+Tab, Shift and Enter/Tab/Escape; no shortcut
+   text commits. Receive 😀 and a combining grapheme without replacement glyphs.
+4. Hold/release letters; add Ctrl while held; switch layouts/visits, revoke and
+   SIGKILL the controller. Verify repeat and all modifiers stop, in both directions.
+5. Test UAC/admin/lock-screen boundaries separately: Windows can block SendInput
+   and should report its existing input error, not claim delivery. Restore Keys
+   and record actual native results before qualifying the application matrix.
+
+## Historical qualification notes (October 30–31, 2026)
+
+The dated sections below preserve earlier investigations and commands. Their
+statements that *all* native TEXT is disabled, capture wiring is absent, or
+Windows/macOS are still future work are **superseded by the current status above**.
+Their X11 delivery counterexamples and Wayland qualification gaps still apply.
 
 ## 5E-5 verified partial delivery (October 30, 2026)
 
@@ -615,11 +758,11 @@ restoration was tested: those paths do not exist in this patch.
   over two seconds, RSS 31,116 KiB. These short samples do not establish zero
   idle CPU generally or measure a functioning character-mode path.
 
-## Owner validation script (required before enabling TEXT)
+## Owner validation script (required before native release acceptance)
 
-This is a future native acceptance script, **not** a claim these paths work now. On
-the production build the characters/auto commands must explicitly report physical
-fallback. Use dedicated test computers and a text editor, never a shell prompt,
+This is a future native acceptance script, **not** a claim of hardware success.
+The default macOS/Windows build must now advertise native TEXT; unsupported
+senders/receivers must explicitly report physical fallback. Use dedicated test computers and a text editor, never a shell prompt,
 for native typing tests. On each machine save its existing settings first.
 
 ```sh
@@ -692,8 +835,9 @@ AltGr+A/L/Z. Then repeat remotely and compare with that local reference. Hold a
 letter to repeat, change layouts while it is held, release and type again. Test
 Ctrl+Z undo, Ctrl+Plus versus keypad plus, held physical Shift alongside a
 shifted shortcut, visit end and peer termination mid-press; no key may stay down.
-Check `auto` with equal/different layouts and an old peer. On this patch all
-Windows/macOS and normal null/X11 daemon paths still report physical fallback, so a
-cross-layout mismatch is expected and must not be reported as a pass. Restore
+Check `auto` with equal/different layouts and an old peer. Native macOS/Windows
+must now advertise TEXT and produce matching characters when selected. Normal
+null/X11 paths still report physical fallback; their cross-layout mismatch is
+expected, not a character-delivery pass. Restore
 the original settings/input source after the exercise. Do remap/crash testing
 only on private Xvfb servers, not either machine's live desktop.

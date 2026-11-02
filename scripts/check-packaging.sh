@@ -15,12 +15,12 @@
 #     still match the window's style (scripts/brand-tokens.py --check).
 # Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby, Pillow) are
 # used when present and reported as skipped when not.
-#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app
+#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
 #   sh scripts/check-packaging.sh
 # A debug build is enough for these checks: BIN_DIR=target/debug sh scripts/check-packaging.sh
 . "$(dirname "$0")/package-common.sh"
 
-need_binaries one-mk one-mk-tray one-mk-app
+need_binaries one-mk one-mk-tray one-mk-app one-mk-wallpaper
 BIN_DIR=$(cd "$BIN_DIR" && pwd)
 export BIN_DIR   # the package scripts run below use the same build
 scratch=$(mktemp -d /tmp/one-mk-pkg-check.XXXXXX)
@@ -40,7 +40,7 @@ if command -v dpkg-deb >/dev/null; then
     mkdir -p "$root/DEBIAN"
     dpkg-deb -x "$deb" "$root"
     dpkg-deb -e "$deb" "$root/DEBIAN"
-    for f in usr/bin/one-mk usr/bin/one-mk-tray usr/bin/one-mk-app usr/share/applications/one-mk.desktop \
+    for f in usr/bin/one-mk usr/bin/one-mk-tray usr/bin/one-mk-app usr/bin/one-mk-wallpaper usr/share/applications/one-mk.desktop \
              usr/share/applications/io.github.onemk.OneMk.desktop usr/share/icons/hicolor/256x256/apps/one-mk.png; do
         [ -e "$root/$f" ] && ok ".deb contains /$f" || bad ".deb is missing /$f"
     done
@@ -78,7 +78,7 @@ else skip "appstreamcli not installed"; fi
 # release's (the "Package" step of release.yml), unpacked somewhere else, and
 # every path in the manifest must resolve there and match its checksum.
 mkdir -p "$scratch/t/one-mk-x86_64-unknown-linux-gnu"
-cp "$BIN_DIR/one-mk" "$BIN_DIR/one-mk-tray" "$BIN_DIR/one-mk-app" "$scratch/t/one-mk-x86_64-unknown-linux-gnu/"
+cp "$BIN_DIR/one-mk" "$BIN_DIR/one-mk-tray" "$BIN_DIR/one-mk-app" "$BIN_DIR/one-mk-wallpaper" "$scratch/t/one-mk-x86_64-unknown-linux-gnu/"
 (cd "$scratch/t" && tar czf one-mk-x86_64-unknown-linux-gnu.tar.gz one-mk-x86_64-unknown-linux-gnu)
 OUT_DIR=$scratch/f sh "$ROOT/scripts/package-flatpak.sh" "$scratch/t/one-mk-x86_64-unknown-linux-gnu.tar.gz" >/dev/null 2>&1
 bundle=$(ls "$scratch"/f/one-mk-flatpak-sources.tar.gz 2>/dev/null) || bundle=

@@ -285,6 +285,7 @@ struct State {
     next_layer: u32,
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    typing: Option<crate::typing::KeyboardLayout>,
     relative: Option<zwp_relative_pointer_v1::ZwpRelativePointerV1>,
     /// The surface under the pointer, with the serial of its enter.
     pointer_on: Option<(wl_surface::WlSurface, u32)>,
@@ -324,6 +325,7 @@ impl State {
             next_layer: 0,
             pointer: None,
             keyboard: None,
+            typing: None,
             relative: None,
             pointer_on: None,
             edge: EdgePush::default(),
@@ -898,13 +900,23 @@ impl State {
                 if format == WEnum::Value(wl_keyboard::KeymapFormat::XkbV1) {
                     match read_keymap(&fd, size as usize) {
                         Ok(k) => {
-                            if self.keymap.as_ref() != Some(&k) {
+                            if self.keymap.as_ref() != Some(&k) || self.typing.is_none() {
+                                self.typing = crate::typing::KeyboardLayout::from_keymap(&k, crate::LayoutState { group: self.group, ..Default::default() });
+                                if let Some(keyboard) = &self.typing { self.send(Event::KeyboardLayout(keyboard.clone())); }
+                                else { self.send(Event::KeyboardLayoutUnavailable); }
                                 self.keymap = Some(k);
                                 self.keymap_sent = false;
                             }
                         }
-                        Err(e) => tracing::debug!("reading the seat's keymap: {e}"),
+                        Err(e) => {
+                            tracing::debug!("reading the seat's keymap: {e}");
+                            self.typing = None;
+                            self.send(Event::KeyboardLayoutUnavailable);
+                        }
                     }
+                } else {
+                    self.typing = None;
+                    self.send(Event::KeyboardLayoutUnavailable);
                 }
             }
             K::Leave { surface, .. } => {
@@ -924,7 +936,8 @@ impl State {
                     self.send(Event::Key { code: key, down, device: None });
                 }
             }
-            K::Modifiers { mods_depressed, mods_latched, group, .. } => {
+            K::Modifiers { mods_depressed, mods_latched, mods_locked, group, .. } => {
+                self.send(Event::KeyboardModifiers { depressed: mods_depressed, latched: mods_latched, locked: mods_locked, group });
                 self.group = group;
                 if let Some(m) = &mut self.mods {
                     m.set_group(group);

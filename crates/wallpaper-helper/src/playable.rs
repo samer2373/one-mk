@@ -1,0 +1,127 @@
+//! AVFoundation (macOS) and Media Foundation (Windows) choose how to read a
+//! file from its extension, and the wallpaper cache names every video
+//! `<hash>.video`: opened as it is, no video plays ("no playable video
+//! track"). What they open instead is a hard link named with the type the
+//! file's first bytes show, in a folder beside the cache: no copy, no extra
+//! space, and the cache's own size limits never count it twice.
+
+use anyhow::{Context, Result};
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+/// The extension for a video whose file starts with `head`.
+pub fn sniff(head: &[u8]) -> Option<&'static str> {
+    if head.len() >= 12 && &head[4..8] == b"ftyp" {
+        return Some(if &head[8..12] == b"qt  " { "mov" } else { "mp4" });
+    }
+    if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return Some(if head.windows(4).any(|window| window == b"webm") { "webm" } else { "mkv" });
+    }
+    // Older QuickTime files start with an atom other than `ftyp`.
+    if head.len() >= 8 && matches!(&head[4..8], b"moov" | b"mdat" | b"wide" | b"free" | b"skip" | b"pnot") { return Some("mov"); }
+    None
+}
+
+/// The path to open for `path`: itself unless it is a cached `.video`.
+pub fn path(path: &Path) -> Result<PathBuf> {
+    if !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("video")) { return Ok(path.to_owned()); }
+    let mut head = [0u8; 64];
+    let read = fs::File::open(path).context("The wallpaper video is missing")?.read(&mut head)?;
+    let Some(extension) = sniff(&head[..read]) else { return Ok(path.to_owned()) };
+    let cache = path.parent().context("The wallpaper video has no folder")?;
+    let links = one_mk_wallpaper::links_dir(cache);
+    fs::create_dir_all(&links)?;
+    // Links to videos the cache no longer has: their wallpaper is gone.
+    // (Names being made, `.…part`, belong to a caller still at work.)
+    for entry in fs::read_dir(&links)?.flatten() {
+        let link = entry.path();
+        if entry.file_name().to_string_lossy().starts_with('.') { continue; }
+        let kept = link.file_stem().is_some_and(|stem| cache.join(stem).with_extension("video").is_file());
+        if !kept { let _ = fs::remove_file(link); }
+    }
+    let stem = path.file_stem().context("The wallpaper video has no name")?;
+    let link = links.join(stem).with_extension(extension);
+    if same_file(&link, path) { return Ok(link); }
+    // Made under a name of its own, then put in place in one step: a player
+    // or probe opening the same video meanwhile never finds the link
+    // missing, and two of them making it at once both end with a good one.
+    let unique = links.join(format!(".{}-{}-{}.part", stem.to_string_lossy(), std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_nanos())));
+    fs::hard_link(path, &unique).context("Couldn't open the wallpaper video")?;
+    let placed = fs::rename(&unique, &link);
+    let _ = fs::remove_file(&unique);
+    // On Windows a link a player has open can't be replaced: fine if it is
+    // already this video.
+    if placed.is_err() && !same_file(&link, path) { placed.context("Couldn't open the wallpaper video")?; }
+    Ok(link)
+}
+
+/// Whether `a` and `b` are the same file (hard links of one another): the
+/// same device and file number, not just the same size and dates.
+fn same_file(a: &Path, b: &Path) -> bool {
+    let identity = |path: &Path| fs::File::open(path).ok().and_then(|file| one_mk_wallpaper::file_identity(&file).ok());
+    identity(a).is_some_and(|a| Some(a) == identity(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_the_containers_players_open() {
+        let mp4 = [0, 0, 0, 24, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm'];
+        let mov = [0, 0, 0, 20, b'f', b't', b'y', b'p', b'q', b't', b' ', b' '];
+        let old_mov = [0, 0, 0, 8, b'w', b'i', b'd', b'e'];
+        let mut webm = vec![0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x82, 0x84];
+        webm.extend_from_slice(b"webm");
+        let mut mkv = vec![0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x82, 0x88];
+        mkv.extend_from_slice(b"matroska");
+        assert_eq!(sniff(&mp4), Some("mp4"));
+        assert_eq!(sniff(&mov), Some("mov"));
+        assert_eq!(sniff(&old_mov), Some("mov"));
+        assert_eq!(sniff(&webm), Some("webm"));
+        assert_eq!(sniff(&mkv), Some("mkv"));
+        assert_eq!(sniff(b"not a video at all"), None);
+        assert_eq!(sniff(&[]), None);
+    }
+
+    #[test]
+    fn a_cached_video_opens_through_a_typed_link_and_stale_links_go() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join("wallpaper-video");
+        fs::create_dir(&cache).unwrap();
+        let hash = "a".repeat(64);
+        let video = cache.join(format!("{hash}.video"));
+        fs::write(&video, [0, 0, 0, 24, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm', 1, 2, 3]).unwrap();
+        let links = home.path().join("wallpaper-links");
+        fs::create_dir(&links).unwrap();
+        let stale = links.join(format!("{}.mp4", "b".repeat(64)));
+        fs::write(&stale, b"gone").unwrap();
+
+        let opened = path(&video).unwrap();
+        assert_eq!(opened, links.join(format!("{hash}.mp4")));
+        assert_eq!(fs::read(&opened).unwrap(), fs::read(&video).unwrap());
+        assert!(!stale.exists());
+        // Again: the same link, not a new one.
+        assert_eq!(path(&video).unwrap(), opened);
+        assert!(same_file(&opened, &video));
+
+        // Opened by many at once: every caller gets the link, none fails.
+        let _ = fs::remove_file(&opened);
+        let handles: Vec<_> = (0..8).map(|_| { let video = video.clone(); std::thread::spawn(move || path(&video)) }).collect();
+        for handle in handles { assert_eq!(handle.join().unwrap().unwrap(), opened); }
+        assert!(same_file(&opened, &video));
+        assert!(!fs::read_dir(&links).unwrap().flatten().any(|entry| entry.file_name().to_string_lossy().ends_with(".part")));
+
+        // A separate copy with the same size and dates is not the same file.
+        let copy = home.path().join("copy.mp4");
+        fs::copy(&video, &copy).unwrap();
+        assert!(!same_file(&copy, &video));
+
+        // Anything that isn't a cached `.video` opens as it is.
+        let original = home.path().join("holiday.mov");
+        fs::write(&original, b"x").unwrap();
+        assert_eq!(path(&original).unwrap(), original);
+    }
+}

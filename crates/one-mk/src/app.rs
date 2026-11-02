@@ -124,6 +124,7 @@ pub struct Options {
 /// What peers can use besides input: clipboard and file streams.
 #[derive(Clone)]
 pub struct Services {
+    pub wallpaper: Option<(crate::live_wallpaper::Runtime, PathBuf)>,
     pub clip: Option<Arc<ClipSync>>,
     pub inbox: Arc<Inbox>,
     /// Who is paired right now. A bulk connection ends when its computer is
@@ -202,6 +203,12 @@ async fn serve_stream(
     mut recv: quinn::RecvStream,
 ) {
     match (kind, &services.clip) {
+        (StreamKind::WallpaperVideo, _) => {
+            if let Some((runtime, dir)) = &services.wallpaper {
+                let inbox = runtime.inbox(dir);
+                inbox.receive_wallpaper_on(permit, name, send, recv).await;
+            }
+        }
         (StreamKind::File, _) => services.inbox.receive_on(permit, name, send, recv).await,
         (StreamKind::Clipboard, Some(clip)) => clip.receive(permit.fp(), name, send, recv).await,
         _ => {
@@ -245,6 +252,8 @@ struct Connected {
 /// We control a peer.
 struct Remote {
     typing: one_mk_proto::typing::Sender,
+    composition: one_mk_input::typing::Translation,
+    typing_mode: one_mk_proto::typing::Mode,
     typing_mods: Mods,
     characters: bool,
     typing_description: String,
@@ -434,6 +443,7 @@ impl Owner {
             }
             Control::CharacterKey { code, down, character } => {
                 if !one_mk_proto::typing::character_key_code(code) || !printable(character) { return; }
+                if keyboard.native_text() && down && self.held.iter().any(|code| matches!(code, 29 | 97 | 56 | 100 | 125 | 126)) { return; }
                 match self.source_kinds.get(&code) {
                     Some(Some(original)) if *original == character => {}
                     None if down => {}
@@ -444,6 +454,13 @@ impl Owner {
                     self.source_kinds.insert(code, Some(character));
                 } else {
                     self.source_kinds.remove(&code);
+                }
+                if keyboard.native_text() {
+                    self.held.update(code, down);
+                    let _ = inject.send(Inject::CharacterKey { code, down, character });
+                    self.last_rx = now;
+                    self.last_input = now;
+                    return;
                 }
                 let events = self.keys.key(code, down, || keyboard.reverse(character).unwrap_or(Chord { code, modifiers: Vec::new() }));
                 self.key_events(events, inject);
@@ -585,6 +602,8 @@ impl Owner {
 
 struct App {
     discovery: bool,
+    #[cfg(all(feature = "native-local-remap", any(windows, target_os = "macos")))]
+    local_rules_snapshot: Option<(Option<Arc<one_mk_input::localmap_runtime::Rules>>, Option<String>)>,
     keyboard: Option<one_mk_input::typing::KeyboardLayout>,
     dropzones: Option<one_mk_input::dropzone::Handle>,
     dir: PathBuf,
@@ -655,6 +674,8 @@ struct App {
     network_seen: bool,
     /// What the input backend says needs the user, by part (`Event::Status`).
     input_problems: std::collections::BTreeMap<&'static str, String>,
+    #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
+    local_stop_replies: Vec<(tokio::sync::oneshot::Sender<String>, String)>,
     /// The keyboards and mice connected, for per-device rules.
     devices: tune::Devices,
     /// The focus probe is asked to say when the front window changes.
@@ -695,6 +716,7 @@ pub async fn serve(
 
     let Backend { name, mut events, capture, inject, focus, locker, keyboard } = backend;
     let services = Services {
+        wallpaper: Some((crate::live_wallpaper::Runtime::default(), dir.clone())),
         clip: opts.clipboard.map(|cb| ClipSync::new(cb, node.clone())),
         inbox: Inbox::new(opts.downloads.clone()),
         trusted: watch::channel(trusted_set(&trust)).0,
@@ -733,6 +755,7 @@ pub async fn serve(
     };
 
     let settings = Settings::load_or_default(&dir);
+    one_mk_input::typing::character_mode(settings.typing.has_character_request());
     let (dropzones, mut drops) = match one_mk_input::dropzone::start(name) {
         Ok((handle, events)) => (Some(handle), events),
         Err(error) => {
@@ -745,6 +768,8 @@ pub async fn serve(
     let (shortcuts, mut shortcut_events) = shortcuts::Shortcuts::start(opts.backend, &settings.hotkeys, computers);
     let devices = tune::Devices::load(&dir, name);
     let mut app = App {
+        #[cfg(all(feature = "native-local-remap", any(windows, target_os = "macos")))]
+        local_rules_snapshot: None,
         keyboard,
         dropzones,
         dir,
@@ -791,6 +816,8 @@ pub async fn serve(
         auto_profile: None,
         network_seen: false,
         input_problems: Default::default(),
+        #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
+        local_stop_replies: Vec::new(),
         devices,
         focus_watched: false,
         dial_at: None,
@@ -812,6 +839,7 @@ pub async fn serve(
         }
     }
     app.wallpaper.refresh(&app.settings.wallpaper);
+    if let Some((runtime, dir)) = &app.services.wallpaper { runtime.restore(dir, app.node.identity().fingerprint.short()); }
     app.refresh_fetch_shortcut();
     #[cfg(any(windows, target_os = "macos"))]
     app.reload_local_rules();
@@ -880,12 +908,26 @@ pub async fn serve(
     }
 
     app.stop_broadcast(broadcast::End::Quit);
+    if let Some((wallpaper, _)) = &app.services.wallpaper { wallpaper.shutdown(); }
     app.go_home();
     if let Some((id, a)) = app.approach.take() {
         app.release_capture(id, Some(a.pos()));
     }
     app.end_owner(false);
     app.devices.stopped();
+    #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
+    if app.backend_name == "native" {
+        let _ = app.capture.send(CaptureCmd::LocalRules { rules: None, inactive: None });
+        if app.capture.send(CaptureCmd::RestoreLocalRules(0)).is_ok() {
+            let restored = tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(event) = events.recv().await {
+                    if let Event::LocalRulesRestored { ticket: 0, error } = event { return error; }
+                }
+                Some("Input capture stopped before keyboard restoration was confirmed".into())
+            }).await;
+            if !matches!(restored, Ok(None)) { tracing::error!(?restored, "keyboard restoration needs recovery on next start"); }
+        }
+    }
     node.close();
     tokio::time::sleep(Duration::from_millis(50)).await; // let the Leave and close go out
     Ok(())
@@ -902,9 +944,15 @@ async fn shutdown_signal() {
     {
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("signal handler");
+        let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("signal handler");
+        let mut quit = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::quit())
+            .expect("signal handler");
         tokio::select! {
             _ = ctrl_c => {}
             _ = term.recv() => {}
+            _ = hangup.recv() => {}
+            _ = quit.recv() => {}
         }
     }
     #[cfg(not(unix))]
@@ -1018,7 +1066,7 @@ async fn establish(
     } else {
         match tokio::time::timeout(FIRST_STREAM_TIMEOUT, peer.accept_stream()).await {
             Ok(Ok((StreamKind::Control, send, recv))) => Ok((send, recv)),
-            Ok(Ok((kind @ (StreamKind::File | StreamKind::Clipboard), send, recv))) => {
+            Ok(Ok((kind @ (StreamKind::File | StreamKind::Clipboard | StreamKind::WallpaperVideo), send, recv))) => {
                 tracing::debug!(peer = %device_name, %addr, "bulk connection");
                 drop(permit); // the transfer limits take over
                 serve_streams(peer.conn, peer.fingerprint, device_name, services, (kind, send, recv)).await;
@@ -1113,24 +1161,35 @@ fn coalesce(
 
 impl App {
     fn character_mode(&self, fingerprint: Fingerprint) -> bool {
-        let mode = match self.settings.typing.requested(Some(&fingerprint.to_string())) {
+        self.character_mode_for(fingerprint, self.typing_mode(fingerprint))
+    }
+
+    fn typing_mode(&self, fingerprint: Fingerprint) -> one_mk_proto::typing::Mode {
+        match self.settings.typing.requested(Some(&fingerprint.to_string())) {
             crate::typing::Mode::Physical => one_mk_proto::typing::Mode::Physical,
             crate::typing::Mode::Characters => one_mk_proto::typing::Mode::Characters,
             crate::typing::Mode::Auto => one_mk_proto::typing::Mode::Auto,
-        };
+        }
+    }
+
+    fn character_mode_for(&self, fingerprint: Fingerprint, mode: one_mk_proto::typing::Mode) -> bool {
         let Some(peer) = self.peers.get(&fingerprint) else { return false };
         one_mk_proto::typing::use_characters(mode, peer.caps, self.keyboard.is_some(), self.keyboard.as_ref().map(|keyboard| keyboard.descriptor()), peer.keyboard.as_ref())
     }
 
     fn typing_description(&self, fingerprint: Fingerprint) -> String {
-        if self.character_mode(fingerprint) {
+        self.typing_description_for(fingerprint, self.typing_mode(fingerprint))
+    }
+
+    fn typing_description_for(&self, fingerprint: Fingerprint, mode: one_mk_proto::typing::Mode) -> String {
+        if self.character_mode_for(fingerprint, mode) {
             let local = self.keyboard.as_ref().map(|keyboard| layout_name(&keyboard.descriptor().name)).unwrap_or("unknown");
             let peer = self.peers.get(&fingerprint).and_then(|peer| peer.keyboard.as_ref()).map(|layout| layout_name(&layout.name)).unwrap_or("unknown");
             format!("characters ({local} to {peer})")
         } else if self.keyboard.is_some() {
-            "physical (visit preference, equal/unknown layouts, or peer lacks TEXT)".into()
+            "physical (Keys selected, matching/unknown layouts, or receiver needs physical keys)".into()
         } else {
-            self.settings.typing.summary()
+            "physical (sender layout translation unavailable)".into()
         }
     }
 
@@ -1143,22 +1202,48 @@ impl App {
         }
         self.settings.typing.summary()
     }
+    fn refresh_keyboard(&mut self) {
+        if !self.settings.typing.has_character_request() { return; }
+        if let Some(keyboard) = &mut self.keyboard && keyboard.refresh() {
+            for peer in self.peers.values() {
+                if peer.caps & (caps::TEXT | caps::TEXT_SOURCE) != 0 {
+                    peer.ctl.send(Control::KeyboardLayout(Box::new(keyboard.descriptor().clone())));
+                }
+            }
+        }
+    }
     // ------------------------------------------------------------ local input
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
+        if matches!(ev, Event::Activated { .. }) || cfg!(not(target_os = "macos")) && matches!(ev, Event::Key { .. }) { self.refresh_keyboard(); }
         match ev {
+            Event::KeyboardModifiers { depressed, latched, locked, group } => {
+                #[cfg(target_os = "linux")]
+                if let Some(keyboard) = &self.keyboard {
+                    keyboard.modifiers(one_mk_input::LayoutState { depressed, latched, locked, group });
+                }
+                #[cfg(not(target_os = "linux"))]
+                let _ = (depressed, latched, locked, group);
+                self.refresh_keyboard();
+            }
             Event::Key { code, down, .. } if self.captured_shortcut(code, down) => {}
             ev @ (Event::Hotkey(_) | Event::Hotkeys(_)) => self.on_shortcut_event(ev),
             ev if self.broadcast_takes(&ev) => self.broadcast_input(ev, events),
             Event::KeyboardLayout(layout) => {
-                if self.keyboard.is_some() {
-                    self.keyboard = Some(layout);
-                    for peer in self.peers.values() {
-                        if peer.caps & caps::TEXT != 0 {
-                            peer.ctl.send(Control::KeyboardLayout(Box::new(self.keyboard.as_ref().unwrap().descriptor().clone())));
-                        }
+                self.reset_composition();
+                if let Some(keyboard) = &self.keyboard { keyboard.reset(); }
+                self.keyboard = Some(layout);
+                for peer in self.peers.values() {
+                    peer.ctl.send(Control::Caps(self.local_caps()));
+                    if peer.caps & (caps::TEXT | caps::TEXT_SOURCE) != 0 {
+                        peer.ctl.send(Control::KeyboardLayout(Box::new(self.keyboard.as_ref().unwrap().descriptor().clone())));
                     }
                 }
+            }
+            Event::KeyboardLayoutUnavailable => {
+                self.reset_composition();
+                if let Some(keyboard) = self.keyboard.take() { keyboard.reset(); }
+                for peer in self.peers.values() { peer.ctl.send(Control::Caps(self.local_caps())); }
             }
             Event::Desktop(d) => {
                 tracing::debug!(screens = ?d.screens, "local screens");
@@ -1261,6 +1346,21 @@ impl App {
                 }
             }
             Event::Error(msg) => tracing::error!("{msg}"),
+            Event::LocalRulesOff => {
+                self.settings.input.local_rules = false;
+                if let Err(error) = crate::settings::Settings::update(&self.dir, |settings| {
+                    settings.input.local_rules = false;
+                    Ok(())
+                }) { tracing::error!(%error, "could not save emergency local-rules disable"); }
+                #[cfg(any(windows, target_os = "macos"))]
+                self.reload_local_rules();
+            }
+            #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
+            Event::LocalRulesRestored { error, .. } => {
+                for (reply, text) in self.local_stop_replies.drain(..) {
+                    let _ = reply.send(error.as_ref().map_or(text, |error| format!("error {error}\n")));
+                }
+            }
             Event::Status { part, problem: Some(p) } => {
                 if self.input_problems.get(part) != Some(&p) {
                     println!("{p}");
@@ -1533,6 +1633,8 @@ impl App {
         let now = Instant::now();
         Remote {
             typing: one_mk_proto::typing::Sender::default(),
+            composition: one_mk_input::typing::Translation::default(),
+            typing_mode: self.typing_mode(fp),
             typing_mods: Mods::default(),
             characters: self.character_mode(fp),
             typing_description: self.typing_description(fp),
@@ -1806,7 +1908,10 @@ impl App {
     /// Has the focus probe say when another window comes to the front while
     /// a controller watches the focus here, and stop when it doesn't.
     fn sync_focus_watch(&mut self) {
-        let want = self.owner.as_ref().is_some_and(|o| o.watch_focus);
+        let want = self.owner.as_ref().is_some_and(|o| o.watch_focus)
+            || cfg!(any(windows, target_os = "macos")) && self.settings.input.local_rules
+                && (self.settings.input.keymap.rule.iter().any(|rule| rule.app.is_some())
+                    || self.settings.input.button.iter().any(|rule| rule.app.is_some()));
         if want == std::mem::replace(&mut self.focus_watched, want) {
             return;
         }
@@ -1882,7 +1987,11 @@ impl App {
                 self.dialing.remove(&addr);
             }
             AppEvent::Network(net) => self.on_network(&net),
-            AppEvent::FocusMoved => self.check_focus_soon(),
+            AppEvent::FocusMoved => {
+                self.check_focus_soon();
+                #[cfg(any(windows, target_os = "macos"))]
+                if self.settings.input.local_rules { self.reload_local_rules(); }
+            }
         }
     }
 
@@ -1981,7 +2090,9 @@ impl App {
                 if self.owner.as_ref().is_some_and(|o| o.peer == fp) {
                     self.end_owner(false);
                 }
-                println!("{} disconnected; reconnecting automatically.", peer.name);
+                // Forgotten (not trusted any more): nothing reconnects.
+                if self.trust.is_trusted(&fp) { println!("{} disconnected; reconnecting automatically.", peer.name); }
+                else { println!("{} disconnected (no longer paired).", peer.name); }
                 self.redial_soon();
                 if let Some(clip) = &self.services.clip {
                     clip.forget(fp);
@@ -2000,8 +2111,17 @@ impl App {
     }
 
     fn on_control(&mut self, fp: Fingerprint, id: usize, msg: Control) {
+        if matches!(msg, Control::Enter { .. }) { self.refresh_keyboard(); }
         let Some(msg) = self.broadcast_control(fp, msg) else { return };
         match msg {
+            Control::LiveWallpaper(json) => {
+                if let Some((runtime, dir)) = &self.services.wallpaper
+                    && let Some(peer) = self.peers.get(&fp)
+                    && peer.id == id && peer.caps & caps::LIVE_WALLPAPER != 0
+                    && self.trust.is_trusted(&fp)
+                    && let Ok(wire) = serde_json::from_str(&json)
+                { runtime.receive(dir.clone(), self.node.identity().fingerprint.short(), fp, peer.ctl.clone(), wire); }
+            }
             Control::Wallpaper(message) => {
                 if self.trust.is_trusted(&fp) && self.peers.get(&fp).is_some_and(|peer| peer.id == id && peer.caps & caps::WALLPAPER != 0) {
                     self.wallpaper.receive_now(fp,message);
@@ -2037,12 +2157,13 @@ impl App {
             Control::Caps(bits) => {
                 if let Some(p) = self.peers.get_mut(&fp) {
                     p.caps = bits;
-                    if bits & caps::TEXT != 0 && let Some(keyboard) = &self.keyboard {
+                    if bits & (caps::TEXT | caps::TEXT_SOURCE) != 0 && let Some(keyboard) = &self.keyboard {
                         p.ctl.send(Control::KeyboardLayout(Box::new(keyboard.descriptor().clone())));
                     }
                 }
                 self.apply_pointer_mode();
                 self.announce_wallpaper(fp);
+                self.update_sides();
                 self.refresh_fetch_shortcut();
             }
             Control::KeyboardLayout(layout) => {
@@ -2051,8 +2172,9 @@ impl App {
                 }
             }
             input @ (Control::Text { .. } | Control::CharacterKey { .. }) => {
-                if self.peers.get(&fp).is_some_and(|peer| peer.caps & caps::TEXT != 0)
+                if (matches!(input, Control::CharacterKey { down: false, .. }) || self.peers.get(&fp).is_some_and(|peer| peer.caps & (caps::TEXT | caps::TEXT_SOURCE) != 0))
                     && let Some(keyboard) = &self.keyboard
+                    && keyboard.can_inject()
                     && let Some(owner) = self.owner.as_mut().filter(|owner| owner.peer == fp && owner.link == id)
                 {
                     owner.character_input(input, keyboard, &self.inject);
@@ -2139,7 +2261,7 @@ impl App {
     }
 
     fn local_caps(&self) -> u32 {
-        caps::LOCAL | if self.keyboard.is_some() { caps::TEXT } else { 0 }
+        caps::LOCAL | self.keyboard.as_ref().map_or(0, |keyboard| caps::TEXT_SOURCE | if keyboard.can_inject() { caps::TEXT } else { 0 } | if keyboard.native_text() { caps::TEXT_HOLD } else { 0 })
             | if self.services.clip.is_some() && self.settings.clipboard.allow_pull { caps::CLIPBOARD_FETCH } else { 0 }
     }
 
@@ -2248,6 +2370,10 @@ impl App {
     /// The OS says this display went to sleep (or the computer is
     /// suspending), or woke.
     fn on_power(&mut self, ev: PowerEvent) {
+        if let Some((wallpaper, dir)) = &self.services.wallpaper {
+            let PowerEvent::DisplayAsleep(asleep) = ev;
+            wallpaper.hold(dir, None, Some(asleep));
+        }
         if ev == PowerEvent::DisplayAsleep(true) { self.cancel_mouse_modes(); }
         match ev {
             PowerEvent::DisplayAsleep(true) if self.visiting() => {
@@ -2373,6 +2499,7 @@ impl App {
     fn reload_settings(&mut self) -> Result<()> {
         let previous_caps = self.local_caps();
         self.settings = Settings::load(&self.dir)?;
+        one_mk_input::typing::character_mode(self.settings.typing.has_character_request());
         self.wallpaper.refresh(&self.settings.wallpaper);
         let peers: Vec<_> = self.peers.keys().copied().collect();
         for peer in peers { self.announce_wallpaper(peer); }
@@ -2403,6 +2530,32 @@ impl App {
         self.reload_trust();
         let stop = req == Request::Stop;
         let text = match req {
+            Request::LocalRulesOff => {
+                self.settings.input.local_rules = false;
+                let result = crate::settings::Settings::update(&self.dir, |settings| { settings.input.local_rules = false; Ok(()) });
+                #[cfg(any(windows, target_os = "macos"))]
+                self.reload_local_rules();
+                let text = match result { Ok(_) => "ok\n".to_owned(), Err(error) => format!("error {error:#}\n") };
+                #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
+                if self.backend_name == "native" {
+                    if self.capture.send(CaptureCmd::RestoreLocalRules(1)).is_err() {
+                        let _ = reply.send("error Keyboard restoration could not be requested; restart oneMK to recover\n".into());
+                    } else { self.local_stop_replies.push((reply, text)); }
+                    return false;
+                }
+                text
+            }
+            Request::LiveWallpaper(json) => {
+                if let Some((runtime, dir)) = &self.services.wallpaper && let Ok(command) = serde_json::from_str(&json) {
+                    let peers = self.peers.iter().filter(|(_, peer)| peer.caps & caps::LIVE_WALLPAPER != 0).map(|(fingerprint, peer)| crate::live_wallpaper::Peer {
+                        id: fingerprint.short(), name: peer.name.clone(), fingerprint: *fingerprint,
+                        address: peer.conn.remote_address(), control: peer.ctl.clone(),
+                    }).collect();
+                    runtime.request(dir.clone(), self.status(), command, peers, self.node.clone(), reply);
+                    return false;
+                }
+                "error Wallpaper is not available\n".into()
+            }
             Request::WallpaperStatus => self.wallpaper.status(),
             Request::Status => self.status().encode(),
             Request::Invitation => {
@@ -2514,6 +2667,7 @@ impl App {
         Status {
             name: sanitize_name(&id.name),
             id: id.fingerprint.short(),
+            wallpaper: self.services.wallpaper.as_ref().map(|(runtime, _)| runtime.status()),
             port: self.node.local_addr().map_or(0, |a| a.port()),
             discovery: Some(self.discovery),
             backend: self.backend_name.into(),
@@ -2689,6 +2843,7 @@ impl App {
 
     /// The OS says this screen locked or unlocked.
     fn on_screen_locked(&mut self, locked: bool) {
+        if let Some((wallpaper, dir)) = &self.services.wallpaper { wallpaper.hold(dir, Some(locked), None); }
         if !locked {
             tracing::debug!("screen unlocked");
             self.lock_sync.on_local_unlocked();
@@ -2794,6 +2949,27 @@ impl App {
     /// peers' edges overlap, the one with the lowest fingerprint wins, so
     /// the choice doesn't depend on connection order.
     fn update_sides(&mut self) {
+        if let Some((runtime, dir)) = &self.services.wallpaper && runtime.needs_reconcile() {
+            let peers = self.peers.iter().filter(|(_, peer)| peer.caps & caps::LIVE_WALLPAPER != 0).map(|(fingerprint, peer)| crate::live_wallpaper::Peer {
+                id: fingerprint.short(), name: peer.name.clone(), fingerprint: *fingerprint,
+                address: peer.conn.remote_address(), control: peer.ctl.clone(),
+            }).collect();
+            let status = Status {
+                id: self.node.identity().fingerprint.short(), name: sanitize_name(&self.node.identity().name),
+                screens: self.local.as_ref().map_or_else(Vec::new, |desktop| desktop.screens.clone()),
+                peers: self.trust.devices().iter().filter_map(|device| {
+                    let live = self.peers.get(&device.fingerprint()?);
+                    Some(PeerStatus { id: device.short_id(), name: sanitize_name(&device.name), side: live.map_or_else(|| device.side(), |peer| peer.side),
+                        os: live.map_or(device.os, |peer| peer.os), online: live.is_some(), swap: device.swap_ctrl_cmd.to_string(),
+                        screens: live.and_then(|peer| peer.desktop.as_ref()).map_or_else(Vec::new, |desktop| desktop.screens.clone()) })
+                }).collect(),
+                offsets: self.trust.devices().iter().filter_map(|device| {
+                    let live = device.fingerprint().and_then(|fingerprint| self.peers.get(&fingerprint));
+                    Some((device.short_id(), live.map_or(device.offset, |peer| peer.offset)?))
+                }).collect(), ..Default::default()
+            };
+            runtime.reconcile(dir.clone(), crate::live_wallpaper::Layout::from_status(&status), peers, self.node.clone());
+        }
         let mut edges: Vec<(Edge, Fingerprint)> = Vec::new();
         let mut conflicts: Vec<_> = self.trust.devices().iter().filter(|device| device.placed_by == one_mk_net::PlacedBy::Pending)
             .map(|device| crate::pairing_layout::warning(&device.name)).collect();
@@ -3029,16 +3205,30 @@ mod tests {
 
     /// A port nothing listens on. Tests run in parallel and the OS may hand
     /// out a just-released port again, so none is given out twice.
+    /// A port for a test daemon, below every system's automatic range
+    /// (Linux from 32768, macOS and Windows from 49152). A port the system
+    /// handed out and took back could go to the next socket that asks for
+    /// any port (a QUIC client here) before the daemon binds it, and the
+    /// daemon would then fail to start (seen on macOS CI).
     fn free_port() -> u16 {
-        static GIVEN: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
-        let mut given = GIVEN.lock().unwrap();
-        loop {
-            let port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-            if !given.contains(&port) {
-                given.push(port);
+        static NEXT: std::sync::Mutex<Option<u16>> = std::sync::Mutex::new(None);
+        // A test that failed while holding it leaves nothing half done.
+        let mut next = NEXT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Each test process starts elsewhere in the range.
+        let mut port = next.unwrap_or(20_000 + (std::process::id() % 1_000) as u16 * 12);
+        // One pass over the range at most: where binding is refused (a
+        // sandbox without network) every test fails at once, instead of
+        // all of them waiting forever on this lock.
+        for _ in 20_000..=32_000 {
+            port = if port >= 32_000 { 20_000 } else { port + 1 };
+            let free = std::net::UdpSocket::bind(("0.0.0.0", port)).is_ok() && std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+            if free {
+                *next = Some(port);
                 return port;
             }
         }
+        drop(next);
+        panic!("No port from 20000 to 32000 could be bound for a test daemon: is network access denied here?");
     }
 
     /// Pairs `dir` with `other`, placed on `side` by the user (so layout
@@ -3937,7 +4127,7 @@ mod tests {
             raw.send(Control::Hello { version: PROTOCOL_VERSION, name: "raw".into(), screens: vec![], nonce: 0, os: 0 })
                 .await;
             assert!(matches!(raw.next().await, Control::Hello { .. }));
-            assert!(matches!(raw.next().await, Control::Caps(bits) if bits & !caps::TEXT == caps::LOCAL));
+            assert!(matches!(raw.next().await, Control::Caps(bits) if bits & !(caps::TEXT | caps::TEXT_SOURCE | caps::TEXT_HOLD) == caps::LOCAL));
             raw.layout = raw.next().await;
             assert!(matches!(raw.layout, Control::Layout { .. }));
             raw
@@ -3980,9 +4170,9 @@ mod tests {
         duo.ha.key_from(29, true, None);
         duo.ha.key_from(21, true, None);
         assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 29, down: true });
-        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 44, down: true });
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 21, down: true });
         duo.leave_b().await;
-        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 44, down: false });
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 21, down: false });
         assert_eq!(next_inject(&mut duo.hb).await, Inject::Key { code: 29, down: false });
         duo.stop().await;
     }

@@ -147,7 +147,7 @@ async fn escape_held_before_gesture_still_releases_remote_escape() {
     assert_eq!(next_n(&mut duo, 1).await, [key(ESC, true)]);
     duo.ha.events.send(Event::Button { button: 0x113, down: true, device: None }).unwrap();
     press(&duo, &[(ESC, true), (ESC, false)]);
-    assert_eq!(next_n(&mut duo, 2).await, [key(ESC, true), key(ESC, false)]);
+    assert_eq!(next_n(&mut duo, 1).await, [key(ESC, false)]);
     duo.ha.events.send(Event::Button { button: 0x113, down: false, device: None }).unwrap();
     press(&duo, &[(LSHIFT, true), (LSHIFT, false)]);
     assert_eq!(next_n(&mut duo, 2).await, [key(LSHIFT, true), key(LSHIFT, false)]);

@@ -206,9 +206,10 @@ mod tests {
                 let a = conn.get_window_attributes(w).ok()?.reply().ok()?;
                 (a.override_redirect && a.map_state == MapState::VIEWABLE).then_some(w)
             })
-            .map(|w| {
-                let g = conn.get_geometry(w).unwrap().reply().unwrap();
-                (w, g.x, g.y, g.width, g.height)
+            // A window another test closes between the two requests is gone.
+            .filter_map(|w| {
+                let g = conn.get_geometry(w).ok()?.reply().ok()?;
+                Some((w, g.x, g.y, g.width, g.height))
             })
             .collect()
     }

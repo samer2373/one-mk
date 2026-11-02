@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(all(target_os = "linux", feature = "wallpaper-m1-lab"))]
 
 use one_mk_net::{Device, Identity, Node, TrustStore, read_frame};
 use one_mk_proto::{Control, PROTOCOL_VERSION, StreamKind, caps};
@@ -206,6 +206,7 @@ fn ticks(child: &Child) -> u64 {
 #[tokio::test]
 async fn isolated_off_and_enabled_scaffolding_have_zero_idle_cpu_ticks() {
     let mut lab = Lab::new(); let home = lab.home("idle");
+    std::fs::write(home.join("settings.toml"),"[update]\ncheck = false\n").unwrap();
     let daemon = lab.daemon(&home,port(),None); ready(&home).await;
     for enabled in [false,true,false] {
         Lab::cli(&home,&["wallpaper",if enabled { "enable" } else { "disable" },"--json"],0);

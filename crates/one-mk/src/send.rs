@@ -76,7 +76,9 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
     }
 
     let elapsed = start.elapsed().as_secs_f64();
-    eprint!("\r\x1b[2K");
+    // The progress line is redrawn in place only in a terminal; a log or a
+    // pipe gets no control codes.
+    if std::io::IsTerminal::is_terminal(&std::io::stderr()) { eprint!("\r\x1b[2K"); }
     let mut failed = 0;
     let mut first_reason = String::new();
     let (mut saved, mut saved_bytes) = (0, 0u64);
@@ -295,6 +297,7 @@ async fn show_progress(p: Arc<Progress>, start: Instant, reports: watch::Sender<
         let rate = moved as f64 / start.elapsed().as_secs_f64().max(1e-3);
         let eta = if rate > 0.0 { format!("{:.0} s", (total - done.min(total)) as f64 / rate) } else { "-".into() };
         let pct = if total > 0 { done as f64 * 100.0 / total as f64 } else { 100.0 };
+        if !std::io::IsTerminal::is_terminal(&std::io::stderr()) { continue; }
         eprint!("\r\x1b[2K  {pct:5.1}%  {} / {}  {}/s  ETA {eta}", bytes(done), bytes(total), bytes(rate as u64));
         let _ = std::io::stderr().flush();
     }

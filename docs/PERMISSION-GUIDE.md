@@ -1,12 +1,12 @@
 # Permission guide (macOS)
 
-When one·mk needs a macOS permission (Accessibility, then Input
+When oneMK needs a macOS permission (Accessibility, then Input
 Monitoring), the window opens the matching System Settings pane and a small
 card floats **next to the System Settings window**: an arrow points at the
 list where the switch is, one line says what to do, a step indicator says
 where you are (1 of 2, 2 of 2). It follows System Settings when it moves and
 watches the permission: when the switch goes on the card ticks, moves on to
-the next permission or leaves, and brings one·mk back to the front. If System
+the next permission or leaves, and brings oneMK back to the front. If System
 Settings is closed first, the card says so and offers **Open Settings
 again**.
 
@@ -48,14 +48,14 @@ points. On a real Mac the row's position is not known (see Limits).
 
 | Phase | Card says | Footer | Arrow |
 |---|---|---|---|
-| **Waiting** | *Turn on one·mk*: find `one-mk` in the *Accessibility* list and switch it on (for Input Monitoring: and choose *Later* if macOS offers to quit and reopen it, the advice the daemon already gives) | amber dot, *Watching for the switch…* (*Waiting for System Settings…* while it isn't on screen) | points at the window, nudges three times every ~5 s |
-| **Granted** (1.2 s) | ✓ *Accessibility is on*: what it lets one·mk do; what comes next | *Opening Input Monitoring…* / *Taking you back to one·mk…* | fades out |
+| **Waiting** | *Turn on oneMK*: find `one-mk` in the *Accessibility* list and switch it on (for Input Monitoring: and choose *Later* if macOS offers to quit and reopen it, the advice the daemon already gives) | amber dot, *Watching for the switch…* (*Waiting for System Settings…* while it isn't on screen) | points at the window, nudges three times every ~5 s |
+| **Granted** (1.2 s) | ✓ *Accessibility is on*: what it lets oneMK do; what comes next | *Opening Input Monitoring…* / *Taking you back to oneMK…* | fades out |
 | **Settings closed** | *System Settings closed*: Accessibility isn't on yet | **Open Settings again** | none |
 | **Settings out of sight** | *System Settings is out of sight*: minimised or on another desktop | **Show System Settings** | none |
 | **Done** | (the last words stay while it fades out, 0.32 s) | | |
 
 - The header shows the steps as bars (done: amber, current: white, to do:
-  grey) and *Step 1 of 2*; with one step it says *one·mk setup*. A
+  grey) and *Step 1 of 2*; with one step it says *oneMK setup*. A
   permission that is already on when the guide starts is skipped, so a Mac
   that only needs Input Monitoring starts at *Step 2 of 2* with step one
   shown done.
@@ -74,8 +74,8 @@ points. On a real Mac the row's position is not known (see Limits).
 - **Covered**: when another app's window covers more than half of System
   Settings (you went to do something else), the card fades away and comes
   back when Settings is in front again. No "closed" message for that.
-- **The close button** (×) ends the guide without bringing one·mk forward.
-- When everything is on, one·mk's window is brought to the front (macOS
+- **The close button** (×) ends the guide without bringing oneMK forward.
+- When everything is on, oneMK's window is brought to the front (macOS
   `activateWithOptions` plus egui's focus command).
 
 ### Where the card goes (`place_card`)
@@ -189,14 +189,14 @@ Unverified on a Mac (compile-checked only):
   converts positions with the card window's own scale.
 - **Always on top over System Settings.** The card uses winit's
   `AlwaysOnTop` (NSFloatingWindowLevel). Floating windows stay above other
-  apps' normal windows even when one·mk isn't active, but the card exists
+  apps' normal windows even when oneMK isn't active, but the card exists
   on one Space only: if System Settings is on another Space or full screen,
   the card is not there (it says *out of sight* after the grace).
-- **Clicking the card activates one·mk.** winit has no non-activating
-  panel, so clicking the card (× or the button) makes one·mk the active app
+- **Clicking the card activates oneMK.** winit has no non-activating
+  panel, so clicking the card (× or the button) makes oneMK the active app
   and may bring its main window above System Settings. *Open Settings
   again* immediately re-activates Settings; × ends the guide anyway.
-- **Bringing one·mk back.** From macOS 14 app activation is cooperative:
+- **Bringing oneMK back.** From macOS 14 app activation is cooperative:
   `activateWithOptions` from a background app may be refused while System
   Settings is frontmost. Then the window stays behind (the dock icon may
   bounce).
@@ -208,7 +208,7 @@ Unverified on a Mac (compile-checked only):
   corners; without the flag they were black. Not seen on a Mac.
 - **Where the arrow points.** `switch_spot()` is an estimate of where the
   app list starts in the pane (a third of the way down, 110–240 pt); the
-  arrow is level with the list, not with one·mk's row: the row's position
+  arrow is level with the list, not with oneMK's row: the row's position
   depends on the other apps listed, the window size and macOS version, and
   reading it would need Accessibility access to System Settings (exactly
   what is not granted yet). Adjust `switch_spot()` after seeing it.
@@ -221,9 +221,9 @@ TCC notes I am not sure of:
   program that needs both permissions; the window (`one-mk-app`) and the
   menu bar icon don't. Launched by launchd from inside the bundle, the
   daemon may be listed under its own executable name **`one-mk`** (with a
-  generic icon) rather than as *one·mk* with the app icon, and the window
+  generic icon) rather than as *oneMK* with the app icon, and the window
   may be listed separately if it ever asked. The card therefore says
-  *Find one-mk in the … list* (`LIST_NAME`). If a Mac shows *one·mk*,
+  *Find one-mk in the … list* (`LIST_NAME`). If a Mac shows *oneMK*,
   change `LIST_NAME`.
 - **Code signature.** TCC records the code signature; a release with a
   different signing identity (ad-hoc builds sign differently each time) may
@@ -263,12 +263,12 @@ Build the app bundle as usual, install it, and have the service running
    scaled wrongly on a mixed-DPI pair).
 5. After 6 s step one ticks, then System Settings switches to Input
    Monitoring and the card says *Step 2 of 2*; 6 s later it ticks and the
-   card fades out. **Check:** one·mk's window comes to the front (on macOS
+   card fades out. **Check:** oneMK's window comes to the front (on macOS
    14+: note whether it does or only bounces).
 6. Run again; close System Settings (red button or ⌘Q). **Check:** after
    about 1.5 s *System Settings closed* with **Open Settings again**;
    clicking it reopens the pane and the card points at it again. Note
-   whether clicking the card brought one·mk's main window over Settings.
+   whether clicking the card brought oneMK's main window over Settings.
 7. Run again; minimise System Settings (⌘M), then repeat with it moved to
    another Space. **Check:** *System Settings is out of sight*; **Show
    System Settings** brings it back.
@@ -280,8 +280,8 @@ Build the app bundle as usual, install it, and have the service running
    pop.
 10. The real thing (once integrated): remove `one-mk` from both lists
     (select, "−"), restart the service (`one-mk install` or log out and in),
-    open one·mk and start the guide. **Check:** which name and icon the
-    entry has in each list (`one-mk`? `one·mk`? both the app and the
+    open oneMK and start the guide. **Check:** which name and icon the
+    entry has in each list (`one-mk`? `oneMK`? both the app and the
     daemon?), that switching it on ticks the card within about a second,
     and that turning Accessibility off again afterwards brings the guide
     back to step one if it is still open.

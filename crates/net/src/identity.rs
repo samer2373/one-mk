@@ -109,8 +109,15 @@ fn device_name() -> String {
     hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
+        .map(|h| plain_name(&h).to_owned())
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "one-mk device".to_owned())
+}
+
+/// A Mac's host name ends in ".local" (its Bonjour name): the computer is
+/// called what comes before it.
+fn plain_name(host: &str) -> &str {
+    host.len().checked_sub(6).filter(|&cut| host.is_char_boundary(cut) && host[cut..].eq_ignore_ascii_case(".local")).map_or(host, |cut| &host[..cut])
 }
 
 /// Creates `dir` if needed and makes it private to this user (0700 on
@@ -212,5 +219,17 @@ mod tests {
         Identity::load_or_create(&dir).unwrap();
         assert_eq!(mode(&key), 0o400);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    #[test]
+    fn a_bonjour_suffix_is_not_part_of_the_name() {
+        assert_eq!(super::plain_name("MacBook-Pro.local"), "MacBook-Pro");
+        assert_eq!(super::plain_name("studio.LOCAL"), "studio");
+        assert_eq!(super::plain_name("samer-Victus"), "samer-Victus");
+        assert_eq!(super::plain_name(".local"), "");
+        assert_eq!(super::plain_name("é.local"), "é");
     }
 }

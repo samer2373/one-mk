@@ -435,7 +435,7 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
 }
 
 fn netwatch_available() -> bool {
-    cfg!(all(unix, not(target_os = "macos")))
+    cfg!(any(unix, windows))
 }
 
 fn describe_rules(p: &Profile) -> String {
@@ -622,6 +622,25 @@ mod tests {
         assert!(check_name("home office").is_ok());
         assert!(check_name("tab\there").is_err());
         assert!(check_name("  ").is_err());
+    }
+
+    #[test]
+    fn wifi_names_match_exactly_and_disconnect_matches_nothing() {
+        let profiles = Profiles {
+            list: vec![
+                Profile { name: "cafe".into(), ssid: vec!["Café".into()], ..Profile::default() },
+                Profile { name: "desk".into(), ssid: vec!["Desk".into(), "Office 5 GHz".into()], ..Profile::default() },
+                Profile { name: "duplicate".into(), ssid: vec!["Desk".into()], ..Profile::default() },
+            ],
+            ..Profiles::default()
+        };
+        for (ssid, expected) in [("Café", Some("cafe")), ("Desk", Some("desk")), ("Office 5 GHz", Some("desk")),
+            ("desk", None), ("Desk ", None), ("Cafe", None), ("", None)]
+        {
+            let network = NetworkId { ssids: vec![ssid.into()], ..NetworkId::default() };
+            assert_eq!(profiles.matching(&network).map(|profile| profile.name.as_str()), expected);
+        }
+        assert!(profiles.matching(&NetworkId::default()).is_none());
     }
 
     /// `profile auto` checks its rules and needs an existing profile.

@@ -12,6 +12,10 @@ mod place;
 mod shell;
 mod desk_cards;
 mod typing;
+mod updates;
+mod settings_controls;
+mod palette;
+mod wallpaper;
 
 use crate::daemon::{Event, Job, Link};
 use crate::motion::{self, tween};
@@ -36,27 +40,32 @@ const PANEL_H: f32 = 196.0;
 const PAD: f32 = 20.0;
 const GHOST: &str = "\u{0}pairing";
 /// Wallpapers for paired computers: low chroma, about equal lightness.
-const WALLS: [[u32; 2]; 4] = [[0x6A4A2E, 0x1C130C], [0x2F5A50, 0x0C1A17], [0x2E5578, 0x0B1724], [0x7A4330, 0x1F0F0A]];
-const ME_WALL: [u32; 2] = [0x2E5578, 0x0B1724];
+/// Each computer's wallpaper on the desk: a light colour and a deep one,
+/// as desktop pictures are (dusk violet, lagoon, ember, ocean); deep
+/// enough that white names on them stay readable.
+const WALLS: [[u32; 2]; 4] = [[0x7B68E0, 0x191338], [0x2E9F96, 0x08262D], [0xD9714A, 0x34101E], [0x3D7FE6, 0x0A1838]];
+const ME_WALL: [u32; 2] = [0x3D7FE6, 0x0A1838];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tab {
     Desk,
     Layout,
     Files,
+    Wallpaper,
     Keys,
     Health,
     Advanced,
 }
 /// Each tab, and a shorter name for narrow windows. Settings most people
 /// never change (Ctrl and Cmd, gaming mode, edge rules) live in Advanced.
-const TABS: [(Tab, &str, &str); 6] = [
+const TABS: [(Tab, &str, &str); 7] = [
     (Tab::Desk, "Desk", "Desk"),
-    (Tab::Layout, "Layout", "Layout"),
+    (Tab::Layout, "Desk", "Desk"),
     (Tab::Files, "Clipboard & files", "Files"),
+    (Tab::Wallpaper, "Wallpaper", "Wallpaper"),
     (Tab::Keys, "Keys & mouse", "Keys"),
     (Tab::Health, "Health", "Health"),
-    (Tab::Advanced, "Advanced", "Advanced"),
+    (Tab::Advanced, "Settings", "Settings"),
 ];
 
 impl Tab {
@@ -65,9 +74,9 @@ impl Tab {
     fn desk(self) -> bool {
         matches!(self, Tab::Desk | Tab::Files | Tab::Layout)
     }
-    /// Tabs that mean something while one·mk is off.
+    /// Tabs that mean something while oneMK is off.
     fn when_off(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Files | Tab::Keys | Tab::Health | Tab::Advanced)
+        matches!(self, Tab::Desk | Tab::Files | Tab::Wallpaper | Tab::Keys | Tab::Health | Tab::Advanced)
     }
 }
 const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"), (Side::Top, "Above"), (Side::Bottom, "Below")];
@@ -183,6 +192,9 @@ pub struct App {
     status_seen: u64,
     update_available: Option<String>,
     update_output: Option<String>,
+    update_ui: updates::UpdateUi,
+    palette: palette::Palette,
+    wallpaper_ui: wallpaper::WallpaperUi,
     link: Link,
     rx: Receiver<Event>,
     /// `None` until the first look at the daemon.
@@ -258,6 +270,7 @@ pub struct App {
     /// The profile whose options are open, and whether to scroll to it.
     profile_open: Option<String>,
     profile_scroll: bool,
+    wifi: Option<one_mk_ctl::wifi::Watch>,
     /// When the tab last changed (the page fades in).
     tab_at: f64,
     fonts: Fallbacks,
@@ -390,6 +403,7 @@ fn info_row(ui: &Ui, c: Rect, y: f32, key: &str, val: &str, mono_val: bool, alph
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, home: Option<PathBuf>, size: [f32; 2]) -> anyhow::Result<Self> {
         crate::style::install(&cc.egui_ctx);
+        crate::chrome::install(cc);
         motion::set_reduced(motion::detect());
         let (tx, rx) = std::sync::mpsc::channel();
         let link = Link::new(home, tx, cc.egui_ctx.clone())?;
@@ -406,6 +420,7 @@ impl App {
         #[cfg(debug_assertions)]
         match std::env::var("ONE_MK_APP_TAB").as_deref() {
             Ok("files") => tab = Tab::Files,
+            Ok("wallpaper") => tab = Tab::Wallpaper,
             Ok("keyboard") => tab = Tab::Advanced,
             Ok("layout") => tab = Tab::Layout,
             Ok("health") => tab = Tab::Health,
@@ -436,6 +451,9 @@ impl App {
             autostart: None,
             update_available: None,
             update_output: None,
+            update_ui: updates::UpdateUi::default(),
+            palette: palette::Palette::default(),
+            wallpaper_ui: wallpaper::WallpaperUi::default(),
             scene,
             tab,
             drag: None,
@@ -475,6 +493,7 @@ impl App {
             drafts: HashMap::new(),
             profile_open: None,
             profile_scroll: false,
+            wifi: None,
             tab_at: f64::NEG_INFINITY,
             fonts: Fallbacks::default(),
             size: vec2(size[0], size[1]),
@@ -500,7 +519,7 @@ impl App {
     /// An error says what went wrong and what to do; the raw reason goes
     /// underneath. It stays until dismissed, or for ten seconds.
     fn toast_error(&mut self, text: impl Into<String>, detail: Option<String>, now: f64) {
-        let detail = detail.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
+        let detail = detail.map(|d| crate::view::window_issue(d.trim())).filter(|d| !d.is_empty());
         self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0 });
     }
 
@@ -537,7 +556,7 @@ impl App {
                     let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).collect());
                     self.fonts.cover(&self.ctx, names.iter().map(String::as_str));
                     // A measurement belongs to one connection: once that
-                    // computer goes offline (or one·mk stops) it means nothing.
+                    // computer goes offline (or oneMK stops) it means nothing.
                     let online: Vec<String> = self.running().map_or(vec![], |s| s.peers.iter().filter(|p| p.online).map(|p| p.id.clone()).collect());
                     self.latency.retain(|id| online.contains(id));
                     self.failed_measure.retain(|id| online.contains(id));
@@ -548,10 +567,13 @@ impl App {
                 Event::Autostart(on) => self.autostart = Some(on),
                 Event::Setup(report) => match report.problems().first() {
                     Some(problem) => self.toast_error(format!("Setup didn't finish. {problem}"), None, now),
-                    None if report.changed() => self.toast("one·mk is set up and starts when you log in.", now),
+                    None if report.changed() => self.toast("oneMK is set up and starts when you log in.", now),
                     None => {}
                 },
-                Event::UpdateAvailable(version) => self.update_available = version,
+                Event::UpdateStatus(status) => {
+                    self.update_available.clone_from(&status.available);
+                    self.update_ui.status = Some(status);
+                }
                 Event::UpdateOutput(output) => self.update_output = Some(output),
                 Event::Latency(l) => {
                     self.measuring = None;
@@ -619,7 +641,8 @@ impl App {
         };
         let e = Some(e);
         match what {
-            Job::Update => self.update_output = e,
+            Job::Update => { self.update_output = e; self.update_ui.failed = true; }
+            Job::UpdateSettings => self.toast_error("Couldn't save update preferences.", e, now),
             Job::Measure(id) => {
                 // Not again by itself: it would fail again, forever.
                 self.measuring = None;
@@ -638,14 +661,14 @@ impl App {
                 self.sync_scene();
                 self.toast_error(format!("Couldn't change Ctrl and Cmd for {name}. Try again."), e, now);
             }
-            Job::TakeBack => self.toast_error("Couldn't take back control. Press a key on this computer, or run `one-mk takeback`.", e, now),
+            Job::TakeBack => self.toast_error("Couldn't take back control. Press a key on this computer, then try again.", e, now),
             Job::Autostart(on) => {
                 let word = if on { "on" } else { "off" };
                 self.toast_error(format!("Couldn't turn {word} start at login."), e, now);
             }
-            Job::Start => self.toast_error("one·mk didn't start.", e, now),
+            Job::Start => self.toast_error("oneMK didn't start.", e, now),
             Job::Forget(name) => self.toast_error(format!("Couldn't remove {name}. Try again."), e, now),
-            Job::Stop => self.toast_error("Couldn't stop one·mk. If it was started before an update, quit it once from Activity Monitor or Task Manager; after that Stop works.", e, now),
+            Job::Stop => self.toast_error("Couldn't stop oneMK. If it was started before an update, quit it once from Activity Monitor or Task Manager; after that Stop works.", e, now),
             Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
             Job::Profile { verb, name } => {
                 let what = match verb {
@@ -675,15 +698,16 @@ impl App {
                 let what = if send { format!("send this clipboard to {name}") } else { format!("get {name}'s clipboard") };
                 self.toast_error(format!("Couldn't {what}."), e, now);
             }
-            Job::Set { what, .. } => {
+            Job::Set { what, args } => {
                 // Show what is really saved.
                 self.prefs = self.link.prefs();
-                self.toast_error(format!("Couldn't change {what}."), e, now);
+                if args.first().is_some_and(|arg| arg == "hotkeys") {
+                    self.toast_error(settings_controls::shortcut_error(e.as_deref().unwrap_or("")), None, now);
+                } else { self.toast_error(format!("Couldn't change {what}."), e, now); }
             }
             Job::Doctor => {}
             // Shown where the change was made, not as a toast.
             Job::Tune { area, what, .. } => self.tuned(area, &what, e),
-            Job::EditSettings => self.toast_error("Couldn't open settings.toml.", e, now),
         }
     }
 
@@ -692,6 +716,7 @@ impl App {
         if let Some(p) = &mut self.pairing {
             while let Some(step) = p.proc.as_ref().and_then(|c| c.rx.try_recv().ok()) {
                 match step {
+                    Step::Invitation(link) => { self.ctx.data_mut(|data| data.insert_temp(Id::unique("invitation-link"), link)); }
                     Step::Searching { me, port } => { p.me = me; p.port = port; }
                     Step::Hint => p.hint = true,
                     Step::Retry(why) => {
@@ -737,11 +762,11 @@ impl App {
             self.just_paired = Some((id.clone(), now));
             // Selecting it measures it: the first crossing, labelled, is the payoff.
             self.selected = Some(id);
-            // Pairing is for connecting: bring one·mk up if it isn't.
+            // Pairing is for connecting: bring oneMK up if it isn't.
             if matches!(self.status, Some(None)) && !self.busy.contains(&Job::Start) {
                 self.busy.push(Job::Start);
                 self.link.start();
-                self.toast(format!("Paired with {name}. Starting one·mk…"), now);
+                self.toast(format!("Paired with {name}. Starting oneMK…"), now);
             }
             let dir = self.link.dir.clone();
             std::thread::spawn(move || {
@@ -849,7 +874,7 @@ impl App {
             me.name = s.name.clone();
         }
         me.online = !off;
-        me.set_subtitle(if off { "one·mk is off" } else if self.tab == Tab::Files { "Here" } else { "This computer" }, now);
+        me.set_subtitle(if off { "oneMK is off" } else if self.tab == Tab::Files { "Here" } else { "This computer" }, now);
 
         // New computers come in staggered by how far they are from this one.
         let opening = self.scene.opening(now);
@@ -963,6 +988,7 @@ impl App {
     }
 
     fn start_pairing(&mut self, now: f64) {
+        self.ctx.data_mut(|data| data.remove::<String>(Id::unique("invitation-link")));
         self.pending_drop = None;
         // The new computer joins the desk: show it.
         if !self.tab.desk() {
@@ -974,7 +1000,7 @@ impl App {
                 let step = Step::Searching { me: me.clone(), port: None };
                 self.pairing = Some(PairUi { proc: Some(proc), step, since: now, opened: now, hint: false, retry: None, me, port: None });
             }
-            Err(e) => self.toast_error("Couldn't start pairing. Is one-mk installed next to this app?", Some(e.to_string()), now),
+            Err(e) => self.toast_error("Couldn't start pairing. Try restarting oneMK.", Some(e.to_string()), now),
         }
     }
 
@@ -990,7 +1016,7 @@ pub fn embedded(bytes: &[u8]) -> ([usize; 2], &[u8]) {
     ([n(0), n(4)], &bytes[8..])
 }
 
-/// The brand lockup (the Crossing mark and the one·mk wordmark), drawn at
+/// The brand lockup (the Crossing mark and the oneMK wordmark), drawn at
 /// 2x for sharpness on high-density screens.
 pub fn lockup_texture(ctx: &egui::Context) -> egui::TextureHandle {
     let (size, px) = embedded(include_bytes!("../assets/lockup.rgba"));
@@ -1068,6 +1094,7 @@ impl App {
     fn placing(&self, rect: Rect, i: usize, start: Pos2) -> Option<Box<Placing>> {
         let d = &self.scene.devices[i];
         let fit = self.scene.fit(d.kind, &d.screens)?;
+        if d.screens.is_empty() || self.scene.devices[0].screens.is_empty() { return None; }
         let mine = Desktop::new(self.scene.devices[0].screens.clone());
         let edges: Vec<Edge> = Side::ALL.into_iter().flat_map(|s| mine.exposed_edges(s)).collect();
         let peer = Desktop::new(d.screens.clone()).bounds();
@@ -1127,7 +1154,7 @@ impl App {
             }
             Some(i) if online.contains(&i) => self.send_to(i, paths),
             _ if online.is_empty() => {
-                self.toast_error("No computer is connected right now. Start one·mk on the other computer, then drop the files again.", None, now)
+                self.toast_error("No computer is connected right now. Start oneMK on the other computer, then drop the files again.", None, now)
             }
             _ if online.len() == 1 => self.send_to(online[0], paths),
             _ => self.pending_drop = Some((paths, now)),
@@ -1377,10 +1404,16 @@ impl App {
         let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1).to_owned();
         let sub = match (self.tab, self.status.as_ref()) {
             (_, None) => String::new(),
-            (_, Some(None)) => "one·mk is off".to_owned(),
+            (_, Some(None)) => "oneMK is off".to_owned(),
             (Tab::Desk | Tab::Layout, Some(Some(s))) => match s.peers.len() {
                 0 => "nothing paired yet".to_owned(),
                 n => format!("{} of {n} connected", s.peers.iter().filter(|p| p.online).count()),
+            },
+            (Tab::Wallpaper, Some(Some(s))) => match s.wallpaper.as_ref().and_then(|w| Some((w, w.plan.as_ref()?))) {
+                Some((_, plan)) if plan.paused => "paused".to_owned(),
+                // Counted from what each computer said, as the page says it.
+                Some((wallpaper, plan)) => plan.playing_summary(&wallpaper.computers).to_lowercase(),
+                None => "one video across all your screens".to_owned(),
             },
             _ => String::new(),
         };
@@ -1409,7 +1442,7 @@ impl App {
         let narrow = self.ctx.content_rect().width() < 1100.0;
         let (label, look, enabled, job) = match self.status.as_ref() {
             Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
-            Some(None) => ("Start one·mk", Look::Primary, true, Some(Job::Start)),
+            Some(None) => ("Start oneMK", Look::Primary, true, Some(Job::Start)),
             _ if broadcasting && self.busy.contains(&Job::Broadcast(false)) => ("Stopping…", Look::Primary, false, None),
             _ if broadcasting => (if narrow { "Keyboard stop" } else { "Use keyboard to stop" }, Look::Quiet, false, None),
             _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
@@ -1435,9 +1468,9 @@ impl App {
     // ---------- the panel ----------
 
     fn headline_text(&self) -> (String, String) {
-        let Some(s) = self.status.as_ref() else { return ("Looking for one·mk…".into(), String::new()) };
+        let Some(s) = self.status.as_ref() else { return ("Looking for oneMK…".into(), String::new()) };
         let Some(s) = s else {
-            return ("one·mk isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
+            return ("oneMK isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
         };
         if !s.broadcast.is_empty() {
             let title = match &s.broadcast[..] {
@@ -1477,7 +1510,7 @@ impl App {
             [] if s.peers.is_empty() => ("No computers paired yet".into(), "Choose Pair a computer, then do the same on the other computer.".into()),
             [] => (
                 "Waiting for your computers".into(),
-                "Paired computers appear here when one·mk is running on them and they're on the same network.".into(),
+                "Paired computers appear here when oneMK is running on them and they're on the same network.".into(),
             ),
             [p] if self.apart.contains(&p.id) => (
                 format!("{} is apart from this computer", p.name),
@@ -1515,11 +1548,11 @@ impl App {
                 let sel = self.selected_id().filter(|id| id != "me");
                 vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
             }
-            Tab::Health | Tab::Advanced | Tab::Keys => vec![],
+            Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper => vec![],
             Tab::Files => {
                 let any = self.running().is_some_and(|status| status.peers.iter().any(|peer| peer.online));
                 let sub = if any {
-                    "Drag files or folders onto a connected computer on the desk. They arrive in its Downloads/one-mk folder."
+                    "Drag files or folders onto a connected computer on the desk. They arrive in its received files folder."
                 } else {
                     "No computer is connected right now. Files can go to one once it's on and connected."
                 };
@@ -1528,7 +1561,8 @@ impl App {
                     area.max.y = rect.top() + PANEL_H - PAD;
                     area
                 };
-                let history = Rect::from_min_max(pos2(rect.left() + PAD, rect.top() + PANEL_H + PAD), pos2(rect.right() - PAD, rect.bottom() - PAD));
+                // The window's gap between the row of cards and the history below.
+                let history = Rect::from_min_max(pos2(rect.left() + PAD, rect.top() + PANEL_H + M + PAD), pos2(rect.right() - PAD, rect.bottom() - PAD));
                 vec![(Cell::FilesHead("Drop files on a computer".into(), sub.into()), row(0, 1)), (Cell::Clipboard, row(1, 2)), (Cell::FilesSettings, row(2, 3)), (Cell::ClipboardHistory, history)]
             }
         }
@@ -1652,7 +1686,6 @@ impl App {
                 enabled: vec![true; 3],
                 role: Role::RadioButton,
                 font: T_META,
-                radius: 6,
             };
             if let Some(k) = pills.show(ui, arrowed) {
                 changes.push((peer.id.clone(), peer.name.clone(), SWAPS[k].0));
@@ -1704,13 +1737,13 @@ impl App {
         let (title, sub, buttons, focus): (String, String, Vec<(String, Look, Act)>, usize) = match &pair.step {
             Step::Searching { .. } | Step::Hint => {
                 let me = if pair.me.is_empty() { String::new() } else { format!(" This one shows up there as “{}”.", pair.me) };
-                let mut sub = format!("On the other computer, open one·mk and choose Pair a computer.{me}");
+                let mut sub = format!("On the other computer, open oneMK and choose Pair a computer.{me}");
                 if let Some(why) = &pair.retry {
                     sub += &format!("\n\nThat attempt didn't finish: {why}. Still looking.");
                 } else if pair.hint {
-                    sub += "\n\nNo discovery? Cancel, run one-mk invite here, then one-mk join LINK on the other computer. Treat the link as a secret.";
+                    sub += "\n\nAllow oneMK through the firewall on both computers and keep them on the same network.";
                     if let Some(port) = pair.port {
-                        sub += &format!("\n\nOr keep this search open and run one-mk pair --connect LAN_IP:{port} there. Use this computer’s LAN IP; allow UDP {port}.");
+                        sub += &format!(" This computer's pairing port is {port}.");
                     }
                 }
                 ("Looking for another computer".into(), sub, vec![quiet("Cancel", Act::Close)], 0)
@@ -1732,13 +1765,13 @@ impl App {
             Step::Paired { name, .. } => {
                 let side = self.running().and_then(|s| s.peers.iter().find(|p| &p.name == name)).map(|p| edge_word(p.side));
                 let sub = match (self.running(), side) {
-                    (None, _) => "Start one·mk to connect.".into(),
+                    (None, _) => "Start oneMK to connect.".into(),
                     (_, Some(e)) => format!("Move the pointer off the {e} edge to cross over."),
                     _ => "It joins the desk in a moment.".into(),
                 };
                 (format!("Paired with {name}"), sub, vec![], 0)
             }
-            Step::Retry(_) => return None,
+            Step::Retry(_) | Step::Invitation(_) => return None,
         };
         let code = match &pair.step {
             Step::Code { code, .. } => Some((code.clone(), pair.since)),
@@ -1788,7 +1821,8 @@ impl App {
         let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
         let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { widths.len() as f32 * 42.0 - 8.0 };
         let title_h = 22.0;
-        let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0;
+        let alternatives = leaving.is_none() && self.pairing.as_ref().is_some_and(|pair| matches!(pair.step, Step::Searching { .. } | Step::Hint));
+        let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0 + if alternatives { 212.0 } else { 0.0 };
         let rect = Rect::from_min_size(pos2(x - 18.0, desk.bottom() - height - 20.0), vec2(width, height));
         self.sheet_top = Some(rect.top());
 
@@ -1860,6 +1894,7 @@ impl App {
             a11y_text(&child, Id::unique("sheet-code"), Rect::from_min_size(pos2(x, y), vec2(inner, code_h)), Role::Label, &format!("Pairing code {spoken}"), None);
             y += code_h;
         }
+        if alternatives { self.pairing_controls(&mut child, Rect::from_min_size(pos2(x, y + 12.0), vec2(inner, 200.0)), now); y += 212.0; }
         if view.buttons.is_empty() {
             return;
         }
@@ -2014,12 +2049,21 @@ impl App {
 
     /// Ctrl+1 to 6 switch tabs (Cmd on a Mac).
     fn shortcuts(&mut self, ui: &Ui) {
-        if widgets::locked(ui) || self.keys_grab(ui.ctx()) {
+        if widgets::locked(ui) || self.keys_grab(ui.ctx()) || ui.ctx().data(|data| data.get_temp::<usize>(Id::unique("shortcut-recorder")).is_some() || data.get_temp::<bool>(Id::unique("gesture-recording")).unwrap_or(false)) {
             return;
         }
         let off = self.off();
-        // Ctrl+1 to Ctrl+5: one key per tab, however many there are.
-        for (key, (tab, _, _)) in [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6].into_iter().zip(TABS) {
+        // ⌘K (Ctrl+K): the command palette, from anywhere.
+        if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
+            if self.palette.open { self.palette.open = false } else { self.open_palette(self.now) }
+            return;
+        }
+        if self.palette.open {
+            return;
+        }
+        // One key per page, as the sidebar shows them: ⌘1 Desk, ⌘2
+        // Wallpaper, ⌘3 Clipboard & files, ⌘4 Keys & mouse, ⌘, Settings.
+        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Comma, Tab::Advanced)] {
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || tab.when_off()) {
                 self.set_tab(tab);
             }
@@ -2033,7 +2077,8 @@ fn lerp_scale(t: f32) -> f32 {
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        crate::chrome::place_buttons(ui.ctx(), frame);
         let now = ui.input(|i| i.time);
         self.now = now;
         if self.size.x > 0.0 {
@@ -2066,15 +2111,15 @@ impl eframe::App for App {
         self.shortcuts(ui);
         let full = ui.max_rect();
         self.glass.frame();
-        ui.painter().rect_filled(full, 0.0, ROOM);
+        crate::chrome::paint_room(ui.painter(), full);
         let f = shell::frame(full);
         let content = f.content;
         let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
-        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys);
+        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper);
         let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
         let desk = Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() }));
         // Files let go over a page without the desk: ask where they go.
-        if !self.tab.desk() {
+        if !self.tab.desk() && self.tab != Tab::Wallpaper {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
             if !dropped.is_empty() {
                 self.set_tab(Tab::Files);
@@ -2100,7 +2145,7 @@ impl eframe::App for App {
         let mut frame = scene;
         if self.tab.desk() {
             if self.desk_notice().is_some() {
-                frame.min.y += 92.0;
+                frame.min.y += 92.0 + if self.desk_views_shown() { desk_cards::DESK_VIEWS_H } else { 0.0 };
             } else if desk.width() < 780.0 && self.running().is_some_and(|s| !s.transfers.is_empty()) {
                 frame.min.y += 60.0;
             }
@@ -2124,6 +2169,10 @@ impl eframe::App for App {
         }
         let body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
         match self.tab {
+            Tab::Wallpaper => {
+                let mut child = page(ui, body, "wallpaper");
+                self.wallpaper_page(&mut child, body);
+            }
             Tab::Health => {
                 let mut child = page(ui, body, "health");
                 self.health(&mut child, body, now);
@@ -2140,7 +2189,8 @@ impl eframe::App for App {
         }
         let (title, sub) = self.page_title();
         self.page_head(ui, head, &title, &sub);
-        self.desk_actions(ui, head);
+        // Below the title band (the window is moved from the band).
+        self.desk_actions(ui, head.translate(vec2(0.0, shell::HEAD_H)));
         if with_cards {
             self.panel(ui, cards, now);
         }
@@ -2152,7 +2202,11 @@ impl eframe::App for App {
         // what is being paired.
         self.sheet(ui, content, now);
         self.toast_view(ui, desk, now);
+        self.palette(ui.ctx(), now);
+        #[cfg(debug_assertions)]
+        crate::chrome::paint_fake_buttons(ui.painter());
         self.guide.show(ui.ctx());
+        self.update_notice(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
         // round trips only then (a minimised window draws nothing).
         let hidden = ui.input(|i| i.viewport().minimized == Some(true));
@@ -2164,7 +2218,7 @@ impl eframe::App for App {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        GROUND.to_normalized_gamma_f32()
+        crate::chrome::clear_color()
     }
 }
 
@@ -2183,7 +2237,9 @@ impl eframe::App for App {
 ///   shows start at login as on;
 /// - `ONE_MK_APP_CONFIRM=1` says the codes match a second after they
 ///   show, and keeps the "paired" sheet up.
-/// - `ONE_MK_APP_TAB=layout|health|advanced` (and files, keyboard);
+/// - `ONE_MK_APP_TAB=layout|health|advanced|wallpaper` (and files, keyboard);
+///   `ONE_MK_APP_WALLPAPER=poster.png` supplies a fake playing video when
+///   combined with `ONE_MK_APP_STATUS` for wallpaper screenshots.
 ///   `ONE_MK_APP_PROFILE=name` opens a profile's options;
 ///   `ONE_MK_APP_DOCTOR=file.json` shows that report instead of running
 ///   `one-mk doctor`; `ONE_MK_APP_ZOOM=2` draws everything twice as big
@@ -2228,6 +2284,14 @@ mod debug {
             if once(&ctx, "update") {
                 app.update_output = out;
             }
+        }
+        // ONE_MK_APP_PALETTE=query: the command palette, open, with that typed.
+        if let Some(q) = var("ONE_MK_APP_PALETTE")
+            && now > 0.5
+            && once(&ctx, "palette")
+        {
+            app.open_palette(now);
+            app.palette.query = q;
         }
         // ONE_MK_APP_WHY=1: after 5 s, what asked for each frame.
         if var("ONE_MK_APP_WHY").is_some() && now > 5.0 && now < 8.0 {
@@ -2309,7 +2373,7 @@ mod debug {
             app.pending_drop = Some(((0..n).map(|i| PathBuf::from(format!("/tmp/file{i}"))).collect(), now));
         }
         if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
-            app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("one-mk didn't answer within 3 seconds".into()), now);
+            app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("oneMK didn't answer within 3 seconds".into()), now);
         }
         if ready && var("ONE_MK_APP_BROADCAST").is_some() && now > 1.0 && once(&ctx, "broadcast") {
             let on = !app.broadcasting();

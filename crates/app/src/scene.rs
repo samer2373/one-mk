@@ -515,10 +515,10 @@ impl Device {
                     if !held {
                         // A stand and base in proportion, as for a monitor alone.
                         let (mx, m) = ((a.0 + a.1) / 2.0, (a.1 - a.0).max(b.1 - b.0) / 58.0);
-                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 12.0)), a: (-11.0 * m, 11.0 * m), b: (0.0, BASE_H), c: (-8.0 * m, 8.0 * m), col: 0x3A404A, screen: None });
-                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 15.6)), a: (-3.0 * m, 3.0 * m), b: (0.0, cy + (b.0 + b.1) / 2.0), c: (-1.1, 1.1), col: 0x3A404A, screen: None });
+                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 12.0)), a: (-11.0 * m, 11.0 * m), b: (0.0, BASE_H), c: (-8.0 * m, 8.0 * m), col: 0x8E949D, screen: None });
+                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 15.6)), a: (-3.0 * m, 3.0 * m), b: (0.0, cy + (b.0 + b.1) / 2.0), c: (-1.1, 1.1), col: 0x8E949D, screen: None });
                     }
-                    boxes.push(Box3 { fr: scr, a, b, c: (-2.2, 0.0), col: 0x30353E, screen: Some(0x0B0D10) });
+                    boxes.push(Box3 { fr: scr, a, b, c: (-2.2, 0.0), col: 0x2B2F36, screen: Some(0x0B0D10) });
                 }
                 Geo { boxes, screen, deck: None, foot: [x, z - 12.0, hw, 8.0 * s] }
             }
@@ -528,9 +528,9 @@ impl Device {
                 let scr = Frame3::axes(v(x, y + cy, z - 14.0));
                 Geo {
                     boxes: vec![
-                        Box3 { fr: Frame3::axes(v(x, y, z - 12.0)), a: (-11.0 * s, 11.0 * s), b: (0.0, 0.8), c: (-8.0 * s, 8.0 * s), col: 0x3A404A, screen: None },
-                        Box3 { fr: Frame3::axes(v(x, y, z - 15.6)), a: (-3.0 * s, 3.0 * s), b: (0.0, cy), c: (-1.1, 1.1), col: 0x3A404A, screen: None },
-                        Box3 { fr: scr, a: (-hw, hw), b: (-hh, hh), c: (-2.2, 0.0), col: 0x30353E, screen: Some(0x0B0D10) },
+                        Box3 { fr: Frame3::axes(v(x, y, z - 12.0)), a: (-11.0 * s, 11.0 * s), b: (0.0, 0.8), c: (-8.0 * s, 8.0 * s), col: 0x8E949D, screen: None },
+                        Box3 { fr: Frame3::axes(v(x, y, z - 15.6)), a: (-3.0 * s, 3.0 * s), b: (0.0, cy), c: (-1.1, 1.1), col: 0x8E949D, screen: None },
+                        Box3 { fr: scr, a: (-hw, hw), b: (-hh, hh), c: (-2.2, 0.0), col: 0x2B2F36, screen: Some(0x0B0D10) },
                     ],
                     screen: Plane { fr: scr, u: (-hw + 0.9, hw - 0.9), w: (hh - 0.9, -hh + 0.9) },
                     deck: None,
@@ -686,6 +686,55 @@ fn quad_colors(painter: &Painter, pts: [Pos2; 4], cols: [Color32; 4], edge: Opti
     if let Some(e) = edge {
         painter.add(Shape::closed_line(pts.to_vec(), Stroke::new(1.0, e)));
     }
+}
+
+/// The wallpaper for a computer with these two colours, made once and kept:
+/// a deep gradient between them, soft blooms of light and colour, and one
+/// slow wave of light across it, in the manner of a desktop picture.
+fn wallpaper(ctx: &egui::Context, wall: [u32; 2]) -> egui::TextureHandle {
+    let id = egui::Id::unique(("wallpaper", wall));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let img = wallpaper_image(hex(wall[0]), hex(wall[1]), 320, 200);
+    let t = ctx.load_texture(format!("wallpaper-{:06x}-{:06x}", wall[0], wall[1]), img, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
+}
+
+fn wallpaper_image(c0: [u8; 3], c1: [u8; 3], w: usize, h: usize) -> egui::ColorImage {
+    let f = |c: [u8; 3]| c.map(|x| x as f32 / 255.0);
+    let (a, b) = (f(c0), f(c1));
+    let lerp3 = |x: [f32; 3], y: [f32; 3], t: f32| [0, 1, 2].map(|i| x[i] + (y[i] - x[i]) * t);
+    let light = |x: [f32; 3], k: f32| x.map(|v| v + (1.0 - v) * k);
+    // Blooms: centre, radius, colour, strength.
+    let blooms = [((0.22, 0.28), 0.42, light(a, 0.45), 0.85), ((0.82, 0.78), 0.5, light(lerp3(a, b, 0.5), 0.3), 0.7), ((0.72, 0.18), 0.3, light(b, 0.55), 0.45)];
+    let mut px = Vec::with_capacity(w * h * 3);
+    let mut seed: u32 = 0x9E37_79B9;
+    for y in 0..h {
+        for x in 0..w {
+            let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+            let t = (0.65 * v + 0.35 * u).clamp(0.0, 1.0);
+            let mut c = lerp3(light(a, 0.08), b.map(|q| q * 0.7), t * t * (3.0 - 2.0 * t));
+            for ((cx, cy), r, col, k) in blooms {
+                let d2 = ((u - cx) * 1.6).powi(2) + (v - cy).powi(2);
+                let g = (-d2 / (r * r)).exp() * k;
+                c = lerp3(c, col, g.min(1.0) * 0.6);
+            }
+            let band = 0.56 + 0.11 * (u * 3.4 + 0.6).sin();
+            let wave = (-((v - band) / 0.07).powi(2)).exp();
+            c = lerp3(c, light(c, 0.5), wave * 0.35);
+            // A grain of noise against banding.
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let n = (seed % 3) as f32 - 1.0;
+            for q in c {
+                px.push((q * 255.0 + n).clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
+    egui::ColorImage::from_rgb([w, h], &px)
 }
 
 /// A soft disc on the desk (y = `y`): `col` at the centre fading to nothing.
@@ -1118,7 +1167,16 @@ impl Scene {
             } else if d.a < 0.99 {
                 quad(painter, f.pts, fade(f.fill, d.a));
             } else {
-                quad(painter, f.pts, f.fill);
+                // Metal: each face a touch brighter where it turns up to
+                // the light, so stands and bodies read as brushed aluminium,
+                // not flat paint.
+                let (y0, y1) = f.pts.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.y), b.max(p.y)));
+                let k = |p: Pos2| 1.10 - 0.2 * ((p.y - y0) / (y1 - y0).max(1.0));
+                let shade = |p: Pos2| {
+                    let m = k(p);
+                    Color32::from_rgb((f.fill.r() as f32 * m).min(255.0) as u8, (f.fill.g() as f32 * m).min(255.0) as u8, (f.fill.b() as f32 * m).min(255.0) as u8)
+                };
+                quad_colors(painter, f.pts, f.pts.map(shade), None);
             }
             if let Some(m) = f.screen {
                 self.screen(painter, &cam, f.owner, m, &geo);
@@ -1141,7 +1199,7 @@ impl Scene {
         }
     }
 
-    /// The line round a screen: where files can go (amber), which one is
+    /// The line round a screen: where files can go (Volt), which one is
     /// selected or hovered (white), where the keyboard is (the focus ring).
     fn screen_outline(&self, painter: &Painter, f: &Face, d: &Device, preview: f32) {
         let i = f.owner;
@@ -1200,24 +1258,52 @@ impl Scene {
         let (h, w) = (pts[0].distance(pts[3]), pts[0].distance(pts[1]));
         let c = cam.pt(g.screen.at(0.5, 0.5));
         let col = if lit { SIGNAL } else { rgba([0xC4, 0xCA, 0xD2], 1.0, k) };
-        let title = semibold((h * 0.11).clamp(12.0, 16.0));
+        // A small window makes a small slot: the title gets smaller (down
+        // to 10 pt) before it is shortened, and the line below only shows
+        // when it fits inside the outline.
+        let mut size = (h * 0.11).clamp(12.0, 16.0);
+        while size > 10.0 && painter.layout_no_wrap("Add a computer".into(), semibold(size), col).size().x > w * 0.9 { size -= 0.5; }
+        let title = semibold(size);
         painter.text(c - vec2(0.0, 2.0), egui::Align2::CENTER_BOTTOM, fit(painter, "Add a computer", &title, w * 0.9), title, col);
-        let sub = regular((h * 0.07).clamp(11.0, 13.0));
+        let sub = regular((h * 0.07).clamp(10.0, 13.0));
         let mut job = egui::text::LayoutJob::simple("Pair another computer to share this mouse and keyboard".into(), sub, rgba(hex(0x9DA6B1), 1.0, k), w * 0.84);
         job.halign = egui::Align::Center;
         let g = painter.layout_job(job);
-        painter.galley(c + vec2(0.0, 4.0), g, INK2);
+        if g.size().y <= h * 0.5 - 10.0 { painter.galley(c + vec2(0.0, 4.0), g, INK2); }
     }
 
     fn room(&self, painter: &Painter, cam: &Camera, geo: &[Geo], rect: Rect) {
-        // One flat colour behind: the desk's far edge melts into it.
-        let sky_low = Color32::from_rgb(0x10, 0x13, 0x18);
-        painter.rect_filled(rect, 0.0, sky_low);
+        // The room behind is the window's own (chrome::paint_room): the
+        // desk's far edge melts into it, as the desk is the lit wood laid
+        // over it at the light's strength (the same as mixing towards the
+        // room's colour on a solid window, and see-through on a clear one).
+        // Each lit screen washes the wall behind it in its own colour, the
+        // way a monitor's glow does in a dim room: the glass over the desk
+        // has that colour to bend.
+        for (d, g) in self.devices.iter().zip(geo) {
+            if !d.online || d.a < 0.01 {
+                continue;
+            }
+            let (l, r) = (cam.pt(g.screen.at(0.0, 0.5)), cam.pt(g.screen.at(1.0, 0.5)));
+            let c = cam.pt(g.screen.at(0.5, 0.35));
+            let [cr, cg, cb] = hex(d.wall[0]);
+            let col = rgba([cr.saturating_add(60), cg.saturating_add(60), cb.saturating_add(60)], 1.0, 0.20 * d.a);
+            crate::chrome::light(painter, c, (r - l).length() * 1.15 + 90.0, col);
+        }
         // The desk is lit around the computers and falls off into the room:
         // no edges, nothing to suggest a box the computers sit in.
         let (cx, cz) = (self.focus_x, -4.0);
         // The desk's front edge, a little in front of the nearest device.
-        let front = geo.iter().map(|g| g.foot[1] + g.foot[3]).fold(f32::MIN, f32::max).max(cz) + 34.0;
+        let mut front = geo.iter().map(|g| g.foot[1] + g.foot[3]).fold(f32::MIN, f32::max).max(cz) + 34.0;
+        // On past the bottom of the window, so the glass over the lower
+        // part of the window floats over the desk, not over nothing.
+        let bottom = rect.bottom();
+        for _ in 0..24 {
+            if cam.pt(v(cx, 0.0, front)).y > bottom + 8.0 {
+                break;
+            }
+            front += 12.0;
+        }
         let (rx, rz) = (150.0 + self.dist * 0.4, (front - cz + 26.0).max(70.0));
         let light = |x: f32, z: f32| {
             let d = (((x - cx) / rx).powi(2) + ((z - cz) / rz).powi(2)).sqrt();
@@ -1225,10 +1311,7 @@ impl Scene {
         };
         // A dark walnut desk, lit only by its screens.
         let lit = Color32::from_rgb(0x3B, 0x30, 0x27);
-        let shade = |k: f32| {
-            let f = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * k) as u8;
-            Color32::from_rgb(f(sky_low.r(), lit.r()), f(sky_low.g(), lit.g()), f(sky_low.b(), lit.b()))
-        };
+        let shade = |k: f32| lit.gamma_multiply(k.clamp(0.0, 1.0));
         const NX: usize = 24;
         const NZ: usize = 10;
         let xs: Vec<f32> = (0..=NX).map(|i| cx - rx + 2.0 * rx * i as f32 / NX as f32).collect();
@@ -1253,7 +1336,7 @@ impl Scene {
         for &x in &xs {
             let k = light(x, front - 10.0);
             lip.colored_vertex(cam.pt(v(x, 0.0, front)), shade((k * 1.35).min(1.0)));
-            lip.colored_vertex(cam.pt(v(x, -3.2, front)), mix(sky_low, Color32::from_rgb(0x0B, 0x09, 0x08), k));
+            lip.colored_vertex(cam.pt(v(x, -3.2, front)), Color32::from_rgb(0x0B, 0x09, 0x08).gamma_multiply(k));
         }
         for i in 0..NX as u32 {
             let k = i * 2;
@@ -1407,11 +1490,40 @@ impl Scene {
         // Only a computer that is on, and solid, has its wallpaper lit.
         let lit = if d.online { d.a } else { 0.0 };
         if lit > 0.01 {
+            // The wallpaper: lighter where the light falls (top left),
+            // deeper in the far corner, so it reads as an image, not a tile.
             let [c0, c1] = d.wall.map(|c| fade(rgba(hex(c), 1.0, 1.0), lit));
             let mid = mix(c0, c1, 0.5);
             let edge = Some(fade(rgba(hex(0x30353E), 0.9, 1.0), lit));
-            quad_colors(painter, rect(0.0, 0.0, 1.0, 1.0), [c0, mid, c1, mid], edge);
+            let _ = mid;
+            // A real wallpaper, made from the computer's two colours, laid
+            // on the screen in perspective (a grid, so it doesn't skew).
+            let tex = wallpaper(painter.ctx(), d.wall);
+            const N: usize = 8;
+            let mut mesh = Mesh::with_texture(tex.id());
+            let tint = Color32::from_white_alpha((lit * 255.0) as u8);
+            for j in 0..=N {
+                for i in 0..=N {
+                    let (u, w) = (i as f32 / N as f32, j as f32 / N as f32);
+                    mesh.vertices.push(egui::epaint::Vertex { pos: at(u, w), uv: pos2(u, w), color: tint });
+                }
+            }
+            for j in 0..N as u32 {
+                for i in 0..N as u32 {
+                    let k = j * (N as u32 + 1) + i;
+                    mesh.add_triangle(k, k + 1, k + N as u32 + 2);
+                    mesh.add_triangle(k, k + N as u32 + 2, k + N as u32 + 1);
+                }
+            }
+            painter.add(Shape::mesh(mesh));
+            if let Some(e) = edge {
+                painter.add(Shape::closed_line(rect(0.0, 0.0, 1.0, 1.0).to_vec(), Stroke::new(1.0, e)));
+            }
         }
+        // Every screen is glass: it catches the room's light across its
+        // upper part, on or off.
+        let sheen = |k: f32| Color32::from_white_alpha((k * a * 255.0) as u8);
+        quad_colors(painter, rect(0.0, 0.0, 1.0, 0.5), [sheen(0.10), sheen(0.04), sheen(0.0), sheen(0.02)], None);
 
         if let Some((_, code, t0)) = self.code.as_ref().filter(|(ids, _, _)| ids.contains(&d.id)) {
             if !named {
@@ -1455,6 +1567,12 @@ impl Scene {
         let sub_font = regular((h * 0.07).clamp(11.0, 14.0));
         let room = width * if wall { 0.96 } else { 0.86 };
         if named {
+            // A soft dark bloom behind the words, as the system draws under
+            // desktop labels: they stay readable on any wallpaper.
+            if d.online && !ghost {
+                let c = at(0.5, 0.5);
+                crate::chrome::light(painter, c, (room * 0.42).min(h * 0.6), Color32::from_black_alpha((90.0 * a) as u8));
+            }
             painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, fit(painter, &d.name, &name_font, room), name_font, name_col);
             let k = d.sub_was.as_ref().map_or(1.0, |(_, t0)| motion::progress(now, *t0, motion::fade(0.18), motion::out_cubic));
             if let Some((was, _)) = &d.sub_was {
@@ -1467,7 +1585,7 @@ impl Scene {
         }
 
         // The edges toward online neighbours: a faint line at rest, so the
-        // edges can be learned; amber only while the pointer is about to
+        // edges can be learned; Volt only while the pointer is about to
         // cross, crossing, or has just come through. They run along the
         // monitors at that side of the wall, not the gaps between them.
         let ends = if wall { panels(&d.screens, pl, GLASS).fold([1.0f32, 1.0, 0.0, 0.0], |[a, b, c, e], [u0, w0, u1, w1]| [a.min(u0), b.min(w0), c.max(u1), e.max(w1)]) } else { glass };

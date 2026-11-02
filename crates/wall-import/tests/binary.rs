@@ -1,3 +1,5 @@
+// Some fixtures serve only the Linux-only tests below.
+#[allow(dead_code)]
 mod fixtures;
 
 #[cfg(target_os = "linux")]

@@ -123,15 +123,25 @@ async fn two_process_character_path_kill9_releases() {
     let (mut sender, receiver) = connected_pair().await;
     sender.send("enter");
     eventually_async("process visit", || async { receiver.injected("MoveTo") }).await;
-    sender.send("key 21 down");
-    sender.send("key 21 up");
-    eventually_async("process German text", || async { receiver.injected("text=z") }).await;
+    for (code, altgr) in [(40, false), (39, false), (26, false), (16, true), (18, true), (57, false), (12, false)] {
+        if altgr { sender.send("key 100 down"); }
+        sender.send(&format!("key {code} down"));
+        sender.send(&format!("key {code} up"));
+        if altgr { sender.send("key 100 up"); }
+    }
+    eventually_async("process German text", || async { receiver.injected("text=ß") }).await;
+    let transcript = std::fs::read_to_string(receiver.dir.join("injected")).unwrap();
+    let text: String = transcript.lines().filter_map(|line| line.strip_prefix("text=")).collect();
+    assert_eq!(text, "äöü@€ ß");
     sender.send("key 29 down");
     sender.send("key 21 down");
-    eventually_async("process Ctrl Z", || async { receiver.injected("Key { code: 44, down: true }") }).await;
+    eventually_async("process physical Ctrl key", || async { receiver.injected("Key { code: 21, down: true }") }).await;
     sender.child.kill().unwrap();
     sender.child.wait().unwrap();
     eventually_async("release after SIGKILL", || async {
-        receiver.injected("Key { code: 44, down: false }") && receiver.injected("Key { code: 29, down: false }")
+        receiver.injected("Key { code: 21, down: false }") && receiver.injected("Key { code: 29, down: false }")
     }).await;
+    let transcript = std::fs::read_to_string(receiver.dir.join("injected")).unwrap();
+    assert_eq!(transcript.lines().filter(|line| line.starts_with("text=")).count(), 7);
+    eprintln!("German → US: {text:?}; physical Ctrl+key21; SIGKILL releases Ctrl and key21\n{transcript}");
 }

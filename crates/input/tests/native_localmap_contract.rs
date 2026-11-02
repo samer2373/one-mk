@@ -1,8 +1,76 @@
 const WINDOWS: &str = include_str!("../src/windows_experimental.rs");
 const MACOS: &str = include_str!("../src/macos_experimental.rs");
 
+#[test]
+fn native_keyboard_properties_have_recovery_and_never_run_in_the_tap_callback() {
+    let native = include_str!("../src/macos_hidmap_native.rs");
+    assert!(native.contains("IOHIDServiceClientSetProperty"));
+    assert!(native.contains("IOHIDServiceClientGetRegistryID"));
+    assert!(native.contains("\"UserKeyMapping\""));
+    assert!(native.contains("if previous != expected"));
+    let startup = MACOS.split("fn capture_thread(").nth(1).unwrap();
+    assert!(startup.find("Native::start").unwrap() < startup.find("Ctx {").unwrap());
+    assert!(native.contains("Lifecycle::recover"));
+    assert!(native.contains("one-mk-keyboard-mappings"));
+    assert!(native.contains("Err(error) => Err(error.clone())"));
+    assert!(!startup.contains("Lifecycle::recover"));
+    for name in ["on_event", "local_pause"] {
+        let body = function(MACOS, name);
+        assert!(!body.contains("restore_system("));
+        assert!(!body.contains(".apply("));
+        assert!(!body.contains("std::fs::"));
+    }
+    assert!(function(MACOS, "local_pause").contains("self.inbox.post(Msg::RestoreSystem)"));
+    let control = function(MACOS, "handle");
+    assert!(control.contains("CaptureCmd::RestoreLocalRules(ticket)"));
+    assert!(function(MACOS, "restore_ack").contains("Event::LocalRulesRestored"));
+    assert!(control.contains("self.restore_system(&mut st)"));
+    assert!(!include_str!("../../app/src/app.rs").contains("local_rules_off_on_quit"));
+    assert!(!include_str!("../../app/src/daemon.rs").contains("local_rules_off_on_quit"));
+}
+
+#[test]
+fn native_typing_uses_one_injector_in_every_feature_configuration() {
+    for (normal, selected, shared) in [
+        (include_str!("../src/macos.rs"), MACOS, include_str!("../src/macos_inject.rs")),
+        (include_str!("../src/windows.rs"), WINDOWS, include_str!("../src/windows_inject.rs")),
+    ] {
+        for backend in [normal, selected] {
+            assert!(backend.contains("keyboard: keyboard_layout()"));
+            assert!(!backend.contains("text unsupported"));
+            assert!(!backend.contains("fn inject_thread("));
+        }
+        assert!(shared.contains("NativeText::default()"));
+        assert!(shared.contains("Inject::CharacterKey"));
+        assert!(shared.contains("selected_native_backend_advertises_text_and_character_holds"));
+    }
+}
+
+#[test]
+fn local_rule_swaps_wait_for_idle_and_recovery_is_automatic() {
+    for source in [WINDOWS, MACOS] {
+        assert!(source.contains("pending_rules = Some(CaptureCmd::LocalRules { rules, inactive })"));
+        let pump = function(source, "local_pump");
+        assert!(pump.contains("idle"));
+        assert!(pump.contains("local.enabled && local.paused"));
+        assert!(pump.contains("local.baseline(std::iter::empty())"));
+        assert!(pump.contains("pending_rules.take()"));
+    }
+    let reload = include_str!("../../one-mk/src/app/tune.rs");
+    assert!(reload.contains("self.local_rules_snapshot.as_ref() != Some(&snapshot)"));
+}
+
+#[test]
+fn local_attribution_has_no_waiting_or_timer_path() {
+    let local = function(include_str!("../src/devcorr.rs"), "local_key");
+    assert!(local.contains("out.push(Correlated"));
+    for forbidden in ["self.enqueue(", "self.waiting", "sleep(", "recv(", "recv_timeout(", "park("] {
+        assert!(!local.contains(forbidden), "local attribution unexpectedly contains {forbidden}");
+    }
+}
+
 fn function<'a>(source: &'a str, name: &str) -> &'a str {
-    let start = source.find(&format!("    fn {name}(" )).unwrap();
+    let start = source.find(&format!("fn {name}(" )).unwrap();
     let end = source[start..].find("\n    }").unwrap() + start + 6;
     &source[start..end]
 }
@@ -40,14 +108,14 @@ fn default_physical_callbacks_match_main_except_device_attribution() {
 }
 
 #[test]
-fn release_backend_sources_have_no_local_adapter_and_gate_is_default_off() {
+fn legacy_backends_remain_untouched_and_release_selects_native_local_mapping() {
     for source in [include_str!("../src/windows.rs"), include_str!("../src/macos.rs"), include_str!("../src/macos_devices.rs")] {
         for forbidden in ["localmap", "LocalRules", "local_fence", "local_rules", "receipt("] {
             assert!(!source.contains(forbidden), "default backend contains {forbidden}");
         }
     }
-    assert!(include_str!("../Cargo.toml").contains("default = []"));
-    assert!(include_str!("../../one-mk/Cargo.toml").contains("default = []"));
+    assert!(include_str!("../Cargo.toml").contains("default = [\"native-local-remap\"]"));
+    assert!(include_str!("../../one-mk/Cargo.toml").contains("default = [\"native-local-remap\"]"));
     for workflow in [include_str!("../../../.github/workflows/ci.yml"), include_str!("../../../.github/workflows/release.yml")] {
         assert!(!workflow.contains("native-local-remap"));
         assert!(!workflow.contains("--workspace --all-features"));
@@ -55,6 +123,10 @@ fn release_backend_sources_have_no_local_adapter_and_gate_is_default_off() {
     let modules = include_str!("../src/lib.rs");
     assert!(modules.contains("#[cfg_attr(feature = \"native-local-remap\", path = \"windows_experimental.rs\")]"));
     assert!(modules.contains("#[cfg_attr(feature = \"native-local-remap\", path = \"macos_experimental.rs\")]"));
+    let create = MACOS.split("CGEvent::tap_create(").nth(1).unwrap();
+    assert!(create.trim_start().starts_with("CGEventTapLocation::SessionEventTap"));
+    assert!(MACOS.contains("Event::LocalRulesOff"));
+    assert!(WINDOWS.contains("Event::LocalRulesOff"));
 }
 
 #[test]
@@ -68,12 +140,16 @@ fn disabling_drops_interception_and_keeps_core_callbacks_fail_open() {
     assert!(windows.contains("matches!(wparam,4|7|18)"));
     assert!(windows.contains("ifstate.local_rules.is_none(){returnEffect::None;}"));
     assert!(canonical(function(WINDOWS, "release")).contains("local.gate.close();"));
-    assert!(macos.contains("drop(st.local_rules.take());"));
+    assert!(macos.contains("st.local_recovery=Some(local.retire());"));
+    assert!(macos.contains("recovery.receipt(sequence);returntrue;"));
     assert!(macos.contains("self.hid.local(None);"));
     assert!(macos.contains("ifheld{self.end(&mutst);}"));
     assert!(macos.contains("ifinjected&&st.local_rules.is_some(){returntrue;}"));
     let quit = MACOS.split("Msg::Quit => {").nth(1).unwrap().split("fn on_event").next().unwrap();
-    assert!(quit.contains("rl.stop();"));
+    assert!(quit.contains("st.quitting = true"));
+    assert!(quit.contains("!system.pending()"));
+    assert!(quit.contains("!local.held()"));
+    assert!(quit.contains("run_loop.stop();"));
     assert!(!quit.contains("self.local_fence("));
 }
 
@@ -87,6 +163,9 @@ fn worker_recovery_and_idle_paths_remain_event_driven() {
     assert!(windows.contains("!self.physical.correlated(code, down, device)"));
     assert!(windows.contains("receiver.recv().ok()"));
     assert!(macos.contains("else { std::thread::park(); }"));
+    assert!(macos.contains("Some(Work::Retire)"));
+    assert!(macos.contains("if retired {"));
+    assert!(macos.contains("pub fn receipt(&self, sequence: u32) { self.receipts.observe(sequence); }"));
     assert!(macos.contains("watchdog_feedback.healthy() && (watchdog_receipts.held"));
     assert!(include_str!("../../../Cargo.toml").contains("panic = \"abort\""));
     assert!(!windows.contains("catch_unwind"));
@@ -120,8 +199,22 @@ fn local_dispatch_requires_its_own_sequence_not_a_matching_remote_key() {
 fn activation_waits_for_serialized_release_completion() {
     assert!(function(WINDOWS, "activate").contains("local.activation = Some"));
     assert!(function(MACOS, "start").contains("local.activation = Some"));
+    let pump = function(WINDOWS, "local_pump");
+    assert!(pump.find("if !done.success").unwrap() < pump.find("activation.take()").unwrap());
+    let pump = function(MACOS, "local_pump");
+    assert!(pump.find("if !done.success").unwrap() < pump.find("local.activation").unwrap());
+    assert!(pump.contains("if self.restore_system(st)"));
+    let pump = function(MACOS, "system_pump");
+    assert!(pump.find("match completion.result").unwrap() < pump.find("local.activation.take()").unwrap());
+    assert!(pump.find("Ok(plan)").unwrap() < pump.find("self.start_now(").unwrap());
+}
+
+#[test]
+fn emergency_disable_is_separate_from_the_bounded_shortcut_queue() {
     for source in [WINDOWS, MACOS] {
         let pump = function(source, "local_pump");
-        assert!(pump.find("if !done.success").unwrap() < pump.find("activation.take()").unwrap());
+        assert!(pump.contains("local.admission.take_emergency()"));
+        assert!(pump.contains("if emergency {"));
+        assert!(pump.contains("Event::LocalRulesOff"));
     }
 }

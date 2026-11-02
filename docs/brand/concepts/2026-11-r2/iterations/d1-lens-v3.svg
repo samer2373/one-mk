@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">oneMK Lens v3</title>
+  <path id="symbol" fill="#111111" d="M104 40 H120 V56.45 A72 72 0 0 0 120 199.55 V216 H104 C50 216 40 206 40 152 V104 C40 50 50 40 104 40 Z M136 40 H152 C206 40 216 50 216 104 V152 C216 206 206 216 152 216 H136 V199.55 A72 72 0 0 0 136 56.45 Z M70 128 A58 58 0 1 1 186 128 A58 58 0 1 1 70 128 Z"/>
+</svg>

@@ -5,13 +5,66 @@
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Painter, Stroke};
 use std::sync::Arc;
 
-pub const GROUND: Color32 = Color32::from_rgb(0x0F, 0x12, 0x16);
+pub const GROUND: Color32 = Color32::from_rgb(0x0B, 0x0D, 0x11);
 /// The room the desk stands in: the window's ground behind everything.
-pub const ROOM: Color32 = Color32::from_rgb(0x10, 0x13, 0x18);
-/// Glass: the tint over a blurred backdrop (premultiplied), and the fill
-/// used instead when there is no blur. Text on either holds 4.5:1.
-pub const GLASS: Color32 = Color32::from_rgba_premultiplied(10, 12, 15, 168);
+pub const ROOM: Color32 = Color32::from_rgb(0x0B, 0x0D, 0x11);
+/// The sidebar: solid, a step lighter than the room, a hairline at its edge.
+pub const SIDEBAR: Color32 = Color32::from_rgb(0x0E, 0x10, 0x15);
+pub const HAIRLINE: Color32 = Color32::from_rgba_premultiplied(15, 15, 15, 15);
+/// The chosen page in the sidebar, and a row under the pointer.
+pub const SIDE_CHOSEN: Color32 = Color32::from_rgb(0x1A, 0x1D, 0x24);
+pub const SIDE_CHOSEN_EDGE: Color32 = Color32::from_rgba_premultiplied(18, 18, 18, 18);
+pub const SIDE_HOVER: Color32 = Color32::from_rgb(0x15, 0x18, 0x1E);
+/// A raised surface over the desk (the panels, the toolbar): solid, a
+/// little lighter at the top, edged by a hairline.
+pub const ELEVATED_TOP: Color32 = Color32::from_rgb(0x17, 0x1A, 0x21);
+pub const ELEVATED: Color32 = Color32::from_rgb(0x12, 0x15, 0x1B);
+pub const ELEVATED_EDGE: Color32 = Color32::from_rgba_premultiplied(20, 20, 20, 20);
+/// The command palette's glass: dark enough that what is behind it is
+/// colour, not detail.
+pub const PALETTE_TOP: Color32 = Color32::from_rgba_premultiplied(18, 20, 25, 205);
+pub const PALETTE: Color32 = Color32::from_rgba_premultiplied(14, 16, 21, 215);
+/// The search row at the top of the sidebar.
+pub const SEARCH_FILL: Color32 = Color32::from_rgb(0x13, 0x16, 0x1C);
+/// Shortcut keys beside each page: there when looked for, not before.
+pub const SHORTCUT_INK: Color32 = Color32::from_rgb(0x52, 0x5A, 0x66);
+/// The room on a see-through window (macOS): a dark tint over the blurred
+/// desktop, 88% so grey text keeps 4.5:1 even over a white wallpaper.
+pub const ROOM_TINT: Color32 = Color32::from_rgba_premultiplied(14, 17, 21, 224);
+/// Glass, frosted: over its blurred backdrop, a little white (more at the
+/// top, as if lit from above) over a little dark, so a panel reads lighter
+/// than the room yet keeps text at 4.5:1 over the brightest backdrop.
+/// `GLASS_TOP` at the top, `GLASS` at the bottom (premultiplied).
+pub const GLASS_TOP: Color32 = Color32::from_rgba_premultiplied(24, 25, 27, 113);
+pub const GLASS: Color32 = Color32::from_rgba_premultiplied(13, 14, 16, 107);
+/// The same on a see-through window, where the room under the panel is
+/// already a dark tint: less dark, the same frost.
+pub const GLASS_CLEAR_TOP: Color32 = Color32::from_rgba_premultiplied(22, 23, 24, 71);
+pub const GLASS_CLEAR: Color32 = Color32::from_rgba_premultiplied(11, 11, 12, 62);
+/// Without blur (old OpenGL, or reduce transparency): solid.
+pub const GLASS_SOLID_TOP: Color32 = Color32::from_rgb(0x1C, 0x20, 0x27);
 pub const GLASS_SOLID: Color32 = Color32::from_rgb(0x16, 0x1A, 0x20);
+/// A control's glass (a button, the chosen segment): clearer than a
+/// panel's, a little lighter.
+pub const CONTROL_TOP: Color32 = Color32::from_rgba_premultiplied(40, 41, 44, 70);
+pub const CONTROL: Color32 = Color32::from_rgba_premultiplied(22, 23, 25, 52);
+pub const CONTROL_SOLID_TOP: Color32 = Color32::from_rgb(0x2A, 0x2E, 0x35);
+pub const CONTROL_SOLID: Color32 = Color32::from_rgb(0x22, 0x26, 0x2C);
+/// The content layer (settings groups, Health, the keys): a quiet fill and
+/// a hairline, no glass.
+pub const GROUP: Color32 = Color32::from_rgba_premultiplied(12, 12, 12, 12);
+pub const GROUP_EDGE: Color32 = Color32::from_rgba_premultiplied(17, 17, 17, 17);
+/// A segmented control's track, and the chosen segment's capsule.
+pub const TRACK: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 56);
+pub const THUMB: Color32 = Color32::from_rgba_premultiplied(48, 48, 48, 48);
+/// The hairline round a solid control.
+pub const CONTROL_EDGE: Color32 = Color32::from_rgba_premultiplied(20, 20, 20, 20);
+/// The edge of a glass shape where the light doesn't catch it.
+pub const GLASS_HAIRLINE: Color32 = Color32::from_rgba_premultiplied(12, 12, 12, 12);
+/// A glass panel's rim, and its lit top edge (drawn when there is no blur;
+/// with blur the glass lights its own rim).
+pub const GLASS_RIM: Color32 = Color32::from_rgba_premultiplied(26, 26, 26, 26);
+pub const GLASS_EDGE: Color32 = Color32::from_rgba_premultiplied(56, 56, 56, 56);
 /// What floats over everything (a sheet, a toast, a menu): solid, so it
 /// reads the same whatever is under it and while it moves.
 pub const POPOVER: Color32 = Color32::from_rgb(0x1A, 0x1E, 0x25);
@@ -21,6 +74,8 @@ pub const ON_GLASS_LIT: Color32 = Color32::from_rgba_premultiplied(30, 30, 30, 3
 /// Corners: panels, things inside them, small controls.
 pub const R_PANEL: u8 = 20;
 pub const R_INNER: u8 = 12;
+/// A group of rows on glass (settings).
+pub const R_GROUP: u8 = 16;
 /// The gap round and between panels.
 pub const M: f32 = 12.0;
 pub const PANEL: Color32 = Color32::from_rgb(0x13, 0x17, 0x1C);
@@ -34,13 +89,24 @@ pub const INK2: Color32 = Color32::from_rgb(0x9D, 0xA6, 0xB1);
 pub const INK3: Color32 = Color32::from_rgb(0x8F, 0x98, 0xA4);
 /// Between INK2 and INK: hovered labels.
 pub const INK_HOVER: Color32 = Color32::from_rgb(0xC4, 0xCA, 0xD2);
-/// The one warm colour: something crossing, a drop target, the main action.
-pub const SIGNAL: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
-pub const SIGNAL_LIT: Color32 = Color32::from_rgb(0xFF, 0xC2, 0x66);
-pub const SIGNAL_INK: Color32 = Color32::from_rgb(0x1E, 0x15, 0x05);
+/// Volt, the brand's one signal colour (the lit tip of the oneMK pointer):
+/// something crossing, a drop target, the main action, the pointer on the
+/// desk, keyboard focus.
+pub const SIGNAL: Color32 = Color32::from_rgb(0xC6, 0xF4, 0x32);
+/// The accent for chosen and on states (a switch that is on): Volt too.
+pub const ACCENT: Color32 = Color32::from_rgb(0xC6, 0xF4, 0x32);
+pub const ACCENT_LIT: Color32 = Color32::from_rgb(0xD7, 0xFF, 0x5E);
+pub const SIGNAL_LIT: Color32 = Color32::from_rgb(0xD7, 0xFF, 0x5E);
+/// Text and marks on Volt.
+pub const SIGNAL_INK: Color32 = Color32::from_rgb(0x14, 0x1A, 0x06);
 pub const ERROR: Color32 = Color32::from_rgb(0xFF, 0x6B, 0x5E);
+/// Not smooth (a slow or stalling connection, lost packets): warm amber,
+/// short of an error, and never the brand's Volt, which means good things.
+pub const WARN: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
+/// The desk lamp's warm light in the room.
+pub const LAMP: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
 /// Connected: a dot, never words alone.
-pub const OK: Color32 = Color32::from_rgb(0x5B, 0xC9, 0x8F);
+pub const OK: Color32 = Color32::from_rgb(0x3C, 0xCF, 0xE6);
 /// Quiet buttons, and the pill under the chosen tab or segment.
 pub const BUTTON: Color32 = Color32::from_rgba_premultiplied(22, 22, 22, 22);
 pub const BUTTON_LIT: Color32 = Color32::from_rgba_premultiplied(34, 34, 34, 34);
@@ -146,6 +212,16 @@ fn fonts(extra: &[(String, Vec<u8>)]) -> FontDefinitions {
     // system's fonts for scripts Geist doesn't cover.
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "geist".into());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "geist-mono".into());
+    // The ⌘ in shortcut hints: neither Geist nor egui's fonts have it.
+    if let Some(bytes) = mac_symbols() {
+        // Apple Symbols draws ⌘ smaller and higher than Geist's figures
+        // beside it (measured on a Mac: 12 px next to 16 px, its foot 2.5 pt
+        // up; 0.2 put it 1.5 pt below the baseline).
+        let tweak = egui::FontTweak { scale: 1.25, y_offset_factor: 0.125, ..Default::default() };
+        fonts.font_data.insert("mac-symbols".into(), Arc::new(FontData::from_static(bytes).tweak(tweak)));
+        fonts.families.entry(FontFamily::Proportional).or_default().push("mac-symbols".into());
+        fonts.families.entry(FontFamily::Monospace).or_default().push("mac-symbols".into());
+    }
     for (name, bytes) in extra {
         fonts.font_data.insert(name.clone(), Arc::new(FontData::from_owned(bytes.clone())));
         fonts.families.entry(FontFamily::Proportional).or_default().push(name.clone());
@@ -154,6 +230,16 @@ fn fonts(extra: &[(String, Vec<u8>)]) -> FontDefinitions {
     fonts.families.insert(FontFamily::Name("semibold".into()), [vec!["geist-semibold".into()], fallback.clone()].concat());
     fonts.families.insert(FontFamily::Name("mono-medium".into()), [vec!["geist-mono-medium".into()], fallback].concat());
     fonts
+}
+
+/// macOS's own symbol font, read once (the window's fonts are rebuilt when
+/// a name needs another script).
+fn mac_symbols() -> Option<&'static [u8]> {
+    static BYTES: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        if !cfg!(target_os = "macos") { return None; }
+        std::fs::read("/System/Library/Fonts/Apple Symbols.ttf").ok().map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
+    })
 }
 
 /// Names can be in any script. When one has letters no loaded font

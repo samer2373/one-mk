@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">one·mk Seam (reversed)</title>
+  <path fill="#F2F4F7" d="M36 38 H38.4 C87 38 96 47 96 95.6 V160.4 C96 209 87 218 38.4 218 H36 V186 H54.4 C62.5 186 64 184.5 64 176.4 V79.6 C64 71.5 62.5 70 54.4 70 H36 Z M220 38 H217.6 C169 38 160 47 160 95.6 V160.4 C160 209 169 218 217.6 218 H220 V186 H201.6 C193.5 186 192 184.5 192 176.4 V79.6 C192 71.5 193.5 70 201.6 70 H220 Z"/>
+  <path fill="#7B6CFF" d="M108 128 A20 20 0 1 1 148 128 A20 20 0 1 1 108 128 Z"/>
+</svg>

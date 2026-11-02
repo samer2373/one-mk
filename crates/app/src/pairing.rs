@@ -8,6 +8,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
+    Invitation(String),
     /// Waiting for the other computer to start pairing too.
     Searching { me: String, port: Option<u16> },
     /// Nothing found for a while: show what to check.
@@ -35,6 +36,7 @@ pub struct Pairing {
 pub fn parse(line: &str) -> Option<Step> {
     let f: Vec<&str> = line.trim_end_matches(['\r', '\n']).split('\t').collect();
     Some(match f[..] {
+        ["invitation", link] => Step::Invitation(link.into()),
         ["me", name, _id, port] => Step::Searching { me: name.into(), port: port.parse().ok() },
         ["me", name, ..] => Step::Searching { me: name.into(), port: None },
         ["searching"] => return None,
@@ -55,11 +57,11 @@ pub fn parse(line: &str) -> Option<Step> {
 
 /// The command line's reasons, said for the window.
 fn plain(why: &str) -> String {
-    if why.starts_with("no answer within") { "nobody confirmed the code in 2 minutes".into() } else { why.into() }
+    if why.starts_with("no answer within") { "nobody confirmed the code in 2 minutes".into() } else { crate::view::window_issue(why) }
 }
 
 /// What the window says when `one-mk pair` stops without saying why.
-pub const STOPPED: &str = "one·mk stopped unexpectedly while pairing. Try again.";
+pub const STOPPED: &str = "oneMK stopped unexpectedly while pairing. Try again.";
 
 /// The short id (`abcd-ef01`) of a full fingerprint, as status reports it.
 fn short(fp: &str) -> String {
@@ -68,9 +70,17 @@ fn short(fp: &str) -> String {
 
 impl Pairing {
     pub fn start(daemon: &std::path::Path, home_args: &[String], ctx: egui::Context) -> std::io::Result<Self> {
+        Self::with_method(daemon, home_args, ctx, Method::Search, one_mk_proto::DEFAULT_PORT)
+    }
+
+    pub fn with_method(daemon: &std::path::Path, home_args: &[String], ctx: egui::Context, method: Method, port: u16) -> std::io::Result<Self> {
+        let args = method.args(port)?;
         let mut cmd = Command::new(daemon);
-        cmd.args(["pair", "--machine"]).args(home_args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.args(args).args(home_args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = one_mk_ctl::proc::hide_window(&mut cmd).spawn()?;
+        if let Method::Join(link) = method && let Some(stdin) = &mut child.stdin {
+            writeln!(stdin, "{}", link.trim())?; stdin.flush()?;
+        }
         let (tx, rx) = channel();
         let stdout = child.stdout.take().expect("piped");
         let stderr = child.stderr.take().expect("piped");
@@ -104,7 +114,7 @@ impl Pairing {
             // its own error if it left one: never leave the sheet waiting.
             let err = errors.join().unwrap_or_default();
             if !over {
-                let _ = tx.send(Step::Ended(if err.is_empty() { STOPPED.into() } else { err }));
+                let _ = tx.send(Step::Ended(if err.is_empty() { STOPPED.into() } else { plain(&err) }));
                 ctx.request_repaint();
             }
         });
@@ -119,6 +129,45 @@ impl Pairing {
     }
 }
 
+pub enum Method {
+    Search,
+    Invite,
+    Join(String),
+    Connect(String),
+}
+
+impl Method {
+    fn args(&self, port: u16) -> std::io::Result<Vec<String>> {
+        Ok(match self {
+            Self::Search => vec!["pair".into(), "--machine".into()],
+            Self::Invite => vec!["invite".into(), "--machine".into(), "--service-port".into(), port.to_string()],
+            Self::Join(link) => {
+                if link.trim().is_empty() || link.trim().contains(['\r', '\n']) { return Err(std::io::Error::other("Paste one complete invitation link.")); }
+                vec!["join".into(), "--machine".into(), "--service-port".into(), port.to_string()]
+            }
+            Self::Connect(address) => {
+                use std::net::ToSocketAddrs;
+                let address = address.trim();
+                if address.is_empty() { return Err(std::io::Error::other("Enter the other computer's address.")); }
+                let address = if let Ok(ip) = address.parse::<std::net::IpAddr>() { std::net::SocketAddr::new(ip, one_mk_proto::DEFAULT_PORT).to_string() }
+                    else if address.contains(':') { address.to_owned() } else { format!("{address}:{}", one_mk_proto::DEFAULT_PORT) };
+                // A name needs a lookup, which can hang on a broken network:
+                // it runs beside the window, which waits 1.5 s at most.
+                let (tx, rx) = std::sync::mpsc::channel();
+                let lookup = address.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(lookup.to_socket_addrs().map(|mut a| a.next()));
+                });
+                let target = match rx.recv_timeout(std::time::Duration::from_millis(1500)) {
+                    Ok(found) => found?.ok_or_else(|| std::io::Error::other("That computer's address could not be found."))?,
+                    Err(_) => return Err(std::io::Error::other("That computer's name took too long to look up. Try its IP address.")),
+                };
+                vec!["pair".into(), "--machine".into(), "--connect".into(), target.to_string()]
+            }
+        })
+    }
+}
+
 impl Drop for Pairing {
     /// Closing the sheet stops pairing.
     fn drop(&mut self) {
@@ -130,6 +179,24 @@ impl Drop for Pairing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_pairing_commands_keep_links_off_the_command_line() {
+        assert_eq!(Method::Invite.args(32001).unwrap(), ["invite", "--machine", "--service-port", "32001"]);
+        assert_eq!(Method::Join("onemk://private-link".into()).args(32002).unwrap(), ["join", "--machine", "--service-port", "32002"]);
+        for link in ["", "   ", "onemk://one\nonemk://two"] { assert!(Method::Join(link.into()).args(1).is_err()); }
+        assert!(matches!(parse("invitation\tonemk://private-link"), Some(Step::Invitation(link)) if link == "onemk://private-link"));
+    }
+
+    #[test]
+    fn direct_addresses_accept_ips_and_hosts_with_optional_ports() {
+        for (address, expected) in [("127.0.0.1:32123", "127.0.0.1:32123".to_owned()),
+            ("127.0.0.1", format!("127.0.0.1:{}", one_mk_proto::DEFAULT_PORT)), ("[::1]:32123", "[::1]:32123".into())] {
+            assert_eq!(Method::Connect(address.into()).args(1).unwrap(), ["pair", "--machine", "--connect", expected.as_str()]);
+        }
+        assert!(Method::Connect("localhost:32123".into()).args(1).is_ok());
+        for address in ["", "127.0.0.1:99999", "127.0.0.1:bad"] { assert!(Method::Connect(address.into()).args(1).is_err()); }
+    }
 
     #[test]
     fn reads_events() {

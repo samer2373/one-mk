@@ -27,6 +27,10 @@ pub enum Action {
     LockAll,
     /// This clipboard to a peer, by id.
     ClipSend(String),
+    /// A peer's clipboard to this computer, by id.
+    ClipGet(String),
+    /// Pause (true) or play the live wallpaper.
+    WallpaperPause(bool),
     Forget { peer: String },
     ToggleAutostart,
     Quit,
@@ -59,7 +63,7 @@ impl Snapshot {
 
     /// The first line of the menu, and the icon's tooltip.
     pub fn headline(&self) -> String {
-        let Some(s) = &self.status else { return "one·mk isn't running".into() };
+        let Some(s) = &self.status else { return "oneMK isn't running".into() };
         match s.broadcast.len() {
             0 => {}
             1 => return format!("Broadcasting to {}", s.broadcast[0]),
@@ -122,7 +126,7 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
         m.extend(s.transfers.iter().map(|t| Entry::Label(transfer_line(t))));
     }
     m.push(Entry::Separator);
-    m.push(Entry::Item { label: "Open one·mk…".into(), action: Action::OpenApp, checked: None });
+    m.push(Entry::Item { label: "Open oneMK…".into(), action: Action::OpenApp, checked: None });
     m.push(Entry::Separator);
     match &snap.status {
         Some(s) => {
@@ -143,6 +147,11 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
                     .map(|p| Entry::Item { label: format!("Send clipboard to {}", p.name), action: Action::ClipSend(p.id.clone()), checked: None })
                     .collect();
                 grouped(&mut m, "Send clipboard to", clip);
+                let get = online
+                    .iter()
+                    .map(|p| Entry::Item { label: format!("Get clipboard from {}", p.name), action: Action::ClipGet(p.id.clone()), checked: None })
+                    .collect();
+                grouped(&mut m, "Get clipboard from", get);
                 m.push(Entry::Separator);
             }
             for p in &s.peers {
@@ -172,17 +181,20 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
             // Only with somewhere to broadcast to (or to stop it).
             let broadcasting = !s.broadcast.is_empty();
             if broadcasting || s.peers.iter().any(|p| p.online) {
-                m.push(Entry::Item { label: "Broadcast to all computers".into(), action: Action::Broadcast(!broadcasting), checked: Some(broadcasting) });
+                m.push(Entry::Item { label: "Type on every computer".into(), action: Action::Broadcast(!broadcasting), checked: Some(broadcasting) });
+            }
+            if let Some(plan) = s.wallpaper.as_ref().and_then(|w| w.plan.as_ref()) {
+                m.push(Entry::Item { label: "Pause the wallpaper".into(), action: Action::WallpaperPause(!plan.paused), checked: Some(plan.paused) });
             }
             m.push(Entry::Item { label: "Lock every screen".into(), action: Action::LockAll, checked: None });
             m.push(Entry::Item { label: "Take back control".into(), action: Action::TakeBack, checked: None });
-            m.push(Entry::Item { label: "Stop one-mk".into(), action: Action::Stop, checked: None });
+            m.push(Entry::Item { label: "Stop oneMK".into(), action: Action::Stop, checked: None });
         }
-        None => m.push(Entry::Item { label: "Start one·mk".into(), action: Action::StartDaemon, checked: None }),
+        None => m.push(Entry::Item { label: "Start oneMK".into(), action: Action::StartDaemon, checked: None }),
     }
     m.push(Entry::Separator);
     m.push(Entry::Item { label: "Start at login".into(), action: Action::ToggleAutostart, checked: Some(snap.autostart) });
-    m.push(Entry::Item { label: "Quit one·mk".into(), action: Action::Quit, checked: None });
+    m.push(Entry::Item { label: "Quit oneMK".into(), action: Action::Quit, checked: None });
     m
 }
 
@@ -201,7 +213,7 @@ mod tests {
 
     #[test]
     fn headlines() {
-        assert_eq!(Snapshot::default().headline(), "one·mk isn't running");
+        assert_eq!(Snapshot::default().headline(), "oneMK isn't running");
         assert_eq!(snap(vec![]).headline(), "No computers paired yet");
         assert_eq!(snap(vec![peer("a", Side::Left, false)]).headline(), "Waiting for your computers");
         assert_eq!(snap(vec![peer("desk", Side::Right, true)]).headline(), "Connected to desk (on your right)");
@@ -272,7 +284,7 @@ mod tests {
     /// on (which stops it), and said in the headline and the icon.
     #[test]
     fn broadcast_is_a_checkmark_said_in_the_headline() {
-        let item = |on: bool| Entry::Item { label: "Broadcast to all computers".into(), action: Action::Broadcast(!on), checked: Some(on) };
+        let item = |on: bool| Entry::Item { label: "Type on every computer".into(), action: Action::Broadcast(!on), checked: Some(on) };
         assert!(!menu(&snap(vec![peer("old", Side::Left, false)])).contains(&item(false)), "nobody to broadcast to");
         assert!(!menu(&snap(vec![])).contains(&item(false)));
         let mut s = snap(vec![peer("desk", Side::Right, true), peer("mac", Side::Left, true), peer("old", Side::Top, false)]);

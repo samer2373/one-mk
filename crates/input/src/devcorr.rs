@@ -79,6 +79,8 @@ pub(crate) struct Correlator {
     motion: VecDeque<(DeviceRef, u64)>,
     waiting: VecDeque<Waiting>,
     misses: u8,
+    local_late: VecDeque<(Token, u64)>,
+    local_held: Vec<(u32, Option<DeviceRef>)>,
 }
 
 impl Correlator {
@@ -87,11 +89,39 @@ impl Correlator {
         self.finish(out);
         self.misses = 0;
         self.enabled = enabled;
+        self.local_held.clear();
     }
 
     #[cfg(any(feature = "native-local-remap", test))]
     pub(crate) fn local_key(&mut self, key: crate::localmap_runtime::Key, now: u64, out: &mut Vec<Correlated>) {
-        self.enqueue(Event::Key { code: key.code, down: key.down, device: None }, Some(key.sequence), now, out);
+        let event = if one_mk_proto::keynames::is_button(key.code) {
+            Event::Button { button: key.code, down: key.down, device: None }
+        } else { Event::Key { code: key.code, down: key.down, device: None } };
+        let mut event = event;
+        if self.enabled {
+            self.prune(now);
+            if let Some(want) = token(&event) {
+                if let Some(index) = self.seen.iter().position(|entry| entry.0 == want && now.saturating_sub(entry.2) <= WAIT_MS) {
+                    if let Some((_, device, _)) = self.seen.remove(index) { set_device(&mut event, Some(device)); }
+                } else {
+                    if self.local_late.len() == RING { self.local_late.pop_front(); }
+                    self.local_late.push_back((want, now));
+                }
+            }
+        }
+        // A press counts on the device just matched to it (a held entry can
+        // be stale when its release went elsewhere); repeats and the release
+        // keep the press's device, so a rule applied on press is undone.
+        let fresh = match event { Event::Key { device, .. } | Event::Button { device, .. } => device, _ => None };
+        let held = self.local_held.iter().position(|entry| entry.0 == key.code);
+        match (held, key.down) {
+            (Some(index), true) if fresh.is_some() => self.local_held[index].1 = fresh,
+            (Some(index), true) => set_device(&mut event, self.local_held[index].1),
+            (Some(index), false) => { set_device(&mut event, self.local_held[index].1); self.local_held.swap_remove(index); }
+            (None, true) => self.local_held.push((key.code, fresh)),
+            (None, false) => {}
+        }
+        out.push(Correlated { event, local: Some(key.sequence) });
     }
 
     /// A device said `token` happened on it.
@@ -103,6 +133,10 @@ impl Correlator {
             w.want = None;
             self.misses = 0;
             self.flush(now, out);
+            return;
+        }
+        if let Some(index) = self.local_late.iter().position(|entry| entry.0 == token) {
+            self.local_late.remove(index);
             return;
         }
         if self.seen.len() == RING {
@@ -167,6 +201,7 @@ impl Correlator {
         out.extend(self.waiting.drain(..).map(|w| Correlated { event: w.ev, local: w.local }));
         self.seen.clear();
         self.motion.clear();
+        self.local_late.clear();
     }
 
     /// A device went away: what it said no longer counts. Whatever still
@@ -177,9 +212,11 @@ impl Correlator {
         out.extend(self.waiting.drain(..).map(|w| Correlated { event: w.ev, local: w.local }));
         self.seen.retain(|s| s.1 != device);
         self.motion.retain(|m| m.0 != device);
+        self.local_held.retain(|held| held.1 != Some(device));
     }
 
     fn prune(&mut self, now: u64) {
+        while self.local_late.front().is_some_and(|entry| entry.1.saturating_add(WAIT_MS) < now) { self.local_late.pop_front(); }
         let old = now.saturating_sub(MOTION_MS);
         while self.seen.front().is_some_and(|s| s.2 < old) {
             self.seen.pop_front();
@@ -239,26 +276,7 @@ pub(crate) fn windows_path(path: &str) -> (Bus, u16, u16) {
 // --------------------------------------------------------- HID usages
 
 #[cfg(any(target_os = "macos", test))]
-/// A HID keyboard usage (page 7) as an evdev key code, as Linux's
-/// `hid-input` maps it; `None` for usages with no key.
-pub(crate) fn hid_key_to_evdev(usage: u32) -> Option<u32> {
-    #[rustfmt::skip]
-    const KEYS: [u8; 0x66] = [
-        0, 0, 0, 0, 30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38,
-        50, 49, 24, 25, 16, 19, 31, 20, 22, 47, 17, 45, 21, 44, 2, 3,
-        4, 5, 6, 7, 8, 9, 10, 11, 28, 1, 14, 15, 57, 12, 13, 26,
-        27, 43, 43, 39, 40, 41, 51, 52, 53, 58, 59, 60, 61, 62, 63, 64,
-        65, 66, 67, 68, 87, 88, 99, 70, 119, 110, 102, 104, 111, 107, 109, 106,
-        105, 108, 103, 69, 98, 55, 74, 78, 96, 79, 80, 81, 75, 76, 77, 71,
-        72, 73, 82, 83, 86, 127,
-    ];
-    let code = match usage {
-        0x00..=0x65 => KEYS[usage as usize],
-        0xe0..=0xe7 => [29, 42, 56, 125, 97, 54, 100, 126][(usage - 0xe0) as usize],
-        _ => 0,
-    };
-    (code != 0).then_some(u32::from(code))
-}
+pub(crate) use crate::macos_hidmap::hid_key_to_evdev;
 
 /// A HID button (page 9, 1 = primary) as an evdev button code.
 pub(crate) fn hid_button_to_evdev(n: u32) -> Option<u32> {
@@ -331,13 +349,81 @@ mod tests {
             corr.configure(true, &mut out);
             corr.hook(key(remote_code, false), 0, &mut out);
             corr.local_key(crate::localmap_runtime::Key {
-                sequence: 7, code: 30, down: false, at: std::time::Instant::now(), keyboard_type: 0,
+                sequence: 7, code: 30, down: false, at: std::time::Instant::now(), keyboard_type: 0, click_state: 0,
             }, 1, &mut out);
             corr.device_event(press(remote_code, false), A, 2, &mut out);
             corr.finish(&mut out);
-            assert_eq!(out.iter().map(|event| event.local).collect::<Vec<_>>(), [None, Some(7)]);
-            assert_eq!(devices(&out), [Some(A), None]);
+            assert_eq!(out.iter().map(|event| event.local).collect::<Vec<_>>(), [Some(7), None]);
+            assert_eq!(devices(&out), [None, Some(A)]);
         }
+    }
+
+    #[test]
+    fn local_button_envelopes_keep_their_type_sequence_and_device() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.configure(true, &mut out);
+        corr.device_event(press(0x113, true), A, 0, &mut out);
+        corr.local_key(crate::localmap_runtime::Key {
+            sequence: 9, code: 0x113, down: true, at: std::time::Instant::now(), keyboard_type: 0, click_state: 0,
+        }, 0, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].local, Some(9));
+        assert!(matches!(out[0].event, Event::Button { button: 0x113, down: true, device: Some(A) }));
+        assert_eq!(corr.deadline(), None);
+    }
+
+    #[test]
+    fn local_hot_path_returns_immediately_without_a_deadline_even_behind_remote_input() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.configure(true, &mut out);
+        corr.hook(key(48, true), 0, &mut out);
+        assert_eq!(corr.deadline(), Some(WAIT_MS));
+        for (sequence, down) in [(1, true), (2, false)] {
+            corr.local_key(crate::localmap_runtime::Key { sequence, code: 30, down, keyboard_type: 0, click_state: 0, at: std::time::Instant::now() }, 0, &mut out);
+            assert_eq!(out.len(), sequence as usize);
+            assert_eq!(out.last().unwrap().local, Some(sequence));
+            assert_eq!(corr.waiting.len(), 1);
+            assert!(corr.waiting.iter().all(|event| event.local.is_none()));
+        }
+        corr.finish(&mut out);
+        assert_eq!(corr.deadline(), None);
+        assert_eq!(devices(&out), [None, None, None]);
+    }
+
+    #[test]
+    fn local_unknown_down_keeps_its_source_on_up_and_late_samples_cannot_name_the_next_press() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.configure(true, &mut out);
+        let local = |sequence, down| crate::localmap_runtime::Key { sequence, code: 30, down, keyboard_type: 0, click_state: 0, at: std::time::Instant::now() };
+        corr.local_key(local(1, true), 0, &mut out);
+        assert_eq!(corr.deadline(), None);
+        corr.device_event(press(30, true), A, 1, &mut out);
+        corr.device_event(press(30, false), A, 2, &mut out);
+        corr.local_key(local(2, false), 3, &mut out);
+        corr.local_key(local(3, true), 4, &mut out);
+        assert_eq!(devices(&out), [None, None, None]);
+        assert_eq!(corr.deadline(), None);
+    }
+
+    #[test]
+    fn a_press_whose_release_went_elsewhere_does_not_name_the_next_press() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.configure(true, &mut out);
+        let local = |sequence, down| crate::localmap_runtime::Key { sequence, code: 58, down, keyboard_type: 0, click_state: 0, at: std::time::Instant::now() };
+        corr.device_event(press(58, true), A, 0, &mut out);
+        corr.local_key(local(1, true), 0, &mut out);
+        // Its release went to the hook (the pointer had crossed); later the
+        // same key on keyboard B.
+        corr.device_event(press(58, true), B, 100, &mut out);
+        corr.local_key(local(2, true), 100, &mut out);
+        corr.local_key(local(3, true), 130, &mut out);
+        corr.local_key(local(4, false), 150, &mut out);
+        assert_eq!(devices(&out), [Some(A), Some(B), Some(B), Some(B)]);
+        assert!(corr.local_held.is_empty());
     }
 
     #[test]

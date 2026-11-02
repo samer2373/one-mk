@@ -146,13 +146,30 @@ impl Env {
 struct Power {
     locked: bool,
     asleep: bool,
+    /// Counts wake-ups. A watcher only sees the latest state, so a short
+    /// sleep can look like no change at all; the count still moves.
+    wakes: u32,
 }
 
 impl Power {
     fn paused(self) -> bool {
         self.locked || self.asleep
     }
+
+    fn wake(&mut self) {
+        self.asleep = false;
+        self.wakes = self.wakes.wrapping_add(1);
+    }
+
+    /// Whether `self` came after a wake-up that `before` didn't.
+    fn woke_since(self, before: Power) -> bool {
+        self.wakes != before.wakes || (before.asleep && !self.asleep)
+    }
 }
+
+/// How long a release waits for a symbol being sent before the session is
+/// ended to let go (a portal answers in milliseconds; one that doesn't is hung).
+const RELEASE_GRACE: Duration = Duration::from_millis(250);
 
 /// A call that should answer at once. One that hangs is an error, which
 /// ends the session (and so releases whatever it held).
@@ -459,7 +476,7 @@ async fn watch_power(
                 }
                 Some(false) => {
                     tracing::debug!("woke up");
-                    power.send_modify(|p| p.asleep = false);
+                    power.send_modify(Power::wake);
                     if let Some(s) = sleep.as_mut() {
                         s.inhibit().await;
                     }
@@ -731,6 +748,7 @@ async fn run_capture(
     let context = ei::Context::new(UnixStream::from(fd))?;
     let handshake = context.handshake_tokio("one-mk", ei::handshake::ContextType::Receiver);
     let (_conn, mut ei_events) = timeout("libei handshake", handshake).await?;
+    let mut typing: Option<(reis::event::Device, crate::typing::KeyboardLayout)> = None;
 
     let mut activated = portal.receive_activated().await?;
     let mut deactivated = portal.receive_deactivated().await?;
@@ -831,7 +849,7 @@ async fn run_capture(
                     st.deactivated();
                     cap.release(portal_id, None, &st.edges).await?;
                 }
-                if was.asleep && !now.asleep {
+                if now.woke_since(was) {
                     // Monitors may have changed while asleep. A session
                     // that can't say where the screens are is no good.
                     cap.refresh_zones().await.context("after waking up")?;
@@ -864,8 +882,36 @@ async fn run_capture(
                     EiEvent::ScrollDelta(s) => Event::Scroll { dx: f64::from(s.dx), dy: f64::from(s.dy), device: None },
                     EiEvent::ScrollDiscrete(s) => Event::ScrollDiscrete { dx: s.discrete_dx, dy: s.discrete_dy, device: None },
                     EiEvent::ScrollStop(_) => Event::ScrollStop,
-                    EiEvent::KeyboardKey(k) => Event::Key { code: k.key, down: k.state == ei::keyboard::KeyState::Press, device: None },
-                    EiEvent::KeyboardModifiers(m) => Event::Modifiers(Mods::from_xkb(m.depressed | m.latched)),
+                    EiEvent::KeyboardKey(k) => {
+                        if typing.as_ref().is_none_or(|(device, _)| *device != k.device) {
+                            typing = portal_keyboard_layout(&k.device).map(|keyboard| {
+                                let _ = st.tx.send(Event::KeyboardLayout(keyboard.clone()));
+                                (k.device.clone(), keyboard)
+                            });
+                            if typing.is_none() { let _ = st.tx.send(Event::KeyboardLayoutUnavailable); }
+                        }
+                        Event::Key { code: k.key, down: k.state == ei::keyboard::KeyState::Press, device: None }
+                    }
+                    EiEvent::KeyboardModifiers(m) => {
+                        if typing.as_ref().is_none_or(|(device, _)| *device != m.device) {
+                            typing = portal_keyboard_layout(&m.device).map(|keyboard| {
+                                let _ = st.tx.send(Event::KeyboardLayout(keyboard.clone()));
+                                (m.device.clone(), keyboard)
+                            });
+                            if typing.is_none() { let _ = st.tx.send(Event::KeyboardLayoutUnavailable); }
+                        }
+                        if typing.is_some() {
+                            let _ = st.tx.send(Event::KeyboardModifiers { depressed: m.depressed, latched: m.latched, locked: m.locked, group: m.group });
+                        }
+                        Event::Modifiers(Mods::from_xkb(m.depressed | m.latched))
+                    }
+                    event @ (EiEvent::DeviceRemoved(_) | EiEvent::DevicePaused(_) | EiEvent::DeviceResumed(_)) => {
+                        if event.device().is_some_and(|changed| typing.as_ref().is_some_and(|(device, _)| device == changed)) {
+                            typing = None;
+                            let _ = st.tx.send(Event::KeyboardLayoutUnavailable);
+                        }
+                        continue;
+                    }
                     EiEvent::Disconnected(d) => bail!("input capture disconnected: {:?}", d.explanation),
                     _ => continue,
                 };
@@ -875,6 +921,17 @@ async fn run_capture(
             }
         }
     }
+}
+
+fn portal_keyboard_layout(device: &reis::event::Device) -> Option<crate::typing::KeyboardLayout> {
+    use std::os::unix::fs::FileExt;
+    let keymap = device.keymap()?;
+    if keymap.size == 0 || keymap.size > 1024 * 1024 || keymap.type_ != ei::keyboard::KeymapType::Xkb { return None; }
+    let file = std::fs::File::from(keymap.fd.try_clone().ok()?);
+    let mut bytes = vec![0; keymap.size as usize];
+    file.read_exact_at(&mut bytes, 0).ok()?;
+    if bytes.last() == Some(&0) { bytes.pop(); }
+    crate::typing::KeyboardLayout::from_keymap(&bytes, crate::LayoutState::default())
 }
 
 const NO_CAPTURE: &str = "Can't move the pointer to another computer right now: input capture is not ready.";
@@ -1240,15 +1297,29 @@ async fn run_inject(
                             }
                             let sending = timeout("injecting text", keyboard.as_mut().expect("keyboard session opened").send(portal, message));
                             tokio::pin!(sending);
+                            // A release or the visit's end while a symbol is
+                            // being sent waits its turn, briefly: a portal that
+                            // answers lets it through in order; one that hangs
+                            // is ended (with the session) so nothing stays held.
+                            let mut interrupt: Option<(tokio::time::Instant, &str)> = None;
                             loop {
+                                let hung = async {
+                                    match interrupt {
+                                        Some((at, _)) => tokio::time::sleep_until(at).await,
+                                        None => std::future::pending().await,
+                                    }
+                                };
                                 tokio::select! {
                                     sent = &mut sending => { sent?; break; }
+                                    () = hung => bail!("{}", interrupt.map_or("", |(_, why)| why)),
                                     incoming = rx.recv() => {
                                         let Some(incoming) = incoming else { bail!("input disconnected during text injection"); };
-                                        if matches!(incoming, Inject::Controlled(false)) { bail!("visit ended during text injection"); }
-                                        if let Inject::Key { code, down: false } = incoming
-                                            && inj.held.keys.contains(&code)
-                                        { bail!("physical key released during text injection"); }
+                                        let why = match incoming {
+                                            Inject::Controlled(false) => Some("visit ended during text injection"),
+                                            Inject::Key { code, down: false } if inj.held.keys.contains(&code) => Some("physical key released during text injection"),
+                                            _ => None,
+                                        };
+                                        if let Some(why) = why && interrupt.is_none() { interrupt = Some((tokio::time::Instant::now() + RELEASE_GRACE, why)); }
                                         if queued.len() >= 256 { bail!("input backlog during text injection"); }
                                         queued.push_back(incoming);
                                     }

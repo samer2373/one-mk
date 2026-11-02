@@ -1,11 +1,12 @@
-use anyhow::{Result, bail};
-use clap::{Args, Subcommand};
-use one_mk_net::{Fingerprint, TrustStore};
+use anyhow::Result;
+use one_mk_net::Fingerprint;
 use one_mk_proto::wallpaper::{Kind, Message};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[cfg(feature = "wallpaper-m1-lab")]
+#[allow(dead_code)]
 #[path = "wallpaper_extension.rs"]
 mod extension;
 
@@ -168,7 +169,8 @@ impl Runtime {
     }
 }
 
-#[derive(Args)]
+#[cfg(feature = "wallpaper-m1-lab")]
+#[derive(clap::Args)]
 pub struct WallpaperArgs {
     /// Print machine-readable JSON.
     #[arg(long, global = true)]
@@ -177,7 +179,8 @@ pub struct WallpaperArgs {
     cmd: WallpaperCommand,
 }
 
-#[derive(Subcommand)]
+#[cfg(feature = "wallpaper-m1-lab")]
+#[derive(clap::Subcommand)]
 enum WallpaperCommand {
     /// Manage the optional GNOME extension (static scaffolding, not playback).
     Extension { #[command(subcommand)] cmd: extension::Command },
@@ -200,7 +203,8 @@ enum WallpaperCommand {
     },
 }
 
-#[derive(Subcommand)]
+#[cfg(feature = "wallpaper-m1-lab")]
+#[derive(clap::Subcommand)]
 enum ConsentCommand {
     /// Allow a directly paired computer to coordinate this receiver.
     Grant {
@@ -233,6 +237,8 @@ pub fn forget(dir: &Path, fingerprint: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "wallpaper-m1-lab")]
+#[allow(dead_code)]
 pub async fn command(dir: &Path, args: WallpaperArgs) -> Result<()> {
     let result = execute(dir,&args.cmd).await;
     match result {
@@ -249,7 +255,9 @@ pub async fn command(dir: &Path, args: WallpaperArgs) -> Result<()> {
     }
 }
 
+#[cfg(feature = "wallpaper-m1-lab")]
 async fn execute(dir: &Path, command: &WallpaperCommand) -> Result<serde_json::Value> {
+    use one_mk_net::TrustStore;
     use crate::settings::Settings;
     if let WallpaperCommand::Extension { cmd } = command { return extension::command(cmd).await; }
     let mut settings = Settings::load(dir)?;
@@ -302,9 +310,10 @@ async fn execute(dir: &Path, command: &WallpaperCommand) -> Result<serde_json::V
         "message": summary(&settings.wallpaper),"daemon": runtime}))
 }
 
+#[cfg(feature = "wallpaper-m1-lab")]
 async fn apply(dir: &Path) -> Result<()> {
     if let Some(reply) = crate::control::request(dir,crate::control::Request::Settings).await? && reply != "ok\n" {
-        bail!("Wallpaper policy saved but the daemon did not apply it: {}. Stop this daemon before continuing.",reply.trim());
+        anyhow::bail!("Wallpaper policy saved but the daemon did not apply it: {}. Stop this daemon before continuing.",reply.trim());
     }
     Ok(())
 }

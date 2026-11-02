@@ -56,7 +56,7 @@ impl Showing {
 }
 
 pub enum Event {
-    UpdateAvailable(Option<String>),
+    UpdateStatus(one_mk_ctl::update_logic::UpdateStatus),
     UpdateOutput(String),
     /// `None`: one-mk is not running. Boxed: a status is large, and every
     /// other event would otherwise be as large too.
@@ -95,6 +95,7 @@ pub struct HistoryItem {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Job {
     Update,
+    UpdateSettings,
     Start,
     Layout { id: String, name: String, side: one_mk_proto::Side },
     Swap { id: String, name: String, swap: String },
@@ -122,7 +123,6 @@ pub enum Job {
     /// A setting changed with `one-mk <args>`; `what` names it in a sentence.
     Set { what: String, args: Vec<String> },
     Doctor,
-    EditSettings,
     /// Input tuning changed with `one-mk keymap|pointer|scroll|buttons`;
     /// `what` names it, `area` is where its error shows, `n` tells two
     /// changes apart.
@@ -161,6 +161,18 @@ pub struct Link {
 }
 
 impl Link {
+    pub fn wallpaper(&self, command: one_mk_wallpaper::Command) {
+        self.job(Job::Set { what: "wallpaper".into(), args: Vec::new() }, move |link| {
+            let json = serde_json::to_string(&command)?;
+            let response = client::request(&link.dir, Request::LiveWallpaper(json), Duration::from_secs(660))?
+                .ok_or_else(|| anyhow::anyhow!("Start oneMK first"))?;
+            anyhow::ensure!(!response.starts_with("error "), "{}", response.trim_start_matches("error ").trim());
+            Ok(())
+        });
+    }
+    pub fn pair_with(&self, method: crate::pairing::Method, port: u16) -> std::io::Result<crate::pairing::Pairing> {
+        crate::pairing::Pairing::with_method(&self.daemon, &self.home_args(), self.ctx.clone(), method, port)
+    }
     pub fn history_reveal(&self, id: u64, epoch: u64) {
         let link = self.clone();
         std::thread::spawn(move || {
@@ -181,8 +193,8 @@ impl Link {
         std::thread::spawn(move || {
             let read = || -> Result<Vec<HistoryItem>, String> {
                 let response = client::request(&link.dir, Request::ClipHistory { action: client::HistoryAction::List, json: true }, Duration::from_secs(5))
-                    .map_err(|_| "Could not read history. Try Refresh when one·mk is running.".to_owned())?
-                    .ok_or_else(|| "Start one·mk to see clipboard history.".to_owned())?;
+                    .map_err(|_| "Could not read history. Try Refresh when oneMK is running.".to_owned())?
+                    .ok_or_else(|| "Start oneMK to see clipboard history.".to_owned())?;
                 let body = response.strip_prefix("ok\n").ok_or_else(|| response.trim_start_matches("error ").trim().to_owned())?;
                 parse_history(body)
             };
@@ -209,6 +221,10 @@ impl Link {
         Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default(), showing: Showing::new() })
     }
 
+    /// The settings folder a login entry for this window names: `None`
+    /// for the usual one.
+    fn login_home(&self) -> Option<PathBuf> { self.custom_home.then(|| install::absolute(&self.dir)) }
+
     pub fn home_args(&self) -> Vec<String> {
         if self.custom_home { vec!["--home".into(), install::absolute(&self.dir).display().to_string()] } else { vec![] }
     }
@@ -225,7 +241,18 @@ impl Link {
         if let Some(path) = std::env::var_os("ONE_MK_APP_STATUS") {
             // Development aid: a status in its wire format, for screenshots
             // of states that are hard to set up (long names, many computers).
-            return Ok(std::fs::read_to_string(path).ok().and_then(|t| Status::decode(&t)));
+            let mut status = std::fs::read_to_string(path).ok().and_then(|text| Status::decode(&text));
+            if let Some(status) = &mut status && let Some(poster) = std::env::var_os("ONE_MK_APP_WALLPAPER") {
+                let canvas = one_mk_ctl::wallpaper::canvas(status);
+                status.wallpaper = Some(one_mk_wallpaper::Status {
+                    plan: Some(one_mk_wallpaper::Plan { hash: "a".repeat(64), title: "Across the horizon.mp4".into(),
+                        media: one_mk_wallpaper::Media { width: 3840, height: 1080, duration_ms: 10000, frame_rate: 30 }, canvas,
+                        start_ms: 1, fit: Default::default(), computers: std::iter::once(status.id.clone()).chain(status.peers.iter().map(|peer| peer.id.clone())).collect(), pause_on_battery: true, paused: false, picture: false, asset_hash: None }),
+                    available: true, poster: Some(poster.into()), message: "Playing on 3 monitors on 2 computers".into(), computers: Default::default(),
+                });
+                if let Some(wallpaper) = &mut status.wallpaper && let Some(plan) = &wallpaper.plan { wallpaper.message = plan.playing_message(); }
+            }
+            return Ok(status);
         }
         match client::request(&self.dir, Request::Status, Duration::from_millis(1500)) {
             Ok(text) => Ok(text.and_then(|t| Status::decode(&t))),
@@ -239,7 +266,7 @@ impl Link {
     pub fn watch(&self) {
         let link = self.clone();
         std::thread::spawn(move || {
-            link.send(Event::Autostart(install::is_installed()));
+            link.send(Event::Autostart(install::is_installed_for(link.login_home().as_deref())));
             link.show_tray();
             // What changed apart from the round-trip times, which change at
             // every look: those go as samples, only while a graph shows.
@@ -248,8 +275,13 @@ impl Link {
             let mut gone = 0;
             let mut stamp = None;
             let opened = std::time::SystemTime::now();
+            let mut update_checked = None::<Instant>;
             loop {
-                // The tray's "Quit one·mk" writes this file: the window goes too.
+                if update_checked.is_none_or(|last| last.elapsed() >= Duration::from_secs(24 * 60 * 60)) {
+                    update_checked = Some(Instant::now());
+                    link.check_updates();
+                }
+                // The tray's "Quit oneMK" writes this file: the window goes too.
                 let quit = std::fs::metadata(link.dir.join(client::QUIT_FILE)).and_then(|m| m.modified());
                 if quit.is_ok_and(|t| t > opened) {
                     link.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -260,7 +292,10 @@ impl Link {
                 if stamp != Some(now) {
                     stamp = Some(now);
                     link.send(Event::Prefs(Box::new(link.prefs())));
-                    link.send(Event::UpdateAvailable(one_mk_ctl::update_logic::cached_version(&link.dir, env!("CARGO_PKG_VERSION"))));
+                    // Whether an update waits comes with the update status,
+                    // measured against the service's version, not this
+                    // window's (a portable update replaces the service).
+                    link.update_status();
                 }
                 let Ok(now) = link.status() else {
                     std::thread::sleep(POLL);
@@ -361,7 +396,7 @@ impl Link {
     fn login_launch(&self) -> anyhow::Result<Launch> {
         let exe = install::program_path().ok().filter(|p| std::env::var_os("APPIMAGE").is_some() && p.is_file()).unwrap_or_else(|| self.daemon.clone());
         if !exe.is_absolute() {
-            anyhow::bail!("one-mk isn't next to this app. Run `one-mk install` instead");
+            anyhow::bail!("The sharing service could not be found next to this app. Try reopening oneMK.");
         }
         Ok(Launch {
             tray: install::sibling(&exe, "one-mk-tray"),
@@ -385,18 +420,123 @@ impl Link {
         let link = self.clone();
         std::thread::spawn(move || {
             if let Some(report) = one_mk_ctl::setup::run(&link.dir, &link) {
-                link.send(Event::Autostart(install::is_installed()));
+                link.send(Event::Autostart(install::is_installed_for(link.login_home().as_deref())));
                 link.send(Event::Setup(report));
             }
         });
     }
 
     pub fn update(&self) {
-        self.job(Job::Update, |link| {
-            let output = link.one_mk(&["update"])?;
-            link.send(Event::UpdateOutput(output));
-            Ok(())
+        self.install_update(None);
+    }
+
+    pub fn move_to_applications(&self) {
+        self.install_update(Some("--move-to-applications"));
+    }
+
+    pub fn rollback_update(&self) {
+        self.install_update(Some("--rollback"));
+    }
+
+    fn install_update(&self, action: Option<&'static str>) {
+        self.job(Job::Update, move |link| {
+            let result = link.stream_update(action);
+            link.update_status();
+            result
         });
+    }
+
+    fn stream_update(&self, action: Option<&str>) -> anyhow::Result<()> {
+        use std::io::BufRead;
+        let mut command = Command::new(&self.daemon);
+        command.arg("update");
+        if let Some(action) = action { command.arg(action); }
+        command.args(self.home_args()).stdin(Stdio::null()).stdout(Stdio::piped());
+        let errors = self.dir.join("update-error.log");
+        let error_file = std::fs::File::create(&errors)?;
+        command.stderr(Stdio::from(error_file));
+        let mut child = proc::hide_window(&mut command).spawn()?;
+        let mut restarting = false;
+        let mut read_error = None;
+        if let Some(output) = child.stdout.take() {
+            for line in std::io::BufReader::new(output).lines() {
+                match line {
+                    Ok(line) => {
+                        restarting |= line.contains("Restarting…");
+                        self.send(Event::UpdateOutput(line));
+                    }
+                    Err(error) => { read_error = Some(error); break; }
+                }
+            }
+        }
+        let status = child.wait()?;
+        if let Some(error) = read_error { return Err(error.into()); }
+        if !status.success() {
+            let error = std::fs::read_to_string(&errors).unwrap_or_default();
+            anyhow::bail!("{}", if error.trim().is_empty() { "Couldn't finish the update. Choose Download instead" } else { error.trim().trim_start_matches("one-mk: ") });
+        }
+        if restarting { self.restart_updated(action == Some("--move-to-applications"))?; }
+        Ok(())
+    }
+
+    fn restart_updated(&self, moved: bool) -> anyhow::Result<()> {
+        let _ = self.one_mk(&["stop"])?;
+        let mut daemon = self.daemon.clone();
+        let mut window = std::env::current_exe()?;
+        if moved {
+            daemon = PathBuf::from("/Applications/one-mk.app/Contents/MacOS/one-mk");
+            window = PathBuf::from("/Applications/one-mk.app/Contents/MacOS/one-mk-app");
+        }
+        let image = std::env::var_os("APPIMAGE").map(PathBuf::from)
+            .filter(|_| std::env::var_os("APPDIR").is_some_and(|dir| window.starts_with(dir)));
+        let mut args = vec!["run".to_owned()];
+        args.extend(self.home_args());
+        proc::spawn_detached(image.as_ref().unwrap_or(&daemon), &args, Some(&self.dir.join("daemon.log")))?;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !client::is_running(&self.dir) {
+            anyhow::ensure!(Instant::now() < deadline, "The update is installed, but sharing couldn't restart. Open oneMK again");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let mut args = Vec::new();
+        if image.is_some() { args.push("app".to_owned()); }
+        args.extend(self.home_args());
+        proc::spawn_detached(image.as_ref().unwrap_or(&window), &args, None)?;
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        Ok(())
+    }
+
+    pub fn acknowledge_app_start(&self) {
+        let link = self.clone();
+        std::thread::spawn(move || { let _ = link.one_mk(&["update", "--started-version", env!("CARGO_PKG_VERSION")]); });
+    }
+
+    pub fn update_status(&self) {
+        match self.one_mk(&["update", "--status-json"]).and_then(|output| Ok(serde_json::from_str(&output)?)) {
+            Ok(status) => self.send(Event::UpdateStatus(status)),
+            Err(_) => self.send(Event::UpdateOutput("Couldn't read update preferences. Choose Download instead".into())),
+        }
+    }
+
+    pub fn check_updates(&self) {
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ONE_MK_APP_STATUS").is_some() || std::env::var_os("ONE_MK_APP_NO_SETUP").is_some() { return; }
+        let link = self.clone();
+        std::thread::spawn(move || {
+            let _ = link.one_mk(&["update", "--startup-check"]);
+            link.update_status();
+        });
+    }
+
+    pub fn update_preference(&self, automatic: bool, enabled: bool) {
+        self.job(Job::UpdateSettings, move |link| {
+            let result = link.one_mk(&["update", if automatic { "--install-automatically" } else { "--check-on-start" }, if enabled { "on" } else { "off" }]);
+            link.update_status();
+            result.map(drop)
+        });
+    }
+
+    pub fn download_update(&self) {
+        self.ctx.open_url(egui::OpenUrl::new_tab("https://github.com/samer2373/one-mk/releases/latest"));
     }
 
     /// Moves a peer to `side`: with an offset, to that exact place; without,
@@ -457,8 +597,11 @@ impl Link {
     /// Changes a setting with `one-mk <args>`; `what` names it for an error.
     pub fn set(&self, what: &str, args: &[&str]) {
         let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
-        let job = Job::Set { what: what.into(), args: args.clone() };
-        self.job(job, move |l| l.one_mk(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(drop));
+        self.setting(what, args);
+    }
+
+    pub fn setting(&self, what: &str, args: Vec<String>) {
+        self.tune(Job::Set { what: what.into(), args: args.clone() }, vec![args], None);
     }
 
     /// Changes input tuning: `cmds` are `one-mk` commands, run in order
@@ -526,7 +669,7 @@ impl Link {
     fn run_keymap_check(&self) -> Result<Vec<String>, String> {
         let mut cmd = Command::new(&self.daemon);
         cmd.args(["keymap", "check"]).args(self.home_args()).stdin(Stdio::null());
-        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("one-mk didn't start: {e}"))?;
+        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("oneMK's service didn't start: {e}"))?;
         let text = String::from_utf8_lossy(&out.stdout);
         if out.status.success() {
             return Ok(vec![]);
@@ -549,11 +692,11 @@ impl Link {
         }
         let mut cmd = Command::new(&self.daemon);
         cmd.args(["input-devices", "--json"]).args(self.home_args()).stdin(Stdio::null());
-        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("one-mk didn't start: {e}"))?;
+        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("oneMK's service didn't start: {e}"))?;
         view::parse_input_devices(&String::from_utf8_lossy(&out.stdout)).ok_or_else(|| {
             let err = String::from_utf8_lossy(&out.stderr);
             let err = err.trim().trim_start_matches("one-mk: ");
-            if err.is_empty() { "one-mk gave no list".to_owned() } else { err.to_owned() }
+            if err.is_empty() { "oneMK gave no list".to_owned() } else { err.to_owned() }
         })
     }
 
@@ -577,44 +720,19 @@ impl Link {
         let mut cmd = Command::new(&self.daemon);
         cmd.args(["doctor", "--json"]).args(self.home_args()).stdin(Stdio::null());
         // It says what it found on stdout, also when something failed.
-        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("one-mk didn't start: {e}"))?;
+        let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("oneMK's service didn't start: {e}"))?;
         let text = String::from_utf8_lossy(&out.stdout);
         view::parse_doctor(&text).ok_or_else(|| {
             let err = String::from_utf8_lossy(&out.stderr);
             let err = err.trim().trim_start_matches("one-mk: ");
-            if err.is_empty() { "one-mk doctor gave no report".to_owned() } else { err.to_owned() }
+            if err.is_empty() { "The connection check gave no report. Try again.".to_owned() } else { view::window_issue(err) }
         })
-    }
-
-    /// Opens `settings.toml` in the system's editor (made first, private,
-    /// if there is none yet).
-    pub fn edit_settings(&self) {
-        self.job(Job::EditSettings, |l| {
-            let path = l.dir.join("settings.toml");
-            if !path.exists() {
-                std::fs::create_dir_all(&l.dir)?;
-                let mut o = std::fs::OpenOptions::new();
-                o.write(true).create_new(true);
-                #[cfg(unix)]
-                std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-                drop(o.open(&path));
-            }
-            let (opener, args): (&str, Vec<String>) = if cfg!(target_os = "macos") {
-                ("open", vec!["-t".into(), path.display().to_string()])
-            } else if cfg!(windows) {
-                ("notepad", vec![path.display().to_string()])
-            } else {
-                ("xdg-open", vec![path.display().to_string()])
-            };
-            proc::spawn_detached(std::path::Path::new(opener), &args, None)
-                .map_err(|e| anyhow::anyhow!("{opener} didn't start ({e}). The file is {}", path.display()))
-        });
     }
 
     /// One request to the running daemon; its error if it refused.
     fn ask(&self, req: Request) -> anyhow::Result<()> {
         let timeout = req.reply_timeout();
-        let Some(reply) = client::request(&self.dir, req, timeout)? else { anyhow::bail!("one-mk is not running") };
+        let Some(reply) = client::request(&self.dir, req, timeout)? else { anyhow::bail!("oneMK is not running") };
         let reply = reply.trim();
         match reply.strip_prefix("error") {
             Some(e) => anyhow::bail!("{}", e.trim_start_matches([' ', ':'])),
@@ -644,7 +762,7 @@ impl Link {
     pub fn stop(&self) {
         self.job(Job::Stop, |l| match client::request(&l.dir, Request::Stop, Duration::from_secs(5))? {
             // One started before an update answers "unknown request".
-            Some(r) if !r.starts_with("ok") => anyhow::bail!("this one·mk is older than the app"),
+            Some(r) if !r.starts_with("ok") => anyhow::bail!("this oneMK is older than the app"),
             _ => Ok(()),
         });
     }
@@ -661,7 +779,7 @@ impl Link {
             } else {
                 install::uninstall()
             };
-            l.send(Event::Autostart(install::is_installed()));
+            l.send(Event::Autostart(install::is_installed_for(l.login_home().as_deref())));
             done.map(drop)
         });
     }
@@ -741,7 +859,7 @@ fn parse_history(body: &str) -> Result<Vec<HistoryItem>, String> {
         timestamp: u64,
         origin: String,
     }
-    let bad = || "Could not read history. Update one·mk and try Refresh.".to_owned();
+    let bad = || "Could not read history. Update oneMK and try Refresh.".to_owned();
     if body.len() > 1000 * (2 * 80 * 4 + 128) { return Err(bad()); }
     let entries: Vec<Metadata> = serde_json::from_str(body).map_err(|_| bad())?;
     if entries.len() > 1000 { return Err(bad()); }
@@ -772,6 +890,9 @@ pub fn parse_bench(out: &str, peer: &str) -> Option<Latency> {
 }
 
 impl one_mk_ctl::setup::Host for Link {
+    /// First-run setup only adds a login entry where there is none: one
+    /// for another settings folder (the usual one, seen from a test copy)
+    /// is left alone rather than replaced unasked.
     fn login_installed(&self) -> bool {
         install::is_installed()
     }

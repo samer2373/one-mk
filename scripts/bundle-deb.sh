@@ -12,13 +12,13 @@ trap 'rm -rf "$tmp"' EXIT
 
 root="$tmp/pkg"
 install -d "$root/DEBIAN" "$root/usr/bin" "$root/usr/share/applications" "$root/usr/share/icons/hicolor/256x256/apps"
-install -m 755 "$dir/one-mk" "$dir/one-mk-tray" "$dir/one-mk-app" "$root/usr/bin/"
+install -m 755 "$dir/one-mk" "$dir/one-mk-tray" "$dir/one-mk-app" "$dir/one-mk-wallpaper" "$root/usr/bin/"
 install -m 644 docs/brand/app-icon/windows-linux/ico-png/onemk-256.png "$root/usr/share/icons/hicolor/256x256/apps/one-mk.png"
 
 cat > "$root/usr/share/applications/one-mk.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
-Name=one·mk
+Name=oneMK
 Comment=Share one mouse and keyboard across your computers
 Exec=one-mk-app
 Icon=one-mk

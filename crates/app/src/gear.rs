@@ -288,13 +288,15 @@ const DESK_LIT: Color32 = Color32::from_rgb(0x3B, 0x30, 0x27);
 pub const SIGNAL: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
 
 /// A legend to print on a key: where, how big, which colour, and whether
-/// it is the key's new job (printed on its front, in amber).
+/// it is the key's new job (printed on its front, in Volt).
 struct Legend {
     at: Pos2,
     size: f32,
     text: String,
     to: bool,
     modifier: bool,
+    /// The widest it may be drawn: the cap's own width.
+    max_w: f32,
 }
 
 /// A built keyboard: the lit mesh, each key's top on screen (for clicks
@@ -328,6 +330,7 @@ impl Keyboard {
         let lit = Lighting { eye: cam.eye };
         let mut m = Mesh::default();
         desk(&mut m, &cam, p3(0.0, -16.0, 0.0), w * 0.9, d * 1.6);
+        fade_to_edges(&mut m, 0, rect, 48.0);
         let (hw, hd) = (w / 2.0 + margin, d / 2.0 + margin);
         let shadow = rring(0.0, 6.0, hw + 6.0, hd + 6.0, 14.0, -15.9);
         soft_blob(&mut m, &cam, &shadow, p3(0.0, -15.9, 6.0), 16.0, 150);
@@ -359,11 +362,13 @@ impl Keyboard {
             let px = (tr.x - tl.x).abs().max(1.0);
             let size = (px / k.w.max(1.0) * 0.25).clamp(8.0, 14.0);
             let at = cam.pt(p3(cx - k.w * U / 2.0 + 4.2, y_top, cz - k.h * U / 2.0 + 4.0));
-            legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier });
+            legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier, max_w: f32::INFINITY });
             if let Some(to) = &k.to {
-                // On the cap's front, as side legends are on real keycaps.
-                let at = cam.pt(p3(cx, 1.0 + (y_top - 1.0) * 0.42, cz + k.h * U / 2.0 - 1.1));
-                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier });
+                // On the cap's top, low and centred, under its own legend:
+                // from this camera the front face is too thin to hold text
+                // (drawn there, it fell onto the next row's key).
+                let at = cam.pt(p3(cx, y_top, cz + k.h * U * 0.2));
+                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier, max_w: px * 0.88 });
             }
         }
         keys.into_mesh(&mut m);
@@ -372,7 +377,7 @@ impl Keyboard {
 
     /// Draws the kept mesh, then what changes from frame to frame: the
     /// keys held (darker, as if pressed), the hovered key, the chosen one
-    /// in amber, and the legends.
+    /// in Volt, and the legends.
     pub fn paint(&self, p: &Painter, held: &[usize], hovered: Option<usize>, chosen: Option<usize>, font: &dyn Fn(f32, bool) -> FontId) {
         p.add(Shape::Mesh(self.mesh.clone()));
         let fill = |i: usize, col: Color32| {
@@ -388,7 +393,11 @@ impl Keyboard {
         }
         for l in &self.legends {
             let col = if l.to { SIGNAL } else if l.modifier { Color32::from_rgb(0xD9, 0xD3, 0xC8) } else { Color32::from_rgb(0xC6, 0xCB, 0xD3) };
-            p.text(l.at, if l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, &l.text, font(l.size, l.to), col);
+            // A long target ("Esc/Ctrl") on a narrow cap gets smaller rather
+            // than spilling onto the next key.
+            let mut size = l.size;
+            while size > 7.0 && p.layout_no_wrap(l.text.clone(), font(size, l.to), col).size().x > l.max_w { size -= 0.5; }
+            p.text(l.at, if l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, &l.text, font(size, l.to), col);
         }
         if let Some(t) = chosen.and_then(|i| self.tops.get(i)).filter(|t| t.len() > 2) {
             let mut ring = t.clone();
@@ -483,6 +492,16 @@ fn desk(m: &mut Mesh, cam: &Cam, c: P3, rx: f32, rz: f32) {
             m.add_triangle(base + k, base + k + 1, base + k + w + 1);
             m.add_triangle(base + k, base + k + w + 1, base + k + w);
         }
+    }
+}
+
+/// The desk is drawn clipped to `rect`: fade it out over `feather` points
+/// before each edge, so it ends softly instead of in a hard box.
+fn fade_to_edges(m: &mut Mesh, from: usize, rect: Rect, feather: f32) {
+    for v in &mut m.vertices[from..] {
+        let d = (v.pos.x - rect.left()).min(rect.right() - v.pos.x).min(v.pos.y - rect.top()).min(rect.bottom() - v.pos.y);
+        let k = (d / feather).clamp(0.0, 1.0);
+        v.color = v.color.gamma_multiply(k * k * (3.0 - 2.0 * k));
     }
 }
 
@@ -597,7 +616,7 @@ impl ModelHit {
 impl ModelView {
     /// `m` on the desk, filling `rect` and framed in `room`, turned by
     /// `yaw` and seen from `cam_yaw`/`pitch`; the part named `chosen` is
-    /// tinted amber. The last one when nothing changed.
+    /// tinted Volt. The last one when nothing changed.
     #[allow(clippy::too_many_arguments)]
     pub fn get(slot: &mut Option<ModelView>, m: &Model, rect: Rect, room: Rect, yaw: f32, cam_yaw: f32, pitch: f32, chosen: Option<&str>) {
         let key = (rect, room, chosen.map(str::to_owned), [yaw.to_bits(), cam_yaw.to_bits(), pitch.to_bits()]);
@@ -616,6 +635,7 @@ impl ModelView {
         let lit = Lighting { eye: cam.eye };
         let mut mesh = Mesh::default();
         desk(&mut mesh, &cam, p3(mid.x, 0.0, mid.z), (hi.x - lo.x) * 1.6, (hi.z - lo.z) * 1.0);
+        fade_to_edges(&mut mesh, 0, room, 48.0);
         let foot: Vec<P3> = (0..40)
             .map(|i| {
                 let a = i as f32 / 40.0 * TAU;

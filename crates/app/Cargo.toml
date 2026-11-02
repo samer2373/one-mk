@@ -16,3 +16,12 @@ egui = "0.37.0"
 directories = "6.0.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0"
+one-mk-wallpaper = { path = "../wallpaper-player" }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+rfd = { version = "0.15.4", default-features = false, features = ["xdg-portal", "async-std"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The see-through window (chrome.rs): two messages to the window and one to
+# the shared workspace.
+objc2 = "0.6.5"
+raw-window-handle = "0.6"
