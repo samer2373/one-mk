@@ -138,9 +138,7 @@ def message_segments(scale, ink, ink2, signal, pt=15):
     semi, reg = "Geist-SemiBold.ttf", "Geist-Regular.ttf"
     return [
         ("t", "Drag ", reg, (px, ink2)),
-        ("t", "one", semi, (px, ink)),
-        ("dot", px, signal, None),
-        ("t", "mk", semi, (px, ink)),
+        ("t", "oneMK", semi, (px, ink)),
         ("t", " to ", reg, (px, ink2)),
         ("t", "Applications", semi, (px, ink)),
         ("t", ", then open it. Setup takes a minute.", reg, (px, ink2)),
