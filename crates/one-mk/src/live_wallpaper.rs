@@ -2,7 +2,9 @@ use anyhow::{Context, Result, bail, ensure};
 use one_mk_ctl::status::Status;
 use one_mk_net::{ControlWriter, Fingerprint, Node};
 use one_mk_proto::{Control, StreamKind};
-use one_mk_wallpaper::{Command, Media, Plan, PlayerConfig, Wire, cache_path, clock_offset, now_ms, prune_cache};
+use one_mk_wallpaper::{Command, Media, Plan, Playback, PlayerConfig, Wire, cache_path, clock_offset, now_ms};
+#[cfg(test)]
+use one_mk_wallpaper::prune_cache;
 use ring::digest::{Context as Digest, SHA256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -18,7 +20,11 @@ pub struct Peer { pub id: String, pub name: String, pub fingerprint: Fingerprint
 struct State {
     status: one_mk_wallpaper::Status,
     player: Option<Child>,
+    retiring: Vec<Child>,
+    report_to: Option<ControlWriter>,
+    clock_wake: Arc<tokio::sync::Notify>,
     generation: u64,
+    launch: u64,
     computer: String,
     locked: bool,
     asleep: bool,
@@ -37,12 +43,18 @@ struct State {
 }
 
 impl State {
-    fn stop(&mut self) {
-        if let Some(mut child) = self.player.take() {
+    fn retire(&mut self) {
+        for mut child in self.retiring.drain(..) {
             if let Some(mut input) = child.stdin.take() { let _ = writeln!(input, "quit"); }
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+    fn stop(&mut self) {
+        self.launch += 1;
+        if let Some(child) = self.player.take() { self.retiring.push(child); }
+        self.retire();
+        self.clock_wake.notify_one();
     }
 }
 impl Drop for State { fn drop(&mut self) { if let Some(worker) = self.worker.take() { worker.abort(); } self.stop(); } }
@@ -99,14 +111,82 @@ fn import(dir: &Path, path: &Path) -> Result<(String, PathBuf)> {
 }
 
 async fn inspect(dir: &Path, hash: &str) -> Result<Media> {
+    inspect_file(&cache_path(&cache(dir), hash)?, Some(&cache(dir).join(format!("{hash}.png")))).await
+}
+
+async fn inspect_file(path: &Path, poster: Option<&Path>) -> Result<Media> {
     let mut probe = tokio::process::Command::new(helper()?);
-    probe.arg("--probe").arg(cache_path(&cache(dir), hash)?).arg(cache(dir).join(format!("{hash}.png"))).kill_on_drop(true);
+    probe.arg("--probe").arg(path).kill_on_drop(true);
+    if let Some(poster) = poster { probe.arg(poster); }
     let output = tokio::time::timeout(Duration::from_secs(40), probe.output()).await.context("The system took too long to read this video")??;
     ensure!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr).trim());
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+struct Prepared(PathBuf);
+impl Drop for Prepared { fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); } }
+
+fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
+    let key = ring::digest::digest(&SHA256, &serde_json::to_vec(&(&plan.hash, &plan.canvas, plan.fit, computer))?);
+    let key: String = key.as_ref().iter().map(|byte| format!("{byte:02x}")).collect();
+    let index = cache(dir).join(format!("{}-{key}.slice", plan.hash));
+    if let Ok(hash) = std::fs::read_to_string(&index) && let Ok(path) = cache_path(&cache(dir), &hash) && digest(&path).ok().as_ref() == Some(&hash) { return Ok(hash); }
+    let temporary = cache(dir).join(format!("picture-{}.part", crate::link::random_u64()));
+    let result = (|| -> Result<String> {
+        one_mk_wallpaper::picture::prepare(&cache_path(&cache(dir), &plan.hash)?, plan, computer, &temporary)?;
+        Ok(import(dir, &temporary)?.0)
+    })();
+    let _ = std::fs::remove_file(temporary);
+    if let Ok(hash) = &result { std::fs::write(index, hash)?; }
+    result
+}
+
+fn prune_selection(dir: &Path, plan: &Plan, previous: Option<&str>) -> Result<()> {
+    let root = cache(dir);
+    let mut keep = BTreeSet::from([plan.hash.clone()]);
+    keep.extend(previous.map(str::to_owned));
+    keep.extend(plan.asset_hash.clone());
+    for entry in std::fs::read_dir(&root)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|extension| extension == "slice") {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name.starts_with(&plan.hash) || previous.is_some_and(|hash| name.starts_with(hash)) {
+                if let Ok(hash) = std::fs::read_to_string(&path) { keep.insert(hash); }
+            } else { std::fs::remove_file(path)?; }
+        }
+    }
+    one_mk_wallpaper::prune_cache_except(&root, &keep)?;
+    Ok(())
+}
+
 impl Runtime {
+    async fn prepare(&self, dir: &Path, path: &Path, canvas: &one_mk_wallpaper::Canvas, generation: u64) -> Result<Option<Prepared>> {
+        use tokio::io::AsyncBufReadExt;
+        let media = inspect_file(path, None).await?;
+        let bytes = std::fs::metadata(path)?.len();
+        ensure!(bytes <= one_mk_wallpaper::MAX_MEDIA_BYTES, "Choose a video smaller than 4 GB");
+        let Some(target) = one_mk_wallpaper::ImportTarget::for_canvas(canvas, &media, bytes) else { return Ok(None) };
+        std::fs::create_dir_all(cache(dir))?;
+        let prepared = Prepared(cache(dir).join(format!("prepared-{}.mp4", crate::link::random_u64())));
+        let log = std::fs::File::create(cache(dir).join("prepare.log"))?;
+        let mut child = tokio::process::Command::new(helper()?).arg("--prepare").arg(path).arg(&prepared.0).arg(serde_json::to_string(&target)?).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(log).kill_on_drop(true).spawn()?;
+        let mut lines = tokio::io::BufReader::new(child.stdout.take().context("The video preparation did not start")?).lines();
+        tokio::time::timeout(Duration::from_secs(600), async {
+            while let Some(line) = lines.next_line().await? {
+                if let Some(percent) = line.strip_prefix("progress ").and_then(|text| text.parse::<u32>().ok()) {
+                    let mut state = self.state.lock().unwrap();
+                    ensure!(state.generation == generation, "Wallpaper selection changed");
+                    state.status.message = format!("Preparing video… {}%", percent.min(100));
+                }
+            }
+            ensure!(child.wait().await?.success(), "The system could not prepare a smaller copy");
+            anyhow::Ok(())
+        }).await.context("The system took too long to prepare this video")??;
+        let result = inspect_file(&prepared.0, None).await?;
+        ensure!(result.width <= media.width && result.height <= media.height && result.frame_rate <= 60, "The prepared video was not the right size or speed");
+        Ok(Some(prepared))
+    }
+
     pub fn inbox(&self, dir: &Path) -> Arc<crate::transfer::Inbox> {
         self.state.lock().unwrap().inbox.get_or_insert_with(|| crate::transfer::Inbox::with_notifier(cache(dir), Arc::new(crate::transfer::Quiet))).clone()
     }
@@ -121,7 +201,10 @@ impl Runtime {
         state.previous = saved.previous;
         state.authority_off = saved.authority_off;
         state.status = saved.status;
+        state.status.computers.clear();
         if let Err(error) = Self::start(dir, &mut state) { state.status.message = error.to_string(); }
+        drop(state);
+        self.listen();
     }
 
     pub fn reconcile(&self, dir: PathBuf, status: Status, peers: Vec<Peer>, node: Node) {
@@ -153,7 +236,7 @@ impl Runtime {
         let runtime = self.clone();
         let mut state = self.state.lock().unwrap();
         let task = tokio::spawn(async move {
-            match runtime.commit(&dir, updated.clone(), status.id, None, generation) {
+            match runtime.commit(&dir, updated.clone(), status.id, None, generation).await {
                 Err(error) => tracing::warn!("Wallpaper layout: {error}"),
                 Ok(()) => for peer in peers {
                     if let Err(error) = runtime.distribute(&dir, &updated, &peer, &node, generation).await { tracing::warn!("Wallpaper copy: {error}"); }
@@ -186,18 +269,14 @@ impl Runtime {
             }
         }
         let mut status = state.status.clone();
-        if state.player.is_some() && let Some(directory) = &state.directory
-            && let Ok(message) = std::fs::read_to_string(cache(directory).join("playback.txt"))
-            && message != "Playing" {
-            status.message = message;
-        }
+        if let Some(Playback::Paused(message) | Playback::Error(message)) = status.computers.get(&state.computer) { status.message = message.clone(); }
         if let Some((name, progress)) = &state.progress {
             use std::sync::atomic::Ordering::Relaxed;
             let total = progress.total.load(Relaxed);
             let done = progress.done.load(Relaxed);
             status.message = format!("Copying to {name}… {}%", done.saturating_mul(100).checked_div(total).unwrap_or(0));
         }
-        if let Err(reason) = one_mk_wallpaper::availability() {
+        if let Err(reason) = one_mk_wallpaper::availability() && !status.plan.as_ref().is_some_and(|plan| plan.picture) && !one_mk_wallpaper::picture::available() {
             status.available = false;
             status.message = reason.into();
         } else { status.available = true; }
@@ -216,15 +295,33 @@ impl Runtime {
         let mut state = self.state.lock().unwrap();
         if let Some(locked) = locked { state.locked = locked; }
         if let Some(asleep) = asleep { state.asleep = asleep; }
-        if state.locked || state.asleep { state.stop(); }
+        if state.locked || state.asleep {
+            state.stop();
+            let computer = state.computer.clone();
+            let playback = Playback::Paused("Paused while this computer is locked or asleep".into());
+            state.status.computers.insert(computer, playback.clone());
+            if let Some(control) = &state.report_to && let Some(plan) = &state.status.plan { send(control, &Wire::Playback { hash: plan.hash.clone(), playback }); }
+        }
         else if let Err(error) = Self::start(dir, &mut state) { state.status.message = error.to_string(); }
+        drop(state);
+        self.listen();
     }
 
     fn start(dir: &Path, state: &mut State) -> Result<()> {
         state.directory = Some(dir.to_owned());
         let Some(plan) = state.status.plan.as_ref() else { return Ok(()) };
+        if plan.picture {
+            if plan.computers.contains(&state.computer) {
+                one_mk_wallpaper::picture::apply(plan, &state.computer, &cache_path(&cache(dir), plan.asset_hash.as_ref().unwrap_or(&plan.hash))?, &cache(dir).join("pictures"))?;
+                state.status.computers.insert(state.computer.clone(), Playback::Ready);
+                state.status.message = "Picture wallpaper is set".into();
+            } else { one_mk_wallpaper::picture::restore(&cache(dir).join("pictures"))?; }
+            state.retire();
+            return Ok(());
+        }
         if state.locked || state.asleep || plan.paused || !plan.computers.contains(&state.computer) {
             state.stop();
+            state.status.computers.insert(state.computer.clone(), Playback::Paused("Paused".into()));
             state.status.message = "Paused".into();
             return Ok(());
         }
@@ -235,32 +332,84 @@ impl Runtime {
         let _ = std::fs::remove_file(cache(dir).join("playback.txt"));
         std::fs::write(&config_path, serde_json::to_vec(&config)?)?;
         let log = std::fs::File::create(cache(dir).join("player.log"))?;
-        state.player = Some(std::process::Command::new(helper()?).arg(config_path).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(log).spawn()?);
+        state.launch += 1;
+        state.player = Some(std::process::Command::new(helper()?).arg(config_path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(log).spawn()?);
+        state.status.computers.insert(state.computer.clone(), Playback::Preparing);
+        state.clock_wake.notify_one();
         state.status.message = plan.playing_message();
         Ok(())
     }
 
-    fn commit(&self, dir: &Path, plan: Plan, computer: String, coordinator: Option<Fingerprint>, generation: u64) -> Result<()> {
+    async fn commit(&self, dir: &Path, plan: Plan, computer: String, coordinator: Option<Fingerprint>, generation: u64) -> Result<()> {
+        let runtime = self.clone();
+        let dir = dir.to_owned();
+        tokio::task::spawn_blocking(move || runtime.commit_sync(&dir, plan, computer, coordinator, generation)).await?
+    }
+
+    fn commit_sync(&self, dir: &Path, mut plan: Plan, computer: String, coordinator: Option<Fingerprint>, generation: u64) -> Result<()> {
         ensure!(plan.valid(), "The wallpaper layout or video is invalid");
         ensure!(serde_json::to_vec(&Wire::Plan { plan: plan.clone() })?.len() <= 12000, "This wallpaper layout has too many monitors to share");
+        if plan.picture && coordinator.is_none() && plan.computers.contains(&computer) { plan.asset_hash = Some(picture_asset(dir, &plan, &computer)?); }
         let mut state = self.state.lock().unwrap();
         ensure!(state.generation == generation, "Wallpaper selection changed");
-        state.stop();
+        if let Some(mut child) = state.player.take() {
+            if state.status.computers.get(&state.computer) == Some(&Playback::Ready) { state.retiring.push(child); }
+            else { let _ = child.kill(); let _ = child.wait(); }
+        }
+        state.launch += 1;
         state.previous = state.status.plan.as_ref().map(|old| old.hash.clone()).filter(|hash| hash != &plan.hash).or(state.previous.take());
         state.computer = computer;
         if state.coordinator != coordinator { state.offset = 0; state.best_rtt = None; state.clocks.clear(); }
         state.coordinator = coordinator;
+        if coordinator.is_none() { state.report_to = None; }
         state.authority_off = false;
         let hash = plan.hash.clone();
         state.status.plan = Some(plan);
+        let selected = state.status.plan.as_ref().unwrap().computers.clone();
+        state.status.computers.retain(|computer, _| selected.contains(computer));
         state.progress = None;
         state.status.poster = cache(dir).join(format!("{hash}.png")).exists().then(|| cache(dir).join(format!("{hash}.png")));
         let saved = Saved { status: state.status.clone(), coordinator: state.coordinator.map(|fingerprint| fingerprint.to_string()), previous: state.previous.clone(), authority_off: false };
         let temporary = cache(dir).join("selection.tmp");
         std::fs::write(&temporary, serde_json::to_vec(&saved)?)?;
         std::fs::rename(temporary, cache(dir).join("selection.json"))?;
-        prune_cache(&cache(dir), &hash, state.previous.as_deref())?;
-        Self::start(dir, &mut state)
+        prune_selection(dir, state.status.plan.as_ref().unwrap(), state.previous.as_deref())?;
+        Self::start(dir, &mut state)?;
+        drop(state);
+        self.listen();
+        Ok(())
+    }
+
+    fn listen(&self) {
+        let mut state = self.state.lock().unwrap();
+        let Some(output) = state.player.as_mut().and_then(|child| child.stdout.take()) else { return };
+        let launch = state.launch;
+        let shared = Arc::downgrade(&self.state);
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(output).lines() {
+                let Ok(line) = line else { break };
+                let Ok(playback) = serde_json::from_str::<Playback>(&line) else { continue };
+                let Some(shared) = shared.upgrade() else { return };
+                let mut state = shared.lock().unwrap();
+                if state.launch != launch { return; }
+                if playback == Playback::Ready { state.retire(); }
+                let computer = state.computer.clone();
+                state.status.computers.insert(computer, playback.clone());
+                state.clock_wake.notify_one();
+                if let Some(control) = &state.report_to && let Some(plan) = &state.status.plan { send(control, &Wire::Playback { hash: plan.hash.clone(), playback }); }
+            }
+            let Some(shared) = shared.upgrade() else { return };
+            let mut state = shared.lock().unwrap();
+            if state.launch != launch { return; }
+            if let Some(mut child) = state.player.take() { let _ = child.wait(); }
+            state.clock_wake.notify_one();
+            if matches!(state.status.computers.get(&state.computer), Some(Playback::Error(_))) { return; }
+            let playback = Playback::Error("The wallpaper player stopped. Choose Play to try again.".into());
+            let computer = state.computer.clone();
+            state.status.computers.insert(computer, playback.clone());
+            if let Some(control) = &state.report_to && let Some(plan) = &state.status.plan { send(control, &Wire::Playback { hash: plan.hash.clone(), playback }); }
+        });
     }
 
     pub fn request(&self, dir: PathBuf, status: Status, command: Command, peers: Vec<Peer>, node: Node, reply: tokio::sync::oneshot::Sender<String>) {
@@ -276,6 +425,8 @@ impl Runtime {
                 state.status.poster = None;
                 state.progress = None;
                 state.coordinator = None;
+                state.report_to = None;
+                state.status.computers.clear();
                 state.authority_off = true;
                 state.connections.clear();
             }
@@ -296,8 +447,10 @@ impl Runtime {
     }
 
     async fn execute(&self, dir: &Path, status: Status, command: Command, peers: Vec<Peer>, node: Node, generation: u64) -> Result<()> {
+        let mut preparation_notice = None;
         if command == Command::Off {
             for peer in peers { send(&peer.control, &Wire::Off); }
+            let restored = one_mk_wallpaper::picture::restore(&cache(dir).join("pictures"));
             let state = self.state.lock().unwrap();
             ensure!(state.generation == generation, "Wallpaper selection changed");
             let saved = Saved { status: state.status.clone(), coordinator: None, previous: state.previous.clone(), authority_off: true };
@@ -305,15 +458,12 @@ impl Runtime {
             let temporary = cache(dir).join("selection.tmp");
             std::fs::write(&temporary, serde_json::to_vec(&saved)?)?;
             std::fs::rename(temporary, cache(dir).join("selection.json"))?;
-            return Ok(());
+            return restored;
         }
         let mut plan = self.state.lock().unwrap().status.plan.clone();
         if let Command::Set { path } = command {
             let dir_owned = dir.to_owned();
             let title = path.file_name().context("Choose a video file")?.to_string_lossy().chars().take(64).collect::<String>();
-            self.state.lock().unwrap().status.message = "Preparing video…".into();
-            let (hash, _) = tokio::task::spawn_blocking(move || import(&dir_owned, &path)).await??;
-            let media = inspect(dir, &hash).await?;
             let mut canvas = one_mk_ctl::wallpaper::canvas(&status);
             if let Some(old) = plan.as_ref() {
                 let mut reserved = old.canvas.clone();
@@ -321,8 +471,20 @@ impl Runtime {
                 reserved.update(canvas.monitors);
                 canvas = reserved;
             }
+            self.state.lock().unwrap().status.message = "Preparing video… 0%".into();
+            let picture = one_mk_wallpaper::picture::is_picture(&path);
+            let prepared = if picture { None } else { match self.prepare(dir, &path, &canvas, generation).await {
+                Ok(prepared) => prepared,
+                Err(error) => { tracing::info!("Wallpaper preparation: {error}"); preparation_notice = Some("Could not prepare a smaller copy. Using the original video."); None }
+            } };
+            let path = prepared.as_ref().map_or(path, |prepared| prepared.0.clone());
+            let (hash, source) = tokio::task::spawn_blocking(move || import(&dir_owned, &path)).await??;
+            let media = if picture {
+                let poster = cache(dir).join(format!("{hash}.png"));
+                tokio::task::spawn_blocking(move || one_mk_wallpaper::picture::inspect(&source, &poster)).await??
+            } else { inspect(dir, &hash).await? };
             let computers = std::iter::once(status.id.clone()).chain(status.peers.iter().map(|peer| peer.id.clone())).collect();
-            plan = Some(Plan { hash, title, media, canvas, start_ms: now_ms() + 2000, fit: Default::default(), computers, pause_on_battery: true, paused: false });
+            plan = Some(Plan { hash, title, media, canvas, start_ms: now_ms() + 2000, fit: Default::default(), computers, pause_on_battery: true, paused: false, picture, asset_hash: None });
         } else {
             let plan = plan.as_mut().context("Choose a video first")?;
             match command {
@@ -338,7 +500,7 @@ impl Runtime {
             }
         }
         let plan = plan.context("Choose a video first")?;
-        self.commit(dir, plan.clone(), status.id, None, generation)?;
+        self.commit(dir, plan.clone(), status.id, None, generation).await?;
         let mut failures: Vec<_> = status.peers.iter().filter(|peer| peer.online && plan.computers.contains(&peer.id) && !peers.iter().any(|connected| connected.id == peer.id))
             .map(|peer| format!("Update oneMK on {} to play video wallpapers", peer.name)).collect();
         for peer in peers {
@@ -347,14 +509,22 @@ impl Runtime {
             if let Err(error) = self.distribute(dir, &plan, &peer, &node, generation).await { failures.push(format!("{}: {error}", peer.name)); }
         }
         ensure!(failures.is_empty(), "{}", failures.join("; "));
+        if let Some(notice) = preparation_notice { self.state.lock().unwrap().status.message = notice.into(); }
         Ok(())
     }
 
     async fn distribute(&self, dir: &Path, plan: &Plan, peer: &Peer, node: &Node, generation: u64) -> Result<()> {
         if !plan.computers.contains(&peer.id) { send(&peer.control, &Wire::Off); return Ok(()); }
+        self.state.lock().unwrap().status.computers.insert(peer.id.clone(), Playback::Preparing);
         let connection = tokio::time::timeout(Duration::from_secs(5), node.connect_pinned(peer.address, peer.fingerprint)).await??;
-        let path = cache_path(&cache(dir), &plan.hash)?;
-        let file = crate::transfer::Outgoing { rel: format!("{}.video", plan.hash), size: std::fs::metadata(&path)?.len(), path, mtime: 0 };
+        let mut delivered = plan.clone();
+        if plan.picture {
+            let (dir, plan, computer) = (dir.to_owned(), plan.clone(), peer.id.clone());
+            delivered.asset_hash = Some(tokio::task::spawn_blocking(move || picture_asset(&dir, &plan, &computer)).await??);
+        }
+        let hash = delivered.asset_hash.as_ref().unwrap_or(&plan.hash);
+        let path = cache_path(&cache(dir), hash)?;
+        let file = crate::transfer::Outgoing { rel: format!("{hash}.video"), size: std::fs::metadata(&path)?.len(), path, mtime: 0 };
         let progress = Arc::new(crate::transfer::Progress::default());
         self.state.lock().unwrap().progress = Some((peer.name.clone(), progress.clone()));
         let results = tokio::time::timeout(Duration::from_secs(600), crate::transfer::send_files_kind(&connection.conn, vec![file], progress, crate::transfer::new_batch_id(), StreamKind::WallpaperVideo)).await?;
@@ -363,12 +533,18 @@ impl Runtime {
         let mut state = self.state.lock().unwrap();
         ensure!(state.generation == generation, "Wallpaper selection changed");
         state.progress = None;
-        send(&peer.control, &Wire::Plan { plan: plan.clone() });
+        send(&peer.control, &Wire::Plan { plan: delivered });
         Ok(())
     }
 
     pub fn receive(&self, dir: PathBuf, computer: String, sender: Fingerprint, control: ControlWriter, wire: Wire) {
         match wire {
+            Wire::Playback { hash, playback } => {
+                let mut state = self.state.lock().unwrap();
+                if state.coordinator.is_none() && state.status.plan.as_ref().is_some_and(|plan| plan.hash == hash) {
+                    state.status.computers.insert(sender.short(), playback);
+                }
+            }
             Wire::Clock { sent_ms } => { let received_ms = now_ms(); send(&control, &Wire::ClockReply { sent_ms, received_ms, replied_ms: now_ms() }); }
             Wire::ClockReply { sent_ms, received_ms, replied_ms } => {
                 let mut state = self.state.lock().unwrap();
@@ -383,6 +559,8 @@ impl Runtime {
                 if state.coordinator != Some(sender) { return; }
                 if let Some(worker) = state.worker.take() { worker.abort(); }
                 state.generation += 1; state.stop(); state.status.plan = None; state.status.poster = None; state.status.message = "Wallpaper is off".into();
+                if let Err(error) = one_mk_wallpaper::picture::restore(&cache(&dir).join("pictures")) { state.status.message = error.to_string(); }
+                state.status.computers.clear();
                 state.progress = None;
                 state.authority_off = false;
                 let saved = Saved { status: state.status.clone(), coordinator: Some(sender.to_string()), previous: state.previous.clone(), authority_off: false };
@@ -391,42 +569,58 @@ impl Runtime {
             }
             Wire::Plan { plan } => {
                 if !plan.valid() { return; }
-                let generation = { let mut state = self.state.lock().unwrap(); if let Some(worker) = state.worker.take() { worker.abort(); } state.generation += 1; state.deferred = None; state.generation };
+                let generation = { let mut state = self.state.lock().unwrap(); if let Some(worker) = state.worker.take() { worker.abort(); } state.generation += 1; state.deferred = None; state.report_to = Some(control.clone()); state.generation };
                 let runtime = self.clone();
                 let mut state = self.state.lock().unwrap();
                 let task = tokio::spawn(async move {
-                    let hash = plan.hash.clone();
+                    let hash = plan.asset_hash.as_ref().unwrap_or(&plan.hash).clone();
+                    let selection_hash = plan.hash.clone();
+                    let picture = plan.picture;
                     let check_dir = dir.clone();
                     let check = tokio::task::spawn_blocking(move || -> Result<()> {
                         ensure!(digest(&cache_path(&cache(&check_dir), &hash)?)? == hash, "The received video is incomplete"); Ok(())
                     }).await;
                     let result = match check {
+                        Ok(Ok(())) if picture => runtime.commit(&dir, plan, computer, Some(sender), generation).await,
                         Ok(Ok(())) => match inspect(&dir, &plan.hash).await {
-                            Ok(_) => runtime.commit(&dir, plan, computer, Some(sender), generation),
+                            Ok(_) => runtime.commit(&dir, plan, computer, Some(sender), generation).await,
                             Err(error) => Err(error),
                         },
                         Ok(Err(error)) => Err(error), Err(error) => Err(error.into()),
                     };
                     if let Err(error) = result {
                         let mut state = runtime.state.lock().unwrap();
-                        if state.generation == generation { state.status.message = error.to_string(); }
+                        if state.generation == generation { state.status.message = error.to_string(); send(&control, &Wire::Playback { hash: selection_hash, playback: Playback::Error(error.to_string()) }); }
                         return;
                     }
+                    if picture { send(&control, &Wire::Playback { hash: selection_hash, playback: Playback::Ready }); runtime.finish_worker(generation); return; }
                     let weak = Arc::downgrade(&runtime.state);
                     drop(runtime);
                     loop {
+                        let (active, clock_wake) = {
+                            let Some(shared) = weak.upgrade() else { return };
+                            let state = shared.lock().unwrap();
+                            if state.generation != generation { return; }
+                            (state.player.is_some() && state.status.computers.get(&state.computer) == Some(&Playback::Ready), state.clock_wake.clone())
+                        };
+                        if !active { clock_wake.notified().await; continue; }
                         for _ in 0..5 {
                             let sent_ms = now_ms();
                             {
                                 let Some(shared) = weak.upgrade() else { return };
                                 let mut state = shared.lock().unwrap();
                                 if state.generation != generation { return; }
+                                if state.status.computers.get(&state.computer) != Some(&Playback::Ready) { break; }
                                 state.clocks.insert(sender, sent_ms);
                             }
                             send(&control, &Wire::Clock { sent_ms });
-                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            tokio::select! { _ = tokio::time::sleep(Duration::from_millis(250)) => {}, _ = clock_wake.notified() => { break; } }
                         }
-                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        if let Some(shared) = weak.upgrade() {
+                            let state = shared.lock().unwrap();
+                            if state.status.computers.get(&state.computer) != Some(&Playback::Ready) { continue; }
+                        }
+                        tokio::select! { _ = tokio::time::sleep(Duration::from_secs(30)) => {}, _ = clock_wake.notified() => {} }
                         let Some(shared) = weak.upgrade() else { return };
                         shared.lock().unwrap().best_rtt = None;
                     }
@@ -464,6 +658,55 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn replacement_keeps_old_player_until_ready_and_ignores_stopped_launches() {
+        let runtime = Runtime::default();
+        let previous = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let previous_pid = previous.id();
+        let current = std::process::Command::new("sh").args(["-c", "read trigger; printf '%s\\n' '{\"state\":\"ready\"}'; exec sleep 60"]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        {
+            let mut state = runtime.state.lock().unwrap();
+            state.retiring.push(previous);
+            state.player = Some(current);
+            state.launch = 1;
+            state.computer = "host".into();
+        }
+        runtime.listen();
+        assert_eq!(unsafe { libc::kill(previous_pid as i32, 0) }, 0);
+        {
+            let mut state = runtime.state.lock().unwrap();
+            state.generation += 1;
+            writeln!(state.player.as_mut().unwrap().stdin.as_mut().unwrap(), "ready").unwrap();
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while runtime.state.lock().unwrap().status.computers.get("host") != Some(&Playback::Ready) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(unsafe { libc::kill(previous_pid as i32, 0) }, -1);
+        runtime.shutdown();
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(runtime.state.lock().unwrap().status.computers.get("host"), Some(&Playback::Ready));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn decoder_error_is_not_replaced_by_generic_exit_message() {
+        let runtime = Runtime::default();
+        let child = std::process::Command::new("sh").args(["-c", "printf '%s\\n' '{\"state\":\"error\",\"message\":\"Decoder unavailable\"}'"]).stdout(Stdio::piped()).spawn().unwrap();
+        {
+            let mut state = runtime.state.lock().unwrap();
+            state.player = Some(child); state.computer = "host".into();
+        }
+        runtime.listen();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while runtime.state.lock().unwrap().player.is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(runtime.state.lock().unwrap().status.computers.get("host"), Some(&Playback::Error("Decoder unavailable".into())));
+    }
     #[test]
     fn off_intent_survives_restart_without_starting_a_player() {
         let directory = tempfile::tempdir().unwrap();

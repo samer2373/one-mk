@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+pub mod picture;
+
 pub const MAX_MEDIA_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,7 +80,32 @@ impl Canvas {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Media { pub width: u32, pub height: u32, pub duration_ms: u64 }
+pub struct Media {
+    pub width: u32, pub height: u32, pub duration_ms: u64,
+    #[serde(default = "default_frame_rate")]
+    pub frame_rate: u32,
+}
+fn default_frame_rate() -> u32 { 30 }
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct ImportTarget { pub width: u32, pub height: u32, pub bitrate: u32 }
+impl ImportTarget {
+    pub fn for_canvas(canvas: &Canvas, media: &Media, bytes: u64) -> Option<Self> {
+        if !canvas.valid() || media.width < 2 || media.height < 2 || media.duration_ms == 0 { return None; }
+        let mut computers = std::collections::BTreeMap::<&str, (Rect, f64)>::new();
+        for monitor in &canvas.monitors {
+            computers.entry(&monitor.computer).and_modify(|(bounds, scale)| { *bounds = bounds.union(monitor.rect); *scale = scale.max(monitor.scale); }).or_insert((monitor.rect, monitor.scale));
+        }
+        let width = computers.values().map(|(rect, scale)| rect.width * scale).fold(2.0, f64::max);
+        let height = computers.values().map(|(rect, scale)| rect.height * scale).fold(2.0, f64::max);
+        let scale = (width / f64::from(media.width)).min(height / f64::from(media.height)).min(1.0);
+        let width = ((f64::from(media.width) * scale) as u32 / 2 * 2).max(2);
+        let height = ((f64::from(media.height) * scale) as u32 / 2 * 2).max(2);
+        let bitrate = (f64::from(width) * f64::from(height) * f64::from(media.frame_rate.clamp(1, 60)) * 0.045).clamp(128_000.0, 100_000_000.0) as u32;
+        let source_bitrate = bytes as f64 * 8000.0 / media.duration_ms.max(1) as f64;
+        (scale < 1.0 || source_bitrate > f64::from(bitrate) * 1.5 || media.frame_rate > 60).then_some(Self { width, height, bitrate })
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Plan {
@@ -91,6 +118,10 @@ pub struct Plan {
     pub computers: Vec<String>,
     pub pause_on_battery: bool,
     pub paused: bool,
+    #[serde(default)]
+    pub picture: bool,
+    #[serde(default)]
+    pub asset_hash: Option<String>,
 }
 
 impl Plan {
@@ -101,7 +132,7 @@ impl Plan {
     }
 
     pub fn valid(&self) -> bool {
-        valid_hash(&self.hash) && self.title.len() <= 256 && self.canvas.valid()
+        valid_hash(&self.hash) && self.asset_hash.as_ref().is_none_or(|hash| valid_hash(hash)) && self.title.len() <= 256 && self.canvas.valid()
             && self.media.width > 0 && self.media.width <= 16384 && self.media.height > 0 && self.media.height <= 16384
             && (1..=7 * 24 * 3600 * 1000).contains(&self.media.duration_ms)
             && self.computers.len() <= 16 && self.start_ms > 0
@@ -114,6 +145,22 @@ pub struct Status {
     pub message: String,
     pub available: bool,
     pub poster: Option<PathBuf>,
+    #[serde(default)]
+    pub computers: std::collections::BTreeMap<String, Playback>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", content = "message", rename_all = "snake_case")]
+pub enum Playback { #[default] Preparing, Ready, Paused(String), Error(String) }
+
+impl Playback {
+    pub fn message(&self) -> &str { match self { Self::Preparing => "preparing…", Self::Ready => "playing", Self::Paused(message) | Self::Error(message) => message } }
+}
+
+pub fn event(playback: Playback) {
+    use std::io::Write;
+    let mut output = std::io::stdout().lock();
+    if let Ok(json) = serde_json::to_string(&playback) { let _ = writeln!(output, "{json}"); let _ = output.flush(); }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +181,7 @@ pub enum Wire {
     Off,
     Clock { sent_ms: i64 },
     ClockReply { sent_ms: i64, received_ms: i64, replied_ms: i64 },
+    Playback { hash: String, playback: Playback },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -168,8 +216,7 @@ pub fn correction(actual: u64, expected: u64, duration: u64) -> Correction {
     if duration == 0 { return Correction::None; }
     let length = i128::from(duration);
     let drift = (i128::from(expected) - i128::from(actual) + length / 2).rem_euclid(length) - length / 2;
-    if drift.abs() > 500 { Correction::Seek(expected) }
-    else if drift.abs() > 40 { Correction::Rate(if drift > 0 { 1.02 } else { 0.98 }) }
+    if drift.abs() > 40 { Correction::Rate(if drift > 0 { 1.02 } else { 0.98 }) }
     else { Correction::None }
 }
 
@@ -195,6 +242,7 @@ impl Holds {
 }
 
 pub fn report(config: &PlayerConfig, holds: &Holds) {
+    if !holds.playing() { event(Playback::Paused(holds.message().into())); }
     if let Some(directory) = config.path.parent() {
         let temporary = directory.join("playback.tmp");
         if std::fs::write(&temporary, holds.message()).is_ok() { let _ = std::fs::rename(temporary, directory.join("playback.txt")); }
@@ -209,11 +257,15 @@ pub fn cache_path(root: &Path, hash: &str) -> anyhow::Result<PathBuf> {
 }
 
 pub fn prune_cache(root: &Path, current: &str, previous: Option<&str>) -> std::io::Result<()> {
+    prune_cache_except(root, &std::iter::once(current.to_owned()).chain(previous.map(str::to_owned)).collect())
+}
+
+pub fn prune_cache_except(root: &Path, keep: &BTreeSet<String>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().is_some_and(|extension| extension == "video" || extension == "png")
-            && path.file_stem().and_then(|name| name.to_str()).is_some_and(|hash| valid_hash(hash) && hash != current && Some(hash) != previous)
+            && path.file_stem().and_then(|name| name.to_str()).is_some_and(|hash| valid_hash(hash) && !keep.contains(hash))
         { std::fs::remove_file(path)?; }
     }
     Ok(())
@@ -242,7 +294,7 @@ mod tests {
     #[test]
     fn spanning_mixed_density_and_offline_reservations() {
         let mut canvas = Canvas { monitors: vec![monitor("mac", -1920.0, 2.0), monitor("pc", 0.0, 1.0)] };
-        let media = Media { width: 3840, height: 1080, duration_ms: 1000 };
+        let media = Media { width: 3840, height: 1080, duration_ms: 1000, frame_rate: 30 };
         let left = canvas.slice(&canvas.monitors[0], &media, Fit::Fill).unwrap();
         let right = canvas.slice(&canvas.monitors[1], &media, Fit::Fill).unwrap();
         assert_eq!(left.x + left.width, right.x);
@@ -252,13 +304,13 @@ mod tests {
         assert_eq!(canvas.bounds(), bounds);
         assert!(!canvas.monitors[1].online);
         let plan = Plan { hash: "a".repeat(64), title: "Video".into(), media, canvas, start_ms: 1, fit: Fit::Fill,
-            computers: vec!["mac".into(), "pc".into()], pause_on_battery: true, paused: false };
+            computers: vec!["mac".into(), "pc".into()], pause_on_battery: true, paused: false, picture: false, asset_hash: None };
         assert_eq!(plan.playing_message(), "Playing on 1 monitor on 1 computer");
     }
     #[test]
     fn fit_modes_keep_one_canvas_transform() {
         let canvas = Canvas { monitors: vec![monitor("mac", 0.0, 2.0), monitor("mac", 1920.0, 1.0)] };
-        let media = Media { width: 1920, height: 1080, duration_ms: 1000 };
+        let media = Media { width: 1920, height: 1080, duration_ms: 1000, frame_rate: 30 };
         let fill = canvas.image_rect(&media, Fit::Fill).unwrap();
         let fit = canvas.image_rect(&media, Fit::Fit).unwrap();
         assert_eq!((fill.width, fill.height, fill.y), (3840.0, 2160.0, -540.0));
@@ -275,7 +327,7 @@ mod tests {
         assert_eq!(correction(1000, 1041, 10000), Correction::Rate(1.02));
         assert_eq!(correction(1000, 1499, 10000), Correction::Rate(1.02));
         assert_eq!(correction(1000, 1500, 10000), Correction::Rate(1.02));
-        assert_eq!(correction(1000, 1501, 10000), Correction::Seek(1501));
+        assert_eq!(correction(1000, 1501, 10000), Correction::Rate(1.02));
         assert_eq!(correction(1000, 950, 10000), Correction::Rate(0.98));
         assert_eq!(position(25005, 100, 10000, 5000), 105);
     }
@@ -293,5 +345,36 @@ mod tests {
     fn hash_paths_never_escape_cache() {
         assert!(cache_path(Path::new("/tmp/cache"), "../video").is_err());
         assert!(cache_path(Path::new("/tmp/cache"), &"a".repeat(64)).unwrap().starts_with("/tmp/cache"));
+    }
+    #[test]
+    fn import_only_reduces_oversized_or_expensive_video() {
+        let canvas = Canvas { monitors: vec![monitor("mac", 0.0, 1.0)] };
+        let mut media = Media { width: 1920, height: 1080, duration_ms: 1000, frame_rate: 30 };
+        assert!(ImportTarget::for_canvas(&canvas, &media, 100_000).is_none());
+        let target = ImportTarget::for_canvas(&canvas, &media, 1_000_000).unwrap();
+        assert_eq!((target.width, target.height, target.bitrate), (1920, 1080, 2_799_360));
+        media.width = 3840; media.height = 2160;
+        let target = ImportTarget::for_canvas(&canvas, &media, 100_000).unwrap();
+        assert_eq!((target.width, target.height), (1920, 1080));
+        media.width = 640; media.height = 360; media.frame_rate = 120;
+        let target = ImportTarget::for_canvas(&canvas, &media, 100_000).unwrap();
+        assert_eq!((target.width, target.height), (640, 360));
+    }
+    #[test]
+    fn mixed_density_import_need_is_translation_invariant() {
+        let mut canvas = Canvas { monitors: vec![monitor("mac", 0.0, 2.0), monitor("mac", 1920.0, 1.0)] };
+        let media = Media { width: 7680, height: 2160, duration_ms: 1000, frame_rate: 30 };
+        assert!(ImportTarget::for_canvas(&canvas, &media, 100_000).is_none());
+        for monitor in &mut canvas.monitors { monitor.rect.x -= 9000.0; monitor.rect.y += 4000.0; }
+        assert!(ImportTarget::for_canvas(&canvas, &media, 100_000).is_none());
+    }
+    #[test]
+    fn old_peer_status_and_plans_keep_working() {
+        let status: Status = serde_json::from_str(r#"{"plan":null,"message":"Playing","poster":null,"available":true}"#).unwrap();
+        assert!(status.computers.is_empty());
+        let media: Media = serde_json::from_str(r#"{"width":1920,"height":1080,"duration_ms":1000}"#).unwrap();
+        assert_eq!(media.frame_rate, 30);
+        assert_eq!(Playback::Ready.message(), "playing");
+        assert_eq!(Playback::Preparing.message(), "preparing…");
     }
 }

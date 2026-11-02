@@ -128,7 +128,7 @@ def main():
                 assert first.tobytes() != second.tobytes(), "video froze after looping"
                 process.stdin.close()
                 assert process.wait(timeout=5) == 0
-            measurements["gpu_percent"] = "unavailable: no /dev/dri in this environment"
+            measurements["gpu_percent"] = "not collected: Xvfb CPU benchmark, not a physical GPU presentation test"
             measurements["decoder"] = "system VP8 software decoder; Xvfb, two 640x360 slices, 30 fps source"
             (output / "measurements.json").write_text(json.dumps(measurements, indent=2) + "\n")
             print(json.dumps(measurements, indent=2))
