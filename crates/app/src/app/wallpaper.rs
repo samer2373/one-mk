@@ -164,6 +164,22 @@ impl App {
             }
 
             let mut bottom = fills.bottom().max(play_on.bottom());
+            if let Some(setup) = &wallpaper.gnome {
+                bottom += 22.0;
+                ui.painter().text(pos2(origin.x + 14.0, bottom), Align2::LEFT_TOP, "GNOME video setup", regular(T_BODY), INK);
+                bottom += 28.0;
+                bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &setup.message, regular(T_BODY), INK2);
+                let action = if setup.can_install { Some((one_mk_wallpaper::ExtensionAction::Install, "Install GNOME extension")) }
+                    else if setup.can_enable { Some((one_mk_wallpaper::ExtensionAction::Enable, "Enable GNOME extension")) } else { None };
+                if let Some((action, label)) = action {
+                    bottom += 12.0;
+                    let bounds = Rect::from_min_size(pos2(origin.x + 14.0, bottom), vec2(230.0_f32.min(width - 28.0), 32.0));
+                    if button(ui, bounds, Id::unique("gnome-extension-setup"), label, Look::Glass, status.is_some(), None).clicked() {
+                        self.wallpaper_command(Command::GnomeExtension { operation: action });
+                    }
+                    bottom = bounds.bottom();
+                }
+            }
             let message = if status.is_none() || wallpaper.message.is_empty() || plan.is_some_and(|plan| plan.playing_message() == wallpaper.message) { String::new() } else { wallpaper.message.clone() };
             if !message.is_empty() {
                 bottom += 14.0;

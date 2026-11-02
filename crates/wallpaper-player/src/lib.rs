@@ -155,6 +155,26 @@ pub struct Status {
     pub poster: Option<PathBuf>,
     #[serde(default)]
     pub computers: std::collections::BTreeMap<String, Playback>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gnome: Option<GnomeSetup>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GnomeStage { NotInstalled, LogOutRequired, Disabled, Active, Unsupported, Unavailable, Failed, Unmanaged }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GnomeSetup { pub stage: GnomeStage, pub message: String, pub can_install: bool, pub can_enable: bool }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionAction { Install, Enable }
+
+pub const GNOME_PLAYBACK_UNAVAILABLE: &str = "Video playback on GNOME is not connected to the production service in this build. Pictures still work.";
+
+pub fn gnome_wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop|
+        desktop.split(':').any(|part| part.eq_ignore_ascii_case("gnome") || part.eq_ignore_ascii_case("gnome-classic")))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -174,6 +194,7 @@ pub fn event(playback: Playback) {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Command {
+    GnomeExtension { operation: ExtensionAction },
     Set { path: PathBuf },
     Off,
     Pause { paused: bool },
@@ -296,6 +317,12 @@ pub fn prune_cache_except(root: &Path, keep: &BTreeSet<String>) -> std::io::Resu
 }
 
 pub fn availability() -> Result<(), &'static str> {
+    // Session setup changes while the window is open; never memoize Wayland.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return Err(if gnome_wayland() { GNOME_PLAYBACK_UNAVAILABLE }
+            else { "Video wallpapers are not supported on this Wayland desktop. KDE and wlroots are not supported; pictures still work." });
+    }
     static AVAILABLE: std::sync::OnceLock<Result<(), &'static str>> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(detect_availability)
 }
@@ -303,9 +330,6 @@ pub fn availability() -> Result<(), &'static str> {
 fn detect_availability() -> Result<(), &'static str> {
     #[cfg(target_os = "linux")]
     {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            return Err("Video wallpapers are not available on Wayland yet. GNOME needs a shell extension; KDE and other Wayland desktops are not supported yet.");
-        }
         if std::env::var_os("DISPLAY").is_none() { return Err("Video wallpapers need an X11 desktop."); }
         if unsafe { libloading::Library::new("libgstreamer-1.0.so.0") }.is_err() {
             return Err("Install GStreamer to play video wallpapers.");
@@ -337,6 +361,17 @@ pub fn file_identity(file: &std::fs::File) -> anyhow::Result<Vec<u64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn extension_actions_are_local_commands_and_old_status_still_decodes() {
+        for operation in [ExtensionAction::Install, ExtensionAction::Enable] {
+            let command = Command::GnomeExtension { operation };
+            let json = serde_json::to_string(&command).unwrap();
+            assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), command);
+            assert!(serde_json::from_str::<Wire>(&json).is_err());
+        }
+        let status: Status = serde_json::from_str(r#"{"plan":null,"message":"off","available":true,"poster":null}"#).unwrap();
+        assert!(status.gnome.is_none());
+    }
     #[test]
     fn only_s_ok_contains_a_video_frame() {
         assert!(has_video_frame(0));

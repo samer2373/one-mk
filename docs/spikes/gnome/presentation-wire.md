@@ -1,5 +1,13 @@
 # Presentation payload and authenticated session (6D-M1 step A, laboratory)
 
+**Product boundary, November 2, 2026:** the production UI's new extension
+Install/Enable actions are only local setup consent. They do not grant a peer,
+create an authority record, authorize a child, or promote this laboratory wire.
+`live_wallpaper::Plan` still has Fit/start time/clock synchronization that this
+payload does not carry. No production adapter or packaged sandbox runtime and
+controller provisioning is supplied by that setup slice. See the
+[production gap report](../../reviews/GNOME-WAYLAND-PRODUCTION-SETUP.md).
+
 October 31, 2026. This document describes `one_mk_wall_sync::presentation_wire`
 (the bounded plan payload) and `one_mk_wall_sync::presentation_auth` (the
 authenticated daemon-to-renderer session that carries it). Since step A the
