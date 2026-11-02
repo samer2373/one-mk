@@ -121,16 +121,18 @@ fn disabling_autoscroll_does_not_tell_user_to_click() {
 }
 
 #[test]
-fn video_wallpaper_has_no_renderer_installation_step() {
+fn video_wallpaper_exposes_separate_extension_install_and_enable() {
     let home = private_home();
     let output = run(home.path(), &["wallpaper", "--help"]);
     assert!(output.status.success());
     let help = String::from_utf8_lossy(&output.stdout);
     assert!(help.contains("set") && help.contains("off") && help.contains("status"));
-    assert!(!help.contains("--renderer") && !help.contains("extension"));
-    let output = run(home.path(), &["wallpaper", "extension", "install"]);
-    assert!(!output.status.success());
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("--renderer"));
+    assert!(!help.contains("--renderer") && help.contains("extension"));
+    let output = run(home.path(), &["wallpaper", "extension", "--help"]);
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("install") && help.contains("enable") && help.contains("status"));
+    assert!(!help.contains("consent") && !help.contains("import"));
 }
 
 #[cfg(unix)]

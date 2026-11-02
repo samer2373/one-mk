@@ -13,6 +13,15 @@ trap 'rm -rf "$tmp"' EXIT
 root="$tmp/pkg"
 install -d "$root/DEBIAN" "$root/usr/bin" "$root/usr/share/applications" "$root/usr/share/icons/hicolor/256x256/apps"
 install -m 755 "$dir/one-mk" "$dir/one-mk-tray" "$dir/one-mk-app" "$dir/one-mk-wallpaper" "$root/usr/bin/"
+install -D -m 755 "$dir/one-mk-wall" "$root/usr/lib/one-mk/one-mk-wall"
+# Outside GNOME's discovery folders: only an explicit user Install action
+# copies this bridge into ~/.local/share/gnome-shell/extensions.
+extension=one-mk-wallpaper@one-mk.org
+install -d "$root/usr/share/one-mk/gnome-extension/$extension"
+for file in metadata.json extension.js bridge.xml; do
+    install -m 644 "extensions/gnome/$extension/$file" "$root/usr/share/one-mk/gnome-extension/$extension/"
+done
+install -m 644 LICENSE-MIT LICENSE-APACHE "$root/usr/share/one-mk/gnome-extension/$extension/"
 install -m 644 docs/brand/app-icon/windows-linux/ico-png/onemk-256.png "$root/usr/share/icons/hicolor/256x256/apps/one-mk.png"
 
 cat > "$root/usr/share/applications/one-mk.desktop" <<DESKTOP
@@ -30,7 +39,7 @@ DESKTOP
 # desktop entry. Written by the code `one-mk install` writes it with
 # (one_mk_ctl::install::packaged_files), so the two can't drift apart. Only
 # that entry: the service and the tray stay something each user turns on.
-cargo run --quiet --locked -p one-mk-ctl --example packaging-files -- "$tmp/packaged" /usr/bin >/dev/null
+cargo run --quiet --locked -j 2 -p one-mk-ctl --example packaging-files -- "$tmp/packaged" /usr/bin >/dev/null
 set -- "$tmp"/packaged/usr/share/applications/*.desktop
 [ $# -eq 1 ] && [ -f "$1" ] || { echo "bundle-deb.sh: expected one packaged desktop entry, got: $*" >&2; exit 1; }
 app_entry=usr/share/applications/$(basename "$1")
@@ -51,7 +60,9 @@ CONTROL
 
 dpkg-deb --root-owner-group --build "$root" "$out" >/dev/null
 listing=$(dpkg-deb -c "$out")
-for f in usr/bin/one-mk usr/share/applications/one-mk.desktop "$app_entry"; do
+for f in usr/bin/one-mk usr/share/applications/one-mk.desktop "$app_entry" usr/lib/one-mk/one-mk-wall \
+    "usr/share/one-mk/gnome-extension/$extension/extension.js" "usr/share/one-mk/gnome-extension/$extension/bridge.xml" \
+    "usr/share/one-mk/gnome-extension/$extension/metadata.json"; do
     echo "$listing" | grep -q " \./$f\$" || { echo "bundle-deb.sh: $out is missing /$f" >&2; exit 1; }
 done
 hidden=$(dpkg-deb --fsys-tarfile "$out" | tar -xOf - "./$app_entry")

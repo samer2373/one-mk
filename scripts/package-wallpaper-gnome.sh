@@ -10,9 +10,10 @@ mkdir -p "$output/libexec" "$output/share/gnome-shell/extensions"
 cp "$binary" "$output/libexec/one-mk-wall"
 cp -R "$root/extensions/gnome/one-mk-wallpaper@one-mk.org" "$output/share/gnome-shell/extensions/"
 cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$output/"
-printf '%s\n' 'NON-PUBLISHING DRY RUN. Default OFF. No automatic install or enable.' \
+printf '%s\n' 'OPTIONAL GNOME COMPONENT. Default OFF. No automatic install or enable.' \
     'Production playback blocked: owner-authenticated daemon plan and media integration are not delivered.' \
-    'Install only explicitly with: one-mk wallpaper extension install --renderer /absolute/path/to/libexec/one-mk-wall' \
-    'Enabling remains a separate user action. See docs/spikes/gnome/production-component.md.' > "$output/README.txt"
+    'The Wallpaper page offers separate, consented Install and Enable actions. No download is required.' \
+    'Log out and back in once after installation. An active extension does not mean video playback is available.' \
+    'See docs/spikes/gnome/production-component.md for the remaining production gates.' > "$output/README.txt"
 (cd "$output" && find . -type f ! -name SHA256SUMS -print | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
 (cd "$output" && sha256sum -c SHA256SUMS)

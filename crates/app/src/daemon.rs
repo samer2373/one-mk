@@ -248,7 +248,7 @@ impl Link {
                     plan: Some(one_mk_wallpaper::Plan { hash: "a".repeat(64), title: "Across the horizon.mp4".into(),
                         media: one_mk_wallpaper::Media { width: 3840, height: 1080, duration_ms: 10000, frame_rate: 30 }, canvas,
                         start_ms: 1, fit: Default::default(), computers: std::iter::once(status.id.clone()).chain(status.peers.iter().map(|peer| peer.id.clone())).collect(), pause_on_battery: true, paused: false, picture: false, asset_hash: None }),
-                    available: true, poster: Some(poster.into()), message: "Playing on 3 monitors on 2 computers".into(), computers: Default::default(),
+                    available: true, poster: Some(poster.into()), message: "Playing on 3 monitors on 2 computers".into(), computers: Default::default(), gnome: None,
                 });
                 if let Some(wallpaper) = &mut status.wallpaper && let Some(plan) = &wallpaper.plan { wallpaper.message = plan.playing_message(); }
             }

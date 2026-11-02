@@ -7,12 +7,16 @@ import pwd
 import runpy
 import shutil
 import subprocess
+import tempfile
 import time
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 LAB = REPO / 'target/gnome-component-qa'
-SESSION = LAB / 'session'
+# Keep private Wayland and D-Bus socket paths below sockaddr_un's limit even
+# when the checkout lives in a deeply nested worktree.
+SESSION_ROOT = Path(tempfile.mkdtemp(prefix='omk-component-'))
+SESSION = SESSION_ROOT / 's'
 UUID = 'one-mk-wallpaper@one-mk.org'
 HARNESS = HERE / 'isolated-session.sh'
 BRIDGE = f'Main.extensionManager.lookup("{UUID}").stateObj.bridge'
@@ -92,7 +96,9 @@ def main():
                 break
             time.sleep(0.1)
         assert 'production bridge awaiting layout' in log, log[-6000:]
-        evaluate('Main.layoutManager.emit("monitors-changed"); true')
+        # Step C deliberately ignores unchanged logical layouts. Exercise a
+        # real temporary monitor change, not a redundant Shell notification.
+        private(['python3', HERE / 'client/displayconfig.py', 'apply', '1'])
         for _ in range(50):
             log = (SESSION / 'log/shell.log').read_text()
             if 'production bridge awaiting reasons' in log:
@@ -181,11 +187,11 @@ def main():
                         f'{BRIDGE}._recovery.children.size === 0 && {BRIDGE}._sources.size === 0')
         state = json.loads((SESSION / 'run/one-mk-wallpaper/status.json').read_text())
         assert state['restart_limit_reached'] and 'restart limit reached' in state['reason']
-        doctor = private([cli, 'wallpaper', 'doctor']).stdout
-        assert 'restart limit reached' in doctor, doctor
+        diagnostic = private([cli, 'wallpaper', 'extension', 'status']).stdout
+        assert 'restart limit reached' in diagnostic, diagnostic
         status = json.loads(private([cli, 'wallpaper', '--json', 'extension', 'status']).stdout)
         assert status['enabled'] and status['qualified'] and status['restart_limit_reached'], status
-        report['checks'].append('actual 1/2/4-second failed-spawn cap, no remaining timer/child, doctor-visible restart limit')
+        report['checks'].append('actual 1/2/4-second failed-spawn cap, no remaining timer/child, status-visible restart limit')
         extension('Disable')
         log = (SESSION / 'log/shell.log').read_text()
         gate = runpy.run_path(str(HERE / 'm1-risk-probe.py'))
@@ -210,6 +216,7 @@ def main():
         if (SESSION / 'log/shell.log').exists():
             shutil.copy2(SESSION / 'log/shell.log', LAB / ('version-negative-shell.log' if report.get('passed') else 'shell.log'))
         run([HARNESS, 'stop'], check=False)
+        shutil.rmtree(SESSION_ROOT)
         shutil.rmtree(sources)
         (LAB / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report, indent=2))
