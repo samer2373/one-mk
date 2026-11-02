@@ -31,35 +31,60 @@ unsafe fn string(pointer: PWSTR) -> Result<String> {
 }
 fn wide(text: &str) -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Snapshot { screens: Vec<(String, String)>, position: i32, #[serde(default)] color: Option<u32>, #[serde(default)] applied: std::collections::BTreeMap<String, String>, #[serde(default)] previous_applied: std::collections::BTreeMap<String, String> }
+fn snapshot(root: &Path) -> Result<Option<Snapshot>> {
+    let path = root.join("previous.json");
+    if !path.exists() { return Ok(None); }
+    let bytes = std::fs::read(path)?;
+    if let Ok(saved) = serde_json::from_slice(&bytes) { return Ok(Some(saved)); }
+    let (screens, position) = serde_json::from_slice(&bytes)?;
+    Ok(Some(Snapshot { screens, position, color: None, applied: Default::default(), previous_applied: Default::default() }))
+}
+
 pub fn apply(files: &[(Monitor, PathBuf)], root: &Path) -> Result<()> {
     let desktop = Desktop::new()?;
     unsafe {
+        let slideshow_items = match desktop.0.GetSlideshow() { Ok(items) => items.GetCount()?, Err(_) => 0 };
+        anyhow::ensure!(!desktop.0.GetStatus()?.contains(DSS_SLIDESHOW) && slideshow_items == 0,
+            "Native pictures cannot safely replace a Windows slideshow. Choose a static picture in Windows first.");
         let mut monitors = Vec::new();
         for index in 0..desktop.0.GetMonitorDevicePathCount()? { monitors.push(string(desktop.0.GetMonitorDevicePathAt(index)?)?); }
         let snapshot = root.join("previous.json");
-        if !snapshot.exists() {
-            let mut previous = Vec::new();
-            for monitor in &monitors { previous.push((monitor.clone(), string(desktop.0.GetWallpaper(PCWSTR(wide(monitor).as_ptr()))?)?)); }
-            std::fs::write(&snapshot, serde_json::to_vec(&(previous, desktop.0.GetPosition()?.0))?)?;
-        }
+        let mut previous = self::snapshot(root)?.unwrap_or(Snapshot { screens: Vec::new(), position: desktop.0.GetPosition()?.0,
+            color: Some(desktop.0.GetBackgroundColor()?.0), applied: Default::default(), previous_applied: Default::default() });
+        let observed = monitors.iter().map(|monitor| Ok((monitor.clone(), string(desktop.0.GetWallpaper(PCWSTR(wide(monitor).as_ptr()))?)?))).collect::<Result<Vec<_>>>()?;
+        super::merge_snapshot(&mut previous.screens, observed, |entry| &entry.0);
+        super::atomic_write(&snapshot, &serde_json::to_vec(&previous)?)?;
         desktop.0.SetPosition(DWPOS_STRETCH)?;
         for (monitor, path) in files {
             let local = monitor.local.unwrap_or(monitor.rect);
             let id = monitors.iter().find(|id| {
                 desktop.0.GetMonitorRECT(PCWSTR(wide(id).as_ptr())).is_ok_and(|rect| (f64::from(rect.left) - local.x).abs() < 2.0 && (f64::from(rect.top) - local.y).abs() < 2.0)
             }).context("The picture's screen is no longer connected")?;
+            let current = string(desktop.0.GetWallpaper(PCWSTR(wide(id).as_ptr()))?)?;
+            if previous.applied.get(id) == Some(&current) || previous.previous_applied.get(id) == Some(&current) { previous.previous_applied.insert(id.clone(), current); }
+            else { previous.previous_applied.remove(id); }
+            previous.applied.insert(id.clone(), path.to_string_lossy().into_owned());
+            super::atomic_write(&snapshot, &serde_json::to_vec(&previous)?)?;
             desktop.0.SetWallpaper(PCWSTR(wide(id).as_ptr()), PCWSTR(wide(&path.to_string_lossy()).as_ptr()))?;
         }
     }
     Ok(())
 }
 
-pub fn restore(root: &Path) -> Result<()> {
-    let (previous, position): (Vec<(String, String)>, i32) = serde_json::from_slice(&std::fs::read(root.join("previous.json"))?)?;
+pub fn restore(root: &Path) -> Result<bool> {
+    let Some(mut previous) = snapshot(root)? else { return Ok(true) };
     let desktop = Desktop::new()?;
     unsafe {
-        for (monitor, path) in previous { desktop.0.SetWallpaper(PCWSTR(wide(&monitor).as_ptr()), PCWSTR(wide(&path).as_ptr()))?; }
-        desktop.0.SetPosition(DESKTOP_WALLPAPER_POSITION(position))?;
+        let monitors = (0..desktop.0.GetMonitorDevicePathCount()?).map(|index| string(desktop.0.GetMonitorDevicePathAt(index)?)).collect::<Result<Vec<_>>>()?;
+        previous.screens = super::unrestored(previous.screens, |(monitor, path)| monitors.contains(monitor)
+            && desktop.0.SetWallpaper(PCWSTR(wide(monitor).as_ptr()), PCWSTR(wide(path).as_ptr())).is_ok());
+        previous.applied.retain(|monitor, _| previous.screens.iter().any(|(pending, _)| pending == monitor));
+        previous.previous_applied.retain(|monitor, _| previous.screens.iter().any(|(pending, _)| pending == monitor));
+        let position_restored = desktop.0.SetPosition(DESKTOP_WALLPAPER_POSITION(previous.position)).is_ok();
+        let color_restored = previous.color.is_none_or(|color| desktop.0.SetBackgroundColor(windows::Win32::Foundation::COLORREF(color)).is_ok());
+        super::atomic_write(&root.join("previous.json"), &serde_json::to_vec(&previous)?)?;
+        Ok(previous.screens.is_empty() && position_restored && color_restored)
     }
-    Ok(())
 }

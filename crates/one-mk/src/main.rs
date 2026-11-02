@@ -506,8 +506,7 @@ fn main() -> ExitCode {
 
     #[cfg(target_os = "macos")]
     let native_daemon = match cli.cmd.as_ref() {
-        None => cli.run.backend != Some(Backend::Null),
-        Some(Cmd::Run(args)) => args.backend.or(cli.run.backend) != Some(Backend::Null),
+        None | Some(Cmd::Run(_)) => true,
         _ => false,
     };
     #[cfg(target_os = "macos")]

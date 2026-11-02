@@ -3,22 +3,35 @@ use anyhow::{Context, Result, ensure};
 use one_mk_wallpaper::{Correction, Hold, Holds, Media, PlayerConfig, correction, now_ms, position};
 use std::{path::Path, sync::{Arc, OnceLock, atomic::{AtomicBool, AtomicU32, Ordering}}, sync::mpsc::Receiver, time::{Duration, Instant}};
 use windows::{core::{BOOL, BSTR, Interface, implement, w}, Win32::{Foundation::*, Graphics::{Direct3D::D3D_DRIVER_TYPE_HARDWARE, Direct3D11::*, Dxgi::{Common::*, *}}, Media::MediaFoundation::*, System::{Com::*, Power::*}, UI::WindowsAndMessaging::*}};
-use windows::Win32::{Graphics::{Gdi::*, Dwm::DwmFlush}, System::{Threading::*, SystemServices::{GUID_ACDC_POWER_SOURCE, GUID_POWER_SAVING_STATUS}}, UI::{Shell::*, Accessibility::*, HiDpi::*}};
+use windows::Win32::{Graphics::{Gdi::*, Dwm::DwmFlush}, System::{Threading::*, SystemServices::{GUID_ACDC_POWER_SOURCE, GUID_POWER_SAVING_STATUS as GUID_ENERGY_SAVER_STATUS}}, UI::{Shell::*, Accessibility::*, HiDpi::*}};
 
 static INPUT_EVENT: OnceLock<usize> = OnceLock::new();
 static DISPLAYS_CHANGED: AtomicBool = AtomicBool::new(false);
+static HOLDS_CHANGED: AtomicBool = AtomicBool::new(true);
+static POWER_CHANGED: AtomicBool = AtomicBool::new(true);
+static ON_BATTERY: AtomicBool = AtomicBool::new(false);
+static ENERGY_SAVER: AtomicBool = AtomicBool::new(false);
 fn input_event() -> HANDLE { HANDLE(*INPUT_EVENT.get_or_init(|| unsafe { CreateEventW(None, false, false, None).expect("wallpaper command event").0 as usize }) as *mut _) }
 pub fn wake() { unsafe { let _ = SetEvent(input_event()); } }
-unsafe extern "system" fn foreground_changed(_: HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) { wake(); }
+unsafe extern "system" fn foreground_changed(_: HWINEVENTHOOK, event: u32, window: HWND, object: i32, _: i32, _: u32, _: u32) {
+    if window.is_invalid() { return; }
+    if event >= EVENT_OBJECT_CREATE && (object != OBJID_WINDOW.0 || unsafe { GetAncestor(window, GA_ROOT) } != window) { return; }
+    HOLDS_CHANGED.store(true, Ordering::Relaxed);
+    wake();
+}
 
 struct Notifications { window: HWND, hooks: Vec<HWINEVENTHOOK>, power: Vec<HPOWERNOTIFY> }
 impl Notifications {
     unsafe fn new() -> Result<Self> {
         unsafe {
             let window = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, w!("oneMKWallpaper"), w!("oneMK Wallpaper events"), WS_POPUP, 0, 0, 0, 0, None, None, None, None)?;
-            let hooks = vec![SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, None, Some(foreground_changed), 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS), SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, None, Some(foreground_changed), 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS)];
-            let power = [&GUID_ACDC_POWER_SOURCE, &GUID_POWER_SAVING_STATUS].into_iter().filter_map(|guid| RegisterPowerSettingNotification(HANDLE(window.0), guid, DEVICE_NOTIFY_WINDOW_HANDLE).ok()).collect();
-            Ok(Self { window, hooks, power })
+            let hooks = [EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, EVENT_OBJECT_DESTROY].into_iter().map(|event|
+                SetWinEventHook(event, event, None, Some(foreground_changed), 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS)).collect();
+            let mut notifications = Self { window, hooks, power: Vec::new() };
+            let mut power = SYSTEM_POWER_STATUS::default();
+            if GetSystemPowerStatus(&mut power).is_ok() { ON_BATTERY.store(power.ACLineStatus == 0, Ordering::Relaxed); ENERGY_SAVER.store(power.SystemStatusFlag == 1, Ordering::Relaxed); }
+            for guid in [&GUID_ACDC_POWER_SOURCE, &GUID_ENERGY_SAVER_STATUS] { notifications.power.push(RegisterPowerSettingNotification(HANDLE(window.0), guid, DEVICE_NOTIFY_WINDOW_HANDLE)?); }
+            Ok(notifications)
         }
     }
 }
@@ -35,6 +48,12 @@ impl IMFMediaEngineNotify_Impl for Notify_Impl {
 }
 
 struct Engine { media: IMFMediaEngine, device: ID3D11Device, _manager: IMFDXGIDeviceManager, events: Arc<AtomicU32> }
+unsafe fn frame_ready(media: &IMFMediaEngine) -> windows::core::Result<bool> {
+    let mut timestamp = 0;
+    let result = unsafe { (Interface::vtable(media).OnVideoStreamTick)(Interface::as_raw(media), &mut timestamp) };
+    result.ok()?;
+    Ok(one_mk_wallpaper::has_video_frame(result.0))
+}
 impl Engine {
     unsafe fn new(path: &Path) -> Result<Self> {
         unsafe {
@@ -104,7 +123,7 @@ unsafe fn save_poster(engine: &Engine, media: &Media, path: &Path) -> Result<()>
         let texture = texture.context("Windows could not prepare the video preview")?;
         engine.media.Play()?;
         let started = Instant::now();
-        while engine.media.OnVideoStreamTick().is_err() {
+        while !frame_ready(&engine.media)? {
             ensure!(started.elapsed() < Duration::from_secs(10), "Windows could not read the video preview");
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -142,17 +161,29 @@ unsafe extern "system" fn find_worker(window: HWND, parameter: LPARAM) -> BOOL {
 
 unsafe extern "system" fn window_proc(window: HWND, message: u32, first: WPARAM, second: LPARAM) -> LRESULT {
     if message == WM_DISPLAYCHANGE || message == WM_DPICHANGED { DISPLAYS_CHANGED.store(true, Ordering::Relaxed); }
+    if message == WM_POWERBROADCAST && first.0 == PBT_POWERSETTINGCHANGE as usize && second.0 != 0 {
+        let setting = unsafe { &*(second.0 as *const POWERBROADCAST_SETTING) };
+        if setting.DataLength == 4 {
+            let value = unsafe { setting.Data.as_ptr().cast::<u32>().read_unaligned() };
+            if setting.PowerSetting == GUID_ACDC_POWER_SOURCE { ON_BATTERY.store(value != 0, Ordering::Relaxed); }
+            if setting.PowerSetting == GUID_ENERGY_SAVER_STATUS { ENERGY_SAVER.store(value != 0, Ordering::Relaxed); }
+            POWER_CHANGED.store(true, Ordering::Relaxed);
+        }
+    }
     unsafe { if message == WM_NCHITTEST { LRESULT(HTTRANSPARENT as isize) } else { DefWindowProcW(window, message, first, second) } }
 }
 
-struct Desktop { windows: Vec<HWND>, chains: Vec<IDXGISwapChain2>, destinations: Vec<RECT>, sources: Vec<MFVideoNormalizedRect> }
+struct Chain { swap: IDXGISwapChain2, latency: HANDLE }
+impl Drop for Chain { fn drop(&mut self) { unsafe { let _ = CloseHandle(self.latency); } } }
+struct Desktop { windows: Vec<HWND>, chains: Vec<Chain>, destinations: Vec<RECT>, sources: Vec<MFVideoNormalizedRect> }
 impl Desktop {
     unsafe fn new(engine: &Engine, config: &PlayerConfig) -> Result<Self> {
         unsafe {
             let progman = FindWindowW(w!("Progman"), None).context("The Windows desktop is not available")?;
             let _ = SendMessageTimeoutW(progman, 0x052c, WPARAM(0), LPARAM(0), SMTO_NORMAL, 1000, None);
-            let mut worker = HWND::default();
-            EnumWindows(Some(find_worker), LPARAM(&mut worker as *mut HWND as isize))?;
+            let mut worker = FindWindowExW(Some(progman), None, w!("WorkerW"), None).unwrap_or_default();
+            if worker.is_invalid() { EnumWindows(Some(find_worker), LPARAM(&mut worker as *mut HWND as isize))?; }
+            if worker.is_invalid() && FindWindowExW(Some(progman), None, w!("SHELLDLL_DefView"), None).is_ok() { worker = progman; }
             ensure!(!worker.is_invalid(), "Windows did not provide a wallpaper surface");
             let class = WNDCLASSW { lpfnWndProc: Some(window_proc), lpszClassName: w!("oneMKWallpaper"), ..Default::default() };
             RegisterClassW(&class);
@@ -172,7 +203,9 @@ impl Desktop {
                 let descriptor = DXGI_SWAP_CHAIN_DESC1 { Width: width, Height: height, Format: DXGI_FORMAT_B8G8R8A8_UNORM, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, BufferCount: 2, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32, ..Default::default() };
                 let chain: IDXGISwapChain2 = factory.CreateSwapChainForHwnd(&engine.device, window, &descriptor, None, None)?.cast()?;
                 chain.SetMaximumFrameLatency(1)?;
-                desktop.chains.push(chain);
+                let latency = chain.GetFrameLatencyWaitableObject();
+                ensure!(!latency.is_invalid(), "Windows did not provide a frame pacing handle");
+                desktop.chains.push(Chain { swap: chain, latency });
                 desktop.destinations.push(RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 });
                 let slice = config.plan.canvas.slice(monitor, &config.plan.media, config.plan.fit).context("Empty canvas")?;
                 let left = slice.x.max(0.0);
@@ -263,12 +296,13 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
                 latency_ready = vec![false; desktop.chains.len()];
                 ready = false;
                 preparing_since = Instant::now();
+                HOLDS_CHANGED.store(true, Ordering::Relaxed);
             }
-            let mut power = SYSTEM_POWER_STATUS::default();
-            let _ = GetSystemPowerStatus(&mut power);
-            holds.set(Hold::Battery, config.plan.pause_on_battery && power.ACLineStatus == 0);
-            holds.set(Hold::LowPower, power.SystemStatusFlag == 1);
-            holds.set(Hold::Occluded, covered(&desktop));
+            if POWER_CHANGED.swap(false, Ordering::Relaxed) {
+                holds.set(Hold::Battery, config.plan.pause_on_battery && ON_BATTERY.load(Ordering::Relaxed));
+                holds.set(Hold::LowPower, ENERGY_SAVER.load(Ordering::Relaxed));
+            }
+            if HOLDS_CHANGED.swap(false, Ordering::Relaxed) { holds.set(Hold::Occluded, covered(&desktop)); }
             holds.set(Hold::User, config.plan.paused);
             if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); }
             if playing != holds.playing() {
@@ -289,13 +323,13 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             }
             if playing && Instant::now() >= next_frame && latency_ready.iter().all(|ready| *ready) {
                 next_frame = Instant::now() + frame_interval;
-                if engine.media.OnVideoStreamTick().is_ok() {
+                if frame_ready(&engine.media)? {
                 for (index, chain) in desktop.chains.iter().enumerate() {
                     let source = &desktop.sources[index];
                     if source.left >= source.right || source.top >= source.bottom { continue; }
-                    let surface: ID3D11Texture2D = chain.GetBuffer(0)?;
+                    let surface: ID3D11Texture2D = chain.swap.GetBuffer(0)?;
                     engine.media.TransferVideoFrame(&surface, Some(&desktop.sources[index]), &desktop.destinations[index], Some(&MFARGB { rgbAlpha: 255, ..Default::default() }))?;
-                    chain.Present(0, DXGI_PRESENT(0)).ok()?;
+                    chain.swap.Present(0, DXGI_PRESENT(0)).ok()?;
                 }
                 latency_ready.fill(false);
                 if !ready {
@@ -308,7 +342,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             }
             let pending: Vec<_> = desktop.chains.iter().enumerate().filter(|(index, _)| !latency_ready[*index]).collect();
             let mut handles = vec![input_event()];
-            if playing { handles.extend(pending.iter().map(|(_, chain)| chain.GetFrameLatencyWaitableObject())); }
+            if playing { handles.extend(pending.iter().map(|(_, chain)| chain.latency)); }
             let timeout = if playing && latency_ready.iter().all(|ready| *ready) { next_frame.saturating_duration_since(Instant::now()).as_millis().max(1) as u32 } else { INFINITE };
             let result = MsgWaitForMultipleObjectsEx(Some(&handles), timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE).0;
             if result > WAIT_OBJECT_0.0 && (result as usize) < handles.len() { latency_ready[pending[result as usize - 1].0] = true; }

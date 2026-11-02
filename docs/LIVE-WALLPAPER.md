@@ -1,6 +1,6 @@
 # Live wallpaper implementation and acceptance record
 
-Implementation branch: `wallpaper-smooth`, including `1ed3aa98` from
+Implementation branch: `wallpaper-review-fixes`, including `3adcf763` from
 `polish-glass-friction`. Evidence recorded on 2 November 2026. This is an
 implemented X11 path and compile-checked Mac/Windows backends, **not completed
 three-platform acceptance**. There is no defensible promise of zero performance
@@ -38,10 +38,23 @@ Animated pictures are not a video replacement workflow.
 Transfers reuse the pinned QUIC file path and `LIVE_WALLPAPER` capability
 **4096**, not typing's 1024. No protocol version or capability bit was bumped.
 Only `<64 lowercase hex characters>.video` cache assets are admitted, at most
-4 GiB, with verified SHA-256 before applying a plan. A verified cached asset
-skips retransmission. Video metadata and new status/plan fields have serde
-defaults for older status readers. Old helpers cannot apply the new picture
-bundle format; update participating computers together for picture support.
+4 GiB, and only when that authenticated peer's current or pending plan names
+the hash. PlanReady acknowledgment installs admission before the sender opens
+the transfer. **Update participating computers together**: older peers do not
+understand PlanReady and sharing times out with an upgrade message. Older
+helpers also cannot apply picture bundles. Status readers retain serde defaults.
+
+The inbox serializes media arrivals, limits accepted offers to one per two
+seconds, removes unreferenced hashed assets at startup/before admission, and
+limits media to twice the larger current/incoming asset, with an 8 GiB total
+wallpaper-cache ceiling including extracted pictures and partial transfers.
+Verified SHA-256 results are cached by size, modification time and inode/file
+identity (plus Unix change time), checked again after hashing. Cached media
+skips bytes and repeat hashes; a changed/replaced file invalidates verification.
+An identical pending/running plan skips probing, poster creation and player
+replacement, and re-sends existing playback status. Connection/Caps changes
+send the existing plan only to newly capable peers; they do not restart the
+controller or other running peers. Actual canvas/selection changes still do.
 
 ### Controller-only video preparation
 
@@ -81,19 +94,46 @@ slicing during ordinary reconciliation. Source and current/previous bundles
 are retained alongside the video cache.
 
 - Mac: `NSWorkspace` per-`NSScreen` image URLs, on the main queue. Save the old
-  URL, scaling/clipping options and fill color, keyed by display identity.
+  URL, scaling/clipping options and fill color, keyed by the stable
+  `CGDisplayCreateUUIDFromDisplayID` UUID rather than transient screen numbers.
 - Windows: `IDesktopWallpaper` monitor device paths matched by rectangle, with
-  the previous URLs and wallpaper position saved for restoration.
+  the previous URLs, wallpaper position and background color saved for restoration.
 - Linux: GNOME-compatible `gsettings` picture-uri, picture-uri-dark and spanned
   positioning. Assemble local slices into one spanned image where per-monitor
   setting is unavailable; save and restore all three settings. This also works
   independently of the unavailable GNOME Wayland video backend.
 
-Turn off restores the snapshot and removes extracted PNGs. Failure to restore
-is reported while video helpers are still stopped and Off intent is persisted.
-Snapshots survive daemon restart. Repeated picture changes can retain extracted
-PNGs until Off; there is no background cleanup timer. KDE/other desktops
-without the GNOME settings API need their own native adapter.
+Picture decode, resize, PNG encoding, snapshot I/O and Linux settings commands
+run on a serialized blocking worker, not the daemon runtime thread or under
+the wallpaper state mutex. Unlock/display wake does not reapply an unchanged
+picture. Writes use a temporary file plus rename; Mac/Windows slices get new
+filenames so native wallpaper caches notice replacements. Main-queue Mac work
+is confined to screen queries/native settings; Null-backend daemon runs also
+pump the main queue instead of deadlocking a synchronous dispatch.
+
+Newly observed screens merge into the original snapshot before mutation.
+Turn off restores connected screens independently. Unplugged screens, a
+different active Space, or failed native calls leave a pending snapshot and
+its referenced PNGs intact; reconnect/return to that desktop and repeat Off.
+Snapshots survive restart. Cleanup removes only unreferenced pictures, and
+complete restoration removes the snapshot and remaining oneMK PNGs. The prior
+and proposed Mac/Windows URLs are both retained across a failed native swap.
+Legacy Mac snapshots keyed by screen number cannot safely recover a historic
+UUID; unmatched entries are retained, not silently discarded.
+
+**Native modes deliberately refused rather than damaged:** Mac dynamic/HEIC
+originals, aerials, per-Space settings, missing/unreadable wallpaper stores and
+opaque store payloads cannot be faithfully round-tripped through NSWorkspace.
+The conservative store check can also refuse ordinary static configurations
+whose settings are opaque. These fail before native mutation; this is not
+dynamic/aerial/other-Spaces support. If the user changes wallpaper/Space during
+a oneMK picture session, Mac Off retains unmatched entries rather than
+overwriting that unrelated desktop. Windows configured/paused slideshow mode
+is refused before changing it; slideshow configuration is left untouched.
+Windows empty-image/solid-color backgrounds restore the original empty URL
+and color; the API does not expose a separate readable background-enable flag
+(`DSS_ENABLED` describes slideshow status). KDE/other Linux desktops without
+GNOME settings need their own adapter.
 
 ### Readiness, replacement and clocks
 
@@ -105,8 +145,10 @@ Failed preparation leaves the previous visible helper alive until another
 successful replacement or Off. Launch identities prevent an intentionally
 stopped or superseded child from overwriting current readiness/errors.
 
-Mac gates on every `AVPlayerLayer.readyForDisplay`; Windows gates on successful
-GPU TransferVideoFrame/Present and DwmFlush; X11 gates on GStreamer preroll,
+Mac windows start black with alpha zero, become visible only after every
+`AVPlayerLayer.readyForDisplay`, and retain the old outputs until then. Windows
+checks the raw tick HRESULT for **exactly S_OK**, not S_FALSE, before either
+poster readback or GPU TransferVideoFrame/Present and DwmFlush; X11 gates on GStreamer preroll,
 initial-position preroll, raise and XSync. These are API readiness/submission
 signals, **not proof of physical compositor scanout or a no-flash guarantee**.
 Mac and Windows report a plain failure if the first playing frame takes more
@@ -119,8 +161,11 @@ preparing. Feedback is keyed by source hash, not a separate plan revision;
 very rapid same-source Fit/selection changes can momentarily accept stale
 feedback. Physical paired-machine delivery/ordering still needs acceptance.
 
-Playback uses one canvas and epoch. Receivers use five midpoint clock samples
-per batch, best RTT, refreshed after 30 seconds of active playback. Within
+Playback uses one canvas and epoch. A receiver completes five midpoint clock
+samples with the new controller **before first video start**; unavailable
+samples fail preparation rather than launching at zero offset. Saved receiver
+video selections wait for a new plan/sample batch after daemon restart.
+The best-RTT batch is refreshed after 30 seconds of active playback. Within
 40 ms there is no correction; otherwise nudge 0.98/1.02, **never periodically
 seek**, including large drift. Initial start/resume and loop boundaries may
 reposition. Network asymmetry, variable refresh and rate-only recovery from
@@ -134,9 +179,23 @@ battery/low-power/coverage holds pause the decoder, not merely hide a window.
 Independent holds do not cancel one another. Receiver clock work sleeps on a
 notification while paused/preparing instead of retaining its refresh timer.
 
-Mac uses native notifications and a CFRunLoop wake source, Windows waits for
-OS/input events and swapchain latency handles, and Linux polls X/GStreamer/
-command/power-event file descriptors. Fully paused loops have no timeout.
+Availability is cached once per process. Input-side Layout reconciliation
+does not build a full daemon/wallpaper status, and returns immediately when
+there is no plan or pending Off distribution.
+
+Mac drains NSEvents as well as servicing its CFRunLoop; off-main power
+notifications dispatch to the main queue before changing main-thread state.
+Lock still reaps the helper (rather than claiming a zero-cost paused decoder).
+Windows owns one latency wait handle per swapchain, closes it on rebuild/drop,
+and uses foreground/move-size-end/minimize/top-level object events instead of
+the system-wide cursor/caret LOCATIONCHANGE hook. Coverage is evaluated only
+on relevant events; battery/saver state comes from power notifications, not
+per-frame polling. Linux subscribes only to root EWMH properties, recomputes
+coverage only for active-window/stacking changes, and reads power state only
+on power-supply events. It does not subscribe to client title/user-time changes.
+GStreamer sink event/expose polling is disabled; oneMK handles Expose on its
+own wallpaper windows and explicitly repaints the retained frame on demand.
+Fully paused loops have no timeout.
 Active clock correction runs about every two seconds; Windows presentation is
 paced at source fps (capped at 60), not a busy presentation loop. OS event
 delivery may still cause work while paused; literal zero CPU/GPU everywhere is
@@ -159,50 +218,72 @@ but controller import targets/picture slices can underestimate remote Retina
 pixel needs. Helper-local hotplug rebuilds do not independently renegotiate the
 global canvas with peers; daemon Layout reconciliation remains authoritative.
 Integrated-GPU selection, GPU utilization and display-frame timing/drop counts
-are not implemented. The older Wave 6 importer/extension work remains lab-only
+are not implemented. Linux programmatic window geometry changes that produce
+neither active-window nor stacking updates can leave coverage stale until a
+relevant WM event. The older Wave 6 importer/extension work remains lab-only
 behind `wallpaper-m1-lab`, not the normal release interface.
 
 ## Linux measurement record
 
 `scripts/test-live-wallpaper.py` generates system-GStreamer VP8 WebM, defines
 two 640×360 XRandR outputs in Xvfb, verifies seam pixels, continued loop motion,
-cover/resume and stdin-EOF teardown. The helper is a debug build. CPU is
-user+system time; 100% means one logical core. Both runs use 30 fps software VP8
-with the same two small destinations, not two 1080p/4K physical outputs.
+cover/resume, user-paused expose repaint and stdin-EOF teardown. The final
+review-fix run on 2 November 2026 uses a debug helper and 30 fps software VP8.
+CPU is user+system time; 100% means one logical core. The destinations are two
+small slices, **not two physical 1080p/4K outputs**.
 
-| State | Before (1ed3aa98) | After (wallpaper-smooth) |
+| State | Sample | CPU | Main / all-thread context switches |
+| --- | ---: | ---: | ---: |
+| 1920×1080 loop | 10 s | 11.2% | Not collected |
+| 3840×2160 loop | 10 s | 26.6% | Not collected |
+| Both outputs covered, idle | 10.02 s | 0.0% | 0 / 0 |
+| Covered, unrelated client title/user-time updates at 20 Hz | 10.00 s | 0.0% | 0 / 0 |
+| User-paused helper, idle | 10.02 s | 0.0% | 0 / 0 |
+
+An initial review-fix measurement still found 400 all-thread context switches
+per ten seconds with a sleeping main thread: the two GStreamer sink event
+threads polled even with input events disabled. Disabling their expose polling
+and handling own-window Expose events explicitly removed those measured wakes;
+the paused-frame repaint check passes. Context-switch deltas from every
+`/proc/PID/task/TID/status` are a **wakeup proxy**, not interrupt counts.
+Zero CPU ticks in a short sample does not establish universal zero work.
+
+`scripts/test-idle-wakeups.py` also passed with wallpaper Off, discovery disabled,
+20 seconds settling followed by a 20-second sample. Main-thread voluntary
+switches/second were:
+
+| Peer state | Null backend | X11 backend |
 | --- | ---: | ---: |
-| 1920×1080 loop, 10-second sample | 33.8% | 13.5% |
-| 3840×2160 loop, 10-second sample | 115.0% | 27.4% |
-| Both outputs covered, 5-second sample | 0.0% | 0.2% |
+| Alone | 0.00 | 0.00 |
+| Paired but offline | 1.10 | 1.05 |
+| Connected | 3.95 | 4.20 |
 
-The final covered sample recorded one CPU tick (0.2%); an earlier after-run
-recorded 0.0%. These short samples do not establish universal zero work. The
-final off-idle daemon integration test also passes. GPU utilization was
-**not collected**: Xvfb is not a physical GPU
-presentation test. An attempted NVIDIA preference failed CUDA/system-memory
-negotiation; it was removed before the final successful CPU run. The script's
-GPU label now states what it measures rather than asserting a host device is
-absent. **Even after these reductions, software 4K does not meet a negligible
-performance-impact acceptance bar.** Smoothness and energy cost need physical
-desktop measurements, not an inference from average CPU.
+Other measured daemon threads recorded zero context switches. The peer cases
+still perform normal connection/retry work; these are not zero-wakeup daemon
+claims. GPU utilization was **not collected**: Xvfb is not a physical GPU
+presentation test. **Software 4K still does not meet a negligible-impact bar.**
+Smoothness, GPU/energy cost and concurrent input latency require physical
+desktop measurements, not an inference from average CPU or compile checks.
 
-Raw evidence is in `/tmp/wallpaper-before.json`, `/tmp/wallpaper-after.json`,
-`/tmp/wallpaper-before.log`, `/tmp/wallpaper-after.log` and
-`/tmp/wallpaper-shots/` (actual X11 seam/motion PNGs and xrandr topology).
+Raw local evidence: `/tmp/wallpaper-review-xvfb.log`,
+`/tmp/wallpaper-shots/measurements.json`, `/tmp/wallpaper-shots/` (seam, loop,
+paused-expose PNGs and xrandr topology), `/tmp/wallpaper-review-idle.json` and
+`/tmp/wallpaper-review-idle.log`. These temporary files are not shipped assets.
 
 ## Validation
 
-Use `CARGO_TARGET_DIR="$PWD/target-wallpaper-smooth"`, no more than four jobs,
+Use `CARGO_TARGET_DIR="$PWD/target-wallpaper-review-fixes"`, no more than four jobs,
 and never `cargo fmt`. No fat-LTO build was performed. The private target
 directory is removed at handoff. Checks on this branch:
 
-- `cargo test -j 4 --workspace`: passes, including 448 daemon unit tests and
-  the off-idle integration test. The first sandboxed attempt failed on denied
-  private loopback sockets; the unrestricted rerun passes. Neither known-flaky
-  input test failed on that rerun.
+- `RUST_TEST_THREADS=4 cargo test -j 4 --workspace`: passes, including 454 daemon
+  unit tests, 16 wallpaper library tests and the off-idle integration test.
+  A sandboxed focused attempt failed on denied private sockets/D-Bus; the
+  unrestricted focused and workspace reruns pass. A subsequent full run hit
+  the known-flaky X11 `devices_are_listed_and_input_says_which_one` event timeout;
+  the exact test passed alone, then the full workspace was rerun unchanged.
 - `cargo clippy -j 4 --workspace --all-targets -- -D warnings`: passes.
-- `cargo check -j 4 -p one-mk-wallpaper -p one-mk-app -p one-mk-ctl -p one-mk-proto`
+- `RUSTFLAGS="-D warnings" cargo check -j 4 --all-targets -p one-mk-wallpaper -p one-mk-app -p one-mk-ctl -p one-mk-proto -p one-mk-input`
   passes with `--target aarch64-apple-darwin` and
   `--target x86_64-pc-windows-msvc`. These are compile checks, **not native
   linking, execution, signing, notarization, encoder tests or GPU acceptance**.
@@ -211,7 +292,12 @@ directory is removed at handoff. Checks on this branch:
   mixed-density origin invariance, old-peer defaults, native-picture bundle
   slicing/corruption/borders, readiness retirement, stale-child EOF and decoder
   error preservation; existing canvas/cache/distribution/lifecycle tests pass.
-- Xvfb seam/loop/pause/EOF/CPU script passes on the final Linux helper.
+  New tests cover connection-only/duplicate plans retaining a child PID and
+  acknowledging readiness, metadata-based verified-hash invalidation, initial
+  clock sampling before any child starts, inbox admission/rate/cap accounting,
+  exact S_OK vs S_FALSE, atomic picture readers, snapshot merge/partial restore
+  and retention of current/unrestored/failed-swap PNG references.
+- Xvfb seam/loop/pause/expose/EOF/CPU and daemon off-idle scripts pass.
 - `git diff --check` passes. Packaging was not rerun for this branch; earlier
   wallpaper-live packaging evidence is not treated as new native acceptance.
 
@@ -246,9 +332,13 @@ Aura, Hanabi or Lively source was copied or incorporated.
 3. Cover one screen (continue); cover every screen (decoder pauses). Combine
    lock, sleep, unplugged power and Low Power Mode; releasing one hold must
    not defeat another. Observe no wallpaper polling wakeups while fully held.
+   Exercise off-main power notifications and repeated screen/occlusion changes;
+   confirm NSEvent processing stays responsive and its queue does not grow.
 4. Watch ten loop boundaries and rate nudges; replace short/long/different-fps
    clips repeatedly. Capture the readiness-gated cut at high frame rate: no
    desktop/black flash. Failed new playback must retain the previous frame.
+   Repeatedly lock/unlock: new windows must remain alpha-zero until ready,
+   without the former opaque-gray flash. Locked helpers should be absent.
 5. Choose oversized/high-bitrate/120-fps clips. Verify preparation progress,
    actual VideoToolbox hardware encoder, <=60 fps, no upscaling, H.264 High,
    audio removal, MP4 moov-first and cache reuse on receivers. Disable encoder
@@ -256,6 +346,12 @@ Aura, Hanabi or Lively source was copied or incorporated.
 6. Set different native wallpapers/scaling/colors per display. Apply a shared
    picture, change Fit and selection, restart the daemon, then Off. Verify
    exact previous wallpaper/options restoration and **no player for pictures**.
+   Use a safely inspectable static configuration; also confirm dynamic/HEIC
+   originals, aerials, opaque settings and other-Space configurations are
+   refused without native changes. Test Null-backend picture application for
+   main-queue deadlock, display UUID survival across unplug/replug, a newly
+   added screen, and partial Off retaining its snapshot/PNG until retry. Inject
+   a failed native setting call during replacement and retry Off.
 7. Record hardware/OS/codec/fps/dimensions, Activity Monitor CPU/GPU/energy and
    frame-time/drop evidence for 1080p/4K for at least one minute, then covered,
    locked, battery and Off. Confirm one steady-state decode per computer and
@@ -264,28 +360,45 @@ Aura, Hanabi or Lively source was copied or incorporated.
    seam/time, paused receiver clock silence, reconnect/offline reservation and
    Off while offline. Test an unsupported receiver codec and rapid same-source
    Fit changes. Remote Retina density transport remains an explicit open gap.
+   Record player PIDs across connect/disconnect/Caps changes: existing players
+   must stay alive, only the newly capable peer receives a plan, and duplicate
+   plans re-report readiness without hashing/probing. Start a new controller
+   with at least 20 seconds of clock skew and verify sampling precedes playback.
 
 ## Owner's Windows acceptance checklist
 
 1. Build/link/run on Windows with the supported system decoders. Test WorkerW
    icon layering/clicks, native chooser/drop, invalid codecs and plain errors.
+   Exercise both the old top-level WorkerW and Windows 11 24H2 child/layered
+   Progman layouts; an unsupported shell must fail cleanly.
 2. Test 100%/150%/200% DPI, negative origins, mixed refresh rates and monitor
    unplug/replug. WM_DISPLAYCHANGE/WM_DPICHANGED must replace outputs without
    flashing or duplicate windows; confirm source-fps flip-model presentation
    and latency-handle waits in a profiler, including minimized/covered states.
+   Track kernel handles through long playback and repeated output rebuilds:
+   one wait handle per swapchain, with no per-frame or rebuild growth.
 3. Test a fullscreen foreground window, multiple covered monitors, shell
    presentation mode, lock/sleep, battery and battery saver independently and
    together. A visible monitor must continue; all covered must pause decoding.
    Fully paused playback must have no presentation timer or busy polling.
+   Move the cursor/caret continuously, including oneMK-injected input, while
+   paused: it must not trigger wallpaper coverage/power work. Unplug AC and
+   toggle saver mode to verify notification-driven holds without frame polls.
 4. Repeatedly replace videos, including decoder failures, and capture actual
    presentation. The old helper must survive until the new first frame is
    visible; then only one decode remains. Check ten loops and 0.98/1.02 nudges.
+   Trace S_FALSE ticks before the first frame and between decoded frames: no
+   premature Ready, black poster or duplicate TransferVideoFrame/Present.
 5. Test oversized/high-bitrate/>60-fps and portrait sources. Confirm a hardware
    MFT, actual resizing/orientation, H.264 High, <=60 fps, no audio, moov-first
    and original fallback if the hardware URL check/encoder is unavailable.
 6. Set different wallpapers per monitor and a nondefault wallpaper position.
    Test PNG/JPEG/WebP and HEIC with/without the OS decoder. Shared picture/Fit
    changes must use no player; Off after restart restores URLs and position.
+   Include background color/solid-color mode, a screen added during the
+   session, disconnected-screen partial restore and replug/Off retry. The
+   pending snapshot and referenced PNGs must survive failures. Configured or
+   paused slideshows must be refused without changing slideshow settings.
 7. Use Task Manager/GPUView/ETW to record CPU/GPU/energy, video-decode engine,
    frame pacing and drops for one-minute 1080p/4K, all covered, battery saver
    and Off. Confirm GPU TransferVideoFrame and no per-frame CPU readback.

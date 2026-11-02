@@ -33,6 +33,7 @@ unsafe extern "C" {
 #[repr(C)]
 struct WakeContext { version: isize, info: *mut c_void, callbacks: [usize; 7], perform: unsafe extern "C" fn(*mut c_void) }
 static INPUT_SOURCE: Mutex<usize> = Mutex::new(0);
+static POWER_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 unsafe extern "C" fn input_ready(_: *mut c_void) {}
 pub fn wake() {
     let source = INPUT_SOURCE.lock().unwrap();
@@ -48,6 +49,10 @@ define_class!(
     impl Observer {
         #[unsafe(method(changed:))]
         fn changed(&self, note: &NSNotification) {
+            if MainThreadMarker::new().is_none() {
+                dispatch2::DispatchQueue::main().exec_async(|| { POWER_DIRTY.store(true, std::sync::atomic::Ordering::Relaxed); wake(); });
+                return;
+            }
             let name = note.name().to_string();
             let mut flags = self.ivars().get();
             match name.as_str() {
@@ -247,6 +252,8 @@ fn outputs(player: &AVQueuePlayer, config: &PlayerConfig, mtm: MainThreadMarker)
         let window = unsafe { NSWindow::initWithContentRect_styleMask_backing_defer(NSWindow::alloc(mtm), frame, NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel, NSBackingStoreType::Buffered, false) };
         unsafe { window.setReleasedWhenClosed(false); }
         window.setIgnoresMouseEvents(true);
+        window.setBackgroundColor(Some(&objc2_app_kit::NSColor::blackColor()));
+        window.setAlphaValue(0.0);
         window.setLevel(unsafe { CGWindowLevelForKey(18) - 1 } as isize);
         window.setCollectionBehavior(NSWindowCollectionBehavior::CanJoinAllSpaces | NSWindowCollectionBehavior::Stationary | NSWindowCollectionBehavior::IgnoresCycle);
         let view = NSView::new(mtm);
@@ -306,13 +313,14 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let mut ready = false;
     let mut preparing_since = Instant::now();
     loop {
+        while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(objc2_app_kit::NSEventMask::Any, Some(&NSDate::distantPast()), unsafe { NSDefaultRunLoopMode }, true) { app.sendEvent(&event); }
         while let Ok(input) = receiver.try_recv() {
             match input { Input::End => {
                 unsafe { player.pause(); looper.disableLooping(); center.removeObserver(&observer); workspace.removeObserver(&observer); distributed.removeObserver(&observer); }
                 return Ok(());
             }, Input::Offset(offset) => config.clock_offset_ms = offset }
         }
-        let flags = observer.ivars().get();
+        let flags = observer.ivars().get() | if POWER_DIRTY.swap(false, std::sync::atomic::Ordering::Relaxed) { 8 } else { 0 };
         if flags & 4 != 0 {
             refresh_displays(&mut config, mtm);
             retiring.extend(std::mem::replace(&mut outputs, self::outputs(&player, &config, mtm)?));
@@ -352,7 +360,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             last_sync = Instant::now();
         }
         if !ready && !outputs.is_empty() && outputs.iter().all(|output| unsafe { output.layer.isReadyForDisplay() }) {
-            for output in &outputs { output.window.orderFrontRegardless(); }
+            for output in &outputs { output.window.setAlphaValue(1.0); output.window.orderFrontRegardless(); }
             retiring.clear();
             if playing { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); }
             ready = true;

@@ -6,6 +6,72 @@ use image::{ImageDecoder, ImageReader, RgbaImage};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
+pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let temporary = path.with_extension(format!("{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        file.write_all(bytes)?; file.sync_all()?; drop(file);
+        std::fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(temporary); }
+    result
+}
+
+fn referenced(value: &serde_json::Value, path: &Path) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains(path.file_name().unwrap().to_string_lossy().as_ref()),
+        serde_json::Value::Array(values) => values.iter().any(|value| referenced(value, path)),
+        serde_json::Value::Object(values) => values.values().any(|value| referenced(value, path)),
+        _ => false,
+    }
+}
+
+fn prune_pictures(root: &Path, keep: &[PathBuf]) -> Result<()> {
+    let snapshot = root.join("previous.json");
+    let saved = if snapshot.exists() { serde_json::from_slice(&std::fs::read(snapshot)?)? } else { serde_json::Value::Null };
+    let current = root.join("current.json");
+    let current = if current.exists() { serde_json::from_slice(&std::fs::read(current)?)? } else { serde_json::Value::Null };
+    for entry in std::fs::read_dir(root)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|extension| extension == "png") && !keep.contains(&path) && !referenced(&saved, &path) && !referenced(&current, &path) { std::fs::remove_file(path)?; }
+    }
+    Ok(())
+}
+
+fn write_picture(root: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    fn occupied(root: &Path) -> Result<u64> {
+        let mut bytes = 0u64;
+        for entry in std::fs::read_dir(root)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            bytes = bytes.saturating_add(if kind.is_file() { entry.metadata()?.len() } else if kind.is_dir() { occupied(&entry.path())? } else { 0 });
+        }
+        Ok(bytes)
+    }
+    ensure!(occupied(root.parent().context("The picture cache has no parent")?)?.saturating_add(bytes.len() as u64) <= 8 << 30, "The wallpaper cache is full. Turn off wallpaper before choosing another picture.");
+    atomic_write(path, bytes)
+}
+
+#[cfg(any(target_os = "macos", windows, test))]
+pub(super) fn merge_snapshot<Entry>(saved: &mut Vec<Entry>, observed: impl IntoIterator<Item = Entry>, key: impl Fn(&Entry) -> &str) {
+    for entry in observed { if !saved.iter().any(|previous| key(previous) == key(&entry)) { saved.push(entry); } }
+}
+
+#[cfg(any(target_os = "macos", windows, test))]
+pub(super) fn unrestored<Entry>(saved: Vec<Entry>, mut restore: impl FnMut(&Entry) -> bool) -> Vec<Entry> {
+    saved.into_iter().filter(|entry| !restore(entry)).collect()
+}
+
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn restorable_macos_store(text: &str) -> bool {
+    let providers: Vec<_> = text.split("<string>com.apple.wallpaper.choice.").skip(1).filter_map(|part| part.split_once("</string>").map(|(provider, _)| provider)).collect();
+    let spaces = text.split("<key>Spaces</key>").skip(1).map(str::trim_start);
+    !text.contains("<data>") && !providers.is_empty() && providers.iter().all(|provider| *provider == "image")
+        && spaces.into_iter().all(|spaces| spaces.starts_with("<dict/>") || spaces.starts_with("<dict></dict>"))
+}
+
 #[cfg(target_os = "macos")]
 #[path = "picture_macos.rs"]
 mod native;
@@ -95,8 +161,9 @@ fn slices(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<Vec<(
         let (width, height) = ImageReader::new(Cursor::new(&bytes)).with_guessed_format()?.into_dimensions()?;
         ensure!(width == (monitor.rect.width * monitor.scale).round() as u32 && height == (monitor.rect.height * monitor.scale).round() as u32
             && u64::from(width) * u64::from(height) <= 64 * 1024 * 1024, "The received picture does not match this screen");
-        let destination = root.join(format!("{}-{index}.png", plan.asset_hash.as_ref().unwrap_or(&plan.hash)));
-        std::fs::write(&destination, bytes)?;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let destination = root.join(format!("{}-{index}-{}-{}.png", plan.asset_hash.as_ref().unwrap_or(&plan.hash), std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        write_picture(root, &destination, &bytes)?;
         files.push((monitor.clone(), destination));
     }
     ensure!(input.read(&mut [0])? == 0, "The received picture has unexpected contents");
@@ -104,9 +171,17 @@ fn slices(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<Vec<(
 }
 
 pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<()> {
+    std::fs::create_dir_all(root)?;
+    prune_pictures(root, &[])?;
     let files = slices(plan, computer, path, root)?;
     #[cfg(any(target_os = "macos", windows))]
-    return native::apply(&files, root);
+    {
+        let result = native::apply(&files, root);
+        let paths: Vec<_> = files.iter().map(|(_, path)| path.clone()).collect();
+        if result.is_ok() { atomic_write(&root.join("current.json"), &serde_json::to_vec(&paths)?)?; }
+        prune_pictures(root, &paths)?;
+        result
+    }
     #[cfg(target_os = "linux")]
     {
         let bounds = files.iter().map(|(monitor, _)| monitor.local.unwrap_or(monitor.rect)).reduce(Rect::union).context("No picture screens")?;
@@ -118,15 +193,19 @@ pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<()
             image::imageops::overlay(&mut desktop, &pixels, (rect.x - bounds.x) as i64, (rect.y - bounds.y) as i64);
         }
         let path = root.join(format!("{}-spanned.png", plan.asset_hash.as_ref().unwrap_or(&plan.hash)));
-        desktop.save(&path)?;
+        let mut png = Cursor::new(Vec::new());
+        desktop.write_to(&mut png, image::ImageFormat::Png)?;
+        write_picture(root, &path, &png.into_inner())?;
         let snapshot = root.join("previous.json");
         if !snapshot.exists() {
             let previous: Vec<_> = ["picture-uri", "picture-uri-dark", "picture-options"].into_iter().map(|key| settings("get", key, None).map(|value| (key.to_owned(), value))).collect::<Result<_>>()?;
-            std::fs::write(&snapshot, serde_json::to_vec(&previous)?)?;
+            atomic_write(&snapshot, &serde_json::to_vec(&previous)?)?;
         }
         let uri = file_uri(&path)?;
         for key in ["picture-uri", "picture-uri-dark"] { settings("set", key, Some(&uri))?; }
         settings("set", "picture-options", Some("spanned"))?;
+        atomic_write(&root.join("current.json"), &serde_json::to_vec(&[&path])?)?;
+        prune_pictures(root, &[path])?;
         Ok(())
     }
 }
@@ -134,13 +213,14 @@ pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<()
 pub fn restore(root: &Path) -> Result<()> {
     if !root.join("previous.json").exists() { return Ok(()); }
     #[cfg(any(target_os = "macos", windows))]
-    native::restore(root)?;
+    ensure!(native::restore(root)?, "Some original wallpapers could not be restored yet. Reconnect those screens and return to the original desktop, then turn wallpaper off again. The snapshot and pictures were retained.");
     #[cfg(target_os = "linux")]
     {
         let previous: Vec<(String, String)> = serde_json::from_slice(&std::fs::read(root.join("previous.json"))?)?;
         for (key, value) in previous { settings("set", &key, Some(value.trim()))?; }
     }
     std::fs::remove_file(root.join("previous.json"))?;
+    let _ = std::fs::remove_file(root.join("current.json"));
     for entry in std::fs::read_dir(root)? {
         let path = entry?.path();
         if path.extension().is_some_and(|extension| extension == "png") { let _ = std::fs::remove_file(path); }
@@ -171,6 +251,49 @@ fn file_uri(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn macos_guard_refuses_opaque_dynamic_and_per_space_settings() {
+        let image = "<string>com.apple.wallpaper.choice.image</string><key>Spaces</key><dict/>";
+        assert!(restorable_macos_store(image));
+        assert!(!restorable_macos_store(&image.replace("choice.image", "choice.aerial")));
+        assert!(!restorable_macos_store(&image.replace("<dict/>", "<dict><key>space-id</key><dict/></dict>")));
+        assert!(!restorable_macos_store(&format!("{image}<data>opaque settings</data>")));
+        assert!(!restorable_macos_store(&format!("{image}<key>Spaces</key><dict><key>another-space</key><dict/></dict>")));
+        assert!(!restorable_macos_store("<plist/>"));
+    }
+    #[test]
+    fn picture_pruning_keeps_current_and_unrestored_screen_references() {
+        let root = Directory::new();
+        let pending = root.0.join("pending-screen.png");
+        let current = root.0.join("current.png");
+        let previous_attempt = root.0.join("failed-swap.png");
+        let stale = root.0.join("stale.png");
+        for path in [&pending, &current, &previous_attempt, &stale] { std::fs::write(path, b"picture").unwrap(); }
+        atomic_write(&root.0.join("previous.json"), &serde_json::to_vec(&serde_json::json!({ "applied": { "unplugged": pending }, "previous_applied": { "failed-swap": previous_attempt } })).unwrap()).unwrap();
+        atomic_write(&root.0.join("current.json"), &serde_json::to_vec(&[&current]).unwrap()).unwrap();
+        prune_pictures(&root.0, &[]).unwrap();
+        assert!(pending.exists() && current.exists() && previous_attempt.exists()); assert!(!stale.exists());
+    }
+    #[test]
+    fn snapshots_merge_without_overwriting_and_retain_unrestored_screens() {
+        let mut saved = vec![("stable-a".to_owned(), "original-a".to_owned())];
+        merge_snapshot(&mut saved, [("stable-a".into(), "oneMK".into()), ("stable-b".into(), "original-b".into())], |entry| &entry.0);
+        assert_eq!(saved[0].1, "original-a");
+        let pending = unrestored(saved, |entry| entry.0 == "stable-b");
+        assert_eq!(pending, [("stable-a".into(), "original-a".into())]);
+        assert!(unrestored(pending, |_| true).is_empty());
+    }
+    #[test]
+    fn atomic_picture_replacement_keeps_existing_readers_intact() {
+        let root = Directory::new();
+        let path = root.0.join("slice.png");
+        atomic_write(&path, b"before").unwrap();
+        let mut reader = std::fs::File::open(&path).unwrap();
+        atomic_write(&path, b"after").unwrap();
+        let mut original = String::new(); reader.read_to_string(&mut original).unwrap();
+        assert_eq!(original, "before");
+        assert_eq!(std::fs::read(path).unwrap(), b"after");
+    }
     struct Directory(PathBuf);
     impl Directory {
         fn new() -> Self {

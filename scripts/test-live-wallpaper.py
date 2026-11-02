@@ -86,6 +86,32 @@ def main():
                 time.sleep(seconds)
                 return (ticks() - before) / os.sysconf("SC_CLK_TCK") / (time.monotonic() - started) * 100
 
+            def switches():
+                counts = {}
+                for task in Path(f"/proc/{process.pid}/task").iterdir():
+                    try:
+                        counts[task.name] = sum(int(line.split()[1]) for line in (task / "status").read_text().splitlines() if "ctxt_switches:" in line)
+                    except FileNotFoundError:
+                        pass
+                return counts
+
+            def paused_cost(churn=False, seconds=10):
+                before_cpu, before_switches = ticks(), switches()
+                title = library.XInternAtom(connection, b"_NET_WM_NAME", 0)
+                user_time = library.XInternAtom(connection, b"_NET_WM_USER_TIME", 0)
+                started = time.monotonic()
+                while time.monotonic() - started < seconds:
+                    if churn:
+                        value = (ffi.c_ulong * 1)(int(time.monotonic() * 1000))
+                        for atom in [title, user_time]:
+                            library.XChangeProperty(connection, blocker, atom, 6, 32, 0, value, 1)
+                        library.XSync(connection, 0)
+                    time.sleep(0.05)
+                elapsed, after = time.monotonic() - started, switches()
+                return {"seconds": round(elapsed, 2), "cpu_percent": round((ticks() - before_cpu) / os.sysconf("SC_CLK_TCK") / elapsed * 100, 3),
+                        "main_context_switches": after[str(process.pid)] - before_switches[str(process.pid)],
+                        "all_thread_context_switches": sum(max(0, count - before_switches.get(task, count)) for task, count in after.items())}
+
             log = open(output / "x11-player.log", "w")
             process = subprocess.Popen([player, config_path], stdin=subprocess.PIPE, env=environment, stderr=log)
             time.sleep(6)
@@ -103,13 +129,33 @@ def main():
             library.XSync(connection, 0)
             time.sleep(2)
             assert (root / "playback.txt").read_text() == "Paused while the desktop is covered"
-            measurements = {"occluded_cpu_percent": round(cpu(), 2)}
+            measurements = {"occluded_idle": paused_cost(), "occluded_unrelated_window_changes": paused_cost(churn=True)}
             library.XDestroyWindow(connection, blocker)
+            library.XChangeProperty(connection, window, atom, 33, 32, 0, None, 0)
             library.XSync(connection, 0)
             time.sleep(2)
             assert (root / "playback.txt").read_text() == "Playing"
             process.stdin.close()
             assert process.wait(timeout=5) == 0
+            plan["paused"] = True
+            config_path.write_text(json.dumps(config))
+            process = subprocess.Popen([player, config_path], stdin=subprocess.PIPE, env=environment, stderr=log)
+            time.sleep(3)
+            assert process.poll() is None
+            measurements["user_paused_idle"] = paused_cost()
+            cover = library.XCreateSimpleWindow(connection, window, 0, 0, 1280, 360, 0, 0, 0)
+            library.XMapWindow(connection, cover)
+            library.XSync(connection, 0)
+            time.sleep(0.2)
+            library.XDestroyWindow(connection, cover)
+            library.XSync(connection, 0)
+            time.sleep(0.2)
+            exposed = shot("user-paused-expose.png")
+            for column in [0, 320, 638, 639, 640, 641, 960, 1279]:
+                assert max(abs(actual - expected) for actual, expected in zip(exposed.getpixel((column, 180)), image.getpixel((column, 180)))) <= 18, "paused frame did not repaint after expose"
+            process.stdin.close()
+            assert process.wait(timeout=5) == 0
+            plan["paused"] = False
             for title, width, height in [("1080p", 1920, 1080), ("4k", 3840, 2160)]:
                 movie = root / (title + ".webm")
                 subprocess.run(["gst-launch-1.0", "-q", "videotestsrc", "pattern=ball", "num-buffers=120", "!", f"video/x-raw,width={width},height={height},framerate=30/1", "!", "vp8enc", "threads=2", "deadline=1", "!", "webmmux", "!", "filesink", f"location={movie}"], check=True, timeout=180)

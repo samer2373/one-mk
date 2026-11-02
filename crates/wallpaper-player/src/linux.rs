@@ -52,6 +52,7 @@ struct Gst {
     structure: unsafe extern "C" fn(Object, c_uint) -> Object,
     integer: unsafe extern "C" fn(Object, *const c_char, *mut c_int) -> c_int,
     overlay: unsafe extern "C" fn(Object, usize),
+    expose: unsafe extern "C" fn(Object),
     unref: unsafe extern "C" fn(Object),
     mini_unref: unsafe extern "C" fn(Object),
     has_name: unsafe extern "C" fn(Object, *const c_char) -> c_int,
@@ -111,6 +112,7 @@ impl Gst {
                 structure: api!(core, "gst_caps_get_structure", unsafe extern "C" fn(Object, c_uint) -> Object),
                 integer: api!(core, "gst_structure_get_int", unsafe extern "C" fn(Object, *const c_char, *mut c_int) -> c_int),
                 overlay: api!(video, "gst_video_overlay_set_window_handle", unsafe extern "C" fn(Object, usize)),
+                expose: api!(video, "gst_video_overlay_expose", unsafe extern "C" fn(Object)),
                 unref: api!(object, "g_object_unref", unsafe extern "C" fn(Object)),
                 mini_unref: api!(core, "gst_mini_object_unref", unsafe extern "C" fn(Object)),
                 _core: core, _object: object, _video: video,
@@ -286,7 +288,6 @@ impl Desktop {
         unsafe {
             let root = (self.xlib.XDefaultRootWindow)(self.display);
             let clients = self.property(root, c"_NET_CLIENT_LIST_STACKING");
-            for window in &clients { (self.xlib.XSelectInput)(self.display, *window, xlib::StructureNotifyMask | xlib::PropertyChangeMask); }
             let desktop = (self.xlib.XInternAtom)(self.display, c"_NET_WM_WINDOW_TYPE_DESKTOP".as_ptr(), 0);
             let dock = (self.xlib.XInternAtom)(self.display, c"_NET_WM_WINDOW_TYPE_DOCK".as_ptr(), 0);
             let rectangles: Vec<_> = clients.into_iter().filter(|window| !self.windows.contains(window)).filter_map(|window| {
@@ -317,7 +318,7 @@ impl Desktop {
         ensure!(!display.is_null(), "Cannot open the X11 desktop");
         unsafe { (xlib.XSetErrorHandler)(Some(ignore_x_error)); }
         let mut desktop = Self { xlib, display, windows: Vec::new() };
-        unsafe { (desktop.xlib.XSelectInput)(display, (desktop.xlib.XDefaultRootWindow)(display), xlib::PropertyChangeMask | xlib::SubstructureNotifyMask); }
+        unsafe { (desktop.xlib.XSelectInput)(display, (desktop.xlib.XDefaultRootWindow)(display), xlib::PropertyChangeMask); }
         for monitor in config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer) {
             let rect = monitor.local.unwrap_or(monitor.rect);
             unsafe {
@@ -333,6 +334,7 @@ impl Desktop {
                 let all_desktops: c_ulong = 0xffff_ffff;
                 (desktop.xlib.XChangeProperty)(display, window, atom(c"_NET_WM_DESKTOP"), xlib::XA_CARDINAL, 32, xlib::PropModeReplace, (&all_desktops as *const c_ulong).cast(), 1);
                 (desktop.xlib.XStoreName)(display, window, c"oneMK Wallpaper".as_ptr());
+                (desktop.xlib.XSelectInput)(display, window, xlib::ExposureMask);
                 (desktop.xlib.XMapWindow)(display, window);
                 (desktop.xlib.XLowerWindow)(display, window);
                 desktop.windows.push(window);
@@ -383,7 +385,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
         let top = (slice.y * height).round() as i32;
         let right = (width - (slice.x + slice.width) * width).round() as i32;
         let bottom = (height - (slice.y + slice.height) * height).round() as i32;
-        pipeline_text += &format!("picture. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! videobox left={left} top={top} right={right} bottom={bottom} fill=black ! videoscale ! video/x-raw,width={},height={},pixel-aspect-ratio=1/1 ! ximagesink name=screen{index} sync=true handle-events=false force-aspect-ratio=false ", (monitor.rect.width * monitor.scale) as u32, (monitor.rect.height * monitor.scale) as u32);
+        pipeline_text += &format!("picture. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! videobox left={left} top={top} right={right} bottom={bottom} fill=black ! videoscale ! video/x-raw,width={},height={},pixel-aspect-ratio=1/1 ! ximagesink name=screen{index} sync=true handle-events=false handle-expose=false force-aspect-ratio=false ", (monitor.rect.width * monitor.scale) as u32, (monitor.rect.height * monitor.scale) as u32);
     }
     if visible.is_empty() { pipeline_text += "picture. ! fakesink sync=true"; }
     let pipeline = gst.pipeline(&pipeline_text)?;
@@ -411,14 +413,31 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let mut rate = 1.0;
     let mut last_message = "";
     let power = power_events();
+    let mut coverage_changed = true;
+    let mut power_changed = true;
+    let root = unsafe { (desktop.xlib.XDefaultRootWindow)(desktop.display) };
+    let coverage_atoms = [c"_NET_ACTIVE_WINDOW", c"_NET_CLIENT_LIST_STACKING"].map(|name| unsafe { (desktop.xlib.XInternAtom)(desktop.display, name.as_ptr(), 0) });
     let mut bus_descriptor = PollDescriptor { fd: -1, events: 0, revents: 0 };
     unsafe { (gst.poll)(bus, &mut bus_descriptor); }
     loop {
         while let Ok(input) = receiver.try_recv() {
             match input { Input::End => { unsafe { (gst.unref)(bus); } return Ok(()); }, Input::Offset(offset) => config.clock_offset_ms = offset }
         }
-        holds.set(Hold::Battery, config.plan.pause_on_battery && on_battery());
-        holds.set(Hold::Occluded, desktop.covered(&config));
+        unsafe {
+            while (desktop.xlib.XPending)(desktop.display) != 0 {
+                let mut event: xlib::XEvent = std::mem::zeroed();
+                (desktop.xlib.XNextEvent)(desktop.display, &mut event);
+                if event.get_type() == xlib::PropertyNotify && event.property.window == root && coverage_atoms.contains(&event.property.atom) { coverage_changed = true; }
+                if event.get_type() == xlib::Expose && event.expose.count == 0
+                    && let Some(index) = desktop.windows.iter().position(|window| *window == event.expose.window) && visible.contains(&index)
+                {
+                    let sink = gst.object(pipeline.raw, &format!("screen{index}"))?;
+                    (gst.expose)(sink); (gst.unref)(sink);
+                }
+            }
+        }
+        if power_changed { holds.set(Hold::Battery, config.plan.pause_on_battery && on_battery()); power_changed = false; }
+        if coverage_changed { holds.set(Hold::Occluded, desktop.covered(&config)); coverage_changed = false; }
         if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); }
         if playing != holds.playing() {
             playing = holds.playing();
@@ -450,10 +469,6 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
                 if error { (gst.unref)(bus); bail!("GStreamer stopped playing this video. Try a video your system can decode."); }
                 pipeline.segment(0, config.plan.media.duration_ms, !segment);
             }
-            while (desktop.xlib.XPending)(desktop.display) != 0 {
-                let mut event = std::mem::zeroed();
-                (desktop.xlib.XNextEvent)(desktop.display, &mut event);
-            }
         }
         let mut descriptors = [
             libc::pollfd { fd: input_socket().0.as_raw_fd(), events: libc::POLLIN, revents: 0 },
@@ -464,6 +479,12 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
         unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, if playing { 2000 } else { -1 }); }
         let mut buffer = [0u8; 4096];
         while (&input_socket().0).read(&mut buffer).is_ok_and(|count| count > 0) {}
-        if let Some(power) = &power { unsafe { while libc::recv(power.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), libc::MSG_DONTWAIT) > 0 {} } }
+        if let Some(power) = &power { unsafe {
+            loop {
+                let count = libc::recv(power.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), libc::MSG_DONTWAIT);
+                if count <= 0 { break; }
+                if buffer[..count as usize].split(|byte| *byte == 0).any(|field| field == b"SUBSYSTEM=power_supply") { power_changed = true; }
+            }
+        } }
     }
 }

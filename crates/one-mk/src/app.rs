@@ -2947,12 +2947,26 @@ impl App {
     /// peers' edges overlap, the one with the lowest fingerprint wins, so
     /// the choice doesn't depend on connection order.
     fn update_sides(&mut self) {
-        if let Some((runtime, dir)) = &self.services.wallpaper {
+        if let Some((runtime, dir)) = &self.services.wallpaper && runtime.needs_reconcile() {
             let peers = self.peers.iter().filter(|(_, peer)| peer.caps & caps::LIVE_WALLPAPER != 0).map(|(fingerprint, peer)| crate::live_wallpaper::Peer {
                 id: fingerprint.short(), name: peer.name.clone(), fingerprint: *fingerprint,
                 address: peer.conn.remote_address(), control: peer.ctl.clone(),
             }).collect();
-            runtime.reconcile(dir.clone(), self.status(), peers, self.node.clone());
+            let status = Status {
+                id: self.node.identity().fingerprint.short(), name: sanitize_name(&self.node.identity().name),
+                screens: self.local.as_ref().map_or_else(Vec::new, |desktop| desktop.screens.clone()),
+                peers: self.trust.devices().iter().filter_map(|device| {
+                    let live = self.peers.get(&device.fingerprint()?);
+                    Some(PeerStatus { id: device.short_id(), name: sanitize_name(&device.name), side: live.map_or_else(|| device.side(), |peer| peer.side),
+                        os: live.map_or(device.os, |peer| peer.os), online: live.is_some(), swap: device.swap_ctrl_cmd.to_string(),
+                        screens: live.and_then(|peer| peer.desktop.as_ref()).map_or_else(Vec::new, |desktop| desktop.screens.clone()) })
+                }).collect(),
+                offsets: self.trust.devices().iter().filter_map(|device| {
+                    let live = device.fingerprint().and_then(|fingerprint| self.peers.get(&fingerprint));
+                    Some((device.short_id(), live.map_or(device.offset, |peer| peer.offset)?))
+                }).collect(), ..Default::default()
+            };
+            runtime.reconcile(dir.clone(), crate::live_wallpaper::Layout::from_status(&status), peers, self.node.clone());
         }
         let mut edges: Vec<(Edge, Fingerprint)> = Vec::new();
         let mut conflicts: Vec<_> = self.trust.devices().iter().filter(|device| device.placed_by == one_mk_net::PlacedBy::Pending)

@@ -178,6 +178,7 @@ pub enum Command {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Wire {
     Plan { plan: Plan },
+    PlanReady { hash: String },
     Off,
     Clock { sent_ms: i64 },
     ClockReply { sent_ms: i64, received_ms: i64, replied_ms: i64 },
@@ -272,6 +273,11 @@ pub fn prune_cache_except(root: &Path, keep: &BTreeSet<String>) -> std::io::Resu
 }
 
 pub fn availability() -> Result<(), &'static str> {
+    static AVAILABLE: std::sync::OnceLock<Result<(), &'static str>> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(detect_availability)
+}
+
+fn detect_availability() -> Result<(), &'static str> {
     #[cfg(target_os = "linux")]
     {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -285,9 +291,35 @@ pub fn availability() -> Result<(), &'static str> {
     Ok(())
 }
 
+pub fn has_video_frame(result: i32) -> bool { result == 0 }
+
+pub fn file_identity(file: &std::fs::File) -> anyhow::Result<Vec<u64>> {
+    let metadata = file.metadata()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(vec![metadata.len(), metadata.dev(), metadata.ino(), metadata.mtime() as u64, metadata.mtime_nsec() as u64, metadata.ctime() as u64, metadata.ctime_nsec() as u64])
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle}};
+        let mut information = BY_HANDLE_FILE_INFORMATION::default();
+        unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information)?; }
+        Ok(vec![metadata.len(), u64::from(information.dwVolumeSerialNumber), u64::from(information.nFileIndexHigh) << 32 | u64::from(information.nFileIndexLow),
+            u64::from(information.ftLastWriteTime.dwHighDateTime) << 32 | u64::from(information.ftLastWriteTime.dwLowDateTime)])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_s_ok_contains_a_video_frame() {
+        assert!(has_video_frame(0));
+        assert!(!has_video_frame(1));
+        assert!(!has_video_frame(i32::MIN));
+    }
     fn monitor(computer: &str, x: f64, scale: f64) -> Monitor {
         Monitor { computer: computer.into(), name: "0".into(), rect: Rect { x, y: 0.0, width: 1920.0, height: 1080.0 }, local: None, scale, online: true }
     }
