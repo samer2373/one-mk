@@ -22,12 +22,12 @@ impl App {
             let mode = choices[index].0;
             self.set_pref("typing preference", &["typing", "--keys", mode], |prefs| prefs.typing = mode);
         }
-        let effective = self.running().map(|status| status.typing.as_str()).filter(|typing| !typing.is_empty()).unwrap_or("daemon not running");
-        let support = if cfg!(target_os = "linux") {
-            "On this computer, received letters follow its own layout. Letters can follow your layout when controlling a supported Mac or Windows computer."
-        } else {
-            "Letters follows your keyboard layout. Auto uses letters when layouts differ. Shortcuts stay physical keys; older peers use Keys."
+        let what = match self.prefs.typing {
+            "characters" => "The other computer types the letters printed on your keys, even with a different layout. Shortcuts still use the keys.",
+            "auto" => "Letters when the two keyboard layouts differ, the same keys when they match.",
+            _ => "Each key you press is the same key on the other computer, whatever its layout.",
         };
-        para(ui, pos2(content.left(), content.top() + 40.0), content.width(), &format!("Effective typing: {effective}. {support} Changes apply on the next visit."), regular(T_META), INK2);
+        let note = if cfg!(target_os = "linux") && self.prefs.typing != "physical" { " Letters work when you control a Mac or Windows computer." } else { "" };
+        para(ui, pos2(content.left(), content.top() + 40.0), content.width(), &format!("{what}{note} It changes the next time the pointer crosses."), regular(T_META), INK2);
     }
 }

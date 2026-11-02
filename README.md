@@ -533,7 +533,7 @@ Linux the desktop still takes the chord, and one-mk ignores it.
 - Windows and macOS shortcuts are not tested on real hardware yet.
 
 **Broadcast: type on every computer at once.** `one-mk broadcast on` (or
-`Ctrl+Alt+B`, or the tray's or window's "Broadcast to all computers") sends
+`Ctrl+Alt+B`, or the tray's or window's "Type on every computer") sends
 everything you type, click and scroll here to every connected computer at
 the same time, for setting up several computers alike or running the same
 command on all of them. Each computer gets its own pointer, starting at the
@@ -982,7 +982,7 @@ The menu shows:
 - **Switch to <computer>** and **Send clipboard to <computer>** for each
   connected computer (**Switch back here** while another one has control);
 - **Open oneMK…**, which opens the window;
-- **Broadcast to all computers** (a checkmark; while a computer is
+- **Type on every computer** (a checkmark; while a computer is
   connected), and the headline "Broadcasting to N computers" while it is on;
 - **Keep the pointer here** (a checkmark), **Lock every screen**, **Take
   back control**, **Start oneMK** (when it is not running), **Pair a

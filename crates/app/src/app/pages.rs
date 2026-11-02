@@ -379,13 +379,13 @@ impl App {
         let s = self.running();
         let peers = s.map_or(0, |status| status.peers.len());
         let heights = [
-            48.0 + 6.0 * EDGE_ROW + 14.0,
+            48.0 + 5.0 * EDGE_ROW + 14.0,
             48.0 + 3.0 * 36.0 - 6.0 + 14.0,
             48.0 + 36.0 - 6.0 + 14.0,
-            48.0 + 46.0 + 56.0 * self.prefs.hotkeys.len() as f32 + 140.0,
+            48.0 + 46.0 + 56.0 * self.prefs.hotkeys.len() as f32 + if s.is_some_and(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
             48.0 + 22.0 + (SWAP_ROW * peers as f32).max(40.0) + 14.0,
-            48.0 + 4.0 * 166.0 + 90.0,
-            48.0 + 132.0 + 14.0,
+            48.0 + 4.0 * super::settings_controls::HOOK_H + 60.0,
+            48.0 + 96.0 + 14.0,
             48.0 + 260.0 + 14.0,
             self.updates_card_h(),
         ];

@@ -148,47 +148,55 @@ impl App {
     pub(super) fn hook_controls(&mut self, ui: &mut Ui, rect: Rect) {
         let mut top = rect.top();
         for (index, (key, label)) in crate::view::HOOK_EVENTS.iter().enumerate() {
-            ui.painter().text(pos2(rect.left(), top), Align2::LEFT_TOP, label, regular(T_BODY), INK2);
+            // One event: its name and which computer it is about; the
+            // command with its button; then the time limit and the shell.
+            if index > 0 {
+                ui.painter().hline(rect.x_range(), top - 9.0, Stroke::new(1.0, HAIRLINE));
+            }
             let current = self.prefs.hooks.iter().find(|(event, _)| event == label).map(|(_, command)| command.as_str()).unwrap_or("").to_owned();
             let event = key.trim_start_matches("on_");
             let (computer, timeout, shell) = self.prefs.hook_options.get(event).cloned().unwrap_or_else(|| (String::new(), self.prefs.hooks_timeout, self.prefs.hooks_shell));
             let mut command = self.drafts.get(*key).cloned().unwrap_or(current.clone());
-            let field = Rect::from_min_size(pos2(rect.left(), top + 23.0), vec2(rect.width(), 28.0));
-            widgets::field(ui, field, Id::unique(("hook-command", key)), &mut command, "Add a command", &format!("Command when {}", label.to_lowercase()), !self.prefs.unreadable, true);
-            self.drafts.insert((*key).into(), command.clone());
             let mut chosen = self.drafts.get(&format!("{key}-computer")).cloned().unwrap_or(computer);
             let mut seconds = self.drafts.get(&format!("{key}-seconds")).cloned().unwrap_or(timeout.to_string());
             let mut use_shell = self.drafts.get(&format!("{key}-shell")).map_or(shell, |value| value == "on");
-            let mut child = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_size(pos2(rect.left(), top + 58.0), vec2((rect.width() - 94.0).max(80.0), 28.0))));
-            child.horizontal(|ui| {
-                ui.label("With");
-                egui::ComboBox::from_id_salt(("hook-computer", key)).selected_text(if chosen.is_empty() { "Any computer".into() } else {
-                    self.running().and_then(|status| status.peers.iter().find(|peer| chosen.replace('-', "").starts_with(&peer.id.replace('-', "")))).map_or("Offline computer".into(), |peer| peer.name.clone())
-                }).width((rect.width() - 144.0).max(70.0)).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut chosen, String::new(), "Any computer");
-                    if let Some(status) = self.running() { for peer in &status.peers { ui.selectable_value(&mut chosen, peer.id.clone(), &peer.name); } }
-                });
-            });
-            ui.painter().text(pos2(rect.right() - 88.0, top + 71.0), Align2::LEFT_CENTER, "Secs", regular(T_META), INK2);
-            widgets::field(ui, Rect::from_min_size(pos2(rect.right() - 44.0, top + 58.0), vec2(44.0, 26.0)), Id::unique(("hook-seconds", key)), &mut seconds, "5", "Time limit in seconds, 1 to 60", true, true);
-            let row = Rect::from_min_size(pos2(rect.left(), top + 88.0), vec2(rect.width(), 30.0));
-            if switch(ui, row, Id::unique(("hook-shell", key)), "Run as a shell command", use_shell, true).clicked() { use_shell = !use_shell; }
-            self.drafts.insert(format!("{key}-computer"), chosen.clone());
-            self.drafts.insert(format!("{key}-seconds"), seconds.clone());
-            self.drafts.insert(format!("{key}-shell"), if use_shell { "on" } else { "off" }.into());
-            let save = Rect::from_min_size(pos2(rect.left(), top + 122.0), vec2(76.0, 28.0));
-            if button(ui, save, Id::unique(("hook-save", index)), if current.is_empty() { "Add" } else { "Save" }, Look::Primary, !command.trim().is_empty(), Some(&format!("Save command: {label}"))).clicked() {
+            let head = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), 28.0));
+            ui.painter().text(head.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
+            let mut options = vec![(String::new(), "Any computer".to_owned())];
+            if let Some(status) = self.running() { options.extend(status.peers.iter().map(|peer| (peer.id.clone(), peer.name.clone()))); }
+            let shown = options.iter().find(|(id, _)| id.is_empty() && chosen.is_empty() || !id.is_empty() && chosen.replace('-', "").starts_with(&id.replace('-', ""))).map_or("A computer that's gone".to_owned(), |(_, name)| name.clone());
+            let w = (text_width(ui, &shown, regular(T_META)) + 40.0).clamp(110.0, (rect.width() * 0.5).max(110.0));
+            if let Some(id) = chooser(ui, Rect::from_min_size(pos2(head.right() - w, head.top()), vec2(w, 28.0)), Id::unique(("hook-computer", key)), &shown, &format!("Which computer: {label}"), &options, &chosen) {
+                chosen = id;
+            }
+            let save_w = 70.0;
+            let field = Rect::from_min_size(pos2(rect.left(), top + 34.0), vec2(rect.width() - save_w - 8.0, 30.0));
+            widgets::field(ui, field, Id::unique(("hook-command", key)), &mut command, "Add a command", &format!("Command when {}", label.to_lowercase()), !self.prefs.unreadable, true);
+            let save = Rect::from_min_size(pos2(field.right() + 8.0, field.top()), vec2(save_w, 30.0));
+            let changed = command.trim() != current.trim();
+            if !current.is_empty() && command.trim().is_empty() {
+                if button(ui, save, Id::unique(("hook-remove", index)), "Remove", Look::Quiet, true, Some(&format!("Remove command: {label}"))).clicked() {
+                    self.settings_command("the command", vec!["hooks".into(), format!("--{}", key.replace('_', "-")), String::new()]);
+                    self.drafts.remove(*key);
+                }
+            } else if button(ui, save, Id::unique(("hook-save", index)), if current.is_empty() { "Add" } else { "Save" }, if changed || current.is_empty() { Look::Primary } else { Look::Quiet }, !command.trim().is_empty(), Some(&format!("Save command: {label}"))).clicked() {
                 match number(&seconds, 60).filter_positive() {
                     Ok(seconds) => self.settings_command("the command", hook_args(key, &command, &chosen, seconds, use_shell)),
                     Err(error) => self.toast_error(error, None, self.now),
                 }
             }
-            let remove = Rect::from_min_size(pos2(rect.left() + 84.0, top + 122.0), vec2(76.0, 28.0));
-            if button(ui, remove, Id::unique(("hook-remove", index)), "Remove", Look::Quiet, !current.is_empty(), Some(&format!("Remove command: {label}"))).clicked() {
-                self.settings_command("the command", vec!["hooks".into(), format!("--{}", key.replace('_', "-")), String::new()]);
-                self.drafts.remove(*key);
-            }
-            top += 166.0;
+            let opts_y = top + 70.0;
+            ui.painter().text(pos2(rect.left(), opts_y + 15.0), Align2::LEFT_CENTER, "Stop it after", regular(T_META), INK2);
+            let after = text_width(ui, "Stop it after", regular(T_META));
+            widgets::field(ui, Rect::from_min_size(pos2(rect.left() + after + 8.0, opts_y + 2.0), vec2(40.0, 26.0)), Id::unique(("hook-seconds", key)), &mut seconds, "5", "Time limit in seconds, 1 to 60", true, true);
+            ui.painter().text(pos2(rect.left() + after + 56.0, opts_y + 15.0), Align2::LEFT_CENTER, "seconds", regular(T_META), INK2);
+            let shell_row = Rect::from_min_size(pos2(rect.right() - 170.0, opts_y), vec2(170.0, 30.0));
+            if switch(ui, shell_row, Id::unique(("hook-shell", key)), "Run in a shell", use_shell, true).clicked() { use_shell = !use_shell; }
+            self.drafts.insert((*key).into(), command.clone());
+            self.drafts.insert(format!("{key}-computer"), chosen.clone());
+            self.drafts.insert(format!("{key}-seconds"), seconds.clone());
+            self.drafts.insert(format!("{key}-shell"), if use_shell { "on" } else { "off" }.into());
+            top += HOOK_H;
         }
         para(ui, pos2(rect.left(), top), rect.width(), "Commands run here with your permissions. Arrivals and departures refer to this computer. Only add commands you trust.", regular(T_META), INK2);
     }
@@ -229,6 +237,39 @@ trait Positive {
 
 impl Positive for Result<u32, String> {
     fn filter_positive(self) -> Result<u32, String> { self.and_then(|value| if value > 0 { Ok(value) } else { Err("Enter a whole number from 1 to 60.".into()) }) }
+}
+
+/// One event's height in the commands card.
+pub(super) const HOOK_H: f32 = 120.0;
+
+/// A quiet button showing the choice, with a menu of the others.
+pub(super) fn chooser(ui: &mut Ui, r: Rect, id: Id, shown: &str, name: &str, options: &[(String, String)], current: &str) -> Option<String> {
+    let resp = button(ui, r, id, "", Look::Quiet, true, Some(name));
+    let p = ui.painter();
+    p.text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, fit(p, shown, &regular(T_META), r.width() - 36.0), regular(T_META), INK);
+    let c = pos2(r.right() - 14.0, r.center().y);
+    p.add(egui::Shape::line(vec![c + vec2(-3.5, -1.5), c + vec2(0.0, 2.0), c + vec2(3.5, -1.5)], Stroke::new(1.5, INK2)));
+    let mut picked = None;
+    egui::Popup::menu(&resp).width(220.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
+        for (value, title) in options {
+            let (row, item) = ui.allocate_exact_size(vec2(220.0, 28.0), Sense::click());
+            let hover = tween(ui.ctx(), item.id.with("hover"), f32::from(item.hovered()), 0.12, motion::out_cubic);
+            let p = ui.painter().clone();
+            p.rect_filled(row, CornerRadius::same(6), mix(Color32::TRANSPARENT, PILL, hover));
+            widgets::focus_ring(ui, &item, row, 6);
+            let on = value == current;
+            if on {
+                widgets::draw_check(&p, pos2(row.left() + 16.0, row.center().y), 10.0, INK, 1.0);
+            }
+            p.text(pos2(row.left() + 30.0, row.center().y), Align2::LEFT_CENTER, fit(&p, title, &regular(T_BODY), row.width() - 40.0), regular(T_BODY), if on { INK } else { INK_HOVER });
+            item.widget_info(|| egui::WidgetInfo::selected(Role::MenuItemRadio, true, on, title));
+            if item.clicked() {
+                picked = Some(value.clone());
+                ui.close();
+            }
+        }
+    });
+    picked
 }
 
 #[cfg(test)]
