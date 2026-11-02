@@ -13,7 +13,12 @@ Stretch. The preview uses the same reserved canvas and monitor offsets as
 Layout. The existing Play on switches select participating computers. Video
 rows show preparing, playing, a pause reason, or a plain error for each computer.
 Pause retains a video selection; Turn off stops playback and restores any native
-picture wallpaper changed by oneMK. Pictures do not start a player process.
+picture wallpaper changed by oneMK. Safe native pictures do not start a player.
+On Macs with aerials, Muro or other non-restorable settings, and Windows with
+slideshows or unreadable native settings, a still picture uses oneMK's desktop
+windows instead. The Wallpaper page and CLI say “Shown by oneMK; your own
+wallpaper returns when you turn it off”. Pause and battery pause do not change
+a still picture. Off, deselecting this computer and quitting close its windows.
 
 Power-user commands remain `one-mk wallpaper set FILE`, `pause`, `play`, `off`,
 and `status`; the normal window needs no commands or configuration editing.
@@ -90,13 +95,15 @@ back to the original rather than silently using a CPU encoder.
 
 ### Native pictures
 
-The controller's helper uses `Canvas::slice` and the same Fit/Fill/Stretch math to make
-bounded per-monitor PNG slices. One SHA-addressed bundle per computer travels
-through the existing distribution path; receivers validate count, byte limits,
-dimensions and trailing data in their helper before applying it. Receivers accept
-only PNG slices, fully decode them with limits, and re-encode them before passing
-them to native wallpaper APIs. Bundle indices avoid repeated
-slicing during ordinary reconciliation. Source and current/previous bundles
+The controller's helper normalizes the source into a bounded PNG-only
+`oneMKpi2` bundle. Receivers validate byte limits, dimensions and trailing data,
+then use `Canvas::slice` and the video's Fit/Fill/Stretch math. Retaining the
+whole picture lets peers reslice locally after display changes, without the
+owner or its original file. Older `oneMKpic` per-monitor bundles remain readable
+for native application; reselect an old picture to enable window fallback.
+Update all participating computers together: older helpers cannot read the new
+bundle or report the picture-window playback state. Bundle indices avoid repeat
+preparation during ordinary reconciliation. Source and current/previous bundles
 are retained alongside the video cache.
 
 - Mac: `NSWorkspace` per-`NSScreen` image URLs, on the main queue. Save the old
@@ -141,15 +148,18 @@ and proposed Mac/Windows URLs are both retained across a failed native swap.
 Legacy Mac snapshots keyed by screen number cannot safely recover a historic
 UUID; unmatched entries are retained, not silently discarded.
 
-**Native modes deliberately refused rather than damaged:** Mac dynamic/HEIC
+**Native modes bypassed rather than damaged:** Mac dynamic/HEIC
 originals, aerials, per-Space settings, missing/unreadable wallpaper stores and
 opaque store payloads cannot be faithfully round-tripped through NSWorkspace.
 The conservative store check can also refuse ordinary static configurations
-whose settings are opaque. These fail before native mutation; this is not
-dynamic/aerial/other-Spaces support. If the user changes wallpaper/Space during
+whose settings are opaque. The helper's complete read-only preparation decides
+whether native replacement is safe before writing a snapshot or setting a
+wallpaper. If not, it selects the window player without changing OS settings.
+This does not import or replace dynamic/aerial/other-Spaces configuration.
+If the user changes wallpaper/Space during
 a oneMK picture session, Mac Off retains unmatched entries rather than
 overwriting that unrelated desktop. Windows configured/paused slideshow mode
-is refused before changing it; slideshow configuration is left untouched.
+uses the window player; slideshow configuration is left untouched.
 Windows empty-image/solid-color backgrounds restore the original empty URL
 and color; the API does not expose a separate readable background-enable flag
 (`DSS_ENABLED` describes slideshow status). KDE/other Linux desktops without
@@ -203,8 +213,8 @@ Availability is cached once per process. Input-side Layout reconciliation
 does not build a full daemon/wallpaper status, and returns immediately when
 there is no plan or pending Off distribution.
 
-Mac drains NSEvents as well as servicing its CFRunLoop; off-main power
-notifications dispatch to the main queue before changing main-thread state.
+Mac drains NSEvents as well as servicing its CFRunLoop; notifications queue
+their identity before waking the main thread to change player state.
 Lock still reaps the helper (rather than claiming a zero-cost paused decoder).
 Windows owns one latency wait handle per swapchain, closes it on rebuild/drop,
 and uses foreground/move-size-end/minimize/top-level object events instead of
@@ -220,6 +230,13 @@ Active clock correction runs about every two seconds; Windows presentation is
 paced at source fps (capped at 60), not a busy presentation loop. OS event
 delivery may still cause work while paused; literal zero CPU/GPU everywhere is
 not established by these structural changes or the finite measurements.
+
+Still-picture windows share the video path's desktop window placement and
+canvas slicing. Mac retains a CGImage in each clipped CALayer; Windows retains
+screen-sized pixels and paints only on WM_PAINT. Neither still path starts a
+decoder, frame loop or polling timer. Display changes rebuild the windows;
+lock and sleep hide them, and Off or parent EOF destroys them without changing
+the system wallpaper. Battery and user pause do not affect a still picture.
 
 ## Platform evidence and limits
 
@@ -377,13 +394,21 @@ Aura, Hanabi or Lively source was copied or incorporated.
    availability and verify a clear original-video fallback.
 6. Set different native wallpapers/scaling/colors per display. Apply a shared
    picture, change Fit and selection, restart the daemon, then Off. Verify
-   exact previous wallpaper/options restoration and **no player for pictures**.
+   exact previous wallpaper/options restoration and **no player for safe native pictures**.
    Use a safely inspectable static configuration; also confirm dynamic/HEIC
    originals, aerials, opaque settings and other-Space configurations are
-   refused without native changes. Test Null-backend picture application for
+   shown by oneMK without native changes. Test Null-backend picture application for
    main-queue deadlock, display UUID survival across unplug/replug, a newly
    added screen, and partial Off retaining its snapshot/PNG until retry. Inject
    a failed native setting call during replacement and retry Off.
+   With Muro and again with an aerial selected, show a picture on four screens.
+   Check icons remain clickable, Fill/Fit/Stretch seams, mixed DPI and negative
+   monitor origins; hot-plug a screen and change resolution. Lock/unlock,
+   sleep/wake and switch Spaces. Pause must keep the still visible. Off and
+   daemon quit must reveal Muro/aerial immediately, with OS settings unchanged.
+   Repeat from a peer, then while its owner is disconnected. Measure steady-state
+   helper CPU in Activity Monitor for at least a minute; it should be near 0%,
+   with no periodic frame work. These native runtime checks have not run here.
 7. Record hardware/OS/codec/fps/dimensions, Activity Monitor CPU/GPU/energy and
    frame-time/drop evidence for 1080p/4K for at least one minute, then covered,
    locked, battery and Off. Confirm one steady-state decode per computer and

@@ -74,7 +74,8 @@ unsafe fn set(workspace: &AnyObject, screen: &AnyObject, url: &NSURL, previous: 
     }
 }
 
-pub fn apply(files: &[(Monitor, PathBuf)], root: &Path) -> Result<()> {
+struct Prepared { previous: Vec<Previous>, assignments: Vec<(String, PathBuf)> }
+fn prepare(files: &[(Monitor, PathBuf)], root: &Path) -> Result<Prepared> {
     {
         let home = std::env::var_os("HOME").context("The Mac wallpaper settings could not be inspected safely")?;
         let store = PathBuf::from(home).join("Library/Application Support/com.apple.wallpaper/Store/Index.plist");
@@ -98,7 +99,8 @@ pub fn apply(files: &[(Monitor, PathBuf)], root: &Path) -> Result<()> {
                 let identity = identity(&screen)?;
                 let url: Option<Retained<NSURL>> = msg_send![&*workspace, desktopImageURLForScreen: &*screen];
                 let native_url = url.context("macOS did not expose a restorable wallpaper setting")?;
-                if let Some(url) = native_url.absoluteString() {
+                {
+                    let url = native_url.absoluteString().context("macOS did not expose a restorable wallpaper URL")?;
                     if let Some(saved) = previous.iter().find(|saved| saved.screen == identity) {
                         ensure!(saved.owns(&url.to_string()) || saved.url == url.to_string(), "Return to the Space where oneMK set the picture before changing it again");
                         continue;
@@ -136,16 +138,24 @@ pub fn apply(files: &[(Monitor, PathBuf)], root: &Path) -> Result<()> {
         }
         Ok(assignments)
     })?;
-    super::atomic_write(&snapshot, &serde_json::to_vec(&previous)?)?;
-    on_main(|| unsafe {
-        let workspace = workspace();
-        let screens = screens();
-        for (display, path) in assignments {
-            let screen = screens.iter().find(|screen| identity(screen).is_ok_and(|identity| identity == display)).context("The picture's screen is no longer connected")?;
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-            set(&workspace, &screen, &url, None)?;
-        }
-        Ok(())
+    Ok(Prepared { previous, assignments })
+}
+
+pub fn apply(files: &[(Monitor, PathBuf)], root: &Path) -> Result<one_mk_wallpaper::picture::Mode> {
+    // No setting has been written during preparation. An opaque store or
+    // another Space therefore falls back without trying to round-trip it.
+    super::native_or_overlay(prepare(files, root), |Prepared { previous, assignments }| {
+        super::atomic_write(&root.join("previous.json"), &serde_json::to_vec(&previous)?)?;
+        on_main(|| unsafe {
+            let workspace = workspace();
+            let screens = screens();
+            for (display, path) in assignments {
+                let screen = screens.iter().find(|screen| identity(screen).is_ok_and(|identity| identity == display)).context("The picture's screen is no longer connected")?;
+                let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+                set(&workspace, &screen, &url, None)?;
+            }
+            Ok(())
+        })
     })
 }
 

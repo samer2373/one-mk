@@ -5,7 +5,8 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSBitmapImageFileType, NSBitmapImageRep, NSScreen, NSView, NSWindow, NSWindowCollectionBehavior, NSWindowOcclusionState, NSWindowStyleMask, NSWorkspace};
 use objc2_av_foundation::{AVAssetImageGenerator, AVLayerVideoGravityResize, AVMediaTypeVideo, AVPlayerItem, AVPlayerLayer, AVPlayerLooper, AVQueuePlayer, AVURLAsset};
 use objc2_core_media::CMTime;
-use objc2_foundation::{MainThreadMarker, NSArray, NSDate, NSDefaultRunLoopMode, NSDictionary, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSPoint, NSProcessInfo, NSRect, NSRunLoop, NSSize, NSString, NSURL};
+use objc2_foundation::{MainThreadMarker, NSArray, NSData, NSDate, NSDefaultRunLoopMode, NSDictionary, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSPoint, NSProcessInfo, NSRect, NSRunLoop, NSSize, NSString, NSURL};
+use objc2_quartz_core::CALayer;
 use one_mk_wallpaper::{Correction, Hold, Holds, Media, PlayerConfig, correction, now_ms, position};
 use std::{cell::Cell, ffi::c_void, path::Path, sync::{Mutex, mpsc::Receiver}, time::{Duration, Instant}};
 
@@ -33,7 +34,7 @@ unsafe extern "C" {
 #[repr(C)]
 struct WakeContext { version: isize, info: *mut c_void, callbacks: [usize; 7], perform: unsafe extern "C" fn(*mut c_void) }
 static INPUT_SOURCE: Mutex<usize> = Mutex::new(0);
-static POWER_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NOTIFICATIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 unsafe extern "C" fn input_ready(_: *mut c_void) {}
 pub fn wake() {
     let source = INPUT_SOURCE.lock().unwrap();
@@ -49,24 +50,29 @@ define_class!(
     impl Observer {
         #[unsafe(method(changed:))]
         fn changed(&self, note: &NSNotification) {
-            if MainThreadMarker::new().is_none() {
-                dispatch2::DispatchQueue::main().exec_async(|| { POWER_DIRTY.store(true, std::sync::atomic::Ordering::Relaxed); wake(); });
-                return;
-            }
-            let name = note.name().to_string();
-            let mut flags = self.ivars().get();
-            match name.as_str() {
-                "com.apple.screenIsLocked" => flags |= 1,
-                "com.apple.screenIsUnlocked" => flags &= !1,
-                "NSWorkspaceScreensDidSleepNotification" | "NSWorkspaceWillSleepNotification" => flags |= 2,
-                "NSWorkspaceScreensDidWakeNotification" | "NSWorkspaceDidWakeNotification" => flags &= !2,
-                "NSApplicationDidChangeScreenParametersNotification" => flags |= 4,
-                _ => flags |= 8,
-            }
-            self.ivars().set(flags);
+            // Notification centers may deliver off-main; keep both the event
+            // identity and ordering without touching main-thread observer state.
+            NOTIFICATIONS.lock().unwrap().push(note.name().to_string());
+            wake();
         }
     }
 );
+
+fn notification_flags(observer: &Observer) -> u32 {
+    let mut flags = observer.ivars().get();
+    for name in NOTIFICATIONS.lock().unwrap().drain(..) {
+        match name.as_str() {
+            "com.apple.screenIsLocked" => flags |= 1,
+            "com.apple.screenIsUnlocked" => flags &= !1,
+            "NSWorkspaceScreensDidSleepNotification" | "NSWorkspaceWillSleepNotification" => flags |= 2,
+            "NSWorkspaceScreensDidWakeNotification" | "NSWorkspaceDidWakeNotification" => flags &= !2,
+            "NSApplicationDidChangeScreenParametersNotification" => flags |= 4,
+            _ => flags |= 8,
+        }
+    }
+    observer.ivars().set(flags & !12);
+    flags
+}
 
 unsafe extern "C" fn power_changed(context: *mut c_void) {
     let observer = unsafe { &*context.cast::<Observer>() };
@@ -215,8 +221,10 @@ fn battery() -> bool {
     }
 }
 
-struct Output { window: Retained<NSWindow>, layer: Retained<AVPlayerLayer> }
-impl Drop for Output { fn drop(&mut self) { self.window.orderOut(None); unsafe { self.layer.setPlayer(None); } } }
+struct Output { window: Retained<NSWindow>, video: Option<Retained<AVPlayerLayer>> }
+impl Drop for Output { fn drop(&mut self) { self.window.orderOut(None); if let Some(layer) = &self.video { unsafe { layer.setPlayer(None); } } } }
+
+enum Surface<'a> { Video(&'a AVQueuePlayer), Picture(&'a NSBitmapImageRep) }
 
 fn refresh_displays(config: &mut PlayerConfig, mtm: MainThreadMarker) {
     let previous: Vec<_> = config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer).cloned().collect();
@@ -239,7 +247,7 @@ fn refresh_displays(config: &mut PlayerConfig, mtm: MainThreadMarker) {
     }
 }
 
-fn outputs(player: &AVQueuePlayer, config: &PlayerConfig, mtm: MainThreadMarker) -> Result<Vec<Output>> {
+fn outputs(surface: Surface<'_>, config: &PlayerConfig, mtm: MainThreadMarker) -> Result<Vec<Output>> {
     let screens = NSScreen::screens(mtm);
     ensure!(!screens.is_empty(), "No desktop screens are available");
     let primary_top = screens.objectAtIndex(0).frame().size.height;
@@ -262,8 +270,21 @@ fn outputs(player: &AVQueuePlayer, config: &PlayerConfig, mtm: MainThreadMarker)
         view.setWantsLayer(true);
         let root = view.layer().context("The desktop video layer could not be created")?;
         root.setMasksToBounds(true);
-        let layer = unsafe { AVPlayerLayer::playerLayerWithPlayer(Some(player)) };
-        unsafe { layer.setVideoGravity(AVLayerVideoGravityResize.context("Video layers are unavailable")?); }
+        let (layer, video) = match &surface {
+            Surface::Video(player) => {
+                let video = unsafe { AVPlayerLayer::playerLayerWithPlayer(Some(player)) };
+                unsafe { video.setVideoGravity(AVLayerVideoGravityResize.context("Video layers are unavailable")?); }
+                (Retained::clone(&video).into_super(), Some(video))
+            },
+            Surface::Picture(bitmap) => {
+                let layer = CALayer::new();
+                let image = bitmap.CGImage().context("macOS could not make the picture layer")?;
+                // CALayer retains the CGImage. No decoder, player or timer is
+                // kept running once the compositor has these pixels.
+                unsafe { let _: () = msg_send![&*layer, setContents: Retained::as_ptr(&image)]; }
+                (layer, None)
+            },
+        };
         layer.setContentsScale(screen.backingScaleFactor());
         let scale_x = frame.size.width / monitor.rect.width;
         let scale_y = frame.size.height / monitor.rect.height;
@@ -271,7 +292,7 @@ fn outputs(player: &AVQueuePlayer, config: &PlayerConfig, mtm: MainThreadMarker)
         root.addSublayer(&layer);
         window.setContentView(Some(&view));
         window.orderBack(None);
-        outputs.push(Output { window, layer });
+        outputs.push(Output { window, video });
     }
     Ok(outputs)
 }
@@ -295,6 +316,11 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     for (center, names) in [(&*center, &["NSWindowDidChangeOcclusionStateNotification", "NSApplicationDidChangeScreenParametersNotification", "NSProcessInfoPowerStateDidChangeNotification"][..]), (&*workspace, &["NSWorkspaceScreensDidSleepNotification", "NSWorkspaceScreensDidWakeNotification", "NSWorkspaceWillSleepNotification", "NSWorkspaceDidWakeNotification"][..]), (&*distributed, &["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"][..])] {
         for name in names { unsafe { center.addObserver_selector_name_object(&observer, sel!(changed:), Some(&NSString::from_str(name)), None); } }
     }
+    if config.plan.picture {
+        let result = run_picture(config, receiver, mtm, &app, &observer);
+        unsafe { center.removeObserver(&observer); workspace.removeObserver(&observer); distributed.removeObserver(&observer); }
+        return result;
+    }
     let asset = asset(&config.path);
     let item = unsafe { AVPlayerItem::playerItemWithAsset(&asset, mtm) };
     unsafe { item.setPreferredForwardBufferDuration(2.0); }
@@ -305,7 +331,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
         player.setPreventsDisplaySleepDuringVideoPlayback(false);
         player.setAutomaticallyWaitsToMinimizeStalling(true);
     }
-    let mut outputs = outputs(&player, &config, mtm)?;
+    let mut outputs = outputs(Surface::Video(&player), &config, mtm)?;
     let mut retiring = Vec::new();
     app.finishLaunching();
     let mut holds = Holds::default();
@@ -322,10 +348,10 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
                 return Ok(());
             }, Input::Offset(offset) => config.clock_offset_ms = offset, Input::Pause(paused) => config.plan.paused = paused }
         }
-        let flags = observer.ivars().get() | if POWER_DIRTY.swap(false, std::sync::atomic::Ordering::Relaxed) { 8 } else { 0 };
+        let flags = notification_flags(&observer);
         if flags & 4 != 0 {
             refresh_displays(&mut config, mtm);
-            retiring.extend(std::mem::replace(&mut outputs, self::outputs(&player, &config, mtm)?));
+            retiring.extend(std::mem::replace(&mut outputs, self::outputs(Surface::Video(&player), &config, mtm)?));
             ready = false;
             preparing_since = Instant::now();
         }
@@ -335,7 +361,6 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             let low_power: bool = unsafe { process.respondsToSelector(sel!(isLowPowerModeEnabled)) && msg_send![&*process, isLowPowerModeEnabled] };
             holds.set(Hold::LowPower, low_power);
         }
-        observer.ivars().set(flags & !12);
         holds.set(Hold::Locked, flags & 1 != 0);
         holds.set(Hold::Asleep, flags & 2 != 0);
         holds.set(Hold::User, config.plan.paused);
@@ -361,12 +386,50 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             }
             last_sync = Instant::now();
         }
-        if !ready && !outputs.is_empty() && outputs.iter().all(|output| unsafe { output.layer.isReadyForDisplay() }) {
+        if !ready && !outputs.is_empty() && outputs.iter().all(|output| unsafe { output.video.as_ref().is_some_and(|layer| layer.isReadyForDisplay()) }) {
             for output in &outputs { output.window.setAlphaValue(1.0); output.window.orderFrontRegardless(); }
             retiring.clear();
             if playing { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); }
             ready = true;
         }
         NSRunLoop::mainRunLoop().runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &NSDate::dateWithTimeIntervalSinceNow(if playing { if ready { 2.0 } else { 0.02 } } else { 1.0e10 }));
+    }
+}
+
+fn run_picture(mut config: PlayerConfig, receiver: Receiver<Input>, mtm: MainThreadMarker, app: &NSApplication, observer: &Observer) -> Result<()> {
+    let pixels = crate::picture::player_source(&config)?;
+    let mut png = std::io::Cursor::new(Vec::new());
+    pixels.write_to(&mut png, image::ImageFormat::Png)?;
+    let bitmap = NSBitmapImageRep::imageRepWithData(&NSData::with_bytes(png.get_ref())).context("macOS could not open this picture")?;
+    drop(pixels);
+    drop(png);
+    let mut outputs = outputs(Surface::Picture(&bitmap), &config, mtm)?;
+    app.finishLaunching();
+    let mut last = None;
+    let mut visible = false;
+    loop {
+        while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(objc2_app_kit::NSEventMask::Any, Some(&NSDate::distantPast()), unsafe { NSDefaultRunLoopMode }, true) { app.sendEvent(&event); }
+        while let Ok(input) = receiver.try_recv() { if matches!(input, Input::End) { return Ok(()); } }
+        let flags = notification_flags(observer);
+        if flags & 4 != 0 {
+            refresh_displays(&mut config, mtm);
+            let replacement = self::outputs(Surface::Picture(&bitmap), &config, mtm)?;
+            outputs = replacement;
+            visible = false;
+        }
+        let show = flags & 3 == 0;
+        if show != visible {
+            for output in &outputs {
+                if show { output.window.setAlphaValue(1.0); output.window.orderFrontRegardless(); }
+                else { output.window.orderOut(None); }
+            }
+            visible = show;
+        }
+        let playback = if !show { one_mk_wallpaper::Playback::Paused("Paused while this computer is locked or asleep".into()) }
+            else if outputs.is_empty() { one_mk_wallpaper::Playback::Paused("No connected screens selected".into()) }
+            else { one_mk_wallpaper::Playback::Picture };
+        if last.as_ref() != Some(&playback) { one_mk_wallpaper::event(playback.clone()); last = Some(playback); }
+        // Wake only for AppKit/workspace notifications or a command on stdin.
+        NSRunLoop::mainRunLoop().runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &NSDate::distantFuture());
     }
 }

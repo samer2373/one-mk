@@ -27,7 +27,7 @@ pub fn command(arguments: &[std::ffi::OsString]) -> Result<()> {
     ensure!(!computer.is_empty() && computer.len() <= 128, "Invalid picture computer");
     match action {
         "--picture-prepare" => prepare(Path::new(&arguments[1]), &plan, computer, Path::new(&arguments[2])),
-        "--picture-apply" => apply(&plan, computer, Path::new(&arguments[1]), Path::new(&arguments[2])),
+        "--picture-apply" => { println!("{}", serde_json::to_string(&apply(&plan, computer, Path::new(&arguments[1]), Path::new(&arguments[2]))?)?); Ok(()) },
         _ => anyhow::bail!("Unknown picture operation"),
     }
 }
@@ -92,6 +92,16 @@ pub(super) fn merge_snapshot<Entry>(saved: &mut Vec<Entry>, observed: impl IntoI
 #[cfg(any(target_os = "macos", windows, test))]
 pub(super) fn unrestored<Entry>(saved: Vec<Entry>, mut restore: impl FnMut(&Entry) -> bool) -> Vec<Entry> {
     saved.into_iter().filter(|entry| !restore(entry)).collect()
+}
+
+#[cfg(any(target_os = "macos", windows, test))]
+pub(super) fn native_or_overlay<Prepared>(prepared: Result<Prepared>, apply: impl FnOnce(Prepared) -> Result<()>) -> Result<one_mk_wallpaper::picture::Mode> {
+    use one_mk_wallpaper::picture::Mode;
+    if Mode::for_native_safety(prepared.is_ok()) == Mode::Overlay { return Ok(Mode::Overlay); }
+    // A failed OS write is not a safety refusal: it may already have changed
+    // a screen. Keep its snapshot and surface the error instead of hiding it.
+    apply(prepared?)?;
+    Ok(Mode::Native)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -194,30 +204,59 @@ pub fn inspect(path: &Path, poster: &Path) -> Result<Media> {
 
 pub fn prepare(source: &Path, plan: &Plan, computer: &str, path: &Path) -> Result<()> {
     let image = open(source)?;
-    let monitors: Vec<_> = plan.canvas.monitors.iter().filter(|monitor| monitor.computer == computer).collect();
-    ensure!(!monitors.is_empty(), "No screens selected on this computer");
+    ensure!(plan.canvas.monitors.iter().any(|monitor| monitor.computer == computer), "No screens selected on this computer");
+    ensure!(image.dimensions() == (plan.media.width, plan.media.height), "The picture dimensions changed");
+    let mut png = Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png)?;
+    let bytes = png.into_inner();
+    ensure!(bytes.len() <= 256 * 1024 * 1024, "This compressed picture is too large");
+    // Keep the original pixels, not just today's slices: a peer can then
+    // reslice after a screen is connected without asking the owner for a file.
     atomic_file(path, |output| {
-        output.write_all(b"oneMKpic")?;
-        output.write_all(&(monitors.len() as u32).to_le_bytes())?;
-        for monitor in monitors {
-            let slice = plan.canvas.slice(monitor, &plan.media, plan.fit).context("Empty picture layout")?;
-            let width = (monitor.rect.width * monitor.scale).round() as u32;
-            let height = (monitor.rect.height * monitor.scale).round() as u32;
-            pixel_limits(width, height).context("This screen is too large for a picture wallpaper")?;
-            let mut pixels = RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]));
-            for (horizontal, vertical, pixel) in pixels.enumerate_pixels_mut() {
-                let source_x = slice.x + (f64::from(horizontal) + 0.5) / f64::from(width) * slice.width;
-                let source_y = slice.y + (f64::from(vertical) + 0.5) / f64::from(height) * slice.height;
-                if let Some(sample) = image::imageops::sample_bilinear(&image, source_x as f32, source_y as f32) { *pixel = sample; }
-            }
-            let mut png = Cursor::new(Vec::new());
-            pixels.write_to(&mut png, image::ImageFormat::Png)?;
-            let bytes = png.into_inner();
-            output.write_all(&(bytes.len() as u64).to_le_bytes())?;
-            output.write_all(&bytes)?;
-        }
+        output.write_all(b"oneMKpi2")?;
+        output.write_all(&(bytes.len() as u64).to_le_bytes())?;
+        output.write_all(&bytes)?;
         Ok(())
     })
+}
+
+fn source(input: &mut impl Read, plan: &Plan) -> Result<RgbaImage> {
+    let mut length = [0; 8]; input.read_exact(&mut length)?;
+    let length = u64::from_le_bytes(length);
+    ensure!(length <= 256 * 1024 * 1024, "The received picture is too large");
+    let mut bytes = vec![0; length as usize]; input.read_exact(&mut bytes)?;
+    ensure!(input.read(&mut [0])? == 0, "The received picture has unexpected contents");
+    ensure!(image::guess_format(&bytes)? == image::ImageFormat::Png, "The received picture must be PNG");
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), image::ImageFormat::Png);
+    reader.limits(limits());
+    let decoder = reader.into_decoder()?;
+    ensure!(decoder.dimensions() == (plan.media.width, plan.media.height), "The received picture dimensions do not match the plan");
+    pixel_limits(plan.media.width, plan.media.height)?;
+    Ok(image::DynamicImage::from_decoder(decoder)?.into_rgba8())
+}
+
+#[cfg(any(target_os = "macos", windows, test))]
+pub fn player_source(config: &one_mk_wallpaper::PlayerConfig) -> Result<RgbaImage> {
+    let mut input = std::fs::File::open(&config.path)?;
+    let mut magic = [0; 8]; input.read_exact(&mut magic)?;
+    ensure!(&magic == b"oneMKpi2", "Choose the picture again to show it without changing your own wallpaper");
+    source(&mut input, &config.plan)
+}
+
+pub fn render(image: &RgbaImage, plan: &Plan, monitor: &Monitor) -> Result<RgbaImage> {
+    let slice = plan.canvas.slice(monitor, &plan.media, plan.fit).context("Empty picture layout")?;
+    let width = (monitor.rect.width * monitor.scale).round() as u32;
+    let height = (monitor.rect.height * monitor.scale).round() as u32;
+    pixel_limits(width, height).context("This screen is too large for a picture wallpaper")?;
+    let mut pixels = RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]));
+    for (horizontal, vertical, pixel) in pixels.enumerate_pixels_mut() {
+        let source_x = slice.x + (f64::from(horizontal) + 0.5) / f64::from(width) * slice.width;
+        let source_y = slice.y + (f64::from(vertical) + 0.5) / f64::from(height) * slice.height;
+        if let Some(sample) = image::imageops::sample_bilinear(image, source_x as f32, source_y as f32) {
+            for channel in 0..3 { pixel.0[channel] = ((u16::from(sample.0[channel]) * u16::from(sample.0[3]) + 127) / 255) as u8; }
+        }
+    }
+    Ok(pixels)
 }
 
 fn slices(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<Vec<(Monitor, PathBuf)>> {
@@ -225,6 +264,19 @@ fn slices(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<Vec<(
     let mut input = std::fs::File::open(path)?;
     let mut magic = [0; 8];
     input.read_exact(&mut magic)?;
+    if &magic == b"oneMKpi2" {
+        let image = source(&mut input, plan)?;
+        let mut files = Vec::new();
+        for (index, monitor) in plan.canvas.monitors.iter().filter(|monitor| monitor.computer == computer).enumerate() {
+            let pixels = render(&image, plan, monitor)?;
+            let mut png = Cursor::new(Vec::new()); pixels.write_to(&mut png, image::ImageFormat::Png)?;
+            let destination = root.join(format!("{}-{index}-{}.png", plan.asset_hash.as_ref().unwrap_or(&plan.hash), std::process::id()));
+            write_picture(root, &destination, &png.into_inner())?;
+            files.push((monitor.clone(), destination));
+        }
+        ensure!(!files.is_empty(), "No screens selected on this computer");
+        return Ok(files);
+    }
     ensure!(&magic == b"oneMKpic", "The received picture is incomplete");
     let mut count = [0; 4];
     input.read_exact(&mut count)?;
@@ -257,7 +309,7 @@ fn slices(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<Vec<(
     Ok(files)
 }
 
-pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<()> {
+pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<one_mk_wallpaper::picture::Mode> {
     std::fs::create_dir_all(root)?;
     prune_pictures(root, &[])?;
     let files = slices(plan, computer, path, root)?;
@@ -293,7 +345,7 @@ pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<()
         settings("set", "picture-options", Some("spanned"))?;
         atomic_write(&root.join("current.json"), &serde_json::to_vec(&[&path])?)?;
         prune_pictures(root, &[path])?;
-        Ok(())
+        Ok(one_mk_wallpaper::picture::Mode::Native)
     }
 }
 
@@ -338,6 +390,18 @@ fn file_uri(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_read_only_safety_refusal_selects_the_picture_player() {
+        use one_mk_wallpaper::picture::Mode;
+        let writes = std::cell::Cell::new(0);
+        let refused: Result<()> = Err(anyhow::anyhow!("opaque wallpaper"));
+        assert_eq!(native_or_overlay(refused, |_| { writes.set(1); Ok(()) }).unwrap(), Mode::Overlay);
+        assert_eq!(writes.get(), 0);
+        assert_eq!(native_or_overlay(Ok(()), |_| { writes.set(1); Ok(()) }).unwrap(), Mode::Native);
+        assert_eq!(writes.get(), 1);
+        assert!(native_or_overlay(Ok(()), |_| anyhow::bail!("OS write failed")).unwrap_err().to_string().contains("OS write failed"));
+    }
     #[test]
     fn macos_guard_refuses_opaque_dynamic_and_per_space_settings() {
         let image = "<string>com.apple.wallpaper.choice.image</string><key>Spaces</key><dict/>";
@@ -412,16 +476,64 @@ mod tests {
         let mut plan = plan();
         let bundle = root.0.join("bundle.video");
         prepare(&source, &plan, "host", &bundle).unwrap();
+        let config = one_mk_wallpaper::PlayerConfig { plan: plan.clone(), computer: "host".into(), path: bundle.clone(), clock_offset_ms: 0 };
+        assert_eq!(player_source(&config).unwrap(), image);
         let files = slices(&plan, "host", &bundle, &root.0.join("slices")).unwrap();
         for (index, (_, path)) in files.iter().enumerate() {
             let slice = open(path).unwrap();
             for (horizontal, vertical, pixel) in slice.enumerate_pixels() { assert_eq!(pixel, image.get_pixel(horizontal + index as u32 * 4, vertical)); }
         }
         plan.canvas.monitors[0].scale = 2.0;
-        assert!(slices(&plan, "host", &bundle, &root.0.join("bad-size")).is_err());
+        let resized = slices(&plan, "host", &bundle, &root.0.join("new-size")).unwrap();
+        assert_eq!(open(&resized[0].1).unwrap().dimensions(), (8, 8));
         plan.canvas.monitors[0].scale = 1.0;
         std::fs::OpenOptions::new().append(true).open(&bundle).unwrap().write_all(b"extra").unwrap();
         assert!(slices(&plan, "host", &bundle, &root.0.join("bad-tail")).is_err());
+    }
+    #[test]
+    fn picture_player_slicing_uses_the_video_canvas_for_every_fit() {
+        use one_mk_wallpaper::Fit;
+        let mut plan = plan();
+        plan.media.height = 8;
+        for monitor in &mut plan.canvas.monitors { monitor.rect.x -= 20.0; monitor.rect.y = 11.0; }
+        let pixels = RgbaImage::from_fn(8, 8, |horizontal, vertical| image::Rgba([(horizontal * 30) as u8, (vertical * 30) as u8, 0, 255]));
+        for (fit, left, right) in [(Fit::Fill, [0, 60, 0, 255], [120, 60, 0, 255]),
+            (Fit::Fit, [0, 0, 0, 255], [135, 15, 0, 255]), (Fit::Stretch, [0, 15, 0, 255], [120, 15, 0, 255])] {
+            plan.fit = fit;
+            assert_eq!(render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap().get_pixel(0, 0).0, left);
+            assert_eq!(render(&pixels, &plan, &plan.canvas.monitors[1]).unwrap().get_pixel(0, 0).0, right);
+        }
+        plan.fit = Fit::Stretch;
+        plan.canvas.monitors[1].computer = "peer".into();
+        plan.canvas.monitors[0].scale = 2.0;
+        assert_eq!(render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap().dimensions(), (8, 8));
+        let before = render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap();
+        plan.canvas.monitors[0].rect.width = 8.0;
+        let after = render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap();
+        assert_eq!(after.dimensions(), (16, 8));
+        assert_ne!(before.get_pixel(7, 3), after.get_pixel(15, 3));
+    }
+
+    #[test]
+    fn transparent_picture_pixels_are_composited_over_black() {
+        let plan = plan();
+        let pixels = RgbaImage::from_pixel(8, 4, image::Rgba([200, 100, 50, 128]));
+        assert_eq!(render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap().get_pixel(1, 1).0, [100, 50, 25, 255]);
+    }
+
+    #[test]
+    fn picture_player_rejects_wrong_dimensions_and_trailing_data() {
+        let root = Directory::new();
+        let source = root.0.join("source.png");
+        RgbaImage::new(8, 4).save(&source).unwrap();
+        let bundle = root.0.join("bundle.video");
+        let mut config = one_mk_wallpaper::PlayerConfig { plan: plan(), computer: "host".into(), path: bundle.clone(), clock_offset_ms: 0 };
+        prepare(&source, &config.plan, "host", &bundle).unwrap();
+        config.plan.media.width = 9;
+        assert!(player_source(&config).is_err());
+        config.plan.media.width = 8;
+        std::fs::OpenOptions::new().append(true).open(&bundle).unwrap().write_all(b"extra").unwrap();
+        assert!(player_source(&config).is_err());
     }
     #[test]
     fn fit_picture_has_black_borders_and_no_player() {

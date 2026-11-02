@@ -57,6 +57,7 @@ struct State {
     pending: Option<(Fingerprint, Plan)>,
     awaiting: BTreeSet<(Fingerprint, String)>,
     applied_picture: Option<Plan>,
+    picture_mode: one_mk_wallpaper::picture::Mode,
 }
 
 impl State {
@@ -183,7 +184,7 @@ impl Drop for Prepared {
 }
 
 fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
-    let key = ring::digest::digest(&SHA256, &serde_json::to_vec(&(&plan.hash, &plan.canvas, plan.fit, computer))?);
+    let key = ring::digest::digest(&SHA256, &serde_json::to_vec(&(2, &plan.hash, &plan.canvas, plan.fit, computer))?);
     let key: String = key.as_ref().iter().map(|byte| format!("{byte:02x}")).collect();
     let index = cache(dir).join(format!("{}-{key}.slice", plan.hash));
     if let Ok(hash) = std::fs::read_to_string(&index) && let Ok(path) = cache_path(&cache(dir), &hash) && digest(&path).ok().as_ref() == Some(&hash) { return Ok(hash); }
@@ -352,6 +353,10 @@ impl Runtime {
         // Counted from what each computer said, not from the plan alone.
         if let Some(plan) = status.plan.as_ref() && status.message == plan.playing_message() { status.message = plan.playing_summary(&status.computers); }
         if let Some(Playback::Paused(message) | Playback::Error(message)) = status.computers.get(&state.computer) { status.message = message.clone(); }
+        if status.computers.get(&state.computer) == Some(&Playback::Picture) { status.message = Playback::Picture.message().into(); }
+        else if status.plan.as_ref().is_some_and(|plan| plan.picture) && status.computers.values().any(|playback| playback == &Playback::Picture) {
+            status.message += ". Some computers show this picture with oneMK; their own wallpaper returns when you turn it off";
+        }
         if let Some((name, progress)) = &state.progress {
             use std::sync::atomic::Ordering::Relaxed;
             let total = progress.total.load(Relaxed);
@@ -377,7 +382,7 @@ impl Runtime {
         let mut state = self.state.lock().unwrap();
         if let Some(locked) = locked { state.locked = locked; }
         if let Some(asleep) = asleep { state.asleep = asleep; }
-        if state.player.is_none() && state.status.plan.as_ref().is_none_or(|plan| plan.picture) { return; }
+        if state.player.is_none() && state.status.plan.as_ref().is_none_or(|plan| plan.picture && state.picture_mode == one_mk_wallpaper::picture::Mode::Native) { return; }
         if state.locked || state.asleep {
             state.stop();
             let computer = state.computer.clone();
@@ -393,7 +398,13 @@ impl Runtime {
     fn start(dir: &Path, state: &mut State) -> Result<()> {
         state.directory = Some(dir.to_owned());
         let Some(plan) = state.status.plan.as_ref() else { return Ok(()) };
-        if plan.picture {
+        if !plan.computers.contains(&state.computer) {
+            state.stop();
+            state.status.computers.remove(&state.computer);
+            state.status.message = "Wallpaper is off on this computer".into();
+            return Ok(());
+        }
+        if plan.picture && state.picture_mode == one_mk_wallpaper::picture::Mode::Native {
             state.status.computers.insert(state.computer.clone(), Playback::Ready);
             state.status.message = "Picture wallpaper is set".into();
             state.retire();
@@ -401,8 +412,8 @@ impl Runtime {
         }
         // Paused by the person, a playing wallpaper holds its frame (the
         // player pauses itself); nothing starts one just to show a still.
-        let held = plan.paused && state.player.is_some();
-        if state.locked || state.asleep || (plan.paused && !held) || !plan.computers.contains(&state.computer) {
+        let held = !plan.picture && plan.paused && state.player.is_some();
+        if state.locked || state.asleep || (!plan.picture && plan.paused && !held) {
             state.stop();
             state.status.computers.insert(state.computer.clone(), Playback::Paused("Paused".into()));
             state.status.message = "Paused".into();
@@ -417,7 +428,7 @@ impl Runtime {
             return Ok(());
         }
         one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?;
-        let config = PlayerConfig { plan: plan.clone(), computer: state.computer.clone(), path: cache_path(&cache(dir), &plan.hash)?, clock_offset_ms: state.offset };
+        let config = PlayerConfig { plan: plan.clone(), computer: state.computer.clone(), path: cache_path(&cache(dir), if plan.picture { plan.asset_hash.as_ref().unwrap_or(&plan.hash) } else { &plan.hash })?, clock_offset_ms: state.offset };
         let config_path = cache(dir).join("player.json");
         let _ = std::fs::remove_file(cache(dir).join("playback.txt"));
         std::fs::write(&config_path, serde_json::to_vec(&config)?)?;
@@ -444,11 +455,18 @@ impl Runtime {
         {
             let state = self.state.lock().unwrap();
             ensure!(state.generation == generation, "Wallpaper selection changed");
-            if state.coordinator == coordinator && state.status.plan.as_ref() == Some(&plan) && (state.applied_picture.as_ref() == Some(&plan) || state.player.is_some()) { return Ok(()); }
+            if state.coordinator == coordinator && state.status.plan.as_ref() == Some(&plan) && (state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.as_ref() == Some(&plan) || state.player.is_some()) { return Ok(()); }
         }
-        if plan.picture && plan.computers.contains(&computer) {
-            one_mk_wallpaper::picture::apply(&helper()?, &plan, &computer, &cache_path(&cache(dir), plan.asset_hash.as_ref().unwrap_or(&plan.hash))?, &cache(dir).join("pictures"))?;
-        } else { restore_picture(&cache(dir).join("pictures"))?; }
+        let previous_mode = {
+            let state = self.state.lock().unwrap();
+            (state.coordinator == coordinator && state.applied_picture.as_ref().is_some_and(|old|
+                Plan { paused: plan.paused, pause_on_battery: plan.pause_on_battery, ..old.clone() } == plan)).then_some(state.picture_mode)
+        };
+        let mode = if plan.picture && plan.computers.contains(&computer) {
+            if let Some(mode) = previous_mode { mode } else {
+                one_mk_wallpaper::picture::apply(&helper()?, &plan, &computer, &cache_path(&cache(dir), plan.asset_hash.as_ref().unwrap_or(&plan.hash))?, &cache(dir).join("pictures"))?
+            }
+        } else { restore_picture(&cache(dir).join("pictures"))?; one_mk_wallpaper::picture::Mode::Native };
         let mut state = self.state.lock().unwrap();
         ensure!(state.generation == generation, "Wallpaper selection changed");
         // Only paused or played: the running player is told (it holds or
@@ -457,7 +475,7 @@ impl Runtime {
             && state.status.plan.as_ref().is_some_and(|old| Plan { paused: plan.paused, ..old.clone() } == plan);
         if !same_but_paused {
             if let Some(mut child) = state.player.take() {
-                if state.status.computers.get(&state.computer) == Some(&Playback::Ready) { state.retiring.push(child); }
+                if state.status.computers.get(&state.computer).is_some_and(Playback::is_ready) { state.retiring.push(child); }
                 else { let _ = child.kill(); let _ = child.wait(); }
             }
             state.launch += 1;
@@ -470,6 +488,7 @@ impl Runtime {
         state.authority_off = false;
         let hash = plan.hash.clone();
         state.applied_picture = plan.picture.then(|| plan.clone());
+        state.picture_mode = mode;
         state.status.plan = Some(plan);
         let selected = state.status.plan.as_ref().unwrap().computers.clone();
         state.status.computers.retain(|computer, _| selected.contains(computer));
@@ -478,7 +497,11 @@ impl Runtime {
         let saved = Saved { status: state.status.clone(), coordinator: state.coordinator.map(|fingerprint| fingerprint.to_string()), previous: state.previous.clone(), authority_off: false };
         save_selection(dir, &saved)?;
         prune_selection(dir, state.status.plan.as_ref().unwrap(), state.previous.as_deref())?;
-        Self::start(dir, &mut state)?;
+        if let Err(error) = Self::start(dir, &mut state) {
+            let computer = state.computer.clone();
+            state.status.computers.insert(computer, Playback::Error(error.to_string()));
+            return Err(error);
+        }
         drop(state);
         self.listen();
         Ok(())
@@ -497,7 +520,7 @@ impl Runtime {
                 let Some(shared) = shared.upgrade() else { return };
                 let mut state = shared.lock().unwrap();
                 if state.launch != launch { return; }
-                if playback == Playback::Ready { state.retire(); }
+                if playback.is_ready() { state.retire(); }
                 let computer = state.computer.clone();
                 state.status.computers.insert(computer, playback.clone());
                 state.clock_wake.notify_one();
@@ -719,7 +742,7 @@ impl Runtime {
                     inbox.expect_wallpaper(sender, current, &hash);
                     send(&control, &Wire::PlanReady { hash: hash.clone() });
                     if state.pending.as_ref().is_some_and(|(peer, pending)| *peer == sender && same_playback_plan(pending, &plan)) { return; }
-                    if state.coordinator == Some(sender) && state.status.plan.as_ref().is_some_and(|active| same_playback_plan(active, &plan)) && (state.player.is_some() || state.applied_picture.is_some()) {
+                    if state.coordinator == Some(sender) && state.status.plan.as_ref().is_some_and(|active| same_playback_plan(active, &plan)) && (state.player.is_some() || state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.is_some()) {
                         state.report_to = Some(control.clone());
                         if let Some(playback) = state.status.computers.get(&computer) { send(&control, &Wire::Playback { hash: plan.hash.clone(), playback: playback.clone() }); }
                         return;
@@ -768,7 +791,11 @@ impl Runtime {
                         return;
                     }
                     { let mut state = runtime.state.lock().unwrap(); if state.generation != generation { return; } state.pending = None; }
-                    if picture { send(&control, &Wire::Playback { hash: selection_hash, playback: Playback::Ready }); runtime.finish_worker(generation); return; }
+                    if picture {
+                        let playback = { let state = runtime.state.lock().unwrap(); state.status.computers.get(&state.computer).cloned().unwrap_or(Playback::Preparing) };
+                        send(&control, &Wire::Playback { hash: selection_hash, playback });
+                        runtime.finish_worker(generation); return;
+                    }
                     let weak = Arc::downgrade(&runtime.state);
                     drop(runtime);
                     loop {
@@ -870,6 +897,35 @@ mod tests {
             canvas: one_mk_wallpaper::Canvas { monitors: ["host", "remote"].into_iter().enumerate().map(|(index, computer)| one_mk_wallpaper::Monitor {
                 computer: computer.into(), name: computer.into(), rect: one_mk_wallpaper::Rect { x: index as f64 * 640.0, y: 0.0, width: 640.0, height: 360.0 }, local: None, scale: 1.0, online: true }).collect() },
             start_ms: now_ms(), fit: Default::default(), computers: vec!["host".into(), "remote".into()], pause_on_battery: true, paused: false, picture: false, asset_hash: None }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn still_player_ignores_pause_reports_its_mode_and_stops_when_deselected() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime::default();
+        let child = std::process::Command::new("sh").args(["-c", "while read line; do [ \"$line\" = quit ] && exit; done"]).stdin(Stdio::piped()).spawn().unwrap();
+        let pid = child.id();
+        {
+            let mut state = runtime.state.lock().unwrap();
+            let mut picture = plan(); picture.picture = true; picture.paused = true;
+            state.status.plan = Some(picture);
+            state.computer = "host".into();
+            state.picture_mode = one_mk_wallpaper::picture::Mode::Overlay;
+            state.player = Some(child);
+            state.status.computers.insert("host".into(), Playback::Picture);
+            Runtime::start(directory.path(), &mut state).unwrap();
+            assert_eq!(state.player.as_ref().unwrap().id(), pid);
+        }
+        assert!(runtime.status().message.contains("your own wallpaper returns"));
+        {
+            let mut state = runtime.state.lock().unwrap();
+            state.status.plan.as_mut().unwrap().computers.retain(|computer| computer != "host");
+            Runtime::start(directory.path(), &mut state).unwrap();
+            assert!(state.player.is_none());
+            assert!(!state.status.computers.contains_key("host"));
+        }
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
     }
 
     async fn controls() -> (ControlWriter, quinn::RecvStream, one_mk_net::Peer, Node, Node) {
@@ -1043,23 +1099,37 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn off_and_drop_reap_the_owned_player() {
-        let runtime = Runtime::default();
-        let child = std::process::Command::new("sleep").arg("60").stdin(Stdio::piped()).spawn().unwrap();
-        let pid = child.id();
-        runtime.state.lock().unwrap().player = Some(child);
-        runtime.shutdown();
-        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
-        assert!(runtime.state.lock().unwrap().player.is_none());
+        for picture in [false, true] {
+            let runtime = Runtime::default();
+            let child = std::process::Command::new("sleep").arg("60").stdin(Stdio::piped()).spawn().unwrap();
+            let pid = child.id();
+            {
+                let mut state = runtime.state.lock().unwrap();
+                let mut plan = plan(); plan.picture = picture;
+                state.status.plan = Some(plan);
+                state.picture_mode = one_mk_wallpaper::picture::Mode::Overlay;
+                state.player = Some(child);
+            }
+            runtime.shutdown();
+            assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+            assert!(runtime.state.lock().unwrap().player.is_none());
+        }
     }
 
     #[cfg(unix)]
     #[test]
     fn lock_sleep_and_last_owner_drop_reap_the_player() {
-        for reason in ["lock", "sleep", "drop"] {
+        for (picture, reason) in [false, true].into_iter().flat_map(|picture| ["lock", "sleep", "drop"].map(|reason| (picture, reason))) {
             let runtime = Runtime::default();
             let child = std::process::Command::new("sleep").arg("60").stdin(Stdio::piped()).spawn().unwrap();
             let pid = child.id();
-            runtime.state.lock().unwrap().player = Some(child);
+            {
+                let mut state = runtime.state.lock().unwrap();
+                let mut plan = plan(); plan.picture = picture;
+                state.status.plan = Some(plan);
+                state.picture_mode = one_mk_wallpaper::picture::Mode::Overlay;
+                state.player = Some(child);
+            }
             match reason {
                 "lock" => runtime.hold(Path::new("/tmp"), Some(true), None),
                 "sleep" => runtime.hold(Path::new("/tmp"), None, Some(true)),

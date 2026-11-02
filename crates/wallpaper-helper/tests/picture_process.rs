@@ -59,17 +59,16 @@ fn helper_inspects_all_supported_formats_and_prepares_png_only_slices() {
         let output = root.path().join("bundle.video");
         picture::prepare(helper(), &source, &plan(), "host", &output).unwrap();
         let mut input = std::io::Cursor::new(std::fs::read(output).unwrap());
-        let mut header = [0; 12]; input.read_exact(&mut header).unwrap();
-        assert_eq!(&header[..8], b"oneMKpic");
-        assert_eq!(u32::from_le_bytes(header[8..].try_into().unwrap()), 2);
-        for index in 0..2 {
+        let mut header = [0; 8]; input.read_exact(&mut header).unwrap();
+        assert_eq!(&header, b"oneMKpi2");
+        {
             let mut length = [0; 8]; input.read_exact(&mut length).unwrap();
             let mut bytes = vec![0; u64::from_le_bytes(length) as usize]; input.read_exact(&mut bytes).unwrap();
             assert_eq!(image::guess_format(&bytes).unwrap(), image::ImageFormat::Png);
-            let slice = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap().into_rgb8();
-            assert_eq!(slice.dimensions(), (4, 4));
+            let original_pixels = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap().into_rgb8();
+            assert_eq!(original_pixels.dimensions(), (8, 4));
             if extension != "jpg" {
-                for (horizontal, vertical, pixel) in slice.enumerate_pixels() { assert_eq!(pixel, original.get_pixel(horizontal + index * 4, vertical)); }
+                assert_eq!(original_pixels, original);
             }
         }
         assert_eq!(input.position(), input.get_ref().len() as u64);

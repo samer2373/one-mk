@@ -8,6 +8,14 @@ use std::time::{Duration, Instant};
 
 const MAX_OUTPUT: u64 = 16 * 1024;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode { #[default] Native, Overlay }
+
+impl Mode {
+    pub fn for_native_safety(restorable: bool) -> Self { if restorable { Self::Native } else { Self::Overlay } }
+}
+
 pub fn available() -> bool {
     #[cfg(target_os = "linux")]
     return std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.to_ascii_lowercase().contains("gnome"));
@@ -85,12 +93,14 @@ pub fn prepare(helper: &Path, source: &Path, plan: &Plan, computer: &str, path: 
     Ok(())
 }
 
-pub fn apply(helper: &Path, plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<()> {
+pub fn apply(helper: &Path, plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<Mode> {
     let mut command = Command::new(helper);
     command.arg("--picture-apply").arg(path).arg(root);
     plan_arguments(&mut command, plan, computer)?;
-    ensure!(run(&mut command, Duration::from_secs(180))?.is_empty(), "Unexpected picture helper output");
-    Ok(())
+    let output = run(&mut command, Duration::from_secs(180))?;
+    // Older installed helpers only set native pictures and return no output.
+    if output.is_empty() { return Ok(Mode::Native); }
+    serde_json::from_slice(&output).context("Invalid picture helper mode")
 }
 
 pub fn restore(helper: &Path, root: &Path) -> Result<()> {

@@ -159,10 +159,11 @@ pub struct Status {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", content = "message", rename_all = "snake_case")]
-pub enum Playback { #[default] Preparing, Ready, Paused(String), Error(String) }
+pub enum Playback { #[default] Preparing, Ready, Picture, Paused(String), Error(String) }
 
 impl Playback {
-    pub fn message(&self) -> &str { match self { Self::Preparing => "preparing…", Self::Ready => "playing", Self::Paused(message) | Self::Error(message) => message } }
+    pub fn message(&self) -> &str { match self { Self::Preparing => "preparing…", Self::Ready => "playing", Self::Picture => "Shown by oneMK; your own wallpaper returns when you turn it off", Self::Paused(message) | Self::Error(message) => message } }
+    pub fn is_ready(&self) -> bool { matches!(self, Self::Ready | Self::Picture) }
 }
 
 pub fn event(playback: Playback) {

@@ -11,6 +11,8 @@ static HOLDS_CHANGED: AtomicBool = AtomicBool::new(true);
 static POWER_CHANGED: AtomicBool = AtomicBool::new(true);
 static ON_BATTERY: AtomicBool = AtomicBool::new(false);
 static ENERGY_SAVER: AtomicBool = AtomicBool::new(false);
+static LOCKED: AtomicBool = AtomicBool::new(false);
+static ASLEEP: AtomicBool = AtomicBool::new(false);
 fn input_event() -> HANDLE { HANDLE(*INPUT_EVENT.get_or_init(|| unsafe { CreateEventW(None, false, false, None).expect("wallpaper command event").0 as usize }) as *mut _) }
 pub fn wake() { unsafe { let _ = SetEvent(input_event()); } }
 unsafe extern "system" fn foreground_changed(_: HWINEVENTHOOK, event: u32, window: HWND, object: i32, _: i32, _: u32, _: u32) {
@@ -28,6 +30,7 @@ impl Notifications {
             let hooks = [EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, EVENT_OBJECT_DESTROY].into_iter().map(|event|
                 SetWinEventHook(event, event, None, Some(foreground_changed), 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS)).collect();
             let mut notifications = Self { window, hooks, power: Vec::new() };
+            windows::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(window, 0)?;
             let mut power = SYSTEM_POWER_STATUS::default();
             if GetSystemPowerStatus(&mut power).is_ok() { ON_BATTERY.store(power.ACLineStatus == 0, Ordering::Relaxed); ENERGY_SAVER.store(power.SystemStatusFlag == 1, Ordering::Relaxed); }
             for guid in [&GUID_ACDC_POWER_SOURCE, &GUID_ENERGY_SAVER_STATUS] { notifications.power.push(RegisterPowerSettingNotification(HANDLE(window.0), guid, DEVICE_NOTIFY_WINDOW_HANDLE)?); }
@@ -35,7 +38,7 @@ impl Notifications {
         }
     }
 }
-impl Drop for Notifications { fn drop(&mut self) { unsafe { for hook in &self.hooks { let _ = UnhookWinEvent(*hook); } for notification in &self.power { let _ = UnregisterPowerSettingNotification(*notification); } let _ = DestroyWindow(self.window); } } }
+impl Drop for Notifications { fn drop(&mut self) { unsafe { for hook in &self.hooks { let _ = UnhookWinEvent(*hook); } for notification in &self.power { let _ = UnregisterPowerSettingNotification(*notification); } let _ = windows::Win32::System::RemoteDesktop::WTSUnRegisterSessionNotification(self.window); let _ = DestroyWindow(self.window); } } }
 
 #[implement(IMFMediaEngineNotify)]
 struct Notify(Arc<AtomicU32>);
@@ -162,6 +165,14 @@ unsafe extern "system" fn find_worker(window: HWND, parameter: LPARAM) -> BOOL {
 
 unsafe extern "system" fn window_proc(window: HWND, message: u32, first: WPARAM, second: LPARAM) -> LRESULT {
     if message == WM_DISPLAYCHANGE || message == WM_DPICHANGED { DISPLAYS_CHANGED.store(true, Ordering::Relaxed); }
+    if message == WM_WTSSESSION_CHANGE {
+        if first.0 == WTS_SESSION_LOCK as usize { LOCKED.store(true, Ordering::Relaxed); }
+        if first.0 == WTS_SESSION_UNLOCK as usize { LOCKED.store(false, Ordering::Relaxed); }
+    }
+    if message == WM_POWERBROADCAST {
+        if first.0 == PBT_APMSUSPEND as usize { ASLEEP.store(true, Ordering::Relaxed); }
+        if first.0 == PBT_APMRESUMEAUTOMATIC as usize || first.0 == PBT_APMRESUMESUSPEND as usize { ASLEEP.store(false, Ordering::Relaxed); }
+    }
     if message == WM_POWERBROADCAST && first.0 == PBT_POWERSETTINGCHANGE as usize && second.0 != 0 {
         let setting = unsafe { &*(second.0 as *const POWERBROADCAST_SETTING) };
         if setting.DataLength == 4 {
@@ -171,14 +182,28 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, first: WPARAM,
             POWER_CHANGED.store(true, Ordering::Relaxed);
         }
     }
-    unsafe { if message == WM_NCHITTEST { LRESULT(HTTRANSPARENT as isize) } else { DefWindowProcW(window, message, first, second) } }
+    unsafe {
+        let pixels = GetWindowLongPtrW(window, GWLP_USERDATA) as *const image::RgbaImage;
+        if message == WM_PAINT && !pixels.is_null() {
+            let pixels = &*pixels;
+            let mut paint = PAINTSTRUCT::default();
+            let context = BeginPaint(window, &mut paint);
+            let bitmap = BITMAPINFO { bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: pixels.width() as i32, biHeight: -(pixels.height() as i32), biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() }, ..Default::default() };
+            SetDIBitsToDevice(context, 0, 0, pixels.width(), pixels.height(), 0, 0, 0, pixels.height(), pixels.as_ptr().cast(), &bitmap, DIB_RGB_COLORS);
+            let _ = EndPaint(window, &paint);
+            return LRESULT(0);
+        }
+        if message == WM_ERASEBKGND && !pixels.is_null() { return LRESULT(1); }
+        if message == WM_NCHITTEST { LRESULT(HTTRANSPARENT as isize) } else { DefWindowProcW(window, message, first, second) }
+    }
 }
 
 struct Chain { swap: IDXGISwapChain2, latency: HANDLE }
 impl Drop for Chain { fn drop(&mut self) { unsafe { let _ = CloseHandle(self.latency); } } }
 struct Desktop { windows: Vec<HWND>, chains: Vec<Chain>, destinations: Vec<RECT>, sources: Vec<MFVideoNormalizedRect> }
 impl Desktop {
-    unsafe fn new(engine: &Engine, config: &PlayerConfig) -> Result<Self> {
+    unsafe fn new(device: Option<&ID3D11Device>, config: &PlayerConfig) -> Result<Self> {
         unsafe {
             let progman = FindWindowW(w!("Progman"), None).context("The Windows desktop is not available")?;
             let _ = SendMessageTimeoutW(progman, 0x052c, WPARAM(0), LPARAM(0), SMTO_NORMAL, 1000, None);
@@ -188,25 +213,28 @@ impl Desktop {
             ensure!(!worker.is_invalid(), "Windows did not provide a wallpaper surface");
             let class = WNDCLASSW { lpfnWndProc: Some(window_proc), lpszClassName: w!("oneMKWallpaper"), ..Default::default() };
             RegisterClassW(&class);
-            let dxgi: IDXGIDevice = engine.device.cast()?;
-            let factory: IDXGIFactory2 = dxgi.GetAdapter()?.GetParent()?;
+            let factory: Option<IDXGIFactory2> = device.map(|device| -> windows::core::Result<_> {
+                let dxgi: IDXGIDevice = device.cast()?; dxgi.GetAdapter()?.GetParent()
+            }).transpose()?;
             let local: Vec<_> = config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer).collect();
             ensure!(!local.is_empty(), "No monitors selected on this computer");
             let mut desktop = Self { windows: Vec::new(), chains: Vec::new(), destinations: Vec::new(), sources: Vec::new() };
             for monitor in local {
-                let width = (monitor.rect.width * monitor.scale) as u32;
-                let height = (monitor.rect.height * monitor.scale) as u32;
+                let width = (monitor.rect.width * monitor.scale).round() as u32;
+                let height = (monitor.rect.height * monitor.scale).round() as u32;
                 let local_rect = monitor.local.unwrap_or(monitor.rect);
                 let mut origin = POINT { x: local_rect.x as i32, y: local_rect.y as i32 };
                 let _ = ScreenToClient(worker, &mut origin);
                 let window = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW, w!("oneMKWallpaper"), w!("oneMK Wallpaper"), WS_CHILD, origin.x, origin.y, width as i32, height as i32, Some(worker), None, None, None)?;
                 desktop.windows.push(window);
                 let descriptor = DXGI_SWAP_CHAIN_DESC1 { Width: width, Height: height, Format: DXGI_FORMAT_B8G8R8A8_UNORM, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, BufferCount: 2, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32, ..Default::default() };
-                let chain: IDXGISwapChain2 = factory.CreateSwapChainForHwnd(&engine.device, window, &descriptor, None, None)?.cast()?;
-                chain.SetMaximumFrameLatency(1)?;
-                let latency = chain.GetFrameLatencyWaitableObject();
-                ensure!(!latency.is_invalid(), "Windows did not provide a frame pacing handle");
-                desktop.chains.push(Chain { swap: chain, latency });
+                if let (Some(factory), Some(device)) = (&factory, device) {
+                    let chain: IDXGISwapChain2 = factory.CreateSwapChainForHwnd(device, window, &descriptor, None, None)?.cast()?;
+                    chain.SetMaximumFrameLatency(1)?;
+                    let latency = chain.GetFrameLatencyWaitableObject();
+                    ensure!(!latency.is_invalid(), "Windows did not provide a frame pacing handle");
+                    desktop.chains.push(Chain { swap: chain, latency });
+                }
                 desktop.destinations.push(RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 });
                 let slice = config.plan.canvas.slice(monitor, &config.plan.media, config.plan.fit).context("Empty canvas")?;
                 let left = slice.x.max(0.0);
@@ -269,9 +297,10 @@ fn refresh_displays(config: &mut PlayerConfig) -> Result<()> {
 
 pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     unsafe { let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
+    if config.plan.picture { return run_picture(config, receiver); }
     let engine = unsafe { Engine::new(&config.path)? };
     engine.metadata()?;
-    let mut desktop = unsafe { Desktop::new(&engine, &config)? };
+    let mut desktop = unsafe { Desktop::new(Some(&engine.device), &config)? };
     let mut preparing_since = Instant::now();
     let _notifications = unsafe { Notifications::new()? };
     let mut holds = Holds::default();
@@ -293,7 +322,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() { DispatchMessageW(&message); }
             if DISPLAYS_CHANGED.swap(false, Ordering::Relaxed) {
                 refresh_displays(&mut config)?;
-                retiring = Some(std::mem::replace(&mut desktop, Desktop::new(&engine, &config)?));
+                retiring = Some(std::mem::replace(&mut desktop, Desktop::new(Some(&engine.device), &config)?));
                 latency_ready = vec![false; desktop.chains.len()];
                 ready = false;
                 preparing_since = Instant::now();
@@ -347,6 +376,55 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             let timeout = if playing && latency_ready.iter().all(|ready| *ready) { next_frame.saturating_duration_since(Instant::now()).as_millis().max(1) as u32 } else { INFINITE };
             let result = MsgWaitForMultipleObjectsEx(Some(&handles), timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE).0;
             if result > WAIT_OBJECT_0.0 && (result as usize) < handles.len() { latency_ready[pending[result as usize - 1].0] = true; }
+        }
+    }
+}
+
+// The windows drop before their backing pixels; WM_PAINT's userdata remains
+// valid even when DestroyWindow dispatches a final message.
+struct PictureDesktop { desktop: Desktop, _pixels: Vec<image::RgbaImage> }
+fn picture_desktop(config: &PlayerConfig, image: &image::RgbaImage) -> Result<PictureDesktop> {
+    let desktop = unsafe { Desktop::new(None, config)? };
+    let mut pixels = config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer)
+        .map(|monitor| crate::picture::render(image, &config.plan, monitor)).collect::<Result<Vec<_>>>()?;
+    for (window, pixels) in desktop.windows.iter().zip(&mut pixels) {
+        for pixel in pixels.pixels_mut() { pixel.0.swap(0, 2); }
+        unsafe { SetWindowLongPtrW(*window, GWLP_USERDATA, pixels as *const image::RgbaImage as isize); }
+    }
+    Ok(PictureDesktop { desktop, _pixels: pixels })
+}
+
+fn run_picture(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
+    let image = crate::picture::player_source(&config)?;
+    let mut picture = picture_desktop(&config, &image)?;
+    let _notifications = unsafe { Notifications::new()? };
+    let mut visible = false;
+    let mut last = None;
+    loop {
+        while let Ok(input) = receiver.try_recv() { if matches!(input, Input::End) { return Ok(()); } }
+        unsafe {
+            let mut message = MSG::default();
+            while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() { DispatchMessageW(&message); }
+            if DISPLAYS_CHANGED.swap(false, Ordering::Relaxed) {
+                refresh_displays(&mut config)?;
+                let replacement = picture_desktop(&config, &image)?;
+                picture = replacement;
+                visible = false;
+            }
+            let show = !LOCKED.load(Ordering::Relaxed) && !ASLEEP.load(Ordering::Relaxed);
+            if show != visible {
+                for window in &picture.desktop.windows {
+                    let _ = ShowWindow(*window, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
+                    if show { let _ = InvalidateRect(Some(*window), None, false); let _ = UpdateWindow(*window); }
+                }
+                visible = show;
+            }
+            let playback = if show { one_mk_wallpaper::Playback::Picture }
+                else { one_mk_wallpaper::Playback::Paused("Paused while this computer is locked or asleep".into()) };
+            if last.as_ref() != Some(&playback) { one_mk_wallpaper::event(playback.clone()); last = Some(playback); }
+            // GDI repaints only damaged windows. There is no swapchain,
+            // media engine, frame pacing or idle polling for a still image.
+            MsgWaitForMultipleObjectsEx(Some(&[input_event()]), INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
     }
 }

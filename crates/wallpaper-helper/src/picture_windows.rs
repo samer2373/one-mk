@@ -42,21 +42,24 @@ fn snapshot(root: &Path) -> Result<Option<Snapshot>> {
     Ok(Some(Snapshot { screens, position, color: None, applied: Default::default(), previous_applied: Default::default() }))
 }
 
-pub fn apply(files: &[(Monitor, PathBuf)], root: &Path) -> Result<()> {
+struct Prepared { desktop: Desktop, previous: Snapshot, assignments: Vec<(String, PathBuf)> }
+unsafe fn slideshow(desktop: &Desktop) -> Result<bool> {
+    unsafe {
+        let items = match desktop.0.GetSlideshow() { Ok(items) => items.GetCount()?, Err(_) => 0 };
+        Ok(desktop.0.GetStatus()?.contains(DSS_SLIDESHOW) || items != 0)
+    }
+}
+fn prepare(files: &[(Monitor, PathBuf)], root: &Path) -> Result<Prepared> {
     let desktop = Desktop::new()?;
     unsafe {
-        let slideshow_items = match desktop.0.GetSlideshow() { Ok(items) => items.GetCount()?, Err(_) => 0 };
-        anyhow::ensure!(!desktop.0.GetStatus()?.contains(DSS_SLIDESHOW) && slideshow_items == 0,
-            "Native pictures cannot safely replace a Windows slideshow. Choose a static picture in Windows first.");
+        anyhow::ensure!(!slideshow(&desktop)?, "Windows is using a slideshow");
         let mut monitors = Vec::new();
         for index in 0..desktop.0.GetMonitorDevicePathCount()? { monitors.push(string(desktop.0.GetMonitorDevicePathAt(index)?)?); }
-        let snapshot = root.join("previous.json");
         let mut previous = self::snapshot(root)?.unwrap_or(Snapshot { screens: Vec::new(), position: desktop.0.GetPosition()?.0,
             color: Some(desktop.0.GetBackgroundColor()?.0), applied: Default::default(), previous_applied: Default::default() });
         let observed = monitors.iter().map(|monitor| Ok((monitor.clone(), string(desktop.0.GetWallpaper(PCWSTR(wide(monitor).as_ptr()))?)?))).collect::<Result<Vec<_>>>()?;
         super::merge_snapshot(&mut previous.screens, observed, |entry| &entry.0);
-        super::atomic_write(&snapshot, &serde_json::to_vec(&previous)?)?;
-        desktop.0.SetPosition(DWPOS_STRETCH)?;
+        let mut assignments = Vec::new();
         for (monitor, path) in files {
             let local = monitor.local.unwrap_or(monitor.rect);
             let id = monitors.iter().find(|id| {
@@ -66,17 +69,34 @@ pub fn apply(files: &[(Monitor, PathBuf)], root: &Path) -> Result<()> {
             if previous.applied.get(id) == Some(&current) || previous.previous_applied.get(id) == Some(&current) { previous.previous_applied.insert(id.clone(), current); }
             else { previous.previous_applied.remove(id); }
             previous.applied.insert(id.clone(), path.to_string_lossy().into_owned());
-            super::atomic_write(&snapshot, &serde_json::to_vec(&previous)?)?;
-            desktop.0.SetWallpaper(PCWSTR(wide(id).as_ptr()), PCWSTR(wide(&path.to_string_lossy()).as_ptr()))?;
+            assignments.push((id.clone(), path.clone()));
         }
+        Ok(Prepared { desktop, previous, assignments })
     }
-    Ok(())
+}
+
+pub fn apply(files: &[(Monitor, PathBuf)], root: &Path) -> Result<one_mk_wallpaper::picture::Mode> {
+    // Everything needed to restore every display is read before SetPosition
+    // or SetWallpaper. A refusal cannot leave a half-applied native picture.
+    super::native_or_overlay(prepare(files, root), |Prepared { desktop, previous, assignments }| {
+        super::atomic_write(&root.join("previous.json"), &serde_json::to_vec(&previous)?)?;
+        unsafe {
+            desktop.0.SetPosition(DWPOS_STRETCH)?;
+            for (id, path) in assignments {
+                desktop.0.SetWallpaper(PCWSTR(wide(&id).as_ptr()), PCWSTR(wide(&path.to_string_lossy()).as_ptr()))?;
+            }
+        }
+        Ok(())
+    })
 }
 
 pub fn restore(root: &Path) -> Result<bool> {
     let Some(mut previous) = snapshot(root)? else { return Ok(true) };
     let desktop = Desktop::new()?;
     unsafe {
+        // A slideshow selected after our native picture belongs to the user.
+        // Off must only close the overlay, not disable that newer choice.
+        if slideshow(&desktop)? { return Ok(true); }
         let monitors = (0..desktop.0.GetMonitorDevicePathCount()?).map(|index| string(desktop.0.GetMonitorDevicePathAt(index)?)).collect::<Result<Vec<_>>>()?;
         previous.screens = super::unrestored(previous.screens, |(monitor, path)| monitors.contains(monitor)
             && desktop.0.SetWallpaper(PCWSTR(wide(monitor).as_ptr()), PCWSTR(wide(path).as_ptr())).is_ok());
