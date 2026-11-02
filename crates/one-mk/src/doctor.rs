@@ -1211,18 +1211,12 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     }
 
     let mut checks = vec![daemon_check(&daemon)];
-    checks.push(check("wallpaper", "Wallpaper", match Settings::load(dir) {
-        Ok(settings) if settings.wallpaper.enabled => Outcome::warn(crate::wallpaper::summary(&settings.wallpaper).trim_start_matches("Wallpaper: "), "This build has no qualified renderer. No playback is available; use one-mk wallpaper disable to turn the feature off."),
-        Ok(settings) => Outcome::pass(crate::wallpaper::summary(&settings.wallpaper).trim_start_matches("Wallpaper: ")),
-        Err(_) => Outcome::warn("Wallpaper settings could not be read.", "Repair settings.toml before enabling wallpaper."),
-    }));
-    checks.push(check("wallpaper-import-sandbox", "Wallpaper import sandbox", Outcome::skip(
-        if crate::wallpaper_import::installed().is_some() {
-            "unavailable until explicitly qualified: optional helper installed; run one-mk wallpaper doctor --runtime DIR; no media process started by general doctor"
-        } else {
-            "unavailable: optional import package not installed; no decoder linked or process started"
-        }
-    )));
+    if let Some(status) = daemon.status().and_then(|status| status.wallpaper.as_ref())
+        && (status.plan.is_some() || !status.available)
+    {
+        checks.push(check("wallpaper", "Wallpaper", if status.available { Outcome::pass(&status.message) }
+            else { Outcome::skip(&status.message) }));
+    }
     let (available, detail) = crate::update::doctor(dir);
     checks.push(check("updates", "Updates", if available { Outcome::warn(detail, "update-now") }
         else if detail.starts_with("Couldn't check:") { Outcome::skip(detail) } else { Outcome::pass(detail) }));

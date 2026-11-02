@@ -161,6 +161,15 @@ pub struct Link {
 }
 
 impl Link {
+    pub fn wallpaper(&self, command: one_mk_wallpaper::Command) {
+        self.job(Job::Set { what: "wallpaper".into(), args: Vec::new() }, move |link| {
+            let json = serde_json::to_string(&command)?;
+            let response = client::request(&link.dir, Request::LiveWallpaper(json), Duration::from_secs(660))?
+                .ok_or_else(|| anyhow::anyhow!("Start oneMK first"))?;
+            anyhow::ensure!(!response.starts_with("error "), "{}", response.trim_start_matches("error ").trim());
+            Ok(())
+        });
+    }
     pub fn pair_with(&self, method: crate::pairing::Method, port: u16) -> std::io::Result<crate::pairing::Pairing> {
         crate::pairing::Pairing::with_method(&self.daemon, &self.home_args(), self.ctx.clone(), method, port)
     }
@@ -228,7 +237,18 @@ impl Link {
         if let Some(path) = std::env::var_os("ONE_MK_APP_STATUS") {
             // Development aid: a status in its wire format, for screenshots
             // of states that are hard to set up (long names, many computers).
-            return Ok(std::fs::read_to_string(path).ok().and_then(|t| Status::decode(&t)));
+            let mut status = std::fs::read_to_string(path).ok().and_then(|text| Status::decode(&text));
+            if let Some(status) = &mut status && let Some(poster) = std::env::var_os("ONE_MK_APP_WALLPAPER") {
+                let canvas = one_mk_ctl::wallpaper::canvas(status);
+                status.wallpaper = Some(one_mk_wallpaper::Status {
+                    plan: Some(one_mk_wallpaper::Plan { hash: "a".repeat(64), title: "Across the horizon.mp4".into(),
+                        media: one_mk_wallpaper::Media { width: 3840, height: 1080, duration_ms: 10000 }, canvas,
+                        start_ms: 1, fit: Default::default(), computers: std::iter::once(status.id.clone()).chain(status.peers.iter().map(|peer| peer.id.clone())).collect(), pause_on_battery: true, paused: false }),
+                    available: true, poster: Some(poster.into()), message: "Playing on 3 monitors on 2 computers".into(),
+                });
+                if let Some(wallpaper) = &mut status.wallpaper && let Some(plan) = &wallpaper.plan { wallpaper.message = plan.playing_message(); }
+            }
+            return Ok(status);
         }
         match client::request(&self.dir, Request::Status, Duration::from_millis(1500)) {
             Ok(text) => Ok(text.and_then(|t| Status::decode(&t))),

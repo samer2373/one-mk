@@ -18,6 +18,7 @@ pub enum StreamKind {
     /// A paired device measuring latency: the peer echoes its `Probe`
     /// datagrams on this connection. Never a link, never replaces one.
     Probe = 5,
+    WallpaperVideo = 6,
 }
 
 impl StreamKind {
@@ -28,6 +29,7 @@ impl StreamKind {
             3 => Some(Self::Clipboard),
             4 => Some(Self::File),
             5 => Some(Self::Probe),
+            6 => Some(Self::WallpaperVideo),
             _ => None,
         }
     }
@@ -157,8 +159,11 @@ pub mod caps {
     pub const IDLE_REVOKE: u32 = 128;
     pub const WALLPAPER: u32 = 256;
     pub const CLIPBOARD_FETCH: u32 = 512;
+    /// Plays a shared live wallpaper (the live-wallpaper streams and
+    /// commands). Its own bit: 1024 and 2048 are typing's.
+    pub const LIVE_WALLPAPER: u32 = 4096;
     /// What this build supports.
-    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT | FOCUS_APP | IDLE_REVOKE | WALLPAPER;
+    pub const LOCAL: u32 = RELATIVE | LOCK | FOCUS | POWER | FOCUS_BEAT | FOCUS_APP | IDLE_REVOKE | WALLPAPER | LIVE_WALLPAPER;
 }
 
 /// How often a computer with [`caps::FOCUS_BEAT`] repeats `Focus` while
@@ -268,6 +273,7 @@ pub enum Control {
     CharacterKey { code: u32, down: bool, character: char },
     KeyboardLayout(Box<crate::typing::LayoutDescriptor>),
     Wallpaper(crate::wallpaper::Message),
+    LiveWallpaper(String),
 }
 
 impl Control {
@@ -281,6 +287,7 @@ impl Control {
 
     fn encode_body(&self, w: &mut Writer) {
         match self {
+            Control::LiveWallpaper(message) => { w.u8(28); w.long_str(message, 12000); }
             Control::Wallpaper(message) => {
                 w.u8(crate::wallpaper::CONTROL_TAG);
                 w.bytes(&message.encode());
@@ -422,6 +429,7 @@ impl Control {
     pub fn decode(b: &[u8]) -> Result<Self, DecodeError> {
         let mut r = Reader(b);
         let c = match r.u8()? {
+            28 => Control::LiveWallpaper(r.bounded_str(12000)?),
             25 => Control::Wallpaper(crate::wallpaper::Message::decode(r.0)?),
             1 => match r.u16()? {
                 PROTOCOL_VERSION => Control::Hello {
@@ -729,6 +737,20 @@ fn from_fixed(v: i32) -> f64 {
 mod tests {
     use super::*;
 
+    /// Every capability has a bit of its own (two branches once both took
+    /// 1024, so a typing peer looked like a wallpaper player).
+    #[test]
+    fn every_capability_has_its_own_bit() {
+        use caps::*;
+        let all = [RELATIVE, LOCK, FOCUS, POWER, FOCUS_BEAT, FOCUS_APP, TEXT, TEXT_SOURCE, TEXT_HOLD, IDLE_REVOKE, WALLPAPER, CLIPBOARD_FETCH, LIVE_WALLPAPER];
+        let mut seen = 0u32;
+        for bit in all {
+            assert_eq!(bit.count_ones(), 1, "{bit} is one bit");
+            assert_eq!(seen & bit, 0, "{bit} is taken twice");
+            seen |= bit;
+        }
+    }
+
     #[test]
     fn datagram_round_trip() {
         for d in [
@@ -853,13 +875,25 @@ mod tests {
 
     #[test]
     fn stream_kind_round_trip() {
-        for k in [StreamKind::Control, StreamKind::Pairing, StreamKind::Clipboard, StreamKind::File, StreamKind::Probe] {
+        for k in [StreamKind::Control, StreamKind::Pairing, StreamKind::Clipboard, StreamKind::File, StreamKind::Probe, StreamKind::WallpaperVideo] {
             assert_eq!(StreamKind::from_u8(k as u8), Some(k));
         }
         assert_eq!(StreamKind::Clipboard as u8, 3);
         assert_eq!(StreamKind::File as u8, 4);
         assert_eq!(StreamKind::from_u8(0), None);
-        assert_eq!(StreamKind::from_u8(6), None);
+        assert_eq!(StreamKind::from_u8(7), None);
+    }
+
+    #[test]
+    fn live_wallpaper_is_bounded_and_roundtrips() {
+        let message = Control::LiveWallpaper("{\"action\":\"off\"}".into());
+        let mut bytes = Vec::new();
+        message.encode_frame(&mut bytes);
+        assert_eq!(Control::decode(&bytes[2..]).unwrap(), message);
+        let mut oversized = vec![28];
+        oversized.extend_from_slice(&12001u16.to_le_bytes());
+        oversized.extend_from_slice(&vec![b'x'; 12001]);
+        assert!(Control::decode(&oversized).is_err());
     }
 
     /// The messages added within protocol 2 use tags that protocol-2 peers

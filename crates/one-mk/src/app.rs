@@ -124,6 +124,7 @@ pub struct Options {
 /// What peers can use besides input: clipboard and file streams.
 #[derive(Clone)]
 pub struct Services {
+    pub wallpaper: Option<(crate::live_wallpaper::Runtime, PathBuf)>,
     pub clip: Option<Arc<ClipSync>>,
     pub inbox: Arc<Inbox>,
     /// Who is paired right now. A bulk connection ends when its computer is
@@ -202,6 +203,12 @@ async fn serve_stream(
     mut recv: quinn::RecvStream,
 ) {
     match (kind, &services.clip) {
+        (StreamKind::WallpaperVideo, _) => {
+            if let Some((runtime, dir)) = &services.wallpaper {
+                let inbox = runtime.inbox(dir);
+                inbox.receive_wallpaper_on(permit, name, send, recv).await;
+            }
+        }
         (StreamKind::File, _) => services.inbox.receive_on(permit, name, send, recv).await,
         (StreamKind::Clipboard, Some(clip)) => clip.receive(permit.fp(), name, send, recv).await,
         _ => {
@@ -707,6 +714,7 @@ pub async fn serve(
 
     let Backend { name, mut events, capture, inject, focus, locker, keyboard } = backend;
     let services = Services {
+        wallpaper: Some((crate::live_wallpaper::Runtime::default(), dir.clone())),
         clip: opts.clipboard.map(|cb| ClipSync::new(cb, node.clone())),
         inbox: Inbox::new(opts.downloads.clone()),
         trusted: watch::channel(trusted_set(&trust)).0,
@@ -826,6 +834,7 @@ pub async fn serve(
         }
     }
     app.wallpaper.refresh(&app.settings.wallpaper);
+    if let Some((runtime, dir)) = &app.services.wallpaper { runtime.restore(dir, app.node.identity().fingerprint.short()); }
     app.refresh_fetch_shortcut();
     #[cfg(any(windows, target_os = "macos"))]
     app.reload_local_rules();
@@ -894,6 +903,7 @@ pub async fn serve(
     }
 
     app.stop_broadcast(broadcast::End::Quit);
+    if let Some((wallpaper, _)) = &app.services.wallpaper { wallpaper.shutdown(); }
     app.go_home();
     if let Some((id, a)) = app.approach.take() {
         app.release_capture(id, Some(a.pos()));
@@ -1051,7 +1061,7 @@ async fn establish(
     } else {
         match tokio::time::timeout(FIRST_STREAM_TIMEOUT, peer.accept_stream()).await {
             Ok(Ok((StreamKind::Control, send, recv))) => Ok((send, recv)),
-            Ok(Ok((kind @ (StreamKind::File | StreamKind::Clipboard), send, recv))) => {
+            Ok(Ok((kind @ (StreamKind::File | StreamKind::Clipboard | StreamKind::WallpaperVideo), send, recv))) => {
                 tracing::debug!(peer = %device_name, %addr, "bulk connection");
                 drop(permit); // the transfer limits take over
                 serve_streams(peer.conn, peer.fingerprint, device_name, services, (kind, send, recv)).await;
@@ -2096,6 +2106,14 @@ impl App {
         if matches!(msg, Control::Enter { .. }) { self.refresh_keyboard(); }
         let Some(msg) = self.broadcast_control(fp, msg) else { return };
         match msg {
+            Control::LiveWallpaper(json) => {
+                if let Some((runtime, dir)) = &self.services.wallpaper
+                    && let Some(peer) = self.peers.get(&fp)
+                    && peer.id == id && peer.caps & caps::LIVE_WALLPAPER != 0
+                    && self.trust.is_trusted(&fp)
+                    && let Ok(wire) = serde_json::from_str(&json)
+                { runtime.receive(dir.clone(), self.node.identity().fingerprint.short(), fp, peer.ctl.clone(), wire); }
+            }
             Control::Wallpaper(message) => {
                 if self.trust.is_trusted(&fp) && self.peers.get(&fp).is_some_and(|peer| peer.id == id && peer.caps & caps::WALLPAPER != 0) {
                     self.wallpaper.receive_now(fp,message);
@@ -2137,6 +2155,7 @@ impl App {
                 }
                 self.apply_pointer_mode();
                 self.announce_wallpaper(fp);
+                self.update_sides();
                 self.refresh_fetch_shortcut();
             }
             Control::KeyboardLayout(layout) => {
@@ -2343,6 +2362,10 @@ impl App {
     /// The OS says this display went to sleep (or the computer is
     /// suspending), or woke.
     fn on_power(&mut self, ev: PowerEvent) {
+        if let Some((wallpaper, dir)) = &self.services.wallpaper {
+            let PowerEvent::DisplayAsleep(asleep) = ev;
+            wallpaper.hold(dir, None, Some(asleep));
+        }
         if ev == PowerEvent::DisplayAsleep(true) { self.cancel_mouse_modes(); }
         match ev {
             PowerEvent::DisplayAsleep(true) if self.visiting() => {
@@ -2513,6 +2536,17 @@ impl App {
                 }
                 text
             }
+            Request::LiveWallpaper(json) => {
+                if let Some((runtime, dir)) = &self.services.wallpaper && let Ok(command) = serde_json::from_str(&json) {
+                    let peers = self.peers.iter().filter(|(_, peer)| peer.caps & caps::LIVE_WALLPAPER != 0).map(|(fingerprint, peer)| crate::live_wallpaper::Peer {
+                        id: fingerprint.short(), name: peer.name.clone(), fingerprint: *fingerprint,
+                        address: peer.conn.remote_address(), control: peer.ctl.clone(),
+                    }).collect();
+                    runtime.request(dir.clone(), self.status(), command, peers, self.node.clone(), reply);
+                    return false;
+                }
+                "error Wallpaper is not available\n".into()
+            }
             Request::WallpaperStatus => self.wallpaper.status(),
             Request::Status => self.status().encode(),
             Request::Invitation => {
@@ -2624,6 +2658,7 @@ impl App {
         Status {
             name: sanitize_name(&id.name),
             id: id.fingerprint.short(),
+            wallpaper: self.services.wallpaper.as_ref().map(|(runtime, _)| runtime.status()),
             port: self.node.local_addr().map_or(0, |a| a.port()),
             discovery: Some(self.discovery),
             backend: self.backend_name.into(),
@@ -2799,6 +2834,7 @@ impl App {
 
     /// The OS says this screen locked or unlocked.
     fn on_screen_locked(&mut self, locked: bool) {
+        if let Some((wallpaper, dir)) = &self.services.wallpaper { wallpaper.hold(dir, Some(locked), None); }
         if !locked {
             tracing::debug!("screen unlocked");
             self.lock_sync.on_local_unlocked();
@@ -2904,6 +2940,13 @@ impl App {
     /// peers' edges overlap, the one with the lowest fingerprint wins, so
     /// the choice doesn't depend on connection order.
     fn update_sides(&mut self) {
+        if let Some((runtime, dir)) = &self.services.wallpaper {
+            let peers = self.peers.iter().filter(|(_, peer)| peer.caps & caps::LIVE_WALLPAPER != 0).map(|(fingerprint, peer)| crate::live_wallpaper::Peer {
+                id: fingerprint.short(), name: peer.name.clone(), fingerprint: *fingerprint,
+                address: peer.conn.remote_address(), control: peer.ctl.clone(),
+            }).collect();
+            runtime.reconcile(dir.clone(), self.status(), peers, self.node.clone());
+        }
         let mut edges: Vec<(Edge, Fingerprint)> = Vec::new();
         let mut conflicts: Vec<_> = self.trust.devices().iter().filter(|device| device.placed_by == one_mk_net::PlacedBy::Pending)
             .map(|device| crate::pairing_layout::warning(&device.name)).collect();

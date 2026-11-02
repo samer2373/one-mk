@@ -29,6 +29,7 @@ Name: "addpath"; Description: "Add one-mk to PATH, to use it from a terminal"
 Source: "{#ReleaseDir}\one-mk.exe"; DestDir: "{app}"
 Source: "{#ReleaseDir}\one-mk-tray.exe"; DestDir: "{app}"
 Source: "{#ReleaseDir}\one-mk-app.exe"; DestDir: "{app}"
+Source: "{#ReleaseDir}\one-mk-wallpaper.exe"; DestDir: "{app}"
 
 [Icons]
 Name: "{group}\oneMK"; Filename: "{app}\one-mk-app.exe"

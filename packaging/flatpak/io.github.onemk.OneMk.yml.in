@@ -38,7 +38,7 @@ modules:
   - name: one-mk
     buildsystem: simple
     build-commands:
-      - install -Dm755 one-mk one-mk-tray one-mk-app -t ${FLATPAK_DEST}/bin
+      - install -Dm755 one-mk one-mk-tray one-mk-app one-mk-wallpaper -t ${FLATPAK_DEST}/bin
       # The app id doubles as desktop-file and icon name inside Flatpak.
       - install -Dm644 one-mk.desktop ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop
       - desktop-file-edit --set-icon=${FLATPAK_ID} ${FLATPAK_DEST}/share/applications/${FLATPAK_ID}.desktop

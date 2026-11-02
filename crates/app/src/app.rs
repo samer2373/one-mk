@@ -15,6 +15,7 @@ mod typing;
 mod updates;
 mod settings_controls;
 mod palette;
+mod wallpaper;
 
 use crate::daemon::{Event, Job, Link};
 use crate::motion::{self, tween};
@@ -50,16 +51,18 @@ enum Tab {
     Desk,
     Layout,
     Files,
+    Wallpaper,
     Keys,
     Health,
     Advanced,
 }
 /// Each tab, and a shorter name for narrow windows. Settings most people
 /// never change (Ctrl and Cmd, gaming mode, edge rules) live in Advanced.
-const TABS: [(Tab, &str, &str); 6] = [
+const TABS: [(Tab, &str, &str); 7] = [
     (Tab::Desk, "Desk", "Desk"),
     (Tab::Layout, "Desk", "Desk"),
     (Tab::Files, "Clipboard & files", "Files"),
+    (Tab::Wallpaper, "Wallpaper", "Wallpaper"),
     (Tab::Keys, "Keys & mouse", "Keys"),
     (Tab::Health, "Health", "Health"),
     (Tab::Advanced, "Settings", "Settings"),
@@ -73,7 +76,7 @@ impl Tab {
     }
     /// Tabs that mean something while oneMK is off.
     fn when_off(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Files | Tab::Keys | Tab::Health | Tab::Advanced)
+        matches!(self, Tab::Desk | Tab::Files | Tab::Wallpaper | Tab::Keys | Tab::Health | Tab::Advanced)
     }
 }
 const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"), (Side::Top, "Above"), (Side::Bottom, "Below")];
@@ -191,6 +194,7 @@ pub struct App {
     update_output: Option<String>,
     update_ui: updates::UpdateUi,
     palette: palette::Palette,
+    wallpaper_ui: wallpaper::WallpaperUi,
     link: Link,
     rx: Receiver<Event>,
     /// `None` until the first look at the daemon.
@@ -416,6 +420,7 @@ impl App {
         #[cfg(debug_assertions)]
         match std::env::var("ONE_MK_APP_TAB").as_deref() {
             Ok("files") => tab = Tab::Files,
+            Ok("wallpaper") => tab = Tab::Wallpaper,
             Ok("keyboard") => tab = Tab::Advanced,
             Ok("layout") => tab = Tab::Layout,
             Ok("health") => tab = Tab::Health,
@@ -448,6 +453,7 @@ impl App {
             update_output: None,
             update_ui: updates::UpdateUi::default(),
             palette: palette::Palette::default(),
+            wallpaper_ui: wallpaper::WallpaperUi::default(),
             scene,
             tab,
             drag: None,
@@ -1402,6 +1408,11 @@ impl App {
                 0 => "nothing paired yet".to_owned(),
                 n => format!("{} of {n} connected", s.peers.iter().filter(|p| p.online).count()),
             },
+            (Tab::Wallpaper, Some(Some(s))) => match s.wallpaper.as_ref().and_then(|w| w.plan.as_ref()) {
+                Some(plan) if plan.paused => "paused".to_owned(),
+                Some(plan) => plan.playing_message().to_lowercase(),
+                None => "one video across all your screens".to_owned(),
+            },
             _ => String::new(),
         };
         (name, sub)
@@ -1535,7 +1546,7 @@ impl App {
                 let sel = self.selected_id().filter(|id| id != "me");
                 vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
             }
-            Tab::Health | Tab::Advanced | Tab::Keys => vec![],
+            Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper => vec![],
             Tab::Files => {
                 let any = self.running().is_some_and(|status| status.peers.iter().any(|peer| peer.online));
                 let sub = if any {
@@ -2050,7 +2061,7 @@ impl App {
         }
         // One key per page, as the sidebar shows them: ⌘1 Desk, ⌘2
         // Wallpaper, ⌘3 Clipboard & files, ⌘4 Keys & mouse, ⌘, Settings.
-        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Comma, Tab::Advanced)] {
+        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Comma, Tab::Advanced)] {
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || tab.when_off()) {
                 self.set_tab(tab);
             }
@@ -2107,11 +2118,11 @@ impl eframe::App for App {
         let f = shell::frame(full);
         let content = f.content;
         let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
-        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys);
+        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper);
         let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
         let desk = Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() }));
         // Files let go over a page without the desk: ask where they go.
-        if !self.tab.desk() {
+        if !self.tab.desk() && self.tab != Tab::Wallpaper {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
             if !dropped.is_empty() {
                 self.set_tab(Tab::Files);
@@ -2161,6 +2172,10 @@ impl eframe::App for App {
         }
         let body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
         match self.tab {
+            Tab::Wallpaper => {
+                let mut child = page(ui, body, "wallpaper");
+                self.wallpaper_page(&mut child, body);
+            }
             Tab::Health => {
                 let mut child = page(ui, body, "health");
                 self.health(&mut child, body, now);
@@ -2225,7 +2240,9 @@ impl eframe::App for App {
 ///   shows start at login as on;
 /// - `ONE_MK_APP_CONFIRM=1` says the codes match a second after they
 ///   show, and keeps the "paired" sheet up.
-/// - `ONE_MK_APP_TAB=layout|health|advanced` (and files, keyboard);
+/// - `ONE_MK_APP_TAB=layout|health|advanced|wallpaper` (and files, keyboard);
+///   `ONE_MK_APP_WALLPAPER=poster.png` supplies a fake playing video when
+///   combined with `ONE_MK_APP_STATUS` for wallpaper screenshots.
 ///   `ONE_MK_APP_PROFILE=name` opens a profile's options;
 ///   `ONE_MK_APP_DOCTOR=file.json` shows that report instead of running
 ///   `one-mk doctor`; `ONE_MK_APP_ZOOM=2` draws everything twice as big

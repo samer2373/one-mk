@@ -16,6 +16,7 @@ class OneMk < Formula
     system "cargo", "install", *std_cargo_args(path: "crates/one-mk")
     system "cargo", "install", *std_cargo_args(path: "crates/tray")
     system "cargo", "install", *std_cargo_args(path: "crates/app")
+    system "cargo", "install", *std_cargo_args(path: "crates/wallpaper-player")
   end
 
   test do

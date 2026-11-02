@@ -575,7 +575,7 @@ mod tests {
                 while let Some(Ok(peer)) = node.accept().await {
                     // Every peer of the test counts as paired.
                     let trusted = tokio::sync::watch::channel(std::collections::HashSet::from([peer.fingerprint])).0;
-                    let services = Services { clip: Some(clip.clone()), inbox: inbox.clone(), trusted };
+                    let services = Services { wallpaper: None, clip: Some(clip.clone()), inbox: inbox.clone(), trusted };
                     tokio::spawn(async move {
                         let fp = peer.fingerprint;
                         if let Ok(first) = peer.accept_stream().await {

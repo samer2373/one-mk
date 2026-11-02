@@ -29,6 +29,8 @@ pub enum Action {
     ClipSend(String),
     /// A peer's clipboard to this computer, by id.
     ClipGet(String),
+    /// Pause (true) or play the live wallpaper.
+    WallpaperPause(bool),
     Forget { peer: String },
     ToggleAutostart,
     Quit,
@@ -180,6 +182,9 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
             let broadcasting = !s.broadcast.is_empty();
             if broadcasting || s.peers.iter().any(|p| p.online) {
                 m.push(Entry::Item { label: "Type on every computer".into(), action: Action::Broadcast(!broadcasting), checked: Some(broadcasting) });
+            }
+            if let Some(plan) = s.wallpaper.as_ref().and_then(|w| w.plan.as_ref()) {
+                m.push(Entry::Item { label: "Pause the wallpaper".into(), action: Action::WallpaperPause(!plan.paused), checked: Some(plan.paused) });
             }
             m.push(Entry::Item { label: "Lock every screen".into(), action: Action::LockAll, checked: None });
             m.push(Entry::Item { label: "Take back control".into(), action: Action::TakeBack, checked: None });

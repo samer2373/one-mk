@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(all(target_os = "linux", feature = "wallpaper-m1-lab"))]
 
 use one_mk_net::{Device, Identity, Node, TrustStore, read_frame};
 use one_mk_proto::{Control, PROTOCOL_VERSION, StreamKind, caps};

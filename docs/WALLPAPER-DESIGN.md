@@ -1,5 +1,8 @@
 # Live wallpapers: one continuous canvas
 
+> Historical Wave 6 design. The simpler current implementation, measured
+> behavior and remaining acceptance gaps are in [LIVE-WALLPAPER.md](LIVE-WALLPAPER.md).
+
 Revision 2 · 30 October 2026 · Wave 6E · **decision-ready design, not an implemented feature**.
 
 ## What changed since revision 1

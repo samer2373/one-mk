@@ -590,7 +590,7 @@ fn window_status(home: &Path) -> Result<policy::UpdateStatus> {
     // A portable copy updates only this program: with the window and tray
     // beside it they would be left at the old version, so download instead.
     let leaves_behind = kind == InstallKind::Portable && executable.parent().is_some_and(|dir| {
-        ["one-mk-app", "one-mk-app.exe", "one-mk-tray", "one-mk-tray.exe"].iter().any(|name| dir.join(name).exists())
+        ["one-mk-app", "one-mk-app.exe", "one-mk-tray", "one-mk-tray.exe", "one-mk-wallpaper", "one-mk-wallpaper.exe"].iter().any(|name| dir.join(name).exists())
     });
     Ok(policy::UpdateStatus {
         check: settings.check, install_automatically: settings.install_automatically,

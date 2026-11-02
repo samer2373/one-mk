@@ -1,14 +1,14 @@
 #!/bin/sh
 # Builds dist/one-mk-<arch>-unknown-linux-gnu.AppImage from an existing
 # release build (named like the release's other Linux files):
-#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app
+#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper
 #   sh scripts/package-appimage.sh
 # Needs appimagetool (set APPIMAGETOOL=/path, or have it on PATH). Without it
 # the script stops after laying out dist/one-mk.AppDir, which is checked by
 # running `AppRun --version`, and says so.
 . "$(dirname "$0")/package-common.sh"
 
-need_binaries one-mk one-mk-tray one-mk-app
+need_binaries one-mk one-mk-tray one-mk-app one-mk-wallpaper
 case "$(uname -m)" in
     x86_64) arch=x86_64 ;;
     aarch64) arch=aarch64 ;;
@@ -21,7 +21,7 @@ rm -rf "$appdir"
 # hidden app-id entry. (`one-mk install` writes those into the home folder,
 # pointing at the AppImage file.)
 mkdir -p "$appdir/usr/bin"
-for b in one-mk one-mk-tray one-mk-app; do
+for b in one-mk one-mk-tray one-mk-app one-mk-wallpaper; do
     install -m 0755 "$BIN_DIR/$b" "$appdir/usr/bin/$b"
 done
 install -Dm 0644 "$ROOT/packaging/linux/one-mk.desktop" "$appdir/usr/share/applications/one-mk.desktop"

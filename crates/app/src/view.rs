@@ -490,6 +490,7 @@ fn legacy_check(mut check: Check) -> Option<Check> {
     let detail = check.detail.as_str();
     let (title, plain, fix) = match check.id.as_str() {
         "updates" | "local-key-rules" | "input-tuning" | "typing" => return Some(check),
+        "wallpaper" if check.detail != "not shipped" => return Some(check),
         "wallpaper" | "wallpaper-import-sandbox" | "drag" => return None,
         "daemon" if detail.contains("not running") => {
             check.verdict = Verdict::Skip;

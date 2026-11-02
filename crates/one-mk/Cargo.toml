@@ -18,6 +18,7 @@ directories = "6.0.0"
 fs4 = "1.1.0"
 if-addrs = "0.15.0"
 one-mk-ctl = { path = "../ctl" }
+one-mk-wallpaper = { path = "../wallpaper-player" }
 one-mk-clipboard = { path = "../clipboard" }
 one-mk-input = { path = "../input", default-features = false }
 one-mk-net = { path = "../net" }

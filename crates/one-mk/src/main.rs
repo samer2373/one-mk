@@ -35,6 +35,7 @@ fn readable_time(timestamp: u64) -> String {
 mod control;
 mod doctor;
 mod wallpaper;
+mod live_wallpaper;
 mod hooks;
 mod hotkeys;
 mod inputdevices;
@@ -61,6 +62,7 @@ mod tuning;
 mod update;
 mod update_key;
 mod typing;
+#[cfg(feature = "wallpaper-m1-lab")]
 mod wallpaper_import;
 #[cfg(all(target_os = "linux", feature = "wallpaper-m1-lab"))]
 mod wallpaper_authority;
@@ -385,8 +387,8 @@ enum Cmd {
         #[arg(value_name = "auto|always|never", value_parser = ["auto", "always", "never"])]
         mode: Option<String>,
     },
-    /// Receiver-owned wallpaper consent; this build does not play media.
-    Wallpaper(wallpaper::WallpaperArgs),
+    /// Play a video across the shared desktop, or turn it off.
+    Wallpaper(live_wallpaper::Args),
     /// Scrolling on the computers this one controls: direction, natural,
     /// speed, smooth or by notches, modifier keys.
     Scroll(tuning::ScrollArgs),
@@ -471,7 +473,9 @@ fn main() -> ExitCode {
     // `wallpaper import` and `wallpaper doctor --runtime` belong to the
     // separately installed, sandboxed import package: dispatched before any
     // configuration or identity is touched.
+    #[cfg(feature = "wallpaper-m1-lab")]
     let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    #[cfg(feature = "wallpaper-m1-lab")]
     if raw.first().is_some_and(|a| a == "wallpaper")
         && (raw.get(1).is_some_and(|a| a == "import") || (raw.get(1).is_some_and(|a| a == "doctor") && raw.iter().any(|a| a == "--runtime")))
     {
@@ -640,7 +644,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Keymap { cmd } => tuning::keymap(&dir, cmd).await,
             Cmd::Pointer(args) => tuning::pointer_command(&dir, args).await,
             Cmd::PointerOverlay { mode } => pointeroverlay::command(&dir, mode.as_deref()).await,
-            Cmd::Wallpaper(args) => wallpaper::command(&dir, args).await,
+            Cmd::Wallpaper(args) => live_wallpaper::command(&dir, args).await,
             Cmd::Scroll(args) => tuning::scroll_command(&dir, args).await,
             Cmd::Autoscroll(args) => tuning::autoscroll_command(&dir, args).await,
             Cmd::Gestures { cmd } => tuning::gestures_command(&dir, cmd).await,
@@ -752,7 +756,9 @@ mod tests {
             (vec!["gestures", "add"], "Minimum swipe distance", "--device"),
             (vec!["gestures", "remove"], "Usage:", "--device"),
             (vec!["gestures", "preset"], "Usage:", "--device"),
-            (vec!["wallpaper", "extension", "install"], "--renderer", "__missing__"),
+            (vec!["wallpaper", "set"], "<FILE>", "--sandbox"),
+            (vec!["wallpaper", "off"], "Usage:", "--renderer"),
+            (vec!["wallpaper", "status"], "Usage:", "--renderer"),
         ] {
             let error = Cli::try_parse_from(std::iter::once("one-mk").chain(args).chain(["--help"]))
                 .err()
@@ -761,6 +767,13 @@ mod tests {
             let help = error.to_string();
             assert!(help.contains(required), "{help}");
             assert!(!help.contains(forbidden), "{help}");
+        }
+    }
+
+    #[test]
+    fn release_wallpaper_cli_does_not_offer_lab_setup() {
+        for action in ["extension", "import", "consent", "doctor"] {
+            assert!(Cli::try_parse_from(["one-mk", "wallpaper", action]).is_err());
         }
     }
 

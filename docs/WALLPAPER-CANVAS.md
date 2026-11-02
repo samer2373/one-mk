@@ -1,5 +1,8 @@
 # Wallpaper canvas and receiver consent: M1c scaffolding
 
+> Historical laboratory scaffolding. Current video playback uses the simpler
+> path documented in [LIVE-WALLPAPER.md](LIVE-WALLPAPER.md).
+
 Implementation scope, 2026-10-30. Read alongside
 [design rev 2](WALLPAPER-DESIGN.md), especially sections 3, 4, 7–10 and 12.
 **This is not playable wallpaper and does not complete M1.** The

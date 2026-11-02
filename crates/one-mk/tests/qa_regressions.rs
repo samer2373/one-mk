@@ -120,19 +120,17 @@ fn disabling_autoscroll_does_not_tell_user_to_click() {
     assert!(!String::from_utf8_lossy(&output.stdout).contains("Autoscroll and gestures:"));
 }
 
-// The extension installer is GNOME's: other systems report it as unavailable.
-#[cfg(target_os = "linux")]
 #[test]
-fn renderer_install_requires_an_explicit_nonempty_file() {
+fn video_wallpaper_has_no_renderer_installation_step() {
     let home = private_home();
+    let output = run(home.path(), &["wallpaper", "--help"]);
+    assert!(output.status.success());
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("set") && help.contains("off") && help.contains("status"));
+    assert!(!help.contains("--renderer") && !help.contains("extension"));
     let output = run(home.path(), &["wallpaper", "extension", "install"]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("--renderer"));
-    let path = home.path().join("empty-renderer");
-    std::fs::write(&path, "").unwrap();
-    let output = run(home.path(), &["wallpaper", "extension", "install", "--renderer", path.to_str().unwrap()]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains(path.to_str().unwrap()));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("--renderer"));
 }
 
 #[cfg(unix)]

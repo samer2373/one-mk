@@ -182,7 +182,7 @@ See [invitation security and protocol](docs/PAIRING-INVITE.md).
 | `one-mk autoscroll --help` / `one-mk gestures --help` | Configure autoscroll and mouse gestures (whole computer, not per-device) |
 | `one-mk update --check` / `one-mk update` | Check/install signed updates when the publisher key is configured |
 | `one-mk stop` | Stop the sharing service; closing the window does not stop sharing |
-| `one-mk wallpaper status` / `one-mk wallpaper doctor` | Inspect experimental, disabled-by-default wallpaper scaffolding; no playback |
+| `one-mk wallpaper set FILE` / `off` / `status` | Choose a shared video wallpaper, turn it off, or inspect playback; also available in the Wallpaper page |
 | `one-mk invite` / `one-mk join LINK` | Pair without discovery using an expiring secret invitation |
 | `one-mk drag --on` / `one-mk drag --off` | Enable/disable the edge file-drop zone |
 | `one-mk clipboard history` / `one-mk clipboard history on\|off` | Inspect or opt into clipboard history; `history show ID`, `copy ID`, `clear` manage items |
@@ -1174,18 +1174,16 @@ background apps, so there it goes through XWayland.
 - Local native key remapping requires a separate build feature and is **not in
   release builds**. Character/letter typing is not available in this release;
   physical-key typing remains the supported path.
-- Wallpaper policy, consent and diagnostics are experimental scaffolding only.
-  `one-mk wallpaper enable` does not start playback. The optional Linux developer
-  importer (`one-mk wallpaper import`) is not packaged in releases and needs an
-  audited sandbox runtime; it saves validated media, not a playable scene.
-  The optional GNOME extension stays static. Never disable GNOME version
-  validation or restart the live Shell to bypass a refusal.
-  See [wallpaper consent](docs/WALLPAPER-CANVAS.md),
-  [import development](docs/WALLPAPER-IMPORT.md) and
-  [GNOME limitations](docs/spikes/gnome/production-component.md).
-- Native Windows service/UAC input, wallpaper playback and native character
-  injection remain outside this release. Native Windows/macOS acceptance testing
-  and qualifying wallpaper renderers remain future work.
+- Video wallpaper has a window-driven implementation with a separate player,
+  shared canvas, automatic file copying and best-effort clock alignment. X11
+  playback is exercised under Xvfb; macOS and Windows are compile-only here.
+  Wayland is explicitly unavailable. Mac per-screen/Spaces handling, seamless
+  replacement, hardware performance and real cross-computer acceptance remain
+  incomplete. See [verified behavior, limitations and Mac checklist](docs/LIVE-WALLPAPER.md).
+  Old importer/consent/extension documentation describes the separate Wave 6
+  laboratory, not the normal wallpaper setup.
+- Native Windows service/UAC input and native character injection remain outside
+  this release. Native Windows/macOS acceptance testing remains future work.
 
 ## Updating
 

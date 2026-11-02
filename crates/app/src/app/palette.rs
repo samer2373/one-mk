@@ -32,6 +32,9 @@ enum Act {
     Stop,
     Recheck,
     Update,
+    WallChoose,
+    WallPause(bool),
+    WallOff,
 }
 
 struct Entry {
@@ -43,6 +46,9 @@ struct Entry {
 
 /// Settings the palette finds, and the page each is on.
 const SETTINGS: &[(&str, Tab)] = &[
+    ("Wallpaper · Fill, fit or stretch", Tab::Wallpaper),
+    ("Wallpaper · Pause on battery", Tab::Wallpaper),
+    ("Wallpaper · Play on a computer", Tab::Wallpaper),
     ("Crossing edges · Don't cross near corners", Tab::Advanced),
     ("Crossing edges · Wait at the edge", Tab::Advanced),
     ("Crossing edges · Hold a key to cross", Tab::Advanced),
@@ -117,6 +123,7 @@ impl App {
         let tab = |t: Tab, title: &str, hint: String| Entry { group: "Go to", title: title.into(), hint, act: Act::Tab(t) };
         out.push(tab(Tab::Desk, "Desk", format!("{k}1")));
         out.push(tab(Tab::Layout, "Arrange computers", "Desk".into()));
+        out.push(tab(Tab::Wallpaper, "Wallpaper", format!("{k}2")));
         out.push(tab(Tab::Files, "Clipboard & files", format!("{k}3")));
         out.push(tab(Tab::Keys, "Keys & mouse", format!("{k}4")));
         out.push(tab(Tab::Advanced, "Settings", format!("{k},")));
@@ -133,6 +140,13 @@ impl App {
                     out.push(act("Back to this computer".into(), "", Act::Here));
                     let kept = s.pointer_locked;
                     out.push(act(if kept { "Let the pointer cross again".into() } else { "Keep the pointer here".into() }, "", Act::KeepHere(!kept)));
+                }
+                if let Some(w) = s.wallpaper.as_ref().filter(|w| w.available) {
+                    out.push(act("Choose a wallpaper video…".into(), "", Act::WallChoose));
+                    if let Some(plan) = &w.plan {
+                        out.push(act(if plan.paused { "Play the wallpaper".into() } else { "Pause the wallpaper".into() }, "", Act::WallPause(!plan.paused)));
+                        out.push(act("Turn the wallpaper off".into(), "", Act::WallOff));
+                    }
                 }
                 out.push(act("Open received files".into(), "", Act::Received));
                 out.push(act("Check health again".into(), "", Act::Recheck));
@@ -192,6 +206,13 @@ impl App {
                 self.link.doctor();
             }
             Act::Update => self.begin_update(),
+            Act::WallChoose => {
+                self.set_tab(Tab::Wallpaper);
+                let ctx = self.ctx.clone();
+                self.choose_video(&ctx);
+            }
+            Act::WallPause(paused) => self.wallpaper_command(one_mk_wallpaper::Command::Pause { paused }),
+            Act::WallOff => self.wallpaper_command(one_mk_wallpaper::Command::Off),
         }
     }
 
@@ -326,6 +347,7 @@ impl App {
                         Act::Tab(Tab::Advanced) => Icon::Advanced,
                         Act::Tab(Tab::Health) | Act::Recheck => Icon::Health,
                         Act::Tab(Tab::Layout) => Icon::Layout,
+                        Act::Tab(Tab::Wallpaper) | Act::WallChoose | Act::WallPause(_) | Act::WallOff => Icon::Wallpaper,
                         Act::Tab(_) => Icon::Desk,
                         Act::LockAll | Act::KeepHere(_) => Icon::Lock,
                         Act::Broadcast(_) => Icon::Broadcast,

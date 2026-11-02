@@ -85,6 +85,7 @@ impl Ctx {
             Action::LockAll => self.ask(Request::LockAll),
             Action::ClipSend(to) => self.ask(Request::ClipSend(Some(to.clone()))),
             Action::ClipGet(from) => self.ask(Request::ClipGet(Some(from.clone()))),
+            Action::WallpaperPause(paused) => self.ask(one_mk_ctl::wallpaper::request(&one_mk_ctl::wallpaper::Command::Pause { paused: *paused })),
             Action::ToggleAutostart => self.toggle_autostart(),
             Action::Forget { peer } => self.forget(peer),
             Action::Quit => self.quit(),
