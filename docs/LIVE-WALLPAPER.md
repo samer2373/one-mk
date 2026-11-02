@@ -24,8 +24,12 @@ Animated pictures are not a video replacement workflow.
 
 ## Implementation
 
-- `crates/wallpaper-player`: shared geometry, import limits, picture slices,
-  playback status and cache contracts; the separate native video helper.
+- `crates/wallpaper-player` (`one-mk-wallpaper`): shared geometry, import limits,
+  playback/cache contracts and a bounded picture-helper process client. No image
+  decoders or native picture decoding paths are dependencies of this library.
+- `crates/wallpaper-helper` (`one-mk-wallpaper-helper`): binary-only package for
+  the installed `one-mk-wallpaper` executable, native video playback and all
+  picture decoding, resizing, compositing, PNG encoding and native application.
 - `crates/one-mk/src/live_wallpaper.rs`: controller-only preparation before
   hashing, SHA-256 cache, authenticated distribution, receiver readiness,
   clock samples, native picture application, child ownership and persistence.
@@ -86,10 +90,12 @@ back to the original rather than silently using a CPU encoder.
 
 ### Native pictures
 
-The controller uses `Canvas::slice` and the same Fit/Fill/Stretch math to make
+The controller's helper uses `Canvas::slice` and the same Fit/Fill/Stretch math to make
 bounded per-monitor PNG slices. One SHA-addressed bundle per computer travels
 through the existing distribution path; receivers validate count, byte limits,
-dimensions and trailing data before applying it. Bundle indices avoid repeated
+dimensions and trailing data in their helper before applying it. Receivers accept
+only PNG slices, fully decode them with limits, and re-encode them before passing
+them to native wallpaper APIs. Bundle indices avoid repeated
 slicing during ordinary reconciliation. Source and current/previous bundles
 are retained alongside the video cache.
 
@@ -103,13 +109,27 @@ are retained alongside the video cache.
   setting is unavailable; save and restore all three settings. This also works
   independently of the unavailable GNOME Wayland video backend.
 
-Picture decode, resize, PNG encoding, snapshot I/O and Linux settings commands
-run on a serialized blocking worker, not the daemon runtime thread or under
-the wallpaper state mutex. Unlock/display wake does not reapply an unchanged
+Picture jobs use explicit `--picture-inspect`, `--picture-prepare`,
+`--picture-apply` and `--picture-restore` helper commands. The daemon spawns and
+waits on a serialized blocking worker, never its runtime thread or under the
+wallpaper state mutex. Jobs have 40-second inspect/restore and 180-second
+prepare/apply deadlines; stdout and stderr are each limited to 16 KiB. Failures,
+excess output and timeouts return errors and kill/reap the helper. The daemon
+accepts only validated small dimensions JSON; image files remain in the cache.
+Decoding uses `image::Limits` (16384 pixels per dimension, 256 MiB allocation)
+and a 64-megapixel ceiling, including received PNGs. Compressed JPEG input is
+also capped at 256 MiB. JPEG/WebP codec libraries and native HEIC decoding exist
+only in the binary crate. The helper uses `zune-jpeg` and `image-webp` directly,
+not the shared `image` crate's JPEG/WebP features: otherwise Cargo unification
+in the joint release build could enable non-PNG decoding in clipboard code.
+Production daemon and joint release graphs retain PNG only. This process boundary
+is required because both local pictures and paired-peer bundles are untrusted:
+a malformed decoder input must not crash or compromise the long-running daemon.
+This is crash/address-space isolation, not an OS privilege sandbox.
+Unlock/display wake does not reapply an unchanged
 picture. Writes use a temporary file plus rename; Mac/Windows slices get new
-filenames so native wallpaper caches notice replacements. Main-queue Mac work
-is confined to screen queries/native settings; Null-backend daemon runs also
-pump the main queue instead of deadlocking a synchronous dispatch.
+filenames so native wallpaper caches notice replacements. Native Mac picture
+operations run on the helper's main thread, without daemon main-queue dispatch.
 
 Newly observed screens merge into the original snapshot before mutation.
 Turn off restores connected screens independently. Unplugged screens, a
@@ -272,18 +292,17 @@ paused-expose PNGs and xrandr topology), `/tmp/wallpaper-review-idle.json` and
 
 ## Validation
 
-Use `CARGO_TARGET_DIR="$PWD/target-wallpaper-review-fixes"`, no more than four jobs,
+Use `CARGO_TARGET_DIR="$PWD/target/picture-out-of-daemon"`, no more than four jobs,
 and never `cargo fmt`. No fat-LTO build was performed. The private target
 directory is removed at handoff. Checks on this branch:
 
 - `RUST_TEST_THREADS=4 cargo test -j 4 --workspace`: passes, including 454 daemon
-  unit tests, 16 wallpaper library tests and the off-idle integration test.
-  A sandboxed focused attempt failed on denied private sockets/D-Bus; the
-  unrestricted focused and workspace reruns pass. A subsequent full run hit
-  the known-flaky X11 `devices_are_listed_and_input_says_which_one` event timeout;
-  the exact test passed alone, then the full workspace was rerun unchanged.
+  unit tests, 10 wallpaper library tests, seven helper unit tests, three helper
+  process tests and the off-idle and crafted-picture daemon integration tests.
+  A sandboxed attempt failed on denied private sockets/D-Bus; the unrestricted
+  workspace rerun passes.
 - `cargo clippy -j 4 --workspace --all-targets -- -D warnings`: passes.
-- `RUSTFLAGS="-D warnings" cargo check -j 4 --all-targets -p one-mk-wallpaper -p one-mk-app -p one-mk-ctl -p one-mk-proto -p one-mk-input`
+- `RUSTFLAGS="-D warnings" cargo check -j 4 --all-targets -p one-mk-wallpaper -p one-mk-wallpaper-helper -p one-mk-app -p one-mk-ctl -p one-mk-proto -p one-mk-input`
   passes with `--target aarch64-apple-darwin` and
   `--target x86_64-pc-windows-msvc`. These are compile checks, **not native
   linking, execution, signing, notarization, encoder tests or GPU acceptance**.
@@ -297,16 +316,29 @@ directory is removed at handoff. Checks on this branch:
   clock sampling before any child starts, inbox admission/rate/cap accounting,
   exact S_OK vs S_FALSE, atomic picture readers, snapshot merge/partial restore
   and retention of current/unrestored/failed-swap PNG references.
-- Xvfb seam/loop/pause/expose/EOF/CPU and daemon off-idle scripts pass.
-- `git diff --check` passes. Packaging was not rerun for this branch; earlier
-  wallpaper-live packaging evidence is not treated as new native acceptance.
+- Picture process regressions cover PNG/JPEG/WebP inspection, PNG-only prepared
+  slices, oversized headers and compressed inputs, malformed media, atomic output
+  preservation, receiver rejection before native application, bounded stdout and
+  stderr, timeout termination, and a daemon that remains responsive after refusal.
+- The artifact gate self-test and CI-style dependency/feature gate pass. Both the
+  daemon graph and the joint production build graph enable only `image/png`;
+  direct JPEG/WebP codec dependencies remain helper-only.
+- Earlier Xvfb seam/loop/pause/expose/EOF/CPU evidence remains historical; those
+  scripts are not new native acceptance for this process-isolation change.
+- The joint production-package debug build passes. `scripts/check-packaging.sh`
+  passes its binary, Debian, AppDir, Flatpak, Homebrew-template and DMG-artwork
+  checks (Ruby syntax checking is skipped because Ruby is unavailable). Its
+  final brand-token freshness check fails on pre-existing drift between
+  `crates/app/src/style.rs` and `docs/brand/`; those files are unchanged here.
+- `git diff --check` passes.
 
 ## Dependency licences
 
-No new lockfile packages were introduced. Additional direct helper dependencies
+No new external lockfile packages were introduced. Additional direct helper dependencies
 already in the workspace lockfile are block2 0.6.2 (MIT), dispatch2 0.3.1
 (Zlib OR Apache-2.0 OR MIT), and libc 0.2.191 (MIT OR Apache-2.0). The image
-0.25.10 dependency (MIT OR Apache-2.0) now enables PNG/JPEG/WebP, including
+0.25.10 dependency (MIT OR Apache-2.0) enables only PNG in production.
+The binary-only `one-mk-wallpaper-helper` package depends directly on
 zune-core 0.5.3 and zune-jpeg 0.5.15 (MIT OR Apache-2.0 OR Zlib), and
 image-webp 0.2.4 (MIT OR Apache-2.0). Checked against installed Cargo manifests.
 Windows/objc2 features only expose more native API bindings; they do not bundle

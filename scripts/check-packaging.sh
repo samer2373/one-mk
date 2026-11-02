@@ -15,7 +15,7 @@
 #     still match the window's style (scripts/brand-tokens.py --check).
 # Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby, Pillow) are
 # used when present and reported as skipped when not.
-#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper
+#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
 #   sh scripts/check-packaging.sh
 # A debug build is enough for these checks: BIN_DIR=target/debug sh scripts/check-packaging.sh
 . "$(dirname "$0")/package-common.sh"

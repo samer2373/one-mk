@@ -30,7 +30,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 echo "Building (the first build takes a few minutes)..."
-cargo build --release -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper
+cargo build --release -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
 
 mkdir -p "$HOME/.local/bin"
 cp target/release/one-mk target/release/one-mk-tray target/release/one-mk-app target/release/one-mk-wallpaper "$HOME/.local/bin/"

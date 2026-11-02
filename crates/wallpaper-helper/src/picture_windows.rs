@@ -1,4 +1,4 @@
-use crate::Monitor;
+use one_mk_wallpaper::Monitor;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use windows::{core::{PCWSTR, PWSTR}, Win32::{System::Com::*, UI::Shell::*}};

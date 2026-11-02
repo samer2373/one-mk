@@ -1,4 +1,4 @@
-use crate::Monitor;
+use one_mk_wallpaper::Monitor;
 use anyhow::{Context, Result, ensure};
 use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
 use objc2_app_kit::{NSColor, NSColorSpace, NSWorkspaceDesktopImageAllowClippingKey, NSWorkspaceDesktopImageFillColorKey, NSWorkspaceDesktopImageScalingKey};

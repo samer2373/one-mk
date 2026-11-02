@@ -9,22 +9,6 @@ anyhow = "1.0.104"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0"
 libloading = "0.8.9"
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-x11-dl = "2.21.0"
-libc = "0.2.191"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-block2 = "0.6.2"
-dispatch2 = "0.3.1"
-objc2 = "0.6.5"
-objc2-foundation = { version = "0.3.2", features = ["NSThread", "NSRunLoop", "NSDate", "NSURL", "NSProcessInfo"] }
-objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSScreen", "NSWindow", "NSView", "NSWorkspace"] }
-objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "AVPlayer", "AVPlayerLooper", "AVPlayerItem", "AVPlayerLayer", "AVAsset", "AVAssetTrack", "AVAssetImageGenerator", "AVMediaFormat", "AVVideoSettings", "AVAnimation", "objc2-quartz-core", "objc2-core-media", "objc2-core-graphics", "objc2-core-foundation"] }
-objc2-quartz-core = { version = "0.3.2", features = ["CALayer"] }
-objc2-core-media = { version = "0.3.2", features = ["CMTime"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-core = "0.62.2"
-windows = { version = "0.62.2", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Com", "Win32_Media_MediaFoundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct3D", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Graphics_Imaging", "Win32_System_Power", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_Security", "Win32_UI_Shell", "Win32_UI_Accessibility", "Win32_UI_HiDpi"] }
+windows = { version = "0.62.2", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }

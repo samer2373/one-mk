@@ -2268,8 +2268,6 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
- "zune-core",
- "zune-jpeg",
 ]
 
 [[package]]
@@ -3555,9 +3553,21 @@ name = "one-mk-wallpaper"
 version = "0.1.19"
 dependencies = [
  "anyhow",
+ "libloading",
+ "serde",
+ "serde_json",
+ "windows",
+]
+
+[[package]]
+name = "one-mk-wallpaper-helper"
+version = "0.1.19"
+dependencies = [
+ "anyhow",
  "block2 0.6.2",
  "dispatch2",
  "image",
+ "image-webp",
  "libc",
  "libloading",
  "objc2 0.6.5",
@@ -3566,11 +3576,15 @@ dependencies = [
  "objc2-core-media",
  "objc2-foundation 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "one-mk-wallpaper",
  "serde",
  "serde_json",
+ "tempfile",
  "windows",
  "windows-core",
  "x11-dl",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds dist/one-mk-<arch>-unknown-linux-gnu.AppImage from an existing
 # release build (named like the release's other Linux files):
-#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper
+#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
 #   sh scripts/package-appimage.sh
 # Needs appimagetool (set APPIMAGETOOL=/path, or have it on PATH). Without it
 # the script stops after laying out dist/one-mk.AppDir, which is checked by

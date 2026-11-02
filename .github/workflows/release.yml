@@ -66,7 +66,7 @@ jobs:
         run: sh scripts/version.sh --check "$GITHUB_REF_NAME"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: stable, targets: "${{ matrix.target }}" }
-      - run: cargo build --release --locked --target ${{ matrix.target }} -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper
+      - run: cargo build --release --locked --target ${{ matrix.target }} -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
       - name: Package
         shell: bash
         run: |

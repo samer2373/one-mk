@@ -93,6 +93,11 @@ fn helper() -> Result<PathBuf> {
     one_mk_ctl::install::sibling(&executable, "one-mk-wallpaper").context("The video wallpaper player is missing from this oneMK installation. Reinstall oneMK to add it.")
 }
 
+fn restore_picture(root: &Path) -> Result<()> {
+    if !root.join("previous.json").exists() { return Ok(()); }
+    one_mk_wallpaper::picture::restore(&helper()?, root)
+}
+
 pub fn cache(dir: &Path) -> PathBuf { dir.join("wallpaper-video") }
 
 pub(crate) fn digest(path: &Path) -> Result<String> {
@@ -160,7 +165,7 @@ fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
     if let Ok(hash) = std::fs::read_to_string(&index) && let Ok(path) = cache_path(&cache(dir), &hash) && digest(&path).ok().as_ref() == Some(&hash) { return Ok(hash); }
     let temporary = cache(dir).join(format!("picture-{}.part", crate::link::random_u64()));
     let result = (|| -> Result<String> {
-        one_mk_wallpaper::picture::prepare(&cache_path(&cache(dir), &plan.hash)?, plan, computer, &temporary)?;
+        one_mk_wallpaper::picture::prepare(&helper()?, &cache_path(&cache(dir), &plan.hash)?, plan, computer, &temporary)?;
         Ok(import(dir, &temporary)?.0)
     })();
     let _ = std::fs::remove_file(temporary);
@@ -406,8 +411,8 @@ impl Runtime {
             if state.coordinator == coordinator && state.status.plan.as_ref() == Some(&plan) && (state.applied_picture.as_ref() == Some(&plan) || state.player.is_some()) { return Ok(()); }
         }
         if plan.picture && plan.computers.contains(&computer) {
-            one_mk_wallpaper::picture::apply(&plan, &computer, &cache_path(&cache(dir), plan.asset_hash.as_ref().unwrap_or(&plan.hash))?, &cache(dir).join("pictures"))?;
-        } else { one_mk_wallpaper::picture::restore(&cache(dir).join("pictures"))?; }
+            one_mk_wallpaper::picture::apply(&helper()?, &plan, &computer, &cache_path(&cache(dir), plan.asset_hash.as_ref().unwrap_or(&plan.hash))?, &cache(dir).join("pictures"))?;
+        } else { restore_picture(&cache(dir).join("pictures"))?; }
         let mut state = self.state.lock().unwrap();
         ensure!(state.generation == generation, "Wallpaper selection changed");
         if let Some(mut child) = state.player.take() {
@@ -515,7 +520,7 @@ impl Runtime {
             let restored = tokio::task::spawn_blocking(move || {
                 let _work = runtime.picture_work.lock().unwrap();
                 ensure!(runtime.state.lock().unwrap().generation == generation, "Wallpaper selection changed");
-                one_mk_wallpaper::picture::restore(&root)
+                restore_picture(&root)
             }).await?;
             let state = self.state.lock().unwrap();
             ensure!(state.generation == generation, "Wallpaper selection changed");
@@ -547,7 +552,7 @@ impl Runtime {
             let (hash, source) = tokio::task::spawn_blocking(move || import(&dir_owned, &path)).await??;
             let media = if picture {
                 let poster = cache(dir).join(format!("{hash}.png"));
-                tokio::task::spawn_blocking(move || one_mk_wallpaper::picture::inspect(&source, &poster)).await??
+                tokio::task::spawn_blocking(move || one_mk_wallpaper::picture::inspect(&helper()?, &source, &poster)).await??
             } else { inspect(dir, &hash).await? };
             let computers = std::iter::once(status.id.clone()).chain(status.peers.iter().map(|peer| peer.id.clone())).collect();
             plan = Some(Plan { hash, title, media, canvas, start_ms: now_ms() + 2000, fit: Default::default(), computers, pause_on_battery: true, paused: false, picture, asset_hash: None });
@@ -653,7 +658,7 @@ impl Runtime {
                 tokio::task::spawn_blocking(move || {
                     let _work = runtime.picture_work.lock().unwrap();
                     if runtime.state.lock().unwrap().generation != generation { return; }
-                    let result = one_mk_wallpaper::picture::restore(&root);
+                    let result = restore_picture(&root);
                     if let Err(error) = result { let mut state = runtime.state.lock().unwrap(); if state.generation == generation { state.status.message = error.to_string(); } }
                 });
                 state.pending = None; state.applied_picture = None;

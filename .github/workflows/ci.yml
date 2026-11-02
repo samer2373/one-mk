@@ -40,7 +40,7 @@ jobs:
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with: { toolchain: stable, targets: "${{ matrix.target }}" }
-      - run: cargo check --locked -j 2 -p one-mk-input -p one-mk-ctl -p one-mk-proto -p one-mk-app --all-targets --target ${{ matrix.target }}
+      - run: cargo check --locked -j 2 -p one-mk-wallpaper -p one-mk-wallpaper-helper -p one-mk-input -p one-mk-ctl -p one-mk-proto -p one-mk-app --all-targets --target ${{ matrix.target }}
         env: { RUSTFLAGS: "-D warnings" }
 
   test:
@@ -67,6 +67,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: stable }
       - run: sh scripts/version.sh
-      - run: cargo build --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper
+      - run: cargo build --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
       - run: sudo apt-get install -y --no-install-recommends python3-pil   # the installer window's artwork check
       - run: BIN_DIR=target/debug sh scripts/check-packaging.sh

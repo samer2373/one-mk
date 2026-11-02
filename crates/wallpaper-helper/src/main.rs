@@ -11,6 +11,8 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
+mod picture;
+
 #[derive(Debug)]
 enum Input { End, Offset(i64) }
 
@@ -42,6 +44,9 @@ fn wake() {
 
 fn main() -> Result<()> {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if arguments.first().is_some_and(|argument| argument.to_string_lossy().starts_with("--picture-")) {
+        return picture::command(&arguments);
+    }
     if arguments.first().is_some_and(|argument| argument == "--prepare") {
         let path = Path::new(arguments.get(1).context("Choose a video first")?);
         let output = Path::new(arguments.get(2).context("Missing prepared video path")?);
