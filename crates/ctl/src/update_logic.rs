@@ -219,7 +219,10 @@ pub fn install_kind(path: &str, home: &str, appimage: bool, flatpak: bool) -> In
         // The caller verified this process runs from that AppImage: whatever
         // the file is called, it is the AppImage (window, tray, libraries).
         if appimage { return InstallKind::AppImage; }
-        if path.ends_with("/one-mk") || lower.ends_with("/one-mk.exe") { return InstallKind::Portable; }
+        // Not one built or installed by cargo: those belong to cargo.
+        let cargo = lower.contains("/.cargo/") || lower.contains("/target/debug/") || lower.contains("/target/release/")
+            || lower.contains("-apple-darwin/") || lower.contains("-pc-windows-") || lower.contains("-unknown-linux-");
+        if !cargo && (path.ends_with("/one-mk") || lower.ends_with("/one-mk.exe")) { return InstallKind::Portable; }
     }
     InstallKind::Managed
 }
@@ -331,6 +334,11 @@ mod tests {
             ("/home/me/.local/bin/one-mk", "/home/me", InstallKind::Portable),
             ("/home/me-other/.local/bin/one-mk", "/home/me", InstallKind::Managed),
             ("/tmp/one-mk", "/home/me", InstallKind::Managed),
+            ("/home/me/Downloads/one-mk-linux/one-mk", "/home/me", InstallKind::Portable),
+            ("/home/me/.cargo/bin/one-mk", "/home/me", InstallKind::Managed),
+            ("/home/me/src/one-mk/target/release/one-mk", "/home/me", InstallKind::Managed),
+            ("/home/me/src/one-mk/target/x86_64-unknown-linux-gnu/release/one-mk", "/home/me", InstallKind::Managed),
+            ("C:\\Users\\me\\.cargo\\bin\\one-mk.exe", "C:\\Users\\me", InstallKind::Managed),
         ] { assert_eq!(install_kind(path, home, false, false), expected); }
         assert_eq!(install_kind("/home/me/one-mk.AppImage", "/home/me", true, false), InstallKind::AppImage);
         // An AppImage keeps its kind under any name, but only inside the home folder.

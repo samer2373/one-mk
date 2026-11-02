@@ -171,9 +171,18 @@ fn clean_temporary(parent: &Path, prefixes: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn target_lock(target: &Path) -> Result<File> {
+/// The end of an install or a rollback. The window reads "Restarting…" and
+/// restarts oneMK itself; in a terminal nothing restarts, so say what to do.
+fn restarting(done: &str, by_hand: &str) {
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() { println!("{done}. {by_hand}"); } else { println!("{done}. Restarting…"); }
+}
+
+/// `denied`: what to tell someone whose account can't write the folder.
+fn target_lock(target: &Path, denied: &str) -> Result<File> {
     let parent = target.parent().context("update target has no directory")?;
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(parent.join(".one-mk-update.lock"))?;
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(parent.join(".one-mk-update.lock"))
+        .with_context(|| denied.to_owned())?;
     // Another update holds it for as long as it runs. A child process that
     // another thread is starting can also hold a copy for a moment (until it
     // execs and closes it), so wait a little before calling it busy.
@@ -185,7 +194,8 @@ fn target_lock(target: &Path) -> Result<File> {
                 tries += 1;
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-            Err(error) => return Err(error).context("another executable update is in progress; wait for it to finish"),
+            Err(std::fs::TryLockError::WouldBlock) => bail!("Another update is running. Wait for it to finish, then try again"),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error).with_context(|| denied.to_owned()),
         }
     }
     clean_temporary(parent, &[".one-mk-update-payload-", ".one-mk-update-probe-"])?;
@@ -541,7 +551,7 @@ fn download(asset: &policy::Asset, release: &Release, origin: &Url, parent: &Pat
 
 fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, kind: InstallKind) -> Result<()> {
     refuse_root()?;
-    let _lock = target_lock(target).context("This app's folder can't be changed by your account. Choose Download instead")?;
+    let _lock = target_lock(target, "This app's folder can't be changed by your account. Choose Download instead")?;
     regular(target)?;
     let asset = policy::select_install(manifest, std::env::consts::OS, std::env::consts::ARCH, kind)?;
     let parent = target.parent().context("update target has no directory")?;
@@ -563,7 +573,7 @@ fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, ki
 
 fn rollback(target: &Path) -> Result<()> {
     refuse_root()?;
-    let _lock = target_lock(target)?;
+    let _lock = target_lock(target, "This app's folder can't be changed by your account")?;
     let old = target.parent().context("update target has no directory")?.join("one-mk.old");
     regular(&old).context("no safe previous executable; reinstall the complete release manually")?;
     version_check(&old, None)?;
@@ -677,7 +687,7 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
         }
         rollback(&target)?;
         skip();
-        println!("Previous oneMK restored. Restarting…");
+        restarting("Previous oneMK restored", "Quit oneMK and open it again to use it");
         return Ok(());
     }
     ensure!(crate::update_key::PRODUCTION_KEY, "release verification is not configured: publisher must replace the test key; install the complete release manually");
@@ -695,7 +705,7 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
     #[cfg(target_os = "macos")]
     if kind == InstallKind::MacApp { return bundle::apply_bundle(&manifest, &release, &origin, &target, home); }
     apply(&manifest, &release, &origin, &target, kind)?;
-    println!("oneMK {} installed. Restarting…", manifest.version);
+    restarting(&format!("oneMK {} installed", manifest.version), "Quit oneMK and open it again to use it");
     Ok(())
 }
 

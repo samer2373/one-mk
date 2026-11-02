@@ -93,8 +93,21 @@ fn wallpaper_fits(media_occupied: u64, total_occupied: u64, size: u64, largest: 
         && total_occupied.saturating_add(size) <= WALLPAPER_CACHE_CAP
 }
 #[derive(Default)]
-struct WallpaperPolicy { peer: Option<Fingerprint>, hashes: std::collections::BTreeSet<String>, last_offer: Option<std::time::Instant> }
+struct WallpaperPolicy {
+    peer: Option<Fingerprint>,
+    hashes: std::collections::BTreeSet<String>,
+    last_offer: Option<std::time::Instant>,
+    /// A cached video whose contents were checked against its hash, and its
+    /// length: offered again (Pause, Play, Fit resend the plan), it is
+    /// acknowledged without the offer limit or another full read.
+    verified: Option<(String, u64)>,
+}
 impl WallpaperPolicy {
+    fn already_have(&self, peer: Fingerprint, hash: &str, size: u64, on_disk: Option<u64>) -> bool {
+        self.peer == Some(peer) && self.hashes.contains(hash) && on_disk == Some(size)
+            && self.verified.as_ref().is_some_and(|(verified, length)| verified == hash && *length == size)
+    }
+
     fn accept(&mut self, peer: Fingerprint, hash: &str, size: u64, now: std::time::Instant) -> bool {
         if self.peer != Some(peer) || !self.hashes.contains(hash) || size == 0 || size > one_mk_wallpaper::MAX_MEDIA_BYTES
             || self.last_offer.is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(2)) { return false; }
@@ -342,6 +355,12 @@ impl Inbox {
         let Ok(_transfer) = self.wallpaper_transfer.try_lock() else { return };
         let existing = self.root.join(&path);
         let hash = path.trim_end_matches(".video").to_owned();
+        let on_disk = fs::symlink_metadata(&existing).ok().filter(|metadata| metadata.is_file()).map(|metadata| metadata.len());
+        if self.wallpaper.lock().unwrap().already_have(conn.fp, &hash, size, on_disk) {
+            let _ = write_file_msg(&mut send, &FileMsg::Saved { name: path }).await;
+            let _ = send.finish();
+            return;
+        }
         let admitted = self.wallpaper.lock().unwrap().accept(conn.fp, &hash, size, std::time::Instant::now());
         if !admitted { let _ = write_file_msg(&mut send, &FileMsg::Reject { reason: "Wallpaper was not requested or was offered too often".into() }).await; return; }
         let root = self.root.clone();
@@ -356,9 +375,10 @@ impl Inbox {
         let admitted = { let policy = self.wallpaper.lock().unwrap(); policy.peer == Some(conn.fp) && policy.hashes.contains(&hash) }
             && wallpaper_fits(media_occupied, total_occupied, size, largest);
         if !admitted { let _ = write_file_msg(&mut send, &FileMsg::Reject { reason: "Wallpaper was not requested, offered too often, or exceeds its cache limit".into() }).await; return; }
-        let check = existing.clone();
-        let cached = tokio::task::spawn_blocking(move || crate::live_wallpaper::digest(&check).is_ok_and(|actual| actual == hash)).await.unwrap_or(false);
+        let (check, expected) = (existing.clone(), hash.clone());
+        let cached = tokio::task::spawn_blocking(move || crate::live_wallpaper::digest(&check).is_ok_and(|actual| actual == expected)).await.unwrap_or(false);
         if cached {
+            self.wallpaper.lock().unwrap().verified = Some((hash, size));
             let _ = write_file_msg(&mut send, &FileMsg::Saved { name: path }).await;
             let _ = send.finish();
             return;
@@ -1552,6 +1572,14 @@ mod tests {
         assert!(policy.accept(peer, "current", 100, now));
         assert!(!policy.accept(peer, "pending", 100, now));
         assert!(policy.accept(peer, "pending", 100, now + Duration::from_secs(2)));
+        // Checked once, the same video offered again right away is acknowledged.
+        assert!(!policy.already_have(peer, "current", 100, Some(100)));
+        policy.verified = Some(("current".into(), 100));
+        assert!(policy.already_have(peer, "current", 100, Some(100)));
+        assert!(!policy.already_have(peer, "current", 100, Some(99)));
+        assert!(!policy.already_have(peer, "current", 100, None));
+        assert!(!policy.already_have(stranger, "current", 100, Some(100)));
+        assert!(!policy.already_have(peer, "pending", 100, Some(100)));
         assert!(wallpaper_fits(1000, 2000, 10, 1000));
         assert!(!wallpaper_fits(1000, 2000, 10, 10));
         assert!(!wallpaper_fits(0, WALLPAPER_CACHE_CAP, 1, 1));

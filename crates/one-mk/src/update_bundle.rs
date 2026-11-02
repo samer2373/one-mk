@@ -153,10 +153,10 @@ fn stop_daemon(home: &Path) -> Result<()> {
 pub(super) fn apply_bundle(manifest: &Manifest, release: &Release, origin: &Url, executable: &Path, home: &Path) -> Result<()> {
     let target = bundle(executable)?;
     ensure!(!policy::translocated(&target.to_string_lossy()), "Move oneMK to Applications before updating");
-    let _lock = target_lock(&target).context("This app's folder can't be changed by your account. Choose Download instead")?;
+    let _lock = target_lock(&target, "This app's folder can't be changed by your account. Choose Download instead")?;
     clean_staging(target.parent().context("The app has no parent folder")?);
     let previous = backup(&target)?;
-    ensure!(!Disk.exists(&previous)? && !receipt(&target).try_exists()?, "The previous app is still waiting for a successful restart");
+    ensure!(!receipt(&target).try_exists()?, "The previous app is still waiting for a successful restart. Open oneMK once, then update");
     ensure!(Disk.exists(&target)?, "The running app is missing");
     let staging = Staging::new(target.parent().context("The app has no parent folder")?)?;
     let asset = policy::select_install(manifest, "macos", std::env::consts::ARCH, InstallKind::MacApp)?;
@@ -176,12 +176,15 @@ pub(super) fn apply_bundle(manifest: &Manifest, release: &Release, origin: &Url,
     let mut pending = OpenOptions::new().create_new(true).write(true).open(&marker)?;
     pending.write_all(manifest.version.as_bytes())?;
     pending.sync_all()?;
+    // The version before the running one, kept since the last update for
+    // "Go back": this update keeps the running version in its place.
+    if Disk.exists(&previous)? { fs::rename(&previous, staging.0.join("older.app"))?; }
     if let Err(error) = stop_daemon(home).and_then(|()| swap(&Disk, &candidate, &target, &previous)) {
         if Disk.exists(&target).unwrap_or(false) { let _ = fs::remove_file(&marker); }
         return Err(error);
     }
     sync_directory(target.parent().context("The app has no parent folder")?)?;
-    println!("Restarting…");
+    restarting(&format!("oneMK {} installed", manifest.version), "Open oneMK to start sharing again");
     Ok(())
 }
 
@@ -190,23 +193,23 @@ pub(super) fn acknowledge(executable: &Path, started_version: &str) -> Result<()
     let target = bundle(executable)?;
     let marker = receipt(&target);
     if !marker.try_exists()? { return Ok(()); }
-    let _lock = target_lock(&target)?;
+    let _lock = target_lock(&target, "This app's folder can't be changed by your account")?;
     regular(&marker)?;
     let version = fs::read_to_string(&marker)?;
     ensure!(version == started_version, "The previous app is kept until the new window starts");
-    let previous = backup(&target)?;
-    if Disk.exists(&previous)? { fs::remove_dir_all(previous)?; }
+    // The previous app stays for "Go back to the previous version" until
+    // the next update replaces it.
     fs::remove_file(marker)?;
     Ok(())
 }
 
 pub(super) fn rollback_available(executable: &Path) -> bool {
-    bundle(executable).is_ok_and(|target| receipt(&target).is_file() && backup(&target).is_ok_and(|previous| previous.is_dir()))
+    bundle(executable).is_ok_and(|target| backup(&target).is_ok_and(|previous| previous.is_dir()))
 }
 
 pub(super) fn rollback_bundle(executable: &Path, home: &Path) -> Result<()> {
     let target = bundle(executable)?;
-    let _lock = target_lock(&target)?;
+    let _lock = target_lock(&target, "This app's folder can't be changed by your account")?;
     clean_staging(target.parent().context("The app has no parent folder")?);
     let previous = backup(&target)?;
     matching_team(&SystemCodeSign, &target, &previous)?;
@@ -214,7 +217,7 @@ pub(super) fn rollback_bundle(executable: &Path, home: &Path) -> Result<()> {
     stop_daemon(home)?;
     swap(&Disk, &previous, &target, &staging.0.join("failed.app"))?;
     let _ = fs::remove_file(receipt(&target));
-    println!("Previous app restored. Restarting…");
+    restarting("Previous app restored", "Open oneMK to start sharing again");
     Ok(())
 }
 
@@ -222,7 +225,7 @@ pub(super) fn move_to_applications(executable: &Path) -> Result<()> {
     let source = bundle(executable)?;
     let target = Path::new("/Applications/one-mk.app");
     ensure!(policy::translocated(&source.to_string_lossy()), "The app is already installed outside the disk image");
-    let _lock = target_lock(target).context("Your account can't move this app to Applications. Drag it there in Finder")?;
+    let _lock = target_lock(target, "Your account can't move this app to Applications. Drag it there in Finder")?;
     clean_staging(Path::new("/Applications"));
     ensure!(!target.try_exists()?, "An app already exists in Applications. Open that copy instead");
     let staging = Staging::new(Path::new("/Applications"))?;
@@ -234,7 +237,7 @@ pub(super) fn move_to_applications(executable: &Path) -> Result<()> {
     let _ = Command::new("/usr/bin/xattr").args(["-dr", "com.apple.quarantine"]).arg(&candidate).output();
     matching_team(&SystemCodeSign, &source, &candidate)?;
     rename_new(&candidate, target).context("An app already exists in Applications. Open that copy instead")?;
-    println!("Moved to Applications. Restarting…");
+    restarting("Moved to Applications", "Open oneMK from Applications");
     Ok(())
 }
 
@@ -303,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn disk_swap_and_window_acknowledgement_keep_rollback_until_start() -> Result<()> {
+    fn disk_swap_and_window_acknowledgement_keep_rollback_after_start() -> Result<()> {
         let temporary = tempfile::tempdir()?;
         let target = temporary.path().join("one-mk.app");
         let candidate = temporary.path().join("new.app");
@@ -321,8 +324,10 @@ mod tests {
         assert!(previous.is_dir());
         assert!(rollback_available(&executable));
         acknowledge(&executable, env!("CARGO_PKG_VERSION"))?;
-        assert!(!previous.exists());
+        // Started: the previous app stays for "Go back".
+        assert!(previous.is_dir());
         assert!(!receipt(&target).exists());
+        assert!(rollback_available(&executable));
         Ok(())
     }
 }

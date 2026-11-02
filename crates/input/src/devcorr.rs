@@ -89,6 +89,7 @@ impl Correlator {
         self.finish(out);
         self.misses = 0;
         self.enabled = enabled;
+        self.local_held.clear();
     }
 
     #[cfg(any(feature = "native-local-remap", test))]
@@ -108,12 +109,17 @@ impl Correlator {
                 }
             }
         }
-        if let Some(index) = self.local_held.iter().position(|entry| entry.0 == key.code) {
-            set_device(&mut event, self.local_held[index].1);
-            if !key.down { self.local_held.swap_remove(index); }
-        } else if key.down {
-            let device = match event { Event::Key { device, .. } | Event::Button { device, .. } => device, _ => None };
-            self.local_held.push((key.code, device));
+        // A press counts on the device just matched to it (a held entry can
+        // be stale when its release went elsewhere); repeats and the release
+        // keep the press's device, so a rule applied on press is undone.
+        let fresh = match event { Event::Key { device, .. } | Event::Button { device, .. } => device, _ => None };
+        let held = self.local_held.iter().position(|entry| entry.0 == key.code);
+        match (held, key.down) {
+            (Some(index), true) if fresh.is_some() => self.local_held[index].1 = fresh,
+            (Some(index), true) => set_device(&mut event, self.local_held[index].1),
+            (Some(index), false) => { set_device(&mut event, self.local_held[index].1); self.local_held.swap_remove(index); }
+            (None, true) => self.local_held.push((key.code, fresh)),
+            (None, false) => {}
         }
         out.push(Correlated { event, local: Some(key.sequence) });
     }
@@ -206,6 +212,7 @@ impl Correlator {
         out.extend(self.waiting.drain(..).map(|w| Correlated { event: w.ev, local: w.local }));
         self.seen.retain(|s| s.1 != device);
         self.motion.retain(|m| m.0 != device);
+        self.local_held.retain(|held| held.1 != Some(device));
     }
 
     fn prune(&mut self, now: u64) {
@@ -399,6 +406,24 @@ mod tests {
         corr.local_key(local(3, true), 4, &mut out);
         assert_eq!(devices(&out), [None, None, None]);
         assert_eq!(corr.deadline(), None);
+    }
+
+    #[test]
+    fn a_press_whose_release_went_elsewhere_does_not_name_the_next_press() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.configure(true, &mut out);
+        let local = |sequence, down| crate::localmap_runtime::Key { sequence, code: 58, down, keyboard_type: 0, click_state: 0, at: std::time::Instant::now() };
+        corr.device_event(press(58, true), A, 0, &mut out);
+        corr.local_key(local(1, true), 0, &mut out);
+        // Its release went to the hook (the pointer had crossed); later the
+        // same key on keyboard B.
+        corr.device_event(press(58, true), B, 100, &mut out);
+        corr.local_key(local(2, true), 100, &mut out);
+        corr.local_key(local(3, true), 130, &mut out);
+        corr.local_key(local(4, false), 150, &mut out);
+        assert_eq!(devices(&out), [Some(A), Some(B), Some(B), Some(B)]);
+        assert!(corr.local_held.is_empty());
     }
 
     #[test]

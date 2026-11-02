@@ -275,7 +275,7 @@ fn kill_mid_download_preserves_original_and_cleans_on_retry() -> Result<()> {
     ready?;
     killed?;
     assert_eq!(fs::read(&target)?, b"original executable is never replaced");
-    let _lock = target_lock(&target)?;
+    let _lock = target_lock(&target, "denied")?;
     assert!(!fs::read_dir(&scratch.0)?.filter_map(Result::ok).any(|entry| entry.file_name().to_string_lossy().starts_with(".one-mk-update-payload-")));
     Ok(())
 }
