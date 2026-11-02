@@ -174,7 +174,20 @@ fn clean_temporary(parent: &Path, prefixes: &[&str]) -> Result<()> {
 fn target_lock(target: &Path) -> Result<File> {
     let parent = target.parent().context("update target has no directory")?;
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(parent.join(".one-mk-update.lock"))?;
-    file.try_lock().context("another executable update is in progress; wait for it to finish")?;
+    // Another update holds it for as long as it runs. A child process that
+    // another thread is starting can also hold a copy for a moment (until it
+    // execs and closes it), so wait a little before calling it busy.
+    let mut tries = 0;
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if tries < 20 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(error) => return Err(error).context("another executable update is in progress; wait for it to finish"),
+        }
+    }
     clean_temporary(parent, &[".one-mk-update-payload-", ".one-mk-update-probe-"])?;
     Ok(file)
 }
