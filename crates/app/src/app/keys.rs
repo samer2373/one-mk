@@ -136,19 +136,20 @@ fn card_begin(ui: &Ui, top: Pos2, w: f32, title: &str) -> Card {
     let bg = ui.painter().add(egui::Shape::Noop);
     let r = Rect::from_min_size(top, vec2(w, 200.0));
     let p = ui.painter();
-    p.text(r.left_top() + vec2(18.0, 26.0), Align2::LEFT_CENTER, title, semibold(T_TITLE), INK);
-    a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(r.min, vec2(w, 44.0)), Role::Heading, title, None);
+    // The title above the group, as every settings group has it.
+    p.text(r.left_top() + vec2(14.0, 13.0), Align2::LEFT_CENTER, title, semibold(T_BODY), INK2);
+    a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(r.min, vec2(w, 30.0)), Role::Heading, title, None);
     Card { bg, top, w, inner: Rect::from_min_max(r.min + vec2(18.0, 48.0), pos2(r.right() - 18.0, f32::INFINITY)) }
 }
 
 impl Card {
     /// Closes the card below `bottom`; its height.
     fn end(self, ui: &Ui, bottom: f32) -> f32 {
-        let r = Rect::from_min_max(self.top, pos2(self.top.x + self.w, bottom + 14.0));
+        let r = Rect::from_min_max(self.top + vec2(0.0, 30.0), pos2(self.top.x + self.w, bottom + 14.0));
         // The group's fill goes behind what was drawn on it.
         let shapes = widgets::group_shapes(r, R_GROUP);
         ui.painter().set(self.bg, egui::Shape::Vec(shapes));
-        r.height()
+        bottom + 14.0 - self.top.y
     }
 }
 
@@ -1325,7 +1326,7 @@ impl App {
         let focused = resp.has_focus();
         let _ = self.tester();
         let p = ui.painter().clone();
-        p.rect(r, CornerRadius::same(9), GROUND, Stroke::new(1.0, if focused { INK2 } else if resp.hovered() { TRACK_EDGE } else { KEY_EDGE }), StrokeKind::Inside);
+        p.rect(r, CornerRadius::same(9), Color32::from_black_alpha(70), Stroke::new(1.0, if focused || resp.hovered() { Color32::from_white_alpha(40) } else { Color32::from_white_alpha(18) }), StrokeKind::Inside);
         if focused {
             p.rect_stroke(r.expand(2.0), CornerRadius::same(11), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
         }
