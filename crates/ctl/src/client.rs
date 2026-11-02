@@ -56,6 +56,7 @@ pub enum Request {
     DismissSuggestion,
     /// Shut the daemon down, as if it had been sent Ctrl-C.
     Stop,
+    LocalRulesOff,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +172,7 @@ impl Request {
             Request::Transfer { .. } => "transfer",
             Request::DismissSuggestion => "dismiss-suggestion",
             Request::Stop => "stop",
+            Request::LocalRulesOff => "local-rules-off",
         }
     }
 
@@ -216,6 +218,7 @@ impl Request {
             "takeback" if arg.is_empty() => Some(Request::TakeBack),
             "lock-all" if arg.is_empty() => Some(Request::LockAll),
             "stop" if arg.is_empty() => Some(Request::Stop),
+            "local-rules-off" if arg.is_empty() => Some(Request::LocalRulesOff),
             "dismiss-suggestion" if arg.is_empty() => Some(Request::DismissSuggestion),
             "switch" => SwitchTo::parse(arg).map(Request::Switch),
             "lock-pointer" => Toggle::parse(arg).map(Request::LockPointer),
@@ -400,6 +403,7 @@ mod tests {
             Request::Reload,
             Request::TakeBack,
             Request::Stop,
+            Request::LocalRulesOff,
             Request::LockAll,
             Request::DismissSuggestion,
             Request::Switch(SwitchTo::Here),

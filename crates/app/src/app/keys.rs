@@ -558,10 +558,53 @@ impl App {
         let scroll = egui::ScrollArea::vertical().id_salt(salt).auto_shrink([false, false]);
         #[cfg(debug_assertions)]
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
-        scroll.show(&mut child, |ui| match self.keys.view {
-            View::Keyboard => self.keyboard_view(ui, body.width(), now),
-            View::Mouse => self.mouse_view(ui, body.width()),
+        scroll.show(&mut child, |ui| {
+            self.local_rules_card(ui, body.width());
+            match self.keys.view {
+                View::Keyboard => self.keyboard_view(ui, body.width(), now),
+                View::Mouse => self.mouse_view(ui, body.width()),
+            }
         });
+    }
+
+    fn local_rules_card(&mut self, ui: &mut Ui, width: f32) {
+        let available = cfg!(any(windows, target_os = "macos"));
+        let input = self.prefs.input.clone();
+        let height = self.keys.heights.get("local-rules").copied().unwrap_or(150.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, height + GAP), Sense::hover());
+        let card = card_begin(ui, rect.min, width, "Where your rules work");
+        let content = card.inner;
+        let row = Rect::from_min_size(content.min, vec2(content.width(), ROW));
+        if switch(ui, row, Id::unique("also-on-this-computer"), "Also on this computer", input.local_rules,
+            available && !self.tuning_busy() && !self.prefs.unreadable).clicked() {
+            self.tune_cmds("local rules", "local-rules", vec![vec!["keymap".into(), "local".into(),
+                if input.local_rules { "off".into() } else { "on".into() }]], None);
+        }
+        let text = if available {
+            "Apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here. Closing this window also turns local rules off."
+        } else {
+            "Not available on this desktop. Local rules need macOS or Windows; your rules still work on the other computers."
+        };
+        let mut bottom = row.bottom() + 6.0;
+        bottom += para(ui, pos2(content.left(), bottom), content.width(), text, regular(T_META), INK2);
+        if input.local_rules && let Some(status) = self.running().and_then(|status| status.input.iter()
+            .find(|line| line.starts_with("Local key rules "))).cloned() {
+            bottom += 6.0;
+            bottom += para(ui, pos2(content.left(), bottom), content.width(), &status, regular(T_META), INK2);
+        }
+        if cfg!(target_os = "macos") {
+            bottom += 6.0;
+            bottom += para(ui, pos2(content.left(), bottom), content.width(),
+                "Simple key swaps, including Caps Lock, use this Mac’s keyboard settings. Caps Lock can only map to one key, not a chord, layer or app-only rule. Fn and media keys are not available.", regular(T_META), INK2);
+        }
+        if let Some((_, error)) = self.keys.error.clone().filter(|(area, _)| *area == "local-rules") {
+            bottom += 6.0 + error_line(ui, content.left(), bottom + 6.0, content.width(), &error);
+        }
+        let measured = card.end(ui, bottom);
+        if (height - measured).abs() > 0.5 {
+            self.keys.heights.insert("local-rules", measured);
+            ui.ctx().request_repaint();
+        }
     }
 
     /// "For: All computers ▾": the computers changes are for.
@@ -913,10 +956,15 @@ impl App {
                 Ok(s) => (s, true),
                 Err(e) => (format!("{} ({e})", tune::as_written(r)), false),
             };
-            let tag = match &r.scope {
+            let scope_tag = match &r.scope {
                 Scope::All => String::new(),
                 s => s.label(),
             };
+            let applies_here = input.local_rules && cfg!(any(windows, target_os = "macos"))
+                && r.scope.includes_local_os(one_mk_proto::os::local());
+            let tag = if applies_here {
+                if scope_tag.is_empty() { "Also here".into() } else { format!("{scope_tag} · Also here") }
+            } else { scope_tag };
             let bx = row.right() - 26.0;
             let edit = Rect::from_center_size(pos2(bx - 32.0, row.center().y), vec2(28.0, 28.0));
             let del = Rect::from_center_size(pos2(bx + 13.0, row.center().y), vec2(28.0, 28.0));
@@ -1681,6 +1729,12 @@ impl App {
             }
         } else {
             y += para(ui, pos2(c.left(), y), c.width(), "Click a part of the mouse above, or its label, to change what it does.", regular(T_BODY), INK2);
+        }
+        if input.local_rules && cfg!(any(windows, target_os = "macos")) {
+            for rule in input.buttons.iter().filter(|rule| rule.scope.includes_local_os(one_mk_proto::os::local())) {
+                y += 6.0;
+                y += para(ui, pos2(c.left(), y), c.width(), &format!("{} → {} · Also here", rule.from, rule.to.describe()), regular(T_META), INK2);
+            }
         }
         if let Some((_, e)) = self.keys.error.clone().filter(|(a, _)| *a == "buttons") {
             y += 6.0 + error_line(ui, c.left(), y + 6.0, c.width(), &e);

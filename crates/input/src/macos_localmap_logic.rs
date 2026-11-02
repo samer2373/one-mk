@@ -28,6 +28,7 @@ pub fn receipt(tag: i64) -> Option<u32> {
 }
 
 pub fn eligible(code: u32) -> bool {
+    if (0x110..=0x114).contains(&code) { return true; }
     code != 58 && code != 464 && !(59..=68).contains(&code) && !(87..=88).contains(&code) && !(183..=194).contains(&code)
         && !one_mk_proto::mediakeys::MEDIA_KEYS.iter().any(|key| key.evdev == code)
         && logic::evdev_to_mac(code).is_some()
@@ -127,6 +128,8 @@ mod tests {
     fn caps_fn_media_and_function_keys_are_not_local_physical_keys() {
         for code in [58, 464, 59, 60, 88, 183, 194, 115, 164] { assert!(!eligible(code)); }
         for code in [30, 42, 54, 29, 125] { assert!(eligible(code)); }
+        for code in 0x110..=0x114 { assert!(eligible(code)); }
+        assert!(!eligible(0x115));
     }
 
     #[test]

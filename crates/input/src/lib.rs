@@ -18,6 +18,9 @@ mod cursoroverlay_x11;
 pub mod localmap;
 pub mod localmap_handoff;
 pub mod localmap_runtime;
+pub mod macos_hidmap;
+#[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+mod macos_hidmap_native;
 pub mod dropzone;
 pub mod hotkeys;
 #[cfg(any(target_os = "linux", test))]
@@ -161,6 +164,9 @@ pub enum Event {
     ScreenLocked(bool),
     /// A keyboard shortcut was pressed (from [`hotkeys::listen`]'s receiver).
     Hotkey(hotkeys::Action),
+    LocalRulesOff,
+    #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+    LocalRulesRestored { ticket: u64, error: Option<String> },
     /// Whether the system's shortcut service works (from the same receiver).
     Hotkeys(hotkeys::Availability),
     /// A part of the backend failed; the message is shown to the user.
@@ -182,6 +188,8 @@ pub enum CaptureCmd {
     DeviceRules(bool),
     #[cfg(all(feature = "native-local-remap", any(windows, target_os = "macos")))]
     LocalRules { rules: Option<std::sync::Arc<localmap_runtime::Rules>>, inactive: Option<String> },
+    #[cfg(all(target_os = "macos", feature = "native-local-remap"))]
+    RestoreLocalRules(u64),
     /// Edge segments that lead to a connected peer, in the coordinates of
     /// the last `Event::Desktop`; replaces the previous ones. Only these
     /// capture: the rest of an edge is a wall, as beside a real monitor.

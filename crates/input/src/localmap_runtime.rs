@@ -10,7 +10,7 @@ use one_mk_proto::device::DeviceRef;
 use one_mk_proto::remap::{Emit, Keymap, KeymapSet, Mapper};
 use one_mk_proto::{HeldKeys, Mods};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub const CAPACITY: usize = 64;
@@ -18,6 +18,7 @@ pub const LEASE: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rules {
+    pub system: crate::macos_hidmap::Plan,
     pub maps: KeymapSet,
     pub hotkeys: Bindings,
     pub count: usize,
@@ -25,7 +26,7 @@ pub struct Rules {
 
 impl Default for Rules {
     fn default() -> Self {
-        Self { maps: KeymapSet::new(Keymap::default()), hotkeys: Bindings::default(), count: 0 }
+        Self { system: Default::default(), maps: KeymapSet::new(Keymap::default()), hotkeys: Bindings::default(), count: 0 }
     }
 }
 
@@ -136,7 +137,7 @@ impl Physical {
         let verdict = self.matcher.key(&rules.hotkeys, mods, code, down);
         if emergency || matches!(verdict, Verdict::Fire(_)) {
             let shortcut = if emergency {
-                admission.fail();
+                admission.emergency();
                 Action::Home
             } else if let Verdict::Fire(shortcut) = verdict { shortcut } else { return None };
             let queued = action(shortcut);
@@ -206,6 +207,7 @@ pub struct Admission {
     submitted: u64,
     oldest: Option<Instant>,
     gate: Arc<HookGate>,
+    emergency: AtomicBool,
     pub keyboard_type: u32,
 }
 
@@ -262,7 +264,7 @@ impl Admission {
         Self {
             keys: ArrayQueue::new(CAPACITY),
             feedback: Arc::new(Feedback { health: AtomicU64::new(0), acknowledged: AtomicU64::new(0), submitted: AtomicU64::new(0) }),
-            submitted: 0, oldest: None, gate, keyboard_type: 0,
+            submitted: 0, oldest: None, gate, emergency: AtomicBool::new(false), keyboard_type: 0,
         }
     }
 
@@ -276,6 +278,13 @@ impl Admission {
         self.feedback.fail();
         self.gate.close();
     }
+
+    pub fn emergency(&self) {
+        self.emergency.store(true, Ordering::Release);
+        self.fail();
+    }
+
+    pub fn take_emergency(&self) -> bool { self.emergency.swap(false, Ordering::AcqRel) }
 
     #[cfg(test)]
     fn recover(&mut self) {
@@ -493,7 +502,64 @@ mod tests {
             from: "capslock".parse().unwrap(), layer: None,
             what: What::To("lctrl+a".parse().unwrap()),
         }], Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map;
-        Rules { maps: KeymapSet::new(map), count: 1, hotkeys: Bindings::default() }
+        Rules { maps: KeymapSet::new(map), count: 1, ..Rules::default() }
+    }
+
+    fn held_output_is_released_on_interruption(destination: Option<Destination>, replace: bool) {
+        let record = Arc::new(Mutex::new(Record::default()));
+        let mut engine = Engine::new(Fake(record.clone()));
+        let rules = rules();
+        assert!(engine.fence(0, Destination::Local, Some(&rules)));
+        let now = Instant::now();
+        assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 58, down: true, at: now }, None));
+        assert!(!record.lock().unwrap().held.is_empty());
+        let empty = Rules::default();
+        if let Some(destination) = destination {
+            assert!(engine.fence(1, destination, Some(if replace { &empty } else { &rules })));
+        } else {
+            assert!(engine.fail());
+        }
+        assert!(engine.fail());
+        let record = record.lock().unwrap();
+        assert!(record.held.is_empty());
+        assert_eq!(record.downs, record.ups);
+    }
+
+    #[test]
+    fn rule_change_mid_press_releases_the_previous_output_ledger() {
+        held_output_is_released_on_interruption(Some(Destination::Local), true);
+    }
+
+    #[test]
+    fn disable_mid_press_releases_the_output_ledger() {
+        held_output_is_released_on_interruption(None, true);
+    }
+
+    #[test]
+    fn tap_timeout_releases_the_output_ledger_idempotently() {
+        held_output_is_released_on_interruption(None, false);
+    }
+
+    #[test]
+    fn sleep_releases_the_output_ledger_even_without_a_physical_up() {
+        held_output_is_released_on_interruption(None, false);
+    }
+
+    #[test]
+    fn worker_drop_releases_injected_buttons() {
+        let record = Arc::new(Mutex::new(Record::default()));
+        let map = Keymap::compile(&[RuleSpec { from: "a".parse().unwrap(), layer: None,
+            what: What::To("button4".parse().unwrap()) }], Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map;
+        {
+            let mut engine = Engine::new(Fake(record.clone()));
+            let rules = Rules { maps: KeymapSet::new(map), count: 1, ..Rules::default() };
+            assert!(engine.fence(0, Destination::Local, Some(&rules)));
+            assert!(engine.key(Key { keyboard_type: 0, sequence: 1, code: 30, down: true, at: Instant::now() }, None));
+            assert!(record.lock().unwrap().held.contains(&0x113));
+        }
+        let record = record.lock().unwrap();
+        assert!(record.held.is_empty());
+        assert_eq!(record.downs, record.ups);
     }
 
     #[test]
@@ -891,7 +957,7 @@ mod tests {
         let mut engine = Engine::new(Fake(record.clone()));
         let specs: Vec<_> = [("lctrl", "z"), ("lalt", "x"), ("lshift", "c"), ("esc", "a")].into_iter()
             .map(|(from, to)| RuleSpec { from: from.parse().unwrap(), layer: None, what: What::To(to.parse().unwrap()) }).collect();
-        let rules = Rules { maps: KeymapSet::new(Keymap::compile(&specs, Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map), count: specs.len(), hotkeys: Bindings::default() };
+        let rules = Rules { maps: KeymapSet::new(Keymap::compile(&specs, Target { os: one_mk_proto::os::WINDOWS, swap: false }, Duration::from_millis(200)).unwrap().map), count: specs.len(), ..Rules::default() };
         assert!(engine.fence(0, Destination::Local, Some(&rules)));
         let mut admission = Admission::new(engine.gate());
         let mut hook = Physical::default();
@@ -905,6 +971,8 @@ mod tests {
         let mut actions = Vec::new();
         assert!(!hook.key(physical(true, true), 1, now, &rules, &mut admission, |action| { actions.push(action); true }));
         assert_eq!(actions, [Action::Home]);
+        assert!(admission.take_emergency());
+        assert!(!admission.take_emergency());
         assert!(engine.fail());
         assert!(!hook.key(physical(false, false), 1, now, &rules, &mut admission, |_| true));
         for code in [29, 56, 42] {
@@ -912,6 +980,27 @@ mod tests {
         }
         assert!(!hook.key(physical(true, false), 30, now, &rules, &mut admission, |_| true));
         assert!(record.lock().unwrap().held.is_empty());
+    }
+
+    #[test]
+    fn local_emergency_cannot_be_lost_when_the_action_queue_is_full() {
+        let mut handoff = crate::localmap_handoff::Handoff::default();
+        let ticket = handoff.begin(Destination::Local, || {}).unwrap();
+        assert!(handoff.acknowledge(ticket));
+        let admission = Admission::new(handoff.hook_gate());
+        let mut hook = Physical::default();
+        let rules = Rules::default();
+        let now = Instant::now();
+        for code in [29, 56, 42] {
+            hook.shortcut(code, true, &rules, &admission, |_| false);
+        }
+        assert_eq!(hook.shortcut(1, true, &rules, &admission, |_| false), Some(false));
+        assert!(!admission.healthy(now));
+        assert_eq!(admission.gate.decide(physical(true, true)), Route::Pass);
+        assert!(admission.take_emergency());
+        assert!(!admission.take_emergency());
+        admission.fail();
+        assert!(!admission.take_emergency());
     }
 
     #[test]

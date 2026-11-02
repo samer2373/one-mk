@@ -1,5 +1,60 @@
 # 5H native review remediation — 2026-10-31
 
+## 2026-11-02 delivery follow-up
+
+The sections dated 2026-10-31 below are historical review evidence, not current
+feature-default or window behavior. At the owner's request this candidate
+includes native local adapters by default, adds the window switch and per-rule
+annotations, applies normal key/button rules locally when enabled, resolves
+local app focus, and persists emergency disable. Mouse buttons use the shared
+ledger. Ordinary maps no longer incur unnecessary per-device correlation waits.
+
+### Two-blocker completion follow-up
+
+The simple-mapping generator is now connected to per-keyboard IOKit
+UserKeyMapping properties (the native equivalent of hidutil), including
+Caps-to-Escape, Caps-to-Control and swaps. A durable write-ahead settings-folder
+journal records only oneMK's inserted entries and service IDs. Startup restores
+that journal before applying anything new. Disable, live replacement, emergency,
+sleep/lock, tap disable, window quit, normal daemon exit and handled signals all
+request restoration. Foreign entries survive; preexisting identical pairs are
+not owned, source conflicts are refused, and observed concurrent changes abort
+the write. Failed restores retain recovery data. IOKit offers no atomic property
+compare-and-swap, so indistinguishable concurrent replacement by another mapping
+tool remains a boundary, not a claim of transactional OS ownership.
+
+Native and tap maps are split without duplicate remapping. Cross-profile
+collisions reach a fixed point, conditional/app sources remain in the tap, and
+per-device mouse rules are retained. Physical HID keys repair the crossing
+modifier snapshot after native restoration; a raw-physical emergency path avoids
+native remaps hiding the emergency chord. Conditional Caps rules still fail
+with a clear explanation.
+
+Local attribution no longer uses the 8 ms wait: cached attribution is consumed
+immediately, otherwise the non-device rule is used immediately. The down's
+source is pinned through its up, late samples are discarded, and no local event
+enters the waiting queue or arms its timer. Remote KVM correlation is unchanged.
+Native property/journal work is outside the tap callback. Deterministic tests
+and a source contract cover the no-wait path, not end-to-end native scheduling.
+
+**Not release-accepted on hardware:** LED state, native latency, idle CPU,
+actual OS release delivery and mixed local/remote acceptance have not been
+measured here. Native extra key-up posts are not OS delivery acknowledgements.
+SIGKILL/abort cannot restore synchronously; recovery requires the next daemon
+start. Do not interpret implementation, plain UI language or cross-compilation
+as native approval. `Also on this computer` stays OFF by default. Neither the
+ordinary platform injectors nor wallpaper code was edited in this follow-up.
+
+Current focused validation: 79 input/local tests, 5 daemon native-plan tests,
+and 11 native source contracts pass. Final workspace and cross-target validation
+is recorded in `LOCAL-REMAP.md`: host clippy passes with warnings denied, the
+workspace test run passes 1,323 tests (18 ignored), and both native input/app
+cross-checks pass. Every Cargo command uses the dedicated
+`localremap` target directory and two jobs; no `cargo fmt` is run. These results
+close the two source-level blockers, not native LED/delivery/latency acceptance.
+Current validation and the owner's Mac checklist are in
+`../LOCAL-REMAP.md#2026-11-02-validation-and-handoff`.
+
 > Historical first-round results below are superseded by **Owner-only feature
 > gate and regression remediation** at the end of this document. In particular,
 > the earlier best-effort-up / fail-open-capture policy is no longer used by

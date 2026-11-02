@@ -1,13 +1,154 @@
 # Local keyboard remapping: safety design (5H)
 
-**NOT INCLUDED in default/released builds.** Native integration requires the
-owner-only Cargo feature `native-local-remap`, which is OFF by default in
-`one-mk-input` and forwarded by `one-mk`. CI/release builds do not enable it.
-**EXPERIMENTAL; Windows and macOS are COMPILE-CHECKED ONLY, UNTESTED on native
-hardware. 5H is incomplete, not production accepted.**
+**2026-11-02 implementation candidate:** `native-local-remap` is a default
+Cargo feature in `one-mk-input` and `one-mk`, so ordinary release builds include
+the native adapters. Simple macOS mappings now use native, per-keyboard
+UserKeyMapping properties with journaled restoration, and local per-device
+attribution never waits for a later device sample. **Windows/macOS runtime
+acceptance has NOT RUN.** Implementation and portable tests are not evidence
+of correct native delivery or LED behavior.
 `[input] local_rules = false` remains the default, including upgrades.
 Linux local remapping is unavailable. Native release delivery, no-stuck-keys,
 latency, idle CPU and memory acceptance have **not** passed.
+
+## Window and native delivery changes
+
+- Keys & mouse has an **Also on this computer** switch. It persists the existing
+  preference through the normal tuning command path; no terminal or config
+  edit is needed. Key rules and button rules show an **Also here** annotation.
+- With the switch on, global and matching-OS key/button rules apply locally as
+  well as remotely. Existing explicit local scopes remain local-only and take
+  priority. App-specific snapshots follow the local foreground application;
+  remote resolution and its scope priorities are unchanged.
+- The window shows native status and unsupported-source explanations in plain
+  words. Linux clearly says **Not available on this desktop**. Neither X11 nor
+  Wayland local interception is implemented in this candidate.
+- The macOS intercepting tap is session-level. Tagged replacements still enter
+  through HID posting and bypass remapping at the tap. Windows retains the
+  low-level keyboard/mouse hooks and injected-input bypass. Both now route the
+  five standard mouse buttons through the same ownership/release ledger.
+- The physical Ctrl+Alt+Shift+Esc emergency closes admission immediately,
+  releases worker output and tells the daemon to persist the preference off.
+  A later focus or device notification cannot silently turn it back on.
+  The emergency flag is independent of the bounded shortcut queue, including
+  when that queue is full or another shortcut follows the emergency.
+- macOS disable retires the worker without joining it on the capture loop.
+  Release receipts still reach the retired ledger after interception stops;
+  failed releases stay in release-only recovery and block a new local worker.
+  This avoids preventing the tap from observing the worker's own release.
+- Equal per-device maps are not registered as device overrides. Local input
+  consumes an already cached matching device sample immediately or uses the
+  ordinary, non-device map immediately. Late samples cannot change an admitted
+  press's source, and its up retains the down's attribution. Local events never
+  enter the 8 ms waiting queue or arm its timer, even behind remote input.
+  Remote KVM attribution retains its existing correlation behavior. This removes
+  the intentional wait; it does not measure the complete native latency budget.
+- Normal window quit turns the switch off and requests native restoration over
+  IPC; macOS acknowledges restoration before replying. A window crash does not
+  kill the daemon or discard its held-key ledger. Daemon normal exit and
+  SIGINT/SIGTERM/SIGHUP/SIGQUIT all run the same restore path. SIGKILL/abort,
+  unavailable permissions and OS refusal cannot promise immediate delivered ups;
+  the persistent journal allows recovery on the next daemon start.
+
+### macOS Caps Lock and native mapping ownership
+
+Pure unconditional 1:1 rules, including Caps-to-Escape, Caps-to-Control and
+swaps, now use the IOKit equivalent of `hidutil property --set`: a
+UserKeyMapping array on each matching keyboard service, using Apple's documented
+simple-client constructor. No subprocess or
+configuration edit is needed. macOS owns the actual Caps toggle/LED behavior;
+oneMK does not swallow Caps transitions or substitute an F-key alias. LED/state
+and real make/break delivery still need the owner's Mac acceptance run.
+
+The native plan and tap plan are disjoint. Chords, layers, tap/hold, buttons,
+app-specific sources and ambiguous keyboard usages stay in the tap plan. A
+fixed-point collision check across all device profiles prevents a native output
+from accidentally becoming a second tap remap. Conditional Caps rules are still
+refused, not silently reinterpreted. Per-device mouse maps remain in the tap.
+
+The lifecycle reads each service's existing mappings, retains foreign entries,
+refuses conflicting sources and does not claim identical preexisting entries.
+Before changing any service it atomically writes and syncs
+`local-key-mapping.json` in the settings folder, recording only the entries it
+will add and that service's registry ID. A second read rejects observed
+concurrent changes; native readback verifies each write. Restoration re-reads
+the property and removes only recorded exact pairs, retaining foreign edits.
+Disconnected services are forgotten. Malformed property/recovery data is not
+overwritten, and failed restoration retains the recovery record. IOKit has no
+compare-and-swap for this property: an external tool must not race the final
+property write with an indistinguishable replacement of oneMK's exact entry.
+
+Startup recovery finishes before any new plan is applied. Disable, rule changes,
+emergency off, sleep/lock, tap timeout/user-disable, normal window quit and daemon
+shutdown restore the native plan. Mapping property work and journal I/O run on
+control/run-loop transitions, never in the tap callback. Changed held sources or
+outputs receive tagged release events before property changes. Physical HID
+source state repairs the crossing modifier snapshot when native maps are removed
+before forwarding; only oneMK-owned mappings participate in that repair. The raw
+physical emergency chord also works when its keys have native mappings.
+
+Fake-runner tests cover apply/replacement/restore, crash before/after a native
+write, recovery failure/retry, concurrent foreign edits, identical foreign
+entries, source conflicts, partial rollback, per-device scope and disconnect.
+These tests do not simulate IOKit, the event server, native LED state or delivery
+of the extra tagged releases. Native held-key/crossing acceptance is mandatory.
+
+Reference: https://developer.apple.com/library/archive/technotes/tn2450/_index.html
+
+The contracts below remain the safety design; historical default-OFF and
+remote-only scope statements are superseded by this delivery-change section.
+
+## 2026-11-02 validation and handoff
+
+All Cargo commands used `-j 2` and the dedicated target directory
+`/home/samer/.t3/cargo-target/localremap`. No formatter was run.
+
+| Check | Result |
+| --- | --- |
+| `cargo check -p one-mk-input -p one-mk-app --target aarch64-apple-darwin -j 2` | PASS; compilation only, no Mac runtime |
+| Same check for `x86_64-pc-windows-msvc` | PASS; compilation only, no Windows runtime |
+| Input library tests filtered by `local` | PASS: 79 tests, including lifecycle/crash recovery, foreign ownership, emergency and no-wait attribution |
+| Daemon tests filtered by `local_native` | PASS: 5 tests for Caps/swaps, app focus, applicable scopes, mouse/device scopes and cross-profile collision fixed point |
+| `native_localmap_contract` | PASS: 11 source contracts; not native delivery tests |
+| `cargo clippy --workspace --all-targets -j 2 -- -D warnings` | PASS on the Linux host; run once for this follow-up |
+| `cargo test --workspace -j 2` | PASS: 1,323 passed, 0 failed, 18 ignored; run once for this follow-up; ignored tests remain unexecuted |
+| Native tap/hook, Caps LED/state, latency and idle CPU | NOT RUN |
+
+Owner's Mac acceptance checklist (not results):
+
+1. Start with keys released and **Also on this computer** off. Grant the existing
+   Accessibility/Input Monitoring permissions. Add Caps Lock → Escape in Keys &
+   mouse and turn the switch on. Verify real Escape, repeated Caps presses,
+   physical make/break and Caps LED/toggle state; disable mid-press and verify no
+   Escape stays down and the prior Caps behavior returns.
+2. Repeat with Caps → Control and a two-key swap (including Caps ↔ Escape).
+   Check the modifier release, another real Control key and both keyboards when
+   only one keyboard is selected. Existing mappings from another keyboard tool
+   must remain unchanged before, during and after activation.
+3. Add a non-Caps chord, then an app-specific rule. Hold each source while
+   editing/disabling its rule or changing foreground application. Verify the old
+   output releases and the next press follows the new rule/application. Conditional
+   Caps rules must explain that they are unavailable rather than partially run.
+4. Hold mapped keyboard/mouse output and press physical Ctrl+Alt+Shift+Escape.
+   Verify releases, pointer back here, switch off, and no automatic re-enable on
+   focus/device changes. Repeat with Escape or a modifier itself remapped.
+5. Sleep/wake and lock/unlock mid-press for Caps → Control and a tap chord.
+   Verify no stuck modifier/output, native restoration, and clear paused status.
+   Also exercise macOS tap timeout/user-disable in a disposable test session.
+6. Cross to a peer with Caps or another mapped source held; check raw source
+   identity/modifiers remotely, return, and release. Repeat rapidly on both
+   keyboards, with a mouse-button device rule and with unknown attribution. There
+   must be no 8 ms local delay; measure the requested ≤1 ms budget separately.
+7. With mappings enabled, quit the window; confirm local rules turn off and the
+   recovery record is cleared. Repeat with daemon normal stop and each handled
+   signal. Kill only the window mid-press: the live daemon must retain release
+   ownership and the emergency chord must still work.
+8. In a disposable session, abruptly kill the daemon after applying mappings.
+   Restart it with the preference off and verify recovery occurs before any new
+   rules: only oneMK's entries disappear, foreign mappings survive and the
+   recovery record clears. Repeat with a disconnected/reconnected keyboard.
+9. Measure idle CPU and local event latency on both native OSes. Cross-compiling,
+   deterministic no-wait tests and source contracts are not runtime measurements.
 
 ## Non-negotiable core KVM invariant
 
@@ -18,11 +159,12 @@ experimental native local remap**; storing a preference cannot enable code
 that was not compiled. Physical behavior follows main except the independent
 changes enumerated below. Pure localmap/handoff/runtime tests always compile.
 
-The default files are `windows.rs`, `macos.rs`, `macos_devices.rs`.
-`lib.rs` selects separate `*_experimental.rs` files only with the feature;
+The feature-off files are `windows.rs`, `macos.rs`, `macos_devices.rs`.
+`lib.rs` selects separate `*_experimental.rs` files with the default feature;
 native worker/power modules and hotkey receipt/interception glue are similarly
 gated. The app/tray launch the daemon and do not link the input backend; build
-the daemon explicitly with the feature for owner tests, not a UI-only binary.
+the daemon as well as the window for owner tests. Ordinary daemon release builds
+include the feature; a UI-only binary cannot update an older daemon.
 
 Disabled/empty/unsupported snapshots remove the local interceptor, rather than
 leaving an unhealthy `Local` instance on the capture path. No local flag rewrite
@@ -173,7 +315,7 @@ is not a hard latency guarantee.
 
 ## macOS adapter — COMPILE-CHECKED ONLY / UNTESTED
 
-The existing HID event tap and IOHID correlator feed the shared worker. Supported
+The session event tap and IOHID correlator feed the shared worker. Supported
 physical keys are posted using a private CGEventSource and tagged sequence.
 Downs and ups wait at most 100 ms on the worker for their exact outstanding
 tap receipt. An uncertain down triggers failure/release; an uncertain up retains
@@ -222,8 +364,9 @@ after wake. It is not an explicit-reload-only policy. Unlock/desktop return
 retry cleanup; they do not themselves promise local mapping resumed. Ask
 `one-mk status` again after asynchronous reload. `active (N)` means the local
 worker fence completed, never that native acceptance passed. Both active and
-inactive feature status retain EXPERIMENTAL/UNTESTED labels; preference off and
-zero rules are silent. Doctor never infers activation from preference alone.
+inactive status use plain window-facing words; preference off and zero rules
+are silent. Doctor never infers activation from preference alone. The emergency
+shortcut additionally persists the preference off before future reloads.
 
 ## Disposable-session acceptance scripts — NOT RUN
 
@@ -234,10 +377,10 @@ computer. Run each OS separately; record actual OS key state, not just logs.
 Build on the actual test OS, with the owner's explicit approval:
 
 ```sh
-# Baseline release: experimental adapter excluded, even with local_rules=true.
+# Legacy baseline: explicitly exclude native local adapters.
+cargo build -j 2 --release -p one-mk --no-default-features
+# Candidate: includes native adapters without an extra feature flag.
 cargo build -j 2 --release -p one-mk
-# Owner-only test binary; never upload this artifact to a release.
-cargo build -j 2 --release -p one-mk --features native-local-remap
 ```
 
 Keep the baseline binary separately before the second build overwrites it.
@@ -317,11 +460,12 @@ keys or ZERO idle CPU acceptance until these scripts actually pass.
 See `reviews/WAVE5-NATIVE-REMEDIATION.md` for the finding-by-finding ledger,
 mutation evidence, consciously incomplete items and verification scope.
 
-## Exit criteria before any release enablement
+## Exit criteria before release acceptance
 
-The default Cargo feature and CI/release policy must remain OFF until the owner
-explicitly accepts separate Windows/macOS hardware results and an independent
-hostile review. Record OS/device/layout versions, exact commit/features,
+Default-feature inclusion was changed at the owner's explicit request, but
+release acceptance still requires separate Windows/macOS hardware results and
+an independent hostile review. Resolve the Caps Lock system-mapping blocker
+before calling this implementation complete. Record OS/device/layout versions, exact commit/features,
 baseline comparison, callback latency distributions, idle wakeups/CPU/RSS and
 actual down/up traces for every script above. Exercise lost receipts, partial
 injection, delayed/dead workers, mixed local/remote identical keys, takeover,

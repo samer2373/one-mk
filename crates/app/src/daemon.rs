@@ -743,6 +743,15 @@ impl Link {
         });
     }
 
+    #[cfg(any(target_os = "macos", windows))]
+    pub fn local_rules_off_on_quit(&self) {
+        match client::request(&self.dir, Request::LocalRulesOff, Duration::from_secs(5)) {
+            Ok(Some(reply)) if !reply.starts_with("ok") => eprintln!("Local keyboard restoration was not confirmed: {reply}"),
+            Err(error) => eprintln!("Local keyboard restoration was not confirmed: {error:#}"),
+            _ => {}
+        }
+    }
+
     pub fn take_back(&self) {
         self.job(Job::TakeBack, |l| client::request(&l.dir, Request::TakeBack, Duration::from_secs(5)).map(drop));
     }
