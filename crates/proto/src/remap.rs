@@ -434,6 +434,8 @@ impl Keymap {
             })
     }
 
+    pub fn maps_source(&self, code: u32) -> bool { self.rules.iter().any(|rule| u32::from(rule.trigger.key) == code) }
+
     /// The rule for `code` in `layer` with the modifiers `held`.
     fn find(&self, layer: u8, code: u32, held: u8) -> Option<usize> {
         let (start, len) = *self.slots.get(usize::from(layer) * KEYS + code as usize)?;
@@ -484,6 +486,8 @@ impl KeymapSet {
     pub fn supports_local_keys(&self, supported: impl Fn(u32) -> bool) -> bool {
         self.maps.iter().all(|map| map.supports_local_keys(&supported))
     }
+
+    pub fn maps_source(&self, code: u32) -> bool { self.maps.iter().any(|map| map.maps_source(code)) }
 
     pub fn has_device_rules(&self) -> bool { !self.by_device.is_empty() }
 

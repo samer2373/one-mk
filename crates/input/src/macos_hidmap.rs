@@ -144,6 +144,7 @@ impl<R: Runner> Lifecycle<R> {
     }
 
     fn install(&mut self, plan: &Plan) -> Result<()> {
+        if plan.base.is_empty() && plan.devices.iter().all(|(_, mappings)| mappings.is_empty()) { return Ok(()); }
         let keyboards = self.runner.keyboards()?;
         if keyboards.is_empty() && !plan.base.is_empty() { bail!("macOS did not report a keyboard mapping service"); }
         for (registry_id, keyboard) in keyboards {
@@ -186,7 +187,7 @@ impl<R: Runner> Lifecycle<R> {
                 }
             }
             self.journal.entries.pop();
-            self.save()?;
+            if !self.journal.entries.is_empty() { self.save()?; }
         }
         match std::fs::remove_file(&self.path) {
             Ok(()) => {
@@ -280,6 +281,7 @@ mod tests {
     struct FakeState {
         maps: BTreeMap<u64, Vec<Mapping>>,
         writes: usize,
+        scans: usize,
         crash: bool,
         refuse: bool,
         concurrent: Option<Vec<Mapping>>,
@@ -303,6 +305,7 @@ mod tests {
 
     impl Runner for FakeHidutil {
         fn keyboards(&mut self) -> Result<Vec<(u64, crate::Fingerprint)>> {
+            self.state.borrow_mut().scans += 1;
             Ok(self.state.borrow().maps.keys().map(|&id| (id, keyboard(id))).collect())
         }
         fn read(&mut self, registry_id: u64) -> Result<Option<Vec<Mapping>>> { Ok(self.state.borrow().maps.get(&registry_id).cloned()) }
@@ -348,6 +351,18 @@ mod tests {
             assert_eq!(fake.state.borrow().writes, 0);
             assert!(fake.journal.exists());
         }
+    }
+
+    #[test]
+    fn empty_local_plan_does_not_scan_keyboards_or_create_a_journal() {
+        let folder = Folder::new();
+        let fake = FakeHidutil::new(&folder);
+        let mut lifecycle = Lifecycle::recover(fake.clone(), &folder.0).unwrap();
+        lifecycle.apply(&Plan::default()).unwrap();
+        lifecycle.restore().unwrap();
+        assert_eq!(fake.state.borrow().scans, 0);
+        assert_eq!(fake.state.borrow().writes, 0);
+        assert!(!fake.journal.exists());
     }
 
     #[test]

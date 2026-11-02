@@ -342,7 +342,7 @@ mod tests {
             corr.configure(true, &mut out);
             corr.hook(key(remote_code, false), 0, &mut out);
             corr.local_key(crate::localmap_runtime::Key {
-                sequence: 7, code: 30, down: false, at: std::time::Instant::now(), keyboard_type: 0,
+                sequence: 7, code: 30, down: false, at: std::time::Instant::now(), keyboard_type: 0, click_state: 0,
             }, 1, &mut out);
             corr.device_event(press(remote_code, false), A, 2, &mut out);
             corr.finish(&mut out);
@@ -358,7 +358,7 @@ mod tests {
         corr.configure(true, &mut out);
         corr.device_event(press(0x113, true), A, 0, &mut out);
         corr.local_key(crate::localmap_runtime::Key {
-            sequence: 9, code: 0x113, down: true, at: std::time::Instant::now(), keyboard_type: 0,
+            sequence: 9, code: 0x113, down: true, at: std::time::Instant::now(), keyboard_type: 0, click_state: 0,
         }, 0, &mut out);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].local, Some(9));
@@ -374,7 +374,7 @@ mod tests {
         corr.hook(key(48, true), 0, &mut out);
         assert_eq!(corr.deadline(), Some(WAIT_MS));
         for (sequence, down) in [(1, true), (2, false)] {
-            corr.local_key(crate::localmap_runtime::Key { sequence, code: 30, down, keyboard_type: 0, at: std::time::Instant::now() }, 0, &mut out);
+            corr.local_key(crate::localmap_runtime::Key { sequence, code: 30, down, keyboard_type: 0, click_state: 0, at: std::time::Instant::now() }, 0, &mut out);
             assert_eq!(out.len(), sequence as usize);
             assert_eq!(out.last().unwrap().local, Some(sequence));
             assert_eq!(corr.waiting.len(), 1);
@@ -390,7 +390,7 @@ mod tests {
         let mut corr = Correlator::default();
         let mut out = Vec::new();
         corr.configure(true, &mut out);
-        let local = |sequence, down| crate::localmap_runtime::Key { sequence, code: 30, down, keyboard_type: 0, at: std::time::Instant::now() };
+        let local = |sequence, down| crate::localmap_runtime::Key { sequence, code: 30, down, keyboard_type: 0, click_state: 0, at: std::time::Instant::now() };
         corr.local_key(local(1, true), 0, &mut out);
         assert_eq!(corr.deadline(), None);
         corr.device_event(press(30, true), A, 1, &mut out);

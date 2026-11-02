@@ -54,7 +54,6 @@ impl App {
         }
         #[cfg(feature = "native-local-remap")]
         {
-            self.input_problems.insert("local-key-rules", "Local key rules inactive: applying your choices".into());
             let apps = self.focus.focus().map(|focus| focus.apps).unwrap_or_default();
             let (rules, inactive) = match local_rules_snapshot(&self.settings, self.devices.list(), &apps, self.trust.devices().len() + 1) {
                 Ok(rules) => (rules, None),
@@ -62,7 +61,13 @@ impl App {
                     (None, Some(error.to_string()))
                 }
             };
-            let _ = self.capture.send(one_mk_input::CaptureCmd::LocalRules { rules, inactive });
+            let snapshot = (rules.clone(), inactive.clone());
+            if self.local_rules_snapshot.as_ref() != Some(&snapshot) {
+                if self.capture.send(one_mk_input::CaptureCmd::LocalRules { rules, inactive }).is_ok() {
+                    self.local_rules_snapshot = Some(snapshot);
+                    self.input_problems.insert("local-key-rules", "Local key rules inactive: applying your choices when all keys are released".into());
+                }
+            }
         }
         self.sync_focus_watch();
     }
@@ -628,6 +633,17 @@ mod tests {
     use one_mk_proto::os;
     use std::time::Duration;
     use tokio::time::Instant;
+
+    #[test]
+    fn irrelevant_focus_changes_keep_the_same_effective_local_snapshot() {
+        let mut settings = crate::settings::Settings::default();
+        settings.input.local_rules = true;
+        settings.input.keymap.rule.push(KeyRule { from: "capslock".into(), to: Some(crate::tuning::To::One("lctrl".into())), scope: crate::tuning::Scope::Local, ..Default::default() });
+        let first = local_rules_snapshot(&settings, &[], &["editor".into()], 1).unwrap();
+        assert_eq!(first, local_rules_snapshot(&settings, &[], &["terminal".into()], 1).unwrap());
+        settings.input.keymap.rule[0].to = Some(crate::tuning::To::One("lalt".into()));
+        assert_ne!(first, local_rules_snapshot(&settings, &[], &["terminal".into()], 1).unwrap());
+    }
 
     #[test]
     fn local_snapshot_requires_opt_in_and_valid_physical_shortcuts() {

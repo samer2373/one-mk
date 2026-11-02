@@ -13,6 +13,16 @@ mod native;
 #[path = "typing_linux.rs"]
 mod native;
 
+#[cfg(target_os = "macos")]
+pub(crate) fn watch_native(events: tokio::sync::mpsc::UnboundedSender<crate::Event>) { native::watch(events); }
+
+pub fn character_mode(enabled: bool) {
+    #[cfg(target_os = "macos")]
+    native::set_enabled(enabled);
+    #[cfg(not(target_os = "macos"))]
+    let _ = enabled;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Text {
     bytes: [u8; one_mk_proto::typing::MAX_TEXT_BYTES],

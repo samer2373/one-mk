@@ -8,6 +8,10 @@ use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUnini
 use windows::core::HSTRING;
 use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SUCCESS, HANDLE};
 use windows_sys::Win32::NetworkManagement::WiFi::*;
+use windows_sys::Win32::NetworkManagement::IpHelper::*;
+use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
+
+include!("windows_network.rs");
 
 pub(super) fn start(shared: Arc<Shared>) -> Box<dyn Fn(Action) + Send + Sync> {
     let (sender, receiver) = mpsc::channel();
@@ -20,7 +24,20 @@ pub(super) fn start(shared: Arc<Shared>) -> Box<dyn Fn(Action) + Send + Sync> {
             let _ = permission_events.send(Action::Refresh);
             Ok(())
         })).ok());
+        let location = AppCapability::Create(&HSTRING::from("location")).ok();
+        let location_events = notifications.clone();
+        let location_token = location.as_ref().and_then(|capability| capability.AccessChanged(&TypedEventHandler::new(move |_, _| {
+            let _ = location_events.send(Action::Refresh);
+            Ok(())
+        })).ok());
         let context = Box::new(notifications);
+        let pointer = (&*context as *const mpsc::Sender<Action>).cast();
+        let mut interface_changes = null_mut();
+        let mut route_changes = null_mut();
+        let mut address_changes = null_mut();
+        NotifyIpInterfaceChange(AF_UNSPEC, Some(interface_changed), pointer, false, &mut interface_changes);
+        NotifyRouteChange2(AF_UNSPEC, Some(route_changed), pointer, false, &mut route_changes);
+        NotifyUnicastIpAddressChange(AF_UNSPEC, Some(address_changed), pointer, false, &mut address_changes);
         let mut handle = null_mut();
         let mut registered = false;
         let refresh = |handle: &mut HANDLE, registered: &mut bool| {
@@ -28,7 +45,7 @@ pub(super) fn start(shared: Arc<Shared>) -> Box<dyn Fn(Action) + Send + Sync> {
                 let mut version = 0;
                 let opened = WlanOpenHandle(2, null(), &mut version, handle);
                 if opened != ERROR_SUCCESS {
-                    shared.publish(State { permission: windows_permission(opened), unavailable: opened != ERROR_ACCESS_DENIED, ..State::default() });
+                    shared.publish_network(State { permission: windows_permission(opened), unavailable: opened != ERROR_ACCESS_DENIED, ..State::default() });
                     return;
                 }
             }
@@ -43,7 +60,7 @@ pub(super) fn start(shared: Arc<Shared>) -> Box<dyn Fn(Action) + Send + Sync> {
             } else if registration != ERROR_SUCCESS {
                 state.unavailable = true;
             }
-            shared.publish(state);
+            shared.publish_network(state);
         };
         refresh(&mut handle, &mut registered);
         while let Ok(action) = receiver.recv() {
@@ -59,7 +76,11 @@ pub(super) fn start(shared: Arc<Shared>) -> Box<dyn Fn(Action) + Send + Sync> {
             WlanRegisterNotification(handle, WLAN_NOTIFICATION_SOURCE_NONE, 1, None, null(), null(), null_mut());
             WlanCloseHandle(handle, null());
         }
+        for notification in [interface_changes, route_changes, address_changes] {
+            if !notification.is_null() { CancelMibChangeNotify2(notification); }
+        }
         drop(context);
+        if let (Some(capability), Some(token)) = (location, location_token) { let _ = capability.RemoveAccessChanged(token); }
         if let (Some(capability), Some(token)) = (capability, token) {
             let _ = capability.RemoveAccessChanged(token);
         }

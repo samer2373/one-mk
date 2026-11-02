@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 directories = "6.0.0"
+if-addrs = "0.15.0"
 one-mk-proto = { path = "../proto" }
 one-mk-wallpaper = { path = "../wallpaper-player" }
 zeroize = "1.9.1"
@@ -23,7 +24,7 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
 objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGDirectDisplay", "CGError", "CGGeometry", "CGWindow"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_WiFi", "Win32_NetworkManagement_Ndis"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_WiFi", "Win32_NetworkManagement_Ndis", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
 windows = { version = "0.62.2", features = ["Foundation", "Security_Authorization_AppCapabilityAccess", "Win32_System_WinRT"] }
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]

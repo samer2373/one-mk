@@ -298,7 +298,7 @@ impl App {
                         r
                     };
                     let del = place(bw("Delete"));
-                    if cfg!(any(unix, windows)) {
+                    if cfg!(any(target_os = "linux", target_os = "macos", windows)) {
                         let off = auto_text.is_some().then(|| place(bw("Turn off")));
                         let set = place(bw("Set"));
                         let fr = Rect::from_min_max(pos2(row.left(), y), pos2(x, y + 28.0));

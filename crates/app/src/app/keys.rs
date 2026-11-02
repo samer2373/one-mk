@@ -582,7 +582,7 @@ impl App {
                 if input.local_rules { "off".into() } else { "on".into() }]], None);
         }
         let text = if available {
-            "Apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here. Closing this window also turns local rules off."
+            "Apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here. Local rules keep working when this window closes. Stopping oneMK restores the original mappings; your preference is kept for the next start."
         } else {
             "Not available on this desktop. Local rules need macOS or Windows; your rules still work on the other computers."
         };

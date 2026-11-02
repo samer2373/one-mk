@@ -10,23 +10,100 @@ use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGEventSource, CG
 unsafe extern "C" {
     fn IOHIDEventSystemClientCreateSimpleClient(allocator: *const c_void) -> *mut CFType;
     fn IOHIDEventSystemClientCopyServices(client: &CFType) -> *mut CFArray<CFType>;
-    fn IOHIDServiceClientGetRegistryID(service: &CFType) -> u64;
+    fn IOHIDServiceClientGetRegistryID(service: &CFType) -> *const CFType;
     fn IOHIDServiceClientConformsTo(service: &CFType, page: u32, usage: u32) -> u8;
     fn IOHIDServiceClientCopyProperty(service: &CFType, key: &CFString) -> *mut CFType;
     fn IOHIDServiceClientSetProperty(service: &CFType, key: &CFString, value: &CFType) -> u8;
 }
 
-pub(crate) type Native = Lifecycle<System>;
+pub(crate) struct Completion {
+    pub result: std::result::Result<Option<crate::macos_hidmap::Plan>, String>,
+    pub restored: Vec<Mapping>,
+}
+
+pub(crate) struct Native {
+    requests: Option<std::sync::mpsc::Sender<(u64, Option<crate::macos_hidmap::Plan>)>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    replies: std::sync::mpsc::Receiver<(u64, Completion)>,
+    serial: u64,
+    pending: bool,
+    desired: Option<crate::macos_hidmap::Plan>,
+    pub error: Option<String>,
+}
+
+impl Native {
+    pub(crate) fn start(dir: std::path::PathBuf, inbox: std::sync::Arc<crate::macos::Inbox>) -> std::io::Result<Self> {
+        let (requests, receiver) = std::sync::mpsc::channel::<(u64, Option<crate::macos_hidmap::Plan>)>();
+        let (sender, replies) = std::sync::mpsc::channel();
+        let thread = std::thread::Builder::new().name("one-mk-keyboard-mappings".into()).spawn(move || {
+            let recovered = System::new().and_then(|runner| Lifecycle::recover(runner, &dir));
+            let status = recovered.as_ref().map(|_| None).map_err(|error| format!("Keyboard recovery unavailable: {error:#}. Sharing still works; local rules need recovery before restarting oneMK."));
+            let _ = sender.send((0, Completion { result: status, restored: Vec::new() }));
+            inbox.signal();
+            let mut recovered = recovered.map_err(|error| format!("Keyboard recovery unavailable: {error:#}. Sharing still works; local rules need recovery before restarting oneMK."));
+            while let Ok((serial, plan)) = receiver.recv() {
+                let restored = recovered.as_ref().map_or_else(|_| Vec::new(), |lifecycle| lifecycle.owned_mappings());
+                let result = match recovered.as_mut() {
+                    Ok(lifecycle) => match &plan { Some(plan) => lifecycle.apply(plan), None => lifecycle.restore() }
+                        .map(|()| plan).map_err(|error| format!("{error:#}")),
+                    Err(error) => Err(error.clone()),
+                };
+                let _ = sender.send((serial, Completion { result, restored }));
+                inbox.signal();
+            }
+            if let Ok(lifecycle) = &mut recovered && let Err(error) = lifecycle.restore() {
+                tracing::error!(%error, "keyboard recovery record kept for the next start");
+            }
+        })?;
+        Ok(Self { requests: Some(requests), thread: Some(thread), replies, serial: 0, pending: true, desired: None, error: None })
+    }
+
+    pub(crate) fn request(&mut self, plan: Option<crate::macos_hidmap::Plan>) -> bool {
+        if self.desired == plan && self.error.is_none() { return !self.pending; }
+        self.desired = plan.clone();
+        self.serial += 1;
+        self.pending = true;
+        if self.requests.as_ref().is_none_or(|requests| requests.send((self.serial, plan)).is_err()) {
+            self.pending = false;
+            self.error.get_or_insert_with(|| "Keyboard mapping worker unavailable; sharing still works".into());
+        }
+        !self.pending
+    }
+
+    pub(crate) fn poll(&mut self) -> Option<Completion> {
+        let mut latest = None;
+        while let Ok((serial, completion)) = self.replies.try_recv() {
+            if serial == self.serial {
+                self.pending = false;
+                self.error = completion.result.as_ref().err().cloned();
+                latest = Some(completion);
+            }
+        }
+        latest
+    }
+
+    pub(crate) fn pending(&self) -> bool { self.pending }
+}
+
+impl Drop for Native {
+    fn drop(&mut self) {
+        self.requests.take();
+        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+    }
+}
 
 pub(crate) struct System {
     client: CFRetained<CFType>,
+    services: Vec<(u64, CFRetained<CFType>)>,
 }
 
 impl System {
     pub(crate) fn new() -> Result<Self> {
         let pointer = NonNull::new(unsafe { IOHIDEventSystemClientCreateSimpleClient(std::ptr::null()) })
             .context("macOS could not open its keyboard mapping service")?;
-        Ok(Self { client: unsafe { CFRetained::from_raw(pointer) } })
+        let mut system = Self { client: unsafe { CFRetained::from_raw(pointer) }, services: Vec::new() };
+        system.refresh_services()?;
+        Ok(system)
     }
 
     fn services(&self) -> Result<CFRetained<CFArray<CFType>>> {
@@ -35,8 +112,17 @@ impl System {
         Ok(unsafe { CFRetained::from_raw(pointer) })
     }
 
-    fn service(&self, registry_id: u64) -> Result<Option<CFRetained<CFType>>> {
-        Ok(self.services()?.iter().find(|service| unsafe { IOHIDServiceClientGetRegistryID(service) } == registry_id))
+    fn refresh_services(&mut self) -> Result<()> {
+        self.services = self.services()?.iter().filter_map(|service| {
+            let value = unsafe { IOHIDServiceClientGetRegistryID(&service).as_ref() }?;
+            let registry_id = value.downcast_ref::<CFNumber>()?.as_i64()? as u64;
+            Some((registry_id, service))
+        }).collect();
+        Ok(())
+    }
+
+    fn service(&self, registry_id: u64) -> Option<CFRetained<CFType>> {
+        self.services.iter().find(|(identifier, _)| *identifier == registry_id).map(|(_, service)| service.clone())
     }
 }
 
@@ -56,7 +142,8 @@ fn string(service: &CFType, key: &'static str) -> Option<String> {
 impl Runner for System {
     fn keyboards(&mut self) -> Result<Vec<(u64, Fingerprint)>> {
         let mut keyboards = Vec::new();
-        for service in self.services()?.iter() {
+        self.refresh_services()?;
+        for (registry_id, service) in &self.services {
             if unsafe { IOHIDServiceClientConformsTo(&service, 1, 6) } == 0 { continue; }
             let vendor = number(&service, "VendorID").and_then(|value| u16::try_from(value).ok()).unwrap_or(0);
             let product = number(&service, "ProductID").and_then(|value| u16::try_from(value).ok()).unwrap_or(0);
@@ -67,13 +154,13 @@ impl Runner for System {
             let bus = if builtin || transport == "spi" || transport == "fifo" { Bus::Internal }
                 else if transport.starts_with("bluetooth") { Bus::Bluetooth }
                 else if transport == "usb" { Bus::Usb } else { Bus::Unknown };
-            keyboards.push((unsafe { IOHIDServiceClientGetRegistryID(&service) }, Fingerprint::new(bus, vendor, product, serial.as_deref(), &name)));
+            keyboards.push((*registry_id, Fingerprint::new(bus, vendor, product, serial.as_deref(), &name)));
         }
         Ok(keyboards)
     }
 
     fn read(&mut self, registry_id: u64) -> Result<Option<Vec<Mapping>>> {
-        let Some(service) = self.service(registry_id)? else { return Ok(None) };
+        let Some(service) = self.service(registry_id) else { return Ok(None) };
         let Some(value) = property(&service, "UserKeyMapping") else { return Ok(Some(Vec::new())) };
         let array = value.downcast_ref::<CFArray>().context("macOS returned an unreadable keyboard mapping; left unchanged")?;
         let array = unsafe { array.cast_unchecked::<CFType>() };
@@ -94,7 +181,7 @@ impl Runner for System {
     }
 
     fn write(&mut self, registry_id: u64, expected: &[Mapping], mappings: &[Mapping]) -> Result<()> {
-        let service = self.service(registry_id)?.context("The keyboard disconnected before its mapping could be changed")?;
+        let service = self.service(registry_id).context("The keyboard disconnected before its mapping could be changed")?;
         let previous = self.read(registry_id)?.unwrap_or_default();
         if previous != expected { bail!("Another keyboard tool changed this keyboard; its mappings were left unchanged"); }
         let changed = previous.iter().filter(|entry| !mappings.contains(entry)).map(|entry| entry.destination)

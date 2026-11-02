@@ -18,11 +18,38 @@ choices are enabled. Preferences apply to outgoing typing.
 
 macOS and Windows are **compile-checked only here**, not hardware-validated. The
 checklists below remain owner validation, not a completed application matrix.
-The optional native-local-remap experimental backends are separate and unchanged;
-this implementation targets the ordinary native backends used by releases.
+The default `native-local-remap` capture adapters and the feature-off adapters
+now include the same OS-specific injector (`macos_inject.rs` / `windows_inject.rs`),
+including Text, CharacterKey ownership, repeat and cleanup. This avoids a second
+copy of the typing implementation; the different capture/local-remap adapters
+remain separate to avoid a risky wholesale capture rewrite. Both advertise TEXT
+and native held characters, with cfg'd tests compiled for each default backend.
 Windows before build 14393 falls back physically rather than use an unsupported
 non-mutating flag. No clipboard transport, X11 keymap remapping, polling loop or
 idle timer is introduced; native held letters reuse existing receiver repeat.
+
+### Main-thread macOS layout cache
+
+TISCopyCurrentKeyboardLayoutInputSource, TISGetInputSourceProperty and keyboard
+kind discovery run on the main dispatch queue. An owned Unicode layout snapshot
+is updated from the distributed selected-input-source notification; Tokio typing
+resolves against that cache, never against borrowed Carbon objects. Keys mode
+does not initialize/read TIS, and notifications do no layout work while Keys is
+selected. No per-key TIS refresh remains. A temporarily unavailable layout falls
+back physically; text injection capability does not depend on layout discovery.
+
+Additional owner checks (NOT RUN on this Linux box):
+
+- [ ] In the ordinary default-feature release, confirm Letters/Auto negotiate
+  TEXT and CharacterKey with native peers. Repeat, release, end visits and
+  disconnect mid-character; no held native character may survive cleanup.
+- [ ] On macOS switch US/German/French/Arabic/IME input sources, including dead
+  keys and Option levels; confirm Auto updates on notification. Trace TIS calls
+  on the main thread only, with none per key and none in Keys mode.
+- [ ] Repeat with local remaps enabled and disabled, Caps-to-Control, shortcuts,
+  held Shift, two keyboards and both directions of a cross-layout visit.
+- [ ] On Windows repeat the AltGr/dead-key/UTF-16 exercises with differing HKLs
+  and verify physical shortcut ownership and partial SendInput cleanup.
 
 ## Current preferences, protocol and cleanup
 
@@ -731,11 +758,11 @@ restoration was tested: those paths do not exist in this patch.
   over two seconds, RSS 31,116 KiB. These short samples do not establish zero
   idle CPU generally or measure a functioning character-mode path.
 
-## Owner validation script (required before enabling TEXT)
+## Owner validation script (required before native release acceptance)
 
-This is a future native acceptance script, **not** a claim these paths work now. On
-the production build the characters/auto commands must explicitly report physical
-fallback. Use dedicated test computers and a text editor, never a shell prompt,
+This is a future native acceptance script, **not** a claim of hardware success.
+The default macOS/Windows build must now advertise native TEXT; unsupported
+senders/receivers must explicitly report physical fallback. Use dedicated test computers and a text editor, never a shell prompt,
 for native typing tests. On each machine save its existing settings first.
 
 ```sh
@@ -808,8 +835,9 @@ AltGr+A/L/Z. Then repeat remotely and compare with that local reference. Hold a
 letter to repeat, change layouts while it is held, release and type again. Test
 Ctrl+Z undo, Ctrl+Plus versus keypad plus, held physical Shift alongside a
 shifted shortcut, visit end and peer termination mid-press; no key may stay down.
-Check `auto` with equal/different layouts and an old peer. On this patch all
-Windows/macOS and normal null/X11 daemon paths still report physical fallback, so a
-cross-layout mismatch is expected and must not be reported as a pass. Restore
+Check `auto` with equal/different layouts and an old peer. Native macOS/Windows
+must now advertise TEXT and produce matching characters when selected. Normal
+null/X11 paths still report physical fallback; their cross-layout mismatch is
+expected, not a character-delivery pass. Restore
 the original settings/input source after the exercise. Do remap/crash testing
 only on private Xvfb servers, not either machine's live desktop.

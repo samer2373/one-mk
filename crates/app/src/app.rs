@@ -2075,11 +2075,6 @@ fn lerp_scale(t: f32) -> f32 {
 }
 
 impl eframe::App for App {
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        #[cfg(any(target_os = "macos", windows))]
-        self.link.local_rules_off_on_quit();
-    }
-
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         crate::chrome::place_buttons(ui.ctx(), frame);
         let now = ui.input(|i| i.time);

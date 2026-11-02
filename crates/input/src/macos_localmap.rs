@@ -52,6 +52,7 @@ struct Native {
     mods: crate::macos_logic::Modifiers,
     held: one_mk_proto::HeldKeys,
     keyboard_type: u32,
+    click_state: i64,
     held_types: [Option<u32>; 128],
 }
 
@@ -73,6 +74,9 @@ impl Injector for Native {
             let Some(event) = event else {
                 return index;
             };
+            if crate::macos_logic::evdev_to_mac_button(code).is_some() {
+                CGEvent::set_integer_value_field(Some(&event), CGEventField::MouseEventClickState, self.click_state);
+            }
             self.sequence = sequence;
             let keyboard_type = if down { self.keyboard_type }
                 else { self.held_types.get(usize::from(kc)).copied().flatten().unwrap_or(self.keyboard_type) };
@@ -112,6 +116,7 @@ impl Injector for Native {
 
     fn settled(&self) -> bool { self.settled }
     fn keyboard_type(&mut self, keyboard_type: u32) { self.keyboard_type = keyboard_type; }
+    fn click_state(&mut self, state: i64) { self.click_state = state; }
 }
 
 pub(crate) struct Dispatch {
@@ -209,7 +214,7 @@ impl Local {
 
     pub fn start(inbox: Arc<Inbox>) -> std::io::Result<(Self, Dispatch)> {
         let receipts = Arc::new(Receipts::default());
-        let mut engine = Engine::new(Native { receipts: receipts.clone(), sequence: 0, settled: true, mods: Default::default(), held: one_mk_proto::HeldKeys::new(), keyboard_type: 0, held_types: [None; 128] });
+        let mut engine = Engine::new(Native { receipts: receipts.clone(), sequence: 0, settled: true, mods: Default::default(), held: one_mk_proto::HeldKeys::new(), keyboard_type: 0, click_state: 0, held_types: [None; 128] });
         let gate = engine.gate();
         let admission = Admission::new(gate.clone());
         let feedback = admission.feedback();
@@ -296,6 +301,8 @@ impl Local {
 
     pub fn held(&self) -> bool { self.receipts.held.load(Ordering::Acquire) }
 
+    pub fn physical_held(&self) -> bool { !self.down.is_empty() }
+
     pub fn hook(&mut self, code: u32, down: bool, injected: bool, flags: u64, remote: bool) -> bool {
         if injected { return false; }
         self.down.update(code, down);
@@ -312,7 +319,7 @@ impl Local {
             }
         } else {
             self.physical.key(PhysicalKey {
-                down, injected, shortcut: false, owner: Owner::Unknown, eligible: logic::eligible(code),
+                down, injected, shortcut: false, owner: Owner::Unknown, eligible: logic::eligible(code) && rules.captures(code),
                 healthy: self.enabled && !self.paused,
             }, code, Instant::now(), &rules, &mut self.admission, |action| self.actions.push(action).is_ok())
         };

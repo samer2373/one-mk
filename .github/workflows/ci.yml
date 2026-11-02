@@ -29,6 +29,20 @@ jobs:
       - run: cargo install --locked -j 2 --version 0.20.2 cargo-deny
       - run: cargo deny --locked --manifest-path crates/wall-import/Cargo.toml --all-features --config crates/wall-import/deny.toml check
 
+  native-cross-check:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-pc-windows-msvc]
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with: { toolchain: stable, targets: "${{ matrix.target }}" }
+      - run: cargo check --locked -j 2 -p one-mk-input -p one-mk-ctl -p one-mk-proto -p one-mk-app --all-targets --target ${{ matrix.target }}
+        env: { RUSTFLAGS: "-D warnings" }
+
   test:
     strategy:
       fail-fast: false
