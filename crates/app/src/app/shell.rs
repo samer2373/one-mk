@@ -390,14 +390,15 @@ impl App {
     /// action as a round Volt button. Names show on hover.
     fn rail(&mut self, ui: &mut Ui, side: Rect, now: f64) {
         let cx = side.center().x;
-        let mut y = side.top() + 12.0;
-        // The mark alone: the left part of the lockup, which is square-ish.
-        let [tw, th] = self.lockup.size();
-        let mark_w = 30.0;
-        let frac = (th as f32 * 1.5 / tw as f32).min(1.0);
-        let r = Rect::from_center_size(pos2(cx, y + 14.0), vec2(mark_w, mark_w * th as f32 / (tw as f32 * frac)));
-        ui.painter().image(self.lockup.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(frac, 1.0)), Color32::WHITE);
-        y += 40.0;
+        // On macOS the window buttons take the top; elsewhere the mark
+        // stands there alone.
+        let mut y = if chrome::mac_frame() {
+            chrome::BUTTONS_Y.max + 6.0
+        } else {
+            let (h, c) = (20.0, pos2(cx, side.top() + 26.0));
+            icons::pointer(ui.painter(), c - vec2(67.5, 62.0) * (h / 127.0), h, SIGNAL);
+            side.top() + 52.0
+        };
         let trouble = self.health_trouble();
         for (tab, icon, _) in NAV {
             let r = Rect::from_center_size(pos2(cx, y + 18.0), vec2(40.0, 36.0));
@@ -441,7 +442,7 @@ impl App {
                 } else {
                     p.circle_stroke(mark, 2.5, Stroke::new(1.5, INK3));
                 }
-                p.text(pos2(r.left() + 16.0, r.center().y), Align2::LEFT_CENTER, initials, semibold(T_META), if online { INK2 } else { INK3 });
+                p.text(pos2(r.left() + 19.0, r.center().y), Align2::LEFT_CENTER, initials, semibold(T_META), if online { INK2 } else { INK3 });
                 if resp.on_hover_text(&name).clicked() {
                     self.set_tab(Tab::Desk);
                     self.select(id.clone());
