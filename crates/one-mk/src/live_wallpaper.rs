@@ -821,10 +821,16 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
             Action::Pause => Command::Pause { paused: true }, Action::Play => Command::Pause { paused: false }, Action::Status => unreachable!(),
         })?),
     };
-    let reply = crate::control::request(dir, request).await?.context("Start oneMK first")?;
-    if let Some(status) = Status::decode(&reply) { println!("{}", status.wallpaper.map_or_else(|| "Wallpaper is off".into(), |status| status.message)); }
-    else if reply.starts_with("error ") { bail!("{}", reply.trim_start_matches("error ").trim()); }
-    else { println!("Wallpaper updated."); }
+    let asked_status = matches!(request, crate::control::Request::Status);
+    let mut reply = crate::control::request(dir, request).await?.context("Start oneMK first")?;
+    if reply.starts_with("error ") { bail!("{}", reply.trim_start_matches("error ").trim()); }
+    // A change answers with an acknowledgement, not the wallpaper's state:
+    // what it says now comes from a status request.
+    if !asked_status { reply = crate::control::request(dir, crate::control::Request::Status).await?.context("Start oneMK first")?; }
+    match Status::decode(&reply) {
+        Some(status) => println!("{}", status.wallpaper.filter(|wallpaper| wallpaper.plan.is_some()).map_or_else(|| "Wallpaper is off".into(), |status| status.message)),
+        None => println!("Wallpaper updated."),
+    }
     Ok(())
 }
 

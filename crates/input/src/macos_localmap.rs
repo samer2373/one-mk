@@ -339,6 +339,12 @@ impl Local {
         physical | self.receipts.output_flags.load(Ordering::Acquire)
     }
 
+    /// [`Self::flags`] for an event another program posted.
+    pub fn posted_flags(&self, original: u64) -> u64 {
+        if !(self.enabled && !self.paused) { return original; }
+        self.flags.apply_posted(original)
+    }
+
     pub fn action(&self) -> Option<Action> { self.actions.pop() }
 
     pub fn fail(&mut self) {

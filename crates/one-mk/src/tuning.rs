@@ -1591,7 +1591,8 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
                 settings.input.local_rules = enabled;
                 Ok(())
             })?;
-            println!("Local key preference {}. {}", if enabled { "on" } else { "off" }, local_rules_note());
+            if enabled { println!("Key rules on this computer: on. {}", local_rules_note()); }
+            else { println!("Key rules on this computer: off. Your rules still apply to the computers you share with."); }
             if let Some(reply) = crate::control::request(dir, crate::control::Request::Settings).await? && let Some(error) = reply.strip_prefix("error ") { bail!("{error}"); }
             local_runtime_status(dir).await;
         }

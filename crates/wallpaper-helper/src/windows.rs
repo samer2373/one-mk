@@ -106,7 +106,7 @@ impl Drop for Engine {
 pub fn probe(path: &Path, poster: Option<&Path>) -> Result<Media> {
     let engine = unsafe { Engine::new(path)? };
     let mut media = engine.metadata()?;
-    media.frame_rate = frame_rate(path).unwrap_or(60.0).ceil() as u32;
+    media.frame_rate = frame_rate(path).unwrap_or(60.0).round() as u32;
     if let Some(path) = poster { unsafe { save_poster(&engine, &media, path)?; } }
     Ok(media)
 }

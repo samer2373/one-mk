@@ -176,6 +176,8 @@ pub fn input_line(line: &str) -> InputLine {
         ("Allow Input Monitoring in System Settings to send this Mac's mouse and keyboard to other computers.", Severity::Problem)
     } else if line.contains("Secure Keyboard Entry") || line.contains("password field") {
         ("Keyboard sharing pauses while a password field or secure typing is active. Leave it to continue sharing.", Severity::Info)
+    } else if line.starts_with("Local key rules active") {
+        ("Your key rules also work on this computer.", Severity::Info)
     } else if line.starts_with("Local key rules inactive") {
         ("Local key rules are off.", Severity::Info)
     } else if line.starts_with("Waiting for your approval") || line.contains("permission dialog") {
@@ -802,15 +804,17 @@ mod tests {
             "Waiting for your approval: allow one-mk in the desktop's dialog.".into(),
             "A password field or an app using Secure Keyboard Entry is active on this Mac".into(),
             "Local key rules inactive; no native local-rules problem reported.".into(),
+            "Local key rules active (1)".into(),
             "one-mk needs Accessibility permission to share this Mac's mouse and keyboard.".into(),
             "one-mk needs Input Monitoring permission to send this Mac's mouse and keyboard.".into(),
             "The Wayland compositor connection failed (decoder compile error).".into(),
         ], ..Status::default() };
         let lines = status.input_lines();
         assert_eq!(lines.iter().map(|line| line.severity).collect::<Vec<_>>(),
-            [Severity::Info, Severity::Info, Severity::Info, Severity::Problem, Severity::Problem, Severity::Problem]);
-        assert!(lines[3].detail.contains("Accessibility"));
-        assert!(lines[4].detail.contains("Input Monitoring"));
+            [Severity::Info, Severity::Info, Severity::Info, Severity::Info, Severity::Problem, Severity::Problem, Severity::Problem]);
+        assert!(lines[3].detail.contains("also work on this computer"));
+        assert!(lines[4].detail.contains("Accessibility"));
+        assert!(lines[5].detail.contains("Input Monitoring"));
         for line in &lines {
             for forbidden in ["one-mk ", "settings.toml", "`", "untested", "compile", "decoder", "native"] {
                 assert!(!line.detail.contains(forbidden), "{}", line.detail);

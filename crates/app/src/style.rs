@@ -214,7 +214,10 @@ fn fonts(extra: &[(String, Vec<u8>)]) -> FontDefinitions {
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "geist-mono".into());
     // The ⌘ in shortcut hints: neither Geist nor egui's fonts have it.
     if let Some(bytes) = mac_symbols() {
-        fonts.font_data.insert("mac-symbols".into(), Arc::new(FontData::from_static(bytes)));
+        // Apple Symbols draws ⌘ smaller and higher than Geist's figures
+        // beside it (measured on a Mac: 12 px next to 16 px, 2.5 pt up).
+        let tweak = egui::FontTweak { scale: 1.25, y_offset_factor: 0.2, ..Default::default() };
+        fonts.font_data.insert("mac-symbols".into(), Arc::new(FontData::from_static(bytes).tweak(tweak)));
         fonts.families.entry(FontFamily::Proportional).or_default().push("mac-symbols".into());
         fonts.families.entry(FontFamily::Monospace).or_default().push("mac-symbols".into());
     }

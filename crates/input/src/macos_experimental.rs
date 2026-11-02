@@ -1004,12 +1004,18 @@ impl Ctx {
                 let swallowed = local.hook(code, down, injected, CGEvent::flags(e).0, remote);
                 self.inbox.signal();
                 if swallowed { return false; }
-                CGEvent::set_flags(e, CGEventFlags(local.flags(CGEvent::flags(e).0)));
+                // A posted event (System Events, automation) carries the
+                // modifiers its program meant; held keys only explain a
+                // keyboard's own.
+                let original = CGEvent::flags(e).0;
+                CGEvent::set_flags(e, CGEventFlags(if injected { local.posted_flags(original) } else { local.flags(original) }));
             }
             if injected && st.local_rules.is_some() { return true; }
         }
         if key.is_none() && ty.0 != NX_SYSDEFINED && let Some(local) = st.local_rules.as_ref() {
-            CGEvent::set_flags(e, CGEventFlags(local.flags(CGEvent::flags(e).0)));
+            let posted = CGEvent::integer_value_field(e, CGEventField::EventSourceStateID) != i64::from(CGEventSourceStateID::HIDSystemState.0);
+            let original = CGEvent::flags(e).0;
+            CGEvent::set_flags(e, CGEventFlags(if posted { local.posted_flags(original) } else { local.flags(original) }));
         }
         if st.active {
             return self.on_active(&mut st, ty, ev);

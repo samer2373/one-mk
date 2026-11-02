@@ -63,11 +63,37 @@ impl Flags {
         let mask = flags::SHIFT | flags::CONTROL | flags::ALTERNATE | flags::COMMAND | flags::DEV_ALL;
         (original & !mask) | (original & passed.flags() & !flags::NON_COALESCED) | injected
     }
+
+    /// An event another program posted: its modifiers are its own (System
+    /// Events, an automation tool), so only those of keys a rule swallowed
+    /// come off it, unless a key still passed on gives the same flag.
+    pub fn apply_posted(&self, original: u64) -> u64 {
+        let (mut swallowed, mut passed) = (logic::Modifiers::default(), logic::Modifiers::default());
+        for code in self.physical.iter() {
+            if self.suppressed.is_held(code) { swallowed.update(code, true); } else { passed.update(code, true); }
+        }
+        original & !(swallowed.flags() & !passed.flags() & !(flags::NON_COALESCED | flags::ALPHA_SHIFT))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_posted_event_keeps_its_own_modifiers_and_loses_only_swallowed_ones() {
+        let mut state = Flags::default();
+        // System Events' ⌘4: no key held here.
+        let command = flags::COMMAND | flags::DEV_LCMD | flags::NON_COALESCED;
+        assert_eq!(state.apply_posted(command), command);
+        assert_eq!(state.apply(command, 0), flags::NON_COALESCED, "a physical event without a held ⌘ loses it");
+        // Left ⌘ held and swallowed by a rule: it comes off a posted event too.
+        state.key(125, true, true);
+        assert_eq!(state.apply_posted(command) & (flags::COMMAND | flags::DEV_LCMD), 0);
+        // Right ⌘ held and passed on: ⌘ stays.
+        state.key(126, true, false);
+        assert_ne!(state.apply_posted(command) & flags::COMMAND, 0);
+    }
 
     #[test]
     fn missed_modifier_release_cannot_add_phantom_flags() {

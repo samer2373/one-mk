@@ -1258,13 +1258,18 @@ impl Scene {
         let (h, w) = (pts[0].distance(pts[3]), pts[0].distance(pts[1]));
         let c = cam.pt(g.screen.at(0.5, 0.5));
         let col = if lit { SIGNAL } else { rgba([0xC4, 0xCA, 0xD2], 1.0, k) };
-        let title = semibold((h * 0.11).clamp(12.0, 16.0));
+        // A small window makes a small slot: the title gets smaller (down
+        // to 10 pt) before it is shortened, and the line below only shows
+        // when it fits inside the outline.
+        let mut size = (h * 0.11).clamp(12.0, 16.0);
+        while size > 10.0 && painter.layout_no_wrap("Add a computer".into(), semibold(size), col).size().x > w * 0.9 { size -= 0.5; }
+        let title = semibold(size);
         painter.text(c - vec2(0.0, 2.0), egui::Align2::CENTER_BOTTOM, fit(painter, "Add a computer", &title, w * 0.9), title, col);
-        let sub = regular((h * 0.07).clamp(11.0, 13.0));
+        let sub = regular((h * 0.07).clamp(10.0, 13.0));
         let mut job = egui::text::LayoutJob::simple("Pair another computer to share this mouse and keyboard".into(), sub, rgba(hex(0x9DA6B1), 1.0, k), w * 0.84);
         job.halign = egui::Align::Center;
         let g = painter.layout_job(job);
-        painter.galley(c + vec2(0.0, 4.0), g, INK2);
+        if g.size().y <= h * 0.5 - 10.0 { painter.galley(c + vec2(0.0, 4.0), g, INK2); }
     }
 
     fn room(&self, painter: &Painter, cam: &Camera, geo: &[Geo], rect: Rect) {

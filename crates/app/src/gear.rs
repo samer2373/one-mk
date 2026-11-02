@@ -295,6 +295,8 @@ struct Legend {
     text: String,
     to: bool,
     modifier: bool,
+    /// The widest it may be drawn: the cap's own width.
+    max_w: f32,
 }
 
 /// A built keyboard: the lit mesh, each key's top on screen (for clicks
@@ -360,11 +362,11 @@ impl Keyboard {
             let px = (tr.x - tl.x).abs().max(1.0);
             let size = (px / k.w.max(1.0) * 0.25).clamp(8.0, 14.0);
             let at = cam.pt(p3(cx - k.w * U / 2.0 + 4.2, y_top, cz - k.h * U / 2.0 + 4.0));
-            legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier });
+            legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier, max_w: f32::INFINITY });
             if let Some(to) = &k.to {
                 // On the cap's front, as side legends are on real keycaps.
                 let at = cam.pt(p3(cx, 1.0 + (y_top - 1.0) * 0.42, cz + k.h * U / 2.0 - 1.1));
-                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier });
+                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier, max_w: px * 0.92 });
             }
         }
         keys.into_mesh(&mut m);
@@ -389,7 +391,11 @@ impl Keyboard {
         }
         for l in &self.legends {
             let col = if l.to { SIGNAL } else if l.modifier { Color32::from_rgb(0xD9, 0xD3, 0xC8) } else { Color32::from_rgb(0xC6, 0xCB, 0xD3) };
-            p.text(l.at, if l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, &l.text, font(l.size, l.to), col);
+            // A long target ("Esc/Ctrl") on a narrow cap gets smaller rather
+            // than spilling onto the next key.
+            let mut size = l.size;
+            while size > 7.0 && p.layout_no_wrap(l.text.clone(), font(size, l.to), col).size().x > l.max_w { size -= 0.5; }
+            p.text(l.at, if l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, &l.text, font(size, l.to), col);
         }
         if let Some(t) = chosen.and_then(|i| self.tops.get(i)).filter(|t| t.len() > 2) {
             let mut ring = t.clone();

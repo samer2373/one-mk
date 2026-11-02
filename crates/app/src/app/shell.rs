@@ -93,7 +93,7 @@ impl App {
 
     /// Something on Health needs attention.
     fn health_trouble(&self) -> bool {
-        self.running().is_some_and(|s| !s.input.is_empty())
+        self.running().is_some_and(|s| s.input_lines().iter().any(|line| line.severity == one_mk_ctl::status::Severity::Problem))
             || self.doctor.as_ref().is_some_and(|(d, _)| d.as_ref().is_ok_and(|c| c.iter().any(|c| c.verdict == crate::view::Verdict::Fail)))
     }
 
@@ -181,7 +181,7 @@ impl App {
             y += 22.0;
             let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
             let here = pointer.as_deref() == Some("me");
-            self.computer_row(ui, r, "me", &status.name, here, true, if here { "pointer here" } else { "" }, false);
+            self.computer_row(ui, r, "me", &status.name, here, true, "", false);
             y += ROW_H + 12.0;
             if y + 22.0 + ROW_H <= list_bottom {
                 ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "PAIRED", semibold(T_META - 1.5), INK3);
@@ -224,7 +224,10 @@ impl App {
     /// Choosing it shows it on the desk.
     #[allow(clippy::too_many_arguments)]
     fn computer_row(&mut self, ui: &mut Ui, r: Rect, id: &str, name: &str, here: bool, online: bool, value: &str, chosen: bool) {
-        let label = if value.is_empty() { name.to_owned() } else { format!("{name}, {value}") };
+        // A Mac's host name ends in ".local", which says nothing here.
+        let name = name.strip_suffix(".local").unwrap_or(name);
+        // The pointer mark shows where the pointer is; screen readers hear it.
+        let label = [Some(name), here.then_some("pointer here"), (!value.is_empty()).then_some(value)].into_iter().flatten().collect::<Vec<_>>().join(", ");
         let (resp, _) = row_button(ui, r, Id::unique(("pc", id)), &label, Role::Button, chosen, true);
         let p = ui.painter();
         let mark = pos2(r.left() + 18.0, r.center().y);

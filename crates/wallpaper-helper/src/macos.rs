@@ -111,7 +111,7 @@ pub fn probe(path: &Path, poster: Option<&Path>) -> Result<Media> {
             let data = bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()).context("Could not make a video preview")?;
             std::fs::write(poster, data.to_vec())?;
         }
-        Ok(Media { width, height, duration_ms, frame_rate: track.nominalFrameRate().ceil() as u32 })
+        Ok(Media { width, height, duration_ms, frame_rate: track.nominalFrameRate().round() as u32 })
     }
 }
 
