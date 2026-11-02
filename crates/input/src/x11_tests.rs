@@ -875,10 +875,24 @@ async fn devices_are_listed_and_input_says_which_one() {
     assert_eq!(second, DeviceRef(u32::from(o.xi_id("second XTEST keyboard"))));
 
     b.capture.send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    o.move_to(W - 1, 400);
-    o.move_by(10, 0);
-    activated(&mut b.events).await;
+    // The edge is armed on the backend's own thread: push until it takes
+    // (a fixed wait wasn't always enough on a busy machine).
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    'armed: loop {
+        assert!(std::time::Instant::now() < deadline, "the right edge never took the pointer");
+        o.move_to(W - 1, 400);
+        o.move_by(10, 0);
+        let tried = std::time::Instant::now();
+        while tried.elapsed() < Duration::from_millis(300) {
+            match b.events.try_recv() {
+                Ok(Event::Activated { .. }) => break 'armed,
+                Ok(Event::Status { .. } | Event::Devices(_) | Event::Modifiers(_)) => {}
+                Ok(other) => panic!("expected Activated, got {other:?}"),
+                Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+            }
+        }
+        o.move_to(600, 400);
+    }
     o.fake(2, 38, NONE, 0, 0);
     o.fake(3, 38, NONE, 0, 0);
     assert_eq!(next(&mut b.events).await, Event::Key { code: 30, down: true, device: Some(keyboard.id) });

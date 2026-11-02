@@ -167,6 +167,10 @@ impl Power {
     }
 }
 
+/// How long a release waits for a symbol being sent before the session is
+/// ended to let go (a portal answers in milliseconds; one that doesn't is hung).
+const RELEASE_GRACE: Duration = Duration::from_millis(250);
+
 /// A call that should answer at once. One that hangs is an error, which
 /// ends the session (and so releases whatever it held).
 async fn timeout<T, E>(what: &str, f: impl Future<Output = Result<T, E>>) -> Result<T>
@@ -1293,15 +1297,29 @@ async fn run_inject(
                             }
                             let sending = timeout("injecting text", keyboard.as_mut().expect("keyboard session opened").send(portal, message));
                             tokio::pin!(sending);
+                            // A release or the visit's end while a symbol is
+                            // being sent waits its turn, briefly: a portal that
+                            // answers lets it through in order; one that hangs
+                            // is ended (with the session) so nothing stays held.
+                            let mut interrupt: Option<(tokio::time::Instant, &str)> = None;
                             loop {
+                                let hung = async {
+                                    match interrupt {
+                                        Some((at, _)) => tokio::time::sleep_until(at).await,
+                                        None => std::future::pending().await,
+                                    }
+                                };
                                 tokio::select! {
                                     sent = &mut sending => { sent?; break; }
+                                    () = hung => bail!("{}", interrupt.map_or("", |(_, why)| why)),
                                     incoming = rx.recv() => {
                                         let Some(incoming) = incoming else { bail!("input disconnected during text injection"); };
-                                        if matches!(incoming, Inject::Controlled(false)) { bail!("visit ended during text injection"); }
-                                        if let Inject::Key { code, down: false } = incoming
-                                            && inj.held.keys.contains(&code)
-                                        { bail!("physical key released during text injection"); }
+                                        let why = match incoming {
+                                            Inject::Controlled(false) => Some("visit ended during text injection"),
+                                            Inject::Key { code, down: false } if inj.held.keys.contains(&code) => Some("physical key released during text injection"),
+                                            _ => None,
+                                        };
+                                        if let Some(why) = why && interrupt.is_none() { interrupt = Some((tokio::time::Instant::now() + RELEASE_GRACE, why)); }
                                         if queued.len() >= 256 { bail!("input backlog during text injection"); }
                                         queued.push_back(incoming);
                                     }
