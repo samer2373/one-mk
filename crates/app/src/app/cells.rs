@@ -275,16 +275,15 @@ impl App {
 
     /// Notifications, the received files folder, and the clipboard's size limit.
     pub(super) fn files_settings(&mut self, ui: &mut Ui, c: Rect) {
-        let row_h = 36.0;
-        let top = c.top() - 8.0;
+        // Titled and spaced as the Clipboard card beside it.
+        title_row(ui, c, "Files", 0.0);
+        let row_h = 30.0;
+        let top = c.top() + 24.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
         let p = self.prefs.clone();
         if switch(ui, row(0), Id::unique("notify"), "Notify when files arrive", p.notify_files, true).clicked() {
             let v = if p.notify_files { "off" } else { "on" };
             self.set_pref("notifications", &["notify", v], |p| p.notify_files = !p.notify_files);
-        }
-        for k in 1..3 {
-            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
         }
         let r1 = row(1);
         ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), INK);

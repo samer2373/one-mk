@@ -4,7 +4,7 @@ impl App {
     pub(super) fn clipboard_history_cell(&mut self, ui: &mut Ui, rect: Rect) {
         title_row(ui, rect, "History", 125.0);
         let refresh = Rect::from_min_size(pos2(rect.right() - 124.0, rect.top() - 4.0), vec2(72.0, 28.0));
-        if button(ui, refresh, Id::unique("history-refresh"), "Refresh", Look::Quiet, true, Some("Refresh clipboard history")).clicked() {
+        if button(ui, refresh, Id::unique("history-refresh"), "Refresh", Look::Quiet, self.prefs.history_enabled && self.running().is_some(), Some("Refresh clipboard history")).clicked() {
             self.clipboard_reveal = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
             self.clipboard_clear_confirm = false;
@@ -27,13 +27,13 @@ impl App {
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
         }
         let persist = Rect::from_min_size(pos2(rect.left(), rect.top() + 62.0), vec2(rect.width(), 28.0));
-        if switch(ui, persist, Id::unique("history-persist"), "Keep history after restart", self.prefs.history_persist, true).clicked() {
+        if switch(ui, persist, Id::unique("history-persist"), "Keep history after restart", self.prefs.history_persist, self.prefs.history_enabled).clicked() {
             let enabled = !self.prefs.history_persist;
             self.set_pref("saved clipboard history", &["clipboard", "history", "persist", if enabled { "on" } else { "off" }], |prefs| prefs.history_persist = enabled);
         }
         let rect = Rect::from_min_max(rect.min + vec2(0.0, 32.0), rect.max);
         let privacy = if !self.prefs.history_enabled {
-            "Off: copies are not retained. Turning history on may retain unmarked secrets."
+            "Off: nothing you copy is kept. Turned on, it may keep passwords their app didn't mark as secret."
         } else if self.prefs.history_persist {
             "Saved unencrypted on disk. Previews are hidden until Show. Clear deletes saved items too. Unmarked secrets may be retained."
         } else {
@@ -105,7 +105,8 @@ fn history_message<'a>(online: bool, history: Option<&'a Result<Vec<crate::daemo
         None => Some("Loading history…"),
         Some(Err(error)) => Some(error.as_str()),
         Some(Ok(items)) if items.is_empty() && failure.is_some() => failure,
-        Some(Ok(items)) if items.is_empty() && !enabled => Some("Clipboard history is disabled. No copies are being retained."),
+        // Off and empty: the line above already says nothing is kept.
+        Some(Ok(items)) if items.is_empty() && !enabled => None,
         Some(Ok(items)) if items.is_empty() => Some("No clipboard items yet. Copy something, then choose Refresh."),
         _ => None,
     }
