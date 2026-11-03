@@ -118,6 +118,7 @@ impl Link {
     pub fn spawn(self, events: LinkTx) -> (quinn::Connection, ControlWriter) {
         let Link { fp, id, name, conn, ctl, mut recv, .. } = self;
         let (ctl_conn, ctl_events) = (conn.clone(), events.clone());
+        let peer_name = name.clone();
         tokio::spawn(async move {
             let mut buf = Vec::with_capacity(256);
             let mut wallpaper_ingress = crate::wallpaper::Ingress::default();
@@ -148,7 +149,11 @@ impl Link {
         });
         let task_conn = conn.clone();
         tokio::spawn(async move {
-            while let Ok(bytes) = task_conn.read_datagram().await {
+            let reason = loop {
+                let bytes = match task_conn.read_datagram().await {
+                    Ok(bytes) => bytes,
+                    Err(e) => break e,
+                };
                 match Datagram::decode(&bytes) {
                     Ok(Datagram::Motion { epoch, seq, pos }) => {
                         let _ = events.send((fp, id, LinkEvent::Motion { epoch, seq, pos }));
@@ -163,6 +168,14 @@ impl Link {
                     Ok(Datagram::ProbeEcho { .. }) => {}
                     Err(e) => tracing::trace!("bad datagram: {e}"),
                 }
+            };
+            // Why it ended, so a flaky link can be told from a peer that left.
+            match reason {
+                quinn::ConnectionError::TimedOut => tracing::warn!(
+                    peer = %peer_name,
+                    "the link to {peer_name} timed out: nothing arrived from it for 4 s (the network dropped out, or that computer slept)"
+                ),
+                other => tracing::debug!(peer = %peer_name, "link closed: {other}"),
             }
             let _ = events.send((fp, id, LinkEvent::Closed));
         });

@@ -1,0 +1,17 @@
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
+<node>
+  <interface name="org.onemk.Pointer1">
+    <method name="Inspect">
+      <arg type="s" direction="out" name="shell_version"/>
+    </method>
+    <!-- Hide the pointer. Asked again at least every 15 seconds, or it comes back. -->
+    <method name="Hide"/>
+    <!-- Hide it where it stands until this computer's own mouse is used. -->
+    <method name="HideUntilMoved"/>
+    <method name="Show"/>
+    <method name="State">
+      <arg type="b" direction="out" name="hidden_by_one_mk"/>
+      <arg type="b" direction="out" name="pointer_visible"/>
+    </method>
+  </interface>
+</node>

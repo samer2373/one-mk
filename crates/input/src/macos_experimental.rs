@@ -40,7 +40,7 @@ use objc2_core_foundation::{
 };
 use objc2_core_graphics::{
     CGAssociateMouseAndMouseCursorPosition, CGDirectDisplayID, CGDisplayBounds, CGDisplayChangeSummaryFlags,
-    CGDisplayHideCursor, CGDisplayRegisterReconfigurationCallback, CGDisplayShowCursor, CGError, CGEvent,
+    CGDisplayHideCursor, CGDisplayMoveCursorToPoint, CGGetDisplaysWithPoint, CGDisplayRegisterReconfigurationCallback, CGDisplayShowCursor, CGError, CGEvent,
     CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventTapOptions,
     CGEventTapPlacement, CGEventTapProxy, CGEventType, CGGetActiveDisplayList, CGMouseButton,
     CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGSessionCopyCurrentDictionary,
@@ -347,7 +347,7 @@ impl State {
 
     fn deactivate(&mut self, pos: Option<Pos>) {
         if let Some(p) = pos {
-            let _ = CGWarpMouseCursorPosition(CGPoint::new(p.x, p.y));
+            move_cursor(p);
         }
         // Re-associating also ends the short input freeze that follows a warp.
         let _ = CGAssociateMouseAndMouseCursorPosition(true);

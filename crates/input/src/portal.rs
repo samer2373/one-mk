@@ -62,6 +62,9 @@ use tokio::sync::{mpsc, watch};
 #[path = "portal_keyboard.rs"]
 mod keyboard;
 use keyboard::KeysymKeyboard;
+#[path = "portal_pointer.rs"]
+mod pointer;
+use pointer::{PointerHider, Want};
 
 /// A session that lasted at least this long starts the backoff over.
 const STABLE: Duration = Duration::from_secs(60);
@@ -564,6 +567,9 @@ impl CaptureState {
     }
 }
 
+/// Barrier ids with their lines (x1, y1, x2, y2).
+type BarrierSet = Vec<(u32, (i32, i32, i32, i32))>;
+
 struct Capture<'a> {
     portal: &'a InputCapture,
     session: &'a Session<InputCapture>,
@@ -571,6 +577,13 @@ struct Capture<'a> {
     zone_set: u32,
     barriers: HashMap<u32, Side>,
     enabled: bool,
+    /// The barriers the compositor holds (with the zone set they were made
+    /// for), when every one of them was accepted: asking for the same again
+    /// is then a no-op instead of a pointless disable and enable.
+    applied: Option<(u32, BarrierSet)>,
+    /// New edges are waiting for the capture in progress to end: changing
+    /// barriers means disabling capture, which would end it.
+    stale: bool,
 }
 
 impl Capture<'_> {
@@ -592,33 +605,76 @@ impl Capture<'_> {
     /// Barriers are line segments, one per armed edge segment (inner
     /// exposed edges too), so touching the rest of an edge never activates
     /// capture.
-    async fn apply_barriers(&mut self, edges: &[Edge]) -> Result<()> {
-        let mut barriers = Vec::new();
-        self.barriers.clear();
+    ///
+    /// The desktop portal takes barriers only on a session that is not
+    /// enabled (GNOME answers `Session already enabled`, failing every
+    /// barrier and leaving the old ones in place, which then no longer match
+    /// what the daemon armed: crossing silently stops working after any
+    /// layout change). So an enabled session is disabled first and enabled
+    /// again after. While `capturing` that would end the capture, so it
+    /// waits (`stale`) until the capture is over.
+    async fn apply_barriers(&mut self, edges: &[Edge], capturing: bool) -> Result<()> {
+        let mut wanted = Vec::new();
         for e in edges.iter().filter(|e| e.lo < e.hi) {
-            let id = e.side as u32 * 64 + barriers.len() as u32 + 1;
+            let id = e.side as u32 * 64 + wanted.len() as u32 + 1;
             // Barriers lie on the zone edge; right/bottom edges are one
             // past the last pixel, as the portal spec requires.
             let pos = match e.side {
                 Side::Left | Side::Right => (e.at, e.lo, e.at, e.hi - 1),
                 Side::Top | Side::Bottom => (e.lo, e.at, e.hi - 1, e.at),
             };
-            barriers.push(Barrier::new(NonZeroU32::new(id).expect("nonzero"), pos));
-            self.barriers.insert(id, e.side);
+            wanted.push((id, pos, e.side));
         }
+        let key: BarrierSet = wanted.iter().map(|&(id, pos, _)| (id, pos)).collect();
+        let want = !key.is_empty();
+        if self.applied.as_ref() == Some(&(self.zone_set, key.clone())) && self.enabled == want {
+            self.stale = false;
+            return Ok(());
+        }
+        if self.enabled && capturing {
+            self.stale = true;
+            return Ok(());
+        }
+        self.stale = false;
+        let was_enabled = self.enabled;
+        if was_enabled {
+            timeout("disabling capture", self.portal.disable(self.session, Default::default())).await?;
+            self.enabled = false;
+        }
+        self.applied = None;
+        self.barriers.clear();
+        let barriers: Vec<Barrier> =
+            wanted.iter().map(|&(id, pos, _)| Barrier::new(NonZeroU32::new(id).expect("nonzero"), pos)).collect();
         let opts = SetPointerBarriersOptions::default();
         let set = self.portal.set_pointer_barriers(self.session, &barriers, self.zone_set, opts);
-        let resp = timeout("pointer barriers", set).await?.response()?;
-        for failed in resp.failed_barriers() {
-            tracing::warn!(barrier = failed.get(), "compositor rejected a pointer barrier");
-            self.barriers.remove(&failed.get());
+        let resp = match timeout("pointer barriers", set).await.and_then(|r| Ok(r.response()?)) {
+            Ok(resp) => resp,
+            Err(e) => {
+                // Don't leave capture off for good because of one failed call.
+                if was_enabled && let Err(e) = timeout("enabling capture", self.portal.enable(self.session, Default::default())).await {
+                    tracing::warn!("enabling capture again: {e:#}");
+                } else {
+                    self.enabled = was_enabled;
+                }
+                return Err(e);
+            }
+        };
+        let failed: Vec<u32> = resp.failed_barriers().iter().map(|f| f.get()).collect();
+        for &(id, _, side) in &wanted {
+            if !failed.contains(&id) {
+                self.barriers.insert(id, side);
+            }
+        }
+        for id in &failed {
+            tracing::warn!(barrier = id, "compositor rejected a pointer barrier");
+        }
+        if failed.is_empty() {
+            self.applied = Some((self.zone_set, key));
         }
 
         let want = !self.barriers.is_empty();
-        if want && !self.enabled {
+        if want {
             timeout("enabling capture", self.portal.enable(self.session, Default::default())).await?;
-        } else if !want && self.enabled {
-            timeout("disabling capture", self.portal.disable(self.session, Default::default())).await?;
         }
         self.enabled = want;
         Ok(())
@@ -627,11 +683,11 @@ impl Capture<'_> {
     /// Re-reads the zones and re-applies the barriers. Failures are logged
     /// and otherwise ignored: the old layout stays in use, and a session
     /// that is really gone shows up as a closed libei connection.
-    async fn refresh(&mut self, edges: &[Edge]) {
+    async fn refresh(&mut self, edges: &[Edge], capturing: bool) {
         if let Err(e) = self.refresh_zones().await {
             tracing::warn!("reading the screen layout: {e:#}");
         }
-        if let Err(e) = self.apply_barriers(edges).await {
+        if let Err(e) = self.apply_barriers(edges, capturing).await {
             tracing::warn!("setting pointer barriers: {e:#}");
         }
     }
@@ -651,7 +707,8 @@ impl Capture<'_> {
             .await
             .context("couldn't release the pointer")?;
         self.enabled = false;
-        if let Err(e) = self.apply_barriers(edges).await {
+        self.applied = None;
+        if let Err(e) = self.apply_barriers(edges, false).await {
             tracing::warn!("setting pointer barriers: {e:#}");
         }
         Ok(())
@@ -762,13 +819,15 @@ async fn run_capture(
         zone_set: 0,
         barriers: HashMap::new(),
         enabled: false,
+        applied: None,
+        stale: false,
     };
     // Without zones there is nothing to put barriers on, so this one is
     // fatal (and retried with a new session).
     cap.refresh_zones().await?;
     st.report_desktop(&cap.desktop);
     // A re-created session starts with no barriers.
-    if let Err(e) = cap.apply_barriers(&st.edges).await {
+    if let Err(e) = cap.apply_barriers(&st.edges, false).await {
         tracing::warn!("setting pointer barriers: {e:#}");
     }
     retry.ready();
@@ -776,12 +835,30 @@ async fn run_capture(
 
     let mut power = env.power.clone();
     let mut was = *power.borrow_and_update();
+    // While the pointer is captured, an optional GNOME extension hides it.
+    // Dropped with the session, which shows it again.
+    let hider = env.connect().await.ok().map(PointerHider::start);
+    let mut hiding = false;
     loop {
+        if let Some(hider) = &hider {
+            let hide = st.activation.is_some();
+            hider.set(if hide { Want::Hidden } else { Want::Shown });
+            if hide && !std::mem::replace(&mut hiding, true) {
+                nudge_pointer(st.warp.clone());
+            }
+            hiding &= hide;
+        }
+        // Edges that changed during a capture take effect once it is over.
+        if cap.stale && st.activation.is_none()
+            && let Err(e) = cap.apply_barriers(&st.edges, false).await
+        {
+            tracing::warn!("setting pointer barriers: {e:#}");
+        }
         tokio::select! {
             cmd = cmds.recv() => match cmd {
                 Some(CaptureCmd::SetEdges(edges)) => {
                     st.edges = edges;
-                    if let Err(e) = cap.apply_barriers(&st.edges).await {
+                    if let Err(e) = cap.apply_barriers(&st.edges, st.activation.is_some()).await {
                         tracing::warn!("setting pointer barriers: {e:#}");
                     }
                 }
@@ -831,14 +908,15 @@ async fn run_capture(
                 }
             },
             Some(_) = zones_changed.next() => {
-                cap.refresh(&st.edges).await;
+                cap.refresh(&st.edges, st.activation.is_some()).await;
                 st.report_desktop(&cap.desktop);
             },
             Some(_) = disabled.next() => {
                 // The compositor dropped our barriers (e.g. monitors changed); set them up again.
                 st.deactivated();
                 cap.enabled = false;
-                cap.refresh(&st.edges).await;
+                cap.applied = None;
+                cap.refresh(&st.edges, false).await;
                 st.report_desktop(&cap.desktop);
             },
             now = power_changed(&mut power) => {
@@ -854,7 +932,7 @@ async fn run_capture(
                     // that can't say where the screens are is no good.
                     cap.refresh_zones().await.context("after waking up")?;
                     st.report_desktop(&cap.desktop);
-                    if let Err(e) = cap.apply_barriers(&st.edges).await {
+                    if let Err(e) = cap.apply_barriers(&st.edges, st.activation.is_some()).await {
                         tracing::warn!("setting pointer barriers: {e:#}");
                     }
                 }
@@ -921,6 +999,18 @@ async fn run_capture(
             }
         }
     }
+}
+
+/// The pointer sits still while captured, and the desktop may not redraw it
+/// until something moves it: a hide asked for then can wait on screen for the
+/// next frame. A one-pixel nudge out and back, just after the hide, makes it.
+fn nudge_pointer(warp: mpsc::UnboundedSender<Inject>) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let _ = warp.send(Inject::MoveBy { dx: 1, dy: 0 });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let _ = warp.send(Inject::MoveBy { dx: -1, dy: 0 });
+    });
 }
 
 fn portal_keyboard_layout(device: &reis::event::Device) -> Option<crate::typing::KeyboardLayout> {
@@ -1179,6 +1269,8 @@ async fn run_inject(
     let mut batch = Vec::new();
     let mut power = env.power.clone();
     power.mark_unchanged();
+    // Dropped with the session, which shows the pointer again.
+    let hider = env.connect().await.ok().map(PointerHider::start);
 
     let result = loop {
         tokio::select! {
@@ -1237,6 +1329,16 @@ async fn run_inject(
                 // Apply everything already queued (stale moves dropped),
                 // then send one frame.
                 drain_coalesced(first, rx, &mut batch);
+                // Another computer moves this one's pointer: drawn as usual;
+                // when it lets go, hidden where it stands until this
+                // computer's own mouse is used.
+                if let Some(hider) = &hider {
+                    match batch.iter().rev().find_map(|m| match m { Inject::Controlled(on) => Some(*on), _ => None }) {
+                        Some(true) => hider.set(Want::Shown),
+                        Some(false) => hider.set(Want::UntilMoved),
+                        None => {}
+                    }
+                }
                 if power.borrow().paused() { batch.clear(); continue; }
                 let symbolic = batch.iter().any(|message| match message {
                     Inject::Text { .. } | Inject::CharacterKey { .. } | Inject::Controlled(false) => true,

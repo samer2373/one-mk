@@ -35,6 +35,7 @@ fn readable_time(timestamp: u64) -> String {
 mod control;
 mod doctor;
 mod wallpaper;
+mod pointer_extension;
 mod live_wallpaper;
 mod hooks;
 mod hotkeys;
@@ -387,6 +388,13 @@ enum Cmd {
         #[arg(value_name = "auto|always|never", value_parser = ["auto", "always", "never"])]
         mode: Option<String>,
     },
+    /// GNOME only: the optional extension that hides this computer's pointer
+    /// while the mouse is on another computer (it stays drawn at the edge
+    /// otherwise): install, enable, status, uninstall.
+    PointerExtension {
+        #[command(subcommand)]
+        action: pointer_extension::Action,
+    },
     /// Play a video across the shared desktop, or turn it off.
     Wallpaper(live_wallpaper::Args),
     /// Scrolling on the computers this one controls: direction, natural,
@@ -641,6 +649,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Keymap { cmd } => tuning::keymap(&dir, cmd).await,
             Cmd::Pointer(args) => tuning::pointer_command(&dir, args).await,
             Cmd::PointerOverlay { mode } => pointeroverlay::command(&dir, mode.as_deref()).await,
+            Cmd::PointerExtension { action } => pointer_extension::command(&action).await,
             Cmd::Wallpaper(args) => live_wallpaper::command(&dir, args).await,
             Cmd::Scroll(args) => tuning::scroll_command(&dir, args).await,
             Cmd::Autoscroll(args) => tuning::autoscroll_command(&dir, args).await,

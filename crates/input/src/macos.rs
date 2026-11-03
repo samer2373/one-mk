@@ -39,7 +39,7 @@ use objc2_core_foundation::{
 #[allow(deprecated)] // CGSetLocalEventsSuppressionInterval: still the only way to drop the post-warp freeze
 use objc2_core_graphics::{
     CGAssociateMouseAndMouseCursorPosition, CGDirectDisplayID, CGDisplayBounds, CGDisplayChangeSummaryFlags,
-    CGDisplayHideCursor, CGDisplayRegisterReconfigurationCallback, CGDisplayShowCursor, CGError, CGEvent,
+    CGDisplayHideCursor, CGDisplayMoveCursorToPoint, CGGetDisplaysWithPoint, CGDisplayRegisterReconfigurationCallback, CGDisplayShowCursor, CGError, CGEvent,
     CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventTapOptions,
     CGEventTapPlacement, CGEventTapProxy, CGEventType, CGGetActiveDisplayList, CGMouseButton,
     CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGSessionCopyCurrentDictionary,
@@ -320,7 +320,7 @@ impl State {
             // jump when the pointer comes back); no freeze.
             #[allow(deprecated)]
             let _ = CGSetLocalEventsSuppressionInterval(0.0);
-            let _ = CGWarpMouseCursorPosition(CGPoint::new(p.x, p.y));
+            move_cursor(p);
         }
         // Re-associating also ends the short input freeze that follows a warp.
         let _ = CGAssociateMouseAndMouseCursorPosition(true);

@@ -325,3 +325,25 @@ mod typing_capability_tests {
         assert!(keyboard.native_text());
     }
 }
+
+/// Puts the cursor at `p` (global points) when it comes back from another
+/// computer. `CGDisplayMoveCursorToPoint` on the display that holds `p`, not
+/// `CGWarpMouseCursorPosition`: after a warp macOS ignores the mouse for about
+/// 0.25 s, and `CGSetLocalEventsSuppressionInterval(0.0)` does not always
+/// stop that (measured on macOS 27.2: the pointer froze after 1 of 5 warps,
+/// after none of 5 display moves, and after all 5 with the default interval).
+fn move_cursor(p: Pos) {
+    let at = CGPoint::new(p.x, p.y);
+    let mut display: CGDirectDisplayID = 0;
+    let mut count = 0u32;
+    // SAFETY: both pointers are valid for one display id and one count.
+    let err = unsafe { CGGetDisplaysWithPoint(at, 1, &mut display, &mut count) };
+    if err == CGError::Success && count == 1 {
+        let origin = CGDisplayBounds(display).origin;
+        let on_display = CGPoint::new(at.x - origin.x, at.y - origin.y);
+        if CGDisplayMoveCursorToPoint(display, on_display) == CGError::Success {
+            return;
+        }
+    }
+    let _ = CGWarpMouseCursorPosition(at);
+}

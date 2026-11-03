@@ -379,7 +379,7 @@ impl App {
         // waiting for permission...): a banner over the desk, read out.
         // Under the Computers / Arrange switch, which sits at the desk's top.
         let mut top = desk.top() + if self.desk_views_shown() { DESK_VIEWS_H } else { 0.0 };
-        if let Some((title, sub)) = self.desk_notice() {
+        if let Some((title, sub)) = self.notice.shown().cloned() {
             let w = 560.0f32.min(desk.width());
             let job = |text: &str, font: egui::FontId, col: Color32| {
                 let mut j = egui::text::LayoutJob::simple(text.to_owned(), font, col, w - 46.0);
@@ -431,6 +431,15 @@ impl App {
     /// Whether the Computers / Arrange switch is on the desk's top row.
     pub(super) fn desk_views_shown(&self) -> bool { matches!(self.tab, Tab::Desk | Tab::Layout) && !self.off() }
 
+    /// Decides the banner for this frame (see [`NoticeHold`]).
+    pub(super) fn refresh_notice(&mut self, ui: &Ui, now: f64) {
+        let moving = self.running().is_some_and(|s| s.controlled_by.is_some() || s.controlling.is_some());
+        let fresh = self.desk_notice();
+        if let Some(left) = self.notice.update(fresh, moving, now) {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(left + 0.05));
+        }
+    }
+
     /// The status worth a banner over the desk: what isn't plain sharing.
     pub(super) fn desk_notice(&self) -> Option<(String, String)> {
         let s = self.running()?;
@@ -452,5 +461,86 @@ impl App {
 
     pub(super) fn drag_hint_file(&self) -> std::path::PathBuf {
         self.link.dir.join(".window-dragged")
+    }
+}
+
+/// The banner over the desk. It takes room from the computers below it,
+/// which then fit their frame again, so one about control moving between
+/// computers (it comes and goes with every crossing) is kept for a few
+/// seconds after it would go: the desk holds still while the pointer goes
+/// back and forth. Anything else (a computer that is away, a missing
+/// permission) goes the moment it ends.
+#[derive(Default)]
+pub(super) struct NoticeHold {
+    shown: Option<(String, String)>,
+    moving: bool,
+    until: f64,
+}
+
+impl NoticeHold {
+    const HOLD: f64 = 4.0;
+
+    pub(super) fn shown(&self) -> Option<&(String, String)> {
+        self.shown.as_ref()
+    }
+
+    /// `fresh` is the banner the status calls for now, `moving` whether that
+    /// is about control moving. Returns how long the banner is still held,
+    /// if it is (the caller draws again then).
+    pub(super) fn update(&mut self, fresh: Option<(String, String)>, moving: bool, now: f64) -> Option<f64> {
+        match fresh {
+            Some(n) => {
+                self.shown = Some(n);
+                self.moving = moving;
+                self.until = now + Self::HOLD;
+                None
+            }
+            None if self.shown.is_some() && self.moving && now < self.until => Some(self.until - now),
+            None => {
+                self.shown = None;
+                None
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::NoticeHold;
+
+    fn n(t: &str) -> Option<(String, String)> {
+        Some((t.into(), String::new()))
+    }
+
+    #[test]
+    fn a_banner_about_moving_control_outlasts_a_crossing_back() {
+        let mut h = NoticeHold::default();
+        assert_eq!(h.update(n("Controlling Mac"), true, 10.0), None);
+        // The pointer came home a moment later: nothing to say, but the desk holds still.
+        let left = h.update(None, false, 11.0).expect("held");
+        assert!((left - 3.0).abs() < 1e-9);
+        assert!(h.shown().is_some());
+        // The next crossing renews it.
+        h.update(n("Mac is controlling this computer"), true, 12.0);
+        assert!(h.update(None, false, 15.0).is_some(), "still held 3 s after the last one");
+        assert_eq!(h.update(None, false, 16.5), None);
+        assert!(h.shown().is_none(), "gone once the hold is over");
+    }
+
+    #[test]
+    fn other_banners_go_the_moment_they_end() {
+        let mut h = NoticeHold::default();
+        h.update(n("Waiting for permission"), false, 10.0);
+        assert_eq!(h.update(None, false, 10.1), None);
+        assert!(h.shown().is_none());
+    }
+
+    #[test]
+    fn a_banner_of_another_kind_replaces_a_held_one_at_once() {
+        let mut h = NoticeHold::default();
+        h.update(n("Controlling Mac"), true, 10.0);
+        h.update(n("Mac is offline"), false, 10.5);
+        assert_eq!(h.update(None, false, 10.6), None, "the offline banner is not held");
+        assert!(h.shown().is_none());
     }
 }

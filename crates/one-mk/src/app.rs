@@ -60,6 +60,9 @@ const LEASE: Duration = Duration::from_millis(750);
 const IDLE: Duration = Duration::from_secs(60);
 /// If a peer doesn't answer `Enter` within this, the pointer comes home.
 const ENTER_TIMEOUT: Duration = Duration::from_millis(750);
+/// An answer to `Enter` later than this is worth a warning: the pointer
+/// stands still on the first computer until it comes.
+const SLOW_ENTER: Duration = Duration::from_millis(120);
 /// `one-mk switch` gives up if the backend doesn't start capturing in this.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
 /// Paired computers that are not connected are dialed again after this,
@@ -1415,6 +1418,19 @@ impl App {
         if self.on_free_edge(id, side, pos) {
             return;
         }
+        if let Some(o) = &self.owner {
+            // While another computer controls this one, the pointer that
+            // reaches the edge is the one it moves here (it comes in at an
+            // edge, and leaves through one), not this computer's own mouse,
+            // which can't be told apart on every system. Crossing now would
+            // hand the pointer back to the controller at a point of its own
+            // choosing and leave both computers thinking they control the
+            // other.
+            let peer = self.peers.get(&o.peer).map_or("", |p| &p.name);
+            tracing::info!(%side, ?pos, peer = %peer, "not crossing: another computer controls this one");
+            self.hand_back(id);
+            return;
+        }
         let Some((armed, _)) = self.armed_at(side, pos) else {
             // Like the wall beside a real monitor: the neighbours on this
             // side are lined up elsewhere along it.
@@ -1728,7 +1744,12 @@ impl App {
         let Some(r) = self.end_visit() else { return };
         self.release_capture(r.activation, pos);
         self.update_sides();
-        tracing::debug!("pointer is home");
+        tracing::debug!(
+            visit_ms = r.entered_at.elapsed().as_millis() as u64,
+            accepted = r.acked,
+            ?pos,
+            "pointer is home"
+        );
     }
 
     /// Like `go_home`, if the visit to `fp` is `epoch`.
@@ -1843,6 +1864,7 @@ impl App {
         let _ = self.inject.send(Inject::Controlled(true));
         let _ = self.inject.send(Inject::MoveTo(pos));
         peer.ctl.send(Control::EnterAck { epoch });
+        tracing::debug!(peer = %peer.name, ?pos, "controlled by a peer");
         if let Some(clip) = &self.services.clip {
             clip.entered(fp, &peer.name);
         }
@@ -1941,6 +1963,7 @@ impl App {
     /// mistaken for it).
     fn end_owner_as(&mut self, revoke: bool, idle: bool) {
         let Some(mut o) = self.owner.take() else { return };
+        tracing::debug!(pos = ?o.pos, revoke, idle, "no longer controlled");
         o.release_all(&self.inject);
         let _ = self.inject.send(Inject::Controlled(false));
         if let Some(p) = self.peers.get(&o.peer).filter(|p| p.id == o.link) {
@@ -2145,6 +2168,12 @@ impl App {
                 }) else {
                     return;
                 };
+                let waited = now.saturating_duration_since(r.entered_at);
+                if waited >= SLOW_ENTER {
+                    tracing::warn!(peer = %self.peers[&fp].name, ms = waited.as_millis() as u64, "the other computer was slow to accept the pointer");
+                } else {
+                    tracing::debug!(ms = waited.as_millis() as u64, "peer accepted the pointer");
+                }
                 r.accepted(&self.peers, now);
                 let peer = &self.peers[&fp];
                 if let Some(clip) = &self.services.clip {
@@ -3020,6 +3049,15 @@ impl App {
             // start) stays armed, so the pointer can come back that way.
             let keep: Vec<Fingerprint> = self.remote.as_ref().map(|r| r.peer).into_iter().chain(switching).collect();
             edges.retain(|(_, fp)| keep.contains(fp));
+        }
+        // While a peer controls this computer no edge is armed (but one a
+        // `switch` is about to use). The pointer the peer moves here comes
+        // in at its edge and leaves through it, and it decides when: an
+        // armed edge only makes the desktop capture the pointer being moved
+        // there (a pause, then a refusal in `on_activated`), which showed as
+        // a lag in the way back.
+        if self.owner.is_some() {
+            edges.retain(|(_, fp)| Some(*fp) == switching);
         }
         // Beside them, the edges where no computer sits, if pointer wrap
         // or layout learning wants them.
@@ -4745,6 +4783,28 @@ mod tests {
         // A later edge crossing is a normal one, not the stale switch.
         duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 100.0) }).unwrap();
         assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 100.0)));
+        duo.stop().await;
+    }
+
+    /// While another computer controls this one, an edge hit is the pointer
+    /// that computer moves here: it is handed back, the control goes on, and
+    /// the controlled computer never starts a crossing of its own.
+    #[tokio::test]
+    async fn an_edge_hit_while_controlled_is_handed_back() {
+        let mut duo = Duo::start("controlled-edge", None).await;
+        duo.enter_b().await;
+        duo.hb.events.send(Event::Activated { id: 7, side: Side::Left, pos: Pos::new(0.0, 540.0) }).unwrap();
+        loop {
+            match next_capture(&mut duo.hb).await {
+                CaptureCmd::Release { id: 7, pos: None } => break,
+                CaptureCmd::Release { id: 7, pos } => panic!("handed back somewhere: {pos:?}"),
+                _ => {}
+            }
+        }
+        // Still controlled by A: its keys arrive, and A was not entered.
+        duo.ha.events.send(Event::Key { code: 42, down: true, device: None }).unwrap();
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code: 42, down: true });
+        assert!(status(&duo.da).await.controlling.is_some(), "A still controls B");
         duo.stop().await;
     }
 
