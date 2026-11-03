@@ -60,6 +60,7 @@ fn qualified(version: &str) -> bool {
 
 struct ShellState { version: String, state: Option<u32>, path: Option<String>, user_extensions: bool, listed: bool }
 
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 /// GNOME's list of switched-on extensions is GVariant text: `['a', 'b']` or
 /// `@as []`. Keeps the other entries exactly as they are.
 fn list_entries(text: &str) -> Vec<String> {
@@ -67,10 +68,12 @@ fn list_entries(text: &str) -> Vec<String> {
         .split(',').map(|entry| entry.trim().trim_matches('\'').to_owned()).filter(|entry| !entry.is_empty()).collect()
 }
 
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 fn list_text(entries: &[String]) -> String {
     format!("[{}]", entries.iter().map(|entry| format!("'{entry}'")).collect::<Vec<_>>().join(", "))
 }
 
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 /// The list with `UUID` switched on, or `None` if it already is.
 fn list_with(text: &str) -> Option<String> {
     let mut entries = list_entries(text);
@@ -79,6 +82,7 @@ fn list_with(text: &str) -> Option<String> {
     Some(list_text(&entries))
 }
 
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 /// The list without `UUID`, or `None` if it isn't there.
 fn list_without(text: &str) -> Option<String> {
     let entries = list_entries(text);
