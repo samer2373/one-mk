@@ -299,8 +299,17 @@ pub fn prune_cache_except(root: &Path, keep: &BTreeSet<String>) -> std::io::Resu
 }
 
 pub fn availability() -> Result<(), &'static str> {
+    // A Wayland session's compositor answers for itself, and the window
+    // asks several times a second: asked again only every few seconds.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() { return detect_availability(); }
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        static RECENT: std::sync::Mutex<Option<(std::time::Instant, Result<(), &'static str>)>> = std::sync::Mutex::new(None);
+        let mut recent = RECENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, result)) = *recent && at.elapsed() < std::time::Duration::from_secs(5) { return result; }
+        let result = detect_availability();
+        *recent = Some((std::time::Instant::now(), result));
+        return result;
+    }
     static AVAILABLE: std::sync::OnceLock<Result<(), &'static str>> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(detect_availability)
 }

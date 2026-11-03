@@ -26,7 +26,11 @@ pub fn available() -> Result<(), &'static str> {
     connection.display().get_registry(&queue.handle(), ());
     let mut probe = Probe::default();
     queue.roundtrip(&mut probe).map_err(|_| "Cannot read the Wayland wallpaper protocols.")?;
-    capabilities(probe.layer_shell, probe.outputs)
+    capabilities(probe.layer_shell, probe.outputs).map_err(|reason| {
+        // GNOME has no layer-shell: say what works there, not the protocol.
+        let gnome = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.to_ascii_lowercase().contains("gnome"));
+        if reason == UNSUPPORTED && gnome { "Video wallpapers aren't available on GNOME Wayland yet. Pictures still work." } else { reason }
+    })
 }
 
 pub fn match_monitor<'a>(monitors: &'a [Monitor], computer: &str, names: &[&str], local: Rect) -> Option<&'a Monitor> {
