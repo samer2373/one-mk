@@ -58,7 +58,7 @@ fn qualified(version: &str) -> bool {
         metadata["one-mk-qualified-shell-versions"].as_array().is_some_and(|versions| versions.contains(&json!(version))))
 }
 
-struct ShellState { version: String, state: Option<u32>, path: Option<String>, user_extensions: bool, owner: String }
+struct ShellState { version: String, state: Option<u32>, path: Option<String>, user_extensions: bool }
 
 fn setup_state(installed: bool, occupied: bool, renderer: bool, expected_path: &Path, shell: Option<&ShellState>) -> GnomeSetup {
     let (stage, message, can_install, can_enable) = match shell {
@@ -194,7 +194,7 @@ pub async fn command(command: &Command) -> Result<Value> {
         }
         Command::Uninstall => {
             #[cfg(all(unix, not(target_os = "macos")))]
-            if let Ok((_, enabled, _)) = shell_state().await && enabled {
+            if let Ok((_, enabled)) = shell_state().await && enabled {
                 bail!("disable first: gnome-extensions disable {UUID}");
             }
             let existed = destination.try_exists().with_context(|| format!("checking extension {}", destination.display()))?;
@@ -214,7 +214,7 @@ pub async fn status() -> Result<Value> {
         "restart_limit_reached": null, "qualified_shell_versions": metadata["one-mk-qualified-shell-versions"],
         "path": destination, "reason": "GNOME session unavailable; runtime state unknown"});
     #[cfg(all(unix, not(target_os = "macos")))]
-    if let Ok((version, enabled, _owner)) = shell_state().await {
+    if let Ok((version, enabled)) = shell_state().await {
         result["enabled"] = json!(enabled);
         result["shell_version"] = json!(version);
         result["qualified"] = json!(metadata["one-mk-qualified-shell-versions"].as_array()
@@ -231,9 +231,9 @@ pub async fn status() -> Result<Value> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-async fn shell_state() -> Result<(String, bool, String)> {
+async fn shell_state() -> Result<(String, bool)> {
     let state = observe_shell().await?;
-    Ok((state.version, state.state == Some(1) && state.user_extensions, state.owner))
+    Ok((state.version, state.state == Some(1) && state.user_extensions))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -246,9 +246,7 @@ async fn observe_shell() -> Result<ShellState> {
         .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=99.0).contains(value)).map(|value| value as u32);
     let path = info.get("path").and_then(|value| <&str>::try_from(value).ok()).map(str::to_owned);
     let user_extensions: bool = extensions.get_property("UserExtensionsEnabled").await?;
-    let bus = zbus::fdo::DBusProxy::new(&connection).await?;
-    let owner = bus.get_name_owner("org.gnome.Shell".try_into()?).await?.to_string();
-    Ok(ShellState { version, state, path, user_extensions, owner })
+    Ok(ShellState { version, state, path, user_extensions })
 }
 
 #[cfg(test)]
@@ -275,7 +273,7 @@ mod tests {
     #[test]
     fn setup_distinguishes_install_logout_enable_and_active_without_authorizing_playback() {
         let path = Path::new("/private/extensions/one-mk-wallpaper@one-mk.org");
-        let mut shell = ShellState { version: "50.1".into(), state: None, path: None, user_extensions: true, owner: ":1.4".into() };
+        let mut shell = ShellState { version: "50.1".into(), state: None, path: None, user_extensions: true };
         let check = |installed, occupied, renderer, shell: &ShellState, expected, install, enable| {
             let setup = setup_state(installed, occupied, renderer, path, Some(shell));
             assert_eq!((setup.stage, setup.can_install, setup.can_enable), (expected, install, enable));
