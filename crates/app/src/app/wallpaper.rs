@@ -180,7 +180,7 @@ impl App {
                 bottom += 28.0;
                 bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &setup.message, regular(T_BODY), INK2);
                 let action = if setup.can_install { Some((one_mk_wallpaper::ExtensionAction::Install, "Install GNOME extension")) }
-                    else if setup.can_enable { Some((one_mk_wallpaper::ExtensionAction::Enable, "Enable GNOME extension")) } else { None };
+                    else if setup.can_enable { Some((one_mk_wallpaper::ExtensionAction::Enable, "Switch on GNOME extension")) } else { None };
                 if let Some((action, label)) = action {
                     bottom += 12.0;
                     let bounds = Rect::from_min_size(pos2(origin.x + 14.0, bottom), vec2(230.0_f32.min(width - 28.0), 32.0));
