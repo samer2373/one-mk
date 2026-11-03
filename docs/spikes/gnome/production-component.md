@@ -1,5 +1,9 @@
 # GNOME component implementation checkpoint — NOT a playback qualification
 
+Historical laboratory notes: the production path now uses authenticated normal
+Wayland windows, not this authority/cgroup design. See the
+[production video report](../../reviews/GNOME-WAYLAND-VIDEO.md) for current support.
+
 ## Offline product setup, not production playback (2026-11-02)
 
 The normal Wallpaper page now observes GNOME setup and offers separate local

@@ -41,11 +41,11 @@ fn destination() -> Result<PathBuf> {
 
 fn bundled_renderer_at(executable: &Path) -> Option<PathBuf> {
     let directory = executable.parent()?;
-    let sibling = directory.join("one-mk-wall");
+    let sibling = directory.join("one-mk-wallpaper");
     if regular(&sibling).is_ok_and(|metadata| metadata.len() > 0) { return Some(sibling); }
     // The .deb keeps optional components outside PATH, and never places the
     // extension in GNOME's system discovery directory (install is consented).
-    let packaged = directory.parent()?.join("lib/one-mk/one-mk-wall");
+    let packaged = directory.parent()?.join("lib/one-mk/one-mk-wallpaper");
     regular(&packaged).is_ok_and(|metadata| metadata.len() > 0).then_some(packaged)
 }
 
@@ -75,14 +75,14 @@ fn setup_state(installed: bool, occupied: bool, renderer: bool, expected_path: &
         Some(shell) if shell.state.is_none() || shell.state == Some(99) => (GnomeStage::LogOutRequired,
             "Log out and back in once to finish. GNOME Wayland loads a newly installed extension in your next session. Then choose Enable here.".into(), false, false),
         Some(shell) if shell.state == Some(1) && shell.user_extensions => (GnomeStage::Active,
-            "The GNOME extension is active. Your own wallpaper remains unchanged until a qualified video session is available.".into(), false, false),
+            "The GNOME extension is active. Choose a video on this page to play it. Off restores your desktop; enabling alone never changes your wallpaper.".into(), false, false),
         Some(shell) if !shell.user_extensions => (GnomeStage::Disabled,
             "GNOME has disabled user extensions. Turn them on in GNOME Extensions, then return here.".into(), false, false),
         Some(shell) if matches!(shell.state, Some(2 | 6)) => (GnomeStage::Disabled,
             "The GNOME extension is installed but disabled. Enable allows its desktop bridge to run; it does not grant video playback or peer access.".into(), false, true),
         Some(shell) => (GnomeStage::Failed, format!("GNOME extension state {} is not active. Check GNOME Extensions for errors.", shell.state.unwrap_or_default()), false, false),
     };
-    GnomeSetup { stage, message: format!("{message} {GNOME_PLAYBACK_UNAVAILABLE}"), can_install, can_enable }
+    GnomeSetup { stage, message, can_install, can_enable }
 }
 
 pub async fn setup() -> Result<GnomeSetup> {
@@ -126,13 +126,13 @@ fn install(destination: &Path, renderer: &Path) -> Result<()> {
             hashes.insert(name.into(), json!(blake3::hash(contents.as_bytes()).to_hex().to_string()));
         }
         std::fs::create_dir(stage.join("libexec"))?;
-        let copied = stage.join("libexec/one-mk-wall");
+        let copied = stage.join("libexec/one-mk-wallpaper");
         std::fs::copy(renderer, &copied)?;
         #[cfg(unix)] {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&copied, std::fs::Permissions::from_mode(0o755))?;
         }
-        hashes.insert("libexec/one-mk-wall".into(), json!(blake3::hash(&std::fs::read(copied)?).to_hex().to_string()));
+        hashes.insert("libexec/one-mk-wallpaper".into(), json!(blake3::hash(&std::fs::read(copied)?).to_hex().to_string()));
         std::fs::write(stage.join(MARKER), serde_json::to_vec(&json!({"uuid": UUID, "version": 1, "files": hashes}))?)?;
         if std::fs::symlink_metadata(destination).is_ok() { bail!("extension appeared during install"); }
         std::fs::rename(&stage, destination)?;
@@ -150,8 +150,8 @@ fn uninstall(destination: &Path) -> Result<()> {
     let manifest: Value = serde_json::from_slice(&std::fs::read(marker)?)?;
     if manifest["uuid"] != UUID || manifest["version"] != 1 { bail!("not a managed one-mk extension"); }
     let mut expected: Vec<&str> = FILES.iter().map(|(name, _)| *name).collect();
-    expected.push("libexec/one-mk-wall");
     let hashes = manifest["files"].as_object().context("invalid installed file list")?;
+    expected.push(if hashes.contains_key("libexec/one-mk-wall") { "libexec/one-mk-wall" } else { "libexec/one-mk-wallpaper" });
     if hashes.len() != expected.len() { bail!("unexpected installed files"); }
     for name in expected {
         let path = destination.join(name);
@@ -190,7 +190,7 @@ pub async fn command(command: &Command) -> Result<Value> {
                 let enabled: bool = extensions.call("EnableExtension", &(UUID,)).await?;
                 ensure!(enabled, "GNOME could not enable the extension. Log out and back in once, then try again.");
             }
-            "GNOME accepted the enable request. The Wallpaper page will detect when the extension is active. Video playback remains unavailable in this build.".into()
+            "GNOME accepted the enable request. When the extension is active, choose a video on the Wallpaper page to start playback.".into()
         }
         Command::Uninstall => {
             #[cfg(all(unix, not(target_os = "macos")))]
@@ -214,21 +214,12 @@ pub async fn status() -> Result<Value> {
         "restart_limit_reached": null, "qualified_shell_versions": metadata["one-mk-qualified-shell-versions"],
         "path": destination, "reason": "GNOME session unavailable; runtime state unknown"});
     #[cfg(all(unix, not(target_os = "macos")))]
-    if let Ok((version, enabled, owner)) = shell_state().await {
+    if let Ok((version, enabled, _owner)) = shell_state().await {
         result["enabled"] = json!(enabled);
         result["shell_version"] = json!(version);
         result["qualified"] = json!(metadata["one-mk-qualified-shell-versions"].as_array()
             .is_some_and(|versions| versions.contains(&json!(version))));
-        result["reason"] = json!(if enabled { "static: daemon presentation plan unavailable" } else { "extension not enabled" });
-        if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
-            let path = PathBuf::from(runtime).join("one-mk-wallpaper/status.json");
-            if regular(&path).is_ok_and(|metadata| metadata.len() <= 4096) &&
-                let Ok(contents) = std::fs::read(path) && let Ok(state) = serde_json::from_slice::<Value>(&contents) &&
-                state["shell_owner"] == owner {
-                result["restart_limit_reached"] = state["restart_limit_reached"].clone();
-                result["reason"] = state["reason"].clone();
-            }
-        }
+        result["reason"] = json!(if enabled { "ready for a video selected on the Wallpaper page" } else { "extension not enabled" });
     }
     result["ok"] = json!(true);
     result["setup"] = serde_json::to_value(setup().await?)?;
@@ -271,7 +262,7 @@ mod tests {
         std::fs::write(&renderer, "test renderer").unwrap();
         let destination = home.path().join("data/gnome-shell/extensions").join(UUID);
         install(&destination, &renderer).unwrap();
-        assert!(destination.join("libexec/one-mk-wall").is_file());
+        assert!(destination.join("libexec/one-mk-wallpaper").is_file());
         assert!(install(&destination, &renderer).is_err());
         std::fs::write(destination.join("foreign"), "keep me").unwrap();
         assert!(uninstall(&destination).is_err());
@@ -288,7 +279,7 @@ mod tests {
         let check = |installed, occupied, renderer, shell: &ShellState, expected, install, enable| {
             let setup = setup_state(installed, occupied, renderer, path, Some(shell));
             assert_eq!((setup.stage, setup.can_install, setup.can_enable), (expected, install, enable));
-            assert!(setup.message.contains(GNOME_PLAYBACK_UNAVAILABLE));
+            assert!(!setup.message.contains("not connected to the production service"));
             setup
         };
         check(false, false, true, &shell, GnomeStage::NotInstalled, true, false);
@@ -326,11 +317,11 @@ mod tests {
         let binary = root.path().join("usr/bin/one-mk");
         std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
         assert!(bundled_renderer_at(&binary).is_none());
-        let packaged = root.path().join("usr/lib/one-mk/one-mk-wall");
+        let packaged = root.path().join("usr/lib/one-mk/one-mk-wallpaper");
         std::fs::create_dir_all(packaged.parent().unwrap()).unwrap();
         std::fs::write(&packaged, "renderer").unwrap();
         assert_eq!(bundled_renderer_at(&binary), Some(packaged));
-        let sibling = binary.with_file_name("one-mk-wall");
+        let sibling = binary.with_file_name("one-mk-wallpaper");
         std::fs::write(&sibling, "renderer").unwrap();
         assert_eq!(bundled_renderer_at(&binary), Some(sibling));
     }
@@ -353,22 +344,24 @@ mod tests {
         let metadata: Value = serde_json::from_str(FILES[0].1).unwrap();
         assert_eq!(metadata["one-mk-qualified-shell-versions"], json!(["50.1"]));
         let source = FILES[1].1;
-        assert!(source.contains("this._authorized = false"));
+        assert!(source.contains("this._client = null"));
+        assert!(source.contains("window.get_pid() !== client.pid"));
+        assert!(source.contains("uid !== new Gio.Credentials().get_unix_user()"));
+        assert!(source.contains("Config.PACKAGE_VERSION !== '50.1'"));
         for forbidden in ["unsafe_mode", "FrameReady", "startRenderer(argv)", "damageTimes", "unlock-dialog"] {
             assert!(!source.contains(forbidden), "{forbidden}");
         }
     }
 
     #[test]
-    fn lifecycle_stops_are_cooperative_and_sleep_or_holding_are_understood() {
+    fn shell_only_presents_windows_and_cleans_up_on_sender_loss_or_disable() {
         let source = FILES[1].1;
-        // SIGTERM first (the renderer removes its worker and cgroup), SIGKILL
-        // only after the grace period; never an immediate force-exit.
-        for required in ["process.send_signal(15)", "TERMINATE_GRACE_MS = 2000", "process.force_exit()",
-            "'prepare-for-sleep'", "this._login.preparingForSleep ? 8", "const PLAYING = 1, HOLDING = 4",
-            "value > HOLDING", "renderer.serial !== this._serial"] {
+        for required in ["'NameOwnerChanged'", "name === this._client?.sender && !owner", "disable() {",
+            "this._stop();", "entry.box?.destroy()", "this._object.unexport()"] {
             assert!(source.contains(required), "{required}");
         }
-        assert!(!source.contains("process?.force_exit()"));
+        for forbidden in ["Gio.Subprocess", "force_exit", "send_signal", "gsettings", "DConf", "Gst."] {
+            assert!(!source.contains(forbidden), "{forbidden}");
+        }
     }
 }

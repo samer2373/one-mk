@@ -21,16 +21,29 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Probe {
 }
 
 pub fn available() -> Result<(), &'static str> {
+    if crate::gnome_wayland() {
+        return std::thread::spawn(|| gnome_connection().map(|_| ())).join().ok()
+            .and_then(Result::ok).ok_or(crate::GNOME_PLAYBACK_UNAVAILABLE);
+    }
     let connection = Connection::connect_to_env().map_err(|_| "Cannot connect to the Wayland compositor for wallpaper playback.")?;
     let mut queue = connection.new_event_queue();
     connection.display().get_registry(&queue.handle(), ());
     let mut probe = Probe::default();
     queue.roundtrip(&mut probe).map_err(|_| "Cannot read the Wayland wallpaper protocols.")?;
-    capabilities(probe.layer_shell, probe.outputs).map_err(|reason| {
-        // GNOME has no layer-shell: say what works there, not the protocol.
-        let gnome = std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.to_ascii_lowercase().contains("gnome"));
-        if reason == UNSUPPORTED && gnome { "Video wallpapers aren't available on GNOME Wayland yet. Pictures still work." } else { reason }
-    })
+    capabilities(probe.layer_shell, probe.outputs)
+}
+
+pub const GNOME_NAME: &str = "org.onemk.WallpaperVideo1";
+pub const GNOME_PATH: &str = "/org/onemk/WallpaperVideo1";
+
+pub fn gnome_connection() -> anyhow::Result<zbus::blocking::Connection> {
+    let connection = zbus::blocking::connection::Builder::session()?.method_timeout(std::time::Duration::from_secs(2)).build()?;
+    let bus = zbus::blocking::fdo::DBusProxy::new(&connection)?;
+    anyhow::ensure!(bus.get_name_owner(GNOME_NAME.try_into()?)? == bus.get_name_owner("org.gnome.Shell".try_into()?)?, "The wallpaper bridge does not belong to GNOME Shell");
+    let proxy = zbus::blocking::Proxy::new(&connection, GNOME_NAME, GNOME_PATH, GNOME_NAME)?;
+    let version: String = proxy.call("Inspect", &())?;
+    anyhow::ensure!(version == "50.1", "GNOME Shell {version} has not been qualified for video wallpaper");
+    Ok(connection)
 }
 
 pub fn match_monitor<'a>(monitors: &'a [Monitor], computer: &str, names: &[&str], local: Rect) -> Option<&'a Monitor> {

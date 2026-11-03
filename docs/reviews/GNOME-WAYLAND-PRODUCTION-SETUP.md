@@ -147,3 +147,8 @@ Real video across this laptop's monitors, Fit, peer clock alignment, lock and
 battery pause/restoration, covered CPU and hardware decode remain **unverified
 and unimplemented in the product**. They are not acceptance checks this branch
 can honestly pass.
+# Historical setup checkpoint
+
+The setup-only limitations below are superseded by the production video
+implementation and private-session evidence in [GNOME-WAYLAND-VIDEO.md](GNOME-WAYLAND-VIDEO.md).
+The earlier laboratory component is no longer the production presentation path.

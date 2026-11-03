@@ -64,6 +64,14 @@ struct State {
 }
 
 impl State {
+    fn replace_player(&mut self, exclusive: bool) {
+        if let Some(mut child) = self.player.take() {
+            if !exclusive && self.status.computers.get(&self.computer).is_some_and(Playback::is_ready) { self.retiring.push(child); }
+            else { let _ = child.kill(); let _ = child.wait(); }
+        }
+        if exclusive { self.retire(); }
+        self.launch += 1;
+    }
     fn retire(&mut self) {
         for mut child in self.retiring.drain(..) {
             if let Some(mut input) = child.stdin.take() { let _ = writeln!(input, "quit"); }
@@ -501,11 +509,7 @@ impl Runtime {
         let same_but_paused = state.coordinator == coordinator && state.player.is_some()
             && state.status.plan.as_ref().is_some_and(|old| Plan { paused: plan.paused, ..old.clone() } == plan);
         if !same_but_paused {
-            if let Some(mut child) = state.player.take() {
-                if state.status.computers.get(&state.computer).is_some_and(Playback::is_ready) { state.retiring.push(child); }
-                else { let _ = child.kill(); let _ = child.wait(); }
-            }
-            state.launch += 1;
+            state.replace_player(one_mk_wallpaper::gnome_wayland());
         }
         state.previous = state.status.plan.as_ref().map(|old| old.hash.clone()).filter(|hash| hash != &plan.hash).or(state.previous.take());
         state.computer = computer;
@@ -1066,6 +1070,21 @@ mod tests {
         std::fs::write(&path, b"second").unwrap(); assert_ne!(digest(&path).unwrap(), first);
         let replacement = directory.path().join("replacement"); std::fs::write(&replacement, b"third").unwrap();
         std::fs::rename(replacement, &path).unwrap(); assert_ne!(digest(&path).unwrap(), first);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exclusive_presentation_reaps_previous_and_retiring_players_before_replacement() {
+        let previous = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let retiring = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let pids = [previous.id(), retiring.id()];
+        let mut state = State::default();
+        state.player = Some(previous); state.retiring = vec![retiring]; state.computer = "host".into();
+        state.status.computers.insert("host".into(), Playback::Ready);
+        state.replace_player(true);
+        assert!(state.player.is_none() && state.retiring.is_empty());
+        assert_eq!(state.launch, 1);
+        for pid in pids { assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1); }
     }
 
     #[cfg(unix)]

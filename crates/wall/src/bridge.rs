@@ -4,7 +4,7 @@ pub const NAME: &str = "org.onemk.WallpaperBridge1";
 pub const PATH: &str = "/org/onemk/WallpaperBridge1";
 pub const VERSION: u32 = 1;
 pub const MAX_PAYLOAD: usize = 4096;
-pub const XML: &str = include_str!("../../../extensions/gnome/one-mk-wallpaper@one-mk.org/bridge.xml");
+pub const XML: &str = include_str!("legacy-bridge.xml");
 pub type Monitor = (i32, i32, i32, i32, f64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

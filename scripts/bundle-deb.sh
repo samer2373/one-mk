@@ -13,7 +13,6 @@ trap 'rm -rf "$tmp"' EXIT
 root="$tmp/pkg"
 install -d "$root/DEBIAN" "$root/usr/bin" "$root/usr/share/applications" "$root/usr/share/icons/hicolor/256x256/apps"
 install -m 755 "$dir/one-mk" "$dir/one-mk-tray" "$dir/one-mk-app" "$dir/one-mk-wallpaper" "$root/usr/bin/"
-install -D -m 755 "$dir/one-mk-wall" "$root/usr/lib/one-mk/one-mk-wall"
 # Outside GNOME's discovery folders: only an explicit user Install action
 # copies this bridge into ~/.local/share/gnome-shell/extensions.
 extension=one-mk-wallpaper@one-mk.org
@@ -60,7 +59,7 @@ CONTROL
 
 dpkg-deb --root-owner-group --build "$root" "$out" >/dev/null
 listing=$(dpkg-deb -c "$out")
-for f in usr/bin/one-mk usr/share/applications/one-mk.desktop "$app_entry" usr/lib/one-mk/one-mk-wall \
+for f in usr/bin/one-mk usr/share/applications/one-mk.desktop "$app_entry" usr/bin/one-mk-wallpaper \
     "usr/share/one-mk/gnome-extension/$extension/extension.js" "usr/share/one-mk/gnome-extension/$extension/bridge.xml" \
     "usr/share/one-mk/gnome-extension/$extension/metadata.json"; do
     echo "$listing" | grep -q " \./$f\$" || { echo "bundle-deb.sh: $out is missing /$f" >&2; exit 1; }

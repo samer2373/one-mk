@@ -24,8 +24,6 @@ package exactly the same binaries:
 
 ```sh
 cargo build --release --locked -j 2 -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
-# Linux .deb additionally requires the dormant GNOME renderer (never m1-lab):
-cargo build --release --locked -j 2 -p one-mk-wall --features gnome-bridge
 sh scripts/bundle-deb.sh target/release one-mk-x86_64-unknown-linux-gnu.deb   # Linux, from the checkout
 sh scripts/bundle-mac.sh target/release one-mk-aarch64-apple-darwin.app.zip   # macOS, also writes the .dmg
 sh scripts/package-appimage.sh      # dist/, see below
@@ -236,9 +234,9 @@ install`, run as yourself, writes the user service and the tray's autostart
 entry (and its own copy of the hidden entry) into the home folder. It is
 built on ubuntu-22.04 (glibc 2.35), the oldest distribution it is meant for.
 
-The optional GNOME component is offline: `/usr/lib/one-mk/one-mk-wall` and
-`/usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/` contain the
-dormant renderer, extension sources, bridge XML, metadata and licences.
+The optional GNOME component is offline: `/usr/bin/one-mk-wallpaper` is the
+production renderer and `/usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/`
+contains extension sources, bridge XML, metadata and licences.
 Nothing is copied into GNOME's discovery directories by the package. The
 Wallpaper page offers **Install GNOME extension**, then says **Log out and
 back in once to finish**, then offers a separate **Enable GNOME extension**.
@@ -247,11 +245,13 @@ Installation uses embedded extension sources from the same build and the
 bundled renderer, never downloads or runs a shell command. A Linux tarball
 also includes a sibling renderer and the optional component payload.
 
-**This is setup scaffolding, not production Wayland video support.** Enabling
-the bridge does not authorize a renderer. Video selection on GNOME Wayland
-still fails closed, before preparation starts; pictures remain supported.
-The page says this even when the extension is active. See
-[the production setup report](reviews/GNOME-WAYLAND-PRODUCTION-SETUP.md).
+On qualified **GNOME Shell 50.1**, selecting a video after explicit Enable starts
+the production helper. Enabling alone starts nothing. The extension authenticates
+the registering process and its tokenized windows, then clones their content
+behind applications without changing the native wallpaper. Off, renderer exit
+and extension disable remove the clones. Other Shell versions fail closed;
+pictures remain supported without the extension. See
+[the video qualification report](reviews/GNOME-WAYLAND-VIDEO.md).
 AppImage/Flatpak staging is not extended with this component in this change.
 
 ## AppImage

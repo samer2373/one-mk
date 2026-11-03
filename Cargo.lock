@@ -3558,6 +3558,7 @@ dependencies = [
  "serde_json",
  "wayland-client",
  "windows",
+ "zbus",
 ]
 
 [[package]]
@@ -3587,6 +3588,7 @@ dependencies = [
  "windows",
  "windows-core",
  "x11-dl",
+ "zbus",
  "zune-core",
  "zune-jpeg",
 ]

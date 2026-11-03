@@ -80,7 +80,8 @@ def main():
             assert time.monotonic() < deadline, state
             time.sleep(0.05)
         assert state["enabled"], state
-        assert "not connected to the production service" in state["setup"]["message"]
+        assert "video" in state["setup"]["message"].lower()
+        assert "not connected to the production service" not in state["setup"]["message"]
         assert background() == before
         assert cli("uninstall", check=False).returncode != 0
         report["checks"].append("next private session discovers extension; explicit Enable becomes active; active uninstall refused")

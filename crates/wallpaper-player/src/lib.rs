@@ -172,7 +172,7 @@ pub struct GnomeSetup { pub stage: GnomeStage, pub message: String, pub can_inst
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionAction { Install, Enable }
 
-pub const GNOME_PLAYBACK_UNAVAILABLE: &str = "Video playback on GNOME is not connected to the production service in this build. Pictures still work.";
+pub const GNOME_PLAYBACK_UNAVAILABLE: &str = "GNOME video needs the oneMK extension on qualified GNOME Shell 50.1. Open Wallpaper, choose Install GNOME extension, log out and back in once, then choose Enable GNOME extension. Pictures still work without it.";
 
 pub fn gnome_wayland() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop|

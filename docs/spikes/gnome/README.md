@@ -1,5 +1,11 @@
 # Private GNOME component laboratory
 
+Current production-video qualification: `qualify-production-video.py` uses the
+isolated session below, production CLI/helper, screenshots and lifecycle/CPU
+checks. `node --test docs/spikes/gnome/test_production_video.mjs` tests admission
+and cleanup without Shell. See [the production report](../../reviews/GNOME-WAYLAND-VIDEO.md).
+The authority/cgroup experiments elsewhere in this directory are historical.
+
 This directory contains an **isolated headless Mutter** harness, not instructions
 for manipulating the owner's running desktop. Read `production-component.md`,
 `../../WALLPAPER-DESIGN.md` revision 2 and
