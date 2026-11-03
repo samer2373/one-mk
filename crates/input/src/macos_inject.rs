@@ -316,16 +316,6 @@ impl Injector {
     }
 }
 
-#[cfg(test)]
-mod typing_capability_tests {
-    #[test]
-    fn selected_native_backend_advertises_text_and_character_holds() {
-        let keyboard = super::keyboard_layout().expect("native backend must advertise a keyboard even before layout discovery");
-        assert!(keyboard.can_inject());
-        assert!(keyboard.native_text());
-    }
-}
-
 /// Puts the cursor at `p` (global points) when it comes back from another
 /// computer. `CGDisplayMoveCursorToPoint` on the display that holds `p`, not
 /// `CGWarpMouseCursorPosition`: after a warp macOS ignores the mouse for about
@@ -346,4 +336,14 @@ fn move_cursor(p: Pos) {
         }
     }
     let _ = CGWarpMouseCursorPosition(at);
+}
+
+#[cfg(test)]
+mod typing_capability_tests {
+    #[test]
+    fn selected_native_backend_advertises_text_and_character_holds() {
+        let keyboard = super::keyboard_layout().expect("native backend must advertise a keyboard even before layout discovery");
+        assert!(keyboard.can_inject());
+        assert!(keyboard.native_text());
+    }
 }
