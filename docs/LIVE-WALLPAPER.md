@@ -111,7 +111,10 @@ are retained alongside the video cache.
   `CGDisplayCreateUUIDFromDisplayID` UUID rather than transient screen numbers.
 - Windows: `IDesktopWallpaper` monitor device paths matched by rectangle, with
   the previous URLs, wallpaper position and background color saved for restoration.
-- Linux: GNOME-compatible `gsettings` picture-uri, picture-uri-dark and spanned
+- Linux layer-shell: oneMK-owned background surfaces, using the original picture
+  bundle and the same canvas crop as video. No desktop wallpaper settings are
+  changed; closing the helper immediately reveals the existing background.
+- Linux GNOME: GNOME-compatible `gsettings` picture-uri, picture-uri-dark and spanned
   positioning. Assemble local slices into one spanned image where per-monitor
   setting is unavailable; save and restore all three settings. This also works
   independently of the unavailable GNOME Wayland video backend.
@@ -246,8 +249,49 @@ the system wallpaper. Battery and user pause do not affect a still picture.
 | Windows | WorkerW children, one IMFMediaEngine/D3D11 decode, per-monitor GPU TransferVideoFrame, flip-sequential double-buffered swapchains with frame-latency waits and source-fps pacing. WM_DISPLAYCHANGE/WM_DPICHANGED rebuild outputs; foreground rectangle coverage and shell presentation state hold playback; power notifications and battery-saver SystemStatusFlag hold it too. | MSVC compile-check only. Real first-frame display, wait-handle pacing, fullscreen/multi-monitor coverage, hotplug/DPI, native images/import and battery saver are unverified on Windows hardware. No per-frame CPU readback; poster generation still reads back once. |
 | Linux X11 | One desktop/below/sticky window per monitor, one GStreamer decode/downscale before tee, bounded two-frame queues, per-slice crop/scale/XImage sinks and event-driven pause. | Xvfb seams, loops, coverage pause/resume and parent EOF verified. This is still CPU colorspace/crop/presentation, not a zero-copy GPU path. VA decode is preferred when a render device is visible. Legacy NVIDIA factories are not selected: their CUDA-memory negotiation failed the XImage path in a diagnostic run; a compatible GPU-download/presentation path remains work. |
 | GNOME Wayland | Native pictures via GNOME settings; video unavailable | No production Shell extension is supplied. |
-| KDE Wayland | Unavailable | No Plasma adapter. |
-| wlroots / COSMIC / Hyprland | Unavailable | No layer-shell video backend or native picture adapter. |
+| Layer-shell Wayland (Plasma 6, Sway, Hyprland, river, labwc, Wayfire, niri, COSMIC) | Registry-detected BACKGROUND surfaces per selected output; system-GStreamer appsink video and shared-memory picture/video presentation. | Private headless Sway 1.11 / wlroots 0.19.2, pixman: advancing 1080p video, exact picture seams, Fit/Fill/Stretch, pause/play, output disable/re-enable, scale 2, window occlusion and Off/parent EOF. Other listed compositors, including KDE, have not been runtime-tested. CPU copies are used; this is not zero-copy GPU presentation. |
+
+### Layer-shell backend
+
+Availability connects to the current Wayland registry and requires
+`zwlr_layer_shell_v1` and `wl_output`, not a desktop-name allowlist. Missing
+layer-shell keeps video unavailable, including on GNOME. Output connector names
+come from `wl_output.name` or optional `zxdg_output_v1.name`; older oneMK plans
+whose monitor names are numbered use unique local logical geometry instead.
+Ambiguous outputs are never assigned by enumeration order. Each surface has all
+four anchors, exclusive zone -1, no keyboard interactivity and an empty input
+region. Physical buffers respect output scale; global canvas slices do not
+reflow when an output disappears.
+
+One dynamically loaded GStreamer pipeline decodes to a bounded BGRx appsink.
+The helper copies the latest sample into released `wl_shm` buffers, using the
+shared canvas Fit/Fill/Stretch mapping. It never embeds a foreign window through
+`waylandsink` and does not link or bundle FFmpeg, libmpv or x264. Videos require
+the system GStreamer core, video and app libraries plus plugins that can decode
+the selected file (`uridecodebin`, `queue`, `videoconvert`, `appsink`). Pictures
+do not load GStreamer and report `Playback::Picture`.
+
+Video pause changes the existing pipeline to PAUSED. Resume seeks to the shared
+clock; two-second drift checks use the existing calibrated-clock correction.
+With no matched output the pipeline also pauses. The event loop blocks on
+Wayland, stdin, GStreamer and power notifications: no periodic wakeups while
+paused, idle or showing a picture. On the isolated two-output 1080p/30 VP8 run,
+helper CPU was 26.5% of one core playing and 0.0% paused, without outputs or
+showing a picture (6/5/3/3 second samples respectively; not compositor CPU). Hardware decoding,
+fractional-scale quality and cross-computer timing on physical displays remain
+unmeasured. Output removal was verified through disable/re-enable; headless
+`unplug` was unstable in this Sway build and is not claimed as verified.
+
+`scripts/test-layer-shell-wallpaper.py` reproduces the acceptance checks against
+an already running **private** headless Sway. It requires Pillow, system
+`gst-launch-1.0` with VP8/timeoverlay plugins, and extracted `sway`, `grim` and
+`foot` packages. Pass `--runtime` (a mode-0700 directory under `/tmp`),
+`--prefix`, `--helper` and `--evidence`. It generates its test clip if needed,
+writes screenshots plus `results.json`, and never uses the owner's desktop
+runtime or wallpaper settings. Run Sway with `WLR_BACKENDS=headless`,
+`WLR_RENDERER=pixman`, `WLR_HEADLESS_OUTPUTS=1`, a private `XDG_RUNTIME_DIR`,
+and an `xwayland disable` configuration. Configure HEADLESS-1 as 960x1080 at
+0,0; the harness creates/configures a second 960x720 output at 960,0.
 
 Remaining limits include true per-monitor density transport: ctl conversion
 still uses scale 1. The Mac layer itself uses NSScreen's real backing scale,

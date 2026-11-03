@@ -73,10 +73,10 @@ fn main() -> Result<()> {
         println!("{}", serde_json::to_string(&media)?);
         return Ok(());
     }
-    one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?;
     let path = arguments.first().context("Missing wallpaper plan")?;
     let config: PlayerConfig = serde_json::from_slice(&std::fs::read(path)?)?;
     anyhow::ensure!(config.plan.valid(), "Invalid wallpaper plan");
+    if !config.plan.picture { one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?; }
     let result = platform_run(config, input());
     if let Err(error) = &result { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Error(error.to_string())); }
     result

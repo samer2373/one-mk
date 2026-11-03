@@ -357,6 +357,13 @@ impl Runtime {
         else if status.plan.as_ref().is_some_and(|plan| plan.picture) && status.computers.values().any(|playback| playback == &Playback::Picture) {
             status.message += ". Some computers show this picture with oneMK; their own wallpaper returns when you turn it off";
         }
+        #[cfg(target_os = "linux")]
+        if state.player.is_some() && std::env::var_os("WAYLAND_DISPLAY").is_some()
+            && status.computers.get(&state.computer).is_some_and(Playback::is_ready)
+            && let Some(directory) = &state.directory
+            && let Ok(message) = std::fs::read_to_string(cache(directory).join("playback.txt"))
+            && message.len() <= 4096 && (message.contains("oneMK") || message.contains("Wayland outputs:"))
+        { status.message = message; }
         if let Some((name, progress)) = &state.progress {
             use std::sync::atomic::Ordering::Relaxed;
             let total = progress.total.load(Relaxed);
@@ -427,7 +434,7 @@ impl Runtime {
             } else if let Some(plan) = state.status.plan.as_ref() { state.status.message = plan.playing_message(); }
             return Ok(());
         }
-        one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?;
+        if !plan.picture { one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?; }
         let config = PlayerConfig { plan: plan.clone(), computer: state.computer.clone(), path: cache_path(&cache(dir), if plan.picture { plan.asset_hash.as_ref().unwrap_or(&plan.hash) } else { &plan.hash })?, clock_offset_ms: state.offset };
         let config_path = cache(dir).join("player.json");
         let _ = std::fs::remove_file(cache(dir).join("playback.txt"));
