@@ -156,7 +156,10 @@ export default class WallpaperVideo extends Extension {
     _stop() {
         this._generation++;
         this._client = null;
+        // No handler of ours outlives this: the renderer sees the name go
+        // and exits, and a disabled extension leaves nothing attached.
         for (const entry of this._windows.values()) {
+            entry.actor.disconnectObject(entry);
             entry.box?.destroy();
             entry.box = null;
         }
