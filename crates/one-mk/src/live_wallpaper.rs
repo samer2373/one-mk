@@ -57,6 +57,9 @@ struct State {
     pending: Option<(Fingerprint, Plan)>,
     awaiting: BTreeSet<(Fingerprint, String)>,
     applied_picture: Option<Plan>,
+    /// A video this computer can't play yet is shown as a still of its first
+    /// frame meanwhile (GNOME before its extension is set up).
+    still_fallback: bool,
     picture_mode: one_mk_wallpaper::picture::Mode,
     extension_check: Option<std::time::Instant>,
     extension_checking: bool,
@@ -206,6 +209,37 @@ fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
     })();
     let _ = std::fs::remove_file(temporary);
     if let Ok(hash) = &result { std::fs::write(index, hash)?; }
+    result
+}
+
+/// Whether a video this computer can't play can show a still of its first
+/// frame instead, through the same native picture path a chosen picture uses
+/// (restorable, no player). False when video plays here, this computer isn't
+/// selected, or pictures can't be set either (GNOME before its extension).
+fn can_show_still(plan: &Plan, computer: &str) -> bool {
+    !plan.picture && plan.computers.iter().any(|id| id == computer)
+        && one_mk_wallpaper::availability().is_err() && one_mk_wallpaper::picture::available()
+}
+
+/// Cuts and sets the video's first frame for this computer's screens. Returns
+/// whether it is a native wallpaper (an overlay would need a running helper,
+/// so that case is refused rather than started).
+fn apply_still(dir: &Path, plan: &Plan, computer: &str) -> Result<bool> {
+    let video = cache_path(&cache(dir), &plan.hash)?;
+    let key = format!("{}-{}", plan.hash, crate::link::random_u64());
+    let frame = cache(dir).join(format!("still-{key}.png"));
+    let bundle = cache(dir).join(format!("still-{key}.part"));
+    let result = (|| -> Result<bool> {
+        // Large enough for this computer's own span of the canvas at its scale.
+        let width = plan.canvas.monitors.iter().filter(|monitor| monitor.computer == computer)
+            .map(|monitor| (monitor.local.unwrap_or(monitor.rect).width * monitor.scale).ceil() as u32).sum::<u32>().clamp(1280, 3840);
+        let media = one_mk_wallpaper::picture::still(&helper()?, &video, &frame, width)?;
+        let still = Plan { picture: true, asset_hash: None, media, ..plan.clone() };
+        one_mk_wallpaper::picture::prepare(&helper()?, &frame, &still, computer, &bundle)?;
+        Ok(one_mk_wallpaper::picture::apply(&helper()?, &still, computer, &bundle, &cache(dir).join("pictures"))? == one_mk_wallpaper::picture::Mode::Native)
+    })();
+    let _ = std::fs::remove_file(frame);
+    let _ = std::fs::remove_file(bundle);
     result
 }
 
@@ -490,17 +524,26 @@ impl Runtime {
         {
             let state = self.state.lock().unwrap();
             ensure!(state.generation == generation, "Wallpaper selection changed");
-            if state.coordinator == coordinator && state.status.plan.as_ref() == Some(&plan) && (state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.as_ref() == Some(&plan) || state.player.is_some()) { return Ok(()); }
+            if state.coordinator == coordinator && state.status.plan.as_ref() == Some(&plan) && (state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.as_ref() == Some(&plan) || state.player.is_some() || state.still_fallback) { return Ok(()); }
         }
         let previous_mode = {
             let state = self.state.lock().unwrap();
             (state.coordinator == coordinator && state.applied_picture.as_ref().is_some_and(|old|
                 Plan { paused: plan.paused, pause_on_battery: plan.pause_on_battery, ..old.clone() } == plan)).then_some(state.picture_mode)
         };
+        let mut still_shown = false;
         let mode = if plan.picture && plan.computers.contains(&computer) {
             if let Some(mode) = previous_mode { mode } else {
                 one_mk_wallpaper::picture::apply(&helper()?, &plan, &computer, &cache_path(&cache(dir), plan.asset_hash.as_ref().unwrap_or(&plan.hash))?, &cache(dir).join("pictures"))?
             }
+        } else if can_show_still(&plan, &computer) {
+            // Setting a still can fail (no gsettings, odd poster): the video's
+            // own error still reaches the owner, just without a still.
+            match apply_still(dir, &plan, &computer) {
+                Ok(shown) => { still_shown = shown; }
+                Err(error) => { eprintln!("wallpaper: could not show a still of the video: {error:#}"); restore_picture(&cache(dir).join("pictures"))?; }
+            }
+            one_mk_wallpaper::picture::Mode::Native
         } else { restore_picture(&cache(dir).join("pictures"))?; one_mk_wallpaper::picture::Mode::Native };
         let mut state = self.state.lock().unwrap();
         ensure!(state.generation == generation, "Wallpaper selection changed");
@@ -520,6 +563,7 @@ impl Runtime {
         let hash = plan.hash.clone();
         state.applied_picture = plan.picture.then(|| plan.clone());
         state.picture_mode = mode;
+        state.still_fallback = still_shown;
         state.status.plan = Some(plan);
         let selected = state.status.plan.as_ref().unwrap().computers.clone();
         state.status.computers.retain(|computer, _| selected.contains(computer));
@@ -530,6 +574,7 @@ impl Runtime {
         prune_selection(dir, state.status.plan.as_ref().unwrap(), state.previous.as_deref())?;
         if let Err(error) = Self::start(dir, &mut state) {
             let computer = state.computer.clone();
+            let error = if still_shown { anyhow::anyhow!("{error} Until then this computer shows a still of the video.") } else { error };
             state.status.computers.insert(computer, Playback::Error(error.to_string()));
             return Err(error);
         }
@@ -611,7 +656,7 @@ impl Runtime {
                 state.status.computers.clear();
                 state.authority_off = true;
                 state.connections.clear();
-                state.pending = None; state.awaiting.clear(); state.applied_picture = None;
+                state.pending = None; state.awaiting.clear(); state.applied_picture = None; state.still_fallback = false;
                 if let Some(inbox) = &state.inbox { inbox.forget_wallpaper(); }
             }
             state.generation
@@ -779,7 +824,7 @@ impl Runtime {
                     let result = restore_picture(&root);
                     if let Err(error) = result { let mut state = runtime.state.lock().unwrap(); if state.generation == generation { state.status.message = error.to_string(); } }
                 });
-                state.pending = None; state.applied_picture = None;
+                state.pending = None; state.applied_picture = None; state.still_fallback = false;
                 if let Some(inbox) = &state.inbox { inbox.forget_wallpaper(); }
                 state.status.computers.clear();
                 state.progress = None;
@@ -797,7 +842,7 @@ impl Runtime {
                     inbox.expect_wallpaper(sender, current, &hash);
                     send(&control, &Wire::PlanReady { hash: hash.clone() });
                     if state.pending.as_ref().is_some_and(|(peer, pending)| *peer == sender && same_playback_plan(pending, &plan)) { return; }
-                    if state.coordinator == Some(sender) && state.status.plan.as_ref().is_some_and(|active| same_playback_plan(active, &plan)) && (state.player.is_some() || state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.is_some()) {
+                    if state.coordinator == Some(sender) && state.status.plan.as_ref().is_some_and(|active| same_playback_plan(active, &plan)) && (state.player.is_some() || state.still_fallback || state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.is_some()) {
                         state.report_to = Some(control.clone());
                         if let Some(playback) = state.status.computers.get(&computer) { send(&control, &Wire::Playback { hash: plan.hash.clone(), playback: playback.clone() }); }
                         return;

@@ -164,6 +164,16 @@ impl App {
             }
 
             let mut bottom = fills.bottom().max(play_on.bottom());
+            // A row only says "can't play it here" (the sentence hides in a
+            // hover): other computers' reasons are written out in full, with
+            // the computer's name, so what to do about it can be read.
+            for (id, name, online) in &computers {
+                if let Some(one_mk_wallpaper::Playback::Error(reason)) = wallpaper.computers.get(id)
+                    && *online && plan.is_none_or(|plan| plan.computers.contains(id)) && reason != &wallpaper.message {
+                    bottom += 14.0;
+                    bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &format!("{name}: {reason}"), regular(T_BODY), WARN);
+                }
+            }
             if let Some(setup) = &wallpaper.gnome {
                 bottom += 22.0;
                 ui.painter().text(pos2(origin.x + 14.0, bottom), Align2::LEFT_TOP, "GNOME video setup", regular(T_BODY), INK);

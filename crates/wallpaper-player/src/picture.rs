@@ -86,6 +86,18 @@ pub fn inspect(helper: &Path, path: &Path, poster: &Path) -> Result<Media> {
     Ok(media)
 }
 
+/// Writes the first frame of `video` as a PNG about `width` pixels wide and
+/// returns its exact dimensions (Linux helper; GStreamer decodes it).
+pub fn still(helper: &Path, video: &Path, output: &Path, width: u32) -> Result<Media> {
+    ensure!(run(Command::new(helper).arg("--still").arg(video).arg(output).arg(width.to_string()), Duration::from_secs(40))?.is_empty(), "Unexpected still helper output");
+    let mut header = [0_u8; 24];
+    std::fs::File::open(output)?.read_exact(&mut header).context("The first-frame still is not a picture")?;
+    ensure!(&header[..8] == b"\x89PNG\r\n\x1a\n" && &header[12..16] == b"IHDR", "The first-frame still is not a PNG");
+    let (width, height) = (u32::from_be_bytes(header[16..20].try_into()?), u32::from_be_bytes(header[20..24].try_into()?));
+    ensure!(width > 0 && height > 0 && width <= 16384 && height <= 16384, "Invalid first-frame still size");
+    Ok(Media { width, height, duration_ms: 1, frame_rate: 0 })
+}
+
 pub fn prepare(helper: &Path, source: &Path, plan: &Plan, computer: &str, path: &Path) -> Result<()> {
     let mut command = Command::new(helper);
     command.arg("--picture-prepare").arg(source).arg(path);
@@ -113,6 +125,21 @@ pub fn restore(helper: &Path, root: &Path) -> Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_frame_still_reports_the_exact_png_size_and_rejects_anything_else() {
+        let dir = std::env::temp_dir().join(format!("one-mk-still-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let helper = dir.join("helper.sh");
+        // Writes what its second argument names: a PNG header 7x3, or text.
+        std::fs::write(&helper, "#!/bin/sh\nif [ \"$4\" = 1 ]; then printf '\\211PNG\\r\\n\\032\\n\\000\\000\\000\\rIHDR\\000\\000\\000\\007\\000\\000\\000\\003' > \"$3\"; else echo nope > \"$3\"; fi\n").unwrap();
+        std::fs::set_permissions(&helper, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let output = dir.join("frame.png");
+        let media = still(&helper, Path::new("video"), &output, 1).unwrap();
+        assert_eq!((media.width, media.height, media.duration_ms), (7, 3, 1));
+        assert!(still(&helper, Path::new("video"), &output, 2).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn helper_timeout_and_output_limits_leave_the_caller_alive() {
