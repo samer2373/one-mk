@@ -54,6 +54,17 @@ fn main() -> Result<()> {
     if arguments.first().is_some_and(|argument| argument.to_string_lossy().starts_with("--picture-")) {
         return picture::command(&arguments);
     }
+    if arguments.first().is_some_and(|argument| argument == "--still") {
+        #[cfg(target_os = "linux")]
+        {
+            let video = Path::new(arguments.get(1).context("Missing video")?);
+            let output = Path::new(arguments.get(2).context("Missing still output")?);
+            let width = arguments.get(3).and_then(|width| width.to_str()?.parse().ok()).context("Missing still width")?;
+            return linux::still(video, output, width);
+        }
+        #[cfg(not(target_os = "linux"))]
+        anyhow::bail!("A first-frame still is only needed on Linux");
+    }
     if arguments.first().is_some_and(|argument| argument == "--prepare") {
         let path = Path::new(arguments.get(1).context("Choose a video first")?);
         let output = Path::new(arguments.get(2).context("Missing prepared video path")?);

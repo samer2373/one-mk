@@ -1074,7 +1074,7 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
                 else { "Your desktop has not allowed mouse and keyboard sharing yet." },
                 if mac && !good { Some("Follow the permission guide to allow sharing in System Settings.") }
                 else if action == Some("Start") { Some("Start sharing to check permissions.") }
-                else if good { None } else { Some("Approve the sharing request in your desktop's permission dialog.") })
+                else if good { None } else { Some("Choose Allow in the permission window your desktop shows (it can be behind other windows). Then press Recheck.") })
         }
         "hotkeys" => ("Keyboard shortcuts", if good { "Keyboard shortcuts are ready." }
             else if status == Status::Skip { "Keyboard shortcuts are turned off or still being set up." }

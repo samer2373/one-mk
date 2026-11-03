@@ -238,11 +238,15 @@ The optional GNOME component is offline: `/usr/bin/one-mk-wallpaper` is the
 production renderer and `/usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/`
 contains extension sources, bridge XML, metadata and licences.
 Nothing is copied into GNOME's discovery directories by the package. The
-Wallpaper page offers **Install GNOME extension**, then says **Log out and
-back in once to finish**, then offers a separate **Enable GNOME extension**.
-Those are explicit user actions; merely opening the page only reads status.
+Wallpaper page offers **Install GNOME extension**. Install copies the files and
+adds the extension to GNOME's login list (`org.gnome.shell enabled-extensions`,
+through the `gsettings` command), so after one log-out and log-in it turns
+itself on. The page says so (**One step left: log out and back in once**). If an
+extension was installed without being listed, the page offers **Switch on GNOME
+extension**, which does the same. These are explicit user actions; merely
+opening the page only reads status. Uninstall removes the login-list entry.
 Installation uses embedded extension sources from the same build and the
-bundled renderer, never downloads or runs a shell command. A Linux tarball
+bundled renderer and never downloads anything. A Linux tarball
 also includes a sibling renderer and the optional component payload.
 
 On qualified **GNOME Shell 50.1**, selecting a video after explicit Enable starts

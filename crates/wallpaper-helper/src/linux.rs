@@ -200,6 +200,32 @@ fn uri(path: &Path) -> Result<String> {
     Ok(uri)
 }
 
+/// The video's first frame as a PNG `width` pixels wide (square pixels).
+fn snapshot(gst: &Gst, path: &Path, output: &Path, width: u32) -> Result<()> {
+    let pipeline = gst.pipeline(&format!("uridecodebin uri={} caps=video/x-raw name=source source. ! queue ! videoconvert ! videoscale ! video/x-raw,width={width},pixel-aspect-ratio=1/1 ! pngenc snapshot=true ! filesink location={}", quoted(&uri(path)?), quoted(&output.to_string_lossy())))?;
+    unsafe {
+        (gst.state)(pipeline.raw, 4);
+        let bus = (gst.bus)(pipeline.raw);
+        let message = (gst.pop)(bus, 15_000_000_000, 1 | 2);
+        let failed = !message.is_null() && (gst.has_name)(message, c"GstMessageError".as_ptr()) != 0;
+        if !message.is_null() { (gst.mini_unref)(message); }
+        (gst.unref)(bus);
+        ensure!(!failed, "The video's first frame could not be read");
+    }
+    Ok(())
+}
+
+/// A larger first-frame still than the preview poster, for a screen that can't
+/// play the video itself (GNOME before its extension is set up).
+pub fn still(path: &Path, output: &Path, width: u32) -> Result<()> {
+    let gst = Gst::load()?;
+    let temporary = output.with_extension("png.part");
+    let _ = std::fs::remove_file(&temporary);
+    let result = snapshot(&gst, path, &temporary, width.clamp(64, 7680)).and_then(|()| Ok(std::fs::rename(&temporary, output)?));
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result
+}
+
 pub fn probe(path: &Path, poster: Option<&Path>) -> Result<Media> {
     let gst = Gst::load()?;
     let pipeline = gst.pipeline(&format!("uridecodebin uri={} caps=video/x-raw name=source source. ! queue max-size-bytes=16777216 max-size-time=2000000000 ! videoconvert ! fakesink name=probe", quoted(&uri(path)?)))?;
@@ -221,14 +247,7 @@ pub fn probe(path: &Path, poster: Option<&Path>) -> Result<Media> {
         fraction(structure, c"framerate".as_ptr(), &mut numerator, &mut denominator);
         (gst.mini_unref)(caps);
         ensure!((gst.duration)(pipeline.raw, 3, &mut duration) != 0 && duration > 0, "This video has no known duration");
-        if let Some(poster) = poster {
-            let poster_pipeline = gst.pipeline(&format!("uridecodebin uri={} caps=video/x-raw name=source source. ! queue ! videoconvert ! videoscale ! video/x-raw,width=640,pixel-aspect-ratio=1/1 ! pngenc snapshot=true ! filesink location={}", quoted(&uri(path)?), quoted(&poster.to_string_lossy())))?;
-            (gst.state)(poster_pipeline.raw, 4);
-            let bus = (gst.bus)(poster_pipeline.raw);
-            let message = (gst.pop)(bus, 15_000_000_000, 1 | 2);
-            if !message.is_null() { (gst.mini_unref)(message); }
-            (gst.unref)(bus);
-        }
+        if let Some(poster) = poster { snapshot(&gst, path, poster, 640)?; }
         Ok(Media { width: width as u32, height: height as u32, duration_ms: duration as u64 / 1_000_000, frame_rate: (f64::from(numerator) / f64::from(denominator.max(1))).ceil() as u32 })
     }
 }

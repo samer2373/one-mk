@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 use anyhow::{Context, Result, bail, ensure};
 use clap::Subcommand;
-use one_mk_wallpaper::{ExtensionAction, GnomeSetup, GnomeStage, GNOME_PLAYBACK_UNAVAILABLE};
+use one_mk_wallpaper::{ExtensionAction, GnomeSetup, GnomeStage};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -17,12 +17,12 @@ const FILES: &[(&str, &str)] = &[
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Install the managed extension files; enabling it is a separate step.
+    /// Install the managed extension files and switch it on for your next login.
     Install {
         /// Absolute path to the separately installed renderer executable.
         #[arg(long)] renderer: Option<PathBuf>,
     },
-    /// Enable the installed extension, without enabling video playback.
+    /// Switch the installed extension on (at your next login if GNOME has not loaded it yet); it never starts a video.
     Enable,
     /// Remove managed extension files after disabling the extension.
     Uninstall,
@@ -58,7 +58,67 @@ fn qualified(version: &str) -> bool {
         metadata["one-mk-qualified-shell-versions"].as_array().is_some_and(|versions| versions.contains(&json!(version))))
 }
 
-struct ShellState { version: String, state: Option<u32>, path: Option<String>, user_extensions: bool }
+struct ShellState { version: String, state: Option<u32>, path: Option<String>, user_extensions: bool, listed: bool }
+
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+/// GNOME's list of switched-on extensions is GVariant text: `['a', 'b']` or
+/// `@as []`. Keeps the other entries exactly as they are.
+fn list_entries(text: &str) -> Vec<String> {
+    text.trim().trim_start_matches("@as").trim().trim_start_matches('[').trim_end_matches(']')
+        .split(',').map(|entry| entry.trim().trim_matches('\'').to_owned()).filter(|entry| !entry.is_empty()).collect()
+}
+
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn list_text(entries: &[String]) -> String {
+    format!("[{}]", entries.iter().map(|entry| format!("'{entry}'")).collect::<Vec<_>>().join(", "))
+}
+
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+/// The list with `UUID` switched on, or `None` if it already is.
+fn list_with(text: &str) -> Option<String> {
+    let mut entries = list_entries(text);
+    if entries.iter().any(|entry| entry == UUID) { return None; }
+    entries.push(UUID.to_owned());
+    Some(list_text(&entries))
+}
+
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+/// The list without `UUID`, or `None` if it isn't there.
+fn list_without(text: &str) -> Option<String> {
+    let entries = list_entries(text);
+    if !entries.iter().any(|entry| entry == UUID) { return None; }
+    Some(list_text(&entries.into_iter().filter(|entry| entry != UUID).collect::<Vec<_>>()))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+async fn gsettings(arguments: &[&str]) -> Result<String> {
+    let output = tokio::time::timeout(std::time::Duration::from_secs(3),
+        tokio::process::Command::new("gsettings").args(arguments).kill_on_drop(true).output()).await
+        .context("GNOME settings took too long")?.context("GNOME settings could not start")?;
+    ensure!(output.status.success(), "GNOME settings said: {}", String::from_utf8_lossy(&output.stderr).trim());
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Switches the extension on for the next login. GNOME refuses a live
+/// enable of an extension it hasn't seen yet, but loads one that is already on
+/// the list when the session starts, so a person only logs out and in.
+#[cfg(all(unix, not(target_os = "macos")))]
+async fn switch_on_for_next_login() -> Result<()> {
+    let current = gsettings(&["get", "org.gnome.shell", "enabled-extensions"]).await?;
+    if let Some(next) = list_with(&current) { gsettings(&["set", "org.gnome.shell", "enabled-extensions", &next]).await?; }
+    Ok(())
+}
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+async fn switch_on_for_next_login() -> Result<()> { bail!("GNOME wallpaper extensions are Linux-only") }
+
+#[cfg(all(unix, not(target_os = "macos")))]
+async fn forget_from_login_list() -> Result<()> {
+    let current = gsettings(&["get", "org.gnome.shell", "enabled-extensions"]).await?;
+    if let Some(next) = list_without(&current) { gsettings(&["set", "org.gnome.shell", "enabled-extensions", &next]).await?; }
+    Ok(())
+}
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+async fn forget_from_login_list() -> Result<()> { Ok(()) }
 
 fn setup_state(installed: bool, occupied: bool, renderer: bool, expected_path: &Path, shell: Option<&ShellState>) -> GnomeSetup {
     let (stage, message, can_install, can_enable) = match shell {
@@ -70,10 +130,13 @@ fn setup_state(installed: bool, occupied: bool, renderer: bool, expected_path: &
         Some(shell) if shell.state.is_some_and(|state| state != 99) && shell.path.as_deref() != expected_path.to_str() => (GnomeStage::Unmanaged,
             "GNOME loaded a different copy of the oneMK extension. It will not be replaced or enabled from this window.".into(), false, false),
         _ if !installed => (GnomeStage::NotInstalled,
-            if renderer { "The GNOME extension is not installed. Install copies bundled files into your user extensions folder, without downloading or enabling anything." }
+            if renderer { "GNOME needs a small oneMK extension to play video behind your windows. Install copies it into your user extensions folder and switches it on for your next login; nothing is downloaded. Then log out and back in once." }
             else { "The GNOME extension is not installed and the bundled renderer is missing. Reinstall oneMK; nothing will be downloaded." }.into(), renderer, false),
-        Some(shell) if shell.state.is_none() || shell.state == Some(99) => (GnomeStage::LogOutRequired,
-            "Log out and back in once to finish. GNOME Wayland loads a newly installed extension in your next session. Then choose Enable here.".into(), false, false),
+        Some(shell) if shell.state.is_none() || shell.state == Some(99) => if shell.listed {
+            (GnomeStage::LogOutRequired, "One step left: log out and back in once. GNOME loads the extension at login, and it turns itself on. Then choose a video here.".into(), false, false)
+        } else {
+            (GnomeStage::LogOutRequired, "The extension is installed but not switched on for your next login. Choose Switch on, then log out and back in once.".into(), false, true)
+        },
         Some(shell) if shell.state == Some(1) && shell.user_extensions => (GnomeStage::Active,
             "The GNOME extension is active. Choose a video on this page to play it. Off restores your desktop; enabling alone never changes your wallpaper.".into(), false, false),
         Some(shell) if !shell.user_extensions => (GnomeStage::Disabled,
@@ -178,11 +241,18 @@ pub async fn command(command: &Command) -> Result<Value> {
             let target = destination.clone();
             tokio::task::spawn_blocking(move || install(&target, &renderer)
                 .with_context(|| format!("installing renderer {} into {}", renderer.display(), target.display()))).await??;
-            format!("Installed {}. Not enabled. Log out and back in once to finish, then choose Enable in the Wallpaper page. {GNOME_PLAYBACK_UNAVAILABLE}", destination.display())
+            match switch_on_for_next_login().await {
+                Ok(()) => format!("Installed in {}. One step left: log out and back in once. The extension turns itself on, and video can start after that.", destination.display()),
+                Err(error) => format!("Installed in {}, but GNOME could not switch it on for your next login ({error:#}). Log out and back in once, then choose Switch on here.", destination.display()),
+            }
         }
         Command::Enable => {
             let setup = setup().await?;
             ensure!(setup.can_enable || setup.stage == GnomeStage::Active, "{}", setup.message);
+            if setup.stage == GnomeStage::LogOutRequired {
+                switch_on_for_next_login().await?;
+                return Ok(json!({"ok": true, "message": "Switched on for your next login. Log out and back in once; the extension then turns itself on."}));
+            }
             #[cfg(all(unix, not(target_os = "macos")))]
             if setup.stage != GnomeStage::Active {
                 let connection = zbus::connection::Builder::session()?.method_timeout(std::time::Duration::from_secs(1)).build().await?;
@@ -199,7 +269,8 @@ pub async fn command(command: &Command) -> Result<Value> {
             }
             let existed = destination.try_exists().with_context(|| format!("checking extension {}", destination.display()))?;
             uninstall(&destination).with_context(|| format!("uninstalling extension {}", destination.display()))?;
-            if existed { "Removed managed extension files; no GNOME settings changed." } else { "No managed extension is installed; nothing changed." }.into()
+            let _ = forget_from_login_list().await;
+            if existed { "Removed managed extension files and its entry in GNOME's login list." } else { "No managed extension is installed; nothing changed." }.into()
         }
         Command::Status => return status().await,
     };
@@ -246,7 +317,8 @@ async fn observe_shell() -> Result<ShellState> {
         .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=99.0).contains(value)).map(|value| value as u32);
     let path = info.get("path").and_then(|value| <&str>::try_from(value).ok()).map(str::to_owned);
     let user_extensions: bool = extensions.get_property("UserExtensionsEnabled").await?;
-    Ok(ShellState { version, state, path, user_extensions })
+    let listed = gsettings(&["get", "org.gnome.shell", "enabled-extensions"]).await.is_ok_and(|text| list_entries(&text).iter().any(|entry| entry == UUID));
+    Ok(ShellState { version, state, path, user_extensions, listed })
 }
 
 #[cfg(test)]
@@ -273,7 +345,7 @@ mod tests {
     #[test]
     fn setup_distinguishes_install_logout_enable_and_active_without_authorizing_playback() {
         let path = Path::new("/private/extensions/one-mk-wallpaper@one-mk.org");
-        let mut shell = ShellState { version: "50.1".into(), state: None, path: None, user_extensions: true };
+        let mut shell = ShellState { version: "50.1".into(), state: None, path: None, user_extensions: true, listed: true };
         let check = |installed, occupied, renderer, shell: &ShellState, expected, install, enable| {
             let setup = setup_state(installed, occupied, renderer, path, Some(shell));
             assert_eq!((setup.stage, setup.can_install, setup.can_enable), (expected, install, enable));
@@ -284,7 +356,12 @@ mod tests {
         check(false, false, false, &shell, GnomeStage::NotInstalled, false, false);
         check(false, true, true, &shell, GnomeStage::Unmanaged, false, false);
         let setup = check(true, true, true, &shell, GnomeStage::LogOutRequired, false, false);
-        assert!(setup.message.contains("Log out and back in once to finish"));
+        assert!(setup.message.contains("log out and back in once") && setup.message.contains("turns itself on"));
+        // Installed but not on GNOME's login list: one click puts it there.
+        shell.listed = false;
+        let setup = check(true, true, true, &shell, GnomeStage::LogOutRequired, false, true);
+        assert!(setup.message.contains("Switch on"));
+        shell.listed = true;
         shell.state = Some(99);
         check(true, true, true, &shell, GnomeStage::LogOutRequired, false, false);
         shell.state = Some(2);
@@ -307,6 +384,17 @@ mod tests {
         let absent = setup_state(true, true, true, path, None);
         assert_eq!(absent.stage, GnomeStage::Unavailable);
         assert!(!absent.can_enable && !absent.can_install);
+    }
+
+    #[test]
+    fn login_list_keeps_other_extensions_and_adds_or_removes_only_ours() {
+        assert_eq!(list_with("@as []").unwrap(), format!("['{UUID}']"));
+        assert_eq!(list_with("['ding@rastersoft.com', 'ubuntu-dock@ubuntu.com']").unwrap(), format!("['ding@rastersoft.com', 'ubuntu-dock@ubuntu.com', '{UUID}']"));
+        assert!(list_with(&format!("['{UUID}']")).is_none());
+        assert_eq!(list_without(&format!("['a@b', '{UUID}']")).unwrap(), "['a@b']");
+        assert_eq!(list_without(&format!("['{UUID}']")).unwrap(), "[]");
+        assert!(list_without("['a@b']").is_none());
+        assert!(list_entries("@as []").is_empty());
     }
 
     #[test]
