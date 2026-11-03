@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub mod picture;
+#[cfg(target_os = "linux")]
+pub mod wayland;
 
 pub const MAX_MEDIA_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
@@ -297,6 +299,17 @@ pub fn prune_cache_except(root: &Path, keep: &BTreeSet<String>) -> std::io::Resu
 }
 
 pub fn availability() -> Result<(), &'static str> {
+    // A Wayland session's compositor answers for itself, and the window
+    // asks several times a second: asked again only every few seconds.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        static RECENT: std::sync::Mutex<Option<(std::time::Instant, Result<(), &'static str>)>> = std::sync::Mutex::new(None);
+        let mut recent = RECENT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, result)) = *recent && at.elapsed() < std::time::Duration::from_secs(5) { return result; }
+        let result = detect_availability();
+        *recent = Some((std::time::Instant::now(), result));
+        return result;
+    }
     static AVAILABLE: std::sync::OnceLock<Result<(), &'static str>> = std::sync::OnceLock::new();
     *AVAILABLE.get_or_init(detect_availability)
 }
@@ -305,9 +318,9 @@ fn detect_availability() -> Result<(), &'static str> {
     #[cfg(target_os = "linux")]
     {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            return Err("Video wallpapers are not available on Wayland yet. GNOME needs a shell extension; KDE and other Wayland desktops are not supported yet.");
+            wayland::available()?;
         }
-        if std::env::var_os("DISPLAY").is_none() { return Err("Video wallpapers need an X11 desktop."); }
+        else if std::env::var_os("DISPLAY").is_none() { return Err("Video wallpapers need an X11 desktop."); }
         if unsafe { libloading::Library::new("libgstreamer-1.0.so.0") }.is_err() {
             return Err("Install GStreamer to play video wallpapers.");
         }

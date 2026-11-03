@@ -235,7 +235,6 @@ fn source(input: &mut impl Read, plan: &Plan) -> Result<RgbaImage> {
     Ok(image::DynamicImage::from_decoder(decoder)?.into_rgba8())
 }
 
-#[cfg(any(target_os = "macos", windows, test))]
 pub fn player_source(config: &one_mk_wallpaper::PlayerConfig) -> Result<RgbaImage> {
     let mut input = std::fs::File::open(&config.path)?;
     let mut magic = [0; 8]; input.read_exact(&mut magic)?;
@@ -310,6 +309,10 @@ fn slices(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<Vec<(
 }
 
 pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<one_mk_wallpaper::picture::Mode> {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() && one_mk_wallpaper::wayland::available().is_ok() {
+        return Ok(one_mk_wallpaper::picture::Mode::Overlay);
+    }
     std::fs::create_dir_all(root)?;
     prune_pictures(root, &[])?;
     let files = slices(plan, computer, path, root)?;

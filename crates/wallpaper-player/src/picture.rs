@@ -18,7 +18,8 @@ impl Mode {
 
 pub fn available() -> bool {
     #[cfg(target_os = "linux")]
-    return std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.to_ascii_lowercase().contains("gnome"));
+    return (std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::wayland::available().is_ok())
+        || std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.to_ascii_lowercase().contains("gnome"));
     #[cfg(not(target_os = "linux"))]
     true
 }

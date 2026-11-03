@@ -3556,6 +3556,7 @@ dependencies = [
  "libloading",
  "serde",
  "serde_json",
+ "wayland-client",
  "windows",
 ]
 
@@ -3580,6 +3581,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "windows",
  "windows-core",
  "x11-dl",

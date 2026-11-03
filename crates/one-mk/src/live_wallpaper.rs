@@ -427,7 +427,7 @@ impl Runtime {
             } else if let Some(plan) = state.status.plan.as_ref() { state.status.message = plan.playing_message(); }
             return Ok(());
         }
-        one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?;
+        if !plan.picture { one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?; }
         let config = PlayerConfig { plan: plan.clone(), computer: state.computer.clone(), path: cache_path(&cache(dir), if plan.picture { plan.asset_hash.as_ref().unwrap_or(&plan.hash) } else { &plan.hash })?, clock_offset_ms: state.offset };
         let config_path = cache(dir).join("player.json");
         let _ = std::fs::remove_file(cache(dir).join("playback.txt"));

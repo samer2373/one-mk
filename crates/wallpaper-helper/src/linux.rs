@@ -33,6 +33,8 @@ macro_rules! api {
     ($library:expr, $name:literal, $signature:ty) => { *$library.get::<$signature>(concat!($name, "\0").as_bytes())? };
 }
 
+mod wayland;
+
 struct Gst {
     _core: Library,
     _object: Library,
@@ -368,6 +370,7 @@ fn power_events() -> Option<OwnedFd> {
 }
 
 pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() { return wayland::run(config, receiver); }
     let desktop = Desktop::new(&config)?;
     ensure!(!desktop.windows.is_empty(), "No monitors selected on this computer");
     let gst = Gst::load()?;
