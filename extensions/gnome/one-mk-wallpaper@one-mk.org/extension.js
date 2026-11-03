@@ -38,10 +38,10 @@ export default class WallpaperVideo extends Extension {
             });
     }
 
-    _credential(sender, method) {
+    _credential(sender, method, type = '(u)') {
         return new Promise((resolve, reject) => {
             Gio.DBus.session.call('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus', method,
-                new GLib.Variant('(s)', [sender]), new GLib.VariantType('(u)'), Gio.DBusCallFlags.NONE, 1000, null,
+                new GLib.Variant('(s)', [sender]), new GLib.VariantType(type), Gio.DBusCallFlags.NONE, 1000, null,
                 (connection, result) => {
                     try { resolve(connection.call_finish(result).deep_unpack()[0]); }
                     catch (error) { reject(error); }
@@ -57,8 +57,15 @@ export default class WallpaperVideo extends Extension {
         const sender = invocation.get_sender();
         if (method === 'Register') {
             const [secret] = parameters.deep_unpack();
-            if (!/^[a-f0-9]{32}$/.test(secret) || this._client)
-                throw new Error('oneMK wallpaper is already running or the launch token is invalid');
+            if (!/^[a-f0-9]{32}$/.test(secret))
+                throw new Error('The launch token is invalid');
+            // A replaced renderer can register before its predecessor's
+            // NameOwnerChanged arrives: a client that has left the bus is gone.
+            const previous = this._client;
+            if (previous && !await this._credential(previous.sender, 'NameHasOwner', '(b)') && this._client === previous)
+                this._stop();
+            if (this._client)
+                throw new Error('oneMK wallpaper is already running');
             const generation = this._generation;
             const [uid, pid] = await Promise.all([
                 this._credential(sender, 'GetConnectionUnixUser'), this._credential(sender, 'GetConnectionUnixProcessID'),
@@ -67,6 +74,12 @@ export default class WallpaperVideo extends Extension {
                 generation !== this._generation || this._client)
                 throw new Error('The renderer must belong to this desktop user');
             this._client = {sender, pid, secret};
+            // Its NameOwnerChanged may have come while we waited above.
+            if (!await this._credential(sender, 'NameHasOwner', '(b)')) {
+                if (this._client?.sender === sender)
+                    this._stop();
+                throw new Error('The renderer left before it registered');
+            }
         } else {
             if (sender !== this._client?.sender)
                 throw new Error('Only the registered renderer can control this wallpaper');

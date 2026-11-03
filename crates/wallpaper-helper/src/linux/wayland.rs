@@ -268,7 +268,11 @@ impl Desktop {
             }
             let wallpaper = output.wallpaper.as_mut().unwrap();
             if !wallpaper.configured || wallpaper.size.0 == 0 || wallpaper.size.1 == 0 { continue; }
-            let size = pixel_size(wallpaper.size, output.scale)?;
+            // One output too large to paint must not take the others down.
+            let Ok(size) = pixel_size(wallpaper.size, output.scale) else {
+                eprintln!("oneMK wallpaper: skipping output {id}, {}x{} at scale {} is too large", wallpaper.size.0, wallpaper.size.1, output.scale);
+                output.wallpaper.take(); output.closed = true; continue;
+            };
             if wallpaper.scale != output.scale || wallpaper.pixels.len() != size.0 as usize * size.1 as usize * 4 || wallpaper.generation == 0 {
                 wallpaper.scale = output.scale; wallpaper.surface.set_buffer_scale(output.scale);
                 wallpaper.mapping = mapping(config, monitor, size, source)?;
