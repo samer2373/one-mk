@@ -9,15 +9,41 @@ pub(super) fn start(tx: mpsc::Sender<Cmd>, history: Arc<Mutex<History>>, apps: A
     let (stop, wake) = UnixStream::pair().ok()?;
     let report = history.clone();
     let spawned = std::thread::Builder::new().name("one-mk-history-events".into()).spawn(move || {
-        if let Err(error) = watch(wake, tx, history, apps) {
-            report.lock().unwrap_or_else(|error| error.into_inner()).status().monitoring_unavailable.store(true, std::sync::atomic::Ordering::Relaxed);
-            tracing::debug!("Clipboard history change notifications unavailable: {error}");
+        // XWayland can restart under us (see `refresh_xauthority`): connect
+        // again, with a growing wait, until asked to stop.
+        let mut wait = std::time::Duration::from_secs(1);
+        loop {
+            crate::refresh_xauthority();
+            let started = std::time::Instant::now();
+            match watch(&wake, &tx, &history, &apps) {
+                Ok(()) => return,
+                Err(error) => {
+                    report.lock().unwrap_or_else(|error| error.into_inner()).status().monitoring_unavailable.store(true, std::sync::atomic::Ordering::Relaxed);
+                    tracing::debug!("Clipboard history change notifications unavailable: {error}");
+                }
+            }
+            if started.elapsed() > std::time::Duration::from_secs(10) {
+                wait = std::time::Duration::from_secs(1);
+            }
+            if stopped(&wake, wait) {
+                return;
+            }
+            wait = (wait * 2).min(std::time::Duration::from_secs(30));
         }
     });
     spawned.ok().map(|_| Arc::new(stop))
 }
 
-fn watch(wake: UnixStream, tx: mpsc::Sender<Cmd>, history: Arc<Mutex<History>>, apps: Arc<Mutex<Vec<String>>>) -> anyhow::Result<()> {
+/// Whether the daemon asked to stop (its end of `wake` was written or closed) within `wait`.
+fn stopped(wake: &UnixStream, wait: std::time::Duration) -> bool {
+    let mut descriptor = libc::pollfd { fd: wake.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+    let ms = wait.as_millis().min(i32::MAX as u128) as libc::c_int;
+    // SAFETY: one valid pollfd.
+    let ready = unsafe { libc::poll(&mut descriptor, 1, ms) };
+    ready > 0
+}
+
+fn watch(wake: &UnixStream, tx: &mpsc::Sender<Cmd>, history: &Arc<Mutex<History>>, apps: &Arc<Mutex<Vec<String>>>) -> anyhow::Result<()> {
     let (connection, screen) = x11rb::connect(None)?;
     connection.xfixes_query_version(5, 0)?.reply()?;
     let root = connection.setup().roots.get(screen).ok_or_else(|| anyhow::anyhow!("no X11 screen"))?.root;
@@ -28,6 +54,7 @@ fn watch(wake: UnixStream, tx: mpsc::Sender<Cmd>, history: Arc<Mutex<History>>, 
     connection.xfixes_select_selection_input(window, clipboard,
         SelectionEventMask::SET_SELECTION_OWNER | SelectionEventMask::SELECTION_WINDOW_DESTROY | SelectionEventMask::SELECTION_CLIENT_CLOSE)?.check()?;
     connection.flush()?;
+    history.lock().unwrap_or_else(|error| error.into_inner()).status().monitoring_unavailable.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut descriptors = [
         libc::pollfd { fd: connection.stream().as_raw_fd(), events: libc::POLLIN, revents: 0 },
         libc::pollfd { fd: wake.as_raw_fd(), events: libc::POLLIN, revents: 0 },

@@ -358,15 +358,25 @@ impl Backend {
         match self {
             Backend::Memory(m) => Ok(m.get().filtered(filter)),
             Backend::System(cb) => {
-                let cb = open(cb)?;
-                let text = if filter.text { cb.get_text().ok() } else { None };
-                let html = if filter.html { cb.get().html().ok() } else { None };
+                let handle = open(cb)?;
+                let mut broken = false;
+                // Asking for a format that isn't there is an error too ("incorrect
+                // type received"); only a dead handler thread means the display
+                // server went away under us.
+                let mut note = |e: &arboard::Error| broken |= handler_lost(e);
+                let text = if filter.text { handle.get_text().map_err(|e| note(&e)).ok() } else { None };
+                let html = if filter.html { handle.get().html().map_err(|e| note(&e)).ok() } else { None };
+                if broken {
+                    // The display server went away under it: open again next time.
+                    *cb = None;
+                    bail!("the clipboard connection was lost");
+                }
                 // Text wins over an image (see `Raw::prefer_text`), so don't
                 // even fetch a possibly huge bitmap (an Excel range).
                 let image = if !filter.image || text.is_some() || html.is_some() {
                     None
                 } else {
-                    cb.get_image().ok().and_then(|i| {
+                    handle.get_image().ok().and_then(|i| {
                         let rgba = i.bytes.into_owned();
                         (i.width > 0 && i.height > 0 && rgba.len() == i.width * i.height * 4)
                             .then_some(Image { width: i.width, height: i.height, rgba })
@@ -392,28 +402,78 @@ impl Backend {
                 Ok(())
             }
             Backend::System(cb) => {
-                let cb = open(cb)?;
-                let res = match raw {
-                    Raw { text: None, html: None, image: Some(i), .. } => cb.set_image(arboard::ImageData {
-                        width: i.width,
-                        height: i.height,
-                        bytes: i.rgba.into(),
-                    }),
-                    Raw { text, html: Some(html), .. } => cb.set_html(html, text),
-                    Raw { text: Some(text), .. } => cb.set_text(text),
-                    Raw { .. } => cb.clear(),
-                };
-                res.context("setting the clipboard")
+                let first = write_system(open(cb)?, &raw);
+                let Err(first) = first else { return Ok(()) };
+                // A handle kept across a restart of the display server (GNOME
+                // starts and stops XWayland as it likes) is dead: drop it,
+                // open a new one (see `open`), and try once more.
+                tracing::debug!("setting the clipboard: {first}; opening it again");
+                *cb = None;
+                write_system(open(cb)?, &raw).context("setting the clipboard")
             }
         }
     }
 }
 
+/// arboard's answer once its X11 thread has stopped (the display server restarted).
+fn handler_lost(e: &arboard::Error) -> bool {
+    matches!(e, arboard::Error::Unknown { description } if description.contains("handler thread seems to have stopped"))
+}
+
+fn write_system(cb: &mut arboard::Clipboard, raw: &Raw) -> std::result::Result<(), arboard::Error> {
+    match raw {
+        Raw { text: None, html: None, image: Some(i), .. } => {
+            cb.set_image(arboard::ImageData { width: i.width, height: i.height, bytes: i.rgba.clone().into() })
+        }
+        Raw { text, html: Some(html), .. } => cb.set_html(html.clone(), text.clone()),
+        Raw { text: Some(text), .. } => cb.set_text(text.clone()),
+        Raw { .. } => cb.clear(),
+    }
+}
+
 fn open(cb: &mut Option<arboard::Clipboard>) -> Result<&mut arboard::Clipboard> {
     if cb.is_none() {
+        #[cfg(target_os = "linux")]
+        refresh_xauthority();
         *cb = Some(arboard::Clipboard::new().context("opening the clipboard")?);
     }
     Ok(cb.as_mut().expect("just set"))
+}
+
+/// Mutter starts XWayland on demand and gives each start its own auth file,
+/// `$XDG_RUNTIME_DIR/.mutter-Xwaylandauth.XXXXXX`, deleting the last. A
+/// daemon started at login keeps the first file's name in `XAUTHORITY`, so
+/// after XWayland has restarted every X11 connection is refused
+/// ("Authorization required") and the clipboard stops for the rest of the
+/// session. Before the clipboard is opened this points `XAUTHORITY` at the
+/// newest such file when it names another one.
+#[cfg(target_os = "linux")]
+fn refresh_xauthority() {
+    let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from) else { return };
+    // SAFETY: geteuid has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    let Some(newest) = newest_xwayland_auth(&dir, uid) else { return };
+    if std::env::var_os("XAUTHORITY").as_deref() != Some(newest.as_os_str()) {
+        tracing::debug!(file = %newest.display(), "XWayland has a new auth file; using it for the clipboard");
+        // SAFETY: only this thread reads the variable (it opens the X11
+        // connection that follows), and it changes only when XWayland has
+        // restarted, which is rare.
+        unsafe { std::env::set_var("XAUTHORITY", &newest) };
+    }
+}
+
+/// The most recently written Mutter XWayland auth file in `dir` that `uid` owns.
+#[cfg(target_os = "linux")]
+fn newest_xwayland_auth(dir: &std::path::Path, uid: u32) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".mutter-Xwaylandauth."))
+        .filter_map(|e| Some((e.metadata().ok()?, e.path())))
+        .filter(|(m, _)| m.is_file() && m.uid() == uid)
+        .max_by_key(|(m, _)| (m.mtime(), m.mtime_nsec()))
+        .map(|(_, path)| path)
 }
 
 struct Worker {
@@ -622,6 +682,37 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// XWayland restarts with a new auth file and deletes the old one: the
+    /// clipboard must follow to the newest, never to another user's or an
+    /// unrelated file.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_newest_xwayland_auth_file_is_found() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let uid = std::fs::metadata(dir.path()).unwrap().uid();
+        assert_eq!(newest_xwayland_auth(dir.path(), uid), None, "none yet");
+
+        let touch = |name: &str, secs_ago: u64| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, b"cookie").unwrap();
+            let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
+            path
+        };
+        let _old = touch(".mutter-Xwaylandauth.OLD111", 600);
+        let new = touch(".mutter-Xwaylandauth.NEW222", 5);
+        let _other = touch(".something-else", 1);
+        std::fs::create_dir(dir.path().join(".mutter-Xwaylandauth.DIR333")).unwrap();
+        assert_eq!(newest_xwayland_auth(dir.path(), uid), Some(new.clone()));
+        // Files that belong to someone else are not ours to use.
+        assert_eq!(newest_xwayland_auth(dir.path(), uid.wrapping_add(1)), None);
+        // A restart replaces it.
+        std::fs::remove_file(&new).unwrap();
+        let newer = touch(".mutter-Xwaylandauth.NEW444", 1);
+        assert_eq!(newest_xwayland_auth(dir.path(), uid), Some(newer));
+    }
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
