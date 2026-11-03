@@ -180,8 +180,14 @@ pub fn input_line(line: &str) -> InputLine {
         ("Your key rules also work on this computer.", Severity::Info)
     } else if line.starts_with("Local key rules inactive") {
         ("Local key rules are off.", Severity::Info)
+    } else if line.contains("declined the desktop's permission") {
+        ("You chose not to allow sharing. Restart oneMK, then choose Allow when your desktop asks.", Severity::Problem)
     } else if line.starts_with("Waiting for your approval") || line.contains("permission dialog") {
-        ("Approve the sharing request in your desktop's permission dialog.", Severity::Info)
+        ("Your desktop is asking if oneMK may share your mouse and keyboard. Look for its permission window (it can be behind other windows) and choose Allow.", Severity::Info)
+    } else if line.starts_with("Can't share this computer's mouse") || line.starts_with("Other computers can't control this one") {
+        // Right after logging in the desktop's permission service can be
+        // late; oneMK keeps asking by itself, so this is a wait, not a fault.
+        ("Sharing isn't ready yet: oneMK is waiting for your desktop's permission and keeps trying. If a permission window appears, choose Allow.", Severity::Problem)
     } else if line.contains("session is locked") || line.contains("screen is locked") {
         ("Sharing is paused while this computer is locked.", Severity::Info)
     } else {
@@ -364,7 +370,12 @@ pub const HOTKEYS_FALLBACK: &str = "bind `one-mk switch next` (and `one-mk switc
 
 impl Status {
     pub fn input_lines(&self) -> Vec<InputLine> {
-        self.input.iter().map(|line| input_line(line)).collect()
+        let mut lines: Vec<InputLine> = Vec::new();
+        // Mouse sharing and remote control can say the same thing twice.
+        for line in self.input.iter().map(|line| input_line(line)) {
+            if !lines.contains(&line) { lines.push(line); }
+        }
+        lines
     }
 
     /// The keyboard shortcuts, in one line; `None` if there is nothing to say.
@@ -821,6 +832,15 @@ mod tests {
             }
         }
         assert_eq!(Status::decode(&status.encode()).unwrap().input_lines(), lines);
+        // The two portals' retry lines (mouse out, control in) read as one.
+        let late = Status { input: vec![
+            "Can't share this computer's mouse with others: the desktop portal did not answer (x). Retrying in the background.".into(),
+            "Other computers can't control this one: the desktop portal did not answer (y). Retrying in the background.".into(),
+        ], ..Status::default() }.input_lines();
+        assert_eq!(late.len(), 1);
+        assert!(late[0].detail.contains("choose Allow") && late[0].severity == Severity::Problem);
+        let declined = input_line("Can't share this computer's mouse with others: you declined the desktop's permission dialog. Restart one-mk to be asked again.");
+        assert!(declined.detail.starts_with("You chose not to allow") && declined.severity == Severity::Problem);
         let legacy = Status::decode("ok\ninput\tWaiting for your approval: allow sharing.\n").unwrap();
         assert_eq!(legacy.input_lines()[0].severity, Severity::Info);
         for state in ["on", "starting", "unavailable", "off"] {
