@@ -437,6 +437,10 @@ struct World {
     barriers: Vec<u32>,
     /// And their positions (x1, y1, x2, y2).
     positions: Vec<(i32, i32, i32, i32)>,
+    /// InputCapture is enabled. GNOME refuses SetPointerBarriers then
+    /// (`Session already enabled`): every barrier of the call fails and the
+    /// barriers in place stay as they are.
+    enabled: bool,
     /// ('k', key) and ('b', button) held down through libei.
     pressed: BTreeSet<(char, u32)>,
     /// Devices the injector started emulating on.
@@ -467,6 +471,7 @@ impl Default for World {
             sessions: Vec::new(),
             barriers: Vec::new(),
             positions: Vec::new(),
+            enabled: false,
             pressed: BTreeSet::new(),
             emulating: 0,
             rd_version: 2,
@@ -697,6 +702,7 @@ impl FakeInputCapture {
         new_session(&self.0, conn, "ic", &session).await?;
         let mut w = lock(&self.0);
         w.log.push("ic.CreateSession".into());
+        w.enabled = false; // a new session starts disabled
         let code = u32::from(w.deny);
         // InputCapture gives the session as an object path (RemoteDesktop as a string).
         let handle_value = Value::from(path(&session)?.into_inner());
@@ -714,7 +720,11 @@ impl FakeInputCapture {
     ) -> zbus::fdo::Result<HashMap<String, OwnedValue>> {
         let session = handle_path(&hdr, "session", opt_str(&options, "session_handle_token"));
         new_session(&self.0, conn, "ic", &session).await?;
-        lock(&self.0).log.push("ic.CreateSession2".into());
+        {
+            let mut w = lock(&self.0);
+            w.log.push("ic.CreateSession2".into());
+            w.enabled = false; // a new session starts disabled
+        }
         let value = OwnedValue::try_from(Value::from(path(&session)?)).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
         Ok(HashMap::from([("session_handle".to_owned(), value)]))
     }
@@ -766,21 +776,29 @@ impl FakeInputCapture {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<OwnedObjectPath> {
         let mut w = lock(&self.0);
-        w.barriers = barriers.iter().filter_map(|b| opt_u32(b, "barrier_id")).collect();
+        let ids: Vec<u32> = barriers.iter().filter_map(|b| opt_u32(b, "barrier_id")).collect();
+        let handle = handle_path(&hdr, "request", opt_str(&options, "handle_token"));
+        if w.enabled {
+            w.log.push(format!("ic.SetPointerBarriers refused while enabled {ids:?}"));
+            respond(conn, handle.clone(), Duration::ZERO, 0, Results::from([("failed_barriers", Value::from(ids))]));
+            return path(&handle);
+        }
+        w.barriers = ids;
         w.positions = barriers
             .iter()
             .filter_map(|b| <(i32, i32, i32, i32)>::try_from(b.get("position")?.try_clone().ok()?).ok())
             .collect();
         let line = format!("ic.SetPointerBarriers {:?}", w.barriers);
         w.log.push(line);
-        let handle = handle_path(&hdr, "request", opt_str(&options, "handle_token"));
         respond(conn, handle.clone(), Duration::ZERO, 0, Results::from([("failed_barriers", Value::from(Vec::<u32>::new()))]));
         path(&handle)
     }
 
     #[zbus(name = "Enable")]
     async fn enable(&self, _session: OwnedObjectPath, _options: Opts) {
-        lock(&self.0).log.push("ic.Enable".into());
+        let mut w = lock(&self.0);
+        w.log.push("ic.Enable".into());
+        w.enabled = true;
     }
 
     #[zbus(name = "Disable")]
@@ -788,6 +806,7 @@ impl FakeInputCapture {
         let hang = {
             let mut w = lock(&self.0);
             w.log.push("ic.Disable".into());
+            w.enabled = false;
             w.hang_disable
         };
         if hang {
@@ -946,10 +965,35 @@ impl Drop for Bus {
     }
 }
 
+/// The optional GNOME extension that hides the pointer.
+struct FakePointer(Shared);
+
+#[zbus::interface(name = "org.onemk.Pointer1")]
+impl FakePointer {
+    #[zbus(name = "Hide")]
+    async fn hide(&self) {
+        lock(&self.0).log.push("pointer.Hide".into());
+    }
+
+    #[zbus(name = "HideUntilMoved")]
+    async fn hide_until_moved(&self) {
+        lock(&self.0).log.push("pointer.HideUntilMoved".into());
+    }
+
+    #[zbus(name = "Show")]
+    async fn show(&self) {
+        lock(&self.0).log.push("pointer.Show".into());
+    }
+}
+
 async fn serve_fake(addr: &str, world: &Shared) -> zbus::Connection {
     zbus::connection::Builder::address(addr)
         .unwrap()
         .name("org.freedesktop.portal.Desktop")
+        .unwrap()
+        .name("org.onemk.Pointer1")
+        .unwrap()
+        .serve_at("/org/onemk/Pointer1", FakePointer(world.clone()))
         .unwrap()
         .serve_at("/org/freedesktop/portal/desktop", FakeRemoteDesktop(world.clone()))
         .unwrap()
@@ -1351,4 +1395,89 @@ async fn barriers_cover_only_the_armed_part_of_an_edge() {
     // An empty segment gets no barrier, and with none capture is off.
     h.capture().send(CaptureCmd::SetEdges(vec![Edge { side: Side::Left, at: 0, lo: 10, hi: 10 }])).unwrap();
     h.until("no barriers", |w| w.positions.is_empty()).await;
+}
+
+/// The desktop takes barriers only while capture is off (GNOME: `Session
+/// already enabled`), so a changed layout must disable, set and enable
+/// again. Asking for the barriers already in place changes nothing.
+#[tokio::test]
+async fn a_changed_layout_replaces_the_barriers_of_an_enabled_session() {
+    let Some(mut h) = Harness::start(&[], |_| {}).await else { return };
+    h.ready().await;
+    let (sets, disables) = (h.count("ic.SetPointerBarriers"), h.count("ic.Disable"));
+
+    h.capture().send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!((h.count("ic.SetPointerBarriers"), h.count("ic.Disable")), (sets, disables), "the same edges: nothing to do");
+
+    let moved = Edge { side: Side::Right, at: 1920, lo: 200, hi: 900 };
+    h.capture().send(CaptureCmd::SetEdges(vec![moved])).unwrap();
+    h.until("the new barrier", |w| w.positions == [(1920, 200, 1920, 899)] && w.enabled).await;
+    assert_eq!(h.count("ic.SetPointerBarriers refused"), 0, "{:#?}", h.log());
+
+    // And it is the one a crossing is recognised by.
+    let id = h.activate().await;
+    assert!(id > 0);
+}
+
+/// The pointer is hidden (by the optional GNOME extension) while the mouse
+/// is captured for another computer, and shown when it is back.
+#[tokio::test]
+async fn the_pointer_is_hidden_only_while_captured() {
+    let Some(mut h) = Harness::start(&[], |_| {}).await else { return };
+    h.ready().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(h.count("pointer."), 0, "nothing hidden at home: {:#?}", h.log());
+
+    let id = h.activate().await;
+    h.until("hidden", |w| w.count("pointer.Hide") == 1).await;
+    assert_eq!(h.count("pointer.Show"), 0);
+
+    h.capture().send(CaptureCmd::Release { id, pos: None }).unwrap();
+    h.until("shown again", |w| w.count("pointer.Show") == 1).await;
+    assert_eq!(h.count("pointer.Hide"), 1, "{:#?}", h.log());
+}
+
+/// Another computer moving this one's pointer shows it as usual; when that
+/// computer lets go, the pointer is hidden where it stands until this
+/// computer's own mouse is used (the extension notices that).
+#[tokio::test]
+async fn the_pointer_hides_when_another_computer_lets_go_of_it() {
+    let Some(h) = Harness::start(&[], |_| {}).await else { return };
+    h.until("injection", |w| w.emulating >= 2).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(h.count("pointer."), 0, "{:#?}", h.log());
+
+    h.inject(Inject::Controlled(true));
+    h.inject(Inject::MoveTo(Pos::new(0.0, 500.0)));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(h.count("pointer."), 0, "visible while it is being controlled: {:#?}", h.log());
+
+    h.inject(Inject::Controlled(false));
+    h.until("hidden until moved", |w| w.count("pointer.HideUntilMoved") == 1).await;
+
+    // Controlled again: shown right away.
+    h.inject(Inject::Controlled(true));
+    h.until("shown", |w| w.count("pointer.Show") == 1).await;
+    assert_eq!(h.count("pointer.HideUntilMoved"), 1, "{:#?}", h.log());
+}
+
+/// Changing barriers disables capture, which would end a visit in
+/// progress, so new edges wait until the pointer is back.
+#[tokio::test]
+async fn new_edges_wait_for_the_capture_in_progress() {
+    let Some(mut h) = Harness::start(&[], |_| {}).await else { return };
+    h.ready().await;
+    let id = h.activate().await;
+    let disables = h.count("ic.Disable");
+
+    let moved = Edge { side: Side::Right, at: 1920, lo: 200, hi: 900 };
+    h.capture().send(CaptureCmd::SetEdges(vec![moved])).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(h.count("ic.Disable"), disables, "the capture goes on");
+    assert_eq!(h.world().positions, [(1920, 0, 1920, 1079)]);
+
+    h.capture().send(CaptureCmd::Release { id, pos: None }).unwrap();
+    h.until("the new barrier", |w| w.positions == [(1920, 200, 1920, 899)] && w.enabled).await;
+    assert_eq!(h.count("ic.SetPointerBarriers refused"), 0, "{:#?}", h.log());
 }

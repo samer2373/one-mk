@@ -161,9 +161,10 @@ async fn guards_lock_and_control_apply_to_wrap() {
     assert_eq!(ask(&duo.da, Request::LockPointer(one_mk_ctl::client::Toggle::Off)).await, "ok\noff\n");
     assert_eq!(next_capture(&mut duo.ha).await, edges(&[whole(Side::Right), whole(Side::Left)]));
 
-    // B takes control of A: A's wrap edge goes while it lasts.
+    // B takes control of A: no edge of A is armed while it lasts (not even
+    // the one leading to B: the pointer B moves here must not be captured).
     duo.hb.events.send(Event::Activated { id: 1, side: Side::Left, pos: Pos::new(0.0, 540.0) }).unwrap();
-    assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Right));
+    assert_eq!(next_capture(&mut duo.ha).await, edges(&[]));
     duo.ha.events.send(Event::Activated { id: 6, side: Side::Left, pos: Pos::new(0.0, 500.0) }).unwrap();
     assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 6, pos: None }), "no wrap while controlled");
     assert_eq!(ask(&duo.da, Request::TakeBack).await.lines().next(), Some("ok"));

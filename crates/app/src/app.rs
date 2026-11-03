@@ -235,6 +235,8 @@ pub struct App {
     answered: Option<(String, Side)>,
     /// Computers placed where no screen of theirs touches ours.
     apart: HashSet<String>,
+    /// The banner over the desk as drawn this frame (see `refresh_notice`).
+    notice: desk_cards::NoticeHold,
     pending_swap: HashMap<String, String>,
     /// A computer that should hop (not slide) to its new place.
     hop: Option<String>,
@@ -474,6 +476,7 @@ impl App {
             pending_side: HashMap::new(),
             answered: None,
             apart: HashSet::new(),
+            notice: desk_cards::NoticeHold::default(),
             pending_swap: HashMap::new(),
             hop: None,
             just_paired: None,
@@ -2137,6 +2140,7 @@ impl eframe::App for App {
             child.set_opacity(e);
             child
         };
+        self.refresh_notice(ui, now);
         // Layout learning's question has a strip of its own under the desk.
         let card = self.suggestion_card(ui, desk);
         let scene = card.as_ref().map_or(desk, |c| Rect::from_min_max(desk.min, pos2(desk.right(), c.rect.top() - 6.0)));
@@ -2144,7 +2148,7 @@ impl eframe::App for App {
         // the transfer where a small window puts it at the top.
         let mut frame = scene;
         if self.tab.desk() {
-            if self.desk_notice().is_some() {
+            if self.notice.shown().is_some() {
                 frame.min.y += 92.0 + if self.desk_views_shown() { desk_cards::DESK_VIEWS_H } else { 0.0 };
             } else if desk.width() < 780.0 && self.running().is_some_and(|s| !s.transfers.is_empty()) {
                 frame.min.y += 60.0;
