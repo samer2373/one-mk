@@ -5,10 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-#[cfg(feature = "wallpaper-m1-lab")]
-#[allow(dead_code)]
 #[path = "wallpaper_extension.rs"]
-mod extension;
+pub(crate) mod extension;
 
 #[derive(Default)]
 pub struct Ingress { window: Option<(std::time::Instant,u8)> }

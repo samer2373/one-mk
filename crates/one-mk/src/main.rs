@@ -768,8 +768,11 @@ mod tests {
     }
 
     #[test]
-    fn release_wallpaper_cli_does_not_offer_lab_setup() {
-        for action in ["extension", "import", "consent", "doctor"] {
+    fn release_wallpaper_cli_offers_only_consented_extension_setup_not_lab_playback() {
+        for action in ["install", "enable", "status", "uninstall"] {
+            assert!(Cli::try_parse_from(["one-mk", "wallpaper", "--json", "extension", action]).is_ok());
+        }
+        for action in ["import", "consent", "doctor"] {
             assert!(Cli::try_parse_from(["one-mk", "wallpaper", action]).is_err());
         }
     }

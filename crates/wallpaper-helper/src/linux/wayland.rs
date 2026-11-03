@@ -6,6 +6,7 @@ use std::os::unix::fs::FileExt;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum, delegate_noop, protocol::{wl_buffer, wl_compositor, wl_output, wl_registry, wl_shm, wl_shm_pool, wl_surface}};
 use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zxdg_output_v1};
+use wayland_protocols::xdg::shell::client::{xdg_wm_base, xdg_surface, xdg_toplevel};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use one_mk_wallpaper::{Monitor, Playback, Rect};
 
@@ -14,6 +15,8 @@ struct Desktop {
     compositor: Option<wl_compositor::WlCompositor>,
     shm: Option<wl_shm::WlShm>,
     shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
+    windows: Option<xdg_wm_base::XdgWmBase>,
+    secret: Option<String>,
     manager: Option<zxdg_output_manager_v1::ZxdgOutputManagerV1>,
     outputs: BTreeMap<u32, Output>,
     changed: bool,
@@ -37,7 +40,11 @@ struct Output {
 
 struct Wallpaper {
     surface: wl_surface::WlSurface,
-    layer: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+    role: Role,
+    rect: Rect,
+    title: String,
+    presented: bool,
+    configured: bool,
     size: (u32, u32),
     scale: i32,
     buffers: Vec<Buffer>,
@@ -46,12 +53,21 @@ struct Wallpaper {
     generation: u64,
 }
 
+enum Role { Layer(zwlr_layer_surface_v1::ZwlrLayerSurfaceV1), Window(xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel) }
+
+fn window_title(secret: &str, id: u32, rect: Rect) -> String {
+    format!("oneMK:{secret}:{id}:{}:{}:{}:{}", rect.x as i32, rect.y as i32, rect.width as u32, rect.height as u32)
+}
+
 struct Buffer { proxy: wl_buffer::WlBuffer, file: File, free: Arc<AtomicBool>, size: (u32, u32) }
 #[derive(Default)]
 struct PixelMapping { columns: Vec<Option<usize>>, rows: Vec<Option<usize>> }
 impl PixelMapping { fn is_empty(&self) -> bool { self.columns.is_empty() || self.rows.is_empty() } }
 impl Drop for Buffer { fn drop(&mut self) { self.proxy.destroy(); } }
-impl Drop for Wallpaper { fn drop(&mut self) { self.layer.destroy(); self.surface.destroy(); } }
+impl Drop for Wallpaper { fn drop(&mut self) {
+    match &self.role { Role::Layer(layer) => layer.destroy(), Role::Window(surface, window) => { window.destroy(); surface.destroy(); } }
+    self.surface.destroy();
+} }
 impl Drop for Output {
     fn drop(&mut self) {
         self.wallpaper.take();
@@ -67,6 +83,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Desktop {
                 "wl_compositor" => state.compositor = Some(registry.bind(name, version.min(4), handle, ())),
                 "wl_shm" => state.shm = Some(registry.bind(name, 1, handle, ())),
                 "zwlr_layer_shell_v1" => state.shell = Some(registry.bind(name, version.min(4), handle, ())),
+                "xdg_wm_base" => state.windows = Some(registry.bind(name, version.min(3), handle, ())),
                 "zxdg_output_manager_v1" => {
                     let manager: zxdg_output_manager_v1::ZxdgOutputManagerV1 = registry.bind(name, version.min(3), handle, ());
                     for (id, output) in &mut state.outputs { output.xdg = Some(manager.get_xdg_output(&output.proxy, handle, *id)); }
@@ -134,12 +151,37 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, u32> for Desktop {
                 layer.ack_configure(serial);
                 if let Some(wallpaper) = &mut output.wallpaper {
                     wallpaper.size = (if width == 0 { output.rect.width as u32 } else { width }, if height == 0 { output.rect.height as u32 } else { height }); wallpaper.generation = 0;
+                    wallpaper.configured = true;
                 }
             }
             zwlr_layer_surface_v1::Event::Closed => { output.wallpaper.take(); output.closed = true; }
             _ => {}
         }
         state.changed = true;
+    }
+}
+
+impl Dispatch<xdg_wm_base::XdgWmBase, ()> for Desktop {
+    fn event(_: &mut Self, shell: &xdg_wm_base::XdgWmBase, event: xdg_wm_base::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let xdg_wm_base::Event::Ping { serial } = event { shell.pong(serial); }
+    }
+}
+impl Dispatch<xdg_surface::XdgSurface, u32> for Desktop {
+    fn event(state: &mut Self, surface: &xdg_surface::XdgSurface, event: xdg_surface::Event, id: &u32, _: &Connection, _: &QueueHandle<Self>) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            surface.ack_configure(serial);
+            if let Some(wallpaper) = state.outputs.get_mut(id).and_then(|output| output.wallpaper.as_mut()) {
+                wallpaper.configured = true; wallpaper.generation = 0;
+            }
+            state.changed = true;
+        }
+    }
+}
+impl Dispatch<xdg_toplevel::XdgToplevel, u32> for Desktop {
+    fn event(state: &mut Self, _: &xdg_toplevel::XdgToplevel, event: xdg_toplevel::Event, id: &u32, _: &Connection, _: &QueueHandle<Self>) {
+        if let xdg_toplevel::Event::Close = event && let Some(output) = state.outputs.get_mut(id) {
+            output.wallpaper.take(); output.closed = true; state.changed = true;
+        }
     }
 }
 
@@ -195,25 +237,42 @@ fn mapping(config: &PlayerConfig, monitor: &Monitor, size: (u32, u32), source: (
 impl Desktop {
     fn reconcile(&mut self, config: &PlayerConfig, handle: &QueueHandle<Self>, source: (u32, u32)) -> Result<()> {
         let compositor = self.compositor.as_ref().context("The Wayland compositor has no surface interface")?;
-        let shell = self.shell.as_ref().context(one_mk_wallpaper::wayland::UNSUPPORTED)?;
         for (id, output) in &mut self.outputs {
             if !output.done || output.closed { continue; }
             let Some(monitor) = one_mk_wallpaper::wayland::match_monitor(&config.plan.canvas.monitors, &config.computer, &[&output.name, &output.xdg_name], output.rect) else {
                 output.wallpaper.take(); continue;
             };
+            if self.secret.is_some() && output.wallpaper.as_ref().is_some_and(|wallpaper| wallpaper.rect != output.rect) { output.wallpaper.take(); }
             if output.wallpaper.is_none() {
                 let surface = compositor.create_surface(handle, ());
-                let layer = shell.get_layer_surface(&surface, Some(&output.proxy), zwlr_layer_shell_v1::Layer::Background, "oneMK wallpaper".into(), handle, *id);
-                layer.set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Bottom | zwlr_layer_surface_v1::Anchor::Left | zwlr_layer_surface_v1::Anchor::Right);
-                layer.set_exclusive_zone(-1); layer.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None);
-                layer.set_size(0, 0);
+                let title = self.secret.as_ref().map(|secret| window_title(secret, *id, output.rect)).unwrap_or_default();
+                let role = if self.secret.is_some() {
+                    let shell = self.windows.as_ref().context("GNOME does not provide xdg-shell windows")?;
+                    let xdg = shell.get_xdg_surface(&surface, handle, *id);
+                    let window = xdg.get_toplevel(handle, *id);
+                    window.set_app_id("org.one-mk.Wallpaper".into()); window.set_title(title.clone());
+                    window.set_min_size(output.rect.width as i32, output.rect.height as i32);
+                    window.set_max_size(output.rect.width as i32, output.rect.height as i32);
+                    Role::Window(xdg, window)
+                } else {
+                    let shell = self.shell.as_ref().context(one_mk_wallpaper::wayland::UNSUPPORTED)?;
+                    let layer = shell.get_layer_surface(&surface, Some(&output.proxy), zwlr_layer_shell_v1::Layer::Background, "oneMK wallpaper".into(), handle, *id);
+                    layer.set_anchor(zwlr_layer_surface_v1::Anchor::Top | zwlr_layer_surface_v1::Anchor::Bottom | zwlr_layer_surface_v1::Anchor::Left | zwlr_layer_surface_v1::Anchor::Right);
+                    layer.set_exclusive_zone(-1); layer.set_keyboard_interactivity(zwlr_layer_surface_v1::KeyboardInteractivity::None); layer.set_size(0, 0);
+                    Role::Layer(layer)
+                };
                 let region = compositor.create_region(handle, ()); surface.set_input_region(Some(&region)); region.destroy();
                 surface.commit();
-                output.wallpaper = Some(Wallpaper { surface, layer, size: (0, 0), scale: output.scale, buffers: Vec::new(), pixels: Vec::new(), mapping: PixelMapping::default(), generation: 0 });
+                output.wallpaper = Some(Wallpaper { surface, role, rect: output.rect, title, presented: self.secret.is_none(), configured: false,
+                    size: (output.rect.width as u32, output.rect.height as u32), scale: output.scale, buffers: Vec::new(), pixels: Vec::new(), mapping: PixelMapping::default(), generation: 0 });
             }
             let wallpaper = output.wallpaper.as_mut().unwrap();
-            if wallpaper.size.0 == 0 || wallpaper.size.1 == 0 { continue; }
-            let size = pixel_size(wallpaper.size, output.scale)?;
+            if !wallpaper.configured || wallpaper.size.0 == 0 || wallpaper.size.1 == 0 { continue; }
+            // One output too large to paint must not take the others down.
+            let Ok(size) = pixel_size(wallpaper.size, output.scale) else {
+                eprintln!("oneMK wallpaper: skipping output {id}, {}x{} at scale {} is too large", wallpaper.size.0, wallpaper.size.1, output.scale);
+                output.wallpaper.take(); output.closed = true; continue;
+            };
             if wallpaper.scale != output.scale || wallpaper.pixels.len() != size.0 as usize * size.1 as usize * 4 || wallpaper.generation == 0 {
                 wallpaper.scale = output.scale; wallpaper.surface.set_buffer_scale(output.scale);
                 wallpaper.mapping = mapping(config, monitor, size, source)?;
@@ -306,7 +365,9 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
     connection.display().get_registry(&handle, ());
     let mut desktop = Desktop::default();
     queue.roundtrip(&mut desktop)?; queue.roundtrip(&mut desktop)?;
-    one_mk_wallpaper::wayland::capabilities(desktop.shell.is_some(), desktop.outputs.len()).map_err(anyhow::Error::msg)?;
+    let bridge = if one_mk_wallpaper::gnome_wayland() { Some(super::gnome::Bridge::start()?) } else { None };
+    desktop.secret = bridge.as_ref().map(|bridge| bridge.secret.clone());
+    one_mk_wallpaper::wayland::capabilities(desktop.shell.is_some() || (bridge.is_some() && desktop.windows.is_some()), desktop.outputs.len()).map_err(anyhow::Error::msg)?;
     let source = (config.plan.media.width, config.plan.media.height);
     pixel_size(source, 1)?;
     let mut generation = 1u64;
@@ -348,7 +409,9 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
         let mut playing = false;
         let mut last_sync = Instant::now(); let mut rate = 1.0;
         let mut last_report = String::new();
+        let mut pending_since = None;
         loop {
+            ensure!(bridge.as_ref().is_none_or(|bridge| bridge.alive()), "GNOME extension was disabled or the Shell session ended; wallpaper stopped");
             let mut resync = false;
             while let Ok(input) = receiver.try_recv() {
                 match input {
@@ -400,9 +463,17 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
                 }
             }
             if let Some(frame) = &frame { desktop.paint(frame, generation, &handle)?; }
-            let names = desktop.outputs.values().filter(|output| output.wallpaper.as_ref().is_some_and(|wallpaper| wallpaper.generation > 0))
+            if let Some(bridge) = &bridge && desktop.outputs.values().any(|output| output.wallpaper.as_ref().is_some_and(|wallpaper| wallpaper.generation > 0 && !wallpaper.presented)) {
+                let titles = bridge.presented()?;
+                for output in desktop.outputs.values_mut() {
+                    if let Some(wallpaper) = &mut output.wallpaper { wallpaper.presented = titles.contains(&wallpaper.title); }
+                }
+            }
+            let names = desktop.outputs.values().filter(|output| output.wallpaper.as_ref().is_some_and(|wallpaper| wallpaper.generation > 0 && wallpaper.presented))
                 .map(|output| if output.name.is_empty() { output.xdg_name.as_str() } else { output.name.as_str() }).collect::<Vec<_>>().join(", ");
-            let pending = names.is_empty() && desktop.outputs.values().any(|output| output.wallpaper.is_some());
+            let pending = desktop.outputs.values().any(|output| output.wallpaper.as_ref().is_some_and(|wallpaper| wallpaper.generation == 0 || !wallpaper.presented));
+            if pending { ensure!(pending_since.get_or_insert_with(Instant::now).elapsed() < Duration::from_secs(5), "The compositor did not present all selected wallpaper monitors within five seconds"); }
+            else { pending_since = None; }
             let message = if pending { "Preparing Wayland wallpaper surfaces…".into() }
                 else if !active { "No selected monitors match connected Wayland outputs; waiting for an output".into() }
                 else if config.plan.picture { format!("Picture shown by oneMK on {names}; your own wallpaper returns when turned off") }
@@ -426,7 +497,7 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
                 libc::pollfd { fd: bus_descriptor.fd, events: libc::POLLIN, revents: 0 },
                 libc::pollfd { fd: power.as_ref().map_or(-1, AsRawFd::as_raw_fd), events: libc::POLLIN, revents: 0 },
             ];
-            let polled = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, if playing { 2000 } else { -1 }) };
+            let polled = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, if pending { 100 } else if playing { 2000 } else { -1 }) };
             if polled < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted { return Err(std::io::Error::last_os_error().into()); }
             if descriptors[0].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
                 match guard.read() {
@@ -454,6 +525,13 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gnome_window_identity_carries_launch_and_logical_geometry_not_monitor_names() {
+        let secret = "0123456789abcdef0123456789abcdef";
+        let title = window_title(secret, 7, Rect { x: -1920.0, y: -360.0, width: 1920.0, height: 1080.0 });
+        assert_eq!(title, "oneMK:0123456789abcdef0123456789abcdef:7:-1920:-360:1920:1080");
+        assert_eq!(&title[39..], "7:-1920:-360:1920:1080");
+    }
     #[test]
     fn dimensions_respect_scale_and_bound_memory() {
         assert_eq!(pixel_size((800, 600), 2).unwrap(), (1600, 1200));

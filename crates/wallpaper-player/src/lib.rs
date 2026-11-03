@@ -157,6 +157,26 @@ pub struct Status {
     pub poster: Option<PathBuf>,
     #[serde(default)]
     pub computers: std::collections::BTreeMap<String, Playback>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gnome: Option<GnomeSetup>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GnomeStage { NotInstalled, LogOutRequired, Disabled, Active, Unsupported, Unavailable, Failed, Unmanaged }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GnomeSetup { pub stage: GnomeStage, pub message: String, pub can_install: bool, pub can_enable: bool }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtensionAction { Install, Enable }
+
+pub const GNOME_PLAYBACK_UNAVAILABLE: &str = "GNOME video needs the oneMK extension on qualified GNOME Shell 50.1. Open Wallpaper, choose Install GNOME extension, log out and back in once, then choose Enable GNOME extension. Pictures still work without it.";
+
+pub fn gnome_wayland() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop|
+        desktop.split(':').any(|part| part.eq_ignore_ascii_case("gnome") || part.eq_ignore_ascii_case("gnome-classic")))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +197,7 @@ pub fn event(playback: Playback) {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Command {
+    GnomeExtension { operation: ExtensionAction },
     Set { path: PathBuf },
     Off,
     Pause { paused: bool },
@@ -351,6 +372,17 @@ pub fn file_identity(file: &std::fs::File) -> anyhow::Result<Vec<u64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn extension_actions_are_local_commands_and_old_status_still_decodes() {
+        for operation in [ExtensionAction::Install, ExtensionAction::Enable] {
+            let command = Command::GnomeExtension { operation };
+            let json = serde_json::to_string(&command).unwrap();
+            assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), command);
+            assert!(serde_json::from_str::<Wire>(&json).is_err());
+        }
+        let status: Status = serde_json::from_str(r#"{"plan":null,"message":"off","available":true,"poster":null}"#).unwrap();
+        assert!(status.gnome.is_none());
+    }
     #[test]
     fn only_s_ok_contains_a_video_frame() {
         assert!(has_video_frame(0));

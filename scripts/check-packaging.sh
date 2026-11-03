@@ -15,7 +15,7 @@
 #     still match the window's style (scripts/brand-tokens.py --check).
 # Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby, Pillow) are
 # used when present and reported as skipped when not.
-#   cargo build --release --locked -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
+#   cargo build --locked -j 4 -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
 #   sh scripts/check-packaging.sh
 # A debug build is enough for these checks: BIN_DIR=target/debug sh scripts/check-packaging.sh
 . "$(dirname "$0")/package-common.sh"
@@ -41,9 +41,14 @@ if command -v dpkg-deb >/dev/null; then
     dpkg-deb -x "$deb" "$root"
     dpkg-deb -e "$deb" "$root/DEBIAN"
     for f in usr/bin/one-mk usr/bin/one-mk-tray usr/bin/one-mk-app usr/bin/one-mk-wallpaper usr/share/applications/one-mk.desktop \
-             usr/share/applications/io.github.onemk.OneMk.desktop usr/share/icons/hicolor/256x256/apps/one-mk.png; do
+             usr/share/applications/io.github.onemk.OneMk.desktop usr/share/icons/hicolor/256x256/apps/one-mk.png \
+             usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/extension.js \
+             usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/bridge.xml \
+             usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/metadata.json; do
         [ -e "$root/$f" ] && ok ".deb contains /$f" || bad ".deb is missing /$f"
     done
+    [ ! -e "$root/usr/share/gnome-shell/extensions" ] && ok ".deb does not auto-install a GNOME extension" || bad ".deb installs an extension without user consent"
+    check "bundled renderer requires a playback plan" sh -c "! '$root/usr/bin/one-mk-wallpaper'"
     [ -z "$(find "$root" -not -path "$root/DEBIAN*" \( -perm -002 -o -perm -4000 \) -not -type l)" ] && ok ".deb has no world-writable or setuid files" || bad ".deb has world-writable or setuid files"
     grep -q "^Version: $VERSION$" "$root/DEBIAN/control" && ok ".deb control version matches Cargo.toml ($VERSION)" || bad ".deb control version"
     got=$("$root/usr/bin/one-mk" --version) && [ "$got" = "one-mk $VERSION" ] && ok "unpacked one-mk --version: $got" || bad "one-mk --version said '$got'"

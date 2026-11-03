@@ -34,6 +34,7 @@ macro_rules! api {
 }
 
 mod wayland;
+mod gnome;
 
 struct Gst {
     _core: Library,

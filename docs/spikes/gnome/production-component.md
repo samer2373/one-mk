@@ -1,5 +1,28 @@
 # GNOME component implementation checkpoint — NOT a playback qualification
 
+Historical laboratory notes: the production path now uses authenticated normal
+Wayland windows, not this authority/cgroup design. See the
+[production video report](../../reviews/GNOME-WAYLAND-VIDEO.md) for current support.
+
+## Offline product setup, not production playback (2026-11-02)
+
+The normal Wallpaper page now observes GNOME setup and offers separate local
+**Install GNOME extension** and **Enable GNOME extension** actions. The .deb
+ships the dormant component outside GNOME's discovery directories. No download,
+automatic enable, Shell Eval, renderer authorization or peer grant is involved.
+The install notice says **Log out and back in once to finish**. A private
+GNOME Shell 50.1 restart confirms discovery, followed by explicit Enable; the
+same test confirms no background URI changes. This is not a real GDM login test.
+
+Video remains explicitly unavailable even when the bridge is active. The
+production service does not publish the laboratory presentation plan, and the
+release renderer still refuses `--present=gnome`. The sandbox/runtime/controller,
+Fit/clock integration and production authorization work remains open; do not
+read this setup slice as step D acceptance. See the
+[production setup report](../../reviews/GNOME-WAYLAND-PRODUCTION-SETUP.md) for
+the actual scope, measurements and remaining implementation work. The historical
+step A/B/C evidence below remains laboratory evidence, not product support.
+
 ## Step C: lifecycle and restoration in the laboratory (2026-10-31)
 
 The extension and laboratory renderer now survive layout change and hot-plug,
@@ -142,23 +165,29 @@ there is no new warning-baseline comparison or playback claim. See
   Retry is 1/2/4 seconds, at most three starts per rolling minute; immediate unlock
   uses the **same** cap and never clears exhaustion. The latch survives extension
   rebase within a Shell session. Retry currently requires a fresh Shell session.
-- CLI `one-mk wallpaper extension install|uninstall|status`, optional
+- CLI `one-mk wallpaper extension install|enable|uninstall|status`, optional
   `install --renderer /absolute/path`. Sources are embedded in the CLI; installation
   requires an existing renderer binary. Only explicit install copies into
   `$XDG_DATA_HOME/gnome-shell/extensions/UUID`, or `$HOME/.local/share/...`.
-  It never enables; it prints `gnome-extensions enable one-mk-wallpaper@one-mk.org`.
+  Install never enables. The separate explicit Enable action calls GNOME's
+  extension API after the next Shell session discovers the installed files.
   Install refuses an occupied path. Uninstall refuses enabled, unmanaged, modified
   or extra-file trees rather than deleting user content. Pristine managed trees
-  are fully removed. GNOME enabled-extension settings are never changed by it.
+  are fully removed. Only Enable requests a GNOME enabled-extension change;
+  the global user-extensions setting and playback authorization are untouched.
 - Status distinguishes installed, enabled, qualified and restart-limit-reached.
-  Unreachable Shell means **unknown**, not false. Doctor prints the extension state
+  Unreachable Shell means **unknown**, not false. Status prints the extension state
   and the literal **restart limit reached** when the Shell-owned runtime snapshot
   says so. Snapshots carry Shell's unique owner so an old session is ignored.
-  Import and `doctor --runtime` dispatch in `main.rs` remain unchanged.
-- Release workflow has a separate **non-publishing** component artifact with
+  Laboratory import and runtime diagnostics remain feature-gated.
+- The separate component artifact contains
   `libexec/one-mk-wall`, extension source beneath `share/gnome-shell/extensions/`,
-  licenses and SHA256SUMS. It is not attached to a GitHub release or auto-installed.
-  `scripts/package-wallpaper-gnome.sh` reproduces packaging without installation.
+  licenses and SHA256SUMS. The Linux release tar also carries this dormant
+  component and a sibling renderer. The `.deb` stages the renderer under
+  `/usr/lib/one-mk` and extension sources under `/usr/share/one-mk`, outside
+  GNOME's discovery folders. Neither package installs into the user's extension
+  folder or enables it. `scripts/package-wallpaper-gnome.sh` reproduces component
+  packaging without installation. Production video is still unavailable.
 
 ## Explicitly unfinished — required before the request can be called complete
 
@@ -181,8 +210,9 @@ there is no new warning-baseline comparison or playback claim. See
    Do not silently promote these partial implementations to section 4 compliance.
 4. ~~Teardown uses immediate force-exit and async reap, not the proposed cooperative
    SIGTERM/two-second escalation.~~ Resolved in step C (SIGTERM, SIGKILL after 2 s). The cap is observable, but a user-facing explicit
-   Retry operation is not delivered. Cold-install recognition without logout/login
-   is not qualified. No on-host system or extension validation setting was changed.
+   Retry operation is not delivered. Cold-install recognition requires logout/login;
+   private Shell restart/discovery is qualified, but a real GDM login is not.
+   No on-host system or extension validation setting was changed.
 5. Whole-runtime licensing/sandbox/decoder package acceptance, Windows/macOS native
    host acceptance, physical display quality and power are still outstanding M1
    work. A dry-run artifact is not a shippable optional playback package.

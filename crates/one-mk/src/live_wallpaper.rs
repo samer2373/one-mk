@@ -58,9 +58,20 @@ struct State {
     awaiting: BTreeSet<(Fingerprint, String)>,
     applied_picture: Option<Plan>,
     picture_mode: one_mk_wallpaper::picture::Mode,
+    extension_check: Option<std::time::Instant>,
+    extension_checking: bool,
+    extension_changing: bool,
 }
 
 impl State {
+    fn replace_player(&mut self, exclusive: bool) {
+        if let Some(mut child) = self.player.take() {
+            if !exclusive && self.status.computers.get(&self.computer).is_some_and(Playback::is_ready) { self.retiring.push(child); }
+            else { let _ = child.kill(); let _ = child.wait(); }
+        }
+        if exclusive { self.retire(); }
+        self.launch += 1;
+    }
     fn retire(&mut self) {
         for mut child in self.retiring.drain(..) {
             if let Some(mut input) = child.stdin.take() { let _ = writeln!(input, "quit"); }
@@ -340,6 +351,7 @@ impl Runtime {
     }
 
     pub fn status(&self) -> one_mk_wallpaper::Status {
+        self.refresh_extension();
         let mut state = self.state.lock().unwrap();
         if let Some(child) = &mut state.player && let Ok(Some(code)) = child.try_wait() {
             state.player = None;
@@ -368,6 +380,29 @@ impl Runtime {
             status.message = reason.into();
         } else { status.available = true; }
         status
+    }
+
+    fn refresh_extension(&self) {
+        if !cfg!(target_os = "linux") || !one_mk_wallpaper::gnome_wayland() { return; }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
+        let mut state = self.state.lock().unwrap();
+        if state.extension_checking || state.extension_changing || state.extension_check.is_some_and(|last| last.elapsed() < Duration::from_secs(2)) { return; }
+        state.extension_checking = true;
+        let shared = Arc::downgrade(&self.state);
+        handle.spawn(async move {
+            let setup = tokio::time::timeout(Duration::from_secs(4), crate::wallpaper::extension::setup()).await;
+            let setup = match setup {
+                Ok(Ok(setup)) => setup,
+                _ => one_mk_wallpaper::GnomeSetup { stage: one_mk_wallpaper::GnomeStage::Unavailable,
+                    message: "Could not check the GNOME extension. Open oneMK in your GNOME Wayland session and try again.".into(), can_install: false, can_enable: false },
+            };
+            if let Some(shared) = shared.upgrade() {
+                let mut state = shared.lock().unwrap();
+                state.extension_checking = false;
+                state.extension_check = Some(std::time::Instant::now());
+                if !state.extension_changing { state.status.gnome = Some(setup); }
+            }
+        });
     }
 
     pub fn shutdown(&self) {
@@ -474,11 +509,7 @@ impl Runtime {
         let same_but_paused = state.coordinator == coordinator && state.player.is_some()
             && state.status.plan.as_ref().is_some_and(|old| Plan { paused: plan.paused, ..old.clone() } == plan);
         if !same_but_paused {
-            if let Some(mut child) = state.player.take() {
-                if state.status.computers.get(&state.computer).is_some_and(Playback::is_ready) { state.retiring.push(child); }
-                else { let _ = child.kill(); let _ = child.wait(); }
-            }
-            state.launch += 1;
+            state.replace_player(one_mk_wallpaper::gnome_wayland());
         }
         state.previous = state.status.plan.as_ref().map(|old| old.hash.clone()).filter(|hash| hash != &plan.hash).or(state.previous.take());
         state.computer = computer;
@@ -540,6 +571,28 @@ impl Runtime {
     }
 
     pub fn request(&self, dir: PathBuf, status: Status, command: Command, peers: Vec<Peer>, node: Node, reply: tokio::sync::oneshot::Sender<String>) {
+        // Setup is local consent, not a wallpaper-plan mutation. It must not
+        // cancel a transfer, increment its generation or tell any peer to play.
+        if let Command::GnomeExtension { operation } = command {
+            let mut state = self.state.lock().unwrap();
+            if state.extension_changing { let _ = reply.send("error GNOME extension setup is already running\n".into()); return; }
+            state.extension_changing = true;
+            let shared = Arc::downgrade(&self.state);
+            tokio::spawn(async move {
+                let result = crate::wallpaper::extension::consented_action(operation).await;
+                if let Some(shared) = shared.upgrade() {
+                    let mut state = shared.lock().unwrap();
+                    state.extension_changing = false;
+                    state.extension_check = None;
+                    if let Err(error) = &result {
+                        state.status.gnome = Some(one_mk_wallpaper::GnomeSetup { stage: one_mk_wallpaper::GnomeStage::Failed,
+                            message: format!("GNOME extension setup: {error:#}"), can_install: false, can_enable: false });
+                    }
+                }
+                let _ = reply.send(result.map_or_else(|error| format!("error {error:#}\n"), |_| "ok\n".into()));
+            });
+            return;
+        }
         // Every change, in the log: what turned a wallpaper off is then known.
         tracing::info!("wallpaper: {}", match &command { Command::Set { path } => format!("set {}", path.display()), other => format!("{other:?}") });
         let generation = {
@@ -595,6 +648,9 @@ impl Runtime {
         }
         let mut plan = self.state.lock().unwrap().status.plan.clone();
         if let Command::Set { path } = command {
+            let picture = one_mk_wallpaper::picture::is_picture(&path);
+            // Refuse unsupported video before preparation can launch a decoder.
+            if !picture { one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?; }
             let dir_owned = dir.to_owned();
             let title = path.file_name().context("Choose a video file")?.to_string_lossy().chars().take(64).collect::<String>();
             let mut canvas = one_mk_ctl::wallpaper::canvas(&status);
@@ -605,7 +661,6 @@ impl Runtime {
                 canvas = reserved;
             }
             self.state.lock().unwrap().status.message = "Preparing video… 0%".into();
-            let picture = one_mk_wallpaper::picture::is_picture(&path);
             let prepared = if picture { None } else { match self.prepare(dir, &path, &canvas, generation).await {
                 Ok(prepared) => prepared,
                 Err(error) => { tracing::info!("Wallpaper preparation: {error}"); preparation_notice = Some("Could not prepare a smaller copy. Using the original video."); None }
@@ -864,16 +919,22 @@ fn send(control: &ControlWriter, wire: &Wire) {
 }
 
 #[derive(clap::Args)]
-pub struct Args { #[command(subcommand)] command: Action }
+pub struct Args { #[arg(long, global = true)] json: bool, #[command(subcommand)] command: Action }
 #[derive(clap::Subcommand)]
-enum Action { Set { file: PathBuf }, Off, Status, Pause, Play }
+enum Action { Set { file: PathBuf }, Off, Status, Pause, Play, Extension { #[command(subcommand)] command: crate::wallpaper::extension::Command } }
 
 pub async fn command(dir: &Path, args: Args) -> Result<()> {
+    if let Action::Extension { command } = args.command {
+        let result = crate::wallpaper::extension::command(&command).await?;
+        if args.json { println!("{result}"); }
+        else { println!("{}", result["message"].as_str().unwrap_or_default()); }
+        return Ok(());
+    }
     let request = match args.command {
         Action::Status => crate::control::Request::Status,
         action => crate::control::Request::LiveWallpaper(serde_json::to_string(&match action {
             Action::Set { file } => Command::Set { path: file.canonicalize()? }, Action::Off => Command::Off,
-            Action::Pause => Command::Pause { paused: true }, Action::Play => Command::Pause { paused: false }, Action::Status => unreachable!(),
+            Action::Pause => Command::Pause { paused: true }, Action::Play => Command::Pause { paused: false }, Action::Status | Action::Extension { .. } => unreachable!(),
         })?),
     };
     let asked_status = matches!(request, crate::control::Request::Status);
@@ -1009,6 +1070,21 @@ mod tests {
         std::fs::write(&path, b"second").unwrap(); assert_ne!(digest(&path).unwrap(), first);
         let replacement = directory.path().join("replacement"); std::fs::write(&replacement, b"third").unwrap();
         std::fs::rename(replacement, &path).unwrap(); assert_ne!(digest(&path).unwrap(), first);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exclusive_presentation_reaps_previous_and_retiring_players_before_replacement() {
+        let previous = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let retiring = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let pids = [previous.id(), retiring.id()];
+        let mut state = State::default();
+        state.player = Some(previous); state.retiring = vec![retiring]; state.computer = "host".into();
+        state.status.computers.insert("host".into(), Playback::Ready);
+        state.replace_player(true);
+        assert!(state.player.is_none() && state.retiring.is_empty());
+        assert_eq!(state.launch, 1);
+        for pid in pids { assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1); }
     }
 
     #[cfg(unix)]

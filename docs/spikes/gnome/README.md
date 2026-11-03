@@ -1,9 +1,36 @@
 # Private GNOME component laboratory
 
+Current production-video qualification: `qualify-production-video.py` uses the
+isolated session below, production CLI/helper, screenshots and lifecycle/CPU
+checks. `node --test docs/spikes/gnome/test_production_video.mjs` tests admission
+and cleanup without Shell. See [the production report](../../reviews/GNOME-WAYLAND-VIDEO.md).
+The authority/cgroup experiments elsewhere in this directory are historical.
+
 This directory contains an **isolated headless Mutter** harness, not instructions
 for manipulating the owner's running desktop. Read `production-component.md`,
 `../../WALLPAPER-DESIGN.md` revision 2 and
 `../../reviews/WAVE6-M1-REPORT.md` before interpreting results.
+
+## Product setup qualification (2026-11-02)
+
+`qualify-extension-setup.py` exercises the normal CLI (not `m1-lab` or Private
+Eval): bundled install, no automatic enable, the log-out notice, discovery after
+a private Shell restart, separate Enable, active-state detection and managed
+uninstall after disabling. It checks the private background URI never changes.
+It uses private buses, a temporary HOME and fake GDM only inside that private
+system bus, so the bridge has lock-screen tracking; it never accesses the real
+display manager. Reports/logs go into `target/gnome-setup-qa`.
+
+```sh
+cargo build --locked -j 4 -p one-mk -p one-mk-wall --features one-mk-wall/gnome-bridge
+python3 docs/spikes/gnome/qualify-extension-setup.py
+```
+
+This proves setup on headless GNOME Shell 50.1, not production video or a real
+login/logout. The .deb now includes dormant components, and the Wallpaper page
+offers these separate explicit actions. Enabling still does not authorize
+playback; the page says so. See
+[the current production gap report](../../reviews/GNOME-WAYLAND-PRODUCTION-SETUP.md).
 
 ## Component conformance and repeated child teardown
 

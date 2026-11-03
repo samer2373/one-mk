@@ -20,12 +20,13 @@ export default class SpikeHarness extends Extension {
         this.events = [];
         this._signals = [];
         const record = kind => {
-            this.events.push({kind, us: GLib.get_monotonic_time(), locked: Main.screenShield.locked});
+            this.events.push({kind, us: GLib.get_monotonic_time(), locked: Main.screenShield?.locked ?? false});
             if (this.events.length > 100)
                 this.events.shift();
         };
         this._signals.push([Main.layoutManager, Main.layoutManager.connect('monitors-changed', () => record('layout'))]);
-        this._signals.push([Main.screenShield, Main.screenShield.connect('locked-changed', () => record('lock'))]);
+        if (Main.screenShield)
+            this._signals.push([Main.screenShield, Main.screenShield.connect('locked-changed', () => record('lock'))]);
     }
 
     disable() {
