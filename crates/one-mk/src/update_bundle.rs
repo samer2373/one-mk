@@ -18,14 +18,23 @@ trait CodeSign {
 
 struct SystemCodeSign;
 
+/// codesign reads a requirement that doesn't start with `=` as the path of a file holding one, so the text
+/// needs the `=` ("--test-requirement==anchor apple generic" on the command line). Without it the check
+/// always failed and no app update could ever be installed.
+const VERIFY_ARGS: [&str; 4] = ["--verify", "--deep", "--strict", "--test-requirement==anchor apple generic"];
+
 impl CodeSign for SystemCodeSign {
     fn team(&self, path: &Path) -> Result<String> {
         // Signed through Apple's chain (a Developer ID), not just any
         // signature with a team string in it: only then is the team the
         // publisher's.
-        let verified = Command::new("/usr/bin/codesign").args(["--verify", "--deep", "--strict", "--test-requirement=anchor apple generic"])
+        let verified = Command::new("/usr/bin/codesign").args(VERIFY_ARGS)
             .arg(path).output().context("Couldn't verify the app's identity")?;
-        ensure!(verified.status.success(), "The app's security check failed; nothing was replaced");
+        if !verified.status.success() {
+            let reason = String::from_utf8_lossy(&verified.stderr).lines().next().unwrap_or("").trim().to_owned();
+            tracing::warn!("update: the security check failed for {}: {reason}", path.display());
+            bail!("The app's security check failed ({}); nothing was replaced", path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default());
+        }
         let identity = Command::new("/usr/bin/codesign").args(["--display", "--verbose=4"])
             .arg(path).output().context("Couldn't read the app's identity")?;
         ensure!(identity.status.success(), "Couldn't read the app's identity");
@@ -253,6 +262,12 @@ mod tests {
             if path == Path::new("running") { return Ok("ABCDEFGHIJ".into()); }
             self.candidate.as_ref().cloned().map_err(|error| anyhow::anyhow!("{error}"))
         }
+    }
+
+    #[test]
+    fn the_signature_requirement_is_given_to_codesign_as_text_not_as_a_file_name() {
+        // "--test-requirement=anchor apple generic" makes codesign look for a file of that name and fail.
+        assert!(VERIFY_ARGS.contains(&"--test-requirement==anchor apple generic"));
     }
 
     #[test]

@@ -217,7 +217,7 @@ impl Link {
             Some(h) => h,
             None => one_mk_ctl::default_home()?,
         };
-        let me = std::env::current_exe()?;
+        let me = running_executable()?;
         let daemon = install::sibling(&me, "one-mk").unwrap_or_else(|| PathBuf::from("one-mk"));
         let tray = install::sibling(&me, "one-mk-tray");
         Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default(), showing: Showing::new() })
@@ -484,7 +484,7 @@ impl Link {
     fn restart_updated(&self, moved: bool) -> anyhow::Result<()> {
         let _ = self.one_mk(&["stop"])?;
         let mut daemon = self.daemon.clone();
-        let mut window = std::env::current_exe()?;
+        let mut window = running_executable()?;
         if moved {
             daemon = PathBuf::from("/Applications/one-mk.app/Contents/MacOS/one-mk");
             window = PathBuf::from("/Applications/one-mk.app/Contents/MacOS/one-mk-app");
@@ -1036,5 +1036,30 @@ mod tests {
             Some(Latency { peer: "mac".into(), p50_us: 312.0, p99_us: 520.0, lost: 2, count: 400 })
         );
         assert_eq!(parse_bench("garbage", "mac"), None);
+    }
+}
+
+/// This program's own file. After an update replaced it on disk Linux reports
+/// the old file as "<path> (deleted)", which is not a path anything can start:
+/// the file now at the same place is the updated program.
+fn running_executable() -> std::io::Result<PathBuf> {
+    Ok(without_deleted_suffix(std::env::current_exe()?))
+}
+
+fn without_deleted_suffix(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|text| text.strip_suffix(" (deleted)")) {
+        Some(original) => PathBuf::from(original),
+        None => path,
+    }
+}
+
+#[cfg(test)]
+mod replaced_executable_tests {
+    use super::*;
+
+    #[test]
+    fn a_program_replaced_by_an_update_is_started_from_the_path_it_had() {
+        assert_eq!(without_deleted_suffix(PathBuf::from("/usr/bin/one-mk-app (deleted)")), PathBuf::from("/usr/bin/one-mk-app"));
+        assert_eq!(without_deleted_suffix(PathBuf::from("/usr/bin/one-mk-app")), PathBuf::from("/usr/bin/one-mk-app"));
     }
 }
