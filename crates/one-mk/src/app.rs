@@ -71,6 +71,8 @@ const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
 const DIAL_INTERVAL: Duration = Duration::from_secs(2);
 const DIAL_MAX: Duration = Duration::from_secs(30);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
+/// How often a paired computer that stays unreachable is mentioned in the log.
+const DIAL_LOG_EVERY: Duration = Duration::from_secs(600);
 /// How long a peer that connected to us may take to open its first stream.
 const FIRST_STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 /// Discovery announcements from unknown devices re-read the trusted device
@@ -225,7 +227,8 @@ async fn serve_stream(
 enum AppEvent {
     Connected(Link),
     Found(Found),
-    DialDone(SocketAddr),
+    /// A dial ended (or the link it made did); with why it failed, if it did.
+    DialDone(SocketAddr, Option<String>),
     /// The networks this computer is on changed (only watched while some
     /// layout profile switches by itself).
     Network(NetworkId),
@@ -632,6 +635,7 @@ struct App {
     discovered: HashMap<Fingerprint, Vec<SocketAddr>>,
     extra_addrs: Vec<SocketAddr>,
     dialing: HashSet<SocketAddr>,
+    dial_logged: HashMap<SocketAddr, Instant>,
     services: Services,
     /// Peers whose first time controlling this machine (this run) has been
     /// announced with how to take control back.
@@ -795,6 +799,7 @@ pub async fn serve(
         discovered: HashMap::new(),
         extra_addrs: opts.connect,
         dialing: HashSet::new(),
+        dial_logged: HashMap::new(),
         services,
         announced: HashSet::new(),
         focus,
@@ -2006,8 +2011,19 @@ impl App {
                 self.dial_backoff = DIAL_INTERVAL;
                 self.dial_missing(screens);
             }
-            AppEvent::DialDone(addr) => {
+            AppEvent::DialDone(addr, failure) => {
                 self.dialing.remove(&addr);
+                match failure {
+                    // Said once, then every ten minutes: a computer that is
+                    // asleep must not fill the log, but "it never connects"
+                    // must have a reason in it.
+                    Some(why) if self.dial_logged.get(&addr).is_none_or(|at| at.elapsed() > DIAL_LOG_EVERY) => {
+                        self.dial_logged.insert(addr, Instant::now());
+                        tracing::info!(%addr, "can't connect to a paired computer: {why}");
+                    }
+                    Some(_) => {}
+                    None => { self.dial_logged.remove(&addr); }
+                }
             }
             AppEvent::Network(net) => self.on_network(&net),
             AppEvent::FocusMoved => {
@@ -3146,11 +3162,11 @@ impl App {
             let (node, dir, screens, tx, services) =
                 (self.node.clone(), self.dir.clone(), screens.clone(), self.tx.clone(), self.services.clone());
             tokio::spawn(async move {
-                match node.connect_timeout(addr, DIAL_TIMEOUT).await {
-                    Ok(peer) => establish(peer, &node, &dir, &screens, &tx, services, None).await,
-                    Err(e) => tracing::trace!(%addr, "dial failed: {e:#}"),
-                }
-                let _ = tx.send(AppEvent::DialDone(addr));
+                let failure = match node.connect_timeout(addr, DIAL_TIMEOUT).await {
+                    Ok(peer) => { establish(peer, &node, &dir, &screens, &tx, services, None).await; None }
+                    Err(e) => Some(format!("{e:#}")),
+                };
+                let _ = tx.send(AppEvent::DialDone(addr, failure));
             });
         }
     }
