@@ -638,6 +638,7 @@ impl App {
                 Job::ProfileAuto { name, ssid: Some(ssid) } => self.toast(format!("“{name}” comes on by itself on Wi-Fi “{ssid}”"), now),
                 Job::ProfileAuto { name, ssid: None } => self.toast(format!("“{name}” no longer comes on by itself"), now),
                 Job::Tune { area, what, .. } => self.tuned(area, &what, None),
+                Job::UpdateCheck => self.update_ui.checked = true,
                 _ => {}
             }
             return;
@@ -645,6 +646,7 @@ impl App {
         let e = Some(e);
         match what {
             Job::Update => { self.update_output = e; self.update_ui.failed = true; }
+            Job::UpdateCheck => self.toast_error("Couldn't check for updates.", e, now),
             Job::UpdateSettings => self.toast_error("Couldn't save update preferences.", e, now),
             Job::Measure(id) => {
                 // Not again by itself: it would fail again, forever.

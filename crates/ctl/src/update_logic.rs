@@ -149,10 +149,19 @@ pub enum InstallKind { Portable, AppImage, Deb, Homebrew, Flatpak, WindowsInstal
 impl InstallKind {
     pub fn automatic(self) -> bool { matches!(self, Self::Portable | Self::AppImage | Self::MacApp) }
 
+    /// Whether the window can do the whole update: the ones that replace
+    /// themselves, and a Linux package, which the update installs after
+    /// the system asks for the password (never without asking).
+    pub fn installs_in_app(self) -> bool { self.automatic() || self == Self::Deb }
+
+    /// Whether the install asks for the account's password.
+    pub fn needs_password(self) -> bool { self == Self::Deb }
+
     pub fn advice(self) -> &'static str {
         match self {
             Self::Portable | Self::AppImage | Self::MacApp => "Ready to update in place",
-            Self::Deb | Self::Homebrew | Self::Flatpak => "Updates come with your package manager",
+            Self::Deb => "Installing asks for your password once",
+            Self::Homebrew | Self::Flatpak => "Updates come with your package manager",
             Self::WindowsInstaller => "Download the new Windows installer to update this installation",
             Self::Managed => "Download the complete release to update this installation",
         }
@@ -168,7 +177,11 @@ pub fn select_install<'a>(manifest: &'a Manifest, os: &str, arch: &str, kind: In
         ensure!(matching.next().is_none(), "The release contains more than one matching app update");
         return Ok(asset);
     }
-    ensure!(kind.automatic(), "{}", kind.advice());
+    ensure!(kind.installs_in_app(), "{}", kind.advice());
+    if kind == InstallKind::Deb {
+        ensure!(os == "linux", "This update doesn't match your operating system");
+        return select(manifest, os, arch, "deb");
+    }
     select(manifest, os, arch, if kind == InstallKind::AppImage { "appimage" } else { "binary" })
 }
 
@@ -184,6 +197,10 @@ pub struct UpdateStatus {
     pub available: Option<String>,
     pub error: Option<String>,
     pub can_update: bool,
+    /// Installing asks for the account's password (a Linux package), so it
+    /// is never done without the person asking.
+    #[serde(default)]
+    pub needs_password: bool,
     pub move_to_applications: bool,
     pub rollback_available: bool,
     pub advice: String,
@@ -350,6 +367,20 @@ mod tests {
     }
 
     #[test]
+    fn a_linux_package_installs_from_its_signed_deb_only_on_linux() -> Result<()> {
+        let mut manifest = fixture();
+        manifest.assets.clear();
+        manifest.assets.push(Asset { name: "one-mk-x86_64-unknown-linux-gnu.deb".into(), size: 1, sha256: "ab".repeat(32),
+            os: "linux".into(), arch: "x86_64".into(), kind: "deb".into() });
+        assert_eq!(select_install(&manifest, "linux", "x86_64", InstallKind::Deb)?.name, "one-mk-x86_64-unknown-linux-gnu.deb");
+        assert!(select_install(&manifest, "macos", "x86_64", InstallKind::Deb).is_err());
+        assert!(select_install(&manifest, "linux", "aarch64", InstallKind::Deb).is_err());
+        assert!(InstallKind::Deb.installs_in_app() && InstallKind::Deb.needs_password() && !InstallKind::Deb.automatic());
+        assert!(!InstallKind::MacApp.needs_password());
+        Ok(())
+    }
+
+    #[test]
     fn install_selection_matches_platform_architecture_and_container() -> Result<()> {
         let mut manifest = fixture();
         manifest.assets.clear();
@@ -368,7 +399,7 @@ mod tests {
                 let selected = select_install(&manifest, os, arch, kind)?;
                 assert_eq!(selected.name, format!("one-mk-{os}-{arch}{suffix}"));
             }
-            for kind in [InstallKind::Deb, InstallKind::Homebrew, InstallKind::Flatpak, InstallKind::WindowsInstaller, InstallKind::Managed] {
+            for kind in [InstallKind::Homebrew, InstallKind::Flatpak, InstallKind::WindowsInstaller, InstallKind::Managed] {
                 assert!(select_install(&manifest, os, arch, kind).is_err());
             }
         }}

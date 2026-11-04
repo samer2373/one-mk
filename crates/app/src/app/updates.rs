@@ -5,6 +5,8 @@ use one_mk_ctl::update_logic::UpdateStatus;
 pub(super) struct UpdateUi {
     pub status: Option<UpdateStatus>,
     pub failed: bool,
+    /// A check made from this window finished: "up to date" may be said.
+    pub checked: bool,
     acknowledged: bool,
     attempted: Option<String>,
 }
@@ -26,7 +28,7 @@ impl App {
             self.link.acknowledge_app_start();
         }
         let Some(status) = self.update_ui.status.clone() else { return; };
-        if status.check && status.install_automatically && status.can_update && status.error.is_none()
+        if status.check && status.install_automatically && status.can_update && !status.needs_password && status.error.is_none()
             && let Some(version) = &self.update_available
             && status.skipped.as_ref() != Some(version)
             && self.update_ui.attempted.as_ref() != Some(version) && !self.busy.contains(&Job::Update)
@@ -43,7 +45,7 @@ impl App {
 /// What the update box in the sidebar shows.
 pub(super) enum UpdateBox {
     /// A newer version, and whether this install can replace itself.
-    Ready { version: String, can: bool, advice: String },
+    Ready { version: String, can: bool, advice: String, password: bool },
     /// Running from the disk image (or translocated): move it first.
     MoveFirst,
     /// Downloading or installing: how far (0–1, when known) and what now.
@@ -67,14 +69,14 @@ impl App {
             return Some(UpdateBox::MoveFirst);
         }
         let version = self.update_available.clone()?;
-        Some(UpdateBox::Ready { version, can: status.is_none_or(|s| s.can_update), advice: status.map(|s| s.advice.clone()).unwrap_or_default() })
+        Some(UpdateBox::Ready { version, can: status.is_none_or(|s| s.can_update), advice: status.map(|s| s.advice.clone()).unwrap_or_default(), password: status.is_some_and(|s| s.needs_password) })
     }
 }
 
 impl App {
     pub(super) fn updates_card_h(&self) -> f32 {
         let rollback = self.update_ui.status.as_ref().is_some_and(|s| s.rollback_available);
-        48.0 + 2.0 * 36.0 + if rollback { 44.0 } else { 0.0 } + 26.0 + 14.0
+        48.0 + 2.0 * 36.0 + 44.0 + if rollback { 44.0 } else { 0.0 } + 26.0 + 14.0
     }
 
     /// Advanced > Updates: whether to look for new versions (at most once
@@ -92,11 +94,40 @@ impl App {
             self.busy.push(Job::UpdateSettings);
             self.link.update_preference(false, !status.check);
         }
-        if widgets::switch(ui, row(1.0), Id::unique("update-auto"), "Install them without asking", status.install_automatically, !busy && status.check && status.can_update).clicked() {
+        if widgets::switch(ui, row(1.0), Id::unique("update-auto"), "Install them without asking", status.install_automatically, !busy && status.check && status.can_update && !status.needs_password).clicked() {
             self.busy.push(Job::UpdateSettings);
             self.link.update_preference(true, !status.install_automatically);
         }
         let mut y = c.top() - 6.0 + 2.0 * 36.0 + 8.0;
+        // The button that matters: look now; once a newer version is known,
+        // install it from here too.
+        let checking = self.busy.contains(&Job::UpdateCheck);
+        let installing = self.busy.contains(&Job::Update);
+        let version = self.update_available.clone();
+        let (label, look) = match (&version, status.can_update) {
+            _ if installing => ("Updating…".to_owned(), Look::Quiet),
+            _ if checking => ("Checking…".to_owned(), Look::Quiet),
+            (Some(v), true) => (format!("Update to {v}"), Look::Primary),
+            (Some(_), false) => ("Download".to_owned(), Look::Primary),
+            (None, _) => ("Check for updates".to_owned(), Look::Quiet),
+        };
+        let b = Rect::from_min_size(pos2(c.left(), y), vec2(button_width(ui, &label), 32.0));
+        if button(ui, b, Id::unique("update-now-or-check"), &label, look, !busy && !installing && !checking && !self.sheet_open(), None).clicked() {
+            match (&version, status.can_update) {
+                (Some(_), true) => self.begin_update(),
+                (Some(_), false) => self.link.download_update(),
+                (None, _) => self.link.check_updates_now(),
+            }
+        }
+        let said = if checking { "Looking for a new version…".to_owned() }
+            else if installing { self.update_output.clone().unwrap_or_default() }
+            else if let Some(v) = &version { format!("oneMK {v} is available. You have {}.", env!("CARGO_PKG_VERSION")) }
+            else if status.error.is_some() { "The last check didn't work.".to_owned() }
+            else if self.update_ui.checked { format!("You're up to date. oneMK {}.", env!("CARGO_PKG_VERSION")) }
+            else { format!("oneMK {}", env!("CARGO_PKG_VERSION")) };
+        let tx = b.right() + 12.0;
+        ui.painter().text(pos2(tx, b.center().y), Align2::LEFT_CENTER, fit(ui.painter(), &said, &regular(T_BODY), (c.right() - tx).max(40.0)), regular(T_BODY), INK2);
+        y += 44.0;
         if status.rollback_available {
             let label = "Go back to the previous version";
             let b = Rect::from_min_size(pos2(c.left(), y), vec2(button_width(ui, label), 32.0));
@@ -110,6 +141,7 @@ impl App {
         // list): say so rather than look up to date.
         let failed = status.check && status.error.is_some() && status.available.is_none();
         let note = if failed { "The last check for updates didn't work. oneMK tries again tomorrow." }
+            else if status.can_update && status.needs_password { "Installing asks for your password, then restarts oneMK for a few seconds." }
             else if status.can_update { "At most once a day. Installing restarts oneMK for a few seconds." } else { status.advice.as_str() };
         ui.painter().text(pos2(c.left(), y + 6.0), Align2::LEFT_CENTER, fit(ui.painter(), note, &regular(T_META), c.width()), regular(T_META), INK3);
     }

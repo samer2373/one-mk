@@ -92,7 +92,7 @@ If permissions prevent moving, explain the Finder drag-and-drop alternative.
 | Linux/macOS portable `one-mk` in the user's home | Signed raw binary replacement with `one-mk.old`; restart sharing and window. Separate window/tray binaries are **not** upgraded. |
 | Windows portable `one-mk.exe` in the user's home | Signed raw executable replacement; rename the mapped executable aside, restore if installing fails. Separate window/tray binaries are not upgraded; no elevation. |
 | Windows installed app | Download fallback for the existing per-user installer. Silent installer/whole-directory replacement is **not implemented**. Program Files/WindowsApps are not modified. |
-| Debian package | “Updates come with your package manager” only if `dpkg-query --search` confirms ownership of the daemon path. No package files changed. |
+| Debian package | Installed from the window too, with one system password prompt (see below), only if the package's file list confirms ownership of the daemon path. |
 | Homebrew / Flatpak | Package-manager message; no direct replacement. |
 | Unknown/system-wide portable path or AppImage outside home | Download fallback; do not guess ownership or modify the installation. |
 
@@ -155,3 +155,28 @@ On a disposable Mac account with an older production-signed release:
    remains, Restore previous version works, old window cannot acknowledge it.
 5. Default asks before installing; opt-in installs only with the window open.
    Close it and verify no extra updater timer. Check narrow/HiDPI and VoiceOver.
+
+## Debian package: install from the window
+
+**Check for updates** (Settings > Updates) asks the release server now; when a
+newer version is known the same button reads **Update to VERSION**. For a
+package install the update then:
+
+1. downloads the `.deb` named in the signed update list, into a private
+   folder (`update-staging`, mode 0700, in the settings folder) as the person,
+   and checks its size and SHA-256 against that list;
+2. checks with `dpkg-deb --field` that it is the `one-mk` package at the
+   signed version;
+3. asks the system for the password once (`pkexec`, the desktop's own dialog)
+   to run `one-mk update --install-deb` as root. That step takes only a file
+   the asking account owns, in a folder named `update-staging` that no one else
+   can write to, opened without following links, checks the SHA-256 again,
+   copies it to a folder only root can use and checks the package name and
+   version once more, then runs `dpkg -i` on the copy;
+4. restarts the service and the window like every other update.
+
+It never installs without the person pressing the button: **Install them
+without asking** stays off for package installs, because a password is needed.
+Cancelling the prompt changes nothing. The hidden `--install-deb` options do
+nothing when run by hand (they refuse unless started through `pkexec`).
+Without `pkexec` the update says so and the package can be installed by hand.

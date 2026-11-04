@@ -419,3 +419,45 @@ fn a_package_file_list_names_the_executable_exactly() {
     assert!(!package_lists(list, "/usr/bin/one"));
     assert!(!package_lists(list, "/usr/local/bin/one-mk"));
 }
+
+#[cfg(unix)]
+#[test]
+fn only_one_mk_at_the_signed_version_is_installed() {
+    let ok = "Package: one-mk\nVersion: 0.1.24\n";
+    assert!(check_deb_fields(ok, "0.1.24").is_ok());
+    assert!(check_deb_fields(ok, "0.1.25").is_err());
+    assert!(check_deb_fields("Package: openssh-server\nVersion: 0.1.24\n", "0.1.24").is_err());
+    assert!(check_deb_fields("Package: one-mk-evil\nVersion: 0.1.24\n", "0.1.24").is_err());
+    assert!(check_deb_fields("", "0.1.24").is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn the_root_step_reads_only_a_private_unchanged_package_it_was_told_about() -> Result<()> {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let sandbox = tempfile::tempdir()?;
+    let staging = sandbox.path().join(DEB_STAGING);
+    fs::create_dir(&staging)?;
+    fs::set_permissions(&staging, fs::Permissions::from_mode(0o700))?;
+    let package = staging.join("payload");
+    fs::write(&package, b"a package")?;
+    let owner = unsafe { libc::geteuid() };
+    let sha = hex(digest::digest(&digest::SHA256, b"a package").as_ref());
+    assert_eq!(read_staged_deb(&package, &sha, owner)?, b"a package");
+    // The wrong checksum, the wrong owner, a link, another folder name and
+    // a folder others can write to are all refused.
+    assert!(read_staged_deb(&package, &"00".repeat(32), owner).is_err());
+    assert!(read_staged_deb(&package, &sha, owner + 1).is_err());
+    let link = staging.join("link");
+    symlink(&package, &link)?;
+    assert!(read_staged_deb(&link, &sha, owner).is_err());
+    let elsewhere = sandbox.path().join("elsewhere");
+    fs::create_dir(&elsewhere)?;
+    fs::write(elsewhere.join("payload"), b"a package")?;
+    assert!(read_staged_deb(&elsewhere.join("payload"), &sha, owner).is_err());
+    fs::set_permissions(&staging, fs::Permissions::from_mode(0o770))?;
+    assert!(read_staged_deb(&package, &sha, owner).is_err());
+    // Run by hand, not through the password prompt, it does nothing.
+    assert!(install_deb_as_root(&package, &sha, "0.1.24").is_err());
+    Ok(())
+}
