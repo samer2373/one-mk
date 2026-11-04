@@ -420,6 +420,7 @@ fn a_package_file_list_names_the_executable_exactly() {
     assert!(!package_lists(list, "/usr/local/bin/one-mk"));
 }
 
+#[cfg(unix)]
 #[test]
 fn only_one_mk_at_the_signed_version_is_installed() {
     let ok = "Package: one-mk\nVersion: 0.1.24\n";
