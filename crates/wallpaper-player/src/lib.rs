@@ -100,7 +100,9 @@ impl ImportTarget {
         }
         let width = computers.values().map(|(rect, scale)| rect.width * scale).fold(2.0, f64::max);
         let height = computers.values().map(|(rect, scale)| rect.height * scale).fold(2.0, f64::max);
-        let scale = (width / f64::from(media.width)).min(height / f64::from(media.height)).min(1.0);
+        // Fill (the default) covers the screens, so the larger of the two ratios is what gets shown: a 4K video across
+        // screens wider than 16:9 is enlarged, and shrinking it first only makes the enlargement softer.
+        let scale = (width / f64::from(media.width)).max(height / f64::from(media.height)).min(1.0);
         let width = ((f64::from(media.width) * scale) as u32 / 2 * 2).max(2);
         let height = ((f64::from(media.height) * scale) as u32 / 2 * 2).max(2);
         // 0.045 bits/pixel/frame looked blocky on detailed 4K footage; ~0.12 keeps a hardware H.264 re-encode visually close to the source.
@@ -474,6 +476,13 @@ mod tests {
         media.width = 640; media.height = 360; media.frame_rate = 120;
         let target = ImportTarget::for_canvas(&canvas, &media, 100_000).unwrap();
         assert_eq!((target.width, target.height), (640, 360));
+    }
+    #[test]
+    fn a_4k_video_across_wide_screens_is_not_shrunk_first() {
+        let canvas = Canvas { monitors: vec![monitor("mac", 0.0, 1.0), monitor("mac", 1920.0, 1.0), monitor("mac", 3840.0, 1.0)] };
+        let media = Media { width: 3840, height: 2160, duration_ms: 30_000, frame_rate: 30 };
+        // About 16 Mbps source, screens 5760x1080 wide: nothing to reduce, so it plays as it is.
+        assert!(ImportTarget::for_canvas(&canvas, &media, 60_000_000).is_none());
     }
     #[test]
     fn mixed_density_import_need_is_translation_invariant() {
