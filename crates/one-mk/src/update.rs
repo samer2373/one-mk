@@ -618,7 +618,7 @@ fn apply_deb(manifest: &Manifest, release: &Release, origin: &Url, home: &Path, 
             Some(0) => Ok(()),
             Some(126) => bail!("The password was not given. Nothing was changed"),
             Some(127) => bail!("This account isn't allowed to install software. Nothing was changed"),
-            _ => bail!("The package could not be installed. Nothing was changed"),
+            _ => bail!("The package could not be installed. Check that no other install is running, then try again"),
         }
     })();
     let _ = fs::remove_dir_all(&staging);
@@ -632,7 +632,7 @@ const DEB_STAGING: &str = "update-staging";
 
 #[cfg(unix)]
 fn deb_fields(path: &Path) -> Result<String> {
-    let output = Command::new("dpkg-deb").arg("--field").arg(path).args(["Package", "Version"]).output()
+    let output = Command::new("/usr/bin/dpkg-deb").arg("--field").arg(path).args(["Package", "Version"]).output()
         .context("cannot read the downloaded package; is dpkg installed?")?;
     ensure!(output.status.success(), "the downloaded package is not a valid .deb");
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -675,6 +675,8 @@ fn read_staged_deb(path: &Path, expect_sha256: &str, owner: u32) -> Result<Vec<u
 fn install_deb_as_root(path: &Path, expect_sha256: &str, expect_version: &str) -> Result<()> {
     ensure!(unsafe { libc::geteuid() } == 0, "this step is run by the update, with your password");
     let owner: u32 = std::env::var("PKEXEC_UID").ok().and_then(|uid| uid.parse().ok()).context("this step is run by the update, with your password")?;
+    // Only forward: an older signed release must not be put back this way.
+    ensure!(policy::compare(expect_version, env!("CARGO_PKG_VERSION"))? == std::cmp::Ordering::Greater, "this is not a newer version; nothing was installed");
     let bytes = read_staged_deb(path, expect_sha256, owner)?;
     let work = PathBuf::from(format!("/var/tmp/one-mk-update-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()));
     {
@@ -685,7 +687,7 @@ fn install_deb_as_root(path: &Path, expect_sha256: &str, expect_version: &str) -
         let copy = work.join("one-mk.deb");
         fs::write(&copy, &bytes)?;
         check_deb_fields(&deb_fields(&copy)?, expect_version)?;
-        let status = Command::new("dpkg").arg("-i").arg(&copy).env("DEBIAN_FRONTEND", "noninteractive").status().context("dpkg could not be started")?;
+        let status = Command::new("/usr/bin/dpkg").arg("-i").arg(&copy).env("DEBIAN_FRONTEND", "noninteractive").status().context("dpkg could not be started")?;
         ensure!(status.success(), "dpkg could not install the update");
         Ok(())
     })();
