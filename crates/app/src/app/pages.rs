@@ -394,7 +394,9 @@ impl App {
         // below 700 points.
         let mut at = [(0usize, 0.0f32); 9];
         let mut ys = [0.0f32; 2];
-        for (k, h) in heights.iter().enumerate() {
+        // Updates first: it is the one card people come to Settings for.
+        for k in [8, 0, 1, 2, 3, 4, 5, 6, 7] {
+            let h = &heights[k];
             let col = if two { usize::from((3..7).contains(&k)) } else { 0 };
             at[k] = (col, ys[col]);
             ys[col] += h + gap;

@@ -50,6 +50,13 @@ pub struct Options {
     /// GitHub-compatible releases/latest endpoint (HTTPS; signatures still required).
     #[arg(long)]
     pub url: Option<String>,
+    /// Only for the update itself, run with the account's password: install the downloaded package.
+    #[arg(long, hide = true, requires_all = ["expect_sha256", "expect_version"])]
+    pub install_deb: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    pub expect_sha256: Option<String>,
+    #[arg(long, hide = true)]
+    pub expect_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -585,6 +592,107 @@ fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, ki
     Ok(())
 }
 
+/// A Linux package: the update is downloaded and checked against the signed
+/// list as the person, then the system asks for the password once (pkexec)
+/// and a root step installs exactly that file. Nothing runs as root until
+/// the person has agreed in the system's own dialog.
+#[cfg(unix)]
+fn apply_deb(manifest: &Manifest, release: &Release, origin: &Url, home: &Path, program: &Path) -> Result<()> {
+    refuse_root()?;
+    let asset = policy::select_install(manifest, std::env::consts::OS, std::env::consts::ARCH, InstallKind::Deb)?;
+    let staging = home.join(DEB_STAGING);
+    let _ = fs::remove_dir_all(&staging);
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(&staging).context("cannot prepare the update; check free disk space")?;
+    }
+    let result = (|| {
+        let temporary = download(asset, release, origin, &staging)?;
+        println!("Checking the update…");
+        check_deb_fields(&deb_fields(&temporary.path)?, &manifest.version)?;
+        println!("Installing… Your computer asks for your password.");
+        let status = Command::new("pkexec").arg(program).args(["update", "--install-deb"]).arg(&temporary.path)
+            .args(["--expect-sha256", &asset.sha256, "--expect-version", &manifest.version]).stdin(Stdio::null())
+            .status().context("this computer has no password prompt (pkexec); install the downloaded package with your package manager")?;
+        match status.code() {
+            Some(0) => Ok(()),
+            Some(126) => bail!("The password was not given. Nothing was changed"),
+            Some(127) => bail!("This account isn't allowed to install software. Nothing was changed"),
+            _ => bail!("The package could not be installed. Nothing was changed"),
+        }
+    })();
+    let _ = fs::remove_dir_all(&staging);
+    result?;
+    restarting(&format!("oneMK {} installed", manifest.version), "Quit oneMK and open it again to use it");
+    Ok(())
+}
+
+#[cfg(unix)]
+const DEB_STAGING: &str = "update-staging";
+
+#[cfg(unix)]
+fn deb_fields(path: &Path) -> Result<String> {
+    let output = Command::new("dpkg-deb").arg("--field").arg(path).args(["Package", "Version"]).output()
+        .context("cannot read the downloaded package; is dpkg installed?")?;
+    ensure!(output.status.success(), "the downloaded package is not a valid .deb");
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The package must be oneMK, at the version the signed list names.
+#[cfg(unix)]
+fn check_deb_fields(fields: &str, version: &str) -> Result<()> {
+    let field = |name: &str| fields.lines().find_map(|line| line.strip_prefix(name)?.strip_prefix(':')).map(str::trim);
+    ensure!(field("Package") == Some("one-mk"), "the downloaded package is not oneMK; nothing was installed");
+    ensure!(field("Version") == Some(version), "the downloaded package is not version {version}; nothing was installed");
+    Ok(())
+}
+
+/// Reads the staged package without following a link, from a file the
+/// caller owns, checks its SHA-256 and returns the bytes (so what is
+/// installed is what was checked, not a file that can change after).
+#[cfg(unix)]
+fn read_staged_deb(path: &Path, expect_sha256: &str, owner: u32) -> Result<Vec<u8>> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    ensure!(path.is_absolute() && path.parent().and_then(Path::file_name).is_some_and(|name| name == DEB_STAGING), "not an update package");
+    let parent = fs::symlink_metadata(path.parent().context("not an update package")?)?;
+    ensure!(parent.is_dir() && parent.uid() == owner && parent.mode() & 0o022 == 0, "the update folder is not private to the account that asked");
+    let file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).context("cannot open the downloaded package")?;
+    let meta = file.metadata()?;
+    ensure!(meta.is_file() && meta.uid() == owner && meta.len() <= 512 * 1024 * 1024, "not an update package");
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.take(meta.len() + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() as u64 == meta.len(), "the package changed while it was read");
+    let wanted = policy::hex_bytes::<32>(expect_sha256)?;
+    ensure!(constant_time_eq::constant_time_eq(digest::digest(&digest::SHA256, &bytes).as_ref(), &wanted),
+        "the package does not match the signed release; nothing was installed");
+    Ok(bytes)
+}
+
+/// Runs as root (through pkexec): installs the package the person's own
+/// update downloaded, after reading and checking it again from a copy only
+/// root can touch.
+#[cfg(unix)]
+fn install_deb_as_root(path: &Path, expect_sha256: &str, expect_version: &str) -> Result<()> {
+    ensure!(unsafe { libc::geteuid() } == 0, "this step is run by the update, with your password");
+    let owner: u32 = std::env::var("PKEXEC_UID").ok().and_then(|uid| uid.parse().ok()).context("this step is run by the update, with your password")?;
+    let bytes = read_staged_deb(path, expect_sha256, owner)?;
+    let work = PathBuf::from(format!("/var/tmp/one-mk-update-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()));
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().mode(0o700).create(&work).context("cannot prepare the install")?;
+    }
+    let result = (|| {
+        let copy = work.join("one-mk.deb");
+        fs::write(&copy, &bytes)?;
+        check_deb_fields(&deb_fields(&copy)?, expect_version)?;
+        let status = Command::new("dpkg").arg("-i").arg(&copy).env("DEBIAN_FRONTEND", "noninteractive").status().context("dpkg could not be started")?;
+        ensure!(status.success(), "dpkg could not install the update");
+        Ok(())
+    })();
+    let _ = fs::remove_dir_all(&work);
+    result
+}
+
 fn rollback(target: &Path) -> Result<()> {
     refuse_root()?;
     let _lock = target_lock(target, "This app's folder can't be changed by your account")?;
@@ -632,7 +740,8 @@ fn window_status(home: &Path) -> Result<policy::UpdateStatus> {
     Ok(policy::UpdateStatus {
         check: settings.check, install_automatically: settings.install_automatically,
         available: policy::cached_version(home, env!("CARGO_PKG_VERSION")), error: state.error,
-        can_update: kind.automatic() && !movable && !leaves_behind, move_to_applications: movable, rollback_available,
+        can_update: kind.installs_in_app() && !movable && !leaves_behind, needs_password: kind.needs_password(),
+        move_to_applications: movable, rollback_available,
         advice: if movable {
             "Move oneMK to Applications before updating".into()
         } else if leaves_behind {
@@ -658,6 +767,11 @@ fn check_release(home: &Path, endpoint: &str, state: &mut State) -> Result<(Mani
 }
 
 fn run_inner(home: &Path, options: Options) -> Result<()> {
+    // The one step that runs as root, started by `apply_deb` through pkexec.
+    #[cfg(unix)]
+    if let (Some(path), Some(sha256), Some(version)) = (&options.install_deb, &options.expect_sha256, &options.expect_version) {
+        return install_deb_as_root(path, sha256, version);
+    }
     refuse_root()?;
     if options.status_json {
         println!("{}", serde_json::to_string(&window_status(home)?)?);
@@ -713,6 +827,12 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
     if state.available.is_none() { println!("one-mk {} is up to date.", env!("CARGO_PKG_VERSION")); return Ok(()); }
     println!("one-mk {} is available (you have {}).", manifest.version, env!("CARGO_PKG_VERSION"));
     if options.check || options.startup_check { return Ok(()); }
+    if kind == InstallKind::Deb {
+        #[cfg(unix)]
+        return apply_deb(&manifest, &release, &origin, home, &target);
+        #[cfg(not(unix))]
+        bail!("{}", kind.advice());
+    }
     if !kind.automatic() {
         bail!("{}. Choose Download to open the release page: {NOTES}", kind.advice());
     }

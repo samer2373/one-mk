@@ -295,8 +295,8 @@ impl App {
             let b = Rect::from_min_size(pos2(r.left() + 10.0, r.bottom() - 42.0), vec2(w - 20.0, 32.0));
             let locked = self.sheet_open();
             match what {
-                UpdateBox::Ready { version, can: true, .. } => {
-                    line(r.top() + 44.0, "Restarts in a few seconds", INK2);
+                UpdateBox::Ready { version, can: true, password, .. } => {
+                    line(r.top() + 44.0, if password { "Asks for your password, then restarts" } else { "Restarts in a few seconds" }, INK2);
                     if button(ui, b, Id::unique("update"), "Update now", Look::Quiet, !locked, Some(&format!("Update oneMK to {version}"))).clicked() {
                         self.begin_update();
                     }

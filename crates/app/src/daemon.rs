@@ -95,6 +95,8 @@ pub struct HistoryItem {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Job {
     Update,
+    /// Looking for a newer version now, not waiting for the daily check.
+    UpdateCheck,
     UpdateSettings,
     Start,
     Layout { id: String, name: String, side: one_mk_proto::Side },
@@ -524,6 +526,16 @@ impl Link {
         std::thread::spawn(move || {
             let _ = link.one_mk(&["update", "--startup-check"]);
             link.update_status();
+        });
+    }
+
+    /// "Check for updates": asks the release server now (the daily check
+    /// is separate) and refreshes what the window knows.
+    pub fn check_updates_now(&self) {
+        self.job(Job::UpdateCheck, |link| {
+            let result = link.one_mk(&["update", "--check"]);
+            link.update_status();
+            result.map(drop)
         });
     }
 
