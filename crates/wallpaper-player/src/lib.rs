@@ -103,9 +103,15 @@ impl ImportTarget {
         let scale = (width / f64::from(media.width)).min(height / f64::from(media.height)).min(1.0);
         let width = ((f64::from(media.width) * scale) as u32 / 2 * 2).max(2);
         let height = ((f64::from(media.height) * scale) as u32 / 2 * 2).max(2);
-        let bitrate = (f64::from(width) * f64::from(height) * f64::from(media.frame_rate.clamp(1, 60)) * 0.045).clamp(128_000.0, 100_000_000.0) as u32;
+        // 0.045 bits/pixel/frame looked blocky on detailed 4K footage; ~0.12 keeps a hardware H.264 re-encode visually close to the source.
+        let bitrate = (f64::from(width) * f64::from(height) * f64::from(media.frame_rate.clamp(1, 60)) * 0.12).clamp(128_000.0, 100_000_000.0) as u32;
         let source_bitrate = bytes as f64 * 8000.0 / media.duration_ms.max(1) as f64;
-        (scale < 1.0 || source_bitrate > f64::from(bitrate) * 1.5 || media.frame_rate > 60).then_some(Self { width, height, bitrate })
+        // Decode cost follows resolution and frame rate, not bitrate, so a video that already fits the screen is played
+        // untouched (no generation loss) unless its bitrate is extreme enough to strain disk and decoder.
+        let reduce = scale < 1.0 || media.frame_rate > 60 || source_bitrate > f64::from(bitrate) * 4.0;
+        // Never spend more bits than the source had: it adds size, not detail.
+        let bitrate = if source_bitrate >= 128_000.0 { f64::from(bitrate).min(source_bitrate) as u32 } else { bitrate };
+        reduce.then_some(Self { width, height, bitrate })
     }
 }
 
@@ -458,8 +464,10 @@ mod tests {
         let canvas = Canvas { monitors: vec![monitor("mac", 0.0, 1.0)] };
         let mut media = Media { width: 1920, height: 1080, duration_ms: 1000, frame_rate: 30 };
         assert!(ImportTarget::for_canvas(&canvas, &media, 100_000).is_none());
-        let target = ImportTarget::for_canvas(&canvas, &media, 1_000_000).unwrap();
-        assert_eq!((target.width, target.height, target.bitrate), (1920, 1080, 2_799_360));
+        let target = ImportTarget::for_canvas(&canvas, &media, 5_000_000).unwrap();
+        assert_eq!((target.width, target.height, target.bitrate), (1920, 1080, 7_464_960));
+        // Fits the screen and is not extreme: left untouched rather than re-encoded.
+        assert!(ImportTarget::for_canvas(&canvas, &media, 3_000_000).is_none());
         media.width = 3840; media.height = 2160;
         let target = ImportTarget::for_canvas(&canvas, &media, 100_000).unwrap();
         assert_eq!((target.width, target.height), (1920, 1080));

@@ -3312,7 +3312,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "one-mk"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3353,7 +3353,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-app"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "directories",
@@ -3372,7 +3372,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-clipboard"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3393,7 +3393,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-ctl"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "directories",
@@ -3419,7 +3419,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-input"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3458,7 +3458,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-net"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "base64",
@@ -3483,7 +3483,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-proto"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "unicode-general-category",
  "unicode-segmentation",
@@ -3491,7 +3491,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-tray"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "ksni",
@@ -3503,7 +3503,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "blake3",
  "futures-util",
@@ -3521,11 +3521,11 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall-canvas"
-version = "0.1.22"
+version = "0.1.23"
 
 [[package]]
 name = "one-mk-wall-import"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "blake3",
  "image",
@@ -3540,7 +3540,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall-sync"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "blake3",
  "libc",
@@ -3550,7 +3550,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wallpaper"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "libloading",
@@ -3563,7 +3563,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wallpaper-helper"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
