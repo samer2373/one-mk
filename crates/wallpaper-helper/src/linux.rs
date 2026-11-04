@@ -408,7 +408,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
         let top = (slice.y * height).round() as i32;
         let right = (width - (slice.x + slice.width) * width).round() as i32;
         let bottom = (height - (slice.y + slice.height) * height).round() as i32;
-        pipeline_text += &format!("picture. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! videobox left={left} top={top} right={right} bottom={bottom} fill=black ! videoscale ! video/x-raw,width={},height={},pixel-aspect-ratio=1/1 ! ximagesink name=screen{index} sync=true handle-events=false handle-expose=false force-aspect-ratio=false ", (monitor.rect.width * monitor.scale) as u32, (monitor.rect.height * monitor.scale) as u32);
+        pipeline_text += &format!("picture. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! videobox left={left} top={top} right={right} bottom={bottom} fill=black ! videoscale method=lanczos ! video/x-raw,width={},height={},pixel-aspect-ratio=1/1 ! ximagesink name=screen{index} sync=true handle-events=false handle-expose=false force-aspect-ratio=false ", (monitor.rect.width * monitor.scale) as u32, (monitor.rect.height * monitor.scale) as u32);
     }
     if visible.is_empty() { pipeline_text += "picture. ! fakesink sync=true"; }
     let pipeline = gst.pipeline(&pipeline_text)?;

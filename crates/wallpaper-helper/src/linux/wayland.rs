@@ -60,8 +60,11 @@ fn window_title(secret: &str, id: u32, rect: Rect) -> String {
 }
 
 struct Buffer { proxy: wl_buffer::WlBuffer, file: File, free: Arc<AtomicBool>, size: (u32, u32) }
+/// One output pixel along one axis: up to four source pixels and their weights (summing to 256).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Taps { index: [u32; 4], weight: [u16; 4], count: usize }
 #[derive(Default)]
-struct PixelMapping { columns: Vec<Option<usize>>, rows: Vec<Option<usize>> }
+struct PixelMapping { columns: Vec<Option<Taps>>, rows: Vec<Option<Taps>> }
 impl PixelMapping { fn is_empty(&self) -> bool { self.columns.is_empty() || self.rows.is_empty() } }
 impl Drop for Buffer { fn drop(&mut self) { self.proxy.destroy(); } }
 impl Drop for Wallpaper { fn drop(&mut self) {
@@ -221,17 +224,48 @@ impl Buffer {
     }
 }
 
+/// The source pixels (and how much of each) that make the output pixel centred at `position`, in source
+/// pixels. A tent filter: enlarging blends the two nearest pixels (bilinear) instead of repeating one, which
+/// is what made enlarged video look like blocks; shrinking by up to 2 widens it so thin detail is not dropped.
+fn taps(position: f64, ratio: f64, source: u32) -> Taps {
+    let radius = ratio.clamp(1.0, 2.0);
+    let first = (position - radius - 0.5).ceil() as i64;
+    let last = (position + radius - 0.5).floor() as i64;
+    let mut found: Vec<(u32, f64)> = Vec::with_capacity(4);
+    for index in first..=last {
+        let weight = 1.0 - ((index as f64 + 0.5) - position).abs() / radius;
+        if weight <= 0.0 || found.len() == 4 { continue; }
+        let clamped = index.clamp(0, i64::from(source) - 1) as u32;
+        match found.iter_mut().find(|(known, _)| *known == clamped) { Some(known) => known.1 += weight, None => found.push((clamped, weight)) }
+    }
+    let total: f64 = found.iter().map(|(_, weight)| weight).sum();
+    let mut taps = Taps::default();
+    let mut given = 0u16;
+    let mut heaviest = 0;
+    for (n, (index, weight)) in found.iter().enumerate() {
+        taps.index[n] = *index;
+        taps.weight[n] = (weight / total * 256.0).round() as u16;
+        given += taps.weight[n];
+        if taps.weight[n] >= taps.weight[heaviest] { heaviest = n; }
+    }
+    taps.count = found.len();
+    taps.weight[heaviest] = taps.weight[heaviest] + 256 - given;
+    taps
+}
+
 fn mapping(config: &PlayerConfig, monitor: &Monitor, size: (u32, u32), source: (u32, u32)) -> Result<PixelMapping> {
     let slice = config.plan.canvas.slice(monitor, &config.plan.media, config.plan.fit).context("Empty wallpaper canvas")?;
-    let horizontal: Vec<_> = (0..size.0).map(|column| {
+    let across = slice.width * f64::from(source.0) / f64::from(size.0);
+    let down = slice.height * f64::from(source.1) / f64::from(size.1);
+    let columns = (0..size.0).map(|column| {
         let value = slice.x + (f64::from(column) + 0.5) / f64::from(size.0) * slice.width;
-        (0.0..1.0).contains(&value).then_some((value * f64::from(source.0)).floor() as usize * 4)
+        (0.0..1.0).contains(&value).then(|| taps(value * f64::from(source.0), across, source.0))
     }).collect();
     let rows = (0..size.1).map(|row| {
         let value = slice.y + (f64::from(row) + 0.5) / f64::from(size.1) * slice.height;
-        (0.0..1.0).contains(&value).then_some((value * f64::from(source.1)).floor() as usize * source.0 as usize * 4)
+        (0.0..1.0).contains(&value).then(|| taps(value * f64::from(source.1), down, source.1))
     }).collect();
-    Ok(PixelMapping { columns: horizontal, rows })
+    Ok(PixelMapping { columns, rows })
 }
 
 impl Desktop {
@@ -284,7 +318,7 @@ impl Desktop {
         Ok(())
     }
 
-    fn paint(&mut self, frame: &[u8], generation: u64, handle: &QueueHandle<Self>) -> Result<()> {
+    fn paint(&mut self, frame: &[u8], source: (u32, u32), generation: u64, handle: &QueueHandle<Self>) -> Result<()> {
         let shm = self.shm.as_ref().context("The Wayland compositor has no shared-memory wallpaper interface")?;
         for output in self.outputs.values_mut() {
             let Some(wallpaper) = &mut output.wallpaper else { continue };
@@ -294,10 +328,20 @@ impl Desktop {
                 wallpaper.buffers.push(Buffer::new(shm, size, handle)?);
             }
             let Some(buffer) = wallpaper.buffers.iter().find(|buffer| buffer.free.load(Ordering::Acquire)) else { continue };
-            for (row, source_row) in wallpaper.pixels.chunks_exact_mut(size.0 as usize * 4).zip(&wallpaper.mapping.rows) {
-                for (pixel, column) in row.as_chunks_mut::<4>().0.iter_mut().zip(&wallpaper.mapping.columns) {
-                    if let Some(source) = column.zip(*source_row).map(|(column, row)| row + column) { pixel.copy_from_slice(&frame[source..source + 4]); }
-                    else { pixel.copy_from_slice(&[0, 0, 0, 255]); }
+            let width = source.0 as usize;
+            for (row, down) in wallpaper.pixels.chunks_exact_mut(size.0 as usize * 4).zip(&wallpaper.mapping.rows) {
+                for (pixel, across) in row.as_chunks_mut::<4>().0.iter_mut().zip(&wallpaper.mapping.columns) {
+                    let Some((across, down)) = across.zip(*down) else { pixel.copy_from_slice(&[0, 0, 0, 255]); continue };
+                    let mut sum = [0u32; 3];
+                    for r in 0..down.count {
+                        let line = down.index[r] as usize * width;
+                        for c in 0..across.count {
+                            let at = (line + across.index[c] as usize) * 4;
+                            let weight = u32::from(down.weight[r]) * u32::from(across.weight[c]);
+                            for channel in 0..3 { sum[channel] += u32::from(frame[at + channel]) * weight; }
+                        }
+                    }
+                    *pixel = [(sum[0] >> 16) as u8, (sum[1] >> 16) as u8, (sum[2] >> 16) as u8, 255];
                 }
             }
             buffer.file.write_all_at(&wallpaper.pixels, 0)?;
@@ -462,7 +506,7 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
                     frame = Some(pixels); generation += 1;
                 }
             }
-            if let Some(frame) = &frame { desktop.paint(frame, generation, &handle)?; }
+            if let Some(frame) = &frame { desktop.paint(frame, source, generation, &handle)?; }
             if let Some(bridge) = &bridge && desktop.outputs.values().any(|output| output.wallpaper.as_ref().is_some_and(|wallpaper| wallpaper.generation > 0 && !wallpaper.presented)) {
                 let titles = bridge.presented()?;
                 for output in desktop.outputs.values_mut() {
@@ -547,23 +591,27 @@ mod tests {
             pause_on_battery: false, paused: false, picture: false, asset_hash: None,
         } }
     }
+    /// The source pixel each output pixel leans on most (the later one at an exact tie).
+    fn nearest(taps: &[Option<Taps>]) -> Vec<Option<u32>> {
+        taps.iter().map(|taps| taps.map(|taps| { let mut best = 0; for n in 0..taps.count { if taps.weight[n] >= taps.weight[best] { best = n; } } taps.index[best] })).collect()
+    }
     #[test]
     fn stretch_crops_share_one_canvas_including_negative_coordinates() {
         let config = config(one_mk_wallpaper::Fit::Stretch);
         let left = mapping(&config, &config.plan.canvas.monitors[0], (2, 4), (4, 2)).unwrap();
         let right = mapping(&config, &config.plan.canvas.monitors[1], (2, 4), (4, 2)).unwrap();
-        assert_eq!(left.columns, [Some(0), Some(4)]); assert_eq!(right.columns, [Some(8), Some(12)]);
-        assert_eq!(left.rows, [Some(0), Some(0), Some(16), Some(16)]);
+        assert_eq!(nearest(&left.columns), [Some(0), Some(1)]); assert_eq!(nearest(&right.columns), [Some(2), Some(3)]);
+        assert_eq!(nearest(&left.rows), [Some(0), Some(0), Some(1), Some(1)]);
     }
     #[test]
     fn fit_letterboxes_and_fill_crops_without_per_output_recentering() {
         let config = config(one_mk_wallpaper::Fit::Fit);
         let left = mapping(&config, &config.plan.canvas.monitors[0], (2, 4), (4, 2)).unwrap();
-        assert_eq!(left.columns, [Some(0), Some(4)]); assert_eq!(left.rows, [None, Some(0), Some(16), None]);
+        assert_eq!(nearest(&left.columns), [Some(0), Some(1)]); assert_eq!(nearest(&left.rows), [None, Some(0), Some(1), None]);
         let config = self::config(one_mk_wallpaper::Fit::Fill);
         let left = mapping(&config, &config.plan.canvas.monitors[0], (2, 4), (4, 2)).unwrap();
         let right = mapping(&config, &config.plan.canvas.monitors[1], (2, 4), (4, 2)).unwrap();
-        assert_eq!(left.columns, [Some(4), Some(4)]); assert_eq!(right.columns, [Some(8), Some(8)]);
+        assert_eq!(nearest(&left.columns), [Some(1), Some(1)]); assert_eq!(nearest(&right.columns), [Some(2), Some(2)]);
         assert!(left.rows.iter().all(Option::is_some));
     }
     #[test]
@@ -571,7 +619,27 @@ mod tests {
         let config = config(one_mk_wallpaper::Fit::Stretch);
         let left = mapping(&config, &config.plan.canvas.monitors[0], (4, 8), (4, 2)).unwrap();
         let right = mapping(&config, &config.plan.canvas.monitors[1], (4, 8), (4, 2)).unwrap();
-        assert_eq!(left.columns, [Some(0), Some(0), Some(4), Some(4)]);
-        assert_eq!(right.columns, [Some(8), Some(8), Some(12), Some(12)]);
+        assert_eq!(nearest(&left.columns), [Some(0), Some(0), Some(1), Some(1)]);
+        assert_eq!(nearest(&right.columns), [Some(2), Some(2), Some(3), Some(3)]);
+    }
+    #[test]
+    fn enlarging_blends_neighbours_instead_of_repeating_a_pixel() {
+        // One source pixel spans 2.3 output pixels.
+        let between = taps(10.0, 1.0 / 2.3, 100);
+        assert_eq!(between.count, 2);
+        assert_eq!(between.weight[..2].iter().sum::<u16>(), 256);
+        assert!(between.weight[0] > 0 && between.weight[1] > 0);
+        // Right on a pixel's centre it is that pixel alone.
+        let on = taps(10.5, 1.0 / 2.3, 100);
+        assert_eq!((on.count, on.index[0], on.weight[0]), (1, 10, 256));
+    }
+    #[test]
+    fn every_pixel_gets_weights_that_add_up_and_stay_inside_the_picture() {
+        for (position, ratio, source) in [(0.0, 1.0, 8), (0.2, 0.4, 8), (7.9, 2.0, 8), (3.5, 5.0, 8), (4.0, 1.7, 8)] {
+            let taps = taps(position, ratio, source);
+            assert!(taps.count >= 1 && taps.count <= 4);
+            assert_eq!(taps.weight[..taps.count].iter().sum::<u16>(), 256, "{position} {ratio}");
+            assert!(taps.index[..taps.count].iter().all(|&index| index < source));
+        }
     }
 }
