@@ -82,7 +82,7 @@ impl App {
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
         let on = self.autostart.unwrap_or(false);
         let busy = self.busy.iter().any(|j| matches!(j, Job::Autostart(_)));
-        let r = switch(ui, row(0), Id::unique("autostart"), "Start at login", on, self.autostart.is_some() && !busy);
+        let r = switch_help(ui, row(0), Id::unique("autostart"), "Start at login", "autostart", on, self.autostart.is_some() && !busy);
         if self.autostart.is_none() {
             r.on_hover_text("Checking…");
         } else if r.clicked() {
@@ -94,7 +94,7 @@ impl App {
         let mut next = 1;
         if self.running().is_some_and(|s| !s.peers.is_empty()) {
             let locked = self.pointer_locked();
-            let r = switch(ui, row(next), Id::unique("lock-pointer"), "Keep the pointer here", locked, true);
+            let r = switch_help(ui, row(next), Id::unique("lock-pointer"), "Keep the pointer here", "lock-pointer", locked, true);
             if r.clicked() {
                 self.pending_lock = Some((!locked, self.now));
                 self.busy.push(Job::LockPointer(!locked));
@@ -124,9 +124,9 @@ impl App {
     /// Gaming mode: a label and three choices (in Advanced).
     pub(super) fn gaming_row(&mut self, ui: &mut Ui, g: Rect) {
         let word = "Gaming mode";
-        ui.painter().text(g.left_center(), Align2::LEFT_CENTER, word, regular(T_BODY), INK);
-        let lw = text_width(ui, word, regular(T_BODY)) + 12.0;
+        let lw = text_width(ui, word, regular(T_BODY)) + 12.0 + 26.0;
         let seg_w = 150.0f32.min(g.width() - lw);
+        label_help(ui, g, Id::unique("gaming-label"), word, "gaming", true, seg_w + 12.0);
         let track = Rect::from_min_size(pos2(g.right() - seg_w, g.center().y - 13.0), vec2(seg_w, 26.0));
         let labels: Vec<&str> = GAMING.iter().map(|(_, l)| *l).collect();
         let pills = Pills {
@@ -249,7 +249,7 @@ impl App {
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
         let p = self.prefs.clone();
         for (k, (key, label, on)) in [("text", "Text", p.clip_text), ("html", "Rich text (HTML)", p.clip_html), ("image", "Images", p.clip_image)].into_iter().enumerate() {
-            if switch(ui, row(k), Id::unique(("clip", key)), label, on, true).clicked() {
+            if switch_help(ui, row(k), Id::unique(("clip", key)), label, &format!("clip-{key}"), on, true).clicked() {
                 let v = if on { "off" } else { "on" };
                 let flag = format!("--{key}");
                 self.set_pref("what the clipboard shares", &["clipboard", &flag, v], |p| match key {
@@ -259,18 +259,16 @@ impl App {
                 });
             }
         }
-        let r = switch(ui, row(3), Id::unique("allow-fetch"), "Others can get this clipboard", p.clip_allow_fetch, true);
+        let r = switch_help(ui, row(3), Id::unique("allow-fetch"), "Others can get this clipboard", "allow-fetch", p.clip_allow_fetch, true);
         if r.clicked() {
             let v = if p.clip_allow_fetch { "off" } else { "on" };
             self.set_pref("who can get this clipboard", &["clipboard", "--allow-fetch", v], |p| p.clip_allow_fetch = !p.clip_allow_fetch);
         }
-        r.on_hover_text("Any paired computer can copy this clipboard with Get clipboard, including passwords you copied.");
         let sensitive_label = if c.width() < 220.0 { "Skip secrets" } else { "Skip sensitive copies" };
-        let sensitive = switch(ui, row(4), Id::unique("clip-sensitive"), sensitive_label, p.clip_skip_sensitive, true);
+        let sensitive = switch_help(ui, row(4), Id::unique("clip-sensitive"), sensitive_label, "clip-sensitive", p.clip_skip_sensitive, true);
         if sensitive.clicked() {
             self.set_pref("sensitive copies", &["clipboard", "--skip-sensitive", if p.clip_skip_sensitive { "off" } else { "on" }], |prefs| prefs.clip_skip_sensitive = !p.clip_skip_sensitive);
         }
-        sensitive.on_hover_text("Skip passwords and other copies marked as sensitive by their app.");
     }
 
     /// Notifications, the received files folder, and the clipboard's size limit.
@@ -281,7 +279,7 @@ impl App {
         let top = c.top() + 24.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
         let p = self.prefs.clone();
-        if switch(ui, row(0), Id::unique("notify"), "Notify when files arrive", p.notify_files, true).clicked() {
+        if switch_help(ui, row(0), Id::unique("notify"), "Notify when files arrive", "notify", p.notify_files, true).clicked() {
             let v = if p.notify_files { "off" } else { "on" };
             self.set_pref("notifications", &["notify", v], |p| p.notify_files = !p.notify_files);
         }
@@ -312,7 +310,7 @@ impl App {
                 _ => self.toast_error(format!("“{text}” isn't a size oneMK can use. Type a whole number of MB, like 25."), None, self.now),
             }
         }
-        if switch(ui, row(3), Id::unique("file-drop-zones"), "Drop files at screen edges", p.drop_zones, true).clicked() {
+        if switch_help(ui, row(3), Id::unique("file-drop-zones"), "Drop files at screen edges", "file-drop-zones", p.drop_zones, true).clicked() {
             self.set_pref("file drop zones", &["drag", if p.drop_zones { "--off" } else { "--on" }], |prefs| prefs.drop_zones = !p.drop_zones);
         }
     }

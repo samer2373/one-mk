@@ -25,7 +25,7 @@ use crate::style::*;
 use crate::rtt;
 use crate::glass::Glass;
 use crate::view::{Check, Prefs};
-use crate::widgets::{self, Look, Pills, a11y_text, button, button_width, mix, para, switch, text_width};
+use crate::widgets::{self, Look, Pills, a11y_text, button, button_width, label_help, label_help_inline, mix, para, switch_help, text_width};
 use egui::accesskit::{Live, Role};
 use egui::{Align2, Color32, CornerRadius, Id, Key, Modifiers, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 use one_mk_ctl::status::{PeerStatus, Status, on_your, os_name};

@@ -119,7 +119,7 @@ impl App {
                 self.wallpaper_command(Command::Fit { fit: [Fit::Fill, Fit::Fit, Fit::Stretch][chosen] });
             }
             let battery = plan.is_none_or(|plan| plan.pause_on_battery);
-            if switch(ui, rows[1], Id::unique("wallpaper-battery"), "Pause on battery", battery, enabled && selected && plan.is_none_or(|plan| !plan.picture)).clicked() {
+            if switch_help(ui, rows[1], Id::unique("wallpaper-battery"), "Pause on battery", "wallpaper-battery", battery, enabled && selected && plan.is_none_or(|plan| !plan.picture)).clicked() {
                 self.wallpaper_command(Command::Battery { enabled: !battery });
             }
 
@@ -156,7 +156,7 @@ impl App {
                 }
                 let switch_row = Rect::from_min_max(pos2(row.left() + 18.0, row.top()), row.max);
                 let label = fit(ui.painter(), name, &regular(T_BODY), label_w);
-                let response = switch(ui, switch_row, Id::unique(("wallpaper-computer", id)), &label, on, enabled && selected);
+                let response = switch_help(ui, switch_row, Id::unique(("wallpaper-computer", id)), &label, "wallpaper-computer", on, enabled && selected);
                 let response = match &failed { Some(reason) => response.on_hover_text(reason), None => response };
                 if response.clicked() {
                     self.wallpaper_command(Command::Computer { id: id.clone(), enabled: !on });

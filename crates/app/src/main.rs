@@ -15,6 +15,7 @@ mod chrome;
 mod daemon;
 mod gear;
 mod glass;
+mod help;
 mod guide;
 mod icons;
 mod motion;

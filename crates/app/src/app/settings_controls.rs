@@ -191,7 +191,7 @@ impl App {
             widgets::field(ui, Rect::from_min_size(pos2(rect.left() + after + 8.0, opts_y + 2.0), vec2(40.0, 26.0)), Id::unique(("hook-seconds", key)), &mut seconds, "5", "Time limit in seconds, 1 to 60", true, true);
             ui.painter().text(pos2(rect.left() + after + 56.0, opts_y + 15.0), Align2::LEFT_CENTER, "seconds", regular(T_META), INK2);
             let shell_row = Rect::from_min_size(pos2(rect.right() - 170.0, opts_y), vec2(170.0, 30.0));
-            if switch(ui, shell_row, Id::unique(("hook-shell", key)), "Run in a shell", use_shell, true).clicked() { use_shell = !use_shell; }
+            if switch_help(ui, shell_row, Id::unique(("hook-shell", key)), "Run in a shell", "hook-shell", use_shell, true).clicked() { use_shell = !use_shell; }
             self.drafts.insert((*key).into(), command.clone());
             self.drafts.insert(format!("{key}-computer"), chosen.clone());
             self.drafts.insert(format!("{key}-seconds"), seconds.clone());
