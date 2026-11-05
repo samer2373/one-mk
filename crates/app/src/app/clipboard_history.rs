@@ -67,25 +67,40 @@ impl App {
                 let age = now.saturating_sub(item.timestamp);
                 let age = if age < 60 { "just now".into() } else if age < 3600 { format!("{} min ago", age / 60) } else { format!("{} h ago", age / 3600) };
                 let detail = format!("{} · {age}", item.detail);
-                let (row, _) = ui.allocate_exact_size(vec2(area.width(), 44.0), Sense::hover());
+                // A list row, as a system list: what was copied, and under
+                // it where from and when; click the row to copy it here.
+                let (row, _) = ui.allocate_exact_size(vec2(area.width(), 50.0), Sense::hover());
                 let revealed = self.clipboard_reveal.as_ref().filter(|(id, _)| *id == item.id).map(|(_, content)| content.as_str());
-                let copy = Rect::from_min_size(row.min, vec2(row.width() - 64.0, 28.0));
-                let preview = revealed.unwrap_or("[hidden; choose Show]");
-                let label = fit(ui.painter(), preview, &semibold(T_BODY), copy.width() - 28.0);
+                let show = Rect::from_min_size(pos2(row.right() - 64.0, row.center().y - 14.0), vec2(64.0, 28.0));
+                let copy = Rect::from_min_max(row.min + vec2(0.0, 3.0), pos2(show.left() - 8.0, row.bottom() - 3.0));
+                let preview = revealed.unwrap_or("Hidden · choose Show to see it");
                 let accessible = format!("Copy clipboard item {} here: {preview}. {detail}", item.id);
-                let response = button(ui, copy, Id::unique(("history-copy", item.id)), &label, Look::Quiet, true, Some(&accessible)).on_hover_text(&accessible);
+                let id = Id::unique(("history-copy", item.id));
+                let response = ui.interact(copy, id, widgets::sense(ui, Sense::click()));
+                let hover = tween(ui.ctx(), id.with("hover"), f32::from(response.hovered()), 0.12, motion::out_cubic);
+                let down = tween(ui.ctx(), id.with("press"), f32::from(response.is_pointer_button_down_on()), 0.08, motion::out_cubic);
+                let p = ui.painter();
+                p.rect_filled(copy, CornerRadius::same(8), mix(mix(Color32::TRANSPARENT, BUTTON, hover), BUTTON_LIT, down));
+                let tx = copy.left() + 10.0;
+                let tw = copy.width() - 20.0;
+                p.text(pos2(tx, copy.top() + 15.0), Align2::LEFT_CENTER, fit(p, preview, &regular(T_BODY), tw), regular(T_BODY), if revealed.is_some() { INK } else { INK2 });
+                p.text(pos2(tx, copy.top() + 32.0), Align2::LEFT_CENTER, fit(p, &detail, &regular(T_META), tw), regular(T_META), INK3);
+                widgets::focus_ring(ui, &response, copy, 8);
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                widgets::a11y(&response, Role::Button, &accessible, None);
+                let response = response.on_hover_text("Copy this here");
                 if response.clicked() {
                     response.request_focus();
                     self.link.history_change(Some(item.id));
                 }
-                let show = Rect::from_min_size(pos2(row.right() - 60.0, row.top()), vec2(60.0, 28.0));
                 if button(ui, show, Id::unique(("history-show", item.id)), if revealed.is_some() { "Hide" } else { "Show" }, Look::Quiet, true, Some("Reveal or hide this item's preview on screen")).clicked() {
                     self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
                     if revealed.is_some() { self.clipboard_reveal = None; }
                     else { self.link.history_reveal(item.id, self.clipboard_reveal_epoch); }
                 }
-                let shown = fit(ui.painter(), &detail, &regular(T_META), row.width());
-                ui.painter().text(pos2(row.left(), row.top() + 35.0), Align2::LEFT_CENTER, shown, regular(T_META), INK2);
+                ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
             }
         });
     }

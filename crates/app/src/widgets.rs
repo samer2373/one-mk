@@ -261,15 +261,26 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
     #[cfg(debug_assertions)]
     let pop = if std::env::var("ONE_MK_APP_HELP").is_ok_and(|v| v == key) { pop.open(true) } else { pop };
     pop.show(|ui| {
-        ui.set_max_width(300.0);
-        if h.scene != crate::help::Scene::None {
-            let (scene, _) = ui.allocate_exact_size(vec2(300.0, 112.0), Sense::hover());
+        // A picture on its own well, then the sentence, inset with the menu's margin.
+        const W: f32 = 300.0;
+        const IN: f32 = 8.0;
+        ui.set_max_width(W);
+        let mut job = egui::text::LayoutJob::simple(h.detail.to_owned(), regular(T_BODY), INK_HOVER, W - 2.0 * IN);
+        job.sections[0].format.line_height = Some((T_BODY * LEADING).round());
+        let text = ui.painter().layout_job(job);
+        let pic = if h.scene != crate::help::Scene::None { 112.0 } else { 0.0 };
+        let (all, _) = ui.allocate_exact_size(vec2(W, IN + pic + if pic > 0.0 { IN } else { 0.0 } + text.size().y + IN - 2.0), Sense::hover());
+        if pic > 0.0 {
+            let scene = Rect::from_min_size(all.min + vec2(IN, IN), vec2(W - 2.0 * IN, pic));
+            ui.painter().rect_filled(scene, CornerRadius::same(R_INNER), Color32::from_black_alpha(60));
             crate::help::draw(ui.painter(), scene, h.scene, crate::help::phase(ui.input(|i| i.time), 4.0));
             if !motion::reduced() {
                 ui.ctx().request_repaint_after_secs(1.0 / 60.0);
             }
         }
-        ui.add(egui::Label::new(egui::RichText::new(h.detail).font(regular(T_BODY)).color(INK_HOVER)).wrap());
+        let y = all.top() + IN + if pic > 0.0 { pic + IN } else { 0.0 };
+        ui.painter().galley(pos2(all.left() + IN, y), text, INK_HOVER);
+        a11y_text(ui, id.with("detail"), all, Role::Label, h.detail, None);
     });
     shown
 }

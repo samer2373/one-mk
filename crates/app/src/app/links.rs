@@ -64,7 +64,7 @@ impl App {
         let with_card = self.tab == Tab::Desk && self.running().is_some_and(|s| !s.peers.is_empty());
         let short = self.ctx.content_rect().height() < 640.0;
         match (with_card, short) {
-            (true, false) => 252.0,
+            (true, false) => 228.0,
             (true, true) => 220.0,
             (false, _) => PANEL_H,
         }

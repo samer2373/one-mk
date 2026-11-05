@@ -334,7 +334,9 @@ impl App {
                     }
                     let chosen = self.palette.sel == *k;
                     if chosen {
-                        ui.painter().rect(row, CornerRadius::same(10), SIGNAL.gamma_multiply(0.12), Stroke::new(1.0, SIGNAL.gamma_multiply(0.35)), StrokeKind::Inside);
+                        // The chosen row: a quiet lift, as a system list does; its icon
+                        // tile carries the Volt.
+                        ui.painter().rect(row, CornerRadius::same(10), ON_GLASS_LIT, Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
                         if down || up {
                             ui.scroll_to_rect(rr, None);
                         }

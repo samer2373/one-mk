@@ -7,7 +7,7 @@
 use crate::motion::{self, Tween};
 use crate::style::{GROUND, INK, INK_HOVER, INK2, SIGNAL, fit, mono_medium, regular, semibold};
 use crate::widgets::mix;
-use egui::{Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
+use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 use one_mk_proto::{Edge, Rect as Monitor, Side};
 use std::ops::{Add, Mul, Sub};
 
@@ -1426,7 +1426,8 @@ impl Scene {
         let pts: Vec<Pos2> = (0..=N).map(|i| cam.pt(bez(p0, p1, p2, p3, lerp(tail, head, i as f32 / N as f32)))).collect();
         // A strip that widens and brightens toward the head, with a one
         // point feather on each side so its edges stay smooth.
-        let (tail_col, head_col) = if f.cargo == Cargo::Parcel { ([255, 181, 71], [255, 214, 140]) } else { ([255, 181, 71], [255, 227, 176]) };
+        // Volt: something crossing between computers, lighter at its head.
+        let (tail_col, head_col) = if f.cargo == Cargo::Parcel { ([198, 244, 50], [215, 255, 94]) } else { ([198, 244, 50], [232, 255, 170]) };
         let mut m = Mesh::default();
         for i in 0..=N {
             let k = i as f32 / N as f32;
@@ -1452,19 +1453,19 @@ impl Scene {
         painter.add(Shape::mesh(m));
         if head < 1.0 {
             let hp = cam.pt(bez(p0, p1, p2, p3, head));
-            let rim = Stroke::new(1.0, Color32::from_rgb(0xFF, 0xF8, 0xEC));
+            let rim = Stroke::new(1.0, Color32::from_rgb(0xF6, 0xFF, 0xE0));
             if f.cargo == Cargo::Parcel {
                 let r = 4.5;
                 painter.add(Shape::convex_polygon(vec![hp + vec2(0.0, -r), hp + vec2(r, 0.0), hp + vec2(0.0, r), hp + vec2(-r, 0.0)], SIGNAL, rim));
             } else {
-                painter.circle(hp, 3.5, Color32::from_rgb(0xFF, 0xE3, 0xB0), rim);
+                painter.circle(hp, 3.5, Color32::from_rgb(0xE8, 0xFF, 0xAA), rim);
             }
         }
         if let Some(label) = self.latency_label.as_ref().filter(|_| f.cargo == Cargo::Probe) {
             let u = f.u(self.now);
             let a = (((u - 0.25) * f.secs) / 0.12).clamp(0.0, 1.0).min(((1.0 - u) / 0.2).clamp(0.0, 1.0));
             let apex = cam.pt(bez(p0, p1, p2, p3, 0.5));
-            painter.text(apex - vec2(0.0, 14.0), egui::Align2::CENTER_BOTTOM, label, FontId::monospace(12.0), fade(INK, a));
+            painter.text(apex - vec2(0.0, 14.0), egui::Align2::CENTER_BOTTOM, label, regular(12.0), fade(INK, a));
         }
     }
 

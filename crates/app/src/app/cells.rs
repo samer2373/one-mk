@@ -73,8 +73,10 @@ impl App {
         // once sits in the page's title row.
         let p = ui.painter().clone();
         p.text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, "This computer", semibold(T_TITLE), INK);
-        if let Some(s) = self.running() {
-            let sub = format!("{} · {}", s.name, os_name(me_os()));
+        {
+            // Off, the name isn't known yet: what it runs, at least, so the
+            // card keeps its shape.
+            let sub = self.running().map_or_else(|| os_name(me_os()).to_owned(), |s| format!("{} · {}", s.name, os_name(me_os())));
             p.text(pos2(c.left(), c.top() + 32.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), c.width()), regular(T_BODY), INK3);
         }
         let row_h = 40.0;
