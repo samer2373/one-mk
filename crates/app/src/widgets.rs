@@ -145,8 +145,9 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
     let p = ui.painter().clone();
     match (look, enabled) {
         (Look::Primary, true) => {
-            // Tinted glass: the colour lit from above, its rim catching light.
-            p.add(egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: SIGNAL.gamma_multiply(0.28) }.as_shape(rr, CornerRadius::same(radius)));
+            // A solid Volt capsule, lit a touch from above; a short neutral
+            // shadow seats it (never a coloured glow).
+            p.add(egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(70) }.as_shape(rr, CornerRadius::same(radius)));
             p.add(rounded_gradient(rr, rr.height() / 2.0, mix(SIGNAL_LIT, Color32::WHITE, 0.12 * hover + 0.04), mix(SIGNAL, SIGNAL_LIT, hover)));
             p.add(lit_edge(rr.shrink(0.5), rr.height() / 2.0 - 0.5));
         }
@@ -415,7 +416,7 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
         .id(id)
         .font(font)
         .text_color(if enabled { INK } else { INK2 })
-        .hint_text(egui::RichText::new(hint).color(OFF))
+        .hint_text(egui::RichText::new(hint).color(INK3))
         .frame(egui::Frame::NONE)
         .margin(egui::Margin::ZERO)
         .align(Align2::LEFT_CENTER)

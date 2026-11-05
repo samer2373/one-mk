@@ -1028,11 +1028,23 @@ pub fn lockup_texture(ctx: &egui::Context) -> egui::TextureHandle {
     ctx.load_texture("lockup", egui::ColorImage::from_rgba_unmultiplied(size, px), egui::TextureOptions::LINEAR)
 }
 
-/// The lockup, top left, `height` points tall.
+/// Where the ink sits in the lockup picture (its clear space around it),
+/// as fractions of its height: left edge, and the centre of the ink.
+const LOCKUP_INK_LEFT: f32 = 65.0 / 52.0;
+const LOCKUP_INK_MID: f32 = 21.5 / 52.0;
+
+/// The lockup with the left edge of its ink at `left_center`, the ink
+/// centred on it vertically, and the picture `height` points tall.
 pub fn draw_lockup(p: &Painter, tex: &egui::TextureHandle, left_center: Pos2, height: f32) {
     let [w, h] = tex.size();
-    let rect = Rect::from_min_size(left_center - vec2(0.0, height / 2.0), vec2(height * w as f32 / h as f32, height));
+    let min = left_center - vec2(LOCKUP_INK_LEFT * height, LOCKUP_INK_MID * height);
+    let rect = Rect::from_min_size(min, vec2(height * w as f32 / h as f32, height));
     p.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+}
+
+/// How wide the lockup's ink is at `height`.
+pub fn lockup_ink_w(height: f32) -> f32 {
+    (213.0 - 65.0) / 52.0 * height
 }
 
 impl App {
@@ -1534,7 +1546,7 @@ impl App {
         let w = rect.width();
         let x = match self.tab {
             Tab::Layout => [0.0, w * 0.3, w * 0.6, w],
-            Tab::Files => [0.0, w * 0.34, w * 0.63, w],
+            Tab::Files => [0.0, w * 0.32, w * 0.645, w],
             _ => [0.0, w * 0.34, w * 0.66, w],
         };
         let cell = |a: usize, b: usize| Rect::from_min_max(pos2(rect.left() + x[a] + PAD, rect.top() + PAD), pos2(rect.left() + x[b] - PAD, rect.bottom() - PAD));

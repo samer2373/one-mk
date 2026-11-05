@@ -130,9 +130,11 @@ impl App {
         let w = side.width() - 20.0;
         // The top band: the window buttons on macOS, the logo at its end.
         let band = HEAD_H / 2.0;
-        let lock_w = self.lockup.size()[0] as f32 * 22.0 / self.lockup.size()[1] as f32;
-        let logo_x = if chrome::mac_frame() { side.right() - 14.0 - lock_w } else { x + 8.0 };
-        draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, band), 22.0);
+        // The mark's left edge lines up with the page icons below it.
+        let lock_h = 26.0;
+        let lock_w = lockup_ink_w(lock_h);
+        let logo_x = if chrome::mac_frame() { side.right() - 18.0 - lock_w } else { x + 10.0 };
+        draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, band), lock_h);
         let mut y = HEAD_H + 6.0;
         // The way to everything: the command palette.
         let sr = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));

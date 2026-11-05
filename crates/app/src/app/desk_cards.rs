@@ -201,7 +201,9 @@ impl App {
         }
         if peer.online && (self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id)) {
             let busy = self.measuring.is_some();
-            let r = Rect::from_min_size(pos2(body.left() + col_w - 28.0, body.top() + 4.0), vec2(28.0, 28.0));
+            // Beside the number it measures.
+            let num_w = summary.map_or(text_width(ui, "…", mono_medium(30.0)), |s| text_width(ui, &rtt::ms_number(s.now_us), mono_medium(30.0)) + 4.0 + text_width(ui, "ms", regular(T_BODY)));
+            let r = Rect::from_min_size(pos2(body.left() + num_w + 10.0, body.top() + 6.0), vec2(28.0, 28.0));
             let spin = if self.measuring.as_ref() == Some(&peer.id) && !motion::reduced() {
                 ui.ctx().request_repaint();
                 (now * 5.0) as f32
@@ -264,8 +266,8 @@ impl App {
         let cy = c.top() + 12.0;
         icons::pointer(&p, pos2(c.left(), cy - 7.0), 14.0, SIGNAL);
         let nw = text_width(ui, &status.name, semibold(T_TITLE));
-        p.text(pos2(c.left() + 16.0, cy), Align2::LEFT_CENTER, &status.name, semibold(T_TITLE), INK);
-        p.text(pos2(c.left() + 26.0 + nw, cy), Align2::LEFT_CENTER, format!("This computer · {}", os_name(me_os())), regular(T_BODY), INK3);
+        p.text(pos2(c.left() + 22.0, cy), Align2::LEFT_CENTER, &status.name, semibold(T_TITLE), INK);
+        p.text(pos2(c.left() + 32.0 + nw, cy), Align2::LEFT_CENTER, format!("This computer · {}", os_name(me_os())), regular(T_BODY), INK3);
         let online = status.peers.iter().filter(|p| p.online).count();
         let paired = match status.peers.len() {
             0 => "None yet".to_owned(),
@@ -273,6 +275,11 @@ impl App {
         };
         info_row(ui, c, c.top() + 52.0, "Paired", &paired, false, 1.0);
         info_row(ui, c, c.top() + 76.0, "ID", &status.id, true, 1.0);
+        if status.peers.is_empty() && c.height() > 150.0 {
+            // What pairing needs, so the first step is clear from here too.
+            p.hline(c.x_range(), c.top() + 100.0, Stroke::new(1.0, LINE));
+            para(ui, pos2(c.left(), c.top() + 114.0), c.width().min(460.0), "To share this keyboard and mouse, open oneMK on the other computer as well, then choose Pair a computer. Both need to be on the same network.", regular(T_BODY), INK2);
+        }
         self.quick_actions(ui, c, c.bottom() - 32.0, None);
     }
 
@@ -318,9 +325,14 @@ impl App {
         let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
         let on = self.broadcasting();
         if online || on {
-            x -= 64.0 + 8.0;
-            let rect = Rect::from_min_size(pos2(x, y), vec2(64.0, 34.0));
-            let response = button(ui, rect, Id::unique("broadcast-options"), "Timer", Look::Glass, !on, Some("Broadcast idle timer"));
+            // When typing on every computer stops by itself: a clock, beside
+            // the switch it belongs to.
+            x -= 34.0 + 8.0;
+            let rect = Rect::from_min_size(pos2(x, y), vec2(34.0, 34.0));
+            let name = "When typing on every computer stops by itself";
+            let response = button(ui, rect, Id::unique("broadcast-options"), "", Look::Glass, !on, Some(name));
+            icons::draw(ui.painter(), Icon::Clock, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), if on { INK3 } else { mix(INK2, INK, f32::from(response.hovered())) });
+            let response = response.on_hover_text(name);
             egui::Popup::menu(&response).width(280.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
                 let (row, _) = ui.allocate_exact_size(vec2(280.0, 34.0), Sense::hover());
                 self.broadcast_timeout(ui, row);
@@ -334,9 +346,9 @@ impl App {
             let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
             let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
             let name = if on { format!("Typing on every computer.{key}") } else { "Type on every computer: everything you type, click and scroll here goes to every connected computer at once".to_owned() };
-            let resp = button(ui, r, Id::unique("broadcast"), "", Look::Quiet, !busy && !on, Some(&name));
+            let resp = button(ui, r, Id::unique("broadcast"), "", Look::Glass, !busy && !on, Some(&name));
             if on {
-                ui.painter().rect_stroke(r, CornerRadius::same(10), Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
+                ui.painter().rect_stroke(r, CornerRadius::same(17), Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
             }
             icons::draw(ui.painter(), Icon::Broadcast, Rect::from_center_size(r.center(), vec2(16.0, 16.0)), if on { SIGNAL } else { INK2 });
             if resp.on_hover_text(&name).clicked() {
@@ -350,12 +362,15 @@ impl App {
             let r = Rect::from_min_size(pos2(x, y), vec2(w, 34.0));
             let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
             let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
-            let resp = button(ui, r, Id::unique("broadcast"), "", Look::Quiet, !busy && !on, Some("Broadcast: type, click and scroll on every connected computer at once"));
+            let resp = button(ui, r, Id::unique("broadcast"), "", Look::Glass, !busy && !on, Some("Broadcast: type, click and scroll on every connected computer at once"));
             icons::draw(ui.painter(), Icon::Broadcast, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
             ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, label, semibold(T_BODY), INK);
+            // A small switch, drawn as the window's other switches are.
             let track = Rect::from_min_size(pos2(r.right() - 46.0, r.center().y - 9.0), vec2(32.0, 18.0));
-            ui.painter().rect_filled(track, CornerRadius::same(9), if on { INK } else { TRACK_OFF });
-            ui.painter().circle_filled(pos2(if on { track.right() - 9.0 } else { track.left() + 9.0 }, track.center().y), 6.5, if on { GROUND } else { INK });
+            let knob_t = tween(ui.ctx(), Id::unique("broadcast-knob"), f32::from(on), motion::space(0.2), motion::out_cubic);
+            ui.painter().rect_filled(track, CornerRadius::same(9), mix(Color32::from_white_alpha(34), ACCENT, knob_t));
+            ui.painter().rect_stroke(track, CornerRadius::same(9), Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
+            ui.painter().circle_filled(pos2(track.left() + 9.0 + 14.0 * knob_t, track.center().y), 7.0, Color32::WHITE);
             if resp.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}")).clicked() {
                 self.ask_broadcast(!on);
             }

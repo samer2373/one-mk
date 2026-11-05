@@ -26,8 +26,9 @@ pub const PALETTE_TOP: Color32 = Color32::from_rgba_premultiplied(18, 20, 25, 20
 pub const PALETTE: Color32 = Color32::from_rgba_premultiplied(14, 16, 21, 215);
 /// The search row at the top of the sidebar.
 pub const SEARCH_FILL: Color32 = Color32::from_rgb(0x13, 0x16, 0x1C);
-/// Shortcut keys beside each page: there when looked for, not before.
-pub const SHORTCUT_INK: Color32 = Color32::from_rgb(0x52, 0x5A, 0x66);
+/// Shortcut keys beside each page: quiet, yet 4.5:1 on the sidebar and on
+/// its chosen row.
+pub const SHORTCUT_INK: Color32 = Color32::from_rgb(0x7D, 0x86, 0x92);
 /// The room on a see-through window (macOS): a dark tint over the blurred
 /// desktop, 88% so grey text keeps 4.5:1 even over a white wallpaper.
 pub const ROOM_TINT: Color32 = Color32::from_rgba_premultiplied(14, 17, 21, 224);

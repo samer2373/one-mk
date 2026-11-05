@@ -182,14 +182,20 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
     let p = ui.painter();
     let radius = CornerRadius::same((rect.height() / 2.0) as u8);
-    p.rect(rect, radius, mix(if on { PILL } else { ON_GLASS }, BUTTON_LIT, hover), Stroke::new(1.0, if on { INK2 } else { Color32::from_white_alpha(40) }), StrokeKind::Inside);
-    let mut x = rect.left() + 14.0;
+    // Solid capsules like the window's other quiet buttons; one that is
+    // set is lighter and carries a Volt tick. The words sit centred either way.
+    let press = tween(ui.ctx(), id.with("press"), f32::from(enabled && r.is_pointer_button_down_on()), 0.08, motion::out_cubic);
+    let fill = if on { mix(BUTTON_LIT, Color32::from_white_alpha(46), hover) } else { mix(BUTTON, BUTTON_LIT, hover) };
+    p.rect(rect, radius, mix(fill, Color32::from_white_alpha(10), press), Stroke::new(1.0, if on { Color32::from_white_alpha(40) } else { CONTROL_EDGE }), StrokeKind::Inside);
+    let font = regular(T_META + 1.0);
+    let text = fit(p, label, &font, rect.width() - 28.0 - if on { 16.0 } else { 0.0 });
+    let tw = p.layout_no_wrap(text.clone(), font.clone(), INK).size().x;
+    let mut x = rect.center().x - (tw + if on { 16.0 } else { 0.0 }) / 2.0;
     if on {
-        widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, INK, 1.0);
+        widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, ACCENT, 1.0);
         x += 16.0;
     }
-    let text = fit(p, label, &regular(T_META + 1.0), rect.right() - 12.0 - x);
-    p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, text, regular(T_META + 1.0), if !enabled { INK2 } else if on { INK } else { mix(INK2, INK, hover) });
+    p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, text, font, if !enabled { INK2 } else if on { INK } else { mix(INK2, INK, hover) });
     widgets::focus_ring(ui, &r, rect, radius.nw);
     if r.hovered() && enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

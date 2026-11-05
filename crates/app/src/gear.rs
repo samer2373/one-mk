@@ -389,7 +389,8 @@ const CASE: Finish = Finish { albedo: Color32::from_rgb(0x3A, 0x3E, 0x45), gloss
 const CAP: Finish = Finish { albedo: Color32::from_rgb(0x34, 0x37, 0x3D), gloss: 18.0, spec: 0.08 };
 const CAP_MOD: Finish = Finish { albedo: Color32::from_rgb(0x55, 0x52, 0x4D), gloss: 18.0, spec: 0.08 };
 const DESK_LIT: Color32 = Color32::from_rgb(0x3B, 0x30, 0x27);
-pub const SIGNAL: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
+/// The brand's Volt: a changed key's new legend, the chosen key or button.
+pub const SIGNAL: Color32 = crate::style::SIGNAL;
 
 /// A legend to print on a key: where, how big, which colour, and whether
 /// it is the key's new job (printed on its front, in Volt).
