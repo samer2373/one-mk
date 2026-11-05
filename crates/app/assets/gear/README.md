@@ -16,5 +16,12 @@ python3 -I scripts/mesh-pack.py g502.glb crates/app/assets/gear/mouse.omkm \
   --size 130 --drop 'Material\.003$' --smooth 38 --regions crates/app/assets/gear/mouse-regions.json
 ```
 
+Then name the buttons by the model's own pieces (the wheel, the left and right buttons and the two thumb
+buttons are each a separate piece of the shell; the box cuts above only approximate them):
+
+```sh
+python3 -I scripts/mesh-regroup.py crates/app/assets/gear/mouse.omkm
+```
+
 `scripts/mesh-pack.py --list model.glb` shows a model's parts first. The file format is described at the top
 of that script.

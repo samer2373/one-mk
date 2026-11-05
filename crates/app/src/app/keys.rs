@@ -111,6 +111,12 @@ pub(super) struct KeysUi {
     mouse_model: Option<std::sync::Arc<crate::gear::Model>>,
     mouse: Option<crate::gear::ModelView>,
     mouse_hover: Option<u32>,
+    /// How far a drag has turned each, and where each one's camera is as it
+    /// eases onto the chosen button or key.
+    mouse_orbit: crate::gear::Orbit,
+    board_orbit: crate::gear::Orbit,
+    mouse_glide: crate::gear::Glide,
+    board_glide: crate::gear::Glide,
 }
 
 impl KeysUi {
@@ -841,7 +847,17 @@ impl App {
         // The board fills the card under its intro; built again only when
         // the window's size, the keys or what they do change.
         let area = Rect::from_min_max(pos2(r.left() + 8.0, r.top() + 50.0), pos2(r.right() - 8.0, r.bottom() - 8.0));
-        crate::gear::Keyboard::get(&mut self.keys.board, area, &drawn);
+        // The camera goes in on the chosen key (from wherever it is now, so
+        // choosing the next one glides across) and back out when it is let
+        // go; a drag on the board turns it.
+        let chosen = caps.iter().position(|c| self.keys.selected == Some(c.code) && self.keys.layer.is_none());
+        let dt = ui.input(|i| i.stable_dt);
+        let mut moving = self.keys.board_orbit.step(dt);
+        let turn = self.keys.board_orbit;
+        moving |= crate::gear::Keyboard::get(&mut self.keys.board, area, &drawn, crate::gear::View { yaw: turn.yaw, pitch: turn.pitch }, chosen, &mut self.keys.board_glide, dt);
+        if moving {
+            ui.ctx().request_repaint();
+        }
         let Some(board) = self.keys.board.take() else { return };
 
         let held: Vec<u16> = if self.keys.test_focused { self.keys.tester.as_ref().map_or(vec![], |(t, ..)| t.pressed.down().to_vec()) } else { vec![] };
@@ -852,7 +868,14 @@ impl App {
         // the keys' drawn tops. Each key is focusable on its own, for the
         // keyboard and for screen readers.
         // Clicks only: focus goes to the keys themselves, not this area.
-        let resp = ui.interact(area, Id::unique("board"), widgets::sense(ui, Sense::CLICK));
+        let resp = ui.interact(area, Id::unique("board"), widgets::sense(ui, Sense::click_and_drag()));
+        if resp.dragged() {
+            self.keys.board_orbit.pull(resp.drag_delta(), 0.7, 0.3);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        if resp.double_clicked() {
+            self.keys.board_orbit.reset();
+        }
         let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| area.contains(*p) && ui.rect_contains_pointer(area));
         let under = pointer.and_then(|pos| board.hit(pos));
         let under_code = under.map(|i| caps[i].code);
@@ -862,6 +885,13 @@ impl App {
         }
         if under.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        // Tapping away from the keys lets go of the chosen one, and the view
+        // zooms back out.
+        if resp.clicked() && under.is_none() && self.keys.selected.is_some() {
+            self.keys.selected = None;
+            self.keys.capture = None;
+            self.keys.picker = None;
         }
         if resp.clicked()
             && let Some(i) = under
@@ -908,7 +938,6 @@ impl App {
                 kr.on_hover_text(&does);
             }
         }
-        let chosen = caps.iter().position(|c| self.keys.selected == Some(c.code) && self.keys.layer.is_none());
         let held_i: Vec<usize> = caps.iter().enumerate().filter(|(_, c)| held.contains(&c.code)).map(|(i, _)| i).collect();
         let painter = ui.painter_at(area);
         board.paint(&painter, &held_i, under, chosen, &|size, to| if to { mono_medium(size) } else { regular(size) });
@@ -1550,14 +1579,30 @@ impl App {
         let room = Rect::from_center_size(r.center() + vec2(0.0, -4.0), vec2((r.width() - 2.0 * co_w - 60.0).max(160.0), r.height() - 40.0));
         let chosen = self.keys.button.and_then(|n| PARTS.iter().find(|p| p.0 == n)).map(|p| p.1);
         let area = r.shrink(1.0);
-        crate::gear::ModelView::get(&mut self.keys.mouse, &model, area, room, 0.0, -2.2, 0.62, chosen);
+        // The camera goes in on the chosen button (from wherever it is now,
+        // so choosing the next one glides across) and back out when it is let
+        // go; a drag on the mouse turns it.
+        let dt = ui.input(|i| i.stable_dt);
+        let mut moving = self.keys.mouse_orbit.step(dt);
+        let turn = self.keys.mouse_orbit;
+        moving |= crate::gear::ModelView::get(&mut self.keys.mouse, &model, area, room, 0.0, -2.2 + turn.yaw, 0.62 + turn.pitch, chosen, chosen, &mut self.keys.mouse_glide, dt);
+        if moving {
+            ui.ctx().request_repaint();
+        }
         let Some(view) = self.keys.mouse.take() else { return };
         let under_painter = ui.painter_at(r);
         let under_idx = under_painter.add(egui::Shape::Noop);
         let shown = tune::buttons_shown(input, facts);
         let busy = self.tuning_busy();
         // Clicks on the mouse itself.
-        let resp = ui.interact(room, Id::unique("mouse-body"), widgets::sense(ui, Sense::click()));
+        let resp = ui.interact(room, Id::unique("mouse-body"), widgets::sense(ui, Sense::click_and_drag()));
+        if resp.dragged() {
+            self.keys.mouse_orbit.pull(resp.drag_delta(), 0.9, 0.3);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        if resp.double_clicked() {
+            self.keys.mouse_orbit.reset();
+        }
         let names: Vec<&str> = PARTS.iter().map(|p| p.1).collect();
         let under = resp.hover_pos().and_then(|pos| view.hit(pos, &names)).and_then(|n| PARTS.iter().find(|p| p.1 == n).map(|p| p.0));
         let mut pick = None;
@@ -1566,6 +1611,11 @@ impl App {
             if resp.clicked() {
                 pick = under;
             }
+        } else if resp.clicked() && self.keys.button.is_some() {
+            // Tapping away from the buttons lets go of the chosen one, and
+            // the view zooms back out.
+            self.keys.button = None;
+            self.keys.reveal = false;
         }
         // Labels: left of the mouse for parts on its left, the rest right,
         // each as near its part as the others allow.
