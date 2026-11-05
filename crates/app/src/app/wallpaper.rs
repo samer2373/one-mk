@@ -113,13 +113,13 @@ impl App {
             let fills = Rect::from_min_size(pos2(origin.x, stage.bottom() + 22.0), vec2(col_w, fills_h));
             let rows = list(ui, fills, "How it fills the screens", 2);
             let fit_row = rows[0];
-            ui.painter().text(fit_row.left_center(), Align2::LEFT_CENTER, "Fit", regular(T_BODY), if enabled && selected { INK } else { INK2 });
+            label_help(ui, short(fit_row), Id::unique("wallpaper-fit-label"), "Fit", "wallpaper-fit", enabled && selected, 204.0 + 12.0);
             let track = Rect::from_min_size(pos2(fit_row.right() - 204.0, fit_row.center().y - 14.0), vec2(204.0, 28.0));
             if let Some(chosen) = (Pills { id: Id::unique("wallpaper-fit"), track, cells: Pills::even(track, 3, 2.0), labels: &["Fill", "Fit", "Stretch"], names: vec!["Fill the screens".into(), "Fit inside the screens".into(), "Stretch across the screens".into()], chosen: Some(match fit_now { Fit::Fill => 0, Fit::Fit => 1, Fit::Stretch => 2 }), enabled: vec![enabled && selected; 3], role: Role::RadioGroup, font: T_META }).show(ui, true) {
                 self.wallpaper_command(Command::Fit { fit: [Fit::Fill, Fit::Fit, Fit::Stretch][chosen] });
             }
             let battery = plan.is_none_or(|plan| plan.pause_on_battery);
-            if switch(ui, rows[1], Id::unique("wallpaper-battery"), "Pause on battery", battery, enabled && selected && plan.is_none_or(|plan| !plan.picture)).clicked() {
+            if switch_help(ui, short(rows[1]), Id::unique("wallpaper-battery"), "Pause on battery", "wallpaper-battery", battery, enabled && selected && plan.is_none_or(|plan| !plan.picture)).clicked() {
                 self.wallpaper_command(Command::Battery { enabled: !battery });
             }
 
@@ -156,7 +156,7 @@ impl App {
                 }
                 let switch_row = Rect::from_min_max(pos2(row.left() + 18.0, row.top()), row.max);
                 let label = fit(ui.painter(), name, &regular(T_BODY), label_w);
-                let response = switch(ui, switch_row, Id::unique(("wallpaper-computer", id)), &label, on, enabled && selected);
+                let response = switch_help(ui, short(switch_row), Id::unique(("wallpaper-computer", id)), &label, "wallpaper-computer", on, enabled && selected);
                 let response = match &failed { Some(reason) => response.on_hover_text(reason), None => response };
                 if response.clicked() {
                     self.wallpaper_command(Command::Computer { id: id.clone(), enabled: !on });
@@ -277,3 +277,8 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
 }
 
 fn fit_text(ui: &Ui, text: &str, width: f32) -> String { fit(ui.painter(), text, &regular(T_META), width) }
+
+/// These rows carry subtitles of their own, so they take the "i" without a caption.
+fn short(row: Rect) -> Rect {
+    Rect::from_center_size(row.center(), vec2(row.width(), 40.0))
+}

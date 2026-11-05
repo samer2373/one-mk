@@ -90,11 +90,11 @@ impl App {
         };
         let busy = self.busy.contains(&Job::Update) || self.busy.contains(&Job::UpdateSettings);
         let row = |k: f32| Rect::from_min_size(pos2(c.left(), c.top() - 6.0 + k * 36.0), vec2(c.width(), 36.0));
-        if widgets::switch(ui, row(0.0), Id::unique("update-check"), "Look for updates", status.check, !busy).clicked() {
+        if widgets::switch_help(ui, row(0.0), Id::unique("update-check"), "Look for updates", "update-check", status.check, !busy).clicked() {
             self.busy.push(Job::UpdateSettings);
             self.link.update_preference(false, !status.check);
         }
-        if widgets::switch(ui, row(1.0), Id::unique("update-auto"), "Install them without asking", status.install_automatically, !busy && status.check && status.can_update && !status.needs_password).clicked() {
+        if widgets::switch_help(ui, row(1.0), Id::unique("update-auto"), "Install them without asking", "update-auto", status.install_automatically, !busy && status.check && status.can_update && !status.needs_password).clicked() {
             self.busy.push(Job::UpdateSettings);
             self.link.update_preference(true, !status.install_automatically);
         }

@@ -191,7 +191,7 @@ impl App {
             widgets::field(ui, Rect::from_min_size(pos2(rect.left() + after + 8.0, opts_y + 2.0), vec2(40.0, 26.0)), Id::unique(("hook-seconds", key)), &mut seconds, "5", "Time limit in seconds, 1 to 60", true, true);
             ui.painter().text(pos2(rect.left() + after + 56.0, opts_y + 15.0), Align2::LEFT_CENTER, "seconds", regular(T_META), INK2);
             let shell_row = Rect::from_min_size(pos2(rect.right() - 170.0, opts_y), vec2(170.0, 30.0));
-            if switch(ui, shell_row, Id::unique(("hook-shell", key)), "Run in a shell", use_shell, true).clicked() { use_shell = !use_shell; }
+            if switch_help(ui, shell_row, Id::unique(("hook-shell", key)), "Run in a shell", "hook-shell", use_shell, true).clicked() { use_shell = !use_shell; }
             self.drafts.insert((*key).into(), command.clone());
             self.drafts.insert(format!("{key}-computer"), chosen.clone());
             self.drafts.insert(format!("{key}-seconds"), seconds.clone());
@@ -208,7 +208,8 @@ impl App {
             ("learn", "Learn computer positions", &[("off", "Off"), ("suggest", "Ask me"), ("auto", "Place them")][..], self.prefs.edge_learn.clone()),
             ("pointer", "Draw a pointer on computers with no mouse", &[("auto", "Auto"), ("always", "Always"), ("never", "Never")][..], self.prefs.pointer_draw.clone()),
         ] {
-            ui.painter().text(pos2(rect.left(), top), Align2::LEFT_TOP, label, regular(T_BODY), INK);
+            let help = match key { "wrap" => "edge-wrap", "learn" => "edge-learn", _ => "pointer-overlay" };
+            label_help_inline(ui, Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), 18.0)), Id::unique(("extra-label", key)), label, help, true);
             let track = Rect::from_min_size(pos2(rect.left(), top + 26.0), vec2(rect.width(), 28.0));
             if let Some(value) = self.settings_segment(ui, track, label, choices, &current) {
                 let args = if key == "pointer" { vec!["pointer-overlay".into(), value] } else { vec!["edge".into(), format!("--{key}"), value] };
@@ -220,7 +221,7 @@ impl App {
     }
 
     pub(super) fn broadcast_timeout(&mut self, ui: &mut Ui, row: Rect) {
-        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, "Stop when idle (minutes)", regular(T_META), INK);
+        label_help(ui, row, Id::unique("broadcast-label"), "Stop when idle (minutes)", "broadcast-idle", true, 54.0 + 12.0);
         let field = Rect::from_min_size(pos2(row.right() - 54.0, row.top() + 3.0), vec2(54.0, 28.0));
         if let Some(text) = self.edit_field(ui, field, "broadcast-idle", &self.prefs.broadcast_idle.to_string(), "15", "Broadcast idle timeout in minutes; zero means never", true, true) {
             match number(&text, 1440) {

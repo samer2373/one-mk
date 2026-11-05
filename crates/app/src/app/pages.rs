@@ -9,7 +9,9 @@ use crate::view::{self, Check, Verdict};
 /// Doctor results older than this are run again when Health opens.
 const STALE: f64 = 30.0;
 /// A row of the Crossing edges card.
-const EDGE_ROW: f32 = 38.0;
+/// Tall enough for a label with its caption under it.
+const EDGE_ROW: f32 = 50.0;
+const HELP_ROW: f32 = 50.0;
 const MODS: [(&str, &str); 4] = [("none", "None"), ("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
 
 /// A group of settings, as the system's own settings show them: its title
@@ -380,9 +382,9 @@ impl App {
         let peers = s.map_or(0, |status| status.peers.len());
         let heights = [
             48.0 + 5.0 * EDGE_ROW + 14.0,
-            48.0 + 3.0 * 36.0 - 6.0 + 14.0,
-            48.0 + 36.0 - 6.0 + 14.0,
-            48.0 + 46.0 + 56.0 * self.prefs.hotkeys.len() as f32 + if s.is_some_and(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
+            48.0 + 3.0 * HELP_ROW - 6.0 + 14.0,
+            48.0 + HELP_ROW - 6.0 + 14.0,
+            48.0 + 62.0 + 56.0 * self.prefs.hotkeys.len() as f32 + if s.is_some_and(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
             48.0 + 22.0 + (SWAP_ROW * peers as f32).max(40.0) + 14.0,
             48.0 + 4.0 * super::settings_controls::HOOK_H + 60.0,
             48.0 + 96.0 + 14.0,
@@ -422,7 +424,7 @@ impl App {
             self.edges_card(ui, r(0));
             self.power_card(ui, r(1));
             let c = card(ui, r(2), "Games");
-            self.gaming_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0), vec2(c.width(), 36.0)));
+            self.gaming_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0), vec2(c.width(), HELP_ROW)));
             self.keys_card(ui, r(3));
             let c = card(ui, r(4), "Ctrl and Cmd");
             ui.painter().text(pos2(c.left(), c.top() + 2.0), Align2::LEFT_CENTER, fit(ui.painter(), "Auto swaps them only between a Mac and a PC.", &regular(T_META), c.width()), regular(T_META), INK2);
@@ -461,7 +463,7 @@ impl App {
         .enumerate()
         {
             let rr = row(k);
-            ui.painter().text(rr.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
+            label_help(ui, rr, Id::unique(("edge-label", key)), label, &format!("edge-{key}"), true, 72.0 + uw + 12.0);
             let fr = Rect::from_min_size(pos2(rr.right() - 72.0 - uw, rr.center().y - 13.0), vec2(72.0, 26.0));
             ui.painter().text(pos2(rr.right(), rr.center().y), Align2::RIGHT_CENTER, unit, regular(T_META), INK2);
             let a11y = format!("{label}, in {}", if unit == "px" { "pixels (0: off)" } else { "milliseconds (0: off)" });
@@ -474,15 +476,12 @@ impl App {
                     _ => self.toast_error(format!("{label}: type a whole number from 0 to {max}."), None, self.now),
                 }
             }
-            let tip = if key == "corner" { "The pointer stays here within this distance of a corner, so corners and close buttons stay easy to hit." } else { "The pointer has to rest against the edge this long before it crosses." };
-            let lw = text_width(ui, label, regular(T_BODY));
-            ui.interact(Rect::from_min_size(rr.min, vec2(lw, rr.height())), Id::unique(("edge-tip", key)), Sense::hover()).on_hover_text(tip);
         }
         let rr = row(2);
         let word = "Hold a key to cross";
-        ui.painter().text(rr.left_center(), Align2::LEFT_CENTER, word, regular(T_BODY), INK);
-        let lw = text_width(ui, word, regular(T_BODY)) + 16.0;
+        let lw = text_width(ui, word, regular(T_BODY)) + 16.0 + 26.0;
         let seg_w = 200.0f32.min(rr.width() - lw);
+        label_help(ui, rr, Id::unique("edge-mod-label"), word, "edge-mod", true, seg_w + 12.0);
         let track = Rect::from_min_size(pos2(rr.right() - seg_w, rr.center().y - 13.0), vec2(seg_w, 26.0));
         let labels: Vec<&str> = MODS.iter().map(|(_, l)| *l).collect();
         let pills = Pills {
@@ -500,12 +499,11 @@ impl App {
             let v = MODS[k].0;
             self.edge_setting(&side, "--modifier", v);
         }
-        let r = switch(ui, row(3), Id::unique("edge-fullscreen"), "Stay in fullscreen windows", p.edge_fullscreen, true);
+        let r = switch_help(ui, row(3), Id::unique("edge-fullscreen"), "Stay in fullscreen windows", "edge-fullscreen", p.edge_fullscreen, true);
         if r.clicked() {
             let v = if p.edge_fullscreen { "off" } else { "on" };
             self.edge_setting(&side, "--fullscreen-guard", v);
         }
-        r.on_hover_text("Don't cross while a fullscreen window (a game, a video) has the focus here.");
         let reset = Rect::from_min_size(pos2(c.left(), row(4).top()), vec2(c.width(), 28.0));
         if !side.is_empty() && button(ui, reset, Id::unique("edge-reset-side"), "Use shared rules", Look::Quiet, true, None).clicked() {
             self.settings_command("the edge rules", vec!["edge".into(), "--side".into(), side.clone(), "--reset".into()]);
@@ -515,20 +513,19 @@ impl App {
     fn power_card(&mut self, ui: &mut Ui, r: Rect) {
         let c = card(ui, r, "Power and locking");
         let p = self.prefs.clone();
-        let row_h = 36.0;
+        let row_h = HELP_ROW;
         let top = c.top() - 6.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
-        let r0 = switch(ui, row(0), Id::unique("block-saver"), "Keep computers I control awake", p.block_screensaver, true);
+        let r0 = switch_help(ui, row(0), Id::unique("block-saver"), "Keep computers I control awake", "block-saver", p.block_screensaver, true);
         if r0.clicked() {
             let v = if p.block_screensaver { "off" } else { "on" };
             self.set_pref("keeping computers awake", &["power", "--block-screensaver", v], |p| p.block_screensaver = !p.block_screensaver);
         }
-        r0.on_hover_text("No screensaver or sleep on a computer while this one controls it.");
-        if switch(ui, row(1), Id::unique("sleep-sync"), "Sleep displays together", p.sleep_sync, true).clicked() {
+        if switch_help(ui, row(1), Id::unique("sleep-sync"), "Sleep displays together", "sleep-sync", p.sleep_sync, true).clicked() {
             let v = if p.sleep_sync { "off" } else { "on" };
             self.set_pref("sleep sync", &["power", "--sleep-sync", v], |p| p.sleep_sync = !p.sleep_sync);
         }
-        if switch(ui, row(2), Id::unique("lock-sync"), "Lock all when this one locks", p.lock_sync, true).clicked() {
+        if switch_help(ui, row(2), Id::unique("lock-sync"), "Lock all when this one locks", "lock-sync", p.lock_sync, true).clicked() {
             let v = if p.lock_sync { "off" } else { "on" };
             self.set_pref("lock sync", &["lock-sync", v], |p| p.lock_sync = !p.lock_sync);
         }
@@ -536,11 +533,11 @@ impl App {
 
     fn keys_card(&mut self, ui: &mut Ui, r: Rect) {
         let c = card(ui, r, "Keyboard shortcuts");
-        let row = Rect::from_min_size(c.min, vec2(c.width(), 34.0));
-        if switch(ui, row, Id::unique("hotkeys"), "Use keyboard shortcuts", self.prefs.hotkeys_on, true).clicked() {
+        let row = Rect::from_min_size(c.min, vec2(c.width(), HELP_ROW));
+        if switch_help(ui, row, Id::unique("hotkeys"), "Use keyboard shortcuts", "hotkeys", self.prefs.hotkeys_on, true).clicked() {
             self.set_pref("keyboard shortcuts", &["hotkeys", if self.prefs.hotkeys_on { "--off" } else { "--on" }], |prefs| prefs.hotkeys_on = !prefs.hotkeys_on);
         }
-        self.shortcut_controls(ui, Rect::from_min_max(c.min + vec2(0.0, 46.0), c.max));
+        self.shortcut_controls(ui, Rect::from_min_max(c.min + vec2(0.0, 62.0), c.max));
     }
 
     fn hooks_card(&mut self, ui: &mut Ui, r: Rect) {

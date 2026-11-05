@@ -221,16 +221,77 @@ pub fn draw_check(p: &Painter, c: Pos2, size: f32, col: Color32, t: f32) {
     }
 }
 
-/// A labelled switch across `row`; the response is clicked when flipped.
-pub fn switch(ui: &mut Ui, row: Rect, id: Id, label: &str, on: bool, enabled: bool) -> Response {
+/// A row's label. With help (see `help.rs`) a caption sits under it and an
+/// "i" opens the long explanation and its picture; `right` is the room the
+/// control keeps free. Returns the label as shown.
+pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enabled: bool, right: f32) -> String {
+    let font = regular(T_BODY);
+    let col = if enabled { INK } else { INK2 };
+    let Some(h) = crate::help::get(key) else {
+        let shown = fit(ui.painter(), label, &font, row.width() - right);
+        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, &shown, font, col);
+        return shown;
+    };
+    let room = row.width() - right - 26.0;
+    let shown = fit(ui.painter(), label, &font, room);
+    let p = ui.painter();
+    // A tall row has room for the caption; a short one keeps only the "i".
+    if row.height() >= 44.0 {
+        p.text(row.left_center() - vec2(0.0, 8.0), Align2::LEFT_CENTER, &shown, font, col);
+        p.text(row.left_center() + vec2(0.0, 8.0), Align2::LEFT_CENTER, fit(p, h.caption, &regular(T_META), room), regular(T_META), INK2);
+    } else {
+        p.text(row.left_center(), Align2::LEFT_CENTER, &shown, font, col);
+    }
+    let ic = pos2(row.right() - right - 11.0, row.center().y);
+    let ir = Rect::from_center_size(ic, vec2(22.0, 22.0));
+    let r = ui.interact(ir, id.with("info"), sense(ui, Sense::click()));
+    let hover = tween(ui.ctx(), id.with("info-hover"), f32::from(r.hovered()), 0.12, motion::out_cubic);
+    let p = ui.painter();
+    let ink = mix(INK2, INK, hover);
+    p.circle_stroke(ic, 8.0, Stroke::new(1.0, ink));
+    p.text(ic, Align2::CENTER_CENTER, "i", semibold(T_META), ink);
+    focus_ring(ui, &r, ir, 11);
+    a11y(&r, Role::Button, &format!("About {label}"), None);
+    if r.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let pop = egui::Popup::menu(&r).width(300.0).align(egui::RectAlign::BOTTOM_END);
+    // Development aid: ONE_MK_APP_HELP=<key> keeps that explanation open.
+    #[cfg(debug_assertions)]
+    let pop = if std::env::var("ONE_MK_APP_HELP").is_ok_and(|v| v == key) { pop.open(true) } else { pop };
+    pop.show(|ui| {
+        ui.set_max_width(300.0);
+        if h.scene != crate::help::Scene::None {
+            let (scene, _) = ui.allocate_exact_size(vec2(300.0, 112.0), Sense::hover());
+            crate::help::draw(ui.painter(), scene, h.scene, crate::help::phase(ui.input(|i| i.time), 4.0));
+            if !motion::reduced() {
+                ui.ctx().request_repaint_after_secs(1.0 / 60.0);
+            }
+        }
+        ui.add(egui::Label::new(egui::RichText::new(h.detail).font(regular(T_BODY)).color(INK_HOVER)).wrap());
+    });
+    shown
+}
+
+/// `label_help` for a label with its control right after it (not at the
+/// far end); returns where that control may start.
+pub fn label_help_inline(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enabled: bool) -> f32 {
+    let w = text_width(ui, label, regular(T_BODY));
+    let extra = if crate::help::get(key).is_some() { 26.0 } else { 0.0 };
+    label_help(ui, row, id, label, key, enabled, row.width() - w - extra);
+    w + extra + 16.0
+}
+
+/// A labelled switch across `row`, with the caption and explanation filed
+/// under `key` in `help.rs`; the response is clicked when flipped.
+pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: bool, enabled: bool) -> Response {
     let r = ui.interact(row, id, if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
     let ctx = ui.ctx().clone();
     let knob_t = tween(&ctx, id.with("knob"), f32::from(on), motion::space(0.26), motion::back_out);
     let fill = tween(&ctx, id.with("track"), f32::from(on), motion::fade(0.2), motion::linear);
     let hover = tween(&ctx, id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
+    let shown = label_help(ui, row, id, label, key, enabled, 46.0);
     let p = ui.painter();
-    let shown = fit(p, label, &regular(T_BODY), row.width() - 46.0);
-    p.text(row.left_center(), Align2::LEFT_CENTER, &shown, regular(T_BODY), if enabled { INK } else { INK2 });
     let track = Rect::from_min_size(pos2(row.right() - 38.0, row.center().y - 11.0), vec2(38.0, 22.0));
     // Off: a recessed capsule. On: filled with the accent, as the system's
     // switches are; the knob is a lit white bead that slides across.

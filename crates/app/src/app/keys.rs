@@ -576,7 +576,7 @@ impl App {
         let card = card_begin(ui, rect.min, width, "Where your rules work");
         let content = card.inner;
         let row = Rect::from_min_size(content.min, vec2(content.width(), ROW));
-        if switch(ui, row, Id::unique("also-on-this-computer"), "Also on this computer", input.local_rules,
+        if switch_help(ui, row, Id::unique("also-on-this-computer"), "Also on this computer", "also-on-this-computer", input.local_rules,
             available && !self.tuning_busy() && !self.prefs.unreadable).clicked() {
             self.tune_cmds("local rules", "local-rules", vec![vec!["keymap".into(), "local".into(),
                 if input.local_rules { "off".into() } else { "on".into() }]], None);
@@ -1445,7 +1445,7 @@ impl App {
         let mut button = "middle";
         for (_, row) in rows { enabled = row.enabled.unwrap_or(enabled); speed = row.speed.unwrap_or(speed); button = row.button.as_deref().unwrap_or(button); }
         let rect = Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), 30.0));
-        if switch(ui, rect, Id::unique("autoscroll-toggle"), "Autoscroll", enabled, !busy).clicked() {
+        if switch_help(ui, rect, Id::unique("autoscroll-toggle"), "Autoscroll", "autoscroll-toggle", enabled, !busy).clicked() {
             let mut args = vec!["autoscroll".into(), if enabled { "--off".into() } else { "--on".into() }];
             args.extend(self.keys.scope.args());
             self.tune_cmds("autoscroll", "mouse-modes", vec![args], None);
@@ -1745,8 +1745,7 @@ impl App {
 
     /// A speed: a slider (even by ratio, 1× in the middle) and the number.
     fn speed_row(&mut self, ui: &mut Ui, row: Rect, key: &'static str, label: &str, value: f64) -> Option<f64> {
-        let lw = text_width(ui, label, regular(T_BODY)) + 16.0;
-        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
+        let lw = label_help_inline(ui, row, Id::unique(("speed-label", key)), label, key, true);
         let shown = self.keys.drafts.get(key).copied().unwrap_or(value);
         let fw = 58.0;
         let sr = Rect::from_min_max(pos2(row.left() + lw, row.top()), pos2(row.right() - fw - 26.0, row.bottom()));
@@ -1786,8 +1785,7 @@ impl App {
         if tune::RAW_MOTION {
             let row = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), ROW));
             let label = "Acceleration";
-            ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
-            let lw = text_width(ui, label, regular(T_BODY)) + 16.0;
+            let lw = label_help_inline(ui, row, Id::unique("accel-label"), label, "pointer-accel", true);
             let track = Rect::from_min_max(pos2(row.left() + lw, row.center().y - 14.0), pos2(row.right(), row.center().y + 14.0));
             let labels = ["Like here", "Off", "Curve"];
             let values = ["system", "off", "curve"];
@@ -1822,8 +1820,7 @@ impl App {
         let s = tune::scroll_shown(input, facts, dev);
         let row = |y: f32| Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), ROW));
         let seg = |ui: &mut Ui, app: &App, r: Rect, id: &str, label: &str, labels: &[&str], names: Vec<String>, chosen: Option<usize>| -> Option<usize> {
-            ui.painter().text(r.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
-            let lw = if label.is_empty() { 0.0 } else { text_width(ui, label, regular(T_BODY)) + 16.0 };
+            let lw = if label.is_empty() { 0.0 } else { label_help_inline(ui, r, Id::unique((id, "label")), label, id, true) };
             let track = Rect::from_min_max(pos2(r.left() + lw, r.center().y - 14.0), pos2(r.right(), r.center().y + 14.0));
             let n = labels.len();
             Pills { id: Id::unique(id), track, cells: Pills::even(track, n, 2.0), labels, names, chosen, enabled: vec![true; n], role: Role::RadioButton, font: T_META }.show(ui, app.arrowed)
@@ -1840,11 +1837,11 @@ impl App {
         }
         y += ROW + 4.0;
         let mut change = None;
-        if switch(ui, row(y), Id::unique("scroll-rev-v"), "Reverse up and down", s.reverse_vertical, true).clicked() {
+        if switch_help(ui, row(y), Id::unique("scroll-rev-v"), "Reverse up and down", "scroll-rev-v", s.reverse_vertical, true).clicked() {
             change = Some(ScrollChange::ReverseVertical(!s.reverse_vertical));
         }
         y += ROW;
-        if switch(ui, row(y), Id::unique("scroll-rev-h"), "Reverse left and right", s.reverse_horizontal, true).clicked() {
+        if switch_help(ui, row(y), Id::unique("scroll-rev-h"), "Reverse left and right", "scroll-rev-h", s.reverse_horizontal, true).clicked() {
             change = Some(ScrollChange::ReverseHorizontal(!s.reverse_horizontal));
         }
         y += ROW;
@@ -1859,7 +1856,7 @@ impl App {
             change = Some(ScrollChange::Mode(mode_values[k]));
         }
         y += ROW + 6.0;
-        ui.painter().text(pos2(c.left(), y + 9.0), Align2::LEFT_CENTER, "Natural scrolling", regular(T_BODY), INK);
+        label_help_inline(ui, Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 18.0)), Id::unique("natural-label"), "Natural scrolling", "scroll-natural", true);
         y += 22.0;
         let nat = ["As here", "Match each", "Always", "Never"];
         let nat_values: [Option<&'static str>; 4] = [None, Some("auto"), Some("on"), Some("off")];
@@ -1882,11 +1879,11 @@ impl App {
         };
         y += para(ui, pos2(c.left(), y), c.width(), explain, regular(T_META), INK2) + 8.0;
         let alt = if mac() { "Option" } else { "Alt" };
-        if switch(ui, row(y), Id::unique("scroll-shift"), "Hold Shift to scroll sideways", s.shift_sideways, true).clicked() {
+        if switch_help(ui, row(y), Id::unique("scroll-shift"), "Hold Shift to scroll sideways", "scroll-shift", s.shift_sideways, true).clicked() {
             change = Some(ScrollChange::Modifier("shift", if s.shift_sideways { "unchanged" } else { "horizontal" }));
         }
         y += ROW;
-        if switch(ui, row(y), Id::unique("scroll-alt"), &format!("Hold {alt} to scroll 5× faster"), s.alt_faster, true).clicked() {
+        if switch_help(ui, row(y), Id::unique("scroll-alt"), &format!("Hold {alt} to scroll 5× faster"), "scroll-alt", s.alt_faster, true).clicked() {
             change = Some(ScrollChange::Modifier("alt", if s.alt_faster { "unchanged" } else { "x5" }));
         }
         y += ROW;

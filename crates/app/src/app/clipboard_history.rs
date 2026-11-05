@@ -20,14 +20,14 @@ impl App {
             self.clipboard_reveal = None;
         }
         let toggle = Rect::from_min_size(pos2(rect.left(), rect.top() + 30.0), vec2(rect.width(), 28.0));
-        if switch(ui, toggle, Id::unique("history-enabled"), "Keep clipboard history", self.prefs.history_enabled, true).clicked() {
+        if switch_help(ui, toggle, Id::unique("history-enabled"), "Keep clipboard history", "history-enabled", self.prefs.history_enabled, true).clicked() {
             let enabled = !self.prefs.history_enabled;
             self.set_pref("clipboard history", &["clipboard", "history", if enabled { "on" } else { "off" }], |prefs| prefs.history_enabled = enabled);
             self.clipboard_reveal = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
         }
         let persist = Rect::from_min_size(pos2(rect.left(), rect.top() + 62.0), vec2(rect.width(), 28.0));
-        if switch(ui, persist, Id::unique("history-persist"), "Keep history after restart", self.prefs.history_persist, self.prefs.history_enabled).clicked() {
+        if switch_help(ui, persist, Id::unique("history-persist"), "Keep history after restart", "history-persist", self.prefs.history_persist, self.prefs.history_enabled).clicked() {
             let enabled = !self.prefs.history_persist;
             self.set_pref("saved clipboard history", &["clipboard", "history", "persist", if enabled { "on" } else { "off" }], |prefs| prefs.history_persist = enabled);
         }
