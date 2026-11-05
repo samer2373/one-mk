@@ -40,6 +40,8 @@ pub enum Cross {
     Corner,
     Dwell,
     HoldKey,
+    /// Out through one end of the desk, in at the other.
+    Wrap,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -113,6 +115,11 @@ pub static HELP: &[(&str, Help)] = &[
     ("autoscroll-speed", Help { caption: "How fast autoscroll goes", detail: "A multiplier on autoscroll. 1× leaves it as it is; below 1× is slower, above 1× is faster.", scene: None }),
     ("update-check", Help { caption: "Checks for a newer oneMK by itself", detail: "oneMK checks whether a newer version is out and tells you. Off: it never checks by itself.", scene: None }),
     ("update-auto", Help { caption: "New versions install by themselves", detail: "When a newer version is found, oneMK installs it without asking. Off: you choose when. Not available where installing needs a password or this copy can't update itself.", scene: None }),
+    ("edge-wrap", Help { caption: "Pointer re-enters on the far side", detail: "Off: the pointer stops at the edge of the desk. Left / right: pushing out through a left or right edge with no computer there brings it back in at the opposite edge. All edges: the top and bottom wrap too.", scene: Cross(self::Cross::Wrap) }),
+    ("edge-learn", Help { caption: "Works out where computers sit", detail: "Push the pointer twice within 2 seconds against an edge that leads nowhere, while a computer whose place is only a guess is online, and oneMK takes it as \"it's over there\". Ask me: suggests the place and moves nothing. Place them: puts it there and tells you how to undo that. Off: never learns.", scene: None }),
+    ("pointer-overlay", Help { caption: "A pointer for computers with no mouse", detail: "A computer with no mouse attached can show no pointer at all while you control it. Auto: oneMK draws a small arrow only when the system shows none. Always: whenever this computer is controlled. Never: not at all.", scene: None }),
+    ("broadcast-idle", Help { caption: "Typing on every computer stops itself", detail: "Typing on every computer at once stops after this many minutes without input. 0 means it never stops by itself.", scene: None }),
+    ("wallpaper-fit", Help { caption: "How the picture meets the screens", detail: "Fill: the picture covers the screens and crops what doesn't fit. Fit: all of it shows, with bars where the shapes differ. Stretch: it is pulled to the exact shape of the screens, which can distort it.", scene: None }),
     ("hotkeys", Help { caption: "Shortcuts that jump to another computer", detail: "Press a shortcut to send the keyboard and mouse straight to a computer, without moving the pointer to an edge. Off: only the edges switch.", scene: Keys }),
 ];
 
@@ -236,6 +243,20 @@ fn cross(p: &Painter, (a, b): (Rect, Rect), c: Cross, t: f32, pointer: &dyn Fn(P
                 ring(p, pos2(edge - 6.0, mid + 6.0), 11.0, fill);
             }
         }
+        Cross::Wrap => {
+            // Out through the right end, in at the left end.
+            let (lo, hi) = (a.left() + 3.0, b.right() - 3.0);
+            col = INK;
+            if t < 0.45 {
+                at.x = lerp(a.left() + 30.0, hi, ease(seg(t, 0.05, 0.45)));
+            } else {
+                at.x = lerp(lo, a.left() + 30.0, ease(seg(t, 0.6, 0.9)));
+                col = SIGNAL;
+                if t < 0.6 {
+                    at.x = -100.0;
+                }
+            }
+        }
         Cross::HoldKey => {
             let held = seg(t, 0.3, 0.38) * (1.0 - seg(t, 0.85, 0.92));
             keycap(p, pos2(a.center().x, a.bottom() + 20.0), "Ctrl", held);
@@ -244,10 +265,13 @@ fn cross(p: &Painter, (a, b): (Rect, Rect), c: Cross, t: f32, pointer: &dyn Fn(P
             blocked = (0.3..0.5).contains(&t) && held < 0.01;
         }
     }
-    if at.x > a.right() {
+    if at.x > a.right() && c != Cross::Wrap {
         col = SIGNAL;
     }
-    pointer(at, col);
+    // Between the two ends of a wrap the pointer is nowhere.
+    if at.x >= 0.0 {
+        pointer(at, col);
+    }
     if blocked {
         cross_mark(p, pos2(edge + 6.0, at.y + 6.0));
     }

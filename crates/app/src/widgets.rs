@@ -261,11 +261,12 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
     let pop = if std::env::var("ONE_MK_APP_HELP").is_ok_and(|v| v == key) { pop.open(true) } else { pop };
     pop.show(|ui| {
         ui.set_max_width(300.0);
-        let (scene, _) = ui.allocate_exact_size(vec2(300.0, 112.0), Sense::hover());
-        let t = crate::help::phase(ui.input(|i| i.time), 4.0);
-        crate::help::draw(ui.painter(), scene, h.scene, t);
-        if h.scene != crate::help::Scene::None && !motion::reduced() {
-            ui.ctx().request_repaint_after_secs(1.0 / 60.0);
+        if h.scene != crate::help::Scene::None {
+            let (scene, _) = ui.allocate_exact_size(vec2(300.0, 112.0), Sense::hover());
+            crate::help::draw(ui.painter(), scene, h.scene, crate::help::phase(ui.input(|i| i.time), 4.0));
+            if !motion::reduced() {
+                ui.ctx().request_repaint_after_secs(1.0 / 60.0);
+            }
         }
         ui.add(egui::Label::new(egui::RichText::new(h.detail).font(regular(T_BODY)).color(INK_HOVER)).wrap());
     });
