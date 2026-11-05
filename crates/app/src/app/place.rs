@@ -165,8 +165,9 @@ impl App {
         a11y_text(ui, Id::unique(("exact-place", &peer.id)), Rect::from_min_size(c.left_top() + vec2(0.0, 26.0), vec2(c.width(), h)), Role::Label, &text, Some(Live::Polite));
         if offset.is_some() {
             let label = "Anywhere along the side";
-            let b = Rect::from_min_size(pos2(c.left(), c.top() + 26.0 + h + 10.0), vec2(button_width(ui, label), 28.0));
-            if button(ui, b, Id::unique(("place-anywhere", &peer.id)), label, Look::Quiet, true, Some(&format!("Let {} take the pointer anywhere along your {} edge", peer.name, edge_word(side)))).clicked() {
+            let b = Rect::from_min_size(pos2(c.left(), c.top() + 26.0 + h + 10.0), vec2(button_width(ui, label).min(c.width()), 28.0));
+            let shown = fit(ui.painter(), label, &semibold(T_BODY), b.width() - 28.0);
+            if button(ui, b, Id::unique(("place-anywhere", &peer.id)), &shown, Look::Quiet, true, Some(&format!("Let {} take the pointer anywhere along your {} edge", peer.name, edge_word(side)))).clicked() {
                 self.choose_side(&peer.id, side, false);
             }
         }
@@ -326,6 +327,10 @@ impl App {
                 p.hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
             }
         });
+        // A list that runs on below fades out into the card rather than
+        // ending in a cut row.
+        let fade = Rect::from_min_max(pos2(list.left() - 6.0, list.bottom() - 14.0), pos2(list.right() + 6.0, list.bottom()));
+        ui.painter().add(widgets::rounded_gradient(fade, 0.0, Color32::TRANSPARENT, ELEVATED));
         if let Some(n) = toggle_open {
             self.profile_open = if self.profile_open.as_ref() == Some(&n) { None } else { Some(n) };
             self.profile_scroll = self.profile_open.is_some();
