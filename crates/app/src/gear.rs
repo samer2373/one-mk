@@ -122,6 +122,107 @@ impl Cam {
         cam.centre = room.center() - (mid - self.centre) * k;
         cam
     }
+
+    /// This view fitted to the points `near(g)`: a box round what is
+    /// focused, grown by `g` in steps of `grow` until the view magnifies by
+    /// no more than `max` of this one.
+    #[allow(clippy::too_many_arguments)]
+    fn zoom_on(self, base: Cam, near: impl Fn(f32) -> Vec<P3>, rect: Rect, pad: f32, grow: f32, max: f32) -> Cam {
+        let mut g = 0.0;
+        loop {
+            let to = base.fitted(&near(g), rect, pad);
+            if to.foc <= self.foc * max || g > grow * 40.0 {
+                return to;
+            }
+            g += grow;
+        }
+    }
+}
+
+/// How far a model or the board is turned: radians, added to the resting view.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct View {
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// The camera's magnification and centre as they are shown, easing toward
+/// where they should be. Choosing another button while zoomed on one moves
+/// from where the view is now, even part-way through the last move, and
+/// speeds up and slows down smoothly (a critically damped spring).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Glide {
+    /// Natural log of the magnification (so a zoom is even all the way),
+    /// then the centre's x and y, each with its speed.
+    at: [f32; 3],
+    speed: [f32; 3],
+    started: bool,
+}
+
+impl Glide {
+    /// Stiffness: settles in about 0.6 s.
+    const W: f32 = 11.0;
+
+    /// Moves on by `dt` seconds toward `to`: where the camera is now, and
+    /// whether it is still moving. `jump` (or the first time, or reduced
+    /// motion) goes straight there.
+    fn step(&mut self, to: Cam, dt: f32, jump: bool) -> (Cam, bool) {
+        let goal = [to.foc.ln(), to.centre.x, to.centre.y];
+        if jump || !self.started || crate::motion::reduced() {
+            (self.at, self.speed, self.started) = (goal, [0.0; 3], true);
+            return (to, false);
+        }
+        const H: f32 = 1.0 / 240.0;
+        let mut left = dt.clamp(0.0, 0.1);
+        while left > 0.0 {
+            let h = left.min(H);
+            for ((x, v), to) in self.at.iter_mut().zip(self.speed.iter_mut()).zip(goal) {
+                *v += (-2.0 * Self::W * *v - Self::W * Self::W * (*x - to)) * h;
+                *x += *v * h;
+            }
+            left -= h;
+        }
+        // Close enough, and slow enough, to stop: a thousandth of a zoom, a
+        // tenth of a pixel.
+        let still = (self.at[0] - goal[0]).abs() < 0.001 && (self.at[1] - goal[1]).abs() < 0.1 && (self.at[2] - goal[2]).abs() < 0.1 && self.speed.iter().all(|v| v.abs() < 0.05);
+        if still {
+            (self.at, self.speed) = (goal, [0.0; 3]);
+        }
+        (Cam { foc: self.at[0].exp(), centre: pos2(self.at[1], self.at[2]), ..to }, !still)
+    }
+}
+
+/// A turn pulled by a drag and eased toward where it was pulled, within
+/// limits, so letting go leaves it there.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Orbit {
+    pub yaw: f32,
+    pub pitch: f32,
+    yaw_v: f32,
+    pitch_v: f32,
+    yaw_to: f32,
+    pitch_to: f32,
+}
+
+impl Orbit {
+    /// A drag of `d` points; the turn stays within `yaw` and `pitch` radians
+    /// of the resting view.
+    pub fn pull(&mut self, d: egui::Vec2, yaw: f32, pitch: f32) {
+        self.yaw_to = (self.yaw_to - d.x * 0.008).clamp(-yaw, yaw);
+        self.pitch_to = (self.pitch_to + d.y * 0.006).clamp(-pitch, pitch);
+    }
+
+    /// Back to the resting view.
+    pub fn reset(&mut self) {
+        (self.yaw_to, self.pitch_to) = (0.0, 0.0);
+    }
+
+    /// Moves on by `dt` seconds; true while it is still moving.
+    pub fn step(&mut self, dt: f32) -> bool {
+        let a = crate::motion::spring(&mut self.yaw, &mut self.yaw_v, self.yaw_to, dt, 0.0005);
+        let b = crate::motion::spring(&mut self.pitch, &mut self.pitch_v, self.pitch_to, dt, 0.0005);
+        a || b
+    }
 }
 
 /// Light: the screens behind the desk (cool, from above and behind), a
@@ -178,6 +279,9 @@ impl Lighting {
 #[derive(Default)]
 struct Tris {
     v: Vec<([Pos2; 3], [Color32; 3], f32)>,
+    /// Drawn this much nearer than they are, so a part that sits on the
+    /// shell wins where the two touch.
+    bias: f32,
 }
 
 impl Tris {
@@ -208,7 +312,7 @@ impl Tris {
         let (pb, zb) = cam.project(p[1]);
         let (pd, zd) = cam.project(p[2]);
         let cols = [lit.shade_with(a[0], f, p[0], n[0]), lit.shade_with(a[1], f, p[1], n[1]), lit.shade_with(a[2], f, p[2], n[2])];
-        self.v.push(([pa, pb, pd], cols, (za + zb + zd) / 3.0));
+        self.v.push(([pa, pb, pd], cols, (za + zb + zd) / 3.0 - self.bias));
     }
 
     fn quad(&mut self, cam: &Cam, lit: &Lighting, f: Finish, p: [P3; 4], n: [P3; 4]) {
@@ -302,31 +406,70 @@ struct Legend {
 /// A built keyboard: the lit mesh, each key's top on screen (for clicks
 /// and highlights) and its legends.
 pub struct Keyboard {
-    built_for: (Rect, Vec<Cap>),
+    built_for: (Rect, Vec<Cap>, View, Option<usize>),
+    /// Where the camera is headed, and whether it was still moving when this
+    /// was built.
+    target: Cam,
+    moving: bool,
     mesh: Arc<Mesh>,
     pub tops: Vec<Vec<Pos2>>,
     legends: Vec<Legend>,
 }
 
 impl Keyboard {
-    /// The keyboard for `caps` filling `rect`: the last one when nothing
-    /// changed, else built anew.
-    pub fn get(slot: &mut Option<Keyboard>, rect: Rect, caps: &[Cap]) {
-        if slot.as_ref().is_some_and(|k| k.built_for.0 == rect && k.built_for.1 == caps) {
-            return;
+    /// The keyboard for `caps` filling `rect`, turned by `view`, and zoomed
+    /// on the key `focus` (or the whole board when `None`): the last one when
+    /// nothing changed, else built anew. The camera eases there by `glide`;
+    /// true while it is still moving, so the caller keeps drawing.
+    pub fn get(slot: &mut Option<Keyboard>, rect: Rect, caps: &[Cap], view: View, focus: Option<usize>, glide: &mut Glide, dt: f32) -> bool {
+        let same = slot.as_ref().filter(|k| k.built_for.0 == rect && k.built_for.1 == caps && k.built_for.2 == view && k.built_for.3 == focus);
+        let mut step = None;
+        if let Some(k) = same {
+            let s = glide.step(k.target, dt, false);
+            if !s.1 && !k.moving {
+                return false;
+            }
+            step = Some((k.target, s));
         }
-        *slot = Some(Self::build(rect, caps));
+        let (target, (cam, moving)) = step.unwrap_or_else(|| {
+            let target = Self::aim(rect, caps, view, focus);
+            let resized = slot.as_ref().is_none_or(|k| k.built_for.0 != rect);
+            (target, glide.step(target, dt, resized))
+        });
+        *slot = Some(Self::build(rect, caps, view, focus, cam, target, moving));
+        moving
     }
 
-    fn build(rect: Rect, caps: &[Cap]) -> Keyboard {
+    /// The camera for the whole board, or on the key `focus`.
+    fn aim(rect: Rect, caps: &[Cap], view: View, focus: Option<usize>) -> Cam {
         let cols = caps.iter().map(|c| c.x + c.w).fold(1.0f32, f32::max);
         let rows = caps.iter().map(|c| c.y + c.h).fold(1.0f32, f32::max);
         let (w, d) = (cols * U, rows * U);
         let margin = 9.0;
         let (x0, z0) = (-w / 2.0, -d / 2.0);
-        let base = Cam::new(p3(0.0, 0.0, 0.0), -0.06, 0.92, 760.0, 1.0, rect.center());
+        let base = Cam::new(p3(0.0, 0.0, 0.0), -0.06 + view.yaw, 0.92 + view.pitch, 760.0, 1.0, rect.center());
         let bounds = [p3(x0 - margin, 0.0, z0 - margin), p3(-x0 + margin, 0.0, z0 - margin), p3(-x0 + margin, -16.0, -z0 + margin + 4.0), p3(x0 - margin, -16.0, -z0 + margin + 4.0), p3(0.0, 12.0, z0)];
-        let cam = base.fitted(&bounds, rect, 10.0);
+        let whole = base.fitted(&bounds, rect, 10.0);
+        // Zoomed: the key and about one key all round it fill the area.
+        match focus.and_then(|i| caps.get(i)) {
+            Some(k) => {
+                let (cx, cz) = (x0 + (k.x + k.w / 2.0) * U, z0 + (k.y + k.h / 2.0) * U);
+                let near = |g: f32| -> Vec<P3> {
+                    let (hx, hz) = (k.w * U / 2.0 + 1.1 * U + g, k.h * U / 2.0 + 1.1 * U + g);
+                    [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter().map(|(sx, sz)| p3(cx + sx * hx, 7.0, cz + sz * hz)).collect()
+                };
+                whole.zoom_on(base, near, rect, 10.0, 0.4 * U, 4.0)
+            }
+            None => whole,
+        }
+    }
+
+    fn build(rect: Rect, caps: &[Cap], view: View, focus: Option<usize>, cam: Cam, target: Cam, moving: bool) -> Keyboard {
+        let cols = caps.iter().map(|c| c.x + c.w).fold(1.0f32, f32::max);
+        let rows = caps.iter().map(|c| c.y + c.h).fold(1.0f32, f32::max);
+        let (w, d) = (cols * U, rows * U);
+        let margin = 9.0;
+        let (x0, z0) = (-w / 2.0, -d / 2.0);
         let lit = Lighting { eye: cam.eye };
         let mut m = Mesh::default();
         desk(&mut m, &cam, p3(0.0, -16.0, 0.0), w * 0.9, d * 1.6);
@@ -372,7 +515,7 @@ impl Keyboard {
             }
         }
         keys.into_mesh(&mut m);
-        Keyboard { built_for: (rect, caps.to_vec()), mesh: Arc::new(m), tops, legends }
+        Keyboard { built_for: (rect, caps.to_vec(), view, focus), target, moving, mesh: Arc::new(m), tops, legends }
     }
 
     /// Draws the kept mesh, then what changes from frame to frame: the
@@ -544,6 +687,48 @@ pub struct ModelPart {
     idx: Vec<u32>,
 }
 
+/// The longest side a model's triangle keeps, in millimetres. Triangles are
+/// drawn back to front by their middle, which only holds for small ones: a
+/// long triangle of the shell reaches under a button and covers part of it.
+const MAX_EDGE: f32 = 4.0;
+
+impl ModelPart {
+    /// The same surface with every triangle cut (at the middle of its
+    /// longest side, normals and colours blended) until its sides are short.
+    fn refined(self, max: f32) -> ModelPart {
+        type V = (P3, P3, Color32);
+        let len = |a: &V, b: &V| {
+            let d = a.0 - b.0;
+            d.dot(d).sqrt()
+        };
+        let mid = |a: &V, b: &V| -> V { (lerp3(a.0, b.0, 0.5), lerp3(a.1, b.1, 0.5).norm(), lerp_col(a.2, b.2, 0.5)) };
+        let (mut pos, mut nrm, mut col, mut idx) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut todo: Vec<([V; 3], u8)> = Vec::new();
+        for tri in self.idx.as_chunks::<3>().0 {
+            todo.push((tri.map(|k| (self.pos[k as usize], self.nrm[k as usize], self.col[k as usize])), 0));
+            while let Some((t, depth)) = todo.pop() {
+                let sides = [len(&t[0], &t[1]), len(&t[1], &t[2]), len(&t[2], &t[0])];
+                let long = (0..3).max_by(|a, b| sides[*a].total_cmp(&sides[*b])).unwrap_or(0);
+                if sides[long] <= max || depth >= 16 {
+                    for v in t {
+                        idx.push(pos.len() as u32);
+                        pos.push(v.0);
+                        nrm.push(v.1);
+                        col.push(v.2);
+                    }
+                    continue;
+                }
+                // Cut side `long` (between corners long and long + 1) in two.
+                let (a, b, c) = (t[long], t[(long + 1) % 3], t[(long + 2) % 3]);
+                let m = mid(&a, &b);
+                todo.push(([a, m, c], depth + 1));
+                todo.push(([m, b, c], depth + 1));
+            }
+        }
+        ModelPart { pos, nrm, col, idx, ..self }
+    }
+}
+
 impl Model {
     pub fn parse(b: &[u8]) -> Option<Model> {
         let mut at = 0usize;
@@ -581,7 +766,7 @@ impl Model {
             if idx.iter().any(|i| *i as usize >= nv) {
                 return None;
             }
-            parts.push(ModelPart { name, gloss, spec, pos, nrm, col, idx });
+            parts.push(ModelPart { name, gloss, spec, pos, nrm, col, idx }.refined(MAX_EDGE));
         }
         Some(Model { parts })
     }
@@ -594,7 +779,11 @@ impl Model {
 /// A built model view: the lit mesh, and each part's outline and the
 /// point its label line goes to.
 pub struct ModelView {
-    built_for: (Rect, Rect, Option<String>, [u32; 3]),
+    built_for: (Rect, Rect, Option<String>, [u32; 3], Option<String>),
+    /// Where the camera is headed, and whether it was still moving when this
+    /// was built.
+    target: Cam,
+    moving: bool,
     mesh: Arc<Mesh>,
     pub parts: Vec<ModelHit>,
 }
@@ -616,13 +805,22 @@ impl ModelHit {
 impl ModelView {
     /// `m` on the desk, filling `rect` and framed in `room`, turned by
     /// `yaw` and seen from `cam_yaw`/`pitch`; the part named `chosen` is
-    /// tinted Volt. The last one when nothing changed.
+    /// tinted Volt, and the camera goes in on the part `focus` (or stays out
+    /// on the whole mouse when `None`), easing there by `glide`. The last
+    /// one when nothing changed; true while the camera is still moving.
     #[allow(clippy::too_many_arguments)]
-    pub fn get(slot: &mut Option<ModelView>, m: &Model, rect: Rect, room: Rect, yaw: f32, cam_yaw: f32, pitch: f32, chosen: Option<&str>) {
-        let key = (rect, room, chosen.map(str::to_owned), [yaw.to_bits(), cam_yaw.to_bits(), pitch.to_bits()]);
-        if slot.as_ref().is_some_and(|v| v.built_for == key) {
-            return;
+    pub fn get(slot: &mut Option<ModelView>, m: &Model, rect: Rect, room: Rect, yaw: f32, cam_yaw: f32, pitch: f32, chosen: Option<&str>, focus: Option<&str>, glide: &mut Glide, dt: f32) -> bool {
+        let key = (rect, room, chosen.map(str::to_owned), [yaw.to_bits(), cam_yaw.to_bits(), pitch.to_bits()], focus.map(str::to_owned));
+        let same = slot.as_ref().filter(|v| v.built_for == key);
+        let mut step = None;
+        if let Some(v) = same {
+            let s = glide.step(v.target, dt, false);
+            if !s.1 && !v.moving {
+                return false;
+            }
+            step = Some((v.target, s));
         }
+        let resized = slot.as_ref().is_none_or(|v| v.built_for.0 != rect || v.built_for.1 != room);
         let pts: Vec<P3> = m.points().map(|p| p.yaw(yaw)).collect();
         let (mut lo, mut hi) = (p3(f32::MAX, f32::MAX, f32::MAX), p3(f32::MIN, f32::MIN, f32::MIN));
         for p in &pts {
@@ -630,8 +828,29 @@ impl ModelView {
             hi = p3(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
         }
         let mid = (lo + hi) * 0.5;
-        let base = Cam::new(mid, cam_yaw, pitch, 420.0, 1.0, rect.center());
-        let cam = base.fitted(&pts, room, room.height() * 0.08);
+        let (target, (cam, moving)) = step.unwrap_or_else(|| {
+            let base = Cam::new(mid, cam_yaw, pitch, 420.0, 1.0, rect.center());
+            let whole = base.fitted(&pts, room, room.height() * 0.08);
+            // Zoomed: the part and a little of what is round it fill the room.
+            let target = match focus.and_then(|f| m.parts.iter().find(|p| p.name == f)) {
+                Some(part) => {
+                    let q: Vec<P3> = part.pos.iter().map(|p| p.yaw(yaw)).collect();
+                    let (mut a, mut b) = (p3(f32::MAX, f32::MAX, f32::MAX), p3(f32::MIN, f32::MIN, f32::MIN));
+                    for p in &q {
+                        a = p3(a.x.min(p.x), a.y.min(p.y), a.z.min(p.z));
+                        b = p3(b.x.max(p.x), b.y.max(p.y), b.z.max(p.z));
+                    }
+                    let corners = |g: f32| -> Vec<P3> {
+                        let g = 12.0 + g;
+                        (0..8).map(|i| p3(if i & 1 == 0 { a.x - g } else { b.x + g }, if i & 2 == 0 { a.y } else { b.y + g }, if i & 4 == 0 { a.z - g } else { b.z + g })).collect()
+                    };
+                    // Not so close that the mouse spills over its labels.
+                    whole.zoom_on(base, corners, room, room.height() * 0.08, 6.0, 1.5)
+                }
+                None => whole,
+            };
+            (target, glide.step(target, dt, resized))
+        });
         let lit = Lighting { eye: cam.eye };
         let mut mesh = Mesh::default();
         desk(&mut mesh, &cam, p3(mid.x, 0.0, mid.z), (hi.x - lo.x) * 1.6, (hi.z - lo.z) * 1.0);
@@ -648,6 +867,8 @@ impl ModelView {
         for part in &m.parts {
             let f = Finish { albedo: Color32::GRAY, gloss: part.gloss.max(2.0), spec: part.spec };
             let tint = |c: Color32| if chosen == Some(part.name.as_str()) { lerp_col(c, SIGNAL, 0.55) } else { c };
+            // The buttons sit on the shell (named Material.…).
+            t.bias = if part.name.starts_with("Material") { 0.0 } else { 0.6 };
             let mut tris = Vec::new();
             let mut centre = p3(0.0, 0.0, 0.0);
             for tri in part.idx.as_chunks::<3>().0 {
@@ -667,7 +888,8 @@ impl ModelView {
             parts.push(ModelHit { name: part.name.clone(), anchor: cam.pt(centre), tris });
         }
         t.into_mesh(&mut mesh);
-        *slot = Some(ModelView { built_for: key, mesh: Arc::new(mesh), parts });
+        *slot = Some(ModelView { built_for: key, target, moving, mesh: Arc::new(mesh), parts });
+        moving
     }
 
     /// The kept mesh, and the hovered part lit a little.
@@ -707,6 +929,161 @@ mod tests {
         }
     }
 
+    /// A part's bounding box: low and high corners.
+    fn bounds(m: &Model, name: &str) -> (P3, P3) {
+        let part = m.parts.iter().find(|p| p.name == name).expect("the part is there");
+        let (mut lo, mut hi) = (p3(f32::MAX, f32::MAX, f32::MAX), p3(f32::MIN, f32::MIN, f32::MIN));
+        for p in &part.pos {
+            lo = p3(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+            hi = p3(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+        }
+        (lo, hi)
+    }
+
+    /// Long triangles are drawn in the wrong order against the ones they
+    /// overlap (a bare shell covered half a button), so none are left, and
+    /// cutting them keeps the mouse a size that draws quickly.
+    #[test]
+    fn no_triangle_of_the_mouse_is_long() {
+        let m = Model::parse(MOUSE).expect("parses");
+        let mut count = 0;
+        for part in &m.parts {
+            for t in part.idx.as_chunks::<3>().0 {
+                count += 1;
+                for k in 0..3 {
+                    let d = part.pos[t[k] as usize] - part.pos[t[(k + 1) % 3] as usize];
+                    assert!(d.dot(d).sqrt() <= MAX_EDGE + 1e-3, "{} has a side of {} mm", part.name, d.dot(d).sqrt());
+                }
+            }
+        }
+        assert!(count < 40_000, "{count} triangles");
+    }
+
+    #[test]
+    fn the_mouse_buttons_are_the_real_buttons() {
+        let m = Model::parse(MOUSE).expect("parses");
+        let (ll, lh) = bounds(&m, "left");
+        let (rl, rh) = bounds(&m, "right");
+        // Each button is its own piece, on its own side, with a gap between.
+        assert!(lh.x <= 0.5 && rl.x >= 10.0, "left x {}..{}, right x {}..{}", ll.x, lh.x, rl.x, rh.x);
+        // Whole buttons, not slivers: long, and as tall as the shell.
+        assert!(lh.z - ll.z > 50.0 && rh.z - rl.z > 50.0);
+        assert!(lh.y > 30.0 && rh.y > 30.0);
+        // The wheel sits between them, and the thumb buttons on the left side.
+        let (wl, wh) = bounds(&m, "wheel");
+        assert!(wl.x > lh.x - 2.0 && wh.x < rl.x + 2.0);
+        for n in ["forward", "back"] {
+            assert!(bounds(&m, n).1.x < -10.0, "{n} is on the left side");
+        }
+    }
+
+    /// A real board's keys, and the area they are drawn in.
+    fn real_board() -> (Vec<Cap>, Rect) {
+        let caps = (0..75).map(|k| Cap { x: (k % 15) as f32, y: (k / 15) as f32, w: 1.0, h: 1.0, label: k.to_string(), to: None, modifier: false }).collect();
+        (caps, Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 360.0)))
+    }
+
+    /// One 60 Hz frame of a board looking at `focus`: where key `look` is on screen.
+    fn frame(board: &mut Option<Keyboard>, glide: &mut Glide, focus: Option<usize>, look: usize) -> (Rect, bool) {
+        let (caps, rect) = real_board();
+        let moving = Keyboard::get(board, rect, &caps, View::default(), focus, glide, 1.0 / 60.0);
+        (board.as_ref().expect("built").bounds(look), moving)
+    }
+
+    #[test]
+    fn zooming_on_a_key_brings_it_up_and_zooming_out_brings_it_back() {
+        let (mut b, mut g) = (None, Glide::default());
+        let whole = frame(&mut b, &mut g, None, 37).0;
+        let mut seen = vec![];
+        loop {
+            let (r, moving) = frame(&mut b, &mut g, Some(37), 37);
+            seen.push(r.width());
+            if !moving {
+                break;
+            }
+            assert!(seen.len() < 200, "it never settles");
+        }
+        let close = *seen.last().unwrap();
+        assert!(close > whole.width() * 1.8, "{close} vs {}", whole.width());
+        assert!(seen.windows(2).all(|w| w[1] >= w[0] - 0.01), "it only grows on the way in");
+        assert!(seen.len() > 12 && seen[seen.len() / 2] > whole.width() && seen[seen.len() / 2] < close, "it takes a while, passing through the middle");
+        let (_, rect) = real_board();
+        let r = frame(&mut b, &mut g, Some(37), 37).0;
+        assert!(r.center().distance(rect.center()) < whole.center().distance(rect.center()) + 1.0, "the key comes toward the middle");
+        // Let go: the same view as before, reached by easing, not at once.
+        let (first, _) = frame(&mut b, &mut g, None, 37);
+        assert!(first.width() > whole.width() * 1.5, "the first frame out is still close");
+        while frame(&mut b, &mut g, None, 37).1 {}
+        assert!((frame(&mut b, &mut g, None, 37).0.width() - whole.width()).abs() < 0.01);
+    }
+
+    #[test]
+    fn choosing_the_next_key_glides_there_from_where_the_view_is() {
+        let (mut b, mut g) = (None, Glide::default());
+        while frame(&mut b, &mut g, Some(37), 40).1 {}
+        let from = frame(&mut b, &mut g, Some(37), 40).0;
+        // Tap the one beside it, then another part-way through: each frame
+        // moves the view by a little, never a jump.
+        let mut last = from.center();
+        let mut biggest = 0.0f32;
+        let mut frames = 0;
+        for n in 0.. {
+            let focus = if n < 12 { 38 } else { 39 };
+            let (r, moving) = frame(&mut b, &mut g, Some(focus), 40);
+            biggest = biggest.max(r.center().distance(last));
+            last = r.center();
+            frames += 1;
+            if !moving && n >= 12 {
+                break;
+            }
+            assert!(n < 300, "it never settles");
+        }
+        let to = frame(&mut b, &mut g, Some(39), 40).0;
+        assert!(from.center().distance(to.center()) > 100.0, "the keys are far enough apart to see a jump");
+        assert!(biggest < 45.0, "moved {biggest} px in one frame");
+        assert!(frames > 24, "it took {frames} frames");
+    }
+
+    #[test]
+    fn choosing_the_next_mouse_button_glides_there_too() {
+        let m = Model::parse(MOUSE).expect("parses");
+        let room = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(500.0, 300.0));
+        let (mut view, mut g) = (None, Glide::default());
+        let mut at = |focus: Option<&str>| {
+            let moving = ModelView::get(&mut view, &m, room, room, 0.0, -2.2, 0.62, focus, focus, &mut g, 1.0 / 60.0);
+            (view.as_ref().expect("built").parts.iter().find(|p| p.name == "wheel").expect("wheel").anchor, moving)
+        };
+        while at(Some("left")).1 {}
+        let from = at(Some("left")).0;
+        let (mut last, mut biggest) = (from, 0.0f32);
+        for n in 0..300 {
+            let (p, moving) = at(Some("forward"));
+            biggest = biggest.max(p.distance(last));
+            last = p;
+            if !moving {
+                break;
+            }
+            assert!(n < 299, "it never settles");
+        }
+        assert!(from.distance(last) > 20.0, "the buttons are far enough apart to see a jump, {}", from.distance(last));
+        assert!(biggest < from.distance(last) * 0.3, "moved {biggest} px in one frame of {}", from.distance(last));
+    }
+
+    #[test]
+    fn a_drag_turns_within_its_limits_and_settles() {
+        let mut o = Orbit::default();
+        o.pull(egui::vec2(-5000.0, 5000.0), 0.9, 0.3);
+        for _ in 0..600 {
+            o.step(1.0 / 60.0);
+        }
+        assert!((o.yaw - 0.9).abs() < 1e-3 && (o.pitch - 0.3).abs() < 1e-3, "{} {}", o.yaw, o.pitch);
+        o.reset();
+        for _ in 0..600 {
+            o.step(1.0 / 60.0);
+        }
+        assert!(o.yaw.abs() < 1e-3 && o.pitch.abs() < 1e-3);
+    }
+
     #[test]
     fn broken_model_files_are_refused_not_trusted() {
         assert!(Model::parse(b"").is_none());
@@ -740,7 +1117,7 @@ mod tests {
             .collect();
         let mut board = None;
         let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 300.0));
-        Keyboard::get(&mut board, rect, &caps);
+        Keyboard::get(&mut board, rect, &caps, View::default(), None, &mut Glide::default(), 0.0);
         let b = board.as_ref().expect("built");
         for i in 0..caps.len() {
             let t = &b.tops[i];
@@ -751,7 +1128,7 @@ mod tests {
         assert_eq!(b.hit(pos2(1.0, 1.0)), None);
         // The same keys in the same place: kept, not built again.
         let mesh = Arc::as_ptr(&b.mesh);
-        Keyboard::get(&mut board, rect, &caps);
+        Keyboard::get(&mut board, rect, &caps, View::default(), None, &mut Glide::default(), 0.0);
         assert_eq!(Arc::as_ptr(&board.as_ref().expect("kept").mesh), mesh);
     }
 }
