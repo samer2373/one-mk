@@ -196,7 +196,8 @@ impl App {
             }
         } else {
             let text = if self.older_daemon(&peer.id) { "Restart oneMK to see latency" } else { "Measuring…" };
-            p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, "…", big, INK3);
+            let _ = big;
+            widgets::draw_dots(&p, Rect::from_min_size(pos2(body.left() - 4.0, body.top() + 10.0), vec2(24.0, 16.0)), INK3);
             p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, fit(&p, text, &regular(T_BODY), col_w), regular(T_BODY), INK2);
         }
         if peer.online && (self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id)) {
@@ -406,7 +407,10 @@ impl App {
             let r = Rect::from_min_size(pos2(desk.left(), top), vec2(w, h));
             widgets::glass_panel(ui, "notice", r, 14);
             let title_h = tg.size().y;
-            p.circle_filled(pos2(r.left() + 18.0, r.top() + 14.0 + title_h / 2.0), 4.0, SIGNAL);
+            // Volt only while something is on (typing on every computer);
+            // a plain notice (waiting, being controlled) gets a neutral dot.
+            let dot = if self.broadcasting() { SIGNAL } else { INK2 };
+            p.circle_filled(pos2(r.left() + 18.0, r.top() + 14.0 + title_h / 2.0), 4.0, dot);
             p.galley(pos2(r.left() + 32.0, r.top() + 14.0), tg, INK);
             p.galley(pos2(r.left() + 32.0, r.top() + 14.0 + title_h + 4.0), sg, INK2);
             a11y_text(ui, Id::unique("headline"), r, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
@@ -431,7 +435,7 @@ impl App {
             a11y_text(ui, Id::unique("transfer"), r, Role::ProgressIndicator, &format!("{title}. {detail}"), Some(Live::Polite));
         }
         let several = self.running().is_some_and(|s| !s.peers.is_empty());
-        if self.tab == Tab::Desk && several && !self.prefs_hint_dismissed() {
+        if self.tab == Tab::Desk && several && !self.prefs_hint_dismissed() && !self.sheet_open() {
             let text = "Drag a computer to where it sits on your desk";
             let w = text_width(ui, text, regular(T_BODY)) + 48.0;
             if desk.width() > 860.0 {

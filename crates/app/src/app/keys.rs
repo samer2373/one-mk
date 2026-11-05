@@ -1646,7 +1646,20 @@ impl App {
                 labels.push((*n, Rect::from_min_size(pos2(x, y), vec2(co_w, hgt(*n))), *a, left));
             }
         }
+        // The lines to the parts first, so a label is never crossed by
+        // another's line or dot.
         for (n, lr, anchor, left) in &labels {
+            let changed = shown.iter().find(|(k, ..)| k == n).is_some_and(|(_, _, ch)| *ch);
+            let sel = self.keys.button == Some(*n);
+            let lit = under == Some(*n) || self.keys.mouse_hover == Some(*n);
+            let ex = if *left { lr.right() + 6.0 } else { lr.left() - 6.0 };
+            let ey = lr.top() + 32.0;
+            let mid = ex + if *left { 16.0 } else { -16.0 };
+            let line = if changed || sel { SIGNAL } else { Color32::from_white_alpha(if lit { 150 } else { 90 }) };
+            painter.line(vec![pos2(ex, ey), pos2(mid, ey), *anchor], Stroke::new(1.0, line));
+            painter.circle(*anchor, 4.0, if changed || sel { SIGNAL } else { GROUND }, Stroke::new(1.5, if changed || sel { GROUND } else { INK }));
+        }
+        for (n, lr, _, left) in &labels {
             let name = tune::BUTTONS.iter().find(|b| b.0 == *n).map_or("Button", |b| b.1);
             let (does, changed) = shown.iter().find(|(k, ..)| k == n).map_or((tune::button_default(*n).to_owned(), false), |(_, d, ch)| (d.clone(), *ch));
             let id = Id::unique(("mouse-label", *n));
@@ -1658,12 +1671,16 @@ impl App {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             let hover = tween(ui.ctx(), id.with("hover"), f32::from(lit), 0.12, motion::out_cubic);
-            let bg = if changed || sel { Color32::from_rgba_unmultiplied(255, 181, 71, 22) } else { Color32::TRANSPARENT };
-            painter.rect_filled(*lr, CornerRadius::same(10), mix(bg, ON_GLASS_LIT, hover * 0.8));
+            // Each label floats over the mouse on a near-solid plate, so it
+            // reads whatever part of the mouse is behind it.
+            let plate = Color32::from_rgba_unmultiplied(0x1A, 0x1E, 0x25, 214);
+            painter.rect_filled(*lr, CornerRadius::same(10), mix(plate, Color32::from_rgb(0x25, 0x29, 0x31), hover));
             if sel {
                 painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
             } else if changed {
-                painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 181, 71, 90)), StrokeKind::Inside);
+                painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.0, SIGNAL.gamma_multiply(0.45)), StrokeKind::Inside);
+            } else {
+                painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
             }
             widgets::focus_ring(ui, &lresp, *lr, 10);
             let (align, tx) = if *left { (Align2::RIGHT_CENTER, lr.right() - 12.0) } else { (Align2::LEFT_CENTER, lr.left() + 12.0) };
@@ -1677,13 +1694,6 @@ impl App {
             if changed {
                 painter.text(pos2(tx, lr.top() + 50.0), align, format!("Was {}", tune::button_default(*n).to_lowercase()), regular(T_META), INK2);
             }
-            // The line from the label to its part.
-            let ex = if *left { lr.right() + 6.0 } else { lr.left() - 6.0 };
-            let ey = lr.top() + 32.0;
-            let mid = ex + if *left { 16.0 } else { -16.0 };
-            let line = if changed || sel { SIGNAL } else { Color32::from_white_alpha(if lit { 150 } else { 90 }) };
-            painter.line(vec![pos2(ex, ey), pos2(mid, ey), *anchor], Stroke::new(1.0, line));
-            painter.circle(*anchor, 4.0, if changed || sel { SIGNAL } else { GROUND }, Stroke::new(1.5, if changed || sel { GROUND } else { INK }));
             widgets::a11y(&lresp, Role::Button, &format!("{name}: {does}. Change it"), Some(sel));
             if lresp.clicked() && !busy {
                 pick = Some(*n);
