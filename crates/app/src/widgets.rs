@@ -47,6 +47,8 @@ pub fn pressed(fill: Color32, t: f32) -> Color32 {
 pub mod targets {
     use std::sync::Mutex;
     static NOW: Mutex<Vec<(String, [f32; 4])>> = Mutex::new(Vec::new());
+    /// The last finished frame's controls.
+    static LAST: Mutex<Vec<(String, [f32; 4])>> = Mutex::new(Vec::new());
 
     pub fn note(label: &str, r: egui::Rect) {
         if std::env::var_os("ONE_MK_APP_TARGETS").is_some() {
@@ -54,9 +56,9 @@ pub mod targets {
         }
     }
 
-    /// The name noted this frame for the control at `r`, if any.
+    /// The name noted last frame for the control at `r`, if any.
     pub fn name_at(r: egui::Rect) -> Option<String> {
-        let now = NOW.lock().unwrap_or_else(|e| e.into_inner());
+        let now = LAST.lock().unwrap_or_else(|e| e.into_inner());
         now.iter().rev().find(|(_, q)| (q[0] - r.min.x).abs() < 0.5 && (q[1] - r.min.y).abs() < 0.5 && (q[2] - r.max.x).abs() < 0.5 && (q[3] - r.max.y).abs() < 0.5).map(|(l, _)| l.clone())
     }
 
@@ -64,6 +66,7 @@ pub mod targets {
     pub fn flush() {
         let Some(path) = std::env::var_os("ONE_MK_APP_TARGETS") else { return };
         let all = std::mem::take(&mut *NOW.lock().unwrap_or_else(|e| e.into_inner()));
+        LAST.lock().unwrap_or_else(|e| e.into_inner()).clone_from(&all);
         let text: String = all.iter().map(|(l, r)| format!("{}\t{}\t{}\t{}\t{}\n", l.replace(['\t', '\n'], " "), r[0], r[1], r[2], r[3])).collect();
         let tmp = std::path::PathBuf::from(&path).with_extension("tmp");
         if std::fs::write(&tmp, text).is_ok() {
@@ -304,8 +307,11 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
             let scene = Rect::from_min_size(all.min + vec2(IN, IN), vec2(W - 2.0 * IN, pic));
             ui.painter().rect_filled(scene, CornerRadius::same(R_INNER), Color32::from_black_alpha(60));
             crate::help::draw(ui.painter(), scene, h.scene, crate::help::phase(ui.input(|i| i.time), 4.0));
+            // The picture loops while the explainer is open (and only
+            // then): 30 frames a second is smooth for a small drawing and
+            // half the work of 60. Reduced motion shows one still frame.
             if !motion::reduced() {
-                ui.ctx().request_repaint_after_secs(1.0 / 60.0);
+                ui.ctx().request_repaint_after_secs(1.0 / 30.0);
             }
         }
         let y = all.top() + IN + if pic > 0.0 { pic + IN } else { 0.0 };

@@ -255,7 +255,7 @@ impl App {
             _ => {
                 // No readings: no empty axes, one quiet line where the
                 // graph's title would be.
-                let text = if !peer.online { "No round trips while it is offline" } else { "The round-trip graph starts with the first replies" };
+                let text = if !peer.online { "No round trips while it is offline" } else if self.older_daemon(&peer.id) { "" } else { "The round-trip graph starts with the first replies" };
                 p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, fit(&p, text, &regular(T_META), graph.width() - 30.0), regular(T_META), INK3);
             }
         }

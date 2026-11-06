@@ -1211,6 +1211,8 @@ impl App {
             let chosen = sel.as_deref() == Some(id.as_str());
             let place = if i == 0 { "this computer".to_owned() } else { self.side_of(&id).map_or(String::new(), |s| on_your(s).to_owned()) };
             let label = format!("{}, {}, {place}", d.name, d.subtitle);
+            #[cfg(debug_assertions)]
+            widgets::targets::note(&label, r.rect);
             r.widget_info(move || egui::WidgetInfo::selected(Role::Button, true, chosen, &label));
             if r.has_focus() {
                 focused = Some(i);
@@ -2242,7 +2244,7 @@ impl eframe::App for App {
             frame.max.y -= self.desk_foot_h(scene.width());
             // Too little room left for monitors anyone could read: the
             // computers as a row of named chips instead.
-            compact = frame.height() < COMPACT_BELOW && self.running().is_some_and(|s| !s.peers.is_empty()) && self.tab == Tab::Desk;
+            compact = frame.height() < COMPACT_BELOW && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout);
         }
         if self.tab.desk() {
             if compact {
@@ -2312,6 +2314,11 @@ impl eframe::App for App {
         debug::shot(ui.ctx(), now);
         #[cfg(debug_assertions)]
         widgets::targets::flush();
+    }
+
+    #[cfg(debug_assertions)]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        debug::tab_press(ctx, raw_input);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -2555,25 +2562,34 @@ mod debug {
     }
 
     /// `ONE_MK_APP_TABWALK=n` (with `ONE_MK_APP_TARGETS=file`): from one
-    /// second in, presses Tab n times, a step every 0.15 s, and prints what
-    /// has the keyboard after each (the Tab order, for the record).
-    pub fn tab_walk(ctx: &egui::Context, now: f64) {
+    /// second in, presses Tab n times (a real key event, as the keyboard
+    /// would send), a step every 0.15 s, and prints what has the keyboard
+    /// after each: the Tab order, for the record.
+    pub fn tab_press(ctx: &egui::Context, raw: &mut egui::RawInput) {
         let Some(n) = var("ONE_MK_APP_TABWALK").and_then(|v| v.parse::<usize>().ok()) else { return };
         let id = Id::unique("tab-walk");
+        let now = raw.time.unwrap_or(0.0);
         let (done, last) = ctx.data(|d| d.get_temp::<(usize, f64)>(id)).unwrap_or((0, 1.0));
-        ctx.request_repaint();
-        if done >= n || now < last + 0.15 {
+        if done > n || now < last + 0.15 {
             return;
         }
+        // What the last press reached (focus settles over the frames between).
         if done > 0 {
-            let name = ctx.memory(|m| m.focused()).and_then(|f| ctx.read_response(f)).and_then(|r| widgets::targets::name_at(r.rect)).unwrap_or_else(|| "(unnamed)".into());
+            let name = ctx.memory(|m| m.focused()).and_then(|f| ctx.read_response(f)).and_then(|r| widgets::targets::name_at(r.rect)).unwrap_or_else(|| "(nothing named)".into());
             eprintln!("tab {done}: {name}");
         }
-        ctx.data_mut(|d| {
-            d.insert_temp(id, (done + 1, now));
-            d.insert_temp(Id::unique("keyboard-focus"), true);
-        });
-        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::Next));
+        if done == n {
+            ctx.data_mut(|d| d.insert_temp(id, (done + 1, now)));
+            return;
+        }
+        raw.events.push(egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        ctx.data_mut(|d| d.insert_temp(id, (done + 1, now)));
+    }
+
+    pub fn tab_walk(ctx: &egui::Context, _now: f64) {
+        if var("ONE_MK_APP_TABWALK").is_some() {
+            ctx.request_repaint_after_secs(0.05);
+        }
     }
 
     pub fn shot(ctx: &egui::Context, now: f64) {

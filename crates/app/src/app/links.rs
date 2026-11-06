@@ -63,7 +63,7 @@ impl App {
         }
         // A narrow window stacks Layout's cards: give them half the height.
         if self.tab == Tab::Layout && self.ctx.content_rect().width() < 1040.0 {
-            return (self.ctx.content_rect().height() * 0.52).max(PANEL_H);
+            return (self.ctx.content_rect().height() * 0.46).max(PANEL_H);
         }
         let with_card = self.tab == Tab::Desk && self.running().is_some_and(|s| !s.peers.is_empty());
         let short = self.ctx.content_rect().height() < 640.0;
