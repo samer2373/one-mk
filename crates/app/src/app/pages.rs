@@ -101,7 +101,7 @@ fn current_check(mut check: Check, status: Option<&Status>) -> Option<Check> {
     if let Some(status) = status {
         if check.id == "pairing" && !status.peers.is_empty() {
             check.verdict = Verdict::Pass;
-            check.detail = format!("{} paired computers are saved.", status.peers.len());
+            check.detail = if status.peers.len() == 1 { "1 paired computer is saved.".to_owned() } else { format!("{} paired computers are saved.", status.peers.len()) };
             check.fix = None;
             check.action = None;
         }
@@ -669,7 +669,7 @@ mod health_tests {
         let status = Status::decode("ok\nname\tDesk\nid\tabcd-ef01\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\n").unwrap();
         let result = current_check(check("pairing"), Some(&status)).unwrap();
         assert_eq!(result.verdict, Verdict::Pass);
-        assert_eq!(result.detail, "1 paired computers are saved.");
+        assert_eq!(result.detail, "1 paired computer is saved.");
         assert!(result.fix.is_none() && result.action.is_none());
     }
 
