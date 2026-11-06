@@ -306,12 +306,22 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
         if pic > 0.0 {
             let scene = Rect::from_min_size(all.min + vec2(IN, IN), vec2(W - 2.0 * IN, pic));
             ui.painter().rect_filled(scene, CornerRadius::same(R_INNER), Color32::from_black_alpha(60));
-            crate::help::draw(ui.painter(), scene, h.scene, crate::help::phase(ui.input(|i| i.time), 4.0));
-            // The picture loops while the explainer is open (and only
-            // then): 30 frames a second is smooth for a small drawing and
-            // half the work of 60. Reduced motion shows one still frame.
-            if !motion::reduced() {
-                ui.ctx().request_repaint_after_secs(1.0 / 30.0);
+            // The picture plays twice from when the explainer opens, then
+            // rests on its last frame: an open explainer costs nothing at
+            // rest. Opened again, it plays again.
+            const LOOP: f64 = 4.0;
+            let clock = ui.input(|i| i.time);
+            let key = id.with("help-clock");
+            let (start, seen) = ui.ctx().data(|d| d.get_temp::<(f64, f64)>(key)).unwrap_or((clock, clock));
+            let start = if clock - seen > 0.5 { clock } else { start };
+            ui.ctx().data_mut(|d| d.insert_temp(key, (start, clock)));
+            let elapsed = clock - start;
+            let playing = !motion::reduced() && elapsed < 2.0 * LOOP;
+            // At rest (and with reduced motion) the picture's last frame.
+            let t = if playing { crate::help::phase(elapsed, LOOP) } else { 0.9 };
+            crate::help::draw(ui.painter(), scene, h.scene, t);
+            if playing {
+                ui.ctx().request_repaint_after_secs(1.0 / 60.0);
             }
         }
         let y = all.top() + IN + if pic > 0.0 { pic + IN } else { 0.0 };
