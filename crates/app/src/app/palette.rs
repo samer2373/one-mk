@@ -55,7 +55,7 @@ const SETTINGS: &[(&str, Tab)] = &[
     ("Crossing edges · Stay in fullscreen windows", Tab::Advanced),
     ("Power · Keep computers I control awake", Tab::Advanced),
     ("Power · Sleep displays together", Tab::Advanced),
-    ("Power · Lock all when this one locks", Tab::Advanced),
+    ("Power · Lock every screen with this one", Tab::Advanced),
     ("Games · Gaming mode", Tab::Advanced),
     ("Keyboard shortcuts", Tab::Advanced),
     ("Ctrl and Cmd · Swap them between a Mac and a PC", Tab::Advanced),
