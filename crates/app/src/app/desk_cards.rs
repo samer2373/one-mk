@@ -346,9 +346,12 @@ impl App {
         }
         let cy = c.top() + 12.0;
         icons::pointer(&p, pos2(c.left(), cy - 7.0), 14.0, SIGNAL);
-        let nw = text_width(ui, &status.name, semibold(T_TITLE));
-        p.text(pos2(c.left() + 22.0, cy), Align2::LEFT_CENTER, &status.name, semibold(T_TITLE), INK);
-        p.text(pos2(c.left() + 32.0 + nw, cy), Align2::LEFT_CENTER, format!("This computer · {}", os_name(me_os())), regular(T_BODY), INK3);
+        let name = fit(&p, &status.name, &semibold(T_TITLE), c.width() - 22.0);
+        p.text(pos2(c.left() + 22.0, cy), Align2::LEFT_CENTER, &name, semibold(T_TITLE), INK);
+        p.text(pos2(c.left(), cy + 22.0), Align2::LEFT_CENTER, fit(&p, &format!("This computer · {}", os_name(me_os())), &regular(T_BODY), c.width()), regular(T_BODY), INK3);
+        if name != status.name {
+            ui.interact(Rect::from_min_size(c.min, vec2(c.width(), 44.0)), Id::unique("local-card-name"), Sense::hover()).on_hover_text(&status.name);
+        }
         let online = status.peers.iter().filter(|p| p.online).count();
         let paired = match status.peers.len() {
             0 => "None yet".to_owned(),
