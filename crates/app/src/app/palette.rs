@@ -332,6 +332,12 @@ impl App {
                     if resp.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
                         self.palette.sel = *k;
                     }
+                    // Tabbed onto, a row is the chosen one (its lift and Volt
+                    // tile are the focus look), and its ring shows.
+                    if resp.gained_focus() {
+                        self.palette.sel = *k;
+                    }
+                    widgets::focus_ring(ui, &resp, row, 10);
                     let chosen = self.palette.sel == *k;
                     if chosen {
                         // The chosen row: a quiet lift, as a system list does; its icon

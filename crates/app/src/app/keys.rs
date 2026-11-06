@@ -1412,6 +1412,9 @@ impl App {
         }
         let name = "Test it: type here to see what the other computer would get";
         widgets::a11y(&resp, Role::TextInput, name, None);
+        // Its value is what was typed, so a reader's text interface has it.
+        let typed = self.keys.tester.as_ref().map(|(t, ..)| t.pressed.chips.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+        ui.ctx().accesskit_node_builder(resp.id, |n| n.set_value(typed));
         a11y_text(ui, Id::unique("keys-test-out"), r, Role::Status, &spoken, Some(Live::Polite));
         y = r.bottom() + 10.0;
         let i_now = Instant::now();

@@ -157,7 +157,10 @@ impl App {
         let kr = Rect::from_min_size(pos2(sr.right() - 8.0 - kw, sr.center().y - 9.0), vec2(kw, 18.0));
         ui.painter().rect(kr, CornerRadius::same(5), Color32::from_white_alpha(10), Stroke::new(0.5, Color32::from_white_alpha(36)), StrokeKind::Inside);
         ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META), INK3);
+        widgets::focus_ring(ui, &resp, sr, 8);
         widgets::a11y(&resp, Role::SearchInput, "Search actions, computers and settings", None);
+        // Empty until the palette opens: an empty value, so readers find text.
+        ui.ctx().accesskit_node_builder(resp.id, |n| n.set_value(String::new()));
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
