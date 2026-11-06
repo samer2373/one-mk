@@ -525,6 +525,10 @@ impl App {
     /// The band over the desk (banner, toast, a small window's transfer),
     /// with its gaps: the desk is framed below it, never under it.
     pub(super) fn band_h(&self, ui: &Ui, desk_w: f32) -> f32 {
+        // Only the Desk and Arrange views draw the band.
+        if !matches!(self.tab, Tab::Desk | Tab::Layout) {
+            return 0.0;
+        }
         let mut h = 0.0;
         if let Some(n) = self.notice_lay(ui, desk_w) {
             h += n.h + 8.0;
