@@ -225,3 +225,44 @@ hooks work. Before is main; after is this branch.
 - **Not run:** Orca is installed, but it was not run. Speaking aloud on the
   owner's live desktop wasn't appropriate. No macOS or Windows screen reader
   was run.
+
+## Round 4 (track A)
+
+- **Cards and telemetry:**
+  - Short cards ("This computer", the Arrange and Exact place cards, oneMK
+    off) end a padding below what they hold. The height is measured from the
+    shapes each card actually drew.
+  - With fewer than 8 readings, the latency graph is replaced by one line:
+    "N readings so far · the graph fills in over 2 minutes".
+- **Room:** the coloured wash behind the screens is gone. Each screen has
+  only a small, near-neutral pool of light under it.
+- **Buttons:** one emphasis system. Volt is for the primary action. Every
+  other button, toolbar included, is a quiet solid fill, with no rim or
+  outline.
+- **Sidebar:** hover is half a step of tone with no edge. The chosen page is
+  lighter and has an edge; its shortcut keeps 5.4:1 contrast.
+- **Keyboard:**
+  - Tab order is Search, the pages, the sidebar's computers and footer, the
+    view switch, the toolbar left to right, the computers on the desk, then
+    the card. The sidebar and toolbar are made first, on a layer above the
+    desk.
+  - Settings starts at Updates.
+  - The desk's focus ring follows the computer's own outline: a convex hull
+    pushed out 5 pt, which never wraps a neighbour.
+  - AT-SPI reports the chosen computer as `pressed`. The dump is
+    `round4/atspi-desk.txt`, with every state shown, unfiltered.
+- **Health:**
+  - The cause is in INK and the fix, in INK2, starts with a verb.
+  - The pending row is titled "Pending permission", and the passing group
+    is called "Passed".
+  - Rows have no Recheck buttons of their own; the one Recheck is at the top.
+  - The firewall and port rows name the port, and the program or firewall
+    when doctor reports it. A test covers this.
+- **Copy:**
+  - The sidebar and the card show the same newest latency reading.
+  - Settings no longer repeats "Ready. You can change shortcuts in
+    Settings".
+  - The error band is one line with Try again first.
+- **No text-only enlargement:** the app has no text-only size setting, so
+  there is no capture of one. Zoom scales the whole interface (`s100`–`s200`
+  shots). That is a real gap, not a design choice.
