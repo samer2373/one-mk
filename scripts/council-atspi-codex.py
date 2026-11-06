@@ -33,7 +33,7 @@ def visit(node, rows, depth=0):
         try:
             text = node.get_text_iface()
             if text:
-                row["text"] = text.get_text(0, -1)
+                row["text"] = Atspi.Text.get_text(text, 0, -1)
         except Exception as error:
             row["text_error"] = str(error)
         rows.append(row)

@@ -1596,7 +1596,7 @@ impl App {
         let dt = ui.input(|i| i.stable_dt);
         let mut moving = self.keys.mouse_orbit.step(dt);
         let turn = self.keys.mouse_orbit;
-        moving |= crate::gear::ModelView::get(&mut self.keys.mouse, &model, area, room, 0.0, -2.2 + turn.yaw, 0.62 + turn.pitch, None, chosen, &mut self.keys.mouse_glide, dt);
+        moving |= crate::gear::ModelView::get(&mut self.keys.mouse, &model, area, room, 0.0, -2.2 + turn.yaw, 0.62 + turn.pitch, chosen, None, &mut self.keys.mouse_glide, dt);
         if moving {
             ui.ctx().request_repaint();
         }
