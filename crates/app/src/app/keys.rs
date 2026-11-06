@@ -1293,6 +1293,9 @@ impl App {
         let r = Rect::from_min_size(pos2(left, y), vec2(w, (12.0 + ah + 4.0 + nh + 12.0).max(52.0)));
         let id = Id::unique(CAPTURE_ID);
         let resp = ui.interact(r, id, Sense::focusable_noninteractive());
+        if !ui.clip_rect().contains_rect(r.expand(4.0)) {
+            ui.scroll_to_rect(r.expand(6.0), None);
+        }
         ui.painter().rect(r, CornerRadius::same(9), GROUND, Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
         para(ui, pos2(left + 14.0, y + 12.0), tw, &ask, semibold(T_BODY), INK);
         para(ui, pos2(left + 14.0, y + 16.0 + ah), tw, note, regular(T_META), INK2);
@@ -1338,6 +1341,10 @@ impl App {
         let mut picked = enter.then(|| hits.first().map(|c| c.value.clone())).flatten();
         let rows = hits.len().clamp(3, rows);
         let list = Rect::from_min_size(pos2(left, y + 38.0), vec2(w, 30.0 * rows as f32 + 6.0));
+        let controls = Rect::from_min_max(fr.min, list.max).expand(4.0);
+        if !ui.clip_rect().contains_rect(controls) {
+            ui.scroll_to_rect(controls, None);
+        }
         ui.painter().rect(list, CornerRadius::same(8), GROUND, Stroke::new(1.0, LINE), StrokeKind::Inside);
         if hits.is_empty() {
             ui.painter().text(list.center(), Align2::CENTER_CENTER, "Nothing is called that. Try another word.", regular(T_BODY), INK2);
