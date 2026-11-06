@@ -8,7 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/omk-guide-shots}
 case "$(realpath -m "$OUT")" in */docs/screens) SMALL=1 ;; *) SMALL= ;; esac
-W=/tmp/omk-guide-shots-work-$$
+W=$PWD/target-codex/council-guide-work-$$
 export CARGO_TARGET_DIR="$PWD/target-codex"
 cargo build -q -p one-mk-app -j 3
 APP=${CARGO_TARGET_DIR:-$PWD/target}/debug/one-mk-app
@@ -28,6 +28,7 @@ shot() { # name after-seconds [env...]
     done
     python3 -c "from PIL import Image, features; i = Image.open('$W/$name.ppm'); i = i.quantize(256, method=Image.Quantize.LIBIMAGEQUANT) if '$SMALL' and features.check_feature('libimagequant') else i; i.save('$OUT/$name.png', optimize=True)"
     echo "$OUT/$name.png"
+    rm -f "$W/$name.ppm"
 }
 
 G="ONE_MK_APP_GUIDE=both"

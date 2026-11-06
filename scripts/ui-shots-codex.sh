@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/omk-shots}
 # Shots for docs/screens are stored small (see shot()); elsewhere exact.
 case "$(realpath -m "$OUT")" in */docs/screens) SMALL=1 ;; *) SMALL= ;; esac
-W=/tmp/omk-shots-work-$$
+W=$PWD/target-codex/council-shots-work-$$
 export CARGO_TARGET_DIR="$PWD/target-codex"
 cargo build -q -p one-mk -p one-mk-app -p one-mk-tray -j 3
 B=$PWD/target-codex/debug/one-mk
@@ -23,6 +23,7 @@ trap cleanup EXIT
 shot() { # name after-seconds home [extra env...]
     local name=$1 after=$2 home=$3; shift 3
     if [[ -n ${COUNCIL_SCREEN_SET:-} && ! $name =~ $COUNCIL_SCREEN_SET ]]; then return; fi
+    if [[ ${COUNCIL_SKIP_EXISTING:-} == 1 ]] && python3 -c "from PIL import Image; Image.open('$OUT/$name.png').load()" 2>/dev/null; then return; fi
     local matrix=()
     case "${COUNCIL_MATRIX:-}" in
         1x) matrix=(ONE_MK_APP_SIZE=1200x780 ONE_MK_APP_ZOOM=1) ;;
@@ -33,13 +34,14 @@ shot() { # name after-seconds home [extra env...]
     # on another workspace); try again rather than fail the whole run.
     for _ in 1 2 3; do
         rm -f "$W/$name.ppm"
-        env "$@" "${matrix[@]}" ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 20 "$APP" --home "$home" || true
+        env "$@" "${matrix[@]}" ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 60 "$APP" --home "$home" || true
         if python3 -c "from PIL import Image; Image.open('$W/$name.ppm').load()" 2>/dev/null; then break; fi
     done
     # For the committed set, 256 colours by libimagequant (dithered, so the
     # desk's gradients don't band): under half the size. Exact without it.
     python3 -c "from PIL import Image, features; i = Image.open('$W/$name.ppm'); i = i.quantize(256, method=Image.Quantize.LIBIMAGEQUANT) if '$SMALL' and features.check_feature('libimagequant') else i; i.save('$OUT/$name.png', optimize=True)"
     echo "$OUT/$name.png"
+    rm -f "$W/$name.ppm"
 }
 
 # Pair a and b, then call b "Studio PC" as a sees it. Discovery on a
