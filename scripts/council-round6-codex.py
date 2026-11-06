@@ -75,7 +75,7 @@ report = {"method": "Real native X11 XTest motion/button hold, AT-SPI target bou
 with tempfile.TemporaryDirectory(prefix="codex-r6-native-") as directory:
     home = Path(directory)
     status = home / "status"
-    status.write_text("ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\npeer\t3333-4444\tright\t2\t0\tauto\tGaming PC\nlink\t1111-2222\t4200\t0\t900\n")
+    status.write_text("ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\npeer\t3333-4444\tright\t2\t0\tauto\tGaming PC\npeer\t5555-6666\tright\t1\t1\tauto\tSamer's extremely long workstation name that goes on and on\npeer\t7777-8888\tbottom\t1\t1\tauto\tМастерская\nlink\t1111-2222\t4200\t0\t900\n")
     doctor = home / "doctor.json"
     doctor.write_text(json.dumps({"ok": False, "checks": [{"id": "pairing", "title": "Paired computers", "status": "skip", "detail": "not paired", "fix": "Pair a computer"}, {"id": "input", "title": "Permissions", "status": "warn", "detail": "The desktop has not allowed input sharing.", "fix": "Allow oneMK in the desktop sharing dialog."}]}))
     environment = dict(os.environ, WINIT_UNIX_BACKEND="x11", ONE_MK_APP_NO_SETUP="1", ONE_MK_APP_STATUS=str(status), ONE_MK_APP_SIZE="1200x780", ONE_MK_APP_ZOOM="1")

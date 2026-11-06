@@ -88,9 +88,9 @@ shot 70-latency-live-two-daemons 9 "$W/a" ONE_MK_APP_SELECT="Studio PC"
 kill "$B_PID"; sleep 3
 shot 12-peer-offline 3 "$W/a"
 
-# A third computer pairs and confirms; the window says the codes match.
+# Pairing success fixture; live discovery and code comparison are captured above.
 (yes yes | timeout 40 "$B" --home "$W/c" pair --machine >/dev/null 2>&1 &)
-shot 22-paired 9 "$W/a" ONE_MK_APP_PAIR=1 ONE_MK_APP_CONFIRM=1
+shot 22-paired 3 "$W/a" ONE_MK_APP_PAIR_STATE=paired
 shot 23-reduced-motion-intro 0.3 "$W/a" ONE_MK_REDUCE_MOTION=1
 shot 27-health-not-running 6 "$W/off" ONE_MK_APP_TAB=health
 

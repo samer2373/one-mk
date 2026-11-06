@@ -1638,7 +1638,7 @@ impl App {
             Tab::Desk if self.off() => vec![(Cell::Head(t, s), cell(0, 2)), (Cell::Controls, cell(2, 3))],
             // A small window has room for one card: the chosen computer's
             // (this computer's switches show when it is the one chosen).
-            Tab::Desk if self.running().is_some_and(|status| status.peers.is_empty()) && w < 760.0 => vec![(Cell::Inspector(None), cell(0, 3))],
+            Tab::Desk if self.running().is_some_and(|status| status.peers.is_empty()) && w < 760.0 => vec![(Cell::Inspector(None), cell(0, 2)), (Cell::Controls, cell(2, 3))],
             Tab::Desk if w < 760.0 => match self.selected_id() {
                 Some(id) if id != "me" => vec![(Cell::Inspector(Some(id)), cell(0, 3))],
                 _ => vec![(Cell::Inspector(None), cell(0, 1)), (Cell::Controls, cell(1, 3))],
