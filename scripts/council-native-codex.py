@@ -1,5 +1,6 @@
 import argparse
 import ctypes
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -156,6 +157,28 @@ def cpu_seconds(pid):
     return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
 
 
+def focused_control(pid):
+    import gi
+    gi.require_version("Atspi", "2.0")
+    from gi.repository import Atspi
+
+    def visit(node):
+        if node.get_state_set().contains(Atspi.StateType.FOCUSED):
+            return {"name": node.get_name(), "role": node.get_role_name()}
+        for index in range(node.get_child_count()):
+            found = visit(node.get_child_at_index(index))
+            if found:
+                return found
+        return None
+
+    desktop = Atspi.get_desktop(0)
+    for index in range(desktop.get_child_count()):
+        application = desktop.get_child_at_index(index)
+        if application.get_process_id() == pid:
+            return visit(application)
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["evidence", "scales", "keyboard", "runtime"])
@@ -167,10 +190,14 @@ def main():
     parser.add_argument("--runtime-tab", default="desk")
     parser.add_argument("--skip-frames", action="store_true")
     args = parser.parse_args()
+    if args.mode == "keyboard":
+        subprocess.run(["gdbus", "call", "--session", "--dest", "org.a11y.Bus", "--object-path", "/org/a11y/bus", "--method", "org.freedesktop.DBus.Properties.Set", "org.a11y.Status", "IsEnabled", "<true>"], check=True, capture_output=True)
     args.output.mkdir(parents=True, exist_ok=True)
     desktop = None if args.mode == "scales" else Desktop()
     with tempfile.TemporaryDirectory(prefix="codex-r2-evidence-") as directory:
         home = Path(directory)
+        if args.mode == "keyboard":
+            subprocess.run([str(args.binary.resolve().with_name("one-mk")), "--home", str(home), "keymap", "add", "--tap=esc", "--hold=lctrl", "--", "capslock"], check=True, capture_output=True)
         status = home / "status"
         status.write_text("ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\nlink\t1111-2222\t4200\t0\t900\n")
         environment = dict(os.environ, ONE_MK_APP_NO_SETUP="1", ONE_MK_APP_STATUS=str(status), ONE_MK_APP_SIZE="1200x780")
@@ -194,18 +221,17 @@ def main():
                 return
             walkthrough = {}
             for tab in args.tabs.split(","):
-                focus = home / "focus.txt"
                 extra = {"ONE_MK_APP_KEY": "capslock", "ONE_MK_APP_KEY_MORE": "1"} if tab == "keys" else {}
-                process = subprocess.Popen([str(args.binary.resolve()), "--home", str(home)], env=dict(environment, **extra, ONE_MK_APP_TAB=tab, ONE_MK_APP_FOCUS_LOG=str(focus)), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                process = subprocess.Popen([str(args.binary.resolve()), "--home", str(home)], env=dict(environment, **extra, ONE_MK_APP_TAB=tab), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 try:
                     window = desktop.window(process.pid)
-                    desktop.focus(window)
                     time.sleep(4)
+                    desktop.focus(window)
                     rows = []
                     for step in range(1, args.steps + 1):
                         desktop.key("Tab")
                         time.sleep(0.3)
-                        rows.append({"tab_press": step, "focus": focus.read_text() if focus.exists() else "No debug label"})
+                        rows.append({"tab_press": step, "focus": focused_control(process.pid)})
                         time.sleep(0.2)
                         desktop.capture(window, args.output / f"keyboard-{tab}-{step:02}.png")
                     walkthrough[tab] = rows
@@ -215,6 +241,7 @@ def main():
         else:
             environment["ONE_MK_APP_TAB"] = args.runtime_tab
             results = {"build": "release, opt-in design-evidence, LTO disabled", "page": args.runtime_tab, "idle_seconds": 60, "samples": [], "frames": []}
+            results["environment"] = {"system": list(os.uname()), "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"), "renderer": subprocess.run(["glxinfo", "-B"], capture_output=True, text=True, check=True).stdout, "binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(), "source_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()}
             binaries = [("baseline", args.baseline), ("candidate", args.binary)]
             for label, binary in binaries:
                 if binary is None:

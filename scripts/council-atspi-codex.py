@@ -45,6 +45,7 @@ def visit(node, rows, depth=0):
 
 with tempfile.TemporaryDirectory(prefix="codex-atspi-") as directory:
     home = Path(directory)
+    subprocess.run([str(binary.with_name("one-mk")), "--home", str(home), "keymap", "add", "--tap=esc", "--hold=lctrl", "--", "capslock"], check=True, capture_output=True)
     status = home / "status"
     status.write_text("ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\nlink\t1111-2222\t4200\t0\t900\n")
     for tab in ["files", "keys", "keys-mouse", "layout"]:
@@ -57,6 +58,7 @@ with tempfile.TemporaryDirectory(prefix="codex-atspi-") as directory:
         with (output / f"atspi-{tab}.log").open("w") as log:
             process = subprocess.Popen([str(binary), "--home", str(home)], env=environment, stdout=log, stderr=log)
             try:
+                time.sleep(3)
                 rows = []
                 for attempt in range(30):
                     time.sleep(0.5)
