@@ -36,7 +36,8 @@ use std::sync::mpsc::Receiver;
 
 const TOP_H: f32 = 56.0;
 const PANEL_H: f32 = 196.0;
-/// Below this height the desk shows its computers as named chips.
+/// Below this height (plus 22 pt for each other computer) the desk shows
+/// its computers as named chips: monitors any smaller can't carry names.
 const COMPACT_BELOW: f32 = 128.0;
 /// Inner padding of the panel's cells.
 const PAD: f32 = 20.0;
@@ -164,6 +165,8 @@ struct Toast {
     error: bool,
     at: f64,
     life: f32,
+    /// What failed, when doing it again is safe: "Try again" does that.
+    retry: Option<Job>,
 }
 
 /// What a cell of the panel shows. When it changes, the old one fades
@@ -523,14 +526,55 @@ impl App {
     }
 
     fn toast(&mut self, text: impl Into<String>, now: f64) {
-        self.toast = Some(Toast { text: text.into(), detail: None, error: false, at: now, life: 3.5 });
+        self.toast = Some(Toast { text: text.into(), detail: None, error: false, at: now, life: 3.5, retry: None });
     }
 
     /// An error says what went wrong and what to do; the raw reason goes
     /// underneath. It stays until dismissed, or for ten seconds.
     fn toast_error(&mut self, text: impl Into<String>, detail: Option<String>, now: f64) {
         let detail = detail.map(|d| crate::view::window_issue(d.trim())).filter(|d| !d.is_empty());
-        self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0 });
+        self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0, retry: None });
+    }
+
+    /// Whether `job` can simply be run again from an error toast.
+    fn retryable(job: &Job) -> bool {
+        matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Open)
+    }
+
+    /// Runs a failed job again, as the control that asked for it did.
+    fn retry(&mut self, job: Job) {
+        match job.clone() {
+            Job::Layout { id, side, .. } => self.choose_side(&id, side, true),
+            Job::Swap { id, name, swap } => {
+                self.pending_swap.insert(id.clone(), swap.clone());
+                self.busy.push(job);
+                self.link.set_swap(&id, &name, &swap);
+                self.sync_scene();
+            }
+            Job::TakeBack => {
+                self.busy.push(job);
+                self.link.take_back();
+            }
+            Job::Start => {
+                self.busy.push(job);
+                self.link.start();
+            }
+            Job::Autostart(on) => {
+                self.busy.push(job);
+                self.autostart = Some(on);
+                self.link.set_autostart(on);
+            }
+            Job::Set { what, args } => {
+                self.busy.push(job);
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                self.link.set(&what, &args);
+            }
+            Job::Open => {
+                self.busy.push(job);
+                self.link.open_downloads();
+            }
+            _ => {}
+        }
     }
 
     fn handle_events(&mut self, now: f64) {
@@ -651,6 +695,16 @@ impl App {
             return;
         };
         let e = Some(e);
+        let again = Self::retryable(&what).then(|| what.clone());
+        self.finished_error(what, e, now);
+        if let (Some(t), Some(job)) = (self.toast.as_mut(), again) {
+            if t.error && t.at == now {
+                t.retry = Some(job);
+            }
+        }
+    }
+
+    fn finished_error(&mut self, what: Job, e: Option<String>, now: f64) {
         match what {
             Job::Update => { self.update_output = e; self.update_ui.failed = true; }
             Job::UpdateCheck => self.toast_error("Couldn't check for updates.", e, now),
@@ -1649,40 +1703,50 @@ impl App {
         }
     }
 
-    /// Layout in a narrow window: its three cards one above another, each
-    /// as tall as what it holds and as wide as the window, so no choice is
-    /// shortened and nothing is cut; the column scrolls.
+    /// Layout in a narrow window: its three cards behind one tab row
+    /// (Position, Exact place, Profiles), each shown full width and full
+    /// height, so every one is a click away and nothing is shortened or cut.
     fn layout_stacked(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
         let sel = self.selected_id().filter(|id| id != "me");
-        let profiles = self.running().map_or(0, |s| s.layout.profiles.len()) as f32;
-        let open = f32::from(self.profile_open.is_some());
-        let w = rect.width() - 10.0;
-        // What each holds: a title row, its control and a few lines of words.
-        let words_h = |ui: &Ui, text_w: f32| -> f32 {
-            let mut job = egui::text::LayoutJob::simple("x".repeat(220), regular(T_BODY), INK, text_w);
-            job.sections[0].format.line_height = Some((T_BODY * LEADING).round());
-            ui.painter().layout_job(job).size().y
-        };
-        let inner = w - 2.0 * PAD;
-        let cards = [
-            (Cell::Arrange(sel.clone()), 2.0 * PAD + 26.0 + 40.0 + words_h(ui, inner).min(70.0) + 8.0),
-            (Cell::LineUp(sel), 2.0 * PAD + 26.0 + words_h(ui, inner).min(70.0) + 46.0),
-            (Cell::Profiles, 2.0 * PAD + 26.0 + 30.0 + 30.0 * profiles + 36.0 * open + 120.0 * open + 52.0),
-        ];
-        let mut child = ui.new_child(UiBuilder::new().max_rect(rect).id_salt("layout-stacked"));
-        child.set_clip_rect(rect.intersect(ui.clip_rect()));
-        let scroll = egui::ScrollArea::vertical().id_salt("layout-stacked-scroll").auto_shrink([false, false]);
+        let key = Id::unique("layout-tab");
+        #[allow(unused_mut)]
+        let mut chosen = ui.ctx().data(|d| d.get_temp::<usize>(key)).unwrap_or(0);
         #[cfg(debug_assertions)]
-        let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()).map_or(scroll.clone(), |o| scroll.vertical_scroll_offset(o));
-        scroll.show(&mut child, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for (k, (cell, h)) in cards.into_iter().enumerate() {
-                let (card, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
-                widgets::glass_panel(ui, ("stacked-card", k), card, R_PANEL);
-                self.draw_cell(ui, &cell, card.shrink(PAD), now);
-                ui.add_space(M);
-            }
-        });
+        if let Some(k) = std::env::var("ONE_MK_APP_LAYOUT_TAB").ok().and_then(|v| v.parse::<usize>().ok()) {
+            chosen = k.min(2);
+        }
+        // An open profile's options belong to Profiles: show that tab.
+        if self.profile_scroll {
+            chosen = 2;
+        }
+        widgets::glass_panel(ui, "layout-tabs-card", rect, R_PANEL);
+        let inner = rect.shrink(PAD);
+        let labels = ["Position", "Exact place", "Profiles"];
+        let track = Rect::from_min_size(inner.min, vec2(inner.width().min(420.0), 30.0));
+        let pills = Pills {
+            id: Id::unique("layout-tabs"),
+            track,
+            cells: Pills::even(track, 3, 2.0),
+            labels: &labels,
+            names: labels.iter().map(|l| format!("Layout: {l}")).collect(),
+            chosen: Some(chosen),
+            enabled: vec![true; 3],
+            role: Role::Tab,
+            font: T_BODY,
+        };
+        if let Some(k) = pills.show(ui, self.arrowed) {
+            chosen = k;
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(key, chosen));
+        let body = Rect::from_min_max(pos2(inner.left(), track.bottom() + 16.0), inner.max);
+        let cell = match chosen {
+            0 => Cell::Arrange(sel),
+            1 => Cell::LineUp(sel),
+            _ => Cell::Profiles,
+        };
+        let mut child = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("layout-tab-body", chosen)));
+        child.set_clip_rect(body.expand(4.0).intersect(ui.clip_rect()));
+        self.draw_cell(&mut child, &cell, body, now);
     }
 
     fn draw_cell(&mut self, ui: &mut Ui, cell: &Cell, r: Rect, now: f64) {
@@ -2079,7 +2143,7 @@ impl App {
         let rect = match slot {
             Some(r) => r.translate(vec2(0.0, -motion::space(6.0) * (1.0 - a_in))),
             None => {
-                let w = g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::TOAST_ACTION_W } else { 0.0 };
+                let w = g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::toast_action_w(t) } else { 0.0 };
                 let y = desk.top() + TOP_H + 10.0 + h / 2.0 - motion::space(8.0) * (1.0 - a_in);
                 Rect::from_center_size(pos2(desk.center().x, y), vec2(w, h))
             }
@@ -2087,7 +2151,7 @@ impl App {
         let layer = egui::LayerId::new(egui::Order::Tooltip, Id::unique("toast"));
         let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
         child.set_opacity(a);
-        let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::TOAST_ACTION_W, rect.bottom())) } else { rect };
+        let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::toast_action_w(t), rect.bottom())) } else { rect };
         let resp = child.interact(body, Id::unique("toast-body"), Sense::CLICK);
         let p = child.painter().clone();
         p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(12)));
@@ -2101,10 +2165,17 @@ impl App {
         }
         // An error says where to look next: Health has the checks and fixes.
         let mut open_health = false;
+        let mut try_again = false;
         if t.error {
             let bw = button_width(&child, "Open Health");
             let b = Rect::from_min_size(pos2(rect.right() - 12.0 - bw, rect.center().y - 15.0), vec2(bw, 30.0));
             open_health = button(&mut child, b, Id::unique("toast-health"), "Open Health", Look::Quiet, true, Some("Open Health to see what went wrong")).clicked();
+            // What failed, done again: the first thing to try.
+            if t.retry.is_some() {
+                let tw = button_width(&child, "Try again");
+                let tb = Rect::from_min_size(pos2(b.left() - 8.0 - tw, b.top()), vec2(tw, 30.0));
+                try_again = button(&mut child, tb, Id::unique("toast-retry"), "Try again", Look::Quiet, true, Some("Do it again")).clicked();
+            }
         }
         let (role, live) = if t.error { (Role::Alert, Live::Assertive) } else { (Role::Status, Live::Polite) };
         let label = format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}")));
@@ -2116,8 +2187,11 @@ impl App {
         if open_health {
             self.set_tab(Tab::Health);
         }
+        if try_again && let Some(job) = self.toast.as_mut().and_then(|t| t.retry.take()) {
+            self.retry(job);
+        }
         let t = self.toast.as_mut().expect("shown above");
-        if (dismiss || open_health) && age < t.life - exit {
+        if (dismiss || open_health || try_again) && age < t.life - exit {
             t.life = age + exit;
         } else if resp.hovered() && age > enter && age < t.life - exit {
             // Held while the pointer is on it, so it can be read.
@@ -2244,7 +2318,9 @@ impl eframe::App for App {
             frame.max.y -= self.desk_foot_h(scene.width());
             // Too little room left for monitors anyone could read: the
             // computers as a row of named chips instead.
-            compact = frame.height() < COMPACT_BELOW && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout);
+            // More computers need more room before their names read.
+            let need = COMPACT_BELOW + 22.0 * self.scene.devices.len().saturating_sub(1).min(5) as f32;
+            compact = frame.height() < need && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout);
         }
         if self.tab.desk() {
             if compact {
@@ -2481,7 +2557,11 @@ mod debug {
             app.pending_drop = Some(((0..n).map(|i| PathBuf::from(format!("/tmp/file{i}"))).collect(), now));
         }
         if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
-            app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("oneMK didn't answer within 3 seconds".into()), now);
+            app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was.", Some("oneMK didn't answer within 3 seconds".into()), now);
+            let peer = app.running().and_then(|s| s.peers.first().map(|p| (p.id.clone(), p.name.clone())));
+            if let (Some(t), Some((id, name))) = (app.toast.as_mut(), peer) {
+                t.retry = Some(Job::Layout { id, name, side: Side::Left });
+            }
         }
         if ready && var("ONE_MK_APP_BROADCAST").is_some() && now > 1.0 && once(&ctx, "broadcast") {
             let on = !app.broadcasting();

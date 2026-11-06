@@ -22,15 +22,17 @@ pub(super) struct NoticeLay {
 /// A toast laid out `w` wide: its message, its detail, and its height
 /// (with room for the action an error carries).
 pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Galley>, Option<std::sync::Arc<egui::Galley>>, f32) {
-    let text_w = w - 46.0 - if t.error { TOAST_ACTION_W } else { 0.0 };
+    let text_w = w - 46.0 - if t.error { toast_action_w(t) } else { 0.0 };
     let g = ui.painter().layout(t.text.clone(), regular(T_BODY), INK, text_w);
     let d = t.detail.as_ref().map(|d| ui.painter().layout(d.clone(), regular(T_META), INK2, text_w));
     let h = 10.0 + g.size().y + d.as_ref().map_or(0.0, |d| d.size().y + 4.0) + 10.0;
     (g, d, h.max(if t.error { 52.0 } else { 0.0 }))
 }
 
-/// Room for an error toast's action.
-pub(super) const TOAST_ACTION_W: f32 = 130.0;
+/// Room for an error toast's actions (Try again, when it can, and Open Health).
+pub(super) fn toast_action_w(t: &Toast) -> f32 {
+    if t.retry.is_some() { 236.0 } else { 130.0 }
+}
 
 /// The row the Computers / Arrange switch takes at the desk's top.
 pub(super) const DESK_VIEWS_H: f32 = 46.0;
@@ -213,7 +215,8 @@ impl App {
             let nw = text_width(ui, &n, big.clone());
             p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, &n, big, INK);
             p.text(pos2(body.left() + nw + 4.0, body.top() + 23.0), Align2::LEFT_CENTER, "ms", regular(T_BODY), INK2);
-            let word = q.map_or("Measuring…", Quality::word);
+            // A number is already shown: say how much it rests on, not "Measuring…".
+            let word = q.map_or("Few readings so far", Quality::word);
             let ww = text_width(ui, word, regular(T_BODY));
             p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { WARN } else { INK2 });
             if q.is_some() {
