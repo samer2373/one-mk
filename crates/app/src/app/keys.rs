@@ -53,6 +53,15 @@ mod gesture_tests {
         }
         assert_eq!(keyboard_navigator_height(900.0, 260.0), 260.0);
     }
+
+    #[test]
+    fn compact_setup_surface_is_scoped_to_keyboard() {
+        for hover in [0.0, 0.5, 1.0] {
+            assert_eq!(setup_fill(false, hover, false), mix(BUTTON, BUTTON_LIT, hover));
+            assert_eq!(setup_fill(true, hover, false), mix(THUMB, Color32::from_rgb(0x60, 0x6A, 0x76), hover));
+            assert_ne!(setup_fill(true, hover, true), setup_fill(true, hover, false));
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -188,7 +197,16 @@ fn flow(ui: &Ui, left: f32, top: f32, width: f32, labels: &[&str]) -> (Vec<Rect>
 }
 
 /// A chip that is on or off: a quick setup.
-fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -> egui::Response {
+fn setup_fill(on: bool, hover: f32, compact: bool) -> Color32 {
+    match (compact, on) {
+        (true, true) => mix(Color32::from_rgb(0x28, 0x36, 0x1C), Color32::from_rgb(0x35, 0x46, 0x25), hover),
+        (true, false) => mix(PANEL, BUTTON_LIT, hover),
+        (false, true) => mix(THUMB, Color32::from_rgb(0x60, 0x6A, 0x76), hover),
+        (false, false) => mix(BUTTON, BUTTON_LIT, hover),
+    }
+}
+
+fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool, compact: bool) -> egui::Response {
     let r = ui.interact(widgets::hit_rect(rect), id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
     let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
     let p = ui.painter();
@@ -198,14 +216,15 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     let press = tween(ui.ctx(), id.with("press"), f32::from(enabled && r.is_pointer_button_down_on()), 0.08, motion::out_cubic);
     // Set: the chosen-segment capsule's tone, semibold words and a Volt
     // tick; not set: a quiet fill and regular words.
-    let fill = if on { mix(Color32::from_rgb(0x28, 0x36, 0x1C), Color32::from_rgb(0x35, 0x46, 0x25), hover) } else { mix(PANEL, BUTTON_LIT, hover) };
+    let fill = setup_fill(on, hover, compact);
     let surface = widgets::pressed_lift(fill, press);
     let ink = if !enabled { INK2 } else if on { INK } else { mix(INK2, INK, hover) };
     let ink = if press > 0.0 { widgets::pressed_ink(surface, ink) } else { ink };
     p.rect_filled(rect, radius, surface);
     let font = if on { semibold(T_META + 1.0) } else { regular(T_META + 1.0) };
     let text = fit(p, label, &font, rect.width() - 28.0 - if on { 16.0 } else { 0.0 });
-    let mut x = rect.left() + 12.0;
+    let text_width = p.layout_no_wrap(text.clone(), font.clone(), INK).size().x;
+    let mut x = if compact { rect.left() + 12.0 } else { rect.center().x - (text_width + if on { 16.0 } else { 0.0 }) / 2.0 };
     if on {
         widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, if press > 0.0 { widgets::pressed_ink(surface, ACCENT) } else { ACCENT }, 1.0);
         x += 16.0;
@@ -828,7 +847,7 @@ impl App {
         let busy = self.tuning_busy();
         for ((p, r), label) in presets.iter().zip(&chips).zip(preset_labels) {
             let on = tune::preset_on(&input, p, &self.keys.scope);
-            if chip(ui, r.translate(vec2(all.left(), cy)), Id::unique(("preset", p.id)), &label, on, !busy).on_hover_text(&p.label).clicked() {
+            if chip(ui, r.translate(vec2(all.left(), cy)), Id::unique(("preset", p.id)), &label, on, !busy, true).on_hover_text(&p.label).clicked() {
                 // Each rule is checked as `one-mk keymap add` would, in turn.
                 let mut sim = input.clone();
                 let mut bad = None;
@@ -1611,7 +1630,7 @@ impl App {
         top += ROW + 8.0;
         top += para(ui, pos2(content.left(), top), content.width(), "Gestures", regular(T_BODY), INK);
         let rect = Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), 30.0));
-        let preset = ui.add_enabled_ui(!busy, |ui| chip(ui, rect, Id::unique("gesture-side-swipe"), "Set up side-button desktop swipes", false, true)).inner;
+        let preset = ui.add_enabled_ui(!busy, |ui| chip(ui, rect, Id::unique("gesture-side-swipe"), "Set up side-button desktop swipes", false, true, false)).inner;
         widgets::a11y(&preset, Role::Button, "Set up side-button desktop swipes", None);
         if preset.clicked() {
             let mut args = vec!["gestures".into(), "preset".into(), "side-swipe".into()];
@@ -1631,7 +1650,7 @@ impl App {
                 Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), height)), Role::Label, &description, None);
             top += height;
             let rect = Rect::from_min_size(pos2(content.left(), top), vec2(100.0_f32.min(content.width()), 30.0));
-            let remove = ui.add_enabled_ui(!busy, |ui| chip(ui, rect, Id::unique(("remove-gesture", &row.button, &row.direction, row.scope.label(), &row.app)), "Remove", false, true)).inner;
+            let remove = ui.add_enabled_ui(!busy, |ui| chip(ui, rect, Id::unique(("remove-gesture", &row.button, &row.direction, row.scope.label(), &row.app)), "Remove", false, true, false)).inner;
             widgets::a11y(&remove, Role::Button, &format!("Remove gesture: {description}"), None);
             if remove.clicked() {
                 let mut args = vec!["gestures".into(), "remove".into(), row.button.clone(), row.direction.clone()];
@@ -1843,7 +1862,7 @@ impl App {
             input.buttons.iter().any(|b| b.scope == self.keys.scope && b.from.trim() == n.to_string() && b.to == tune::To::One((*to).into()))
         });
         let cr = Rect::from_min_size(pos2(c.left(), y), vec2(chip_width(ui, side).min(c.width()), 30.0));
-        if chip(ui, cr, Id::unique("preset-side"), side, on, !busy).clicked() {
+        if chip(ui, cr, Id::unique("preset-side"), side, on, !busy, false).clicked() {
             let cmds = if on {
                 vec![tune::button_args(4, None, &self.keys.scope), tune::button_args(5, None, &self.keys.scope)]
             } else {
