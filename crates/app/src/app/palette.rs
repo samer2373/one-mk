@@ -377,11 +377,13 @@ impl App {
                         if range.start < at {
                             continue;
                         }
-                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(14.0), INK));
-                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(14.0), SIGNAL));
+                        // Only the typed characters stand out: in full ink and
+                        // semibold, the rest of the title a step quieter.
+                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(14.0), INK_HOVER));
+                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(14.0), INK));
                         at = range.end;
                     }
-                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(14.0), INK));
+                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(14.0), INK_HOVER));
                     let g = ui.painter().layout_job(job);
                     ui.painter().galley(pos2(ic.right() + 12.0, row.center().y - g.size().y / 2.0), g, INK);
                     if !e.hint.is_empty() {
