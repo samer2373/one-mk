@@ -136,3 +136,92 @@ focused computer do the same), and the help pictures.
   available there; the position control in the card is.
 - The keyboard picture on Keys can sit partly scrolled under the page header
   when an editor is revealed.
+
+## Round 3
+
+**Changes**
+- **Help explainers:** the picture plays twice when an explainer opens, then
+  rests on its last frame. An open explainer now uses no CPU at rest.
+- **Health:**
+  - The headline names its groups: "3 need attention · 1 awaiting permission".
+  - The shortcut line shows once, not twice.
+  - Every row that isn't a pass has an action: the window's own fix, Copy
+    command, Recheck, or Open guide. On macOS, Open guide opens the
+    permission guide. On other desktops it opens the steps for the desktop's
+    own dialog, in a popover.
+  - A permission still to answer is listed under Pending, never with a tick.
+- **Colour meanings:** the newest latency reading, the live sparkline dot and
+  the Connected dot are cyan, never Volt.
+- **Narrow Layout:** Position, Exact place and Profiles are tabs over one
+  full card, so all three are a click away.
+- **Desk:**
+  - Named chips replace the desk below 128 pt plus 22 pt for each other
+    computer. The chips take dropped files.
+  - Clipboard & files in a narrow window shows the chips at the top, and the
+    page gets the room.
+  - Error toasts have **Try again**, which re-runs the move, swap, Take back,
+    Start, setting, start-at-login change or folder opening that failed. They
+    also keep **Open Health**.
+  - "Few readings so far" replaces "Measuring…" next to a live number.
+- **Room and cards:**
+  - The room is quiet: it has no lights of its own, the screen glow is
+    faint, and the desk is a neutral dark.
+  - Desk cards and the Layout card are flat groups.
+  - The monitors always start below the toolbar row.
+  - The band spans the desk, so its right edge lines up with the cards.
+- **Type and layout fixes:**
+  - The sidebar uses the 12-point step.
+  - Files rows are 36 pt with hairlines.
+  - The Health column starts under the page title.
+  - The Keys close button sits on its card's title line.
+  - Changed-key legends sit inside the cap.
+  - Mouse labels go to the side their part is on.
+  - Monitor names shrink before they are shortened, and a shortened name
+    shows in full on hover.
+  - An offline computer is described in words.
+  - An open profile's Wi-Fi network sits on its own line.
+- **Focus:**
+  - Tabbing onto any control scrolls it into view.
+  - Pressing the chosen segment gives it a pressed look.
+  - The unnamed Settings stop was the credit link at the page's foot. It now
+    has a name and a ring, comes last in Tab order and scrolls into view.
+
+**Runtime**
+The figures are in `/home/samer/omk-council/claude/round3-perf.txt`. "Opt"
+means `--release` without LTO, with debug assertions on so the screenshot
+hooks work. Before is main; after is this branch.
+
+| what | before | after |
+|---|---|---|
+| Release, window visible, oneMK off, 60 s, 2 runs | 0.03 / 0.02 % | 0.03 / 0.03 % |
+| Opt, desk with 3 computers, visible, 30 s, 3 runs | 0.23 / 0.23 / 0.20 % | 0.23 / 0.17 / 0.20 % |
+| Opt, minimised, 3 runs | – | 0.03 % each |
+| Opt, help explainer open, 3 runs | 5.77 / 4.43 / 4.53 % | **0.03 % each** |
+| Opt, moving frames, p95, 3 runs | 7.08 / 7.14 / 7.22 ms | 7.09 / 7.12 / 7.13 ms |
+
+**AT-SPI (a real read, Linux)**
+- The session's accessibility bus was turned on for the run and then
+  restored. A plain `gi.repository.Atspi` client then read the window's tree.
+  The dumps are in `round3/atspi-desk.txt`, `round3/atspi-advanced.txt` and
+  `round3/atspi-health.txt`.
+- **Roles and names as read:**
+  - Computers on the desk: toggle buttons, for example "MacBook Air, macOS,
+    on your left".
+  - Search: an entry.
+  - Pages: page tabs, with the current one checked.
+  - Position: radio buttons, for example "Position of MacBook Air: Left",
+    checked.
+  - Number fields: entries, for example "Don't cross near corners, in pixels
+    (0: off)".
+  - Health: a status bar "2 need attention · 1 pending…", with headings and
+    list items.
+  - Latency, as text: "Latency to MacBook Air: 4 ms, smooth. Over the last
+    2 minutes: lowest…, average…, highest…".
+- **What the dump found and this round fixed:**
+  - Pending items had ids that collided with Needs you, so Pending read as
+    empty.
+  - Live Health lines were read twice.
+  - The desk card had no words for its latency.
+- **Not run:** Orca is installed, but it was not run. Speaking aloud on the
+  owner's live desktop wasn't appropriate. No macOS or Windows screen reader
+  was run.

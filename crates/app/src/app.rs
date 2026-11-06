@@ -2325,7 +2325,7 @@ impl eframe::App for App {
             let band = tween(ui.ctx(), Id::unique("desk-band"), self.band_h(ui, scene.width()), motion::space(0.22), motion::out_cubic);
             // The view switch and toolbar row is never drawn over: the
             // monitors start below it (the camera adds its 12-point inset).
-            frame.min.y += band + if self.desk_views_shown() || self.running().is_some_and(|s| !s.peers.is_empty()) { desk_cards::DESK_VIEWS_H } else { 0.0 };
+            frame.min.y += band + if self.desk_views_shown() { desk_cards::DESK_VIEWS_H } else { 0.0 };
             frame.max.y -= self.desk_foot_h(scene.width());
             // Too little room left for monitors anyone could read: the
             // computers as a row of named chips instead.

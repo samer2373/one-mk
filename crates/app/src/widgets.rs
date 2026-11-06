@@ -96,6 +96,11 @@ pub fn a11y_text(ui: &Ui, id: Id, rect: Rect, role: Role, label: &str, live: Opt
     targets::note(label, rect);
     ui.ctx().accesskit_node_builder(id, |n| {
         n.set_role(role);
+        // A label's words are its value (AccessKit's model): set both, so
+        // AT-SPI and the others read them as the name.
+        if role == Role::Label {
+            n.set_value(label);
+        }
         n.set_label(label);
         n.set_bounds(egui::accesskit::Rect { x0: rect.min.x as f64, y0: rect.min.y as f64, x1: rect.max.x as f64, y1: rect.max.y as f64 });
         if let Some(l) = live {

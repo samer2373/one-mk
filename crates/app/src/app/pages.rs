@@ -375,7 +375,8 @@ impl App {
                             }
                         }
                     }
-                    let label = format!("{}{}. {}", i.title, if i.title.is_empty() { "" } else { ": needs you" }, i.detail);
+                    let state = if group_title == "Pending" { "pending" } else { "needs you" };
+                    let label = if i.title.is_empty() { format!("{state}: {}", i.detail) } else { format!("{}: {state}. {}", i.title, i.detail) };
                     a11y_text(ui, Id::unique(("need", group_title, n)), row, Role::ListItem, &label, None);
                     if n + 1 < needs.len() {
                         ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
