@@ -2288,6 +2288,8 @@ fn lerp_scale(t: f32) -> f32 {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         crate::chrome::place_buttons(ui.ctx(), frame);
+        #[cfg(debug_assertions)]
+        let ui_started = std::time::Instant::now();
         let now = ui.input(|i| i.time);
         self.now = now;
         if self.size.x > 0.0 {
@@ -2442,6 +2444,13 @@ impl eframe::App for App {
         let hidden = ui.input(|i| i.viewport().minimized == Some(true));
         self.link.showing.frame(self.graph_wanted() && !hidden);
         #[cfg(debug_assertions)]
+        if std::env::var_os("ONE_MK_APP_BENCH").is_some() {
+            // The UI thread's own work this frame (laying out and painting
+            // shapes), apart from waiting for the display.
+            let ms = ui_started.elapsed().as_secs_f64() * 1000.0;
+            ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::Mutex<Vec<f64>>>>(Id::unique("bench-ui")).lock().unwrap().push(ms));
+        }
+        #[cfg(debug_assertions)]
         debug::tab_walk(ui.ctx(), now);
         #[cfg(debug_assertions)]
         debug::shot(ui.ctx(), now);
@@ -2558,6 +2567,14 @@ mod debug {
                 let start = ctx.data(|d| d.get_temp::<u64>(Id::unique("bench-cpu"))).unwrap_or(0);
                 let ticks = cpu().unwrap_or(0).saturating_sub(start);
                 println!("bench cpu_ms_per_frame={:.2} (all threads)", ticks as f64 * 10.0 / n as f64);
+                let ui_times = ctx.data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::Mutex<Vec<f64>>>>(Id::unique("bench-ui")).clone());
+                let mut ui_ms = ui_times.lock().unwrap().clone();
+                if !ui_ms.is_empty() {
+                    let k = ui_ms.len().min(n);
+                    ui_ms = ui_ms.split_off(ui_ms.len() - k);
+                    ui_ms.sort_by(f64::total_cmp);
+                    println!("bench ui_thread_ms_per_frame p50={:.2} p95={:.2} max={:.2} (update + layout + shapes, not GPU or vsync)", ui_ms[k / 2], ui_ms[k * 95 / 100], ui_ms[k - 1]);
+                }
                 let gaps: Vec<f64> = t.windows(2).map(|w| (w[1] - w[0]) * 1000.0).collect();
                 let mut sorted = gaps.clone();
                 sorted.sort_by(f64::total_cmp);
