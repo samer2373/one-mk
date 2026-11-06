@@ -42,26 +42,39 @@ enum Fix {
 }
 
 fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
+    // One family: a 14-point round badge each, told apart by its mark (and
+    // by the word beside the title), never by colour alone.
+    let r = 7.0;
     match v {
-        Verdict::Pass => widgets::draw_check(p, c, 12.0, INK2, 1.0),
-        // Pending (a step to take, or on its way): an open ring with a
-        // clock hand, in ink. Volt stays for actions, never status.
+        Verdict::Pass => {
+            p.circle_stroke(c, r, Stroke::new(1.5, OK));
+            widgets::draw_check(p, c, 9.0, OK, 1.0);
+        }
         Verdict::Skip => {
-            p.circle_stroke(c, 6.0, Stroke::new(1.5, INK2));
-            p.line_segment([c, c + vec2(0.0, -3.5)], Stroke::new(1.5, INK2));
-            p.line_segment([c, c + vec2(2.5, 1.5)], Stroke::new(1.5, INK2));
+            p.circle_stroke(c, r, Stroke::new(1.5, INK2));
+            p.line_segment([c, c + vec2(0.0, -4.0)], Stroke::new(1.5, INK2));
+            p.line_segment([c, c + vec2(3.0, 1.5)], Stroke::new(1.5, INK2));
         }
         Verdict::Warn => {
-            // A triangle with a bar and a dot: not a ring, which reads as an
-            // empty radio button.
-            let (top, l, r) = (c + vec2(0.0, -6.5), c + vec2(-7.0, 5.5), c + vec2(7.0, 5.5));
-            p.add(egui::Shape::closed_line(vec![top, r, l], Stroke::new(1.5, INK)));
-            p.line_segment([c + vec2(0.0, -2.0), c + vec2(0.0, 1.5)], Stroke::new(1.5, INK));
-            p.circle_filled(c + vec2(0.0, 3.6), 0.9, INK);
+            p.circle_stroke(c, r, Stroke::new(1.5, WARN));
+            p.line_segment([c + vec2(0.0, -3.5), c + vec2(0.0, 1.0)], Stroke::new(1.6, WARN));
+            p.circle_filled(c + vec2(0.0, 3.4), 0.9, WARN);
         }
         Verdict::Fail => {
-            p.circle_filled(c, 6.0, ERROR);
+            p.circle_filled(c, r, ERROR);
+            p.line_segment([c + vec2(0.0, -3.5), c + vec2(0.0, 1.0)], Stroke::new(1.6, GROUND));
+            p.circle_filled(c + vec2(0.0, 3.4), 0.9, GROUND);
         }
+    }
+}
+
+/// The word that goes with a badge.
+fn verdict_word(v: Verdict) -> &'static str {
+    match v {
+        Verdict::Pass => "passed",
+        Verdict::Skip => "waiting",
+        Verdict::Warn => "warning",
+        Verdict::Fail => "problem",
     }
 }
 
@@ -219,6 +232,11 @@ impl App {
                 if c.verdict == Verdict::Pass { works.push(item) } else { needs.push(item) }
             }
         }
+        // A permission the desktop is asking for now is the same thing as
+        // doctor's "not allowed yet": one row (Pending), not two.
+        if needs.iter().any(|i| i.title == "Pending permission") {
+            needs.retain(|i| !(i.title == "Permissions" && i.verdict != Verdict::Fail));
+        }
         // Worst first; steps still to take (neutral) last.
         needs.sort_by_key(|i| match i.verdict {
             Verdict::Fail => 0,
@@ -339,7 +357,9 @@ impl App {
                     let tx = row.left() + 26.0;
                     let mut ty = row.top() + 12.0;
                     if !i.title.is_empty() {
+                        let tw = text_width(ui, &i.title, semibold(T_BODY));
                         p.text(pos2(tx, ty + 10.0), Align2::LEFT_CENTER, &i.title, semibold(T_BODY), INK);
+                        p.text(pos2(tx + tw + 8.0, ty + 10.5), Align2::LEFT_CENTER, verdict_word(i.verdict), regular(T_META), INK3);
                         ty += 24.0;
                     }
                     // What is wrong in ink; what to do, quieter, under it.
@@ -377,8 +397,9 @@ impl App {
                             }
                         }
                     }
-                    let state = if group_title == "Pending" { "pending" } else { "needs you" };
-                    let label = if i.title.is_empty() { format!("{state}: {}", i.detail) } else { format!("{}: {state}. {}", i.title, i.detail) };
+                    let state = if group_title == "Pending" { "is waiting" } else { "needs attention" };
+                    let fix = i.fix.as_deref().filter(|_| shows_fix_text(&i.here)).map_or(String::new(), |f| format!(" {}", f.replace('`', "")));
+                    let label = if i.title.is_empty() { format!("{}{fix}", i.detail) } else { format!("{} {state}. {}{fix}", i.title, i.detail) };
                     a11y_text(ui, Id::unique(("need", group_title, n)), row, Role::ListItem, &label, None);
                     if n + 1 < needs.len() {
                         ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
@@ -417,14 +438,14 @@ impl App {
                 for (n, (i, ih)) in works.iter().zip(&heights).enumerate() {
                     let p = ui.painter().clone();
                     let tx = r.left() + 18.0 + 26.0;
-                    widgets::draw_check(&p, pos2(r.left() + 26.0, y + 20.0), 12.0, OK, 1.0);
+                    verdict_icon(&p, pos2(r.left() + 26.0, y + 20.0), Verdict::Pass);
                     if i.title.is_empty() {
                         widgets::para_code(ui, pos2(tx, y + 10.0), text_w, &i.detail, regular(T_BODY), INK);
                     } else {
                         p.text(pos2(tx, y + 20.0), Align2::LEFT_CENTER, line(i), regular(T_BODY), INK);
                         widgets::para_code(ui, pos2(tx, y + 32.0), text_w, &i.detail, regular(T_META), INK3);
                     }
-                    a11y_text(ui, Id::unique(("works", n)), Rect::from_min_size(pos2(r.left(), y), vec2(w, *ih)), Role::ListItem, &if i.title.is_empty() { i.detail.clone() } else { format!("{}: works. {}", line(i), i.detail) }, None);
+                    a11y_text(ui, Id::unique(("works", n)), Rect::from_min_size(pos2(r.left(), y), vec2(w, *ih)), Role::ListItem, &if i.title.is_empty() { i.detail.clone() } else { format!("{} passed. {}", line(i), i.detail) }, None);
                     y += ih;
                 }
                 ui.add_space(8.0);

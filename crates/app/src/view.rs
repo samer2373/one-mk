@@ -506,7 +506,22 @@ fn legacy_check(mut check: Check) -> Option<Check> {
     let good = check.verdict == Verdict::Pass;
     let detail = check.detail.as_str();
     let (title, plain, fix) = match check.id.as_str() {
-        "updates" | "local-key-rules" | "input-tuning" | "typing" => return Some(check),
+        "typing" => {
+            // The daemon's summary ("physical (same keys; …)") as a sentence.
+            let d = detail.to_lowercase();
+            check.detail = if d.starts_with("physical") {
+                "Keys are sent by position; each computer applies its own keyboard layout.".into()
+            } else if d.starts_with("characters") {
+                "Letters are sent as you type them, whatever the other computer's keyboard layout.".into()
+            } else if d.is_empty() {
+                check.detail.clone()
+            } else {
+                let mut c = check.detail.chars();
+                c.next().map_or(String::new(), |f| f.to_uppercase().collect::<String>() + c.as_str())
+            };
+            return Some(check);
+        }
+        "updates" | "local-key-rules" | "input-tuning" => return Some(check),
         "wallpaper" if check.detail != "not shipped" => return Some(check),
         "wallpaper" | "wallpaper-import-sandbox" | "drag" => return None,
         "daemon" if detail.contains("not running") => {
