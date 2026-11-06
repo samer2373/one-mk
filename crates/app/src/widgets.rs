@@ -410,7 +410,17 @@ pub fn label_help_inline(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str,
 /// A labelled switch across `row`, with the caption and explanation filed
 /// under `key` in `help.rs`; the response is clicked when flipped.
 pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: bool, enabled: bool) -> Response {
-    let enabled = enabled && ui.is_enabled();
+    switch_help_painted(ui, row, id, label, key, on, (enabled, false))
+}
+
+pub fn switch_help_dimmed(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: bool, enabled: bool) -> Response {
+    switch_help_painted(ui, row, id, label, key, on, (enabled, true))
+}
+
+fn switch_help_painted(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: bool, availability: (bool, bool)) -> Response {
+    let (enabled, dim_disabled) = availability;
+    let enabled = enabled && (!dim_disabled || ui.is_enabled());
+    let undimmed = enabled || !dim_disabled;
     let r = ui.interact(hit_rect(row), id, if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
     let ctx = ui.ctx().clone();
     let press = tween(&ctx, id.with("press"), f32::from(enabled && r.is_pointer_button_down_on()), motion::fade(0.06), motion::out_cubic);
@@ -426,9 +436,9 @@ pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: b
     let on_col = if enabled { mix(ACCENT, ACCENT_LIT, hover) } else { INK3 };
     let base = mix(off, on_col, fill);
     let pressed_track = if on { mix(base, GROUND, 0.45) } else { mix(base, Color32::WHITE, 0.30) };
-    p.rect_filled(track, CornerRadius::same(11), switch_color(mix(base, pressed_track, press), enabled));
+    p.rect_filled(track, CornerRadius::same(11), switch_color(mix(base, pressed_track, press), undimmed));
     // Off, the track's edge is what shows the control: 3:1 on the group.
-    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, switch_color(mix(SWITCH_EDGE, Color32::TRANSPARENT, fill), enabled)), StrokeKind::Inside);
+    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, switch_color(mix(SWITCH_EDGE, Color32::TRANSPARENT, fill), undimmed)), StrokeKind::Inside);
     let knob = pos2(track.left() + 11.0 + 16.0 * knob_t, track.center().y);
     // Pressed, the knob stretches toward where it will go (as the
     // system's switches do): a look of its own, apart from hover.
@@ -436,7 +446,7 @@ pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: b
     let toward = if on { -1.0 } else { 1.0 };
     let kr = Rect::from_center_size(knob + vec2(toward * stretch / 2.0, 0.0), vec2(18.0 + stretch, 18.0));
     p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(kr, CornerRadius::same(9)));
-    p.rect_filled(kr, CornerRadius::same(9), switch_color(Color32::WHITE, enabled));
+    p.rect_filled(kr, CornerRadius::same(9), switch_color(if enabled { Color32::WHITE } else { INK2 }, undimmed));
     focus_ring(ui, &r, track, 11);
     if r.gained_focus() && keyboard_focus(&ctx) {
         r.scroll_to_me(None);
@@ -943,10 +953,20 @@ mod tests {
         let mut enabled = true;
         let mut output = context.run_ui(Default::default(), |ui| {
             ui.disable();
-            enabled = switch_help(ui, Rect::from_min_size(Pos2::ZERO, vec2(300.0, 32.0)), Id::unique("disabled-switch"), "Also on this computer", "also-on-this-computer", false, true).enabled();
+            enabled = switch_help_dimmed(ui, Rect::from_min_size(Pos2::ZERO, vec2(300.0, 32.0)), Id::unique("disabled-switch"), "Also on this computer", "also-on-this-computer", false, true).enabled();
         });
         assert!(!enabled);
         output.textures_delta.clear();
+        for dimmed in [false, true] {
+            let context = egui::Context::default();
+            let mut output = context.run_ui(Default::default(), |ui| {
+                switch_help_painted(ui, Rect::from_min_size(Pos2::ZERO, vec2(300.0, 32.0)), Id::unique("switch-appearance"), "Also on this computer", "also-on-this-computer", false, (false, dimmed));
+            });
+            for expected in [switch_color(SWITCH_OFF, !dimmed), switch_color(INK2, !dimmed)] {
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == expected)), "dimmed={dimmed}, missing {expected:?}");
+            }
+            output.textures_delta.clear();
+        }
     }
 
     #[test]
