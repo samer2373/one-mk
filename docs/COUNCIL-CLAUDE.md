@@ -277,3 +277,62 @@ hooks work. Before is main; after is this branch.
     p50 0.15 / p95 0.22 ms. CPU per frame across all threads went from
     0.97 to 0.53 ms. Frame pacing p95 is 7.1 ms in both, set by vsync.
     Most of the saving is the room's light meshes, now gone.
+
+## Round 5 (track A)
+
+- **Accessibility:**
+  - "Type on every computer" is a switch. AT-SPI reads it as a toggle
+    button, `pressed` while broadcasting (`round5/atspi-desk-broadcasting.txt`).
+  - Stop is a plain button, "Stop oneMK: turn off sharing on this computer";
+    plain rows no longer read as toggle buttons.
+  - The computers' Tab names say "this computer" once.
+  - The debug Tab walk names every stop by id, so scrolling no longer leaves
+    stops unnamed.
+- **Footer and pairing:**
+  - The footer says "On · nothing paired yet" or "On · waiting for
+    computers" until a computer is actually connected.
+  - A pairing match with this computer's own name is called "another
+    computer named …".
+  - The card names lost packets ("3 packets lost"), apart from stalls.
+- **Desk:**
+  - With nothing paired, this computer's card is the first step and carries
+    the one Volt "Pair a computer"; the sidebar's copy turns quiet.
+  - "Options here" replaces a second "This computer" beside this computer's
+    own card.
+  - A peer card without a graph ends under its actions.
+  - The drag hint shows once, for 12 seconds.
+- **Layout:**
+  - The three cards share one height.
+  - The compact tabs have one chosen look (the underline is gone).
+  - An open profile comes first, and the save row steps aside, so its
+    options are never cut. The list always ends on a whole row.
+- **Keys:** a set quick setup is a lighter capsule with semibold words and a
+  Volt tick.
+- **Health:**
+  - A permission appears once (Pending), not also under Needs you.
+  - Status markers are one family: a round badge plus a word (problem,
+    warning, waiting, passed).
+  - Screen readers hear each cause together with its fix.
+  - Typing is described in plain words.
+- **Palette:** only the typed characters stand out, in ink and semibold
+  (no Volt text).
+- **Controls:** pressed looks that show on dark surfaces. A switch's knob
+  stretches, an unchosen segment lifts more than on hover, and a sidebar
+  row takes the chosen tone without its edge.
+- **Evidence:**
+  - State sheets: `round5/sheet-state-*.png`.
+  - Sheet open → close strips, normal and reduced motion:
+    `sheet-strip-sheet-rm0/1.png`.
+  - The focus ring moving: `sheet-strip-ring.png`.
+  - 1:1 crops at 1× and 2× of Desk, Settings and Health:
+    `crop-1to1-*.png`.
+  - Runtime: `round5/perf.txt`.
+- **Honest gap:** the screenshot harness's simulated pointer press
+  (`ONE_MK_APP_PRESS`) does not register as a press. Hover drops instead,
+  so the `*-pressed` stills show no pressed state. The pressed looks are in
+  the code and covered by `pressed_is_its_own_look`. They are not
+  demonstrated in screenshots.
+- **Runtime:** the machine was loaded (load average 8). Release build,
+  visible, at rest: 0.08 % of a core. Help explainer open: 5.97 % before,
+  0.03 % after. Minimised: 0.03 %. UI-thread time per frame, p95: before
+  0.76–0.97 ms, after 0.30–0.74 ms.
