@@ -892,6 +892,8 @@ pub struct Scene {
     pub sheet_top: Option<f32>,
     /// Nothing may go above this (the top bar).
     pub top_clear: f32,
+    /// Computers whose name was shortened on their screen this frame.
+    pub cut_names: std::cell::RefCell<std::collections::HashSet<usize>>,
     /// Where the computers are framed, when the desk is drawn bigger than
     /// that (behind the window's glass panels).
     pub fit: Option<Rect>,
@@ -934,6 +936,7 @@ impl Default for Scene {
             raise: Tween::new(0.0),
             sheet_top: None,
             top_clear: 0.0,
+            cut_names: Default::default(),
             fit: None,
             faces: vec![],
             view_k: 0.6,
@@ -1313,7 +1316,8 @@ impl Scene {
             let (l, r) = (cam.pt(g.screen.at(0.0, 0.5)), cam.pt(g.screen.at(1.0, 0.5)));
             let c = cam.pt(g.screen.at(0.5, 0.35));
             let [cr, cg, cb] = hex(d.wall[0]);
-            let col = rgba([cr.saturating_add(60), cg.saturating_add(60), cb.saturating_add(60)], 1.0, 0.20 * d.a);
+            // Each screen's glow on the room: a hint, not a coloured haze.
+            let col = rgba([cr.saturating_add(60), cg.saturating_add(60), cb.saturating_add(60)], 1.0, 0.065 * d.a);
             crate::chrome::light(painter, c, (r - l).length() * 1.15 + 90.0, col);
         }
         // The desk is lit around the computers and falls off into the room:
@@ -1336,7 +1340,8 @@ impl Scene {
             (1.0 - d).clamp(0.0, 1.0).powf(1.4)
         };
         // A dark walnut desk, lit only by its screens.
-        let lit = Color32::from_rgb(0x3B, 0x30, 0x27);
+        // A dark, neutral desk (no walnut warmth), lit only by the screens.
+        let lit = Color32::from_rgb(0x24, 0x2A, 0x2D);
         let shade = |k: f32| lit.gamma_multiply(k.clamp(0.0, 1.0));
         const NX: usize = 24;
         const NZ: usize = 10;
@@ -1393,8 +1398,8 @@ impl Scene {
                 let c = hex(d.wall[0]);
                 let pw = if wall { rx.max(36.0) } else { 36.0 };
                 let glow = [c[0].saturating_add(70), c[1].saturating_add(60), c[2].saturating_add(50)];
-                pool(painter, cam, v(fx, 0.0, fz + 14.0), pw * 1.5, 34.0, rgba(glow, 1.0, 0.22 * a));
-                pool(painter, cam, v(fx, 0.0, fz + 10.0), pw, 18.0, rgba(glow, 1.0, 0.22 * a));
+                pool(painter, cam, v(fx, 0.0, fz + 14.0), pw * 1.5, 34.0, rgba(glow, 1.0, 0.08 * a));
+                pool(painter, cam, v(fx, 0.0, fz + 10.0), pw, 18.0, rgba(glow, 1.0, 0.11 * a));
             }
             let up = (d.at.y - d.target.y.max(0.0)).clamp(0.0, 6.0) / 6.0;
             let shadow = |[fx, fz, rx, rz]: [f32; 4]| {
@@ -1590,9 +1595,14 @@ impl Scene {
         };
         // A monitor of a wall is narrow for the whole wall's name: use its
         // glass, and a point smaller type if need be.
-        let name_font = semibold((h * 0.11).clamp(if wall { 11.0 } else { 12.0 }, 22.0));
-        let sub_font = regular((h * 0.07).clamp(11.0, 14.0));
-        let room = width * if wall { 0.96 } else { 0.86 };
+        let room = width * if wall { 0.96 } else { 0.9 };
+        // The name a point or two smaller before it is ever shortened.
+        let mut name_size = (h * 0.11).clamp(if wall { 11.0 } else { 12.0 }, 22.0);
+        while name_size > 10.0 && painter.layout_no_wrap(d.name.clone(), semibold(name_size), INK).size().x > room {
+            name_size -= 0.5;
+        }
+        let name_font = semibold(name_size);
+        let sub_font = regular((h * 0.07).clamp(11.0, 14.0).min(name_size));
         if named {
             // A soft dark bloom behind the words, as the system draws under
             // desktop labels: they stay readable on any wallpaper.
@@ -1600,7 +1610,13 @@ impl Scene {
                 let c = at(0.5, 0.5);
                 crate::chrome::light(painter, c, (room * 0.42).min(h * 0.6), Color32::from_black_alpha((90.0 * a) as u8));
             }
-            painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, fit(painter, &d.name, &name_font, room), name_font, name_col);
+            let shown = fit(painter, &d.name, &name_font, room);
+            if shown != d.name {
+                self.cut_names.borrow_mut().insert(i);
+            } else {
+                self.cut_names.borrow_mut().remove(&i);
+            }
+            painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, shown, name_font, name_col);
             let k = d.sub_was.as_ref().map_or(1.0, |(_, t0)| motion::progress(now, *t0, motion::fade(0.18), motion::out_cubic));
             if let Some((was, _)) = &d.sub_was {
                 painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, was, &sub_font, room), sub_font.clone(), sub_col.gamma_multiply(1.0 - k));

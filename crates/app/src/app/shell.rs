@@ -149,10 +149,10 @@ impl App {
         icons::search(ui.painter(), pos2(sr.left() + 16.0, sr.center().y), INK3);
         ui.painter().text(pos2(sr.left() + 30.0, sr.center().y), Align2::LEFT_CENTER, "Search", regular(T_BODY), INK3);
         let kc = format!("{}K", cmd());
-        let kw = text_width(ui, &kc, regular(T_META - 1.0)) + 10.0;
+        let kw = text_width(ui, &kc, regular(T_META)) + 10.0;
         let kr = Rect::from_min_size(pos2(sr.right() - 8.0 - kw, sr.center().y - 9.0), vec2(kw, 18.0));
         ui.painter().rect(kr, CornerRadius::same(5), Color32::from_white_alpha(10), Stroke::new(0.5, Color32::from_white_alpha(36)), StrokeKind::Inside);
-        ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META - 1.0), INK3);
+        ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META), INK3);
         widgets::a11y(&resp, Role::SearchInput, "Search actions, computers and settings", None);
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -170,7 +170,7 @@ impl App {
             let col = if !enabled { INK3.gamma_multiply(0.6) } else if on { INK } else { mix(INK2, INK, hover) };
             icons::draw(ui.painter(), icon, Rect::from_center_size(pos2(r.left() + 17.0, r.center().y), vec2(15.0, 15.0)), col);
             ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, name, regular(T_BODY), col);
-            ui.painter().text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, format!("{}{key}", cmd()), mono(T_META - 1.0), SHORTCUT_INK);
+            ui.painter().text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, format!("{}{key}", cmd()), mono(T_META), SHORTCUT_INK);
             if resp.clicked() {
                 self.set_tab(tab);
             }
@@ -184,14 +184,14 @@ impl App {
         {
             let pointer = self.pointer_on();
             y += 14.0;
-            ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "THIS COMPUTER", semibold(T_META - 1.5), INK3);
+            ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "This computer", semibold(T_META), INK3);
             y += 22.0;
             let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
             let here = pointer.as_deref() == Some("me");
             self.computer_row(ui, r, "me", &status.name, here, true, "", false);
             y += ROW_H + 12.0;
             if y + 22.0 + ROW_H <= list_bottom {
-                ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "PAIRED", semibold(T_META - 1.5), INK3);
+                ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "Paired", semibold(T_META), INK3);
                 ui.painter().text(pos2(x + w - 10.0, y + 8.0), Align2::RIGHT_CENTER, status.peers.len().to_string(), mono(T_META), INK3);
                 y += 22.0;
                 if status.peers.is_empty() {

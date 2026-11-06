@@ -223,8 +223,9 @@ impl App {
             _ => 2,
         });
 
-        let w = (rect.width() - 48.0).min(820.0);
-        let x = rect.center().x - w / 2.0;
+        let w = (rect.width() - 48.0).min(960.0);
+        // Inset as Settings is: the column starts under the page title.
+        let x = rect.left() + 24.0;
         let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 8.0), rect.max - vec2(0.0, 8.0));
         let mut child = ui.new_child(UiBuilder::new().max_rect(area));
         child.set_clip_rect(area);

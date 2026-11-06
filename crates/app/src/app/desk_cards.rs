@@ -8,8 +8,9 @@ use super::*;
 use crate::icons::{self, Icon};
 use crate::rtt::{Quality, Ring};
 
-/// How wide the band's banner and toast are at most.
-pub(super) const BAND_W: f32 = 560.0;
+/// How wide the band's banner and toast are at most: the desk's width, so
+/// their right edges line up with the cards and the toolbar.
+pub(super) const BAND_W: f32 = f32::INFINITY;
 
 pub(super) struct NoticeLay {
     pub title: std::sync::Arc<egui::Galley>,
@@ -204,12 +205,11 @@ impl App {
         let q = summary.and_then(|s| s.quality());
         let big = mono_medium(30.0);
         if !peer.online {
-            p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, "—", big.clone(), INK3);
-            p.text(pos2(body.left(), body.top() + 46.0), Align2::LEFT_CENTER, "Not found on the network", regular(T_BODY), INK2);
-            // Two lines rather than cut short in a narrow column.
-            let mut hint = egui::text::LayoutJob::simple("Start oneMK on it, on the same Wi-Fi.".into(), regular(T_META), INK3, col_w);
-            hint.wrap.max_rows = 2;
-            p.galley(pos2(body.left(), body.top() + 58.0), p.layout_job(hint), INK3);
+            // No reading to show: what is wrong and what to do, as words.
+            p.text(pos2(body.left(), body.top() + 10.0), Align2::LEFT_CENTER, "Not found on the network", semibold(T_BODY), INK);
+            let mut hint = egui::text::LayoutJob::simple("Start oneMK on it, on the same network as this computer.".into(), regular(T_BODY), INK2, col_w);
+            hint.wrap.max_rows = 3;
+            p.galley(pos2(body.left(), body.top() + 22.0), p.layout_job(hint), INK2);
         } else if let Some(s) = summary {
             let n = rtt::ms_number(s.now_us);
             let nw = text_width(ui, &n, big.clone());
@@ -468,7 +468,9 @@ impl App {
             let (title, detail, frac) = crate::view::transfer_lines(&t);
             let more = self.running().map_or(0, |s| s.transfers.len() - 1);
             let detail = if more > 0 { format!("{detail} · and {more} more") } else { detail };
-            let w = 360.0f32.min(desk.width() * 0.6);
+            // In the band (a small window) as wide as the desk; along the
+            // bottom of a wide one, a compact pill.
+            let w = if desk.width() < 780.0 { desk.width() } else { 360.0f32.min(desk.width() * 0.6) };
             // In a small window the desk's front is crowded: the top instead.
             // A small window's desk front is crowded: the top instead, unless
             // a banner is there already.

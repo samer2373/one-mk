@@ -16,7 +16,7 @@ impl App {
         let wide = rect.width() >= 700.0;
         let transfers = self.running().map_or(0, |status| status.transfers.len());
         let head_h = if transfers == 0 { if wide { 96.0 } else { 120.0 } } else { 2.0 * PAD + 30.0 + 54.0 * transfers.min(4) as f32 };
-        let settings_h = 2.0 * PAD + 24.0 + 5.0 * 30.0;
+        let settings_h = 2.0 * PAD + 28.0 + 5.0 * 36.0;
         let items = self.clipboard_history.as_ref().and_then(|h| h.as_ref().ok()).map_or(0, Vec::len);
         let listed = self.prefs.history_enabled && items > 0;
         let history_h = 2.0 * PAD + 104.0 + 44.0 + if listed { 50.0 * items as f32 } else { 30.0 };
@@ -287,9 +287,13 @@ impl App {
     /// What the clipboard shares, and whether others may take it.
     pub(super) fn clipboard_cell(&mut self, ui: &mut Ui, c: Rect) {
         title_row(ui, c, "Clipboard", 0.0);
-        let row_h = 30.0;
-        let top = c.top() + 24.0;
+        // 36-point rows (the 6-point grid), a hairline between them.
+        let row_h = 36.0;
+        let top = c.top() + 28.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
+        for k in 1..5 {
+            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
+        }
         let p = self.prefs.clone();
         for (k, (key, label, on)) in [("text", "Text", p.clip_text), ("html", "Rich text (HTML)", p.clip_html), ("image", "Images", p.clip_image)].into_iter().enumerate() {
             if switch_help(ui, row(k), Id::unique(("clip", key)), label, &format!("clip-{key}"), on, true).clicked() {
@@ -318,9 +322,13 @@ impl App {
     pub(super) fn files_settings(&mut self, ui: &mut Ui, c: Rect) {
         // Titled and spaced as the Clipboard card beside it.
         title_row(ui, c, "Files", 0.0);
-        let row_h = 30.0;
-        let top = c.top() + 24.0;
+        // 36-point rows (the 6-point grid), a hairline between them.
+        let row_h = 36.0;
+        let top = c.top() + 28.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
+        for k in 1..4 {
+            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
+        }
         let p = self.prefs.clone();
         if switch_help(ui, row(0), Id::unique("notify"), "Notify when files arrive", "notify", p.notify_files, true).clicked() {
             let v = if p.notify_files { "off" } else { "on" };

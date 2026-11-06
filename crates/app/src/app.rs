@@ -1389,6 +1389,14 @@ impl App {
             None if self.scene.hover.is_some() => ui.ctx().set_cursor_icon(egui::CursorIcon::Grab),
             None => {}
         }
+        // The full name of the computer under the pointer (a narrow screen
+        // can't always hold all of it).
+        if self.drag.is_none()
+            && let Some(d) = under.filter(|i| self.scene.cut_names.borrow().contains(i)).and_then(|i| self.scene.devices.get(i))
+        {
+            let text = format!("{} · {}", d.name, d.subtitle);
+            resp.clone().on_hover_text_at_pointer(text);
+        }
         let slot = self.scene.slot_rect(rect);
         self.scene.slot_hover = self.drag.is_none() && slot.zip(pointer).is_some_and(|(r, p)| r.contains(p));
         if self.scene.slot_hover {
@@ -2312,9 +2320,9 @@ impl eframe::App for App {
             // above what floats along its bottom, never under either. The
             // band eases open so the desk glides rather than jumps.
             let band = tween(ui.ctx(), Id::unique("desk-band"), self.band_h(ui, scene.width()), motion::space(0.22), motion::out_cubic);
-            if band > 0.5 {
-                frame.min.y += band + if self.desk_views_shown() { desk_cards::DESK_VIEWS_H } else { 0.0 };
-            }
+            // The view switch and toolbar row is never drawn over: the
+            // monitors start below it (the camera adds its 12-point inset).
+            frame.min.y += band + if self.desk_views_shown() || self.running().is_some_and(|s| !s.peers.is_empty()) { desk_cards::DESK_VIEWS_H } else { 0.0 };
             frame.max.y -= self.desk_foot_h(scene.width());
             // Too little room left for monitors anyone could read: the
             // computers as a row of named chips instead.

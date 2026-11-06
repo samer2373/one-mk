@@ -261,7 +261,8 @@ impl App {
             }
             for n in &names {
                 let expanded = open.as_ref() == Some(n);
-                let h = if expanded { 30.0 + 36.0 } else { 30.0 };
+                let auto_line = expanded && self.prefs.auto.contains_key(n);
+                let h = if expanded { 30.0 + 36.0 + if auto_line { 22.0 } else { 0.0 } } else { 30.0 };
                 let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
                 if expanded && just_opened {
                     ui.scroll_to_rect(row, None);
@@ -281,9 +282,13 @@ impl App {
                 if shown != *n {
                     ui.interact(Rect::from_min_size(line.min, vec2(nw, 30.0)), Id::unique(("profile-name", n)), Sense::hover()).on_hover_text(n);
                 }
-                if let Some(t) = auto_text.as_ref().filter(|_| text_w - nw > 40.0) {
-                    let tag = if expanded { format!("· automatic on {t}") } else { "· automatic".to_owned() };
-                    p.text(pos2(line.left() + nw + 8.0, line.center().y), Align2::LEFT_CENTER, fit(&p, &tag, &regular(T_META), text_w - nw - 8.0), regular(T_META), INK2);
+                // Beside the name only the word; open, the network gets a
+                // line of its own (a button never sits over words).
+                if auto_text.is_some() && text_w - nw > 80.0 {
+                    p.text(pos2(line.left() + nw + 8.0, line.center().y), Align2::LEFT_CENTER, "· automatic", regular(T_META), INK2);
+                }
+                if let Some(t) = auto_text.as_ref().filter(|_| auto_line) {
+                    p.text(pos2(line.left(), line.bottom() + 9.0), Align2::LEFT_CENTER, fit(&p, &format!("Comes on by itself on {t}"), &regular(T_META), row.width()), regular(T_META), INK2);
                 }
                 let label = if in_use { "In use" } else { "Use" };
                 if button(ui, use_r, Id::unique(("profile-use", n)), label, Look::Quiet, !in_use, Some(&format!("Use profile {n}"))).clicked() {
@@ -295,7 +300,7 @@ impl App {
                 }
                 if expanded {
                     // One line: a Wi-Fi name to switch to it by itself, and deleting it.
-                    let y = line.bottom() + 2.0;
+                    let y = line.bottom() + 2.0 + if auto_line { 22.0 } else { 0.0 };
                     let bw = |l: &str| button_width(ui, l) - 6.0;
                     let mut x = row.right();
                     let mut place = |w: f32| {

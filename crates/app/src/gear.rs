@@ -511,8 +511,8 @@ impl Keyboard {
                 // On the cap's top, low and centred, under its own legend:
                 // from this camera the front face is too thin to hold text
                 // (drawn there, it fell onto the next row's key).
-                let at = cam.pt(p3(cx, y_top, cz + k.h * U * 0.2));
-                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier, max_w: px * 0.88 });
+                let at = cam.pt(p3(cx, y_top, cz + k.h * U * 0.14));
+                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier, max_w: px * 0.74 });
             }
         }
         keys.into_mesh(&mut m);

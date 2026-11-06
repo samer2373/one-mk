@@ -1072,7 +1072,8 @@ impl App {
         };
         let card = card_begin(ui, at, w, &title);
         let c = card.inner;
-        let close = Rect::from_min_size(pos2(at.x + w - 12.0 - 28.0, at.y + 12.0), vec2(28.0, 28.0));
+        // On the title's own line, at the group's right edge: the card's action.
+        let close = Rect::from_center_size(pos2(at.x + w - 14.0, at.y + 13.0), vec2(26.0, 26.0));
         let esc = !self.keys_grab(ui.ctx()) && self.keys.picker.is_none() && ui.input(|i| i.key_pressed(Key::Escape)) && !ui.ctx().text_edit_focused();
         if widgets::icon_button(ui, close, Id::unique("key-close"), &format!("Done with {title}"), true, draw_cross).clicked() || esc {
             self.keys.selected = None;
@@ -1344,7 +1345,7 @@ impl App {
         let card = card_begin(ui, at, w, "Test it");
         let c = card.inner;
         let has = self.keys.tester.as_ref().is_some_and(|(t, ..)| !t.pressed.chips.is_empty() || t.note.is_some());
-        let clear = Rect::from_min_size(pos2(at.x + w - 12.0 - 28.0, at.y + 12.0), vec2(28.0, 28.0));
+        let clear = Rect::from_center_size(pos2(at.x + w - 14.0, at.y + 13.0), vec2(26.0, 26.0));
         if has && widgets::icon_button(ui, clear, Id::unique("test-clear"), "Clear the test box", true, draw_cross).clicked()
             && let Some((t, ..)) = &mut self.keys.tester
         {
@@ -1639,7 +1640,7 @@ impl App {
             let mut keys: Vec<(u32, Pos2)> = PARTS
                 .iter()
                 .filter_map(|(n, name)| view.parts.iter().find(|h| h.name == *name).map(|h| (*n, h.anchor)))
-                .filter(|(_, a)| (a.x < centre - 12.0) == left)
+                .filter(|(_, a)| (a.x < centre) == left)
                 .collect();
             keys.sort_by(|a, b| a.1.y.total_cmp(&b.1.y));
             let hgt = |n: u32| if shown.iter().any(|(k, _, ch)| *k == n && *ch) { 62.0 } else { 46.0 };
