@@ -42,14 +42,16 @@ impl App {
         let hint = if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Desk hidden. Choose a recipient to pick files, or drop files on its chip." };
         let hint_h = ui.painter().layout(hint.to_owned(), regular(T_META), INK2, width - 32.0).size().y;
         let head_h = 32.0 + rows as f32 * 44.0 + hint_h + 40.0 + if self.files_ui.spatial { 148.0 } else { 0.0 } + if transfers > 0 { 28.0 + 36.0 * shown_transfers as f32 } else { 0.0 };
-        let settings_h = 2.0 * PAD + 28.0 + 5.0 * 36.0;
+        // One inset (16) for every group on the page; each as tall as its rows.
+        let settings_h = 2.0 * 16.0 + 28.0 + 5.0 * 36.0 + 6.0;
+        let files_h = 2.0 * 16.0 + 28.0 + 4.0 * 36.0 + 6.0;
         let items = self.clipboard_history.as_ref().and_then(|h| h.as_ref().ok()).map_or(0, Vec::len);
         let listed = self.prefs.history_enabled && items > 0;
         let history_h = 2.0 * PAD + 104.0 + 44.0 + if listed { 50.0 * items as f32 } else { 30.0 };
         let privacy_h = ui.painter().layout("History off · Nothing you copy is kept. If enabled, unmarked secrets may be retained.".to_owned(), regular(T_META), INK2, width - 32.0).size().y;
         let history_h = if listed { history_h } else { 136.0 + privacy_h };
         let clipboard_h = if self.files_ui.options { settings_h } else { 80.0 };
-        let total = head_h + M + clipboard_h + M + history_h + M + settings_h;
+        let total = head_h + M + clipboard_h + M + history_h + M + files_h;
         let mut child = ui.new_child(UiBuilder::new().max_rect(rect).id_salt("files-panel"));
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         let scroll = egui::ScrollArea::vertical().id_salt("files-page").auto_shrink([false, false]);
@@ -60,7 +62,7 @@ impl App {
             let head = Rect::from_min_size(all.min, vec2(all.width(), head_h));
             let clipboard = Rect::from_min_size(pos2(all.left(), head.bottom() + M), vec2(all.width(), clipboard_h));
             let history = Rect::from_min_size(pos2(all.left(), clipboard.bottom() + M), vec2(all.width(), history_h));
-            let files = Rect::from_min_size(pos2(all.left(), history.bottom() + M), vec2(all.width(), settings_h));
+            let files = Rect::from_min_size(pos2(all.left(), history.bottom() + M), vec2(all.width(), files_h));
             for g in [head, clipboard, files, history] {
                 widgets::group(ui, g, R_GROUP);
             }
@@ -106,9 +108,9 @@ impl App {
             }
             if transfers > 0 { self.files_head(ui, Rect::from_min_max(pos2(inner.left(), y), inner.max), "Transfers", ""); }
             if self.files_ui.options {
-                self.clipboard_cell(ui, clipboard.shrink(PAD));
+                self.clipboard_cell(ui, clipboard.shrink(16.0));
             } else {
-                let inner = clipboard.shrink(PAD);
+                let inner = clipboard.shrink(16.0);
                 title_row(ui, inner, "Clipboard", 140.0);
                 let summary = format!("Text {} · Images {} · Others can fetch {}", if self.prefs.clip_text { "on" } else { "off" }, if self.prefs.clip_image { "on" } else { "off" }, if self.prefs.clip_allow_fetch { "on" } else { "off" });
                 para(ui, inner.min + vec2(0.0, 28.0), inner.width(), &summary, regular(T_META), INK2);
@@ -116,7 +118,7 @@ impl App {
             let options = Rect::from_min_size(pos2(clipboard.right() - PAD - 124.0, clipboard.top() + PAD - 4.0), vec2(124.0, 28.0));
             if button(ui, options, Id::unique("files-clipboard-options"), if self.files_ui.options { "Hide options" } else { "Sharing options" }, Look::Quiet, true, None).clicked() { self.files_ui.options = !self.files_ui.options; }
             self.clipboard_history_cell(ui, history.shrink(16.0));
-            self.files_settings(ui, files.shrink(PAD));
+            self.files_settings(ui, files.shrink(16.0));
         });
     }
 
