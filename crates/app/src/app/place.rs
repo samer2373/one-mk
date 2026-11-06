@@ -211,7 +211,13 @@ impl App {
             self.busy.push(Job::Profile { verb: "save", name: n.clone() });
             self.link.profile("save", &n);
         }
-        let list = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), save_y - 6.0));
+        let mut list = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), save_y - 6.0));
+        // Whole rows only: the list ends on a row's edge (and scrolls for
+        // the rest), never through the middle of one.
+        if network.explanation().is_none() && self.profile_open.is_none() {
+            let rows = ((list.height() - 24.0) / 30.0).floor().max(1.0);
+            list.max.y = list.top() + 24.0 + rows * 30.0;
+        }
         let mut child = ui.new_child(UiBuilder::new().max_rect(list.expand2(vec2(4.0, 0.0))));
         child.set_clip_rect(list.expand2(vec2(6.0, 0.0)));
         let mut act: Option<(&'static str, String)> = None;
@@ -327,10 +333,6 @@ impl App {
                 p.hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
             }
         });
-        // A list that runs on below fades out into the card rather than
-        // ending in a cut row.
-        let fade = Rect::from_min_max(pos2(list.left() - 6.0, list.bottom() - 14.0), pos2(list.right() + 6.0, list.bottom()));
-        ui.painter().add(widgets::rounded_gradient(fade, 0.0, Color32::TRANSPARENT, ELEVATED));
         if let Some(n) = toggle_open {
             self.profile_open = if self.profile_open.as_ref() == Some(&n) { None } else { Some(n) };
             self.profile_scroll = self.profile_open.is_some();

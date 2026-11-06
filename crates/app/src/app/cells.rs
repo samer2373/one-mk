@@ -9,6 +9,47 @@ use crate::view;
 const GAMING: [(&str, &str); 3] = [("off", "Off"), ("on", "On"), ("auto", "Auto")];
 
 impl App {
+    /// Clipboard & files under the desk (after council/codex): one column
+    /// that scrolls, each group as tall as what it holds, so no label is
+    /// shortened and no history row is cut by an edge.
+    pub(super) fn files_panel(&mut self, ui: &mut Ui, rect: Rect) {
+        let wide = rect.width() >= 700.0;
+        let transfers = self.running().map_or(0, |status| status.transfers.len());
+        let head_h = if transfers == 0 { if wide { 96.0 } else { 120.0 } } else { 2.0 * PAD + 30.0 + 54.0 * transfers.min(4) as f32 };
+        let settings_h = 2.0 * PAD + 24.0 + 5.0 * 30.0;
+        let items = self.clipboard_history.as_ref().and_then(|h| h.as_ref().ok()).map_or(0, Vec::len);
+        let listed = self.prefs.history_enabled && items > 0;
+        let history_h = 2.0 * PAD + 104.0 + 44.0 + if listed { 50.0 * items as f32 } else { 30.0 };
+        let total = head_h + M + if wide { settings_h } else { settings_h * 2.0 + M } + M + history_h;
+        let connected = self.running().is_some_and(|status| status.peers.iter().any(|peer| peer.online));
+        let sub = if connected {
+            "Drag files or folders onto a connected computer above. They arrive in its received files folder."
+        } else {
+            "No computer is connected right now. Files can go to one once it's on and connected."
+        };
+        let mut child = ui.new_child(UiBuilder::new().max_rect(rect).id_salt("files-panel"));
+        child.set_clip_rect(rect.intersect(ui.clip_rect()));
+        let scroll = egui::ScrollArea::vertical().id_salt("files-page").auto_shrink([false, false]);
+        #[cfg(debug_assertions)]
+        let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()).map_or(scroll.clone(), |o| scroll.vertical_scroll_offset(o));
+        scroll.show(&mut child, |ui| {
+            let (all, _) = ui.allocate_exact_size(vec2(rect.width() - 10.0, total), Sense::hover());
+            let head = Rect::from_min_size(all.min, vec2(all.width(), head_h));
+            let top = head.bottom() + M;
+            let width = if wide { (all.width() - M) / 2.0 } else { all.width() };
+            let clipboard = Rect::from_min_size(pos2(all.left(), top), vec2(width, settings_h));
+            let files = Rect::from_min_size(if wide { pos2(clipboard.right() + M, top) } else { pos2(all.left(), clipboard.bottom() + M) }, vec2(width, settings_h));
+            let history = Rect::from_min_size(pos2(all.left(), files.bottom() + M), vec2(all.width(), history_h));
+            for g in [head, clipboard, files, history] {
+                widgets::group(ui, g, R_GROUP);
+            }
+            self.files_head(ui, head.shrink(PAD), "Drop files on a computer", sub);
+            self.clipboard_cell(ui, clipboard.shrink(PAD));
+            self.files_settings(ui, files.shrink(PAD));
+            self.clipboard_history_cell(ui, history.shrink(PAD));
+        });
+    }
+
     /// A field showing `current`; returns the new text when the person
     /// changed it and pressed Enter or moved on (Esc keeps the old value).
     #[allow(clippy::too_many_arguments)]
