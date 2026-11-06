@@ -407,6 +407,7 @@ struct Legend {
 /// A built keyboard: the lit mesh, each key's top on screen (for clicks
 /// and highlights) and its legends.
 pub struct Keyboard {
+    flat: bool,
     built_for: (Rect, Vec<Cap>, View, Option<usize>),
     /// Where the camera is headed, and whether it was still moving when this
     /// was built.
@@ -418,12 +419,33 @@ pub struct Keyboard {
 }
 
 impl Keyboard {
+    pub fn working(slot: &mut Option<Keyboard>, rect: Rect, caps: &[Cap]) {
+        if slot.as_ref().is_some_and(|board| board.flat && board.built_for.0 == rect && board.built_for.1 == caps) { return; }
+        let columns = caps.iter().map(|cap| cap.x + cap.w).fold(1.0f32, f32::max);
+        let rows = caps.iter().map(|cap| cap.y + cap.h).fold(1.0f32, f32::max);
+        let unit = ((rect.width() - 16.0) / columns).min((rect.height() - 16.0) / rows);
+        let origin = rect.center() - egui::vec2(columns * unit, rows * unit) / 2.0;
+        let mut tops = Vec::with_capacity(caps.len());
+        let mut legends = Vec::new();
+        for cap in caps {
+            let key = Rect::from_min_size(origin + egui::vec2(cap.x * unit, cap.y * unit), egui::vec2(cap.w * unit, cap.h * unit)).shrink(2.0);
+            tops.push(vec![key.left_top(), key.right_top(), key.right_bottom(), key.left_bottom()]);
+            let lines: Vec<&str> = cap.to.as_deref().unwrap_or(&cap.label).split('/').collect();
+            let size = if lines.len() > 1 { (unit * 0.29).clamp(8.0, 12.0) } else { (unit * 0.36).clamp(10.0, 15.0) };
+            for (index, text) in lines.iter().enumerate() {
+                legends.push(Legend { at: key.center() + egui::vec2(0.0, (index as f32 - (lines.len() - 1) as f32 / 2.0) * (size + 1.0)), size, text: (*text).to_owned(), to: cap.to.is_some(), modifier: cap.modifier, max_w: key.width() - 6.0 });
+            }
+        }
+        let target = Self::aim(rect, caps, View::default(), None);
+        *slot = Some(Keyboard { flat: true, built_for: (rect, caps.to_vec(), View::default(), None), target, moving: false, mesh: Arc::new(Mesh::default()), tops, legends });
+    }
+
     /// The keyboard for `caps` filling `rect`, turned by `view`, and zoomed
     /// on the key `focus` (or the whole board when `None`): the last one when
     /// nothing changed, else built anew. The camera eases there by `glide`;
     /// true while it is still moving, so the caller keeps drawing.
     pub fn get(slot: &mut Option<Keyboard>, rect: Rect, caps: &[Cap], view: View, focus: Option<usize>, glide: &mut Glide, dt: f32) -> bool {
-        let same = slot.as_ref().filter(|k| k.built_for.0 == rect && k.built_for.1 == caps && k.built_for.2 == view && k.built_for.3 == focus);
+        let same = slot.as_ref().filter(|k| !k.flat && k.built_for.0 == rect && k.built_for.1 == caps && k.built_for.2 == view && k.built_for.3 == focus);
         let mut step = None;
         if let Some(k) = same {
             let s = glide.step(k.target, dt, false);
@@ -503,7 +525,7 @@ impl Keyboard {
             let y_top = top[0].y;
             let (tl, tr) = (cam.pt(top[top.len() * 3 / 4]), cam.pt(top[0]));
             let px = (tr.x - tl.x).abs().max(1.0);
-            let size = (px / k.w.max(1.0) * 0.25).clamp(8.0, 14.0);
+            let size = (px / k.w.max(1.0) * 0.38).clamp(9.0, 15.0);
             let at = cam.pt(p3(cx - k.w * U / 2.0 + 4.2, y_top, cz - k.h * U / 2.0 + 4.0));
             if k.to.is_none() {
                 legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier, max_w: px * 0.78 });
@@ -517,7 +539,7 @@ impl Keyboard {
             }
         }
         keys.into_mesh(&mut m);
-        Keyboard { built_for: (rect, caps.to_vec(), view, focus), target, moving, mesh: Arc::new(m), tops, legends }
+        Keyboard { flat: false, built_for: (rect, caps.to_vec(), view, focus), target, moving, mesh: Arc::new(m), tops, legends }
     }
 
     /// Draws the kept mesh, then what changes from frame to frame: the
@@ -525,6 +547,11 @@ impl Keyboard {
     /// in Volt, and the legends.
     pub fn paint(&self, p: &Painter, held: &[usize], hovered: Option<usize>, chosen: Option<usize>, font: &dyn Fn(f32, bool) -> FontId) {
         p.add(Shape::Mesh(self.mesh.clone()));
+        if self.flat {
+            for key in &self.tops {
+                p.rect(Rect::from_points(key), egui::CornerRadius::same(4), crate::style::BUTTON, Stroke::new(1.0, crate::style::KEY_EDGE), egui::StrokeKind::Inside);
+            }
+        }
         let fill = |i: usize, col: Color32| {
             if let Some(t) = self.tops.get(i).filter(|t| t.len() > 2) {
                 p.add(Shape::convex_polygon(t.clone(), col, Stroke::NONE));
@@ -542,7 +569,7 @@ impl Keyboard {
             // than spilling onto the next key.
             let mut size = l.size;
             while size > 4.0 && p.layout_no_wrap(l.text.clone(), font(size, l.to), col).size().x > l.max_w { size -= 0.5; }
-            p.text(l.at, if l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, &l.text, font(size, l.to), col);
+            p.text(l.at, if self.flat || l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, &l.text, font(size, l.to), col);
         }
         if let Some(t) = chosen.and_then(|i| self.tops.get(i)).filter(|t| t.len() > 2) {
             let mut ring = t.clone();
@@ -1161,6 +1188,27 @@ mod tests {
             for (index, cap) in caps.iter().enumerate() {
                 assert!(rect.shrink(2.0).contains_rect(board.bounds(index)), "key {} outside {rect:?}", cap.label);
             }
+        }
+    }
+
+    #[test]
+    fn working_board_fits_and_splits_tap_hold_labels() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: cap.code.to_string(), to: (cap.code == 58).then(|| "Esc/Ctrl".into()), modifier: false,
+        }).collect();
+        for (width, height) in [(590.0, 136.0), (1064.0, 340.0)] {
+            let rect = Rect::from_min_size(pos2(8.0, 50.0), egui::vec2(width, height));
+            let mut board = None;
+            Keyboard::working(&mut board, rect, &caps);
+            let board = board.unwrap();
+            for index in 0..caps.len() {
+                let bounds = board.bounds(index);
+                assert!(rect.shrink(2.0).contains_rect(bounds));
+                assert_eq!(board.hit(bounds.center()), Some(index));
+            }
+            let remapped: Vec<_> = board.legends.iter().filter(|legend| legend.to).collect();
+            assert_eq!(remapped.len(), 2);
+            assert!(remapped.iter().all(|legend| legend.size >= 8.0));
         }
     }
 }

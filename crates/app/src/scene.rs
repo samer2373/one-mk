@@ -803,6 +803,7 @@ fn grown(pts: &[Pos2; 4], by: f32) -> Vec<Pos2> {
 
 /// The outline round `pts` (their convex hull), pushed out `by` points
 /// with rounded corners: a ring that hugs one computer's silhouette.
+#[cfg(test)]
 fn hull_grown(pts: &[Pos2], by: f32) -> Vec<Pos2> {
     let mut p: Vec<Pos2> = pts.to_vec();
     p.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
@@ -1262,22 +1263,8 @@ impl Scene {
             }
         }
         self.faces = faces;
-        if let Some(index) = self.selected.filter(|index| Some(*index) != self.focused) {
-            let points: Vec<Pos2> = self.faces.iter().filter(|face| face.owner == index).flat_map(|face| face.pts).collect();
-            let outline = hull_grown(&points, 3.0);
-            if outline.len() > 2 {
-                painter.add(Shape::closed_line(outline, Stroke::new(1.0, INK2)));
-            }
-        }
         // Keyboard focus: one tight ring round the whole computer, screen,
         // stand and base, 4 points out, never round a neighbour.
-        if let Some(i) = self.focused {
-            let pts: Vec<Pos2> = self.faces.iter().filter(|f| f.owner == i).flat_map(|f| f.pts).collect();
-            let ring = hull_grown(&pts, 5.0);
-            if ring.len() > 2 {
-                painter.add(Shape::closed_line(ring, Stroke::new(2.0, SIGNAL)));
-            }
-        }
         self.ribbon(painter, &cam, &geo);
         if self.empty_slot {
             self.slot(painter, &cam);
@@ -1287,6 +1274,10 @@ impl Scene {
     /// The line round a screen: where files can go (Volt), which one is
     /// selected or hovered (white). Keyboard focus is drawn round the whole computer in `paint`.
     fn screen_outline(&self, painter: &Painter, f: &Face, d: &Device, preview: f32) {
+        if self.focused == Some(f.owner) {
+            painter.add(Shape::closed_line(grown(&f.pts, 3.0), Stroke::new(2.0, SIGNAL)));
+            return;
+        }
         let target = d.online && !d.me && !d.leaving && d.w < 0.01;
         if self.drop_targets && target {
             painter.add(Shape::closed_line(grown(&f.pts, 2.5), Stroke::new(1.5, fade(SIGNAL, 0.9 * d.a))));

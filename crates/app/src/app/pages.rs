@@ -45,27 +45,9 @@ fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
     // One family: a 14-point round badge each, told apart by its mark (and
     // by the word beside the title), never by colour alone.
     let r = 7.0;
-    match v {
-        Verdict::Pass => {
-            p.circle_stroke(c, r, Stroke::new(1.5, OK));
-            widgets::draw_check(p, c, 9.0, OK, 1.0);
-        }
-        Verdict::Skip => {
-            p.circle_stroke(c, r, Stroke::new(1.5, INK2));
-            p.line_segment([c, c + vec2(0.0, -4.0)], Stroke::new(1.5, INK2));
-            p.line_segment([c, c + vec2(3.0, 1.5)], Stroke::new(1.5, INK2));
-        }
-        Verdict::Warn => {
-            p.circle_stroke(c, r, Stroke::new(1.5, WARN));
-            p.line_segment([c + vec2(0.0, -3.5), c + vec2(0.0, 1.0)], Stroke::new(1.6, WARN));
-            p.circle_filled(c + vec2(0.0, 3.4), 0.9, WARN);
-        }
-        Verdict::Fail => {
-            p.circle_filled(c, r, ERROR);
-            p.line_segment([c + vec2(0.0, -3.5), c + vec2(0.0, 1.0)], Stroke::new(1.6, GROUND));
-            p.circle_filled(c + vec2(0.0, 3.4), 0.9, GROUND);
-        }
-    }
+    let colour = match v { Verdict::Pass => OK, Verdict::Skip => INK2, Verdict::Warn => WARN, Verdict::Fail => ERROR };
+    p.circle_stroke(c, r, Stroke::new(1.5, colour));
+    p.circle_filled(c, 2.0, colour);
 }
 
 /// The word that goes with a badge.
@@ -113,6 +95,21 @@ fn text_height(ui: &Ui, text: &str, width: f32) -> f32 {
     let mut job = egui::text::LayoutJob::simple(text.to_owned(), f.clone(), INK, width);
     job.sections[0].format.line_height = Some((f.size * LEADING).round());
     ui.painter().layout_job(job).size().y
+}
+
+fn current_check(mut check: Check, status: Option<&Status>) -> Option<Check> {
+    if let Some(status) = status {
+        if check.id == "pairing" && !status.peers.is_empty() {
+            check.verdict = Verdict::Pass;
+            check.detail = format!("{} paired computers are saved.", status.peers.len());
+            check.fix = None;
+            check.action = None;
+        }
+        if matches!(check.id.as_str(), "input" | "permissions" | "accessibility") && status.input_lines().iter().any(|line| pending_kind(&line.detail).is_some()) {
+            return None;
+        }
+    }
+    Some(check)
 }
 
 /// A "Needs you" row's height: title, what is wrong, what to do.
@@ -170,9 +167,6 @@ impl App {
         let mut out: Vec<(Color32, String)> = s.input_lines().into_iter().map(|line| (
             if line.severity == one_mk_ctl::status::Severity::Problem { ERROR } else { INK2 }, line.detail,
         )).collect();
-        if out.is_empty() {
-            out.push((INK2, "Mouse and keyboard sharing works: the desktop allowed it.".into()));
-        }
         if let Some(h) = s.hotkeys_line() {
             out.push((INK2, h));
         }
@@ -183,12 +177,21 @@ impl App {
     /// needs the person (each with the button that fixes it, when the
     /// window can), how each paired computer answers, and what works. A
     /// check about something this computer doesn't use isn't shown.
+    pub(super) fn health_checks(&self) -> Option<Vec<Check>> {
+        let (report, _) = self.doctor.as_ref()?;
+        let checks = report.as_ref().ok()?;
+        Some(checks.iter().filter_map(|check| {
+            let check = current_check(check.clone(), self.running())?;
+            (check.verdict != Verdict::Skip || self.window_fix(&check).is_some()).then_some(check)
+        }).collect())
+    }
+
     pub(super) fn health(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
         let running = self.busy.contains(&Job::Doctor);
         let checks: Option<Vec<Check>> = match &self.doctor {
             // A neutral check shows only when there is something to do
             // about it (not paired yet: Pair); the others say nothing new.
-            Some((Ok(c), _)) => Some(c.iter().filter(|c| c.verdict != Verdict::Skip || self.window_fix(c).is_some()).cloned().collect()),
+            Some((Ok(_), _)) => self.health_checks(),
             _ => None,
         };
         // What needs the person: the daemon's own problems first (they are
@@ -283,7 +286,7 @@ impl App {
                     (n, true) => format!("{n} awaiting you"),
                     (n, false) => format!("{n} pending"),
                 };
-                let tone = if fails > 0 { ERROR } else { INK };
+                let tone = if fails > 0 { ERROR } else { WARN };
                 match (problems, steps_only) {
                     (_, true) => (p_words, INK),
                     (n, _) if pending == 0 => (format!("{n} {} attention", if n == 1 { "needs" } else { "need" }), tone),
@@ -309,14 +312,8 @@ impl App {
                 let turn = if motion::reduced() { 0.0 } else { (now * 5.0) as f32 };
                 widgets::draw_refresh(&p, Rect::from_center_size(medal, vec2(18.0, 18.0)), INK2, turn);
                 ui.ctx().request_repaint_after_secs(1.0 / 30.0);
-            } else if tone == OK {
-                widgets::draw_check(&p, medal, 18.0, OK, 1.0);
-            } else if needs.is_empty() {
-                p.circle_filled(medal, 3.0, INK2);
-            } else if steps_only {
-                p.text(medal, Align2::CENTER_CENTER, needs.len().to_string(), semibold(T_TITLE + 1.0), tone);
             } else {
-                p.text(medal, Align2::CENTER_CENTER, "!", semibold(T_TITLE + 3.0), tone);
+                p.circle_filled(medal, 4.0, tone);
             }
             let bw = button_width(ui, "Recheck");
             let tx = hero.left() + 84.0;
@@ -656,5 +653,30 @@ impl App {
     fn hooks_card(&mut self, ui: &mut Ui, r: Rect) {
         let c = card(ui, r, "Run commands");
         self.hook_controls(ui, c);
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+
+    fn check(id: &str) -> Check {
+        Check { id: id.into(), title: id.into(), detail: "Not paired; permission not granted".into(), verdict: Verdict::Warn, fix: Some("Pair".into()), action: Some("Pair".into()) }
+    }
+
+    #[test]
+    fn live_peers_supersede_a_stale_not_paired_check() {
+        let status = Status::decode("ok\nname\tDesk\nid\tabcd-ef01\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\n").unwrap();
+        let result = current_check(check("pairing"), Some(&status)).unwrap();
+        assert_eq!(result.verdict, Verdict::Pass);
+        assert_eq!(result.detail, "1 paired computers are saved.");
+        assert!(result.fix.is_none() && result.action.is_none());
+    }
+
+    #[test]
+    fn a_live_permission_request_has_one_authoritative_row() {
+        let status = Status::decode("ok\nname\tDesk\nid\tabcd-ef01\ninput\tWaiting for your approval: allow one-mk in the desktop's dialog.\n").unwrap();
+        assert!(current_check(check("input"), Some(&status)).is_none());
+        assert!(current_check(check("firewall"), Some(&status)).is_some());
     }
 }

@@ -23,11 +23,17 @@ trap cleanup EXIT
 shot() { # name after-seconds home [extra env...]
     local name=$1 after=$2 home=$3; shift 3
     if [[ -n ${COUNCIL_SCREEN_SET:-} && ! $name =~ $COUNCIL_SCREEN_SET ]]; then return; fi
+    local matrix=()
+    case "${COUNCIL_MATRIX:-}" in
+        1x) matrix=(ONE_MK_APP_SIZE=1200x780 ONE_MK_APP_ZOOM=1) ;;
+        2x) matrix=(ONE_MK_APP_SIZE=1200x780 ONE_MK_APP_ZOOM=2) ;;
+        small) matrix=(ONE_MK_APP_SIZE=760x540 ONE_MK_APP_ZOOM=1) ;;
+    esac
     # The compositor sometimes never draws a fresh window (e.g. covered or
     # on another workspace); try again rather than fail the whole run.
     for _ in 1 2 3; do
         rm -f "$W/$name.ppm"
-        env "$@" ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 20 "$APP" --home "$home" || true
+        env "$@" "${matrix[@]}" ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 20 "$APP" --home "$home" || true
         if python3 -c "from PIL import Image; Image.open('$W/$name.ppm').load()" 2>/dev/null; then break; fi
     done
     # For the committed set, 256 colours by libimagequant (dithered, so the
@@ -299,7 +305,9 @@ shot 19b-drop-chooser-small 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_DROP=3 
 shot 19c-drop-chooser-2x 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_DROP=3 ONE_MK_APP_SIZE=1600x1080 ONE_MK_APP_ZOOM=2
 shot 47b-keys-mouse-controls 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEYS=mouse ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=220
 shot 112-updates-2x 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced ONE_MK_APP_SIZE=1600x1080 ONE_MK_APP_ZOOM=2 'ONE_MK_APP_UPDATE_STATUS={"check":true,"install_automatically":false,"available":null,"error":null,"can_update":true,"needs_password":true,"move_to_applications":false,"rollback_available":false,"advice":"","skipped":null}'
-shot 100-layout-small-profiles 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=416
+shot 100-layout-small-profiles 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_SIZE=760x540 ONE_MK_APP_LAYOUT_TAB=2
+shot r6-pair-new-peer 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_PAIR_STATE=code ONE_MK_APP_PAIR_NAME='Design laptop'
+shot r6-pair-same-name 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_PAIR_STATE=code ONE_MK_APP_PAIR_NAME='samer-Victus'
 shot 101-empty-desk-small 3 "$W/e" ONE_MK_APP_SIZE=760x540
 shot 102-scale-two-large 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_ZOOM=2 ONE_MK_APP_SIZE=1920x1200
 shot 103-this-computer-small 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT=me ONE_MK_APP_SIZE=760x540

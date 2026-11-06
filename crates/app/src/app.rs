@@ -1442,7 +1442,7 @@ impl App {
             Some(id) => self.scene.index(id),
             None => None,
         };
-        self.scene.empty_slot = !self.sheet_open() && self.running().is_some_and(|s| s.peers.is_empty()) && self.just_paired.is_none();
+        self.scene.empty_slot = false;
         let moving = self.scene.step(now, dragging);
         self.scene_moving = moving;
         self.scene.fit = Some(rect);
@@ -1498,7 +1498,7 @@ impl App {
 
     /// The page's title and the quieter words after it.
     fn page_title(&self) -> (String, String) {
-        let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1).to_owned();
+        let name = if self.tab == Tab::Layout { "Arrange" } else { TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1) }.to_owned();
         let sub = match (self.tab, self.status.as_ref()) {
             (_, None) => String::new(),
             (_, Some(None)) => "oneMK is off".to_owned(),
@@ -1575,10 +1575,8 @@ impl App {
             return ("oneMK isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
         };
         if !s.broadcast.is_empty() {
-            let title = match &s.broadcast[..] {
-                [one] => format!("Broadcasting to {one}"),
-                all => format!("Broadcasting to {} computers", all.len()),
-            };
+            let connected = s.peers.iter().filter(|peer| peer.online && s.broadcast.contains(&peer.name)).count();
+            let title = format!("Broadcasting · {connected} of {} connected", s.broadcast.len());
             // The title names one; more than three are on the desk above.
             let names = match &s.broadcast[..] {
                 [_] => "it".to_owned(),
@@ -1640,6 +1638,7 @@ impl App {
             Tab::Desk if self.off() => vec![(Cell::Head(t, s), cell(0, 2)), (Cell::Controls, cell(2, 3))],
             // A small window has room for one card: the chosen computer's
             // (this computer's switches show when it is the one chosen).
+            Tab::Desk if self.running().is_some_and(|status| status.peers.is_empty()) && w < 760.0 => vec![(Cell::Inspector(None), cell(0, 3))],
             Tab::Desk if w < 760.0 => match self.selected_id() {
                 Some(id) if id != "me" => vec![(Cell::Inspector(Some(id)), cell(0, 3))],
                 _ => vec![(Cell::Inspector(None), cell(0, 1)), (Cell::Controls, cell(1, 3))],
@@ -2314,6 +2313,7 @@ fn cell_key(c: &Cell) -> Option<&'static str> {
         // Layout's three cards share one height (a row of equals).
         Cell::Inspector(None) => Some("me"),
         Cell::Inspector(Some(_)) => Some("peer"),
+        Cell::LineUp(_) => Some("lineup"),
         _ => None,
     }
 }
@@ -2653,7 +2653,7 @@ mod debug {
         }
         if ready && let Some(state) = var("ONE_MK_APP_PAIR_STATE") && once(&ctx, "pair-state") {
             let step = match state.as_str() {
-                "code" => Step::Code { name: "Studio PC".into(), code: "726480".into() },
+                "code" => Step::Code { name: var("ONE_MK_APP_PAIR_NAME").unwrap_or_else(|| "Studio PC".into()), code: "726480".into() },
                 "waiting" => Step::Waiting { name: "Studio PC".into() },
                 "paired" => Step::Paired { id: "1111-2222".into(), name: "Studio PC".into() },
                 "ended" => Step::Ended("The codes did not match. Nothing was saved.".into()),

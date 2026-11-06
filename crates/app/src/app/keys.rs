@@ -565,7 +565,11 @@ impl App {
             ui.ctx().request_repaint_after_secs(1.0 / 30.0);
         }
 
-        let body = Rect::from_min_max(pos2(area.left(), area.top() + 46.0), area.max);
+        let keyboard = self.keys.view == View::Keyboard;
+        if keyboard {
+            self.keyboard_toolbar(ui, Rect::from_min_size(pos2(area.left(), area.top() + 42.0), vec2(area.width(), 36.0)));
+        }
+        let body = Rect::from_min_max(pos2(area.left(), area.top() + if keyboard { 84.0 } else { 46.0 }), area.max);
         let mut child = ui.new_child(UiBuilder::new().max_rect(body.expand2(vec2(6.0, 0.0))));
         child.set_clip_rect(body.expand2(vec2(8.0, 4.0)));
         let salt = if self.keys.view == View::Keyboard { "keys-keyboard" } else { "keys-mouse" };
@@ -753,11 +757,18 @@ impl App {
         let side = false;
         let unit = (inner / kw).min(UNIT_MAX).floor();
         let _ = kh;
-        let kb_h = 64.0 + (inner * 0.19).clamp(100.0, 180.0);
+        let kb_h = if w < 700.0 { 152.0 } else { 24.0 + inner * 0.32 };
         let head_w = text_width(ui, "Quick setups", semibold(T_BODY)) + 16.0;
         let mut chips = vec![];
+        let balanced = head_w + presets.iter().map(|preset| chip_width(ui, &preset.label) + 8.0).sum::<f32>() > w;
         let (mut x, mut y) = (head_w, 0.0);
         for (k, p) in presets.iter().enumerate() {
+            if balanced {
+                let width = (w - 8.0) / 2.0;
+                chips.push(Rect::from_min_size(pos2((k % 2) as f32 * (width + 8.0), 30.0 + (k / 2) as f32 * 38.0), vec2(width, 30.0)));
+                y = 68.0;
+                continue;
+            }
             if side {
                 chips.push(Rect::from_min_size(pos2(w - 18.0 - SIDE_W, 54.0 + 26.0 + 38.0 * k as f32 - kb_h - 14.0), vec2(SIDE_W, 30.0)));
                 continue;
@@ -826,19 +837,28 @@ impl App {
         }
     }
 
-    fn keyboard_card(&mut self, ui: &mut Ui, r: Rect, _unit: f32, _side: bool, input: &Input, facts: &Facts) {
-        widgets::group(ui, r, R_GROUP);
+    fn keyboard_toolbar(&mut self, ui: &mut Ui, r: Rect) {
         let p = ui.painter().clone();
         let label = if self.keys.keypad { "Fewer keys" } else { "More keys" };
         let bw = button_width(ui, label) - 8.0;
-        let b = Rect::from_min_size(pos2(r.right() - 18.0 - bw, r.top() + 14.0), vec2(bw, 28.0));
-        let intro = "Select a key to change what it types.";
+        let b = Rect::from_min_size(pos2(r.right() - bw, r.top() + 4.0), vec2(bw, 28.0));
+        let intro = self.keys.selected.map_or_else(|| "Select a key to change it".to_owned(), |key| format!("Selected: {}", tune::key_label(u32::from(key))));
         let iw = b.left() - r.left() - 30.0 - if self.keys.selected.is_some() { 122.0 } else { 0.0 };
-        p.text(pos2(r.left() + 18.0, b.center().y), Align2::LEFT_CENTER, fit(&p, intro, &regular(T_BODY), iw), regular(T_BODY), INK2);
-        a11y_text(ui, Id::unique("keys-intro"), Rect::from_min_size(r.min, vec2(iw, 40.0)), Role::Label, intro, None);
+        p.text(pos2(r.left(), b.center().y), Align2::LEFT_CENTER, fit(&p, &intro, &regular(T_BODY), iw), regular(T_BODY), INK2);
+        a11y_text(ui, Id::unique("keys-intro"), Rect::from_min_size(r.min, vec2(iw, 36.0)), Role::Label, &intro, None);
         if button(ui, b, Id::unique("keys-more"), label, Look::Quiet, true, Some(if self.keys.keypad { "Hide the keypad" } else { "Show the keypad too" })).clicked() {
             self.keys.keypad = !self.keys.keypad;
         }
+        if self.keys.selected.is_some() {
+            let detail = Rect::from_min_size(pos2(b.left() - 122.0, r.top() + 4.0), vec2(114.0, 28.0));
+            if button(ui, detail, Id::unique("keyboard-detail"), if self.keys.board_detail { "Whole board" } else { "Key detail" }, Look::Quiet, true, None).clicked() {
+                self.keys.board_detail = !self.keys.board_detail;
+            }
+        }
+    }
+
+    fn keyboard_card(&mut self, ui: &mut Ui, r: Rect, _unit: f32, _side: bool, input: &Input, facts: &Facts) {
+        widgets::group(ui, r, R_GROUP);
         let caps = tune::keyboard(self.keys.keypad, mac());
         // What each key does for these computers (plain keys, base layer).
         let mut target: HashMap<u16, What> = HashMap::new();
@@ -859,21 +879,19 @@ impl App {
             .collect();
         // The board fills the card under its intro; built again only when
         // the window's size, the keys or what they do change.
-        let area = Rect::from_min_max(pos2(r.left() + 8.0, r.top() + 50.0), pos2(r.right() - 8.0, r.bottom() - 8.0));
+        let area = r.shrink(8.0);
         // The camera goes in on the chosen key (from wherever it is now, so
         // choosing the next one glides across) and back out when it is let
         // go; a drag on the board turns it.
         let chosen = caps.iter().position(|c| self.keys.selected == Some(c.code) && self.keys.layer.is_none());
-        if chosen.is_some() {
-            let detail = Rect::from_min_size(pos2(r.right() - 242.0, r.top() + 14.0), vec2(114.0, 28.0));
-            if button(ui, detail, Id::unique("keyboard-detail"), if self.keys.board_detail { "Whole board" } else { "Key detail" }, Look::Quiet, true, None).clicked() {
-                self.keys.board_detail = !self.keys.board_detail;
-            }
-        }
         let dt = ui.input(|i| i.stable_dt);
         let mut moving = self.keys.board_orbit.step(dt);
         let turn = self.keys.board_orbit;
-        moving |= crate::gear::Keyboard::get(&mut self.keys.board, area, &drawn, crate::gear::View { yaw: turn.yaw, pitch: turn.pitch }, chosen.filter(|_| self.keys.board_detail), &mut self.keys.board_glide, dt);
+        if self.keys.board_detail {
+            moving |= crate::gear::Keyboard::get(&mut self.keys.board, area, &drawn, crate::gear::View { yaw: turn.yaw, pitch: turn.pitch + 0.4 }, chosen, &mut self.keys.board_glide, dt);
+        } else {
+            crate::gear::Keyboard::working(&mut self.keys.board, area, &drawn);
+        }
         if moving {
             ui.ctx().request_repaint();
         }
@@ -1174,7 +1192,7 @@ impl App {
                     let hold = own.as_ref().and_then(|r| r.hold.clone());
                     let hold_text = hold.as_ref().and_then(|h| h.parse().ok()).map_or("nothing else yet: it types the same".to_owned(), |o| tune::out_text(&o));
                     y += para(ui, pos2(c.left(), y), c.width(), &format!("Tapped, it types what is chosen above. Held, it gives: {hold_text}."), regular(T_META), INK2) + 8.0;
-                    let mut labels = vec!["Press the key for holding", "Choose"];
+                    let mut labels = vec!["Press the key for holding", "Choose…"];
                     if hold.is_some() {
                         labels.push("Not when held");
                     }
@@ -1421,11 +1439,10 @@ impl App {
                 spoken += &format!("{label}: {}. ", log.chips.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(", "));
             }
         }
-        let name = "Test it: type here to see what the other computer would get";
-        widgets::a11y(&resp, Role::TextInput, name, None);
+        let name = "Test keys: activate, then press keys. Tab leaves. Nothing is sent.";
+        widgets::a11y(&resp, Role::Button, name, None);
         // Its value is what was typed, so a reader's text interface has it.
-        let typed = self.keys.tester.as_ref().map(|(t, ..)| t.pressed.chips.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
-        ui.ctx().accesskit_node_builder(resp.id, |n| n.set_value(typed));
+        if spoken.is_empty() { spoken = "No keys tested yet.".to_owned(); }
         a11y_text(ui, Id::unique("keys-test-out"), r, Role::Status, &spoken, Some(Live::Polite));
         y = r.bottom() + 10.0;
         let i_now = Instant::now();
@@ -1840,8 +1857,9 @@ impl App {
     fn speed_row(&mut self, ui: &mut Ui, row: Rect, key: &'static str, label: &str, value: f64) -> Option<f64> {
         let lw = label_help_inline(ui, row, Id::unique(("speed-label", key)), label, key, true);
         let shown = self.keys.drafts.get(key).copied().unwrap_or(value);
-        let fw = 58.0;
-        let sr = Rect::from_min_max(pos2(row.left() + lw, row.top()), pos2(row.right() - fw - 26.0, row.bottom()));
+        let fw = 48.0;
+        let suffix = text_width(ui, "× speed", regular(T_META)) + 8.0;
+        let sr = Rect::from_min_max(pos2(row.left() + lw, row.top()), pos2(row.right() - fw - suffix - 10.0, row.bottom()));
         let (t, apply) = slider(ui, sr, Id::unique(("slider", key)), tune::speed_to_t(shown), label, shown);
         let mut out = None;
         if let Some(t) = t {
@@ -1851,8 +1869,8 @@ impl App {
                 out = Some(x);
             }
         }
-        let fr = Rect::from_min_size(pos2(row.right() - fw - 16.0, row.center().y - 13.0), vec2(fw, 26.0));
-        ui.painter().text(pos2(row.right(), row.center().y), Align2::RIGHT_CENTER, "×", regular(T_BODY), INK2);
+        let fr = Rect::from_min_size(pos2(row.right() - fw - suffix, row.center().y - 13.0), vec2(fw, 26.0));
+        ui.painter().text(pos2(row.right(), row.center().y), Align2::RIGHT_CENTER, "× speed", regular(T_META), INK2);
         let cur = tune::speed_text(shown).trim_end_matches('×').to_owned();
         if let Some(text) = self.edit_field(ui, fr, key, &cur, "1", &format!("{label}, from 0.1 to 10 times"), true, true) {
             match tune::parse_speed(&text) {

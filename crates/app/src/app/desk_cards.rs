@@ -213,6 +213,7 @@ impl App {
         // Left: the number now, what it means; actions at the bottom.
         let body = Rect::from_min_max(pos2(c.left(), c.top() + 52.0), c.max);
         let summary = self.summary_of(&peer.id);
+        let graphed = peer.online && summary.is_some_and(|summary| summary.count >= 8) && self.rtts.of(&peer.id).is_some();
         let q = summary.and_then(|s| s.quality());
         let big = mono_medium(30.0);
         if !peer.online {
@@ -229,7 +230,8 @@ impl App {
             // A number is already shown: say how much it rests on, not "Measuring…".
             let word = q.map_or("Few readings so far", Quality::word);
             let ww = text_width(ui, word, regular(T_BODY));
-            p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { WARN } else { INK2 });
+            let quality_at = if graphed { pos2(body.left(), body.top() + 48.0) } else { pos2(body.left() + nw + 58.0, body.top() + 18.0) };
+            p.text(quality_at, Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { WARN } else { INK2 });
             if q.is_some() {
                 let (lo, hi) = (rtt::ms_number(s.min_us), rtt::ms(s.p95_us));
                 // Lost packets are named apart from slowness (stalls).
@@ -239,13 +241,12 @@ impl App {
                     1 => " · 1 packet lost".to_owned(),
                     n => format!(" · {n} packets lost"),
                 };
-                p.text(pos2(body.left() + ww, body.top() + 48.0), Align2::LEFT_CENTER, fit(&p, &usual, &regular(T_BODY), col_w - ww), regular(T_BODY), INK3);
+                p.text(quality_at + vec2(ww, 0.0), Align2::LEFT_CENTER, fit(&p, &usual, &regular(T_BODY), if graphed { col_w - ww } else { c.width() - nw - 58.0 - ww }), regular(T_BODY), INK3);
             }
         } else {
-            let text = if self.older_daemon(&peer.id) { "Restart oneMK to see latency" } else { "Measuring…" };
+            let text = if !status.broadcast.is_empty() { "Latency unavailable during broadcast" } else if self.older_daemon(&peer.id) { "Restart oneMK to measure latency" } else { "Measuring latency…" };
             let _ = big;
-            widgets::draw_dots(&p, Rect::from_min_size(pos2(body.left() - 4.0, body.top() + 10.0), vec2(24.0, 16.0)), INK3);
-            p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, fit(&p, text, &regular(T_BODY), col_w), regular(T_BODY), INK2);
+            para(ui, body.left_top(), c.width(), text, regular(T_BODY), INK2);
         }
         if peer.online && (self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id)) {
             let busy = self.measuring.is_some();
@@ -266,8 +267,7 @@ impl App {
         // With a graph the actions sit at the card's foot; without one (a
         // few readings, offline, none) right under the words, and the card
         // ends there.
-        let graphed = peer.online && summary.is_some_and(|s| s.count >= 8) && self.rtts.of(&peer.id).is_some();
-        let actions_y = if graphed { body.bottom() - 32.0 } else { (body.top() + 84.0).min(body.bottom() - 32.0) };
+        let actions_y = if graphed { body.bottom() - 32.0 } else { body.top() + if summary.is_some() { 48.0 } else { 64.0 } };
         self.peer_actions(ui, pos2(body.left(), actions_y), &status, &peer);
 
         // The graph and the number, as words for screen readers.
@@ -275,6 +275,7 @@ impl App {
         // Right: the last two minutes.
         let graph = Rect::from_min_max(pos2(body.left() + col_w + 24.0, c.top() + 40.0), body.max);
         let plot = Rect::from_min_max(pos2(graph.left(), graph.top() + 18.0), graph.max);
+        if !graphed { return; }
         match self.rtts.of(&peer.id).filter(|_| peer.online) {
             // A handful of readings: say so in a line rather than a big,
             // nearly empty plot.
@@ -332,7 +333,7 @@ impl App {
         // Nothing paired: this card is the first step, with the one action.
         if status.peers.is_empty() {
             let th = para(ui, c.left_top(), c.width(), "Pair your first computer", semibold(T_TITLE), INK);
-            let text = "Open oneMK on the other computer too, then choose Pair a computer here. Both need to be on the same network; a six-digit code on both screens confirms it.";
+            let text = "Open oneMK on both computers on the same network. Compare the six-digit codes to pair securely.";
             let sh = para(ui, c.left_top() + vec2(0.0, th + 6.0), c.width().min(520.0), text, regular(T_BODY), INK2);
             let bw = button_width(ui, "Pair a computer") + 8.0;
             let b = Rect::from_min_size(pos2(c.left(), c.top() + th + 6.0 + sh + 16.0), vec2(bw, 36.0));
@@ -394,7 +395,7 @@ impl App {
         let narrow = head.width() < 780.0;
         let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
         let on = self.broadcasting();
-        let lock_label = if narrow { "Lock all" } else { "Lock every screen" };
+        let lock_label = if narrow { "Lock screens" } else { "Lock every screen" };
         let lock_w = text_width(ui, lock_label, semibold(T_BODY)) + 46.0;
         let lock_r = Rect::from_min_size(pos2(head.right() - lock_w, y), vec2(lock_w, 34.0));
         let mut x = lock_r.left();

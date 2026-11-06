@@ -9,7 +9,7 @@ use crate::view;
 const GAMING: [(&str, &str); 3] = [("off", "Off"), ("on", "On"), ("auto", "Auto")];
 
 fn transfer_height(transfer: &one_mk_ctl::status::TransferStatus) -> f32 {
-    if transfer.rate == 0 { 54.0 } else { 36.0 }
+    if transfer.rate == 0 { 60.0 } else { 42.0 }
 }
 
 #[cfg(any(debug_assertions, feature = "design-evidence", test))]
@@ -48,9 +48,9 @@ impl App {
             used += chip_width + 8.0;
         }
         let shown_transfers = if self.files_ui.all_transfers { transfers } else { transfers.min(if rect.width() < 700.0 { 1 } else { 4 }) };
-        let transfer_height = self.running().map_or(0.0, |status| status.transfers.iter().take(shown_transfers).map(transfer_height).sum::<f32>());
+        let transfer_height = self.running().map_or(0.0, |status| status.transfers.iter().take(shown_transfers).map(transfer_height).sum::<f32>()) + shown_transfers.saturating_sub(1) as f32 * 8.0;
         let reconnect;
-        let hint = if !recipients.is_empty() && recipients.iter().all(|peer| !peer.online) {
+        let hint = if transfers > 0 && recipients.iter().all(|peer| !peer.online) { "Transfer details and reconnect steps are below." } else if !recipients.is_empty() && recipients.iter().all(|peer| !peer.online) {
             reconnect = format!("Open oneMK on {} to reconnect, then choose files or drop them here.", recipients[0].name);
             reconnect.as_str()
         } else if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Choose a recipient to pick files, or drop files on its chip." };
@@ -202,7 +202,7 @@ impl App {
         // Beside this computer's own card (chosen, or nothing paired yet),
         // the name is already there: say what these are instead.
         let beside_me = self.running().is_some_and(|s| s.peers.is_empty()) || self.selected_id().as_deref() == Some("me");
-        p.text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, if beside_me { "Options here" } else { "This computer" }, semibold(T_TITLE), INK);
+        p.text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, if beside_me { "Startup & files" } else { "This computer" }, semibold(T_TITLE), INK);
         if !beside_me {
             // Off, the name isn't known yet: what it runs, at least, so the
             // card keeps its shape.
@@ -345,7 +345,7 @@ impl App {
         for t in transfers.iter().take(shown) {
             let height = transfer_height(t);
             self.transfer_row(ui, Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), height)), t);
-            y += height;
+            y += height + 8.0;
         }
     }
 
@@ -354,7 +354,7 @@ impl App {
         let (title, detail, frac) = view::transfer_lines(t);
         let p = ui.painter();
         p.text(r.left_top(), Align2::LEFT_TOP, fit(p, &title, &regular(T_BODY), r.width()), regular(T_BODY), INK);
-        let bar = Rect::from_min_size(pos2(r.left(), r.bottom() - 3.0), vec2(r.width(), 2.0));
+        let bar = Rect::from_min_size(pos2(r.left(), r.bottom() - 4.0), vec2(r.width(), 4.0));
         if t.rate == 0 {
             p.rect_filled(bar, 1.0, WARN.gamma_multiply(0.22));
             p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac.unwrap_or(0.0), bar.height())), 1.0, WARN);
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn stalled_transfer_reserves_its_recovery_line() {
         let transfer = one_mk_ctl::status::TransferStatus { id: 8, sending: true, peer: "Studio PC".into(), files: 1, done: 500_000, total: 9_000_000, rate: 0 };
-        assert_eq!(transfer_height(&transfer), 54.0);
-        assert_eq!(transfer_height(&one_mk_ctl::status::TransferStatus { rate: 100, ..transfer }), 36.0);
+        assert_eq!(transfer_height(&transfer), 60.0);
+        assert_eq!(transfer_height(&one_mk_ctl::status::TransferStatus { rate: 100, ..transfer }), 42.0);
     }
 }

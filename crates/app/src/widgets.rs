@@ -380,7 +380,9 @@ pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: b
     // switches are; the knob is a lit white bead that slides across.
     let off = mix(SWITCH_OFF, SWITCH_OFF_LIT, hover);
     let on_col = if enabled { mix(ACCENT, ACCENT_LIT, hover) } else { INK3 };
-    p.rect_filled(track, CornerRadius::same(11), pressed(mix(off, on_col, fill), press));
+    let base = mix(off, on_col, fill);
+    let pressed_track = if on { mix(base, GROUND, 0.45) } else { mix(base, Color32::WHITE, 0.30) };
+    p.rect_filled(track, CornerRadius::same(11), mix(base, pressed_track, press));
     // Off, the track's edge is what shows the control: 3:1 on the group.
     p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, mix(SWITCH_EDGE, Color32::TRANSPARENT, fill)), StrokeKind::Inside);
     let knob = pos2(track.left() + 11.0 + 16.0 * knob_t, track.center().y);

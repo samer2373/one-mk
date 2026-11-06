@@ -85,7 +85,7 @@ fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: b
     } else if hover > 0.01 {
         // Hover is a hint, clearly weaker than the chosen page: half way
         // from the sidebar to the hover tone, no edge.
-        p.rect_filled(rect, CornerRadius::same(8), mix(SIDEBAR, SIDE_HOVER, 0.55 * hover));
+        p.rect_filled(rect, CornerRadius::same(8), mix(SIDEBAR, SIDE_HOVER, 0.25 * hover));
     }
     widgets::focus_ring(ui, &r, rect, 8);
     if r.hovered() && enabled {
@@ -111,7 +111,7 @@ impl App {
     /// Something on Health needs attention.
     fn health_trouble(&self) -> bool {
         self.running().is_some_and(|s| s.input_lines().iter().any(|line| line.severity == one_mk_ctl::status::Severity::Problem))
-            || self.doctor.as_ref().is_some_and(|(d, _)| d.as_ref().is_ok_and(|c| c.iter().any(|c| c.verdict == crate::view::Verdict::Fail)))
+            || self.health_checks().is_some_and(|checks| checks.iter().any(|check| matches!(check.verdict, crate::view::Verdict::Fail | crate::view::Verdict::Warn)))
     }
 
     /// The top-bar action, done.
@@ -378,7 +378,8 @@ impl App {
             "Use keyboard to stop" | "Keyboard stop" => Some("Use the keyboard shortcut shown in the broadcast panel"),
             _ => None,
         };
-        if button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
+        let first_pair = self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty());
+        if !first_pair && button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
             self.do_action(job, now);
         }
         y += 36.0 + 10.0;
@@ -388,11 +389,12 @@ impl App {
         let (dot, text) = match self.status.as_ref() {
             None => (INK3, "Looking for oneMK…".to_owned()),
             Some(None) => (INK3, "Sharing is off".to_owned()),
-            Some(Some(_)) if trouble => (ERROR, "Something needs you".to_owned()),
+            Some(Some(_)) if trouble => (WARN, "On · check Health".to_owned()),
             // Only "all good" when a computer is actually connected.
-            Some(Some(s)) if s.peers.is_empty() => (INK3, "On · nothing paired yet".to_owned()),
-            Some(Some(s)) if !s.peers.iter().any(|p| p.online) => (INK3, "On · waiting for computers".to_owned()),
-            Some(Some(_)) => (OK, "Sharing is on · All good".to_owned()),
+            Some(Some(s)) if s.peers.is_empty() => (INK3, "On · not paired".to_owned()),
+            Some(Some(s)) if !s.peers.iter().any(|p| p.online) => (INK3, "On · none connected".to_owned()),
+            Some(Some(s)) if s.peers.iter().any(|peer| !peer.online) => (WARN, "On · some offline".to_owned()),
+            Some(Some(_)) => (OK, "On · connected".to_owned()),
         };
         let stop_w = if self.running().is_some() { text_width(ui, "Stop", regular(T_META)) + 16.0 } else { 0.0 };
         let status_r = Rect::from_min_max(row.min, pos2(row.right() - stop_w - 4.0, row.bottom()));
@@ -451,6 +453,20 @@ impl App {
         ui.painter().hline((cx - 12.0)..=(cx + 12.0), y, Stroke::new(1.0, Color32::from_white_alpha(18)));
         y += 8.0;
         if let Some(status) = self.running().cloned() {
+            let expander = Rect::from_center_size(pos2(cx, y + 14.0), vec2(side.width() - 12.0, 28.0));
+            let response = button(ui, expander, Id::unique("rail-computers"), "Computers…", Look::Quiet, true, Some("Show full computer names and connection states"));
+            let mut selected = None;
+            egui::Popup::menu(&response).width(300.0).show(|ui| {
+                for (id, name, online) in std::iter::once(("me", status.name.as_str(), true)).chain(status.peers.iter().map(|peer| (peer.id.as_str(), peer.name.as_str(), peer.online))) {
+                    let label = format!("{name}\n{}", if id == "me" { "This computer" } else if online { "Connected" } else { "Offline" });
+                    if ui.add(egui::Button::new(egui::RichText::new(label).font(regular(T_BODY))).wrap()).clicked() {
+                        selected = Some(id.to_owned());
+                        ui.close();
+                    }
+                }
+            });
+            if let Some(id) = selected { self.set_tab(Tab::Desk); self.select(id); }
+            y += 32.0;
             let pointer = self.pointer_on();
             let sel = self.selected_id().filter(|_| self.tab.desk());
             let mut rows: Vec<(String, String, bool)> = vec![("me".into(), status.name.clone(), true)];
@@ -513,6 +529,7 @@ impl App {
         }
         let (label, look, enabled, job) = self.action();
         let a = Rect::from_center_size(pos2(cx, side.bottom() - 12.0 - 20.0), vec2(40.0, 40.0));
+        if self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty()) { return; }
         let shown = !self.sheet_open() && self.status.is_some();
         let r = button(ui, a, Id::unique("action"), "", look, enabled && shown, Some(&label));
         let col = if look == Look::Primary && enabled { SIGNAL_INK } else { INK };
