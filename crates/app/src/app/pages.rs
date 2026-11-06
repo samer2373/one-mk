@@ -466,7 +466,7 @@ impl App {
             48.0 + 5.0 * EDGE_ROW + 14.0,
             48.0 + 3.0 * HELP_ROW - 6.0 + 14.0,
             48.0 + HELP_ROW - 6.0 + 14.0,
-            48.0 + 62.0 + super::settings_controls::SHORTCUT_ROW * self.prefs.hotkeys.len() as f32 + 10.0 + if s.is_some_and(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
+            48.0 + 62.0 + super::settings_controls::SHORTCUT_ROW * self.prefs.hotkeys.len() as f32 + 10.0 + if s.is_some_and(|status| status.hotkeys != "on" && crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
             48.0 + 22.0 + (super::swap_row_h(col_w - 36.0) * peers as f32).max(40.0) + 14.0,
             48.0 + 4.0 * super::settings_controls::HOOK_H + 60.0,
             48.0 + 96.0 + 14.0,

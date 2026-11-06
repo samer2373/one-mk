@@ -207,8 +207,10 @@ impl App {
                 let shown = if n > fit { fit.saturating_sub(1) } else { n };
                 for p in status.peers.iter().take(shown) {
                     let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
+                    // The same reading the card shows (its newest), so the
+                    // two never disagree; the daemon's last link otherwise.
                     let value = match status.link_of(&p.id).filter(|_| p.online) {
-                        Some(l) => rtt::ms(l.rtt_us),
+                        Some(l) => rtt::ms(self.summary_of(&p.id).map_or(l.rtt_us, |s| s.now_us)),
                         None if p.online => String::new(),
                         None => "offline".to_owned(),
                     };

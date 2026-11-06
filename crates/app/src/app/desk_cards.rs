@@ -24,6 +24,17 @@ pub(super) struct NoticeLay {
 /// (with room for the action an error carries).
 pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Galley>, Option<std::sync::Arc<egui::Galley>>, f32) {
     let text_w = w - 46.0 - if t.error { toast_action_w(t) } else { 0.0 };
+    // An error is one line: what failed, then (quieter) why; the whole of
+    // it on hover and for screen readers.
+    if t.error {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(&t.text, 0.0, egui::TextFormat::simple(regular(T_BODY), INK));
+        if let Some(d) = &t.detail {
+            job.append(&format!("  {d}"), 0.0, egui::TextFormat::simple(regular(T_META), INK2));
+        }
+        job.wrap = egui::text::TextWrapping { max_width: text_w, max_rows: 1, break_anywhere: false, overflow_character: Some('…') };
+        return (ui.painter().layout_job(job), None, 46.0);
+    }
     let g = ui.painter().layout(t.text.clone(), regular(T_BODY), INK, text_w);
     let d = t.detail.as_ref().map(|d| ui.painter().layout(d.clone(), regular(T_META), INK2, text_w));
     let h = 10.0 + g.size().y + d.as_ref().map_or(0.0, |d| d.size().y + 4.0) + 10.0;

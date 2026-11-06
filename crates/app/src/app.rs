@@ -2169,8 +2169,13 @@ impl App {
         p.rect(rect, CornerRadius::same(12), POPOVER, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
         let dot = if t.error { ERROR } else { INK };
         let gh = g.size().y;
-        p.circle_filled(pos2(rect.left() + 17.0, rect.top() + 10.0 + 9.0), 3.5, dot);
-        p.galley(pos2(rect.left() + 30.0, rect.top() + 10.0), g, INK);
+        // Errors are one line, centred on the band.
+        let gy = if t.error { rect.center().y - g.size().y / 2.0 } else { rect.top() + 10.0 };
+        p.circle_filled(pos2(rect.left() + 17.0, gy + 9.0), 3.5, dot);
+        if t.error && g.elided {
+            resp.clone().on_hover_text(format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}"))));
+        }
+        p.galley(pos2(rect.left() + 30.0, gy), g, INK);
         if let Some(d) = d {
             p.galley(pos2(rect.left() + 30.0, rect.top() + 14.0 + gh), d, INK2);
         }
@@ -2180,13 +2185,14 @@ impl App {
         if t.error {
             let bw = button_width(&child, "Open Health");
             let b = Rect::from_min_size(pos2(rect.right() - 12.0 - bw, rect.center().y - 15.0), vec2(bw, 30.0));
-            open_health = button(&mut child, b, Id::unique("toast-health"), "Open Health", Look::Quiet, true, Some("Open Health to see what went wrong")).clicked();
-            // What failed, done again: the first thing to try.
+            // What failed, done again: the first thing to try, first in
+            // Tab order too.
             if t.retry.is_some() {
                 let tw = button_width(&child, "Try again");
                 let tb = Rect::from_min_size(pos2(b.left() - 8.0 - tw, b.top()), vec2(tw, 30.0));
                 try_again = button(&mut child, tb, Id::unique("toast-retry"), "Try again", Look::Quiet, true, Some("Do it again")).clicked();
             }
+            open_health = button(&mut child, b, Id::unique("toast-health"), "Open Health", Look::Quiet, true, Some("Open Health to see what went wrong")).clicked();
         }
         let (role, live) = if t.error { (Role::Alert, Live::Assertive) } else { (Role::Status, Live::Polite) };
         let label = format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}")));

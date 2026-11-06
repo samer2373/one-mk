@@ -164,7 +164,8 @@ impl App {
         ui.ctx().data_mut(|data| { if let Some(index) = recording { data.insert_temp(recorder, index); } else { data.remove::<usize>(recorder); } });
         let emergency = crate::view::chord_label("ctrl+alt+shift+esc", cfg!(target_os = "macos"));
         top += para(ui, pos2(rect.left(), top), rect.width(), &format!("Always back here: {emergency}. While changing: Esc cancels; Backspace turns it off. For computer numbers, press a number from 1 to 9."), regular(T_META), INK2) + 8.0;
-        if let Some(note) = self.running().and_then(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail)) {
+        // "Ready, change them in Settings" says nothing here, in Settings.
+        if let Some(note) = self.running().filter(|status| status.hotkeys != "on").and_then(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail)) {
             para(ui, pos2(rect.left(), top), rect.width(), &crate::view::window_issue(&note), regular(T_META), INK2);
         }
     }
