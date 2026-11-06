@@ -54,6 +54,12 @@ pub mod targets {
         }
     }
 
+    /// The name noted this frame for the control at `r`, if any.
+    pub fn name_at(r: egui::Rect) -> Option<String> {
+        let now = NOW.lock().unwrap_or_else(|e| e.into_inner());
+        now.iter().rev().find(|(_, q)| (q[0] - r.min.x).abs() < 0.5 && (q[1] - r.min.y).abs() < 0.5 && (q[2] - r.max.x).abs() < 0.5 && (q[3] - r.max.y).abs() < 0.5).map(|(l, _)| l.clone())
+    }
+
     /// Writes this frame's controls (as JSON lines) and starts the next.
     pub fn flush() {
         let Some(path) = std::env::var_os("ONE_MK_APP_TARGETS") else { return };

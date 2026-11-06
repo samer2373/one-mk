@@ -2307,6 +2307,8 @@ impl eframe::App for App {
         let hidden = ui.input(|i| i.viewport().minimized == Some(true));
         self.link.showing.frame(self.graph_wanted() && !hidden);
         #[cfg(debug_assertions)]
+        debug::tab_walk(ui.ctx(), now);
+        #[cfg(debug_assertions)]
         debug::shot(ui.ctx(), now);
         #[cfg(debug_assertions)]
         widgets::targets::flush();
@@ -2550,6 +2552,28 @@ mod debug {
                 app.make_room(i);
             }
         }
+    }
+
+    /// `ONE_MK_APP_TABWALK=n` (with `ONE_MK_APP_TARGETS=file`): from one
+    /// second in, presses Tab n times, a step every 0.15 s, and prints what
+    /// has the keyboard after each (the Tab order, for the record).
+    pub fn tab_walk(ctx: &egui::Context, now: f64) {
+        let Some(n) = var("ONE_MK_APP_TABWALK").and_then(|v| v.parse::<usize>().ok()) else { return };
+        let id = Id::unique("tab-walk");
+        let (done, last) = ctx.data(|d| d.get_temp::<(usize, f64)>(id)).unwrap_or((0, 1.0));
+        ctx.request_repaint();
+        if done >= n || now < last + 0.15 {
+            return;
+        }
+        if done > 0 {
+            let name = ctx.memory(|m| m.focused()).and_then(|f| ctx.read_response(f)).and_then(|r| widgets::targets::name_at(r.rect)).unwrap_or_else(|| "(unnamed)".into());
+            eprintln!("tab {done}: {name}");
+        }
+        ctx.data_mut(|d| {
+            d.insert_temp(id, (done + 1, now));
+            d.insert_temp(Id::unique("keyboard-focus"), true);
+        });
+        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::Next));
     }
 
     pub fn shot(ctx: &egui::Context, now: f64) {
