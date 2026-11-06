@@ -490,11 +490,11 @@ impl App {
             let detail = if more > 0 { format!("{detail} · and {more} more") } else { detail };
             // In the band (a small window) as wide as the desk; along the
             // bottom of a wide one, a compact pill.
-            let w = if desk.width() < 780.0 { desk.width() } else { 360.0f32.min(desk.width() * 0.6) };
+            let w = desk.width().min(520.0);
             // In a small window the desk's front is crowded: the top instead.
             // A small window's desk front is crowded: the top instead, unless
             // a banner is there already.
-            let y = if desk.width() < 780.0 { top } else { desk.bottom() - 52.0 };
+            let y = top;
             let r = Rect::from_min_size(pos2(desk.left(), y), vec2(w, 52.0));
             widgets::glass_panel(ui, "transfer", r, 14);
             p.text(pos2(r.left() + 14.0, r.top() + 16.0), Align2::LEFT_CENTER, fit(&p, &title, &regular(T_BODY), w - 28.0), regular(T_BODY), INK);
@@ -554,7 +554,7 @@ impl App {
         if let Some(t) = self.toast_band_h(ui, desk_w) {
             h += t + 8.0;
         }
-        if desk_w < 780.0 && self.running().is_some_and(|s| !s.transfers.is_empty()) {
+        if self.running().is_some_and(|s| !s.transfers.is_empty()) {
             h += 52.0 + 8.0;
         }
         h
@@ -562,9 +562,8 @@ impl App {
 
     /// Room kept free along the desk's bottom for what floats there.
     pub(super) fn desk_foot_h(&self, desk_w: f32) -> f32 {
-        let transfer = desk_w >= 780.0 && self.running().is_some_and(|s| !s.transfers.is_empty());
         let hint = self.tab == Tab::Desk && desk_w > 860.0 && self.running().is_some_and(|s| !s.peers.is_empty()) && !self.prefs_hint_dismissed();
-        if transfer { 52.0 + 8.0 } else if hint { 36.0 + 8.0 } else { 0.0 }
+        if hint { 36.0 + 8.0 } else { 0.0 }
     }
 
     /// The desk when there is too little room for monitors anyone could

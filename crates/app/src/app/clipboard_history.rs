@@ -14,7 +14,7 @@ impl App {
         let clear = Rect::from_min_size(pos2(rect.right() - 48.0, rect.top() - 4.0), vec2(48.0, 28.0));
         let online = self.running().is_some();
         let clear_label = if self.clipboard_clear_confirm { "Sure?" } else { "Clear" };
-        if button(ui, clear, Id::unique("history-clear"), clear_label, Look::Quiet, online, Some("Clear deletes all memory and saved history. Click again to confirm; Refresh cancels.")).clicked() {
+        if button(ui, clear, Id::unique("history-clear"), clear_label, Look::Quiet, online && self.prefs.history_enabled, Some("Clear deletes all memory and saved history. Click again to confirm; Refresh cancels.")).clicked() {
             if self.clipboard_clear_confirm { self.link.history_change(None); }
             self.clipboard_clear_confirm = !self.clipboard_clear_confirm;
             self.clipboard_reveal = None;
@@ -33,7 +33,7 @@ impl App {
         }
         let rect = Rect::from_min_max(rect.min + vec2(0.0, 32.0), rect.max);
         let privacy = if !self.prefs.history_enabled {
-            "Off: nothing you copy is kept. Turned on, it may keep passwords their app didn't mark as secret."
+            "History off · Nothing you copy is kept. If enabled, unmarked secrets may be retained."
         } else if self.prefs.history_persist {
             "Saved unencrypted on disk. Previews are hidden until Show. Clear deletes saved items too. Unmarked secrets may be retained."
         } else {

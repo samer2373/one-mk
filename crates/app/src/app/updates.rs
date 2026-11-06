@@ -143,6 +143,6 @@ impl App {
         let note = if failed { "The last check for updates didn't work. oneMK tries again tomorrow." }
             else if status.can_update && status.needs_password { "Installing asks for your password, then restarts oneMK for a few seconds." }
             else if status.can_update { "At most once a day. Installing restarts oneMK for a few seconds." } else { status.advice.as_str() };
-        ui.painter().text(pos2(c.left(), y + 6.0), Align2::LEFT_CENTER, fit(ui.painter(), note, &regular(T_META), c.width()), regular(T_META), INK3);
+        para(ui, pos2(c.left(), y), c.width(), note, regular(T_META), INK3);
     }
 }

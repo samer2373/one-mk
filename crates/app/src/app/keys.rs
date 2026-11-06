@@ -151,7 +151,7 @@ fn card_begin(ui: &Ui, top: Pos2, w: f32, title: &str) -> Card {
 impl Card {
     /// Closes the card below `bottom`; its height.
     fn end(self, ui: &Ui, bottom: f32) -> f32 {
-        let r = Rect::from_min_max(self.top + vec2(0.0, 30.0), pos2(self.top.x + self.w, bottom + 14.0));
+    let r = Rect::from_min_max(self.top, pos2(self.top.x + self.w, bottom + 14.0));
         // The group's fill goes behind what was drawn on it.
         let shapes = widgets::group_shapes(r, R_GROUP);
         ui.painter().set(self.bg, egui::Shape::Vec(shapes));
@@ -186,7 +186,7 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     // set is lighter and carries a Volt tick. The words sit centred either way.
     let press = tween(ui.ctx(), id.with("press"), f32::from(enabled && r.is_pointer_button_down_on()), 0.08, motion::out_cubic);
     let fill = if on { mix(BUTTON_LIT, Color32::from_white_alpha(46), hover) } else { mix(BUTTON, BUTTON_LIT, hover) };
-    p.rect(rect, radius, widgets::pressed(fill, press), Stroke::new(1.0, if on { Color32::from_white_alpha(40) } else { CONTROL_EDGE }), StrokeKind::Inside);
+    p.rect_filled(rect, radius, widgets::pressed(fill, press));
     let font = regular(T_META + 1.0);
     let text = fit(p, label, &font, rect.width() - 28.0 - if on { 16.0 } else { 0.0 });
     let tw = p.layout_no_wrap(text.clone(), font.clone(), INK).size().x;
@@ -1445,7 +1445,7 @@ impl App {
         let h = |k: &str| self.keys.heights.get(k).copied().unwrap_or(300.0);
         let body_height = if two { h("buttons").max(h("pointer") + GAP + h("scroll")) } else { h("buttons") + h("pointer") + h("scroll") + 2.0 * GAP };
         let total = body_height + GAP + h("mouse-modes");
-        let stage_h = (w * 0.36).clamp(250.0, 340.0);
+        let stage_h = (w * 0.28).clamp(220.0, 280.0);
         let (all, _) = ui.allocate_exact_size(vec2(w, total + stage_h + GAP), Sense::hover());
         self.mouse_stage(ui, Rect::from_min_size(all.min, vec2(w, stage_h)), &input, &facts);
         let all = Rect::from_min_max(all.min + vec2(0.0, stage_h + GAP), all.max);

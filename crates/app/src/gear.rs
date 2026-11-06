@@ -460,7 +460,7 @@ impl Keyboard {
                     let (hx, hz) = (k.w * U / 2.0 + 2.2 * U + g, k.h * U / 2.0 + 1.6 * U + g);
                     [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter().map(|(sx, sz)| p3(cx + sx * hx, 7.0, cz + sz * hz)).collect()
                 };
-                whole.zoom_on(base, near, rect, 10.0, 0.4 * U, 2.4)
+                whole.zoom_on(base, near, rect, 24.0, 0.4 * U, 1.8)
             }
             None => whole,
         }
@@ -507,12 +507,14 @@ impl Keyboard {
             let px = (tr.x - tl.x).abs().max(1.0);
             let size = (px / k.w.max(1.0) * 0.25).clamp(8.0, 14.0);
             let at = cam.pt(p3(cx - k.w * U / 2.0 + 4.2, y_top, cz - k.h * U / 2.0 + 4.0));
-            legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier, max_w: f32::INFINITY });
+            if k.to.is_none() {
+                legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier, max_w: px * 0.78 });
+            }
             if let Some(to) = &k.to {
                 // On the cap's top, low and centred, under its own legend:
                 // from this camera the front face is too thin to hold text
                 // (drawn there, it fell onto the next row's key).
-                let at = cam.pt(p3(cx, y_top, cz + k.h * U * 0.14));
+                let at = cam.pt(p3(cx, y_top, cz));
                 legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier, max_w: px * 0.74 });
             }
         }

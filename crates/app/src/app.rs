@@ -202,6 +202,7 @@ pub struct App {
     update_ui: updates::UpdateUi,
     palette: palette::Palette,
     wallpaper_ui: wallpaper::WallpaperUi,
+    files_ui: cells::FilesUi,
     link: Link,
     rx: Receiver<Event>,
     /// `None` until the first look at the daemon.
@@ -468,6 +469,7 @@ impl App {
             update_ui: updates::UpdateUi::default(),
             palette: palette::Palette::default(),
             wallpaper_ui: wallpaper::WallpaperUi::default(),
+            files_ui: cells::FilesUi::default(),
             scene,
             tab,
             drag: None,
@@ -1749,6 +1751,8 @@ impl App {
         if self.profile_scroll {
             chosen = 2;
         }
+        let panel_height = if chosen == 0 { 232.0f32.min(rect.height()) } else { rect.height() };
+        let rect = Rect::from_min_size(rect.min, vec2(rect.width(), panel_height));
         widgets::group(ui, rect, R_PANEL);
         let inner = rect.shrink(PAD);
         let labels = ["Position", "Exact place", "Profiles"];
@@ -1767,6 +1771,8 @@ impl App {
         if let Some(k) = pills.show(ui, self.arrowed) {
             chosen = k;
         }
+        let active = pills.cells[chosen];
+        ui.painter().hline((active.left() + 12.0)..=(active.right() - 12.0), active.bottom() - 2.0, Stroke::new(2.0, INK));
         ui.ctx().data_mut(|d| d.insert_temp(key, chosen));
         let body = Rect::from_min_max(pos2(inner.left(), track.bottom() + 16.0), inner.max);
         let cell = match chosen {
@@ -1966,7 +1972,8 @@ impl App {
         if leaving.is_none() && self.keys_on_sheet(ui) {
             return;
         }
-        let width = 380.0f32.min(desk.width() - 40.0);
+        let widest = view.buttons.iter().map(|(label, _, _)| button_width(ui, label) + 36.0).fold(440.0f32, f32::max);
+        let width = widest.min(desk.width() - 40.0);
         let x = desk.center().x - width / 2.0 + 18.0;
         let inner = width - 36.0;
         let sub_g = {
@@ -1984,8 +1991,11 @@ impl App {
             view.focus = view.focus.saturating_sub(1);
         }
         let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
-        let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { widths.len() as f32 * 42.0 - 8.0 };
-        let title_h = 22.0;
+        let button_labels: Vec<_> = view.buttons.iter().map(|(label, _, _)| ui.painter().layout(label.clone(), regular(T_BODY), INK, inner - 28.0)).collect();
+        let button_heights: Vec<f32> = button_labels.iter().map(|label| (label.size().y + 16.0).max(34.0)).collect();
+        let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { button_heights.iter().sum::<f32>() + 8.0 * button_heights.len().saturating_sub(1) as f32 };
+        let title_g = ui.painter().layout(view.title.clone(), semibold(T_TITLE), INK, inner - if view.check.is_some() { 26.0 } else { 0.0 });
+        let title_h = title_g.size().y.max(22.0);
         let alternatives = leaving.is_none() && self.pairing.as_ref().is_some_and(|pair| matches!(pair.step, Step::Searching { .. } | Step::Hint));
         let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0 + if alternatives { 212.0 } else { 0.0 };
         let rect = Rect::from_min_size(pos2(x - 18.0, desk.bottom() - height - 20.0), vec2(width, height));
@@ -2031,8 +2041,7 @@ impl App {
                 ui.ctx().request_repaint();
             }
         }
-        let title = fit(&p, &view.title, &semibold(T_TITLE), inner - (tx - x));
-        p.text(pos2(tx, y + title_h / 2.0), Align2::LEFT_CENTER, &title, semibold(T_TITLE), INK);
+        p.galley(pos2(tx, y), title_g, INK);
         y += title_h + 4.0;
         let sub_h = sub_g.size().y;
         p.galley(pos2(x, y), sub_g, INK2);
@@ -2073,11 +2082,15 @@ impl App {
                 bx -= 8.0;
                 r
             } else {
-                Rect::from_min_size(pos2(x, y + k as f32 * 42.0), vec2(inner, 34.0))
+                Rect::from_min_size(pos2(x, y + button_heights[..k].iter().sum::<f32>() + k as f32 * 8.0), vec2(inner, button_heights[k]))
             };
-            let shown = fit(&p, label, &semibold(T_BODY), r.width() - 28.0);
+            let shown = if row { label.as_str() } else { "" };
             let id = Id::unique(("sheet-btn", &view.key, k));
-            let resp = button(&mut child, r, id, &shown, *look, true, Some(label));
+            let resp = button(&mut child, r, id, shown, *look, true, Some(label));
+            widgets::a11y(&resp, Role::Button, label, None);
+            if !row {
+                p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if *look == Look::Primary { SIGNAL_INK } else { INK });
+            }
             if k == view.focus && self.sheet_key != view.key && o >= 0.5 {
                 resp.request_focus();
                 self.sheet_key = view.key.clone();
@@ -2326,7 +2339,7 @@ impl eframe::App for App {
         let f = shell::frame(full);
         let content = f.content;
         let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
-        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper);
+        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper | Tab::Files);
         let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
         let desk = Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() }));
         // Files let go over a page without the desk: ask where they go.
@@ -2356,7 +2369,7 @@ impl eframe::App for App {
         // the transfer where a small window puts it at the top.
         let mut frame = scene;
         let mut compact = false;
-        if self.tab.desk() {
+        if self.tab.desk() && self.tab != Tab::Files {
             // A band at the desk's top holds the banner, the toast and (in a
             // small window) the transfer; the desk is framed below it and
             // above what floats along its bottom, never under either. The
@@ -2384,7 +2397,7 @@ impl eframe::App for App {
             self.sidebar(&mut top, &f, now);
             self.desk_actions(&mut top, head.translate(vec2(0.0, shell::HEAD_H)));
         }
-        if self.tab.desk() {
+        if self.tab.desk() && self.tab != Tab::Files {
             if compact {
                 self.desk_chips(ui, frame);
             } else {
@@ -2397,12 +2410,16 @@ impl eframe::App for App {
             self.backdrop_was = sig;
             self.glass.changed();
         }
-        if self.tab.desk() {
+        if self.tab.desk() && self.tab != Tab::Files {
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
             self.desk_overlay(ui, scene, hovering);
         }
         let body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
         match self.tab {
+            Tab::Files => {
+                let mut child = page(ui, body, "files");
+                self.files_panel(&mut child, body);
+            }
             Tab::Wallpaper => {
                 let mut child = page(ui, body, "wallpaper");
                 self.wallpaper_page(&mut child, body);

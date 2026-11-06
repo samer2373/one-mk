@@ -8,45 +8,115 @@ use crate::view;
 
 const GAMING: [(&str, &str); 3] = [("off", "Off"), ("on", "On"), ("auto", "Auto")];
 
+#[derive(Default)]
+pub(super) struct FilesUi {
+    picker: Option<(String, Receiver<Option<Vec<PathBuf>>>)>,
+    spatial: bool,
+    options: bool,
+}
+
 impl App {
     /// Clipboard & files under the desk (after council/codex): one column
     /// that scrolls, each group as tall as what it holds, so no label is
     /// shortened and no history row is cut by an edge.
     pub(super) fn files_panel(&mut self, ui: &mut Ui, rect: Rect) {
-        let wide = rect.width() >= 700.0;
+        if let Some(paths) = self.files_ui.picker.as_ref().and_then(|(_, receiver)| receiver.try_recv().ok()) {
+            let (id, _) = self.files_ui.picker.take().expect("picker completed");
+            if let Some(paths) = paths.filter(|paths| !paths.is_empty()) {
+                if let Some(index) = self.online_targets().into_iter().find(|index| self.scene.devices[*index].id == id) {
+                    self.send_to(index, paths);
+                } else {
+                    self.toast_error("That computer disconnected. Reconnect it, then choose the files again.", None, self.now);
+                }
+            }
+        }
         let transfers = self.running().map_or(0, |status| status.transfers.len());
-        let head_h = if transfers == 0 { if wide { 96.0 } else { 120.0 } } else { 2.0 * PAD + 30.0 + 54.0 * transfers.min(4) as f32 };
+        let recipients = self.running().map(|status| status.peers.clone()).unwrap_or_default();
+        let width = rect.width() - 10.0;
+        let chip_widths: Vec<f32> = recipients.iter().map(|peer| (text_width(ui, &peer.name, semibold(T_BODY)) + 54.0).clamp(132.0, (width - 2.0 * PAD).min(340.0))).collect();
+        let mut rows = 1;
+        let mut used = 0.0;
+        for chip_width in &chip_widths {
+            if used > 0.0 && used + chip_width > width - 2.0 * PAD { rows += 1; used = 0.0; }
+            used += chip_width + 8.0;
+        }
+        let shown_transfers = transfers.min(if rect.width() < 700.0 { 1 } else { 4 });
+        let head_h = 32.0 + 32.0 + rows as f32 * 44.0 + 24.0 + if self.files_ui.spatial { 148.0 } else { 0.0 } + if transfers > 0 { 28.0 + 36.0 * shown_transfers as f32 } else { 0.0 };
         let settings_h = 2.0 * PAD + 28.0 + 5.0 * 36.0;
         let items = self.clipboard_history.as_ref().and_then(|h| h.as_ref().ok()).map_or(0, Vec::len);
         let listed = self.prefs.history_enabled && items > 0;
         let history_h = 2.0 * PAD + 104.0 + 44.0 + if listed { 50.0 * items as f32 } else { 30.0 };
-        let total = head_h + M + if wide { settings_h } else { settings_h * 2.0 + M } + M + history_h;
-        let connected = self.running().is_some_and(|status| status.peers.iter().any(|peer| peer.online));
-        let sub = if connected {
-            "Drag files or folders onto a connected computer above. They arrive in its received files folder."
-        } else {
-            "No computer is connected right now. Files can go to one once it's on and connected."
-        };
+        let history_h = if listed { history_h } else { 164.0 };
+        let clipboard_h = if self.files_ui.options { settings_h } else { 80.0 };
+        let total = head_h + M + clipboard_h + M + history_h + M + settings_h;
         let mut child = ui.new_child(UiBuilder::new().max_rect(rect).id_salt("files-panel"));
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         let scroll = egui::ScrollArea::vertical().id_salt("files-page").auto_shrink([false, false]);
         #[cfg(debug_assertions)]
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()).map_or(scroll.clone(), |o| scroll.vertical_scroll_offset(o));
         scroll.show(&mut child, |ui| {
-            let (all, _) = ui.allocate_exact_size(vec2(rect.width() - 10.0, total), Sense::hover());
+            let (all, _) = ui.allocate_exact_size(vec2(width, total), Sense::hover());
             let head = Rect::from_min_size(all.min, vec2(all.width(), head_h));
-            let top = head.bottom() + M;
-            let width = if wide { (all.width() - M) / 2.0 } else { all.width() };
-            let clipboard = Rect::from_min_size(pos2(all.left(), top), vec2(width, settings_h));
-            let files = Rect::from_min_size(if wide { pos2(clipboard.right() + M, top) } else { pos2(all.left(), clipboard.bottom() + M) }, vec2(width, settings_h));
-            let history = Rect::from_min_size(pos2(all.left(), files.bottom() + M), vec2(all.width(), history_h));
+            let clipboard = Rect::from_min_size(pos2(all.left(), head.bottom() + M), vec2(all.width(), clipboard_h));
+            let history = Rect::from_min_size(pos2(all.left(), clipboard.bottom() + M), vec2(all.width(), history_h));
+            let files = Rect::from_min_size(pos2(all.left(), history.bottom() + M), vec2(all.width(), settings_h));
             for g in [head, clipboard, files, history] {
                 widgets::group(ui, g, R_GROUP);
             }
-            self.files_head(ui, head.shrink(PAD), "Drop files on a computer", sub);
-            self.clipboard_cell(ui, clipboard.shrink(PAD));
+            let inner = head.shrink(16.0);
+            title_row(ui, inner, "Send files", 110.0);
+            let spatial = Rect::from_min_size(pos2(inner.right() - 100.0, inner.top() - 4.0), vec2(100.0, 28.0));
+            if button(ui, spatial, Id::unique("files-spatial"), if self.files_ui.spatial { "Hide desk" } else { "Show desk" }, Look::Quiet, true, None).clicked() { self.files_ui.spatial = !self.files_ui.spatial; }
+            let (mut x, mut y) = (inner.left(), inner.top() + 32.0);
+            let dropped: Vec<PathBuf> = ui.input(|input| input.raw.dropped_files.iter().map(|file| file.path().to_path_buf()).collect());
+            let pointer = ui.input(|input| input.pointer.hover_pos());
+            let mut drop_id = None;
+            for (peer, chip_width) in recipients.iter().zip(&chip_widths) {
+                if x > inner.left() && x + chip_width > inner.right() { x = inner.left(); y += 44.0; }
+                let chip = Rect::from_min_size(pos2(x, y), vec2(*chip_width, 36.0));
+                let label = format!("{}  {}", if peer.online { "↗" } else { "○" }, peer.name);
+                let response = button(ui, chip, Id::unique(("files-recipient", &peer.id)), &label, Look::Quiet, peer.online && self.files_ui.picker.is_none(), Some(&format!("Send files to {}. Choose files, or drop files on this recipient.", peer.name)));
+                widgets::a11y(&response, Role::Button, &format!("Send files to {}{}", peer.name, if peer.online { ". Choose files or drop here" } else { ", offline" }), None);
+                if response.clicked() {
+                    let (sender, receiver) = std::sync::mpsc::channel();
+                    self.files_ui.picker = Some((peer.id.clone(), receiver));
+                    let context = ui.ctx().clone();
+                    let title = format!("Send files to {}", peer.name);
+                    std::thread::spawn(move || {
+                        let _ = sender.send(rfd::FileDialog::new().set_title(title).pick_files());
+                        context.request_repaint();
+                    });
+                }
+                if peer.online && pointer.is_some_and(|pointer| chip.contains(pointer)) {
+                    if ui.input(|input| !input.raw.hovered_files.is_empty()) { ui.painter().rect_stroke(chip.expand(2.0), R_INNER, Stroke::new(2.0, SIGNAL), StrokeKind::Outside); }
+                    if !dropped.is_empty() { drop_id = Some(peer.id.clone()); }
+                }
+                x += chip_width + 8.0;
+            }
+            y += 44.0;
+            if recipients.is_empty() { para(ui, pos2(inner.left(), y - 38.0), inner.width(), "Pair a computer to send files to it.", regular(T_BODY), INK2); }
+            let hint = if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Desk hidden. Choose a recipient to pick files, or drop files on its chip." };
+            y += para(ui, pos2(inner.left(), y), inner.width(), hint, regular(T_META), INK2) + 8.0;
+            if self.files_ui.spatial {
+                self.desk(ui, Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), 140.0)), rect, self.now);
+                y += 148.0;
+            } else if !dropped.is_empty() {
+                if let Some(index) = drop_id.and_then(|id| self.online_targets().into_iter().find(|index| self.scene.devices[*index].id == id)) { self.send_to(index, dropped); }
+                else { self.drop_files(dropped, None, self.now); }
+            }
+            if transfers > 0 { self.files_head(ui, Rect::from_min_max(pos2(inner.left(), y), inner.max), "Transfers", ""); }
+            if self.files_ui.options {
+                self.clipboard_cell(ui, clipboard.shrink(PAD));
+            } else {
+                let inner = clipboard.shrink(PAD);
+                title_row(ui, inner, "Clipboard", 140.0);
+                let summary = format!("Text {} · Images {} · Others can fetch {}", if self.prefs.clip_text { "on" } else { "off" }, if self.prefs.clip_image { "on" } else { "off" }, if self.prefs.clip_allow_fetch { "on" } else { "off" });
+                para(ui, inner.min + vec2(0.0, 28.0), inner.width(), &summary, regular(T_META), INK2);
+            }
+            let options = Rect::from_min_size(pos2(clipboard.right() - PAD - 124.0, clipboard.top() + PAD - 4.0), vec2(124.0, 28.0));
+            if button(ui, options, Id::unique("files-clipboard-options"), if self.files_ui.options { "Hide options" } else { "Sharing options" }, Look::Quiet, true, None).clicked() { self.files_ui.options = !self.files_ui.options; }
             self.files_settings(ui, files.shrink(PAD));
-            self.clipboard_history_cell(ui, history.shrink(PAD));
+            self.clipboard_history_cell(ui, history.shrink(16.0));
         });
     }
 
@@ -245,11 +315,11 @@ impl App {
         }
         let head = if transfers.len() == 1 { "1 transfer".to_owned() } else { format!("{} transfers", transfers.len()) };
         para(ui, r.left_top(), r.width(), &head, semibold(T_TITLE), INK);
-        let mut y = r.top() + 30.0;
-        let shown = ((r.bottom() - y + 8.0) / 54.0).floor().max(1.0) as usize;
+        let mut y = r.top() + 28.0;
+        let shown = ((r.bottom() - y + 8.0) / 36.0).floor().max(1.0) as usize;
         for t in transfers.iter().take(shown) {
-            self.transfer_row(ui, Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), 44.0)), t);
-            y += 54.0;
+            self.transfer_row(ui, Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), 36.0)), t);
+            y += 36.0;
         }
         if transfers.len() > shown {
             let more = format!("and {} more", transfers.len() - shown);
@@ -262,7 +332,7 @@ impl App {
         let (title, detail, frac) = view::transfer_lines(t);
         let p = ui.painter();
         p.text(r.left_top(), Align2::LEFT_TOP, fit(p, &title, &regular(T_BODY), r.width()), regular(T_BODY), INK);
-        let bar = Rect::from_min_size(pos2(r.left(), r.top() + 21.0), vec2(r.width(), 4.0));
+        let bar = Rect::from_min_size(pos2(r.left(), r.bottom() - 3.0), vec2(r.width(), 2.0));
         widgets::progress_bar(ui, bar, Id::unique(("transfer", t.id, &t.peer, t.sending)), frac);
         // Too long for the cell: leave out "x of y" before cutting anything.
         let detail = if text_width(ui, &detail, mono(T_META)) > r.width() && frac.is_some() {
@@ -270,7 +340,7 @@ impl App {
         } else {
             detail
         };
-        p.text(pos2(r.left(), r.top() + 30.0), Align2::LEFT_TOP, fit(p, &detail, &mono(T_META), r.width()), mono(T_META), INK2);
+        p.text(pos2(r.left(), r.top() + 17.0), Align2::LEFT_TOP, fit(p, &detail, &mono(T_META), r.width()), mono(T_META), INK2);
         let label = format!("{title}: {detail}");
         ui.ctx().accesskit_node_builder(Id::unique(("transfer-node", t.id, &t.peer)), |n| {
             n.set_role(Role::ProgressIndicator);
