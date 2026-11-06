@@ -265,7 +265,7 @@ from = "f5"
 to = "f6"
 scope = { peer = "$LONG" }
 TOML
-shot 43-keys-keyboard 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys
+shot 43-keys-keyboard 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_SIZE=1200x780 ONE_MK_APP_ZOOM=1
 shot 44-keys-edit-and-test 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_KEY_MORE=1 ONE_MK_APP_KEY_TEST=58d0,58u85,58d300,46d350,46u400,58u450
 shot 45-keys-press-a-key-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=f5 ONE_MK_APP_KEY_CAPTURE=1 ONE_MK_APP_SIZE=760x540
 shot 46-keys-list-search 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_KEY_PICK=vol
@@ -285,9 +285,11 @@ shot 97-reduced-transparency 3 "$W/a" ONE_MK_NO_GLASS=1
 shot 98-reduced-motion 3 "$W/a" ONE_MK_REDUCE_MOTION=1
 shot 99-files-scrolled 3 "$W/a" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=600
 shot 93b-files-small-transfers 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
-shot r5-keys-whole-1x 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_ZOOM=1
+shot r5-keys-whole-1x 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_ZOOM=1 ONE_MK_APP_SIZE=1200x780
 shot r5-keys-whole-2x 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_ZOOM=2 ONE_MK_APP_SIZE=1920x1200
 shot r5-keys-editor-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_SIZE=760x540
+shot r5-keys-safety-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=600
+shot r5-keys-picker-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_KEY_PICK=vol ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=210
 shot r5-files-full-width 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=1600x1000
 printf 'ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t3333-4444\tleft\t1\t0\tauto\tStudio PC\n' >"$W/offline.status"
 shot r5-files-offline 3 "$W/fx" ONE_MK_APP_STATUS="$W/offline.status" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
