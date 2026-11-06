@@ -1006,7 +1006,8 @@ mod tests {
             assert!(seen.len() < 200, "it never settles");
         }
         let close = *seen.last().unwrap();
-        assert!(close > whole.width() * 1.8, "{close} vs {}", whole.width());
+        // Closer, yet with two keys of board round it (round-3 design: at most 2.4x).
+        assert!(close > whole.width() * 1.4, "{close} vs {}", whole.width());
         assert!(seen.windows(2).all(|w| w[1] >= w[0] - 0.01), "it only grows on the way in");
         assert!(seen.len() > 12 && seen[seen.len() / 2] > whole.width() && seen[seen.len() / 2] < close, "it takes a while, passing through the middle");
         let (_, rect) = real_board();
