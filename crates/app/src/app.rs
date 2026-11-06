@@ -86,6 +86,12 @@ const SWAPS: [(&str, &str); 3] = [("auto", "Auto"), ("on", "Always swap"), ("off
 /// One computer's row in the Ctrl and Cmd card.
 const SWAP_ROW: f32 = 36.0;
 
+/// A Ctrl and Cmd row `inner_w` wide: one line when the full choices fit
+/// beside the name, else the name above and the choices across the row.
+pub(crate) fn swap_row_h(inner_w: f32) -> f32 {
+    if inner_w * 0.6 >= 264.0 { SWAP_ROW } else { 66.0 }
+}
+
 enum Drag {
     /// `place` is set when both computers' monitors are known: then the
     /// drag puts it at an exact place beside this computer's monitors.
@@ -1468,6 +1474,10 @@ impl App {
             _ if self.running().is_some_and(|s| !s.peers.is_empty()) => (if narrow { "Pair another" } else { "Pair another computer" }, Look::Quiet, true, None),
             _ => ("Pair a computer", Look::Primary, true, None),
         };
+        // On the desk, Start and Take back are offered where the eye is (in
+        // the card, in the banner) in Volt: here they step back to quiet,
+        // so one Volt action shows at a time.
+        let look = if look == Look::Primary && self.tab == Tab::Desk && matches!(job, Some(Job::Start | Job::TakeBack)) { Look::Quiet } else { look };
         (label.to_owned(), look, enabled, job)
     }
 
@@ -1680,6 +1690,17 @@ impl App {
                 let sh = para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), sub, regular(T_BODY), INK2);
                 let at = Rect::from_min_size(r.min, vec2(r.width(), th + sh + 6.0));
                 a11y_text(ui, Id::unique("headline"), at, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
+                // Off: the way to turn it on, in the card that says so.
+                if self.off() && self.status.is_some() {
+                    let busy = self.busy.contains(&Job::Start);
+                    let label = if busy { "Starting…" } else { "Start oneMK" };
+                    let bw = button_width(ui, "Start oneMK") + 8.0;
+                    let b = Rect::from_min_size(pos2(r.left(), at.bottom() + 16.0), vec2(bw, 36.0));
+                    if button(ui, b, Id::unique("start-in-card"), label, Look::Primary, !busy && !self.sheet_open(), Some("Start oneMK on this computer")).clicked() {
+                        self.busy.push(Job::Start);
+                        self.link.start();
+                    }
+                }
             }
             Cell::Inspector(sel) => self.peer_card(ui, r, sel.clone(), now),
             Cell::Controls => self.controls(ui, r),
@@ -1700,23 +1721,30 @@ impl App {
         let arrowed = self.arrowed;
         let mut changes = vec![];
         for (k, peer) in peers.iter().enumerate() {
-            let row = Rect::from_min_size(pos2(c.left(), c.top() + SWAP_ROW * k as f32), vec2(c.width(), SWAP_ROW));
+            let rh = swap_row_h(c.width());
+            let stacked = rh > SWAP_ROW;
+            let row = Rect::from_min_size(pos2(c.left(), c.top() + rh * k as f32), vec2(c.width(), rh));
             let p = ui.painter().clone();
-            let seg_w = 264.0f32.min(row.width() * 0.6);
-            let seg = Rect::from_min_size(pos2(row.right() - seg_w, row.center().y - 13.0), vec2(seg_w, 26.0));
+            let seg_w = if stacked { row.width() } else { 264.0 };
+            let seg = if stacked {
+                Rect::from_min_size(pos2(row.left(), row.top() + 28.0), vec2(seg_w, 28.0))
+            } else {
+                Rect::from_min_size(pos2(row.right() - seg_w, row.center().y - 13.0), vec2(seg_w, 26.0))
+            };
+            let name_y = if stacked { row.top() + 12.0 } else { row.center().y };
             let os_label = os_name(peer.os);
             let ow = text_width(ui, os_label, regular(T_META));
-            let name = fit(&p, &peer.name, &regular(T_BODY), seg.left() - row.left() - ow - 20.0);
+            let name_room = if stacked { row.width() } else { seg.left() - row.left() - 12.0 };
+            let name = fit(&p, &peer.name, &regular(T_BODY), name_room - ow - 8.0);
             let nw = text_width(ui, &name, regular(T_BODY));
-            p.text(pos2(row.left(), row.center().y), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
-            p.text(pos2(row.left() + nw + 8.0, row.center().y), Align2::LEFT_CENTER, os_label, regular(T_META), INK2);
+            p.text(pos2(row.left(), name_y), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
+            p.text(pos2(row.left() + nw + 8.0, name_y), Align2::LEFT_CENTER, os_label, regular(T_META), INK2);
             if name != peer.name {
-                ui.interact(Rect::from_min_max(row.min, pos2(row.left() + nw, row.max.y)), Id::unique(("swap-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
+                ui.interact(Rect::from_min_size(pos2(row.left(), name_y - 10.0), vec2(nw, 20.0)), Id::unique(("swap-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
             }
             let current = self.pending_swap.get(&peer.id).unwrap_or(&peer.swap);
-            // Shorter words when the full ones would be cut.
-            let full = seg_w >= 240.0;
-            let labels: Vec<&str> = if full { SWAPS.iter().map(|(_, l)| *l).collect() } else { vec!["Auto", "Swap", "No swap"] };
+            // The full words always: the row makes room for them.
+            let labels: Vec<&str> = SWAPS.iter().map(|(_, l)| *l).collect();
             let pills = Pills {
                 id: Id::unique(("swap", &peer.id)),
                 track: seg,

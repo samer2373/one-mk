@@ -42,9 +42,12 @@ enum Fix {
 fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
     match v {
         Verdict::Pass => widgets::draw_check(p, c, 12.0, INK2, 1.0),
-        // A step still to take: an open ring in the accent.
+        // Pending (a step to take, or on its way): an open ring with a
+        // clock hand, in ink. Volt stays for actions, never status.
         Verdict::Skip => {
-            p.circle_stroke(c, 5.5, Stroke::new(1.5, ACCENT));
+            p.circle_stroke(c, 6.0, Stroke::new(1.5, INK2));
+            p.line_segment([c, c + vec2(0.0, -3.5)], Stroke::new(1.5, INK2));
+            p.line_segment([c, c + vec2(2.5, 1.5)], Stroke::new(1.5, INK2));
         }
         Verdict::Warn => {
             // A triangle with a bar and a dot: not a ring, which reads as an
@@ -57,6 +60,19 @@ fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
         Verdict::Fail => {
             p.circle_filled(c, 6.0, ERROR);
         }
+    }
+}
+
+/// Whether a line the daemon says now is still pending, and if so whether
+/// it waits on the person (`true`: a permission to answer) or on oneMK.
+fn pending_kind(line: &str) -> Option<bool> {
+    let l = line.to_lowercase();
+    if ["waiting for your approval", "is asking", "choose allow", "allow one-mk", "not allowed"].iter().any(|w| l.contains(w)) {
+        Some(true)
+    } else if ["being set up", "starting", "setting up"].iter().any(|w| l.contains(w)) {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -159,7 +175,17 @@ impl App {
         // Off, the checks say so themselves (with Start).
         let live = if self.running().is_some() { self.live_lines() } else { vec![] };
         let mut needs: Vec<Item> = live.iter().filter(|(c, _)| *c == ERROR).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Fail, here: None, k: usize::MAX }).collect();
-        let mut works: Vec<Item> = live.iter().filter(|(c, _)| *c != ERROR).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Pass, here: None, k: usize::MAX }).collect();
+        // A line that waits on the person (a permission dialog to answer)
+        // or on oneMK (still setting up) is pending: never a tick.
+        let ask = if cfg!(target_os = "macos") { Some(("Allow sharing", Fix::OpenPermissionGuide)) } else { None };
+        let mut works: Vec<Item> = vec![];
+        for (c, l) in live.iter().filter(|(c, _)| *c != ERROR) {
+            let _ = c;
+            match pending_kind(l) {
+                Some(asks) => needs.push(Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Skip, here: if asks { ask } else { None }, k: usize::MAX }),
+                None => works.push(Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Pass, here: None, k: usize::MAX }),
+            }
+        }
         if let Some(checks) = &checks {
             for (k, c) in checks.iter().enumerate() {
                 let item = Item { title: c.title.clone(), detail: c.detail.clone(), fix: c.fix.clone(), verdict: c.verdict, here: self.window_fix(c), k };
@@ -201,7 +227,7 @@ impl App {
             } else if needs.is_empty() {
                 ("Not checked yet".to_owned(), INK2)
             } else if steps_only {
-                (if needs.len() == 1 { "One step left".to_owned() } else { format!("{} steps left", needs.len()) }, ACCENT)
+                (if needs.len() == 1 { "One step left".to_owned() } else { format!("{} steps left", needs.len()) }, INK)
             } else if needs.len() == 1 {
                 ("One thing needs you".to_owned(), if fails > 0 { ERROR } else { INK })
             } else {
@@ -250,7 +276,10 @@ impl App {
             a11y_text(ui, Id::unique("health-summary"), hero, Role::Status, &format!("{headline}. {sub}"), Some(Live::Polite));
             ui.add_space(14.0);
 
-            // What needs the person.
+            // What needs the person (problems), then what is pending (a step
+            // to take, or something still on its way): two groups.
+            let (pending, problems): (Vec<&Item>, Vec<&Item>) = needs.iter().partition(|i| i.verdict == Verdict::Skip);
+            for (group_title, needs) in [("Needs you", problems), ("Pending", pending)] {
             if !needs.is_empty() {
                 let inner = w - 36.0 - 26.0;
                 let bw = needs.iter().map(|i| match (&i.here, &i.fix) {
@@ -262,7 +291,7 @@ impl App {
                 let heights: Vec<f32> = needs.iter().map(|i| item_height(ui, i, text_w)).collect();
                 let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
                 let r = col(ui, h);
-                card(ui, r, if steps_only { "Next" } else { "Needs you" });
+                card(ui, r, group_title);
                 let mut y = r.top() + 48.0;
                 for (n, (i, ih)) in needs.iter().zip(&heights).enumerate() {
                     let row = Rect::from_min_size(pos2(r.left() + 18.0, y), vec2(w - 36.0, *ih));
@@ -304,6 +333,7 @@ impl App {
                     y += ih;
                 }
                 ui.add_space(14.0);
+            }
             }
 
             // How each paired computer answers.
@@ -385,7 +415,7 @@ impl App {
             48.0 + 3.0 * HELP_ROW - 6.0 + 14.0,
             48.0 + HELP_ROW - 6.0 + 14.0,
             48.0 + 62.0 + super::settings_controls::SHORTCUT_ROW * self.prefs.hotkeys.len() as f32 + 10.0 + if s.is_some_and(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
-            48.0 + 22.0 + (SWAP_ROW * peers as f32).max(40.0) + 14.0,
+            48.0 + 22.0 + (super::swap_row_h(col_w - 36.0) * peers as f32).max(40.0) + 14.0,
             48.0 + 4.0 * super::settings_controls::HOOK_H + 60.0,
             48.0 + 96.0 + 14.0,
             48.0 + 260.0 + 14.0,

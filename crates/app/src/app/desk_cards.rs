@@ -246,13 +246,17 @@ impl App {
 
         // Right: the last two minutes.
         let graph = Rect::from_min_max(pos2(body.left() + col_w + 24.0, c.top() + 40.0), body.max);
-        p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, format!("Round trip, last {}", rtt::span_words()), regular(T_META), INK3);
         let plot = Rect::from_min_max(pos2(graph.left(), graph.top() + 18.0), graph.max);
         match self.rtts.of(&peer.id).filter(|_| peer.online) {
-            Some(ring) if summary.is_some() => chart(&p, plot, ring, self.rtt_now(), summary),
+            Some(ring) if summary.is_some() => {
+                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, format!("Round trip, last {}", rtt::span_words()), regular(T_META), INK3);
+                chart(&p, plot, ring, self.rtt_now(), summary);
+            }
             _ => {
-                let text = if !peer.online { "Nothing to measure while it is offline" } else { "The line starts with the first replies" };
-                p.text(plot.center(), Align2::CENTER_CENTER, fit(&p, text, &regular(T_META), plot.width()), regular(T_META), INK3);
+                // No readings: no empty axes, one quiet line where the
+                // graph's title would be.
+                let text = if !peer.online { "No round trips while it is offline" } else { "The round-trip graph starts with the first replies" };
+                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, fit(&p, text, &regular(T_META), graph.width() - 30.0), regular(T_META), INK3);
             }
         }
     }
@@ -354,11 +358,14 @@ impl App {
         if online || on {
             // When typing on every computer stops by itself: a clock, beside
             // the switch it belongs to.
-            x -= 34.0 + 8.0;
-            let rect = Rect::from_min_size(pos2(x, y), vec2(34.0, 34.0));
-            let name = "When typing on every computer stops by itself";
+            // An icon and a word: what it is, at a glance.
+            let tw = text_width(ui, "Timer", semibold(T_BODY)) + 46.0;
+            x -= tw + 8.0;
+            let rect = Rect::from_min_size(pos2(x, y), vec2(tw, 34.0));
+            let name = "Timer: when typing on every computer stops by itself";
             let response = button(ui, rect, Id::unique("broadcast-options"), "", Look::Glass, !on, Some(name));
-            icons::draw(ui.painter(), Icon::Clock, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), if on { INK3 } else { mix(INK2, INK, f32::from(response.hovered())) });
+            icons::draw(ui.painter(), Icon::Clock, Rect::from_min_size(pos2(rect.left() + 12.0, rect.center().y - 8.0), vec2(16.0, 16.0)), if on { INK3 } else { INK2 });
+            ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, "Timer", semibold(T_BODY), if on { INK3 } else { INK });
             let response = response.on_hover_text(name);
             egui::Popup::menu(&response).width(280.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
                 let (row, _) = ui.allocate_exact_size(vec2(280.0, 34.0), Sense::hover());
