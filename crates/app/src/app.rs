@@ -2389,6 +2389,10 @@ mod debug {
                 app.update_output = out;
             }
         }
+        // ONE_MK_APP_MINIMIZE=1: minimised two seconds in (idle measurements).
+        if var("ONE_MK_APP_MINIMIZE").is_some() && now > 2.0 && once(&ctx, "minimize") {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
         // ONE_MK_APP_PALETTE=query: the command palette, open, with that typed.
         if let Some(q) = var("ONE_MK_APP_PALETTE")
             && now > 0.5

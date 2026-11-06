@@ -884,8 +884,9 @@ fn draw_card(
             let beat =
                 if nudging { 0.5 - 0.5 * ((now - v.phase_at) * std::f64::consts::TAU / 1.1).cos() as f32 } else { 0.0 };
             let c = pos2(inner.left() + 4.0, fy);
-            p.circle_filled(c, 7.0, SIGNAL.gamma_multiply(alpha * k * 0.18 * beat));
-            p.circle_filled(c, 3.5, wink(SIGNAL));
+            // Waiting is a state, not an action: ink, never Volt.
+            p.circle_filled(c, 7.0, INK2.gamma_multiply(alpha * k * 0.16 * beat));
+            p.circle_filled(c, 3.5, wink(INK2));
             let text = if v.covered || v.settings.is_none() {
                 "Waiting for System Settings…"
             } else {
