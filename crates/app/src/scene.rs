@@ -1306,20 +1306,9 @@ impl Scene {
         // desk's far edge melts into it, as the desk is the lit wood laid
         // over it at the light's strength (the same as mixing towards the
         // room's colour on a solid window, and see-through on a clear one).
-        // Each lit screen washes the wall behind it in its own colour, the
-        // way a monitor's glow does in a dim room: the glass over the desk
-        // has that colour to bend.
-        for (d, g) in self.devices.iter().zip(geo) {
-            if !d.online || d.a < 0.01 {
-                continue;
-            }
-            let (l, r) = (cam.pt(g.screen.at(0.0, 0.5)), cam.pt(g.screen.at(1.0, 0.5)));
-            let c = cam.pt(g.screen.at(0.5, 0.35));
-            let [cr, cg, cb] = hex(d.wall[0]);
-            // Each screen's glow on the room: a hint, not a coloured haze.
-            let col = rgba([cr.saturating_add(60), cg.saturating_add(60), cb.saturating_add(60)], 1.0, 0.065 * d.a);
-            crate::chrome::light(painter, c, (r - l).length() * 1.15 + 90.0, col);
-        }
+        // No coloured wash on the room: the screens' colour stays on the
+        // screens, with only a small neutral pool of light under each one.
+        let _ = geo;
         // The desk is lit around the computers and falls off into the room:
         // no edges, nothing to suggest a box the computers sit in.
         let (cx, cz) = (self.focus_x, -4.0);
@@ -1395,11 +1384,13 @@ impl Scene {
             let wall = is_wall(d.kind, &d.screens);
             let [fx, fz, rx, _] = g.foot;
             if d.online {
+                // The screen's light where it falls, close by and nearly
+                // neutral (a tenth of its colour), not a tinted haze.
                 let c = hex(d.wall[0]);
                 let pw = if wall { rx.max(36.0) } else { 36.0 };
-                let glow = [c[0].saturating_add(70), c[1].saturating_add(60), c[2].saturating_add(50)];
-                pool(painter, cam, v(fx, 0.0, fz + 14.0), pw * 1.5, 34.0, rgba(glow, 1.0, 0.08 * a));
-                pool(painter, cam, v(fx, 0.0, fz + 10.0), pw, 18.0, rgba(glow, 1.0, 0.11 * a));
+                let grey = |k: u8| ((u16::from(k) + 3 * 150) / 4) as u8;
+                let glow = [grey(c[0]), grey(c[1]), grey(c[2])];
+                pool(painter, cam, v(fx, 0.0, fz + 10.0), pw, 18.0, rgba(glow, 1.0, 0.07 * a));
             }
             let up = (d.at.y - d.target.y.max(0.0)).clamp(0.0, 6.0) / 6.0;
             let shadow = |[fx, fz, rx, rz]: [f32; 4]| {

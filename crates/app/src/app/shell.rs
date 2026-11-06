@@ -70,12 +70,16 @@ fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: b
     let down = enabled && r.is_pointer_button_down_on();
     let p = ui.painter();
     if chosen {
-        p.rect(rect, CornerRadius::same(8), if down { widgets::pressed(SIDE_CHOSEN, 1.0) } else { SIDE_CHOSEN }, Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
+        // Chosen: a lighter fill and a visible edge, a step above hover.
+        let fill = mix(SIDE_CHOSEN, Color32::from_rgb(0x24, 0x28, 0x30), 0.5);
+        p.rect(rect, CornerRadius::same(8), if down { widgets::pressed(fill, 1.0) } else { fill }, Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
     } else if down {
         // Pressed: a deeper well than the hover, never the chosen look.
         p.rect_filled(rect, CornerRadius::same(8), widgets::pressed(SIDE_HOVER, 1.0));
     } else if hover > 0.01 {
-        p.rect_filled(rect, CornerRadius::same(8), SIDE_HOVER.gamma_multiply(hover));
+        // Hover is a hint, clearly weaker than the chosen page: half way
+        // from the sidebar to the hover tone, no edge.
+        p.rect_filled(rect, CornerRadius::same(8), mix(SIDEBAR, SIDE_HOVER, 0.55 * hover));
     }
     widgets::focus_ring(ui, &r, rect, 8);
     if r.hovered() && enabled {
@@ -170,7 +174,7 @@ impl App {
             let col = if !enabled { INK3.gamma_multiply(0.6) } else if on { INK } else { mix(INK2, INK, hover) };
             icons::draw(ui.painter(), icon, Rect::from_center_size(pos2(r.left() + 17.0, r.center().y), vec2(15.0, 15.0)), col);
             ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, name, regular(T_BODY), col);
-            ui.painter().text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, format!("{}{key}", cmd()), mono(T_META), SHORTCUT_INK);
+            ui.painter().text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, format!("{}{key}", cmd()), mono(T_META), if on { INK3 } else { SHORTCUT_INK });
             if resp.clicked() {
                 self.set_tab(tab);
             }

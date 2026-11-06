@@ -187,16 +187,10 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
             let fill = mix(mix(SIGNAL, SIGNAL_LIT, hover), SIGNAL_INK, 0.16 * press);
             p.rect_filled(rr, CornerRadius::same(radius), fill);
         }
+        // One emphasis system: the toolbar's buttons are quiet fills too
+        // (no raised rim); only Primary is strong.
         (Look::Glass, true) => {
-            for s in glass_shapes_as(&ctx, id.with("glass").value(), rr, rr.height() / 2.0, CONTROL_GLASS) {
-                p.add(s);
-            }
-            if hover > 0.0 {
-                p.rect_filled(rr, CornerRadius::same(radius), Color32::from_white_alpha((14.0 * hover) as u8));
-            }
-            if press > 0.0 {
-                p.rect_filled(rr, CornerRadius::same(radius), Color32::from_black_alpha((90.0 * press) as u8));
-            }
+            p.rect_filled(rr, CornerRadius::same(radius), pressed(mix(BUTTON, BUTTON_LIT, hover), press));
         }
         (Look::Quiet, true) => {
             p.rect(rr, CornerRadius::same(radius), pressed(mix(BUTTON, BUTTON_LIT, hover), press), Stroke::new(1.0, CONTROL_EDGE), StrokeKind::Inside);
