@@ -492,15 +492,6 @@ impl App {
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
         scroll.show(&mut child, |ui| {
             let (all, _) = ui.allocate_exact_size(vec2(area.width(), total + 44.0), Sense::hover());
-            // Credits for what the window draws and isn't ours.
-            let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for oneMK.";
-            let credit_at = pos2(all.left() + 4.0, all.bottom() - 16.0);
-            let shown = fit(ui.painter(), credit, &regular(T_META), all.width() - 8.0);
-            ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), INK3);
-            let link = ui.interact(widgets::hit_rect(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0))), Id::unique("credit-mouse"), Sense::click());
-            if link.on_hover_text("Open the model's page").clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
-            }
             let r = |k: usize| Rect::from_min_size(pos2(all.left() + at[k].0 as f32 * (col_w + gap), all.top() + at[k].1), vec2(col_w, heights[k]));
             self.edges_card(ui, r(0));
             self.power_card(ui, r(1));
@@ -515,6 +506,22 @@ impl App {
             let c = card(ui, r(7), "Pointer and layout");
             self.extra_controls(ui, c);
             self.updates_card(ui, r(8));
+            // Credits for what the window draws and isn't ours: last on the
+            // page, and last in Tab order.
+            let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for oneMK.";
+            let credit_at = pos2(all.left() + 4.0, all.bottom() - 16.0);
+            let shown = fit(ui.painter(), credit, &regular(T_META), all.width() - 8.0);
+            let link = ui.interact(widgets::hit_rect(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0))), Id::unique("credit-mouse"), Sense::click());
+            let lr = link.rect;
+            ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), if link.hovered() { INK } else { INK3 });
+            if link.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            widgets::focus_ring(ui, &link, lr, 6);
+            widgets::a11y(&link, Role::Link, "Credit: open the 3D mouse model's page", None);
+            if link.on_hover_text("Open the model's page").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
+            }
         });
     }
 
