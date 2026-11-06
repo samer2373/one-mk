@@ -388,6 +388,9 @@ impl App {
             None => (INK3, "Looking for oneMK…".to_owned()),
             Some(None) => (INK3, "Sharing is off".to_owned()),
             Some(Some(_)) if trouble => (ERROR, "Something needs you".to_owned()),
+            // Only "all good" when a computer is actually connected.
+            Some(Some(s)) if s.peers.is_empty() => (INK3, "Sharing is on · Nothing paired".to_owned()),
+            Some(Some(s)) if !s.peers.iter().any(|p| p.online) => (INK3, "Sharing is on · Waiting for computers".to_owned()),
             Some(Some(_)) => (OK, "Sharing is on · All good".to_owned()),
         };
         let stop_w = if self.running().is_some() { text_width(ui, "Stop", regular(T_META)) + 16.0 } else { 0.0 };

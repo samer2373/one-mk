@@ -232,7 +232,13 @@ impl App {
             p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { WARN } else { INK2 });
             if q.is_some() {
                 let (lo, hi) = (rtt::ms_number(s.min_us), rtt::ms(s.p95_us));
-                let usual = if hi == format!("{lo} ms") { format!(" · usually {hi}") } else { format!(" · usually {lo}–{hi}") };
+                // Lost packets are named apart from slowness (stalls).
+                let usual = match s.lost {
+                    0 if hi == format!("{lo} ms") => format!(" · usually {hi}"),
+                    0 => format!(" · usually {lo}–{hi}"),
+                    1 => " · 1 packet lost".to_owned(),
+                    n => format!(" · {n} packets lost"),
+                };
                 p.text(pos2(body.left() + ww, body.top() + 48.0), Align2::LEFT_CENTER, fit(&p, &usual, &regular(T_BODY), col_w - ww), regular(T_BODY), INK3);
             }
         } else {

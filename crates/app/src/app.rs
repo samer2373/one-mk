@@ -1931,6 +1931,14 @@ impl App {
                 ("Looking for another computer".into(), sub, vec![quiet("Cancel", Act::Close)], 0)
             }
             Step::Found => ("Found a computer".into(), "Connecting to it…".into(), vec![quiet("Cancel", Act::Close)], 0),
+            // A computer named like this one: say so, so the sheet never
+            // seems to offer this computer to itself.
+            Step::Code { name, .. } if self.running().is_some_and(|s| s.name == *name) => (
+                format!("Found another computer named “{name}”"),
+                "It has the same name as this one. Check that its screen shows the same code, then confirm.".into(),
+                vec![quiet("They don't match", Act::Decline), ("Codes match, pair".into(), Look::Primary, Act::Confirm)],
+                0,
+            ),
             Step::Code { name, .. } => (
                 format!("Found “{name}”"),
                 "Check that its screen shows the same code, then confirm.".into(),
