@@ -265,6 +265,13 @@ impl App {
         let graph = Rect::from_min_max(pos2(body.left() + col_w + 24.0, c.top() + 40.0), body.max);
         let plot = Rect::from_min_max(pos2(graph.left(), graph.top() + 18.0), graph.max);
         match self.rtts.of(&peer.id).filter(|_| peer.online) {
+            // A handful of readings: say so in a line rather than a big,
+            // nearly empty plot.
+            Some(_) if summary.is_some_and(|s| s.count < 8) => {
+                let n = summary.map_or(0, |s| s.count);
+                let text = format!("{n} {} so far · the graph fills in over {}", if n == 1 { "reading" } else { "readings" }, rtt::span_words());
+                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, fit(&p, &text, &regular(T_META), graph.width() - 30.0), regular(T_META), INK3);
+            }
             Some(ring) if summary.is_some() => {
                 p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, format!("Round trip, last {}", rtt::span_words()), regular(T_META), INK3);
                 chart(&p, plot, ring, self.rtt_now(), summary);

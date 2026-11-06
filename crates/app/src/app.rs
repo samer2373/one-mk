@@ -246,6 +246,9 @@ pub struct App {
     notice: desk_cards::NoticeHold,
     /// Where the toast goes in the desk's band this frame (None: off the desk).
     toast_slot: Option<Rect>,
+    /// How tall each short cell's contents were last drawn (cards are
+    /// sized to them, not stretched to the tallest).
+    cell_h: HashMap<&'static str, f32>,
     pending_swap: HashMap<String, String>,
     /// A computer that should hop (not slide) to its new place.
     hop: Option<String>,
@@ -487,6 +490,7 @@ impl App {
             apart: HashSet::new(),
             notice: desk_cards::NoticeHold::default(),
             toast_slot: None,
+            cell_h: HashMap::new(),
             pending_swap: HashMap::new(),
             hop: None,
             just_paired: None,
@@ -1655,8 +1659,12 @@ impl App {
         }
         let cells = self.cells(rect);
         // Each cell on a glass card of its own, the window's gap between.
-        for (_, c) in &cells {
+        for (cell, c) in &cells {
             let mut card = Rect::from_min_max(c.min - vec2(PAD - M / 2.0, PAD), c.max + vec2(PAD - M / 2.0, PAD));
+            // A short cell's card ends a padding under what it holds.
+            if let Some(h) = cell_key(cell).and_then(|k| self.cell_h.get(k)) {
+                card.max.y = card.max.y.min(c.top() + h + PAD + 2.0);
+            }
             if card.left() < rect.left() + M {
                 card.min.x = rect.left();
             }
@@ -1710,7 +1718,18 @@ impl App {
             let mut child = ui.new_child(UiBuilder::new().max_rect(r2).id_salt(("cell", k)));
             child.set_clip_rect(rect);
             child.set_opacity(e * dim);
+            let layer = child.layer_id();
+            let start = ui.ctx().graphics(|g| g.get(layer).map_or(0, |l| l.all_entries().len()));
             self.draw_cell(&mut child, &c, r2, now);
+            // What it really took (its shapes' extent), for its card next frame.
+            if let Some(key) = cell_key(&c) {
+                let bottom = ui.ctx().graphics(|g| g.get(layer).map_or(r2.top(), |l| l.all_entries().skip(start).map(|e| e.shape.visual_bounding_rect()).filter(|b| b.is_finite()).fold(r2.top(), |m, b| m.max(b.bottom()))));
+                let h = (bottom - r2.top()).clamp(0.0, r2.height());
+                if (self.cell_h.get(key).copied().unwrap_or(f32::MAX) - h).abs() > 0.5 && e >= 1.0 {
+                    self.cell_h.insert(key, h);
+                    ui.ctx().request_repaint();
+                }
+            }
         }
     }
 
@@ -2250,6 +2269,18 @@ impl App {
 }
 
 /// The sheet grows from 98% as it arrives.
+/// Cells whose card fits what they hold (the others fill their column).
+fn cell_key(c: &Cell) -> Option<&'static str> {
+    match c {
+        Cell::Controls => Some("controls"),
+        Cell::Head(..) => Some("head"),
+        Cell::Arrange(_) => Some("arrange"),
+        Cell::LineUp(_) => Some("line-up"),
+        Cell::Inspector(None) => Some("me"),
+        _ => None,
+    }
+}
+
 fn lerp_scale(t: f32) -> f32 {
     if motion::reduced() { 1.0 } else { 0.98 + 0.02 * t }
 }
