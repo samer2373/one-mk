@@ -801,6 +801,46 @@ fn grown(pts: &[Pos2; 4], by: f32) -> Vec<Pos2> {
     pts.iter().map(|p| *p + (*p - c).normalized() * by).collect()
 }
 
+/// The outline round `pts` (their convex hull), pushed out `by` points
+/// with rounded corners: a ring that hugs one computer's silhouette.
+fn hull_grown(pts: &[Pos2], by: f32) -> Vec<Pos2> {
+    let mut p: Vec<Pos2> = pts.to_vec();
+    p.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    p.dedup_by(|a, b| a.distance(*b) < 0.01);
+    if p.len() < 3 {
+        return p;
+    }
+    let cross = |o: Pos2, a: Pos2, b: Pos2| (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    let mut hull: Vec<Pos2> = vec![];
+    for pass in 0..2 {
+        let start = hull.len();
+        let iter: Box<dyn Iterator<Item = &Pos2>> = if pass == 0 { Box::new(p.iter()) } else { Box::new(p.iter().rev()) };
+        for &q in iter {
+            while hull.len() >= start + 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 0.0 {
+                hull.pop();
+            }
+            hull.push(q);
+        }
+        hull.pop();
+    }
+    // Offset each corner by an arc between its two edges' normals.
+    let n = hull.len();
+    let mut out = vec![];
+    for k in 0..n {
+        let (prev, cur, next) = (hull[(k + n - 1) % n], hull[k], hull[(k + 1) % n]);
+        let n0 = { let d = (cur - prev).normalized(); vec2(d.y, -d.x) };
+        let n1 = { let d = (next - cur).normalized(); vec2(d.y, -d.x) };
+        let (a0, mut a1) = (n0.y.atan2(n0.x), n1.y.atan2(n1.x));
+        while a1 < a0 { a1 += std::f32::consts::TAU; }
+        let steps = (((a1 - a0) / 0.35).ceil() as usize).clamp(1, 12);
+        for j in 0..=steps {
+            let a = a0 + (a1 - a0) * j as f32 / steps as f32;
+            out.push(cur + vec2(a.cos(), a.sin()) * by);
+        }
+    }
+    out
+}
+
 fn bez(p0: V3, p1: V3, p2: V3, p3: V3, t: f32) -> V3 {
     let s = 1.0 - t;
     p0 * (s * s * s) + p1 * (3.0 * s * s * t) + p2 * (3.0 * s * t * t) + p3 * (t * t * t)
@@ -1224,8 +1264,12 @@ impl Scene {
         self.faces = faces;
         // Keyboard focus: one tight ring round the whole computer, screen,
         // stand and base, 4 points out, never round a neighbour.
-        if let Some(b) = self.focused.and_then(|i| self.bounds(i)) {
-            painter.rect_stroke(b.expand(4.0), egui::CornerRadius::same(10), Stroke::new(2.0, SIGNAL), egui::StrokeKind::Outside);
+        if let Some(i) = self.focused {
+            let pts: Vec<Pos2> = self.faces.iter().filter(|f| f.owner == i).flat_map(|f| f.pts).collect();
+            let ring = hull_grown(&pts, 5.0);
+            if ring.len() > 2 {
+                painter.add(Shape::closed_line(ring, Stroke::new(2.0, SIGNAL)));
+            }
         }
         self.ribbon(painter, &cam, &geo);
         if self.empty_slot {
@@ -1811,6 +1855,19 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn the_focus_ring_hugs_the_outline_from_outside() {
+        let sq = [pos2(0.0, 0.0), pos2(10.0, 0.0), pos2(10.0, 10.0), pos2(0.0, 10.0), pos2(5.0, 5.0)];
+        let ring = hull_grown(&sq, 4.0);
+        assert!(ring.len() > 4);
+        for p in &ring {
+            let outside = p.x < -0.1 || p.x > 10.1 || p.y < -0.1 || p.y > 10.1;
+            assert!(outside, "{p:?} is inside");
+            let d = (p.x.clamp(0.0, 10.0) - p.x).hypot(p.y.clamp(0.0, 10.0) - p.y);
+            assert!((d - 4.0).abs() < 0.05, "{p:?} is {d} away");
         }
     }
 
