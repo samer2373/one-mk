@@ -80,7 +80,8 @@ fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: b
         p.rect(rect, CornerRadius::same(8), if down { widgets::pressed(fill, 1.0) } else { fill }, Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
     } else if down {
         // Pressed: a deeper well than the hover, never the chosen look.
-        p.rect_filled(rect, CornerRadius::same(8), widgets::pressed(SIDE_HOVER, 1.0));
+        // rest < hover < pressed < chosen (which adds its edge).
+        p.rect_filled(rect, CornerRadius::same(8), SIDE_CHOSEN);
     } else if hover > 0.01 {
         // Hover is a hint, clearly weaker than the chosen page: half way
         // from the sidebar to the hover tone, no edge.

@@ -384,8 +384,13 @@ pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: b
     // Off, the track's edge is what shows the control: 3:1 on the group.
     p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, mix(SWITCH_EDGE, Color32::TRANSPARENT, fill)), StrokeKind::Inside);
     let knob = pos2(track.left() + 11.0 + 16.0 * knob_t, track.center().y);
-    p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(Rect::from_center_size(knob, vec2(18.0, 18.0)), CornerRadius::same(9)));
-    p.circle_filled(knob, 9.0, if enabled { Color32::WHITE } else { INK2 });
+    // Pressed, the knob stretches toward where it will go (as the
+    // system's switches do): a look of its own, apart from hover.
+    let stretch = 5.0 * press;
+    let toward = if on { -1.0 } else { 1.0 };
+    let kr = Rect::from_center_size(knob + vec2(toward * stretch / 2.0, 0.0), vec2(18.0 + stretch, 18.0));
+    p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(kr, CornerRadius::same(9)));
+    p.rect_filled(kr, CornerRadius::same(9), if enabled { Color32::WHITE } else { INK2 });
     focus_ring(ui, &r, track, 11);
     if r.gained_focus() && keyboard_focus(&ctx) {
         r.scroll_to_me(None);
@@ -460,7 +465,9 @@ impl Pills<'_> {
             // Under the pointer, a faint lift; pressed, a deeper well. The
             // chosen one's capsule (above) is the selection, apart from both.
             if enabled && !on && (r.hovered() || r.is_pointer_button_down_on()) {
-                let fill = if r.is_pointer_button_down_on() { Color32::from_black_alpha(90) } else { Color32::from_white_alpha(12) };
+                // Pressed is a stronger lift than hover (a dark well can't
+                // show on the dark track).
+                let fill = if r.is_pointer_button_down_on() { Color32::from_white_alpha(30) } else { Color32::from_white_alpha(12) };
                 p.rect_filled(*cell, CornerRadius::same(round(*cell)), fill);
             }
             // The chosen one pressed: its capsule sinks a step (darker),
