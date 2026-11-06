@@ -8,6 +8,14 @@ use crate::view;
 
 const GAMING: [(&str, &str); 3] = [("off", "Off"), ("on", "On"), ("auto", "Auto")];
 
+fn transfer_height(transfer: &one_mk_ctl::status::TransferStatus) -> f32 {
+    if transfer.rate == 0 { 54.0 } else { 36.0 }
+}
+
+fn bounded_scroll(offset: f32, content_height: f32, viewport_height: f32) -> f32 {
+    offset.clamp(0.0, (content_height - viewport_height).max(0.0))
+}
+
 #[derive(Default)]
 pub(super) struct FilesUi {
     picker: Option<(String, Receiver<Option<Vec<PathBuf>>>)>,
@@ -31,7 +39,7 @@ impl App {
         let transfers = self.running().map_or(0, |status| status.transfers.len());
         let recipients = self.running().map(|status| status.peers.clone()).unwrap_or_default();
         let width = rect.width() - 10.0;
-        let chip_widths: Vec<f32> = recipients.iter().map(|peer| (text_width(ui, &peer.name, semibold(T_BODY)) + 54.0).clamp(132.0, (width - 2.0 * PAD).min(340.0))).collect();
+        let chip_widths: Vec<f32> = recipients.iter().map(|peer| (text_width(ui, &format!("{}{}", peer.name, if peer.online { "" } else { " · Offline" }), semibold(T_BODY)) + 54.0).clamp(132.0, (width - 2.0 * PAD).min(340.0))).collect();
         let mut rows = 1;
         let mut used = 0.0;
         for chip_width in &chip_widths {
@@ -39,9 +47,14 @@ impl App {
             used += chip_width + 8.0;
         }
         let shown_transfers = if self.files_ui.all_transfers { transfers } else { transfers.min(if rect.width() < 700.0 { 1 } else { 4 }) };
-        let hint = if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Desk hidden. Choose a recipient to pick files, or drop files on its chip." };
+        let transfer_height = self.running().map_or(0.0, |status| status.transfers.iter().take(shown_transfers).map(transfer_height).sum::<f32>());
+        let reconnect;
+        let hint = if !recipients.is_empty() && recipients.iter().all(|peer| !peer.online) {
+            reconnect = format!("Open oneMK on {} to reconnect, then choose files or drop them here.", recipients[0].name);
+            reconnect.as_str()
+        } else if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Choose a recipient to pick files, or drop files on its chip." };
         let hint_h = ui.painter().layout(hint.to_owned(), regular(T_META), INK2, width - 32.0).size().y;
-        let head_h = 32.0 + rows as f32 * 44.0 + hint_h + 40.0 + if self.files_ui.spatial { 148.0 } else { 0.0 } + if transfers > 0 { 28.0 + 36.0 * shown_transfers as f32 } else { 0.0 };
+        let head_h = 32.0 + rows as f32 * 44.0 + hint_h + 40.0 + if self.files_ui.spatial { 148.0 } else { 0.0 } + if transfers > 0 { 28.0 + transfer_height } else { 0.0 };
         // One inset (16) for every group on the page; each as tall as its rows.
         let settings_h = 2.0 * 16.0 + 28.0 + 5.0 * 36.0 + 6.0;
         let files_h = 2.0 * 16.0 + 28.0 + 4.0 * 36.0 + 6.0;
@@ -56,7 +69,7 @@ impl App {
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         let scroll = egui::ScrollArea::vertical().id_salt("files-page").auto_shrink([false, false]);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
-        let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()).map_or(scroll.clone(), |o| scroll.vertical_scroll_offset(o));
+        let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(bounded_scroll(offset, total, rect.height())));
         scroll.show(&mut child, |ui| {
             let (all, _) = ui.allocate_exact_size(vec2(width, total), Sense::hover());
             let head = Rect::from_min_size(all.min, vec2(all.width(), head_h));
@@ -77,7 +90,7 @@ impl App {
             for (peer, chip_width) in recipients.iter().zip(&chip_widths) {
                 if x > inner.left() && x + chip_width > inner.right() { x = inner.left(); y += 44.0; }
                 let chip = Rect::from_min_size(pos2(x, y), vec2(*chip_width, 36.0));
-                let label = format!("{}  {}", if peer.online { "↗" } else { "○" }, peer.name);
+                let label = format!("{}  {}{}", if peer.online { "↗" } else { "○" }, peer.name, if peer.online { "" } else { " · Offline" });
                 let response = button(ui, chip, Id::unique(("files-recipient", &peer.id)), &label, Look::Quiet, peer.online && self.files_ui.picker.is_none(), Some(&format!("Send files to {}. Choose files, or drop files on this recipient.", peer.name)));
                 widgets::a11y(&response, Role::Button, &format!("Send files to {}{}", peer.name, if peer.online { ". Choose files or drop here" } else { ", offline" }), None);
                 if response.clicked() {
@@ -321,7 +334,7 @@ impl App {
         let head = if transfers.len() == 1 { "1 transfer".to_owned() } else { format!("{} transfers", transfers.len()) };
         para(ui, r.left_top(), r.width(), &head, semibold(T_TITLE), INK);
         let mut y = r.top() + 28.0;
-        let shown = ((r.bottom() - y + 8.0) / 36.0).floor().max(1.0) as usize;
+        let shown = if self.files_ui.all_transfers { transfers.len() } else { transfers.len().min(if r.width() < 668.0 { 1 } else { 4 }) };
         if transfers.len() > shown || self.files_ui.all_transfers {
             let label = if self.files_ui.all_transfers { "Show less".to_owned() } else { format!("Show all {}", transfers.len()) };
             let width = button_width(ui, &label);
@@ -329,8 +342,9 @@ impl App {
             if button(ui, rect, Id::unique("files-all-transfers"), &label, Look::Quiet, true, None).clicked() { self.files_ui.all_transfers = !self.files_ui.all_transfers; }
         }
         for t in transfers.iter().take(shown) {
-            self.transfer_row(ui, Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), 36.0)), t);
-            y += 36.0;
+            let height = transfer_height(t);
+            self.transfer_row(ui, Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), height)), t);
+            y += height;
         }
     }
 
@@ -340,15 +354,24 @@ impl App {
         let p = ui.painter();
         p.text(r.left_top(), Align2::LEFT_TOP, fit(p, &title, &regular(T_BODY), r.width()), regular(T_BODY), INK);
         let bar = Rect::from_min_size(pos2(r.left(), r.bottom() - 3.0), vec2(r.width(), 2.0));
-        widgets::progress_bar(ui, bar, Id::unique(("transfer", t.id, &t.peer, t.sending)), frac);
+        if t.rate == 0 {
+            p.rect_filled(bar, 1.0, WARN.gamma_multiply(0.22));
+            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac.unwrap_or(0.0), bar.height())), 1.0, WARN);
+        } else {
+            widgets::progress_bar(ui, bar, Id::unique(("transfer", t.id, &t.peer, t.sending)), frac);
+        }
         // Too long for the cell: leave out "x of y" before cutting anything.
         let detail = if text_width(ui, &detail, mono(T_META)) > r.width() && frac.is_some() {
             detail.split(" · ").enumerate().filter(|(k, _)| *k != 1).map(|(_, s)| s).collect::<Vec<_>>().join(" · ")
         } else {
             detail
         };
-        p.text(pos2(r.left(), r.top() + 17.0), Align2::LEFT_TOP, fit(p, &detail, &mono(T_META), r.width()), mono(T_META), INK2);
-        let label = format!("{title}: {detail}");
+        p.text(pos2(r.left(), r.top() + 17.0), Align2::LEFT_TOP, fit(p, &detail, &mono(T_META), r.width()), mono(T_META), if t.rate == 0 { WARN } else { INK2 });
+        let recovery = if t.rate == 0 { format!("Open oneMK on {} to reconnect.", t.peer) } else { String::new() };
+        if !recovery.is_empty() {
+            p.text(pos2(r.left(), r.top() + 34.0), Align2::LEFT_TOP, fit(p, &recovery, &regular(T_META), r.width()), regular(T_META), INK2);
+        }
+        let label = format!("{title}: {detail}. {recovery}");
         ui.ctx().accesskit_node_builder(Id::unique(("transfer-node", t.id, &t.peer)), |n| {
             n.set_role(Role::ProgressIndicator);
             n.set_label(label);
@@ -441,5 +464,24 @@ impl App {
         if switch_help(ui, row(3), Id::unique("file-drop-zones"), "Drop files at screen edges", "file-drop-zones", p.drop_zones, true).clicked() {
             self.set_pref("file drop zones", &["drag", if p.drop_zones { "--off" } else { "--on" }], |prefs| prefs.drop_zones = !p.drop_zones);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn files_scroll_never_leaves_the_content() {
+        assert_eq!(bounded_scroll(600.0, 700.0, 500.0), 200.0);
+        assert_eq!(bounded_scroll(600.0, 200.0, 500.0), 0.0);
+        assert_eq!(bounded_scroll(-12.0, 700.0, 500.0), 0.0);
+    }
+
+    #[test]
+    fn stalled_transfer_reserves_its_recovery_line() {
+        let transfer = one_mk_ctl::status::TransferStatus { id: 8, sending: true, peer: "Studio PC".into(), files: 1, done: 500_000, total: 9_000_000, rate: 0 };
+        assert_eq!(transfer_height(&transfer), 54.0);
+        assert_eq!(transfer_height(&one_mk_ctl::status::TransferStatus { rate: 100, ..transfer }), 36.0);
     }
 }

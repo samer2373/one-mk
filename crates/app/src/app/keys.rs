@@ -107,6 +107,7 @@ pub(super) struct KeysUi {
     /// The 3D keyboard as last built, and the key the pointer is over.
     board: Option<crate::gear::Keyboard>,
     board_hover: Option<u16>,
+    board_detail: bool,
     /// The 3D mouse: its model (read once) and its view as last built.
     mouse_model: Option<std::sync::Arc<crate::gear::Model>>,
     mouse: Option<crate::gear::ModelView>,
@@ -752,7 +753,7 @@ impl App {
         let side = false;
         let unit = (inner / kw).min(UNIT_MAX).floor();
         let _ = kh;
-        let kb_h = if self.keys.selected.is_some() { 224.0 } else { 54.0 + (inner * 0.32).clamp(180.0, 330.0) + 10.0 };
+        let kb_h = 64.0 + (inner * 0.19).clamp(100.0, 180.0);
         let head_w = text_width(ui, "Quick setups", semibold(T_BODY)) + 16.0;
         let mut chips = vec![];
         let (mut x, mut y) = (head_w, 0.0);
@@ -770,16 +771,18 @@ impl App {
         }
         let chips_h = if side { 2.0 } else { y + 30.0 + 16.0 };
         let two = w >= 700.0;
+        let editor_first = !two && self.keys.selected.is_some();
         let col_w = if two { (w - GAP) / 2.0 } else { w };
         let h = |k: &str| self.keys.heights.get(k).copied().unwrap_or(220.0);
         let lower = if two { h("left").max(h("test")) } else { h("left") + GAP + h("test") };
+        let editor_height = h("left");
         let total = kb_h + 14.0 + chips_h + lower;
         let (all, _) = ui.allocate_exact_size(vec2(w, total), Sense::hover());
         let top = all.top();
 
         self.keyboard_card(ui, Rect::from_min_size(all.min, vec2(w, kb_h)), unit, side, &input, &facts);
 
-        let cy = top + kb_h + 14.0;
+        let cy = top + kb_h + 14.0 + if editor_first { editor_height + GAP } else { 0.0 };
         let head = if side { pos2(all.left() + w - 18.0 - SIDE_W, top + 54.0 + 10.0) } else { pos2(all.left(), cy + 15.0) };
         ui.painter().text(head, Align2::LEFT_CENTER, "Quick setups", semibold(T_BODY), INK);
         let busy = self.tuning_busy();
@@ -806,14 +809,14 @@ impl App {
             }
         }
 
-        let ly = cy + chips_h;
+        let ly = if editor_first { top + kb_h + 14.0 } else { cy + chips_h };
         let left = pos2(all.left(), ly);
         let lh = if self.keys.selected.is_some() { self.key_editor(ui, left, col_w, &input, &facts) } else { self.rules_card(ui, left, col_w, &input) };
         if std::mem::take(&mut self.keys.reveal) {
             // Its title and first choices, at least, in view.
             ui.scroll_to_rect(Rect::from_min_size(left, vec2(col_w, lh.min(130.0))), None);
         }
-        let test_at = if two { pos2(all.left() + col_w + GAP, ly) } else { pos2(all.left(), ly + lh + GAP) };
+        let test_at = if two { pos2(all.left() + col_w + GAP, ly) } else if editor_first { pos2(all.left(), cy + chips_h) } else { pos2(all.left(), ly + lh + GAP) };
         let th = self.test_card(ui, test_at, col_w, now);
         for (k, v) in [("left", lh), ("test", th)] {
             if (self.keys.heights.get(k).copied().unwrap_or(0.0) - v).abs() > 0.5 {
@@ -830,7 +833,7 @@ impl App {
         let bw = button_width(ui, label) - 8.0;
         let b = Rect::from_min_size(pos2(r.right() - 18.0 - bw, r.top() + 14.0), vec2(bw, 28.0));
         let intro = "Click a key, then choose what it types on the other computers.";
-        let iw = b.left() - r.left() - 30.0;
+        let iw = b.left() - r.left() - 30.0 - if self.keys.selected.is_some() { 122.0 } else { 0.0 };
         p.text(pos2(r.left() + 18.0, b.center().y), Align2::LEFT_CENTER, fit(&p, intro, &regular(T_BODY), iw), regular(T_BODY), INK2);
         a11y_text(ui, Id::unique("keys-intro"), Rect::from_min_size(r.min, vec2(iw, 40.0)), Role::Label, intro, None);
         if button(ui, b, Id::unique("keys-more"), label, Look::Quiet, true, Some(if self.keys.keypad { "Hide the keypad" } else { "Show the keypad too" })).clicked() {
@@ -861,10 +864,16 @@ impl App {
         // choosing the next one glides across) and back out when it is let
         // go; a drag on the board turns it.
         let chosen = caps.iter().position(|c| self.keys.selected == Some(c.code) && self.keys.layer.is_none());
+        if chosen.is_some() {
+            let detail = Rect::from_min_size(pos2(r.right() - 242.0, r.top() + 14.0), vec2(114.0, 28.0));
+            if button(ui, detail, Id::unique("keyboard-detail"), if self.keys.board_detail { "Whole board" } else { "Key detail" }, Look::Quiet, true, None).clicked() {
+                self.keys.board_detail = !self.keys.board_detail;
+            }
+        }
         let dt = ui.input(|i| i.stable_dt);
         let mut moving = self.keys.board_orbit.step(dt);
         let turn = self.keys.board_orbit;
-        moving |= crate::gear::Keyboard::get(&mut self.keys.board, area, &drawn, crate::gear::View { yaw: turn.yaw, pitch: turn.pitch }, chosen, &mut self.keys.board_glide, dt);
+        moving |= crate::gear::Keyboard::get(&mut self.keys.board, area, &drawn, crate::gear::View { yaw: turn.yaw, pitch: turn.pitch }, chosen.filter(|_| self.keys.board_detail), &mut self.keys.board_glide, dt);
         if moving {
             ui.ctx().request_repaint();
         }
@@ -1118,9 +1127,9 @@ impl App {
             (Some((want, _)), _) => y = self.capture_box(ui, c.left(), y, c.width(), &name, want),
             (_, Some((want, query))) => y = self.picker(ui, c.left(), y, c.width(), want, query, 7),
             _ => {
-                let mut labels = vec!["Press the new key", "Choose from a list", "Does nothing"];
+                let mut labels = vec!["Press the new key", "Choose…", "No output"];
                 if own.is_some() {
-                    labels.push("Back to normal");
+                    labels.push("Reset");
                 }
                 let (rects, bottom) = flow(ui, c.left(), y, c.width(), &labels);
                 let names = [format!("Press the key {name} should become"), format!("Choose what {name} becomes from a list"), format!("Make {name} do nothing"), format!("Make {name} type itself again")];
@@ -1435,8 +1444,10 @@ impl App {
         ui.painter().hline(c.x_range(), y, Stroke::new(1.0, LINE));
         y += 10.0;
         let safe = format!("{} always brings the mouse and keyboard back here. No rule can change it.", crate::view::chord_label("ctrl+alt+shift+esc", mac()));
-        y += widgets::para_code(ui, pos2(c.left(), y), c.width(), &safe, regular(T_META), INK2);
-        a11y_text(ui, Id::unique("keys-safe"), Rect::from_min_size(pos2(c.left(), y - 30.0), vec2(c.width(), 30.0)), Role::Label, &safe.replace('`', ""), None);
+        let safety_at = pos2(c.left(), y);
+        let safety_height = widgets::para_code(ui, safety_at, c.width(), &safe, regular(T_META), INK2);
+        y += safety_height;
+        a11y_text(ui, Id::unique("keys-safe"), Rect::from_min_size(safety_at, vec2(c.width(), safety_height)), Role::Label, &safe.replace('`', ""), None);
         let _ = now;
         card.end(ui, y)
     }
@@ -1451,7 +1462,7 @@ impl App {
         let h = |k: &str| self.keys.heights.get(k).copied().unwrap_or(300.0);
         let body_height = if two { h("buttons").max(h("pointer") + GAP + h("scroll")) } else { h("buttons") + h("pointer") + h("scroll") + 2.0 * GAP };
         let total = body_height + GAP + h("mouse-modes");
-        let stage_h = (w * 0.28).clamp(220.0, 280.0);
+        let stage_h = (w * 0.20).clamp(144.0, 190.0);
         let (all, _) = ui.allocate_exact_size(vec2(w, total + stage_h + GAP), Sense::hover());
         self.mouse_stage(ui, Rect::from_min_size(all.min, vec2(w, stage_h)), &input, &facts);
         let all = Rect::from_min_max(all.min + vec2(0.0, stage_h + GAP), all.max);

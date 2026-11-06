@@ -1262,6 +1262,13 @@ impl Scene {
             }
         }
         self.faces = faces;
+        if let Some(index) = self.selected.filter(|index| Some(*index) != self.focused) {
+            let points: Vec<Pos2> = self.faces.iter().filter(|face| face.owner == index).flat_map(|face| face.pts).collect();
+            let outline = hull_grown(&points, 3.0);
+            if outline.len() > 2 {
+                painter.add(Shape::closed_line(outline, Stroke::new(1.0, INK2)));
+            }
+        }
         // Keyboard focus: one tight ring round the whole computer, screen,
         // stand and base, 4 points out, never round a neighbour.
         if let Some(i) = self.focused {
@@ -1657,7 +1664,8 @@ impl Scene {
             if let Some((was, _)) = &d.sub_was {
                 painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, was, &sub_font, room), sub_font.clone(), sub_col.gamma_multiply(1.0 - k));
             }
-            painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, &d.subtitle, &sub_font, room), sub_font, sub_col.gamma_multiply(k));
+            let subtitle = if self.selected == Some(i) { format!("Selected · {}", d.subtitle) } else { d.subtitle.clone() };
+            painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, &subtitle, &sub_font, room), sub_font, sub_col.gamma_multiply(k));
         }
         if !d.online || ghost {
             return;
