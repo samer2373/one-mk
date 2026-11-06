@@ -1654,7 +1654,7 @@ impl App {
         }
         let cells = self.cells(rect);
         // Each cell on a glass card of its own, the window's gap between.
-        for (k, (_, c)) in cells.iter().enumerate() {
+        for (_, c) in &cells {
             let mut card = Rect::from_min_max(c.min - vec2(PAD - M / 2.0, PAD), c.max + vec2(PAD - M / 2.0, PAD));
             if card.left() < rect.left() + M {
                 card.min.x = rect.left();
@@ -1664,7 +1664,9 @@ impl App {
             }
             card.min.y = card.min.y.max(rect.top());
             card.max.y = card.max.y.min(rect.bottom());
-            widgets::glass_panel(ui, ("card", k), card, R_PANEL);
+            // Persistent content: a flat quiet group (no gradient, no
+            // shadow); only what floats is raised.
+            widgets::group(ui, card, R_PANEL);
         }
         let opening = self.scene.opening(now);
         for k in 0..self.slots.len() {
@@ -1727,7 +1729,7 @@ impl App {
         if self.profile_scroll {
             chosen = 2;
         }
-        widgets::glass_panel(ui, "layout-tabs-card", rect, R_PANEL);
+        widgets::group(ui, rect, R_PANEL);
         let inner = rect.shrink(PAD);
         let labels = ["Position", "Exact place", "Profiles"];
         let track = Rect::from_min_size(inner.min, vec2(inner.width().min(420.0), 30.0));
@@ -2328,7 +2330,10 @@ impl eframe::App for App {
             // computers as a row of named chips instead.
             // More computers need more room before their names read.
             let need = COMPACT_BELOW + 22.0 * self.scene.devices.len().saturating_sub(1).min(5) as f32;
-            compact = frame.height() < need && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout);
+            // On Clipboard & files the desk is only where files go: in a
+            // narrow window, chips (drop targets with names) always.
+            let files_narrow = self.tab == Tab::Files && scene.width() < 780.0;
+            compact = (frame.height() < need || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout | Tab::Files);
         }
         if self.tab.desk() {
             if compact {

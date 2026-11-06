@@ -51,11 +51,8 @@ pub fn paint_room(p: &egui::Painter, full: egui::Rect) {
     #[cfg(debug_assertions)]
     fake::paint_desktop(p, full);
     p.rect_filled(full, 0.0, if see_through() { ROOM_TINT } else { ROOM });
-    // A quiet room: one faint cool light high on the right, no warm lamp,
-    // so the computers (not the room) carry the colour.
-    let w = full.width().max(full.height());
+    // A quiet room: no lights of its own; the computers carry the colour.
     let _ = LAMP;
-    light(p, full.right_top() + egui::vec2(-0.18 * full.width(), 0.08 * full.height()), 0.75 * w, egui::Color32::from_rgb(0x4A, 0x6F, 0xB0).gamma_multiply(0.05));
 }
 
 /// A soft round light: full colour in the middle, gone at `radius`, eased

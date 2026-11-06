@@ -63,7 +63,8 @@ impl App {
         if self.tab == Tab::Files {
             // The page scrolls, so the desk above keeps enough room for its
             // monitors to stay readable drop targets in a small window.
-            let share = if self.ctx.content_rect().width() < 1040.0 { 0.42 } else { 0.56 };
+            // Narrow, the desk above is a row of named chips: the page takes the room.
+            let share = if self.ctx.content_rect().width() < 1040.0 { 0.62 } else { 0.56 };
             return (self.ctx.content_rect().height() * share).clamp(210.0, 460.0);
         }
         // A narrow window stacks Layout's cards: give them half the height.

@@ -451,15 +451,16 @@ impl Keyboard {
         let base = Cam::new(p3(0.0, 0.0, 0.0), -0.06 + view.yaw, 0.92 + view.pitch, 760.0, 1.0, rect.center());
         let bounds = [p3(x0 - margin, 0.0, z0 - margin), p3(-x0 + margin, 0.0, z0 - margin), p3(-x0 + margin, -16.0, -z0 + margin + 4.0), p3(x0 - margin, -16.0, -z0 + margin + 4.0), p3(0.0, 12.0, z0)];
         let whole = base.fitted(&bounds, rect, 10.0);
-        // Zoomed: the key and about one key all round it fill the area.
+        // Zoomed: the key with two keys of board all round it, at most 2.4
+        // times the whole board's scale, so where it sits stays clear.
         match focus.and_then(|i| caps.get(i)) {
             Some(k) => {
                 let (cx, cz) = (x0 + (k.x + k.w / 2.0) * U, z0 + (k.y + k.h / 2.0) * U);
                 let near = |g: f32| -> Vec<P3> {
-                    let (hx, hz) = (k.w * U / 2.0 + 1.1 * U + g, k.h * U / 2.0 + 1.1 * U + g);
+                    let (hx, hz) = (k.w * U / 2.0 + 2.2 * U + g, k.h * U / 2.0 + 1.6 * U + g);
                     [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter().map(|(sx, sz)| p3(cx + sx * hx, 7.0, cz + sz * hz)).collect()
                 };
-                whole.zoom_on(base, near, rect, 10.0, 0.4 * U, 4.0)
+                whole.zoom_on(base, near, rect, 10.0, 0.4 * U, 2.4)
             }
             None => whole,
         }

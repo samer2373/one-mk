@@ -38,6 +38,8 @@ enum Fix {
     OpenFirewallSettings,
     Update,
     Recheck,
+    /// The steps for the desktop's own permission dialog (not macOS).
+    DesktopGuide,
 }
 
 fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
@@ -80,7 +82,7 @@ fn pending_kind(line: &str) -> Option<bool> {
 /// Whether a row's written fix shows: always, unless the window's own
 /// button does that very thing (Start, Pair, Allow...).
 fn shows_fix_text(here: &Option<(&'static str, Fix)>) -> bool {
-    matches!(here, None | Some((_, Fix::Recheck | Fix::OpenPermissionGuide)))
+    matches!(here, None | Some((_, Fix::Recheck | Fix::OpenPermissionGuide | Fix::DesktopGuide)))
 }
 
 /// One line of Health: a check, or something the daemon says right now
@@ -186,7 +188,7 @@ impl App {
         // or on oneMK (still setting up) is pending: never a tick.
         // On a Mac the guide walks through the permission; elsewhere the
         // dialog is the desktop's own, so the action is to check again.
-        let ask = if cfg!(target_os = "macos") { Some(("Open guide", Fix::OpenPermissionGuide)) } else { Some(("Recheck", Fix::Recheck)) };
+        let ask = if cfg!(target_os = "macos") { Some(("Open guide", Fix::OpenPermissionGuide)) } else { Some(("Open guide", Fix::DesktopGuide)) };
         let mut works: Vec<Item> = vec![];
         // The daemon's shortcut line says what the "Keyboard shortcuts"
         // check says: one row, not two.
@@ -209,7 +211,7 @@ impl App {
                 let here = self.window_fix(c).or_else(|| match (&c.fix, c.verdict) {
                     (_, Verdict::Pass) => None,
                     (Some(f), _) if view::fix_command(f).1 => None,
-                    _ if matches!(c.id.as_str(), "input" | "permissions" | "accessibility") && cfg!(target_os = "macos") => Some(("Open guide", Fix::OpenPermissionGuide)),
+                    _ if matches!(c.id.as_str(), "input" | "permissions" | "accessibility") => Some(("Open guide", if cfg!(target_os = "macos") { Fix::OpenPermissionGuide } else { Fix::DesktopGuide })),
                     _ => Some(("Recheck", Fix::Recheck)),
                 });
                 let item = Item { title: c.title.clone(), detail: c.detail.clone(), fix: c.fix.clone(), verdict: c.verdict, here, k };
@@ -256,13 +258,17 @@ impl App {
                 // you, the rest under Pending.
                 let pending = needs.iter().filter(|i| i.verdict == Verdict::Skip).count();
                 let problems = needs.len() - pending;
-                let p_words = if pending == 1 { "1 pending".to_owned() } else { format!("{pending} pending") };
+                let asks = needs.iter().any(|i| i.verdict == Verdict::Skip && matches!(i.here, Some((_, Fix::OpenPermissionGuide | Fix::DesktopGuide))));
+                let p_words = match (pending, asks) {
+                    (1, true) => "1 awaiting permission".to_owned(),
+                    (n, true) => format!("{n} awaiting you"),
+                    (n, false) => format!("{n} pending"),
+                };
+                let tone = if fails > 0 { ERROR } else { INK };
                 match (problems, steps_only) {
-                    (_, true) => (if pending == 1 { "1 thing pending".to_owned() } else { format!("{pending} things pending") }, INK),
-                    (1, _) if pending == 0 => ("1 thing needs you".to_owned(), if fails > 0 { ERROR } else { INK }),
-                    (n, _) if pending == 0 => (format!("{n} things need you"), if fails > 0 { ERROR } else { INK }),
-                    (1, _) => (format!("1 thing needs you · {p_words}"), if fails > 0 { ERROR } else { INK }),
-                    (n, _) => (format!("{n} things need you · {p_words}"), if fails > 0 { ERROR } else { INK }),
+                    (_, true) => (p_words, INK),
+                    (n, _) if pending == 0 => (format!("{n} {} attention", if n == 1 { "needs" } else { "need" }), tone),
+                    (n, _) => (format!("{n} {} attention · {p_words}", if n == 1 { "needs" } else { "need" }), tone),
                 }
             };
             let sub = match &self.doctor {
@@ -342,7 +348,22 @@ impl App {
                     }
                     let br = Rect::from_min_size(pos2(row.right() - bw, row.top() + 6.0), vec2(bw, 32.0));
                     if let Some((label, job)) = &i.here {
-                        if button(ui, br, Id::unique(("fix-here", i.k)), label, Look::Quiet, !running, None).clicked() {
+                        let resp = button(ui, br, Id::unique(("fix-here", i.k)), label, Look::Quiet, !running, None);
+                        if matches!(job, Fix::DesktopGuide) {
+                            // The desktop's own dialog: the steps, beside the button.
+                            egui::Popup::menu(&resp).width(320.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
+                                ui.set_max_width(320.0);
+                                let steps = [
+                                    "1. Look for your desktop's sharing window (“Remote desktop” or “Input capture”). It can be behind other windows; check the taskbar.",
+                                    "2. Choose Allow (or Share). oneMK only asks for the mouse and keyboard.",
+                                    "3. Back here, choose Recheck. Dismissed it? Stop and start oneMK to be asked again.",
+                                ];
+                                for t in steps {
+                                    ui.add(egui::Label::new(egui::RichText::new(t).font(regular(T_BODY)).color(INK_HOVER)).wrap());
+                                    ui.add_space(4.0);
+                                }
+                            });
+                        } else if resp.clicked() {
                             fix_now = Some(*job);
                         }
                     } else if let Some(f) = &i.fix {

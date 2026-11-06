@@ -555,6 +555,10 @@ impl App {
             let side = self.side_shown(&p.id, p.side);
             items.push((p.id.clone(), p.name.clone(), if p.online { on_your(side).to_owned() } else { "offline".into() }, p.online));
         }
+        let hovering_files = ui.input(|i| !i.raw.hovered_files.is_empty());
+        let dropped: Option<Vec<std::path::PathBuf>> = ui.input(|i| (!i.raw.dropped_files.is_empty()).then(|| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect()));
+        let drop_at = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+        let mut drop_to: Option<(String, Vec<std::path::PathBuf>)> = None;
         const H: f32 = 44.0;
         let widths: Vec<f32> = items.iter().map(|(_, n, w, _)| (text_width(ui, n, semibold(T_BODY)).max(text_width(ui, w, regular(T_META))) + 50.0).clamp(120.0, 220.0)).collect();
         // Rows that wrap, centred in the room there is.
@@ -592,6 +596,15 @@ impl App {
                 } else {
                     p.circle_stroke(mark, 3.0, Stroke::new(1.5, INK3));
                 }
+                // On Clipboard & files each chip is a drop target too.
+                let target = self.tab == Tab::Files && *online && id != "me";
+                let words: &str = if target && hovering_files { "Drop here" } else { words };
+                if target && hovering_files {
+                    p.rect_stroke(cr.expand(2.0), CornerRadius::same(R_INNER + 2), Stroke::new(1.5, SIGNAL), StrokeKind::Outside);
+                }
+                if target && let Some(paths) = dropped.as_ref().filter(|_| drop_at.is_some_and(|q| cr.contains(q))) {
+                    drop_to = Some((id.clone(), paths.clone()));
+                }
                 let tw = cr.width() - 46.0;
                 p.text(pos2(cr.left() + 34.0, cr.top() + 15.0), Align2::LEFT_CENTER, fit(p, name, &semibold(T_BODY), tw), semibold(T_BODY), if *online { INK } else { INK2 });
                 p.text(pos2(cr.left() + 34.0, cr.top() + 31.0), Align2::LEFT_CENTER, fit(p, words, &regular(T_META), tw), regular(T_META), INK3);
@@ -606,6 +619,14 @@ impl App {
                 }
             }
             y += H + 8.0;
+        }
+        // Files let go: on a chip, to that computer; elsewhere, asked.
+        if let Some(paths) = dropped {
+            let now = self.now;
+            match drop_to.and_then(|(id, p)| self.scene.devices.iter().position(|d| d.id == id).map(|i| (i, p))) {
+                Some((i, p)) => self.send_to(i, p),
+                None => self.drop_files(paths, None, now),
+            }
         }
     }
 
