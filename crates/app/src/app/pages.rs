@@ -376,7 +376,7 @@ impl App {
                         }
                     }
                     let label = format!("{}{}. {}", i.title, if i.title.is_empty() { "" } else { ": needs you" }, i.detail);
-                    a11y_text(ui, Id::unique(("need", n)), row, Role::ListItem, &label, None);
+                    a11y_text(ui, Id::unique(("need", group_title, n)), row, Role::ListItem, &label, None);
                     if n + 1 < needs.len() {
                         ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
                     }
@@ -421,7 +421,7 @@ impl App {
                         p.text(pos2(tx, y + 20.0), Align2::LEFT_CENTER, line(i), regular(T_BODY), INK);
                         widgets::para_code(ui, pos2(tx, y + 32.0), text_w, &i.detail, regular(T_META), INK3);
                     }
-                    a11y_text(ui, Id::unique(("works", n)), Rect::from_min_size(pos2(r.left(), y), vec2(w, *ih)), Role::ListItem, &format!("{}: works. {}", line(i), i.detail), None);
+                    a11y_text(ui, Id::unique(("works", n)), Rect::from_min_size(pos2(r.left(), y), vec2(w, *ih)), Role::ListItem, &if i.title.is_empty() { i.detail.clone() } else { format!("{}: works. {}", line(i), i.detail) }, None);
                     y += ih;
                 }
                 ui.add_space(8.0);

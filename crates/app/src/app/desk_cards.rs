@@ -248,6 +248,8 @@ impl App {
         }
         self.peer_actions(ui, pos2(body.left(), body.bottom() - 32.0), &status, &peer);
 
+        // The graph and the number, as words for screen readers.
+        a11y_text(ui, Id::unique(("peer-latency", &peer.id)), body, Role::Label, &self.latency_words(&peer), None);
         // Right: the last two minutes.
         let graph = Rect::from_min_max(pos2(body.left() + col_w + 24.0, c.top() + 40.0), body.max);
         let plot = Rect::from_min_max(pos2(graph.left(), graph.top() + 18.0), graph.max);

@@ -109,7 +109,7 @@ impl App {
     }
 
     /// "Latency to desk: 4 ms, smooth. Over the last 2 minutes: …".
-    fn latency_words(&self, peer: &PeerStatus) -> String {
+    pub(super) fn latency_words(&self, peer: &PeerStatus) -> String {
         if !peer.online {
             return format!("Latency to {}: offline.", peer.name);
         }
