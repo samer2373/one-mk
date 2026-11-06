@@ -573,7 +573,9 @@ impl App {
             x += w + 8.0;
         }
         let total_h = rows.len() as f32 * (H + 8.0) - 8.0;
-        let mut y = r.center().y - total_h / 2.0;
+        // On Clipboard & files the chips sit at the top, close to the page
+        // they serve; on the desk, centred where the monitors would be.
+        let mut y = if self.tab == Tab::Files { r.top() + 12.0 } else { r.center().y - total_h / 2.0 };
         for row in rows {
             let rw: f32 = row.iter().map(|k| widths[*k] + 8.0).sum::<f32>() - 8.0;
             let mut x = r.center().x - rw / 2.0;

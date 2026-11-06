@@ -64,8 +64,13 @@ impl App {
             // The page scrolls, so the desk above keeps enough room for its
             // monitors to stay readable drop targets in a small window.
             // Narrow, the desk above is a row of named chips: the page takes the room.
-            let share = if self.ctx.content_rect().width() < 1040.0 { 0.62 } else { 0.56 };
-            return (self.ctx.content_rect().height() * share).clamp(210.0, 460.0);
+            if self.ctx.content_rect().width() < 1040.0 {
+                // Chips need a row (two at most): the page takes the rest.
+                let peers = self.running().map_or(0, |s| s.peers.len());
+                let chips = if peers > 3 { 2.0 * 52.0 } else { 52.0 };
+                return (self.ctx.content_rect().height() - shell::HEAD_H - chips - 3.0 * M).max(210.0);
+            }
+            return (self.ctx.content_rect().height() * 0.56).clamp(210.0, 460.0);
         }
         // A narrow window stacks Layout's cards: give them half the height.
         if self.tab == Tab::Layout && self.ctx.content_rect().width() < 1040.0 {

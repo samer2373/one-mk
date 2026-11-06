@@ -697,10 +697,11 @@ impl App {
         let e = Some(e);
         let again = Self::retryable(&what).then(|| what.clone());
         self.finished_error(what, e, now);
-        if let (Some(t), Some(job)) = (self.toast.as_mut(), again) {
-            if t.error && t.at == now {
-                t.retry = Some(job);
-            }
+        if let (Some(t), Some(job)) = (self.toast.as_mut(), again)
+            && t.error
+            && t.at == now
+        {
+            t.retry = Some(job);
         }
     }
 
@@ -2672,7 +2673,8 @@ mod debug {
         }
         // What the last press reached (focus settles over the frames between).
         if done > 0 {
-            let name = ctx.memory(|m| m.focused()).and_then(|f| ctx.read_response(f)).and_then(|r| widgets::targets::name_at(r.rect)).unwrap_or_else(|| "(nothing named)".into());
+            let focused = ctx.memory(|m| m.focused()).and_then(|f| ctx.read_response(f));
+            let name = focused.as_ref().and_then(|r| widgets::targets::name_at(r.rect)).unwrap_or_else(|| format!("(nothing named at {:?})", focused.map(|r| r.rect)));
             eprintln!("tab {done}: {name}");
         }
         if done == n {
