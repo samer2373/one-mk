@@ -46,8 +46,18 @@ fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
     // by the word beside the title), never by colour alone.
     let r = 7.0;
     let colour = match v { Verdict::Pass => OK, Verdict::Skip => INK2, Verdict::Warn => WARN, Verdict::Fail => ERROR };
-    p.circle_stroke(c, r, Stroke::new(1.5, colour));
-    p.circle_filled(c, 2.0, colour);
+    match v {
+        Verdict::Pass => widgets::draw_check(p, c, 12.0, colour, 1.0),
+        Verdict::Skip => {
+            p.circle_stroke(c, r, Stroke::new(1.5, colour));
+            p.line_segment([c, c + vec2(0.0, -4.0)], Stroke::new(1.5, colour));
+            p.line_segment([c, c + vec2(3.0, 1.0)], Stroke::new(1.5, colour));
+        }
+        Verdict::Warn | Verdict::Fail => {
+            p.add(egui::Shape::closed_line(vec![c + vec2(0.0, -r), c + vec2(r, r), c + vec2(-r, r)], Stroke::new(1.5, colour)));
+            p.text(c + vec2(0.0, 2.0), Align2::CENTER_CENTER, "!", semibold(11.0), colour);
+        }
+    }
 }
 
 /// The word that goes with a badge.
@@ -297,7 +307,7 @@ impl App {
                 Some((Err(e), _)) => format!("The checks didn't run: {e}"),
                 Some((Ok(_), at)) => {
                     let ago = (now - at).max(0.0);
-                    let when = if ago < 60.0 { "just now".to_owned() } else if ago < 3600.0 { format!("{} min ago", (ago / 60.0) as u32) } else { format!("{} h ago", (ago / 3600.0) as u32) };
+                    let when = if ago < 60.0 { "just now".to_owned() } else if ago < 3600.0 { format!("{} min ago", (ago / 60.0) as u32) } else if ago < 86400.0 { format!("{} h ago", (ago / 3600.0) as u32) } else { format!("{} days ago", (ago / 86400.0) as u32) };
                     let passed = works.iter().filter(|item| item.k != usize::MAX).count();
                     format!("{passed} {} · checked {when}", if passed == 1 { "check passes" } else { "checks pass" })
                 }
@@ -314,7 +324,7 @@ impl App {
                 widgets::draw_refresh(&p, Rect::from_center_size(medal, vec2(18.0, 18.0)), INK2, turn);
                 ui.ctx().request_repaint_after_secs(1.0 / 30.0);
             } else {
-                p.circle_filled(medal, 4.0, tone);
+                verdict_icon(&p, medal, if steps_only || checks.is_none() { Verdict::Skip } else if needs.is_empty() { Verdict::Pass } else if fails > 0 { Verdict::Fail } else { Verdict::Warn });
             }
             let bw = button_width(ui, "Recheck");
             let tx = hero.left() + 84.0;
@@ -636,7 +646,7 @@ impl App {
             let v = if p.sleep_sync { "off" } else { "on" };
             self.set_pref("sleep sync", &["power", "--sleep-sync", v], |p| p.sleep_sync = !p.sleep_sync);
         }
-        if switch_help(ui, row(2), Id::unique("lock-sync"), "Lock all when this one locks", "lock-sync", p.lock_sync, true).clicked() {
+        if switch_help(ui, row(2), Id::unique("lock-sync"), "Lock every screen with this one", "lock-sync", p.lock_sync, true).clicked() {
             let v = if p.lock_sync { "off" } else { "on" };
             self.set_pref("lock sync", &["lock-sync", v], |p| p.lock_sync = !p.lock_sync);
         }

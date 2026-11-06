@@ -7,6 +7,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/omk-guide-shots}
+if [[ -n ${COUNCIL_EXPECTED_TIP:-} ]]; then
+    [[ $(git rev-parse HEAD) == "$COUNCIL_EXPECTED_TIP" ]]
+    git diff --quiet && git diff --cached --quiet
+fi
 case "$(realpath -m "$OUT")" in */docs/screens) SMALL=1 ;; *) SMALL= ;; esac
 W=$PWD/target-codex/council-guide-work-$$
 export CARGO_TARGET_DIR="$PWD/target-codex"
@@ -28,6 +32,7 @@ shot() { # name after-seconds [env...]
     done
     python3 -c "from PIL import Image, features; i = Image.open('$W/$name.ppm'); i = i.quantize(256, method=Image.Quantize.LIBIMAGEQUANT) if '$SMALL' and features.check_feature('libimagequant') else i; i.save('$OUT/$name.png', optimize=True)"
     echo "$OUT/$name.png"
+    python3 -c 'import hashlib,json,subprocess,sys,time; from pathlib import Path; from PIL import Image; path=Path(sys.argv[1]); print(json.dumps({"file":path.name,"source_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"captured_at":time.time(),"sha256":hashlib.sha256(path.read_bytes()).hexdigest(),"size":Image.open(path).size}))' "$OUT/$name.png" >>"$OUT/captures.jsonl"
     rm -f "$W/$name.ppm"
 }
 

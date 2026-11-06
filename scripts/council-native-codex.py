@@ -201,7 +201,7 @@ def main():
         if args.mode == "keyboard":
             subprocess.run([str(args.binary.resolve().with_name("one-mk")), "--home", str(home), "keymap", "add", "--tap=esc", "--hold=lctrl", "--", "capslock"], check=True, capture_output=True)
         status = home / "status"
-        status.write_text("ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\nlink\t1111-2222\t4200\t0\t900\n")
+        status.write_text("ok\nname\tsamer-Victus\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\nlink\t1111-2222\t4200\t0\t900\n")
         environment = dict(os.environ, ONE_MK_APP_NO_SETUP="1", ONE_MK_APP_STATUS=str(status), ONE_MK_APP_SIZE="1200x780")
         environment.pop("WAYLAND_DISPLAY", None)
         environment["WINIT_UNIX_BACKEND"] = "x11"
@@ -255,7 +255,19 @@ def main():
                         try:
                             window = desktop.window(process.pid)
                             desktop.focus(window)
-                            time.sleep(12)
+                            if scenario == "help":
+                                time.sleep(5)
+                                before = cpu_seconds(process.pid)
+                                started = time.monotonic()
+                                time.sleep(2.5)
+                                elapsed = time.monotonic() - started
+                                consumed = cpu_seconds(process.pid) - before
+                                sample = {"build": label, "scenario": "help-playing", "warmup_excluded_s": 5, "elapsed_s": round(elapsed, 3), "cpu_s": round(consumed, 3), "one_core_percent": round(consumed / elapsed * 100, 3)}
+                                results["samples"].append(sample)
+                                print(json.dumps(sample), flush=True)
+                                time.sleep(6)
+                            else:
+                                time.sleep(5)
                             minimized = desktop.minimize(window) if scenario == "minimized" else False
                             if scenario != "minimized":
                                 desktop.capture(window, args.output / f"runtime-{label}-{scenario}.png")
@@ -264,7 +276,7 @@ def main():
                             time.sleep(60)
                             elapsed = time.monotonic() - started
                             consumed = cpu_seconds(process.pid) - before
-                            sample = {"build": label, "scenario": scenario, "minimized_verified": minimized, "elapsed_s": round(elapsed, 3), "cpu_s": round(consumed, 3), "one_core_percent": round(consumed / elapsed * 100, 3)}
+                            sample = {"build": label, "scenario": "help-settled" if scenario == "help" else scenario, "warmup_excluded_s": 13.5 if scenario == "help" else 5, "minimized_verified": minimized, "elapsed_s": round(elapsed, 3), "cpu_s": round(consumed, 3), "one_core_percent": round(consumed / elapsed * 100, 3)}
                             results["samples"].append(sample)
                             print(json.dumps(sample), flush=True)
                         finally:

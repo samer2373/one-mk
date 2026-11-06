@@ -65,7 +65,7 @@ impl App {
         egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(area.height()).show(&mut child, |ui| {
             for item in items {
                 let age = now.saturating_sub(item.timestamp);
-                let age = if age < 60 { "just now".into() } else if age < 3600 { format!("{} min ago", age / 60) } else { format!("{} h ago", age / 3600) };
+                let age = if age < 60 { "just now".into() } else if age < 3600 { format!("{} min ago", age / 60) } else if age < 86400 { format!("{} h ago", age / 3600) } else { format!("{} days ago", age / 86400) };
                 let detail = format!("{} · {age}", item.detail);
                 // A list row, as a system list: what was copied, and under
                 // it where from and when; click the row to copy it here.

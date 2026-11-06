@@ -383,7 +383,8 @@ impl App {
             _ => None,
         };
         let first_pair = self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty());
-        if !first_pair && button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
+        let banner_take_back = self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack));
+        if !first_pair && !banner_take_back && button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
             self.do_action(job, now);
         }
         y += 36.0 + 10.0;
@@ -458,7 +459,7 @@ impl App {
         y += 8.0;
         if let Some(status) = self.running().cloned() {
             let expander = Rect::from_center_size(pos2(cx, y + 14.0), vec2(side.width() - 12.0, 28.0));
-            let response = button(ui, expander, Id::unique("rail-computers"), "Computers…", Look::Quiet, true, Some("Show full computer names and connection states"));
+            let response = button(ui, expander, Id::unique("rail-computers"), "PCs", Look::Quiet, true, Some("Select a computer: show full names and connection states"));
             let mut selected = None;
             egui::Popup::menu(&response).width(300.0).show(|ui| {
                 for (id, name, online) in std::iter::once(("me", status.name.as_str(), true)).chain(status.peers.iter().map(|peer| (peer.id.as_str(), peer.name.as_str(), peer.online))) {
@@ -477,14 +478,14 @@ impl App {
             rows.extend(status.peers.iter().map(|p| (p.id.clone(), p.name.clone(), p.online)));
             let extra = 36.0 * (f32::from(self.running().is_some()) + f32::from(self.update_available.is_some()));
             let bottom = side.bottom() - 12.0 - 40.0 - 8.0 - extra;
-            for (id, name, online) in rows {
+            for (index, (id, name, online)) in rows.into_iter().enumerate() {
                 if y + 32.0 > bottom {
                     break;
                 }
                 // A short name, not initials: as much of it as fits.
                 let r = Rect::from_center_size(pos2(cx, y + 15.0), vec2(side.width() - 12.0, 30.0));
                 let (resp, _) = row_button(ui, r, Id::unique(("pc", id.as_str())), &name, Role::Button, sel.as_deref() == Some(id.as_str()), true);
-                let shown = fit(ui.painter(), name.strip_suffix(".local").unwrap_or(&name), &regular(T_META), r.width() - 26.0);
+                let shown = if id == "me" { "This PC".to_owned() } else { format!("PC {index}") };
                 let p = ui.painter();
                 let mark = pos2(r.left() + 9.0, r.center().y);
                 if pointer.as_deref() == Some(id.as_str()) {
@@ -532,8 +533,9 @@ impl App {
             }
         }
         let (label, look, enabled, job) = self.action();
-        let a = Rect::from_center_size(pos2(cx, side.bottom() - 12.0 - 20.0), vec2(40.0, 40.0));
+        let a = Rect::from_center_size(pos2(cx, side.bottom() - 12.0 - 20.0), vec2(side.width() - 12.0, 40.0));
         if self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty()) { return; }
+        if self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack)) { return; }
         let shown = !self.sheet_open() && self.status.is_some();
         let r = button(ui, a, Id::unique("action"), "", look, enabled && shown, Some(&label));
         let col = if look == Look::Primary && enabled { SIGNAL_INK } else { INK };
@@ -545,7 +547,11 @@ impl App {
             _ if label.starts_with("Pair") => Icon::Plus,
             _ => Icon::Chevron,
         };
-        icons::draw(ui.painter(), icon, Rect::from_center_size(a.center(), vec2(18.0, 18.0)), col);
+        if self.broadcasting() {
+            ui.painter().text(a.center(), Align2::CENTER_CENTER, "Keyboard stop", regular(11.0), col);
+        } else {
+            icons::draw(ui.painter(), icon, Rect::from_center_size(a.center(), vec2(18.0, 18.0)), col);
+        }
         if r.on_hover_text(&label).clicked() {
             self.do_action(job, now);
         }

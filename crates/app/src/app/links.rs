@@ -98,12 +98,6 @@ impl App {
         }
     }
 
-    /// A connected computer that the daemon reports no link for: a daemon
-    /// from before the graph, still running after an upgrade.
-    pub(super) fn older_daemon(&self, id: &str) -> bool {
-        self.rtts.of(id).is_none() && self.running().is_some_and(|s| s.link_of(id).is_none())
-    }
-
     pub(super) fn summary_of(&self, id: &str) -> Option<Summary> {
         self.rtts.of(id).and_then(|r| r.summary(self.rtt_now()))
     }
@@ -115,8 +109,7 @@ impl App {
         }
         match self.summary_of(&peer.id) {
             Some(s) => s.describe(&peer.name),
-            None if self.older_daemon(&peer.id) => format!("Latency to {}: not shown, restart oneMK to see it.", peer.name),
-            None => format!("Latency to {}: still measuring.", peer.name),
+            None => format!("Latency to {}: no samples yet.", peer.name),
         }
     }
 
@@ -158,7 +151,7 @@ impl App {
                 p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, "offline", regular(T_META), INK2);
             } else {
                 let q = summary.and_then(|s| s.quality());
-                let waiting = if self.older_daemon(&peer.id) { "Restart oneMK" } else { "Measuring…" };
+                let waiting = "No samples yet";
                 let word = q.map_or(waiting, Quality::word);
                 p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, word, regular(T_META), if q.is_some() { tone(q) } else { INK2 });
                 if let Some(s) = summary {

@@ -431,7 +431,7 @@ impl Keyboard {
             let key = Rect::from_min_size(origin + egui::vec2(cap.x * unit, cap.y * unit), egui::vec2(cap.w * unit, cap.h * unit)).shrink(2.0);
             tops.push(vec![key.left_top(), key.right_top(), key.right_bottom(), key.left_bottom()]);
             let lines: Vec<&str> = cap.to.as_deref().unwrap_or(&cap.label).split('/').collect();
-            let size = if lines.len() > 1 { (unit * 0.29).clamp(8.0, 12.0) } else { (unit * 0.36).clamp(10.0, 15.0) };
+            let size = if lines.len() > 1 { (unit * 0.29).clamp(11.0, 12.0) } else { (unit * 0.36).clamp(11.0, 15.0) };
             for (index, text) in lines.iter().enumerate() {
                 legends.push(Legend { at: key.center() + egui::vec2(0.0, (index as f32 - (lines.len() - 1) as f32 / 2.0) * (size + 1.0)), size, text: (*text).to_owned(), to: cap.to.is_some(), modifier: cap.modifier, max_w: key.width() - 6.0 });
             }
@@ -568,8 +568,9 @@ impl Keyboard {
             // A long target ("Esc/Ctrl") on a narrow cap gets smaller rather
             // than spilling onto the next key.
             let mut size = l.size;
-            while size > 4.0 && p.layout_no_wrap(l.text.clone(), font(size, l.to), col).size().x > l.max_w { size -= 0.5; }
-            p.text(l.at, if self.flat || l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, &l.text, font(size, l.to), col);
+            while size > 11.0 && p.layout_no_wrap(l.text.clone(), font(size, l.to), col).size().x > l.max_w { size = (size - 0.5).max(11.0); }
+            let text = crate::style::fit(p, &l.text, &font(size, l.to), l.max_w);
+            p.text(l.at, if self.flat || l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, text, font(size, l.to), col);
         }
         if let Some(t) = chosen.and_then(|i| self.tops.get(i)).filter(|t| t.len() > 2) {
             let mut ring = t.clone();
@@ -580,12 +581,20 @@ impl Keyboard {
 
     /// The key under `pos`, front keys first.
     pub fn hit(&self, pos: Pos2) -> Option<usize> {
-        (0..self.tops.len()).rev().find(|&i| inside(pos, &self.tops[i]))
+        (0..self.tops.len()).rev().find(|&i| inside(pos, &self.tops[i])).or_else(|| {
+            (0..self.tops.len()).filter(|&index| self.target_bounds(index).contains(pos))
+                .min_by(|&first, &second| self.bounds(first).center().distance_sq(pos).total_cmp(&self.bounds(second).center().distance_sq(pos)))
+        })
     }
 
     /// A key's outline's bounding box (for focus rings and screen readers).
     pub fn bounds(&self, i: usize) -> Rect {
         self.tops.get(i).map_or(Rect::NOTHING, |t| Rect::from_points(t))
+    }
+
+    pub fn target_bounds(&self, index: usize) -> Rect {
+        let bounds = self.bounds(index);
+        Rect::from_center_size(bounds.center(), bounds.size().max(egui::vec2(24.0, 24.0)))
     }
 }
 
@@ -1196,7 +1205,7 @@ mod tests {
         let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
             x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: cap.code.to_string(), to: (cap.code == 58).then(|| "Esc/Ctrl".into()), modifier: false,
         }).collect();
-        for (width, height) in [(590.0, 136.0), (1064.0, 340.0)] {
+        for (width, height) in [(860.0, 250.0), (1064.0, 340.0)] {
             let rect = Rect::from_min_size(pos2(8.0, 50.0), egui::vec2(width, height));
             let mut board = None;
             Keyboard::working(&mut board, rect, &caps);
@@ -1205,10 +1214,24 @@ mod tests {
                 let bounds = board.bounds(index);
                 assert!(rect.shrink(2.0).contains_rect(bounds));
                 assert_eq!(board.hit(bounds.center()), Some(index));
+                assert!(bounds.width() >= 24.0 && bounds.height() >= 24.0, "undersized key: {bounds:?}");
             }
             let remapped: Vec<_> = board.legends.iter().filter(|legend| legend.to).collect();
             assert_eq!(remapped.len(), 2);
-            assert!(remapped.iter().all(|legend| legend.size >= 8.0));
+            assert!(board.legends.iter().all(|legend| legend.size >= 11.0));
         }
+    }
+
+    #[test]
+    fn small_key_targets_extend_beyond_the_painted_polygon() {
+        let caps = vec![Cap { x: 0.0, y: 0.0, w: 1.0, h: 1.0, label: "A".into(), to: None, modifier: false }];
+        let mut board = None;
+        Keyboard::working(&mut board, Rect::from_min_size(Pos2::ZERO, egui::vec2(36.0, 36.0)), &caps);
+        let board = board.unwrap();
+        let target = board.target_bounds(0);
+        assert!(target.width() >= 24.0 && target.height() >= 24.0);
+        let edge = target.left_center() + egui::vec2(0.5, 0.0);
+        assert!(!inside(edge, &board.tops[0]));
+        assert_eq!(board.hit(edge), Some(0));
     }
 }

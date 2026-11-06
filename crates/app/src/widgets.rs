@@ -221,7 +221,8 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
         }
     }
     focus_ring(ui, &r, rr, radius);
-    p.text(rr.center(), Align2::CENTER_CENTER, label, semibold(T_BODY), fg);
+    let shown = fit(&p, label, &semibold(T_BODY), (rr.width() - 16.0).max(0.0));
+    p.text(rr.center(), Align2::CENTER_CENTER, shown, semibold(T_BODY), fg);
     if r.hovered() && enabled {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -336,16 +337,17 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
             const LOOP: f64 = 4.0;
             let clock = ui.input(|i| i.time);
             let key = id.with("help-clock");
-            let (start, seen) = ui.ctx().data(|d| d.get_temp::<(f64, f64)>(key)).unwrap_or((clock, clock));
-            let start = if clock - seen > 0.5 { clock } else { start };
-            ui.ctx().data_mut(|d| d.insert_temp(key, (start, clock)));
+            let frame = ui.ctx().cumulative_frame_nr();
+            let (start, seen) = ui.ctx().data(|d| d.get_temp::<(f64, u64)>(key)).unwrap_or((clock, frame));
+            let start = crate::help::playback_start(clock, frame, start, seen);
+            ui.ctx().data_mut(|d| d.insert_temp(key, (start, frame)));
             let elapsed = clock - start;
             let playing = !motion::reduced() && elapsed < 2.0 * LOOP;
             // At rest (and with reduced motion) the picture's last frame.
             let t = if playing { crate::help::phase(elapsed, LOOP) } else { 0.9 };
             crate::help::draw(ui.painter(), scene, h.scene, t);
             if playing {
-                ui.ctx().request_repaint_after_secs(1.0 / 60.0);
+                ui.ctx().request_repaint_after_secs(1.0 / 24.0);
             }
         }
         let y = all.top() + IN + if pic > 0.0 { pic + IN } else { 0.0 };

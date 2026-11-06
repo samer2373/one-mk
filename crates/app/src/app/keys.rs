@@ -757,7 +757,7 @@ impl App {
         let side = false;
         let unit = (inner / kw).min(UNIT_MAX).floor();
         let _ = kh;
-        let kb_h = if w < 700.0 { 152.0 } else { 24.0 + inner * 0.32 };
+        let kb_h = (kh * 36.0 + 32.0).max(if w < 700.0 { 0.0 } else { 24.0 + inner * 0.32 });
         let head_w = text_width(ui, "Quick setups", semibold(T_BODY)) + 16.0;
         let mut chips = vec![];
         let balanced = head_w + presets.iter().map(|preset| chip_width(ui, &preset.label) + 8.0).sum::<f32>() > w;
@@ -791,7 +791,14 @@ impl App {
         let (all, _) = ui.allocate_exact_size(vec2(w, total), Sense::hover());
         let top = all.top();
 
-        self.keyboard_card(ui, Rect::from_min_size(all.min, vec2(w, kb_h)), unit, side, &input, &facts);
+        let viewport = Rect::from_min_size(all.min, vec2(w, kb_h));
+        let mut board_ui = ui.new_child(egui::UiBuilder::new().max_rect(viewport));
+        board_ui.set_clip_rect(ui.clip_rect().intersect(viewport));
+        egui::ScrollArea::horizontal().id_salt("working-keyboard-scroll").show(&mut board_ui, |ui| {
+                let board_width = w.max(kw * 36.0 + 32.0);
+                let (board_rect, _) = ui.allocate_exact_size(vec2(board_width, kb_h - 16.0), Sense::hover());
+                self.keyboard_card(ui, board_rect, unit, side, &input, &facts);
+        });
 
         let cy = top + kb_h + 14.0 + if editor_first { editor_height + GAP } else { 0.0 };
         let head = if side { pos2(all.left() + w - 18.0 - SIDE_W, top + 54.0 + 10.0) } else { pos2(all.left(), cy + 15.0) };
@@ -839,10 +846,10 @@ impl App {
 
     fn keyboard_toolbar(&mut self, ui: &mut Ui, r: Rect) {
         let p = ui.painter().clone();
-        let label = if self.keys.keypad { "Fewer keys" } else { "More keys" };
+        let label = if self.keys.keypad { "Compact" } else { "Keypad" };
         let bw = button_width(ui, label) - 8.0;
         let b = Rect::from_min_size(pos2(r.right() - bw, r.top() + 4.0), vec2(bw, 28.0));
-        let intro = self.keys.selected.map_or_else(|| "Select a key to change it".to_owned(), |key| format!("Selected: {}", tune::key_label(u32::from(key))));
+        let intro = self.keys.selected.map_or_else(|| "Select a key · scroll for more".to_owned(), |key| format!("Selected: {}", tune::key_label(u32::from(key))));
         let iw = b.left() - r.left() - 30.0 - if self.keys.selected.is_some() { 122.0 } else { 0.0 };
         p.text(pos2(r.left(), b.center().y), Align2::LEFT_CENTER, fit(&p, &intro, &regular(T_BODY), iw), regular(T_BODY), INK2);
         a11y_text(ui, Id::unique("keys-intro"), Rect::from_min_size(r.min, vec2(iw, 36.0)), Role::Label, &intro, None);
@@ -945,7 +952,8 @@ impl App {
         for (i, c) in caps.iter().enumerate() {
             let id = Id::unique(("cap", c.code));
             let roving = c.code == self.keys.focus_key;
-            let kr = ui.interact(board.bounds(i).shrink(2.0), id, widgets::sense(ui, if roving { Sense::focusable_noninteractive() } else { Sense::hover() }));
+            let kr = ui.interact(board.target_bounds(i), id, widgets::sense(ui, if roving { Sense::focusable_noninteractive() } else { Sense::hover() }));
+            if kr.gained_focus() { ui.scroll_to_rect(board.bounds(i).expand(6.0), None); }
             if kr.has_focus() {
                 focused = Some(i);
                 ui.memory_mut(|m| m.set_focus_lock_filter(id, EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() }));
@@ -1060,7 +1068,12 @@ impl App {
             if widgets::icon_button(ui, edit, Id::unique(("rule-edit", i)), &format!("Change: {text}"), editable && !busy, draw_pencil).clicked() {
                 act = Some((i, true));
             }
-            if widgets::icon_button(ui, del, Id::unique(("rule-del", i)), &format!("Remove: {text}"), !busy, draw_cross).clicked() {
+            if widgets::icon_button(ui, del, Id::unique(("rule-del", i)), &format!("Remove: {text}"), !busy, |p, rect, colour| {
+                let bin = Rect::from_center_size(rect.center() + vec2(0.0, 2.0), vec2(10.0, 11.0));
+                p.rect_stroke(bin, CornerRadius::same(2), Stroke::new(1.5, colour), StrokeKind::Inside);
+                p.line_segment([bin.left_top() - vec2(2.0, 2.0), bin.right_top() + vec2(2.0, -2.0)], Stroke::new(1.5, colour));
+                p.line_segment([bin.center_top() + vec2(-2.0, -5.0), bin.center_top() + vec2(2.0, -5.0)], Stroke::new(1.5, colour));
+            }).clicked() {
                 act = Some((i, false));
             }
             if i + 1 < n {
@@ -1145,7 +1158,7 @@ impl App {
             (Some((want, _)), _) => y = self.capture_box(ui, c.left(), y, c.width(), &name, want),
             (_, Some((want, query))) => y = self.picker(ui, c.left(), y, c.width(), want, query, 7),
             _ => {
-                let mut labels = vec!["Press the new key", "Choose…", "No output"];
+                let mut labels = vec!["Press the new key", "Choose from a list", "No output"];
                 if own.is_some() {
                     labels.push("Reset");
                 }
@@ -1192,7 +1205,7 @@ impl App {
                     let hold = own.as_ref().and_then(|r| r.hold.clone());
                     let hold_text = hold.as_ref().and_then(|h| h.parse().ok()).map_or("nothing else yet: it types the same".to_owned(), |o| tune::out_text(&o));
                     y += para(ui, pos2(c.left(), y), c.width(), &format!("Tapped, it types what is chosen above. Held, it gives: {hold_text}."), regular(T_META), INK2) + 8.0;
-                    let mut labels = vec!["Press the key for holding", "Choose…"];
+                    let mut labels = vec!["Press the key for holding", "Choose from a list"];
                     if hold.is_some() {
                         labels.push("Not when held");
                     }

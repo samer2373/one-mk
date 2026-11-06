@@ -7,6 +7,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OUT=${1:-/tmp/omk-shots}
+if [[ -n ${COUNCIL_EXPECTED_TIP:-} ]]; then
+    [[ $(git rev-parse HEAD) == "$COUNCIL_EXPECTED_TIP" ]]
+    git diff --quiet && git diff --cached --quiet
+fi
 # Shots for docs/screens are stored small (see shot()); elsewhere exact.
 case "$(realpath -m "$OUT")" in */docs/screens) SMALL=1 ;; *) SMALL= ;; esac
 W=$PWD/target-codex/council-shots-work-$$
@@ -22,6 +26,10 @@ trap cleanup EXIT
 
 shot() { # name after-seconds home [extra env...]
     local name=$1 after=$2 home=$3; shift 3
+    if [[ -n ${COUNCIL_EXPECTED_TIP:-} ]]; then
+        [[ $(git rev-parse HEAD) == "$COUNCIL_EXPECTED_TIP" ]]
+        git diff --quiet && git diff --cached --quiet
+    fi
     if [[ -n ${COUNCIL_SCREEN_SET:-} && ! $name =~ $COUNCIL_SCREEN_SET ]]; then return; fi
     if [[ ${COUNCIL_SKIP_EXISTING:-} == 1 ]] && python3 -c "from PIL import Image; Image.open('$OUT/$name.png').load()" 2>/dev/null; then return; fi
     local matrix=()
@@ -29,6 +37,7 @@ shot() { # name after-seconds home [extra env...]
         1x) matrix=(ONE_MK_APP_SIZE=1200x780 ONE_MK_APP_ZOOM=1) ;;
         2x) matrix=(ONE_MK_APP_SIZE=1200x780 ONE_MK_APP_ZOOM=2) ;;
         small) matrix=(ONE_MK_APP_SIZE=760x540 ONE_MK_APP_ZOOM=1) ;;
+        medium) matrix=(ONE_MK_APP_SIZE=820x540 ONE_MK_APP_ZOOM=1) ;;
     esac
     # The compositor sometimes never draws a fresh window (e.g. covered or
     # on another workspace); try again rather than fail the whole run.
@@ -41,6 +50,7 @@ shot() { # name after-seconds home [extra env...]
     # desk's gradients don't band): under half the size. Exact without it.
     python3 -c "from PIL import Image, features; i = Image.open('$W/$name.ppm'); i = i.quantize(256, method=Image.Quantize.LIBIMAGEQUANT) if '$SMALL' and features.check_feature('libimagequant') else i; i.save('$OUT/$name.png', optimize=True)"
     echo "$OUT/$name.png"
+    python3 -c 'import hashlib,json,subprocess,sys,time; from pathlib import Path; from PIL import Image; path=Path(sys.argv[1]); record={"file":path.name,"source_commit":subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),"captured_at":time.time(),"sha256":hashlib.sha256(path.read_bytes()).hexdigest(),"size":Image.open(path).size}; print(json.dumps(record))' "$OUT/$name.png" >>"$OUT/captures.jsonl"
     rm -f "$W/$name.ppm"
 }
 
@@ -287,7 +297,16 @@ shot 91-pairing-manual 3 "$W/a" ONE_MK_APP_PAIR_STATE=hint
 shot 92-history-revealed 3 "$W/a" ONE_MK_APP_TAB=files ONE_MK_APP_HISTORY=revealed ONE_MK_APP_SCROLL=344
 shot 93-files-small 3 "$W/a" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
 shot 94-update 3 "$W/a" ONE_MK_APP_UPDATE=1.2.3
-shot 95-wallpaper 3 "$W/a" ONE_MK_APP_TAB=wallpaper
+python3 -c 'from PIL import Image; import sys; Image.open("/usr/share/backgrounds/mendhak-Red_Acer.jpg").resize((1280,720)).save(sys.argv[1])' "$W/poster.png"
+python3 - "$X" "$W/wallpaper.status" "$W/poster.png" <<'PY'
+import json, sys
+from pathlib import Path
+canvas = {"monitors": [{"computer": "abcd-ef01", "name": "samer-Victus", "rect": {"x": 0, "y": 0, "width": 2560, "height": 1440}, "scale": 1, "online": True}]}
+plan = {"hash": "a" * 64, "title": "Red Acer", "media": {"width": 1280, "height": 720, "duration_ms": 1, "frame_rate": 0}, "canvas": canvas, "start_ms": 1, "fit": "fill", "computers": ["abcd-ef01"], "pause_on_battery": True, "paused": False, "picture": True}
+status = {"plan": plan, "message": "", "available": True, "poster": sys.argv[3], "computers": {}}
+Path(sys.argv[2]).write_text(Path(sys.argv[1]).read_text() + "wallpaper\t" + json.dumps(status) + "\n")
+PY
+shot 95-wallpaper 3 "$W/a" ONE_MK_APP_STATUS="$W/wallpaper.status" ONE_MK_APP_TAB=wallpaper
 shot 96-advanced-scrolled 3 "$W/a" ONE_MK_APP_TAB=advanced ONE_MK_APP_SCROLL=600
 shot 97-reduced-transparency 3 "$W/a" ONE_MK_NO_GLASS=1
 shot 98-reduced-motion 3 "$W/a" ONE_MK_REDUCE_MOTION=1
@@ -299,7 +318,7 @@ shot r5-keys-editor-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ON
 shot r5-keys-safety-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=600
 shot r5-keys-picker-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_KEY_PICK=vol ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=210
 shot r5-files-full-width 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=1600x1000
-printf 'ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t3333-4444\tleft\t1\t0\tauto\tStudio PC\n' >"$W/offline.status"
+printf 'ok\nname\tsamer-Victus\nid\tabcd-ef01\nport\t24800\npeer\t3333-4444\tleft\t1\t0\tauto\tStudio PC\n' >"$W/offline.status"
 shot r5-files-offline 3 "$W/fx" ONE_MK_APP_STATUS="$W/offline.status" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
 printf 'transfer\t8\ts\t1\t500000\t9000000\t0\tStudio PC\n' >>"$W/offline.status"
 shot r5-files-stalled-small 3 "$W/fx" ONE_MK_APP_STATUS="$W/offline.status" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540

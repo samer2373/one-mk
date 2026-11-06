@@ -1655,7 +1655,7 @@ impl Scene {
             if let Some((was, _)) = &d.sub_was {
                 painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, was, &sub_font, room), sub_font.clone(), sub_col.gamma_multiply(1.0 - k));
             }
-            let subtitle = if self.selected == Some(i) { format!("Selected · {}", d.subtitle) } else { d.subtitle.clone() };
+            let subtitle = if self.selected == Some(i) { "Selected".to_owned() } else { d.subtitle.clone() };
             painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, &subtitle, &sub_font, room), sub_font, sub_col.gamma_multiply(k));
         }
         if !d.online || ghost {

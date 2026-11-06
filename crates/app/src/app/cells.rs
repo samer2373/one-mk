@@ -368,7 +368,8 @@ impl App {
             detail
         };
         p.text(pos2(r.left(), r.top() + 17.0), Align2::LEFT_TOP, fit(p, &detail, &mono(T_META), r.width()), mono(T_META), if t.rate == 0 { WARN } else { INK2 });
-        let recovery = if t.rate == 0 { format!("Open oneMK on {} to reconnect.", t.peer) } else { String::new() };
+        let offline = self.running().is_some_and(|status| status.peers.iter().any(|peer| peer.name == t.peer && !peer.online));
+        let recovery = if t.rate == 0 && offline { format!("Open oneMK on {} to reconnect.", t.peer) } else if t.rate == 0 { "Connected · waiting for transfer progress.".into() } else { String::new() };
         if !recovery.is_empty() {
             p.text(pos2(r.left(), r.top() + 34.0), Align2::LEFT_TOP, fit(p, &recovery, &regular(T_META), r.width()), regular(T_META), INK2);
         }

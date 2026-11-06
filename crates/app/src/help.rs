@@ -132,6 +132,10 @@ pub fn phase(now: f64, secs: f64) -> f32 {
     if motion::reduced() { 0.9 } else { ((now % secs) / secs) as f32 }
 }
 
+pub fn playback_start(clock: f64, frame: u64, start: f64, seen: u64) -> f64 {
+    if frame > seen + 1 { clock } else { start }
+}
+
 fn seg(t: f32, a: f32, b: f32) -> f32 {
     ((t - a) / (b - a)).clamp(0.0, 1.0)
 }
@@ -460,5 +464,12 @@ mod tests {
     fn the_loop_wraps() {
         assert!(phase(0.0, 4.0) < 1e-6);
         assert!((phase(5.0, 4.0) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn settled_explainer_does_not_restart_after_idle() {
+        assert_eq!(playback_start(60.0, 42, 0.0, 41), 0.0);
+        assert_eq!(playback_start(120.0, 43, 0.0, 42), 0.0);
+        assert_eq!(playback_start(121.0, 45, 0.0, 43), 121.0);
     }
 }

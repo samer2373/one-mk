@@ -113,7 +113,7 @@ impl App {
             let fills = Rect::from_min_size(pos2(origin.x, stage.bottom() + 22.0), vec2(col_w, fills_h));
             let rows = list(ui, fills, "How it fills the screens", 2);
             let fit_row = rows[0];
-            label_help(ui, short(fit_row), Id::unique("wallpaper-fit-label"), "Fit", "wallpaper-fit", enabled && selected, 204.0 + 12.0);
+            label_help(ui, short(fit_row), Id::unique("wallpaper-fit-label"), "Picture sizing", "wallpaper-fit", enabled && selected, 204.0 + 12.0);
             let track = Rect::from_min_size(pos2(fit_row.right() - 204.0, fit_row.center().y - 14.0), vec2(204.0, 28.0));
             if let Some(chosen) = (Pills { id: Id::unique("wallpaper-fit"), track, cells: Pills::even(track, 3, 2.0), labels: &["Fill", "Fit", "Stretch"], names: vec!["Fill the screens".into(), "Fit inside the screens".into(), "Stretch across the screens".into()], chosen: Some(match fit_now { Fit::Fill => 0, Fit::Fit => 1, Fit::Stretch => 2 }), enabled: vec![enabled && selected; 3], role: Role::RadioGroup, font: T_META }).show(ui, true) {
                 self.wallpaper_command(Command::Fit { fit: [Fit::Fill, Fit::Fit, Fit::Stretch][chosen] });

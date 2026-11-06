@@ -1581,7 +1581,8 @@ impl App {
             let names = match &s.broadcast[..] {
                 [_] => "it".to_owned(),
                 [rest @ .., last] if rest.len() < 3 => format!("{} and {last}", rest.join(", ")),
-                _ => "all of them".to_owned(),
+                _ if connected == 4 => "the four connected computers".to_owned(),
+                _ => format!("the {connected} connected computers"),
             };
             return (title, format!("Everything you type, click and scroll here goes to {names}. {}", self.broadcast_stop_hint()));
         }
@@ -2071,7 +2072,7 @@ impl App {
         p.galley(pos2(x, y), sub_g, INK2);
         y += sub_h;
         a11y_text(&child, Id::unique("sheet-dialog"), rect, Role::Dialog, &format!("{}. {}", view.title, view.sub), Some(Live::Polite));
-        if let Some((code, since)) = &view.code {
+        if let Some((code, _)) = &view.code {
             // Digits rise in one by one, in the same rhythm as the other screen.
             let font = mono_medium(28.0);
             let adv = text_width(&child, "0", font.clone()) + 3.0;
@@ -2080,12 +2081,8 @@ impl App {
                 if i == 3 {
                     cx += 12.0;
                 }
-                let e = scene::digit_t(i, *since, now);
-                p.text(pos2(cx, y + 14.0 + motion::space(8.0) * (1.0 - e)), Align2::LEFT_TOP, ch, font.clone(), INK.gamma_multiply(e));
+                p.text(pos2(cx, y + 14.0), Align2::LEFT_TOP, ch, font.clone(), INK);
                 cx += adv;
-            }
-            if now - since < 1.2 {
-                ui.ctx().request_repaint();
             }
             let digits: Vec<String> = code.chars().map(String::from).collect();
             let spoken = if digits.len() == 6 { format!("{}, {}", digits[..3].join(" "), digits[3..].join(" ")) } else { digits.join(" ") };
@@ -2657,9 +2654,9 @@ mod debug {
                 "waiting" => Step::Waiting { name: "Studio PC".into() },
                 "paired" => Step::Paired { id: "1111-2222".into(), name: "Studio PC".into() },
                 "ended" => Step::Ended("The codes did not match. Nothing was saved.".into()),
-                _ => Step::Searching { me: "desk".into(), port: Some(45173) },
+                _ => Step::Searching { me: app.running().map_or_else(String::new, |status| status.name.clone()), port: Some(45173) },
             };
-            app.pairing = Some(PairUi { proc: None, step, since: now, opened: now, hint: state == "hint", retry: None, me: "desk".into(), port: Some(45173) });
+            app.pairing = Some(PairUi { proc: None, step, since: now, opened: now, hint: state == "hint", retry: None, me: app.running().map_or_else(String::new, |status| status.name.clone()), port: Some(45173) });
         }
         if ready && var("ONE_MK_APP_HISTORY").is_some() {
             app.prefs.history_enabled = true;
