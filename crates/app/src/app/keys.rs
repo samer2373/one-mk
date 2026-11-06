@@ -149,14 +149,14 @@ struct Card {
     inner: Rect,
 }
 
-fn card_begin(ui: &Ui, top: Pos2, w: f32, title: &str) -> Card {
+fn card_begin(ui: &Ui, top: Pos2, w: f32, title: &str, strong: bool) -> Card {
     let bg = ui.painter().add(egui::Shape::Noop);
     let r = Rect::from_min_size(top, vec2(w, 200.0));
     let p = ui.painter();
     // The title above the group, as every settings group has it.
-    p.text(r.left_top() + vec2(18.0, 17.0), Align2::LEFT_CENTER, title, semibold(T_TITLE), INK);
+    p.text(r.left_top() + if strong { vec2(18.0, 17.0) } else { vec2(14.0, 13.0) }, Align2::LEFT_CENTER, title, semibold(if strong { T_TITLE } else { T_BODY }), if strong { INK } else { INK2 });
     a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(r.min, vec2(w, 30.0)), Role::Heading, title, None);
-    Card { bg, top, w, inner: Rect::from_min_max(r.min + vec2(18.0, 42.0), pos2(r.right() - 18.0, f32::INFINITY)) }
+    Card { bg, top, w, inner: Rect::from_min_max(r.min + vec2(18.0, if strong { 42.0 } else { 48.0 }), pos2(r.right() - 18.0, f32::INFINITY)) }
 }
 
 impl Card {
@@ -610,7 +610,7 @@ impl App {
         let input = self.prefs.input.clone();
         let height = self.keys.heights.get("local-rules").copied().unwrap_or(150.0);
         let (rect, _) = ui.allocate_exact_size(vec2(width, height + GAP), Sense::hover());
-        let card = card_begin(ui, rect.min, width, "Where your rules work");
+        let card = card_begin(ui, rect.min, width, "Where your rules work", false);
         let content = card.inner;
         let row = Rect::from_min_size(content.min, vec2(content.width(), ROW));
         if widgets::switch_help_dimmed(ui, row, Id::unique("also-on-this-computer"), "Also on this computer", "also-on-this-computer", input.local_rules,
@@ -1046,7 +1046,7 @@ impl App {
     fn rules_card(&mut self, ui: &mut Ui, at: Pos2, w: f32, input: &Input) -> f32 {
         let n = input.keys.len();
         let title = if n == 0 { "Changed keys".to_owned() } else { format!("Changed keys ({n})") };
-        let card = card_begin(ui, at, w, &title);
+        let card = card_begin(ui, at, w, &title, true);
         let c = card.inner;
         let mut y = c.top() - 6.0;
         if self.prefs.unreadable {
@@ -1161,7 +1161,7 @@ impl App {
             },
             None => name.clone(),
         };
-        let card = card_begin(ui, at, w, &title);
+        let card = card_begin(ui, at, w, &title, true);
         let c = card.inner;
         // On the title's own line, at the group's right edge: the card's action.
         let close = Rect::from_center_size(pos2(at.x + w - 14.0, at.y + 13.0), vec2(26.0, 26.0));
@@ -1440,7 +1440,7 @@ impl App {
     /// "Test it": keys typed here go through the rules as a visit would
     /// send them; nothing is sent and no action runs.
     fn test_card(&mut self, ui: &mut Ui, at: Pos2, w: f32, minimum_height: f32, now: f64) -> f32 {
-        let card = card_begin(ui, at, w, "Test it");
+        let card = card_begin(ui, at, w, "Test it", true);
         let c = card.inner;
         let has = self.keys.tester.as_ref().is_some_and(|(t, ..)| !t.pressed.chips.is_empty() || t.note.is_some());
         let clear = Rect::from_center_size(pos2(at.x + w - 14.0, at.y + 13.0), vec2(26.0, 26.0));
@@ -1569,7 +1569,7 @@ impl App {
     }
 
     fn mouse_modes_card(&mut self, ui: &mut Ui, at: Pos2, width: f32, input: &Input, facts: &Facts) -> f32 {
-        let card = card_begin(ui, at, width, "Autoscroll & gestures");
+        let card = card_begin(ui, at, width, "Autoscroll & gestures", false);
         let content = card.inner;
         let mut top = content.top();
         if matches!(self.keys.scope, Scope::Device(..)) {
@@ -1833,7 +1833,7 @@ impl App {
     }
 
     fn buttons_card(&mut self, ui: &mut Ui, at: Pos2, w: f32, input: &Input, facts: &Facts) -> f32 {
-        let card = card_begin(ui, at, w, "Buttons");
+        let card = card_begin(ui, at, w, "Buttons", false);
         let c = card.inner;
         let mut y = c.top() - 6.0;
         let busy = self.tuning_busy();
@@ -1953,7 +1953,7 @@ impl App {
     }
 
     fn pointer_card(&mut self, ui: &mut Ui, at: Pos2, w: f32, input: &Input, facts: &Facts) -> f32 {
-        let card = card_begin(ui, at, w, "Pointer");
+        let card = card_begin(ui, at, w, "Pointer", false);
         let c = card.inner;
         let mut y = c.top() - 6.0;
         let (speed, accel) = tune::pointer_shown(input, facts);
@@ -1992,7 +1992,7 @@ impl App {
     }
 
     fn scroll_card(&mut self, ui: &mut Ui, at: Pos2, w: f32, input: &Input, facts: &Facts) -> f32 {
-        let card = card_begin(ui, at, w, "Scrolling");
+        let card = card_begin(ui, at, w, "Scrolling", false);
         let c = card.inner;
         let mut y = c.top() - 6.0;
         let dev = self.keys.device;
