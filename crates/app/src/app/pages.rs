@@ -37,7 +37,6 @@ enum Fix {
     OpenPermissionSettings,
     OpenFirewallSettings,
     Update,
-    Recheck,
     /// The steps for the desktop's own permission dialog (not macOS).
     DesktopGuide,
 }
@@ -82,7 +81,7 @@ fn pending_kind(line: &str) -> Option<bool> {
 /// Whether a row's written fix shows: always, unless the window's own
 /// button does that very thing (Start, Pair, Allow...).
 fn shows_fix_text(here: &Option<(&'static str, Fix)>) -> bool {
-    matches!(here, None | Some((_, Fix::Recheck | Fix::OpenPermissionGuide | Fix::DesktopGuide)))
+    matches!(here, None | Some((_, Fix::OpenPermissionGuide | Fix::DesktopGuide)))
 }
 
 /// One line of Health: a check, or something the daemon says right now
@@ -200,7 +199,7 @@ impl App {
                 continue;
             }
             match pending_kind(l) {
-                Some(asks) => needs.push(Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Skip, here: if asks { ask } else { None }, k: usize::MAX }),
+                Some(asks) => needs.push(Item { title: if asks { "Pending permission".into() } else { "Setting up".into() }, detail: l.clone(), fix: None, verdict: Verdict::Skip, here: if asks { ask } else { None }, k: usize::MAX }),
                 None => works.push(Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Pass, here: None, k: usize::MAX }),
             }
         }
@@ -212,7 +211,9 @@ impl App {
                     (_, Verdict::Pass) => None,
                     (Some(f), _) if view::fix_command(f).1 => None,
                     _ if matches!(c.id.as_str(), "input" | "permissions" | "accessibility") => Some(("Open guide", if cfg!(target_os = "macos") { Fix::OpenPermissionGuide } else { Fix::DesktopGuide })),
-                    _ => Some(("Recheck", Fix::Recheck)),
+                    // Nothing the window can do here: the fix is in words,
+                    // and Recheck (once, at the top) checks again.
+                    _ => None,
                 });
                 let item = Item { title: c.title.clone(), detail: c.detail.clone(), fix: c.fix.clone(), verdict: c.verdict, here, k };
                 if c.verdict == Verdict::Pass { works.push(item) } else { needs.push(item) }
@@ -341,10 +342,11 @@ impl App {
                         p.text(pos2(tx, ty + 10.0), Align2::LEFT_CENTER, &i.title, semibold(T_BODY), INK);
                         ty += 24.0;
                     }
-                    ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, regular(T_BODY), if i.title.is_empty() { INK } else { INK2 });
+                    // What is wrong in ink; what to do, quieter, under it.
+                    ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, regular(T_BODY), INK);
                     let fix_text = i.fix.clone().filter(|_| shows_fix_text(&i.here));
                     if let Some(f) = &fix_text {
-                        widgets::para_code(ui, pos2(tx, ty + 6.0), text_w, f, regular(T_BODY), INK);
+                        widgets::para_code(ui, pos2(tx, ty + 6.0), text_w, f, regular(T_BODY), INK2);
                     }
                     let br = Rect::from_min_size(pos2(row.right() - bw, row.top() + 6.0), vec2(bw, 32.0));
                     if let Some((label, job)) = &i.here {
@@ -410,7 +412,7 @@ impl App {
                 }).collect();
                 let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
                 let r = col(ui, h);
-                card(ui, r, "Working");
+                card(ui, r, "Passed");
                 let mut y = r.top() + 44.0;
                 for (n, (i, ih)) in works.iter().zip(&heights).enumerate() {
                     let p = ui.painter().clone();
@@ -443,7 +445,6 @@ impl App {
                 self.link.start();
             }
             Some(Fix::Pair) => self.start_pairing(now),
-            Some(Fix::Recheck) => self.recheck(),
             Some(Fix::OpenPermissionGuide) => {
                 let lines = self.running().map(|status| status.input.clone()).unwrap_or_default();
                 self.guide.start(&crate::guide::Permission::ALL, Box::new(crate::guide::StatusPermissions { lines }), now);
