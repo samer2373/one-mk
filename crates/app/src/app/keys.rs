@@ -876,7 +876,7 @@ impl App {
         // the keys' drawn tops. Each key is focusable on its own, for the
         // keyboard and for screen readers.
         // Clicks only: focus goes to the keys themselves, not this area.
-        let resp = ui.interact(area, Id::unique("board"), widgets::sense(ui, Sense::click_and_drag()));
+        let resp = ui.interact(area, Id::unique("board"), widgets::sense(ui, Sense::CLICK | Sense::DRAG));
         if resp.dragged() {
             self.keys.board_orbit.pull(resp.drag_delta(), 0.7, 0.3);
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -1606,7 +1606,7 @@ impl App {
         let shown = tune::buttons_shown(input, facts);
         let busy = self.tuning_busy();
         // Clicks on the mouse itself.
-        let resp = ui.interact(room, Id::unique("mouse-body"), widgets::sense(ui, Sense::click_and_drag()));
+        let resp = ui.interact(room, Id::unique("mouse-body"), widgets::sense(ui, Sense::CLICK | Sense::DRAG));
         if resp.dragged() {
             self.keys.mouse_orbit.pull(resp.drag_delta(), 0.9, 0.3);
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
