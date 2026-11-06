@@ -2297,7 +2297,7 @@ impl App {
         }
         // One key per page, as the sidebar shows them: ⌘1 Desk, ⌘2
         // Wallpaper, ⌘3 Clipboard & files, ⌘4 Keys & mouse, ⌘, Settings.
-        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Comma, Tab::Advanced)] {
+        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Num5, Tab::Health), (Key::Comma, Tab::Advanced)] {
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || tab.when_off()) {
                 self.set_tab(tab);
             }
@@ -2810,7 +2810,11 @@ mod debug {
         if raw.time.unwrap_or(0.0) < 1.5 {
             return;
         }
-        let Some(r) = widgets::targets::rect_of(&name) else { return };
+        // Found once and kept: a frame whose target list is empty (the
+        // screenshot's own) must not let the pointer go.
+        let key = Id::unique("point-at-rect");
+        let Some(r) = widgets::targets::rect_of(&name).or_else(|| ctx.data(|d| d.get_temp::<Rect>(key))) else { return };
+        ctx.data_mut(|d| d.insert_temp(key, r));
         let at = r.center();
         raw.events.push(egui::Event::PointerMoved(at));
         let id = Id::unique("point-at-pressed");

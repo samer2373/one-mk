@@ -11,7 +11,7 @@ use crate::chrome;
 use crate::icons::{self, Icon};
 
 pub(super) const SIDE_W: f32 = 232.0;
-pub(super) const RAIL_W: f32 = 56.0;
+pub(super) const RAIL_W: f32 = 96.0;
 /// Narrower than this, the sidebar becomes a rail.
 pub(super) const RAIL_BELOW: f32 = 1000.0;
 /// The band across the top: the page title (and on macOS the window
@@ -39,7 +39,7 @@ pub(super) fn frame(full: Rect) -> Frame {
 /// The pages in the sidebar, each with its shortcut key (with ⌘ or Ctrl).
 /// Layout lives in Desk (its Arrange view), Health behind the status line
 /// at the bottom, Advanced is Settings.
-const NAV: [(Tab, Icon, &str); 5] = [(Tab::Desk, Icon::Desk, "1"), (Tab::Wallpaper, Icon::Wallpaper, "2"), (Tab::Files, Icon::Clipboard, "3"), (Tab::Keys, Icon::Keys, "4"), (Tab::Advanced, Icon::Advanced, ",")];
+const NAV: [(Tab, Icon, &str); 6] = [(Tab::Desk, Icon::Desk, "1"), (Tab::Wallpaper, Icon::Wallpaper, "2"), (Tab::Files, Icon::Clipboard, "3"), (Tab::Keys, Icon::Keys, "4"), (Tab::Health, Icon::Health, "5"), (Tab::Advanced, Icon::Advanced, ",")];
 
 /// The sidebar's page that `tab` belongs to.
 fn nav_of(tab: Tab) -> Tab {
@@ -167,9 +167,9 @@ impl App {
         ui.painter().rect(kr, CornerRadius::same(5), Color32::from_white_alpha(10), Stroke::new(0.5, Color32::from_white_alpha(36)), StrokeKind::Inside);
         ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META), INK3);
         widgets::focus_ring(ui, &resp, sr, 8);
-        widgets::a11y(&resp, Role::SearchInput, "Search actions, computers and settings", None);
-        // Empty until the palette opens: an empty value, so readers find text.
-        ui.ctx().accesskit_node_builder(resp.id, |n| n.set_value(String::new()));
+        // A button that opens the command palette (where the typing
+        // happens, in a real text field): not a text field itself.
+        widgets::a11y(&resp, Role::Button, "Search: open the command palette", None);
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -461,9 +461,10 @@ impl App {
                 if y + 32.0 > bottom {
                     break;
                 }
-                let r = Rect::from_center_size(pos2(cx, y + 15.0), vec2(40.0, 30.0));
+                // A short name, not initials: as much of it as fits.
+                let r = Rect::from_center_size(pos2(cx, y + 15.0), vec2(side.width() - 12.0, 30.0));
                 let (resp, _) = row_button(ui, r, Id::unique(("pc", id.as_str())), &name, Role::Button, sel.as_deref() == Some(id.as_str()), true);
-                let initials: String = name.split(|c: char| c.is_whitespace() || c == '-' || c == '_').filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase();
+                let shown = fit(ui.painter(), name.strip_suffix(".local").unwrap_or(&name), &regular(T_META), r.width() - 26.0);
                 let p = ui.painter();
                 let mark = pos2(r.left() + 9.0, r.center().y);
                 if pointer.as_deref() == Some(id.as_str()) {
@@ -473,7 +474,7 @@ impl App {
                 } else {
                     p.circle_stroke(mark, 2.5, Stroke::new(1.5, INK3));
                 }
-                p.text(pos2(r.left() + 19.0, r.center().y), Align2::LEFT_CENTER, initials, semibold(T_META), if online { INK2 } else { INK3 });
+                p.text(pos2(r.left() + 19.0, r.center().y), Align2::LEFT_CENTER, shown, regular(T_META), if online { INK2 } else { INK3 });
                 if resp.on_hover_text(&name).clicked() {
                     self.set_tab(Tab::Desk);
                     self.select(id.clone());
