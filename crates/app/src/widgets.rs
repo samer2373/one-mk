@@ -65,6 +65,12 @@ pub mod targets {
         }
     }
 
+    /// Where last frame's control called `label` (exactly) was.
+    pub fn rect_of(label: &str) -> Option<egui::Rect> {
+        let last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        last.iter().find(|(l, _)| l == label).map(|(_, q)| egui::Rect::from_min_max(egui::pos2(q[0], q[1]), egui::pos2(q[2], q[3])))
+    }
+
     pub fn name_of(id: egui::Id) -> Option<String> {
         NAMES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&id).cloned())
     }

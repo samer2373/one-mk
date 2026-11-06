@@ -1982,6 +1982,11 @@ impl App {
             None => match &self.sheet_was {
                 Some((v, t)) if now - t < 0.16 => (v.clone(), Some(*t)),
                 _ => {
+                    // Closed: the keyboard goes back to where the sheet was
+                    // opened from (the sidebar's action).
+                    if self.sheet_was.is_some() && widgets::keyboard_focus(ui.ctx()) {
+                        ui.memory_mut(|m| m.request_focus(Id::unique("action")));
+                    }
                     self.sheet_was = None;
                     self.sheet_top = None;
                     self.sheet_key.clear();
@@ -2497,6 +2502,7 @@ impl eframe::App for App {
     #[cfg(any(debug_assertions, feature = "design-evidence"))]
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         debug::tab_press(ctx, raw_input);
+        debug::point_at(ctx, raw_input);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -2634,6 +2640,16 @@ mod debug {
         let ready = app.running().is_some();
         if app.status.is_some() && var("ONE_MK_APP_PAIR").is_some() && once(&ctx, "pair") {
             app.start_pairing(now);
+        }
+        // ONE_MK_APP_SHEET_CLOSE=secs: the open sheet is closed then (as
+        // Cancel or Esc would), with the keyboard driving.
+        if let Some(t) = var("ONE_MK_APP_SHEET_CLOSE").and_then(|v| v.parse::<f64>().ok())
+            && now > t
+            && app.sheet_open()
+            && once(&ctx, "sheet-close")
+        {
+            ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
+            app.sheet_act(Act::Close, now);
         }
         if ready && let Some(state) = var("ONE_MK_APP_PAIR_STATE") && once(&ctx, "pair-state") {
             let step = match state.as_str() {
@@ -2784,6 +2800,24 @@ mod debug {
         }
         raw.events.push(egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
         ctx.data_mut(|d| d.insert_temp(id, (done + 1, now)));
+    }
+
+    /// `ONE_MK_APP_POINT_AT=<control name>` (with `ONE_MK_APP_TARGETS`):
+    /// from 1.5 s the pointer rests on that control (hover);
+    /// `ONE_MK_APP_PRESS=1` also holds the button down on it (pressed).
+    pub fn point_at(ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(name) = var("ONE_MK_APP_POINT_AT") else { return };
+        if raw.time.unwrap_or(0.0) < 1.5 {
+            return;
+        }
+        let Some(r) = widgets::targets::rect_of(&name) else { return };
+        let at = r.center();
+        raw.events.push(egui::Event::PointerMoved(at));
+        let id = Id::unique("point-at-pressed");
+        if var("ONE_MK_APP_PRESS").is_some() && !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) && raw.time.unwrap_or(0.0) > 1.8 {
+            raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            ctx.data_mut(|d| d.insert_temp(id, true));
+        }
     }
 
     pub fn tab_walk(ctx: &egui::Context, _now: f64) {
