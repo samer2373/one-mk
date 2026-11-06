@@ -26,7 +26,7 @@ impl App {
             self.clipboard_reveal = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
         }
-        let persist = Rect::from_min_size(pos2(rect.left(), rect.top() + 62.0), vec2(rect.width(), 28.0));
+        let persist = Rect::from_min_size(pos2(rect.left(), rect.top() + 66.0), vec2(rect.width(), 28.0));
         if switch_help(ui, persist, Id::unique("history-persist"), "Keep history after restart", "history-persist", self.prefs.history_persist, self.prefs.history_enabled).clicked() {
             let enabled = !self.prefs.history_persist;
             self.set_pref("saved clipboard history", &["clipboard", "history", "persist", if enabled { "on" } else { "off" }], |prefs| prefs.history_persist = enabled);
@@ -39,7 +39,7 @@ impl App {
         } else {
             "Memory only; hidden until Show. Unmarked secrets may be retained."
         };
-        let mut height = para(ui, pos2(rect.left(), rect.top() + 64.0), rect.width(), privacy, regular(T_META), INK2);
+        let mut height = para(ui, pos2(rect.left(), rect.top() + 72.0), rect.width(), privacy, regular(T_META), INK2);
         let failure = history_failure(self.running());
         let text = history_message(online, self.clipboard_history.as_ref(), self.prefs.history_enabled, failure);
         // A saved-history failure next to a list: say so above it, or the

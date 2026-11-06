@@ -37,9 +37,9 @@ impl App {
         let wallpaper = status.as_ref().and_then(|status| status.wallpaper.clone()).unwrap_or_default();
         let plan = wallpaper.plan.as_ref();
         let canvas = plan.map(|plan| plan.canvas.clone()).unwrap_or_else(|| status.as_ref().map(one_mk_ctl::wallpaper::canvas).unwrap_or_default());
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let poster_path = std::env::var_os("ONE_MK_APP_WALLPAPER").map(Into::into).or_else(|| wallpaper.poster.clone());
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, feature = "design-evidence")))]
         let poster_path = wallpaper.poster.clone();
         if self.wallpaper_ui.poster_path != poster_path {
             self.wallpaper_ui.poster = poster_path.as_ref().and_then(|path| {

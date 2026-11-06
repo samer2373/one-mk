@@ -16,9 +16,6 @@ pub(super) struct FilesUi {
 }
 
 impl App {
-    /// Clipboard & files under the desk (after council/codex): one column
-    /// that scrolls, each group as tall as what it holds, so no label is
-    /// shortened and no history row is cut by an edge.
     pub(super) fn files_panel(&mut self, ui: &mut Ui, rect: Rect) {
         if let Some(paths) = self.files_ui.picker.as_ref().and_then(|(_, receiver)| receiver.try_recv().ok()) {
             let (id, _) = self.files_ui.picker.take().expect("picker completed");
@@ -41,18 +38,21 @@ impl App {
             used += chip_width + 8.0;
         }
         let shown_transfers = transfers.min(if rect.width() < 700.0 { 1 } else { 4 });
-        let head_h = 32.0 + 32.0 + rows as f32 * 44.0 + 24.0 + if self.files_ui.spatial { 148.0 } else { 0.0 } + if transfers > 0 { 28.0 + 36.0 * shown_transfers as f32 } else { 0.0 };
+        let hint = if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Desk hidden. Choose a recipient to pick files, or drop files on its chip." };
+        let hint_h = ui.painter().layout(hint.to_owned(), regular(T_META), INK2, width - 32.0).size().y;
+        let head_h = 32.0 + rows as f32 * 44.0 + hint_h + 40.0 + if self.files_ui.spatial { 148.0 } else { 0.0 } + if transfers > 0 { 28.0 + 36.0 * shown_transfers as f32 } else { 0.0 };
         let settings_h = 2.0 * PAD + 28.0 + 5.0 * 36.0;
         let items = self.clipboard_history.as_ref().and_then(|h| h.as_ref().ok()).map_or(0, Vec::len);
         let listed = self.prefs.history_enabled && items > 0;
         let history_h = 2.0 * PAD + 104.0 + 44.0 + if listed { 50.0 * items as f32 } else { 30.0 };
-        let history_h = if listed { history_h } else { 164.0 };
+        let privacy_h = ui.painter().layout("History off · Nothing you copy is kept. If enabled, unmarked secrets may be retained.".to_owned(), regular(T_META), INK2, width - 32.0).size().y;
+        let history_h = if listed { history_h } else { 136.0 + privacy_h };
         let clipboard_h = if self.files_ui.options { settings_h } else { 80.0 };
         let total = head_h + M + clipboard_h + M + history_h + M + settings_h;
         let mut child = ui.new_child(UiBuilder::new().max_rect(rect).id_salt("files-panel"));
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         let scroll = egui::ScrollArea::vertical().id_salt("files-page").auto_shrink([false, false]);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()).map_or(scroll.clone(), |o| scroll.vertical_scroll_offset(o));
         scroll.show(&mut child, |ui| {
             let (all, _) = ui.allocate_exact_size(vec2(width, total), Sense::hover());
@@ -95,7 +95,6 @@ impl App {
             }
             y += 44.0;
             if recipients.is_empty() { para(ui, pos2(inner.left(), y - 38.0), inner.width(), "Pair a computer to send files to it.", regular(T_BODY), INK2); }
-            let hint = if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Desk hidden. Choose a recipient to pick files, or drop files on its chip." };
             y += para(ui, pos2(inner.left(), y), inner.width(), hint, regular(T_META), INK2) + 8.0;
             if self.files_ui.spatial {
                 self.desk(ui, Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), 140.0)), rect, self.now);
@@ -115,8 +114,8 @@ impl App {
             }
             let options = Rect::from_min_size(pos2(clipboard.right() - PAD - 124.0, clipboard.top() + PAD - 4.0), vec2(124.0, 28.0));
             if button(ui, options, Id::unique("files-clipboard-options"), if self.files_ui.options { "Hide options" } else { "Sharing options" }, Look::Quiet, true, None).clicked() { self.files_ui.options = !self.files_ui.options; }
-            self.files_settings(ui, files.shrink(PAD));
             self.clipboard_history_cell(ui, history.shrink(16.0));
+            self.files_settings(ui, files.shrink(PAD));
         });
     }
 

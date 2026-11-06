@@ -151,7 +151,7 @@ fn card_begin(ui: &Ui, top: Pos2, w: f32, title: &str) -> Card {
 impl Card {
     /// Closes the card below `bottom`; its height.
     fn end(self, ui: &Ui, bottom: f32) -> f32 {
-    let r = Rect::from_min_max(self.top, pos2(self.top.x + self.w, bottom + 14.0));
+        let r = Rect::from_min_max(self.top, pos2(self.top.x + self.w, bottom + 14.0));
         // The group's fill goes behind what was drawn on it.
         let shapes = widgets::group_shapes(r, R_GROUP);
         ui.painter().set(self.bg, egui::Shape::Vec(shapes));
@@ -200,7 +200,7 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     if r.hovered() && enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     widgets::targets::note(label, rect);
     let (name, enabled) = (label.to_owned(), enabled && r.enabled());
     r.widget_info(move || egui::WidgetInfo::selected(Role::CheckBox, enabled, on, &name));
@@ -400,7 +400,7 @@ impl App {
 
     /// Development aid: types `spec` into the test box (`58d0,58u85`: a
     /// code, down or up, at a time in ms), as if it had just happened.
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     pub(super) fn debug_type(&mut self, ctx: &egui::Context, spec: &str) {
         ctx.memory_mut(|m| m.request_focus(Id::unique(TEST_ID)));
         self.keys.test_focused = true;
@@ -570,14 +570,15 @@ impl App {
             child.style_mut().scroll_animation = egui::style::ScrollAnimation::none();
         }
         let scroll = egui::ScrollArea::vertical().id_salt(salt).auto_shrink([false, false]);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
         scroll.show(&mut child, |ui| {
-            self.local_rules_card(ui, body.width());
             match self.keys.view {
                 View::Keyboard => self.keyboard_view(ui, body.width(), now),
                 View::Mouse => self.mouse_view(ui, body.width()),
             }
+            ui.add_space(GAP);
+            self.local_rules_card(ui, body.width());
         });
     }
 
@@ -634,7 +635,7 @@ impl App {
         p.add(egui::Shape::line(vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)], Stroke::new(1.5, INK2)));
         let peers = self.scope_peers();
         // Development aid (screenshots): the menu opens by itself.
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_KEY_SCOPE_MENU").is_some() {
             let once = Id::unique("debug-scope-menu");
             if !ui.ctx().data(|d| d.get_temp::<bool>(once).unwrap_or(false)) {
@@ -749,7 +750,7 @@ impl App {
         let side = false;
         let unit = (inner / kw).min(UNIT_MAX).floor();
         let _ = kh;
-        let kb_h = 54.0 + (inner * 0.32).clamp(180.0, 330.0) + 10.0;
+        let kb_h = if self.keys.selected.is_some() { 224.0 } else { 54.0 + (inner * 0.32).clamp(180.0, 330.0) + 10.0 };
         let head_w = text_width(ui, "Quick setups", semibold(T_BODY)) + 16.0;
         let mut chips = vec![];
         let (mut x, mut y) = (head_w, 0.0);

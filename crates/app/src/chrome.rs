@@ -48,7 +48,7 @@ pub fn mac_frame() -> bool {
 /// on it keeps 4.5:1 over a white wallpaper.
 pub fn paint_room(p: &egui::Painter, full: egui::Rect) {
     use crate::style::{LAMP, ROOM, ROOM_TINT};
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     fake::paint_desktop(p, full);
     p.rect_filled(full, 0.0, if see_through() { ROOM_TINT } else { ROOM });
     // A quiet room: no lights of its own; the computers carry the colour.
@@ -175,10 +175,10 @@ mod mac {
 /// a see-through window with the macOS frame and its window buttons, so
 /// the Mac look can be seen and screenshotted on any system.
 mod fake {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     static PICTURE: std::sync::OnceLock<Option<egui::ColorImage>> = std::sync::OnceLock::new();
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     fn picture() -> &'static Option<egui::ColorImage> {
         PICTURE.get_or_init(|| {
             let bytes = std::fs::read(std::env::var_os("ONE_MK_APP_FAKE_DESKTOP")?).ok()?;
@@ -202,13 +202,13 @@ mod fake {
     }
 
     pub fn desktop() -> bool {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         return picture().is_some();
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, feature = "design-evidence")))]
         false
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     pub fn paint_desktop(p: &egui::Painter, full: egui::Rect) {
         let Some(img) = picture() else { return };
         let tex = p.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(egui::Id::unique("fake-desktop"))).unwrap_or_else(|| {
@@ -220,7 +220,7 @@ mod fake {
     }
 
     /// The three window buttons, drawn where AppKit would put them.
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     pub fn paint_buttons(p: &egui::Painter) {
         if !desktop() {
             return;
@@ -233,7 +233,7 @@ mod fake {
 }
 
 /// The macOS window buttons in a fake desktop screenshot (debug only).
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "design-evidence"))]
 pub fn paint_fake_buttons(p: &egui::Painter) {
     fake::paint_buttons(p);
 }

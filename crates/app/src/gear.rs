@@ -451,8 +451,6 @@ impl Keyboard {
         let base = Cam::new(p3(0.0, 0.0, 0.0), -0.06 + view.yaw, 0.92 + view.pitch, 760.0, 1.0, rect.center());
         let bounds = [p3(x0 - margin, 0.0, z0 - margin), p3(-x0 + margin, 0.0, z0 - margin), p3(-x0 + margin, -16.0, -z0 + margin + 4.0), p3(x0 - margin, -16.0, -z0 + margin + 4.0), p3(0.0, 12.0, z0)];
         let whole = base.fitted(&bounds, rect, 10.0);
-        // Zoomed: the key with two keys of board all round it, at most 2.4
-        // times the whole board's scale, so where it sits stays clear.
         match focus.and_then(|i| caps.get(i)) {
             Some(k) => {
                 let (cx, cz) = (x0 + (k.x + k.w / 2.0) * U, z0 + (k.y + k.h / 2.0) * U);
@@ -1008,7 +1006,6 @@ mod tests {
             assert!(seen.len() < 200, "it never settles");
         }
         let close = *seen.last().unwrap();
-        // Closer, yet with two keys of board round it (round-3 design: at most 2.4x).
         assert!(close > whole.width() * 1.4, "{close} vs {}", whole.width());
         assert!(seen.windows(2).all(|w| w[1] >= w[0] - 0.01), "it only grows on the way in");
         assert!(seen.len() > 12 && seen[seen.len() / 2] > whole.width() && seen[seen.len() / 2] < close, "it takes a while, passing through the middle");
@@ -1020,6 +1017,20 @@ mod tests {
         assert!(first.width() > whole.width() * 1.5, "the first frame out is still close");
         while frame(&mut b, &mut g, None, 37).1 {}
         assert!((frame(&mut b, &mut g, None, 37).0.width() - whole.width()).abs() < 0.01);
+    }
+
+    #[test]
+    fn selected_edge_keys_keep_padding_in_a_short_editor_stage() {
+        let (caps, _) = real_board();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(860.0, 166.0));
+        for selected in [0, 14, 30, 60, 74] {
+            let (mut board, mut glide) = (None, Glide::default());
+            Keyboard::get(&mut board, rect, &caps, View::default(), Some(selected), &mut glide, 1.0 / 60.0);
+            let bounds = board.as_ref().unwrap().bounds(selected);
+            assert!(rect.shrink(20.0).contains_rect(bounds), "key {selected}: {bounds:?}");
+            assert!(bounds.center().distance(rect.center()) < 32.0, "key {selected} is not centered");
+            assert!(bounds.width() < rect.width() / 4.0, "board context must remain visible");
+        }
     }
 
     #[test]

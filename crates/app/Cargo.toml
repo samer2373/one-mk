@@ -3,6 +3,9 @@ name = "one-mk-app"
 version.workspace = true
 edition = "2024"
 
+[features]
+design-evidence = []
+
 [[bin]]
 name = "one-mk-app"
 path = "src/main.rs"

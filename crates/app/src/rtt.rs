@@ -235,7 +235,7 @@ impl Rtts {
     }
 
     /// Replaces a computer's history (the screenshot hook).
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     pub fn set(&mut self, id: &str, ring: Ring) {
         self.rings.insert(id.to_owned(), ring);
     }
@@ -244,7 +244,7 @@ impl Rtts {
 /// A history from `ms,ms,+loss` text, one second apart, ending at `now`
 /// (the screenshot hook): `4,5,6+2` is three samples, the last 6 ms with
 /// 2 packets lost since the one before.
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "design-evidence"))]
 pub fn scripted(now: f64, text: &str) -> Ring {
     let items: Vec<&str> = text.split(',').filter(|s| !s.is_empty()).collect();
     let mut ring = Ring::default();
@@ -487,7 +487,7 @@ mod tests {
         assert!(all.of("a").is_none());
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     #[test]
     fn the_screenshot_script_makes_histories() {
         let r = scripted(100.0, "4,5,6+2");

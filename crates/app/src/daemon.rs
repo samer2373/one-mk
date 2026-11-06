@@ -186,7 +186,7 @@ impl Link {
     }
 
     pub fn history(&self) {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_STATUS").is_some() {
             self.send(Event::ClipboardHistory(Ok(Vec::new())));
             return;
@@ -239,7 +239,7 @@ impl Link {
     /// `Err` when the daemon could not be asked (busy, a timeout): that
     /// says nothing about whether it runs.
     fn status(&self) -> Result<Option<Status>, ()> {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if let Some(path) = std::env::var_os("ONE_MK_APP_STATUS") {
             // Development aid: a status in its wire format, for screenshots
             // of states that are hard to set up (long names, many computers).
@@ -414,7 +414,7 @@ impl Link {
     /// `one_mk_ctl::setup`); the window says what it did.
     pub fn first_run(&self) {
         // Screenshots and demos must not touch the real login items.
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_STATUS").is_some() || std::env::var_os("ONE_MK_APP_NO_SETUP").is_some()
             || std::env::var_os("ONE_MK_APP_GUIDE").is_some() || std::env::var_os("ONE_MK_GUIDE_STAGE").is_some() || std::env::var_os("ONE_MK_APP_SHOT").is_some() {
             return;
@@ -520,7 +520,7 @@ impl Link {
     }
 
     pub fn check_updates(&self) {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_STATUS").is_some() || std::env::var_os("ONE_MK_APP_NO_SETUP").is_some() { return; }
         let link = self.clone();
         std::thread::spawn(move || {
@@ -696,7 +696,7 @@ impl Link {
     }
 
     fn run_input_devices(&self) -> Result<crate::tune::InputDevices, String> {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if let Some(path) = std::env::var_os("ONE_MK_APP_INPUT_DEVICES") {
             // Development aid: a list to show instead of the real one.
             let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
@@ -722,7 +722,7 @@ impl Link {
     }
 
     fn run_doctor(&self) -> Result<Vec<Check>, String> {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if let Some(path) = std::env::var_os("ONE_MK_APP_DOCTOR") {
             // Development aid: a report to show instead of a real check.
             std::thread::sleep(Duration::from_millis(600));
@@ -755,7 +755,7 @@ impl Link {
     /// Puts the menu-bar / tray icon up if it isn't, so the window is never
     /// the only way in. The tray exits by itself when one is already there.
     fn show_tray(&self) {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_STATUS").is_some() { return; }
         if let Some(tray) = &self.tray {
             let _ = proc::spawn_detached(tray, &self.home_args(), None);

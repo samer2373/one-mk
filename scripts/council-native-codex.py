@@ -172,7 +172,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="codex-r2-evidence-") as directory:
         home = Path(directory)
         status = home / "status"
-        status.write_text("ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t1\t0\tauto\tStudio PC\n")
+        status.write_text("ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\nlink\t1111-2222\t4200\t0\t900\n")
         environment = dict(os.environ, ONE_MK_APP_NO_SETUP="1", ONE_MK_APP_STATUS=str(status), ONE_MK_APP_SIZE="1200x780")
         environment.pop("WAYLAND_DISPLAY", None)
         environment["WINIT_UNIX_BACKEND"] = "x11"
@@ -195,7 +195,8 @@ def main():
             walkthrough = {}
             for tab in args.tabs.split(","):
                 focus = home / "focus.txt"
-                process = subprocess.Popen([str(args.binary.resolve()), "--home", str(home)], env=dict(environment, ONE_MK_APP_TAB=tab, ONE_MK_APP_FOCUS_LOG=str(focus)), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                extra = {"ONE_MK_APP_KEY": "capslock", "ONE_MK_APP_KEY_MORE": "1"} if tab == "keys" else {}
+                process = subprocess.Popen([str(args.binary.resolve()), "--home", str(home)], env=dict(environment, **extra, ONE_MK_APP_TAB=tab, ONE_MK_APP_FOCUS_LOG=str(focus)), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 try:
                     window = desktop.window(process.pid)
                     desktop.focus(window)

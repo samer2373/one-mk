@@ -43,7 +43,7 @@ pub fn pressed(fill: Color32, t: f32) -> Color32 {
 /// Tells assistive technology what a painted control is.
 /// Development aid (`ONE_MK_APP_TARGETS=file`): every named control and
 /// where it is, written out each frame, so tests can click them by name.
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "design-evidence"))]
 pub mod targets {
     use std::sync::Mutex;
     static NOW: Mutex<Vec<(String, [f32; 4])>> = Mutex::new(Vec::new());
@@ -76,7 +76,7 @@ pub mod targets {
 }
 
 pub fn a11y(r: &Response, role: Role, label: &str, selected: Option<bool>) {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     targets::note(label, r.rect);
     // Tabbed onto, a control is brought into view (a list that scrolls).
     if r.gained_focus() && keyboard_focus(&r.ctx) {
@@ -92,7 +92,7 @@ pub fn a11y(r: &Response, role: Role, label: &str, selected: Option<bool>) {
 /// A node for painted text, so screen readers can read it. `live` makes
 /// changes announced (headlines, toasts).
 pub fn a11y_text(ui: &Ui, id: Id, rect: Rect, role: Role, label: &str, live: Option<egui::accesskit::Live>) {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     targets::note(label, rect);
     ui.ctx().accesskit_node_builder(id, |n| {
         n.set_role(role);
@@ -294,7 +294,7 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
     }
     let pop = egui::Popup::menu(&r).width(300.0).align(egui::RectAlign::BOTTOM_END);
     // Development aid: ONE_MK_APP_HELP=<key> keeps that explanation open.
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     let pop = if std::env::var("ONE_MK_APP_HELP").is_ok_and(|v| v == key) { pop.open(true) } else { pop };
     pop.show(|ui| {
         // A picture on its own well, then the sentence, inset with the menu's margin.
@@ -372,7 +372,7 @@ pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: b
     if r.hovered() && enabled {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     targets::note(label, r.rect);
     let (label, enabled) = (label.to_owned(), r.enabled());
     let cut = shown != label;
@@ -465,7 +465,7 @@ impl Pills<'_> {
             if r.hovered() && enabled && !on {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, feature = "design-evidence"))]
             targets::note(&self.names[k], r.rect);
             let (name, enabled) = (self.names[k].clone(), r.enabled());
             let role = self.role;
@@ -505,7 +505,7 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
     if r.has_focus() {
         ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(9), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
     }
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     targets::note(label, r.rect);
     if r.gained_focus() && keyboard_focus(ui.ctx()) {
         r.scroll_to_me(None);

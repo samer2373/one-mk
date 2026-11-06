@@ -432,7 +432,7 @@ impl App {
         scene.cursor_on = "me".into();
         #[allow(unused_mut)]
         let mut tab = Tab::Desk;
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         match std::env::var("ONE_MK_APP_TAB").as_deref() {
             Ok("files") => tab = Tab::Files,
             Ok("wallpaper") => tab = Tab::Wallpaper,
@@ -443,7 +443,7 @@ impl App {
             Ok("keys") => tab = Tab::Keys,
             _ => {}
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if let Some(z) = std::env::var("ONE_MK_APP_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()) {
             cc.egui_ctx.set_zoom_factor(z);
         }
@@ -848,9 +848,9 @@ impl App {
             self.sync_scene();
         }
         // The success sheet holds a moment, then goes.
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let hold = if std::env::var_os("ONE_MK_APP_CONFIRM").is_some() { 60.0 } else { 1.15 };
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, feature = "design-evidence")))]
         let hold = 1.15;
         if self.pairing.as_ref().is_some_and(|p| matches!(p.step, Step::Paired { .. }) && now - p.since > hold) {
             self.pairing = None;
@@ -1272,7 +1272,7 @@ impl App {
             let chosen = sel.as_deref() == Some(id.as_str());
             let place = if i == 0 { "this computer".to_owned() } else { self.side_of(&id).map_or(String::new(), |s| on_your(s).to_owned()) };
             let label = format!("{}, {}, {place}", d.name, d.subtitle);
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, feature = "design-evidence"))]
             widgets::targets::note(&label, r.rect);
             r.widget_info(move || egui::WidgetInfo::selected(Role::Button, true, chosen, &label));
             if r.has_focus() {
@@ -1743,7 +1743,7 @@ impl App {
         let key = Id::unique("layout-tab");
         #[allow(unused_mut)]
         let mut chosen = ui.ctx().data(|d| d.get_temp::<usize>(key)).unwrap_or(0);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if let Some(k) = std::env::var("ONE_MK_APP_LAYOUT_TAB").ok().and_then(|v| v.parse::<usize>().ok()) {
             chosen = k.min(2);
         }
@@ -1751,7 +1751,8 @@ impl App {
         if self.profile_scroll {
             chosen = 2;
         }
-        let panel_height = if chosen == 0 { 232.0f32.min(rect.height()) } else { rect.height() };
+        let height_key = Id::unique(("layout-position-height", &sel, rect.width().to_bits()));
+        let panel_height = if chosen == 0 { ui.ctx().data(|data| data.get_temp::<f32>(height_key)).unwrap_or(232.0).min(rect.height()) } else { rect.height() };
         let rect = Rect::from_min_size(rect.min, vec2(rect.width(), panel_height));
         widgets::group(ui, rect, R_PANEL);
         let inner = rect.shrink(PAD);
@@ -1782,7 +1783,17 @@ impl App {
         };
         let mut child = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("layout-tab-body", chosen)));
         child.set_clip_rect(body.expand(4.0).intersect(ui.clip_rect()));
+        let layer = child.layer_id();
+        let start = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(0, |list| list.all_entries().len()));
         self.draw_cell(&mut child, &cell, body, now);
+        if chosen == 0 {
+            let bottom = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(body.top(), |list| list.all_entries().skip(start).map(|entry| entry.shape.visual_bounding_rect()).filter(|bounds| bounds.is_finite()).fold(body.top(), |bottom, bounds| bottom.max(bounds.bottom()))));
+            let measured = (bottom + PAD - rect.top()).max(120.0);
+            if (measured - panel_height).abs() > 0.5 {
+                ui.ctx().data_mut(|data| data.insert_temp(height_key, measured));
+                ui.ctx().request_repaint();
+            }
+        }
     }
 
     fn draw_cell(&mut self, ui: &mut Ui, cell: &Cell, r: Rect, now: f64) {
@@ -2301,7 +2312,7 @@ fn lerp_scale(t: f32) -> f32 {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         crate::chrome::place_buttons(ui.ctx(), frame);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let ui_started = std::time::Instant::now();
         let now = ui.input(|i| i.time);
         self.now = now;
@@ -2317,7 +2328,7 @@ impl eframe::App for App {
                 ui.ctx().request_repaint_after_secs(0.05);
             }
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::hooks(self, now);
         widgets::track_focus_mode(ui.ctx());
         self.arrowed = self.arrow_down;
@@ -2452,7 +2463,7 @@ impl eframe::App for App {
         self.sheet(ui, content, now);
         self.toast_view(ui, desk, now);
         self.palette(ui.ctx(), now);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         crate::chrome::paint_fake_buttons(ui.painter());
         self.guide.show(ui.ctx());
         self.update_notice(ui.ctx());
@@ -2460,22 +2471,22 @@ impl eframe::App for App {
         // round trips only then (a minimised window draws nothing).
         let hidden = ui.input(|i| i.viewport().minimized == Some(true));
         self.link.showing.frame(self.graph_wanted() && !hidden);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_BENCH").is_some() {
             // The UI thread's own work this frame (laying out and painting
             // shapes), apart from waiting for the display.
             let ms = ui_started.elapsed().as_secs_f64() * 1000.0;
             ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::Mutex<Vec<f64>>>>(Id::unique("bench-ui")).lock().unwrap().push(ms));
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::tab_walk(ui.ctx(), now);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::shot(ui.ctx(), now);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         widgets::targets::flush();
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         debug::tab_press(ctx, raw_input);
     }
@@ -2520,7 +2531,7 @@ impl eframe::App for App {
 /// - `ONE_MK_APP_BROADCAST=1` turns broadcast on (or off), as the Desk's
 ///   switch does.
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "design-evidence"))]
 mod debug {
     use super::*;
     use std::io::Write;

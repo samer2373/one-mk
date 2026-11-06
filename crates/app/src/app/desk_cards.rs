@@ -488,8 +488,6 @@ impl App {
             let (title, detail, frac) = crate::view::transfer_lines(&t);
             let more = self.running().map_or(0, |s| s.transfers.len() - 1);
             let detail = if more > 0 { format!("{detail} · and {more} more") } else { detail };
-            // In the band (a small window) as wide as the desk; along the
-            // bottom of a wide one, a compact pill.
             let w = desk.width().min(520.0);
             // In a small window the desk's front is crowded: the top instead.
             // A small window's desk front is crowded: the top instead, unless
