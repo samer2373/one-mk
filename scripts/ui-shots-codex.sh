@@ -285,6 +285,14 @@ shot 97-reduced-transparency 3 "$W/a" ONE_MK_NO_GLASS=1
 shot 98-reduced-motion 3 "$W/a" ONE_MK_REDUCE_MOTION=1
 shot 99-files-scrolled 3 "$W/a" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=600
 shot 93b-files-small-transfers 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
+shot r5-keys-whole-1x 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_ZOOM=1
+shot r5-keys-whole-2x 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_ZOOM=2 ONE_MK_APP_SIZE=1920x1200
+shot r5-keys-editor-small 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEY=capslock ONE_MK_APP_SIZE=760x540
+shot r5-files-full-width 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=1600x1000
+printf 'ok\nname\tCodex reference\nid\tabcd-ef01\nport\t24800\npeer\t3333-4444\tleft\t1\t0\tauto\tStudio PC\n' >"$W/offline.status"
+shot r5-files-offline 3 "$W/fx" ONE_MK_APP_STATUS="$W/offline.status" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
+printf 'transfer\t8\ts\t1\t500000\t9000000\t0\tStudio PC\n' >>"$W/offline.status"
+shot r5-files-stalled-small 3 "$W/fx" ONE_MK_APP_STATUS="$W/offline.status" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
 shot 19b-drop-chooser-small 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_DROP=3 ONE_MK_APP_SIZE=760x540
 shot 19c-drop-chooser-2x 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_DROP=3 ONE_MK_APP_SIZE=1600x1080 ONE_MK_APP_ZOOM=2
 shot 47b-keys-mouse-controls 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEYS=mouse ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=220

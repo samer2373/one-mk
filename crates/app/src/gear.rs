@@ -541,7 +541,7 @@ impl Keyboard {
             // A long target ("Esc/Ctrl") on a narrow cap gets smaller rather
             // than spilling onto the next key.
             let mut size = l.size;
-            while size > 7.0 && p.layout_no_wrap(l.text.clone(), font(size, l.to), col).size().x > l.max_w { size -= 0.5; }
+            while size > 4.0 && p.layout_no_wrap(l.text.clone(), font(size, l.to), col).size().x > l.max_w { size -= 0.5; }
             p.text(l.at, if l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, &l.text, font(size, l.to), col);
         }
         if let Some(t) = chosen.and_then(|i| self.tops.get(i)).filter(|t| t.len() > 2) {
@@ -1146,5 +1146,21 @@ mod tests {
         let mesh = Arc::as_ptr(&b.mesh);
         Keyboard::get(&mut board, rect, &caps, View::default(), None, &mut Glide::default(), 0.0);
         assert_eq!(Arc::as_ptr(&board.as_ref().expect("kept").mesh), mesh);
+    }
+
+    #[test]
+    fn the_complete_board_fits_compact_and_wide_stages() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: cap.code.to_string(), to: None, modifier: false,
+        }).collect();
+        for (width, height) in [(640.0, 110.0), (880.0, 180.0), (1280.0, 180.0)] {
+            let rect = Rect::from_min_size(pos2(8.0, 50.0), egui::vec2(width, height));
+            let mut board = None;
+            Keyboard::get(&mut board, rect, &caps, View::default(), None, &mut Glide::default(), 0.0);
+            let board = board.expect("whole board");
+            for (index, cap) in caps.iter().enumerate() {
+                assert!(rect.shrink(2.0).contains_rect(board.bounds(index)), "key {} outside {rect:?}", cap.label);
+            }
+        }
     }
 }

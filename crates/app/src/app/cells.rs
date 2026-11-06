@@ -12,6 +12,7 @@ fn transfer_height(transfer: &one_mk_ctl::status::TransferStatus) -> f32 {
     if transfer.rate == 0 { 54.0 } else { 36.0 }
 }
 
+#[cfg(any(debug_assertions, feature = "design-evidence", test))]
 fn bounded_scroll(offset: f32, content_height: f32, viewport_height: f32) -> f32 {
     offset.clamp(0.0, (content_height - viewport_height).max(0.0))
 }
@@ -334,7 +335,7 @@ impl App {
         let head = if transfers.len() == 1 { "1 transfer".to_owned() } else { format!("{} transfers", transfers.len()) };
         para(ui, r.left_top(), r.width(), &head, semibold(T_TITLE), INK);
         let mut y = r.top() + 28.0;
-        let shown = if self.files_ui.all_transfers { transfers.len() } else { transfers.len().min(if r.width() < 668.0 { 1 } else { 4 }) };
+        let shown = if self.files_ui.all_transfers { transfers.len() } else { transfers.len().min(if r.width() < 658.0 { 1 } else { 4 }) };
         if transfers.len() > shown || self.files_ui.all_transfers {
             let label = if self.files_ui.all_transfers { "Show less".to_owned() } else { format!("Show all {}", transfers.len()) };
             let width = button_width(ui, &label);
