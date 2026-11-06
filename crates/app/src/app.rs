@@ -2085,12 +2085,11 @@ impl App {
         }
         y += 18.0;
         let mut clicked = None;
-        let mut bx = rect.right() - 18.0;
-        for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate().rev() {
+        let mut bx = rect.right() - 18.0 - widths.iter().sum::<f32>() - 8.0 * widths.len().saturating_sub(1) as f32;
+        for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate() {
             let r = if row {
-                bx -= w;
                 let r = Rect::from_min_size(pos2(bx, y), vec2(*w, 34.0));
-                bx -= 8.0;
+                bx += w + 8.0;
                 r
             } else {
                 Rect::from_min_size(pos2(x, y + button_heights[..k].iter().sum::<f32>() + k as f32 * 8.0), vec2(inner, button_heights[k]))
@@ -2558,6 +2557,11 @@ mod debug {
             if once(&ctx, "update") {
                 app.update_output = out;
             }
+        }
+        if let Some(status) = var("ONE_MK_APP_UPDATE_STATUS")
+            && let Ok(status) = serde_json::from_str(&status)
+        {
+            app.update_ui.status = Some(status);
         }
         // ONE_MK_APP_MINIMIZE=1: minimised two seconds in (idle measurements).
         if var("ONE_MK_APP_MINIMIZE").is_some() && now > 2.0 && once(&ctx, "minimize") {

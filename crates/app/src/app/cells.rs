@@ -13,6 +13,7 @@ pub(super) struct FilesUi {
     picker: Option<(String, Receiver<Option<Vec<PathBuf>>>)>,
     spatial: bool,
     options: bool,
+    all_transfers: bool,
 }
 
 impl App {
@@ -37,7 +38,7 @@ impl App {
             if used > 0.0 && used + chip_width > width - 2.0 * PAD { rows += 1; used = 0.0; }
             used += chip_width + 8.0;
         }
-        let shown_transfers = transfers.min(if rect.width() < 700.0 { 1 } else { 4 });
+        let shown_transfers = if self.files_ui.all_transfers { transfers } else { transfers.min(if rect.width() < 700.0 { 1 } else { 4 }) };
         let hint = if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Desk hidden. Choose a recipient to pick files, or drop files on its chip." };
         let hint_h = ui.painter().layout(hint.to_owned(), regular(T_META), INK2, width - 32.0).size().y;
         let head_h = 32.0 + rows as f32 * 44.0 + hint_h + 40.0 + if self.files_ui.spatial { 148.0 } else { 0.0 } + if transfers > 0 { 28.0 + 36.0 * shown_transfers as f32 } else { 0.0 };
@@ -316,13 +317,15 @@ impl App {
         para(ui, r.left_top(), r.width(), &head, semibold(T_TITLE), INK);
         let mut y = r.top() + 28.0;
         let shown = ((r.bottom() - y + 8.0) / 36.0).floor().max(1.0) as usize;
+        if transfers.len() > shown || self.files_ui.all_transfers {
+            let label = if self.files_ui.all_transfers { "Show less".to_owned() } else { format!("Show all {}", transfers.len()) };
+            let width = button_width(ui, &label);
+            let rect = Rect::from_min_size(pos2(r.right() - width, r.top() - 4.0), vec2(width, 28.0));
+            if button(ui, rect, Id::unique("files-all-transfers"), &label, Look::Quiet, true, None).clicked() { self.files_ui.all_transfers = !self.files_ui.all_transfers; }
+        }
         for t in transfers.iter().take(shown) {
             self.transfer_row(ui, Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), 36.0)), t);
             y += 36.0;
-        }
-        if transfers.len() > shown {
-            let more = format!("and {} more", transfers.len() - shown);
-            ui.painter().text(pos2(r.left(), y.min(r.bottom() - 8.0)), Align2::LEFT_CENTER, more, regular(T_META), INK2);
         }
     }
 

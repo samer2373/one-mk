@@ -284,6 +284,11 @@ shot 96-advanced-scrolled 3 "$W/a" ONE_MK_APP_TAB=advanced ONE_MK_APP_SCROLL=600
 shot 97-reduced-transparency 3 "$W/a" ONE_MK_NO_GLASS=1
 shot 98-reduced-motion 3 "$W/a" ONE_MK_REDUCE_MOTION=1
 shot 99-files-scrolled 3 "$W/a" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=600
+shot 93b-files-small-transfers 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=files ONE_MK_APP_SIZE=760x540
+shot 19b-drop-chooser-small 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_DROP=3 ONE_MK_APP_SIZE=760x540
+shot 19c-drop-chooser-2x 3 "$W/off" ONE_MK_APP_STATUS="$F" ONE_MK_APP_DROP=3 ONE_MK_APP_SIZE=1600x1080 ONE_MK_APP_ZOOM=2
+shot 47b-keys-mouse-controls 3 "$W/k" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=keys ONE_MK_APP_KEYS=mouse ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=220
+shot 112-updates-2x 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=advanced ONE_MK_APP_SIZE=1600x1080 ONE_MK_APP_ZOOM=2 'ONE_MK_APP_UPDATE_STATUS={"check":true,"install_automatically":false,"available":null,"error":null,"can_update":true,"needs_password":true,"move_to_applications":false,"rollback_available":false,"advice":"","skipped":null}'
 shot 100-layout-small-profiles 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_TAB=layout ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_SIZE=760x540 ONE_MK_APP_SCROLL=416
 shot 101-empty-desk-small 3 "$W/e" ONE_MK_APP_SIZE=760x540
 shot 102-scale-two-large 3 "$W/fx" ONE_MK_APP_STATUS="$X" ONE_MK_APP_SELECT="MacBook Air" ONE_MK_APP_ZOOM=2 ONE_MK_APP_SIZE=1920x1200

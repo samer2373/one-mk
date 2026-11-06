@@ -1593,13 +1593,10 @@ impl App {
         let room = Rect::from_center_size(r.center() + vec2(0.0, -4.0), vec2((r.width() - 2.0 * co_w - 60.0).max(160.0), r.height() - 40.0));
         let chosen = self.keys.button.and_then(|n| PARTS.iter().find(|p| p.0 == n)).map(|p| p.1);
         let area = r.shrink(1.0);
-        // The camera goes in on the chosen button (from wherever it is now,
-        // so choosing the next one glides across) and back out when it is let
-        // go; a drag on the mouse turns it.
         let dt = ui.input(|i| i.stable_dt);
         let mut moving = self.keys.mouse_orbit.step(dt);
         let turn = self.keys.mouse_orbit;
-        moving |= crate::gear::ModelView::get(&mut self.keys.mouse, &model, area, room, 0.0, -2.2 + turn.yaw, 0.62 + turn.pitch, chosen, chosen, &mut self.keys.mouse_glide, dt);
+        moving |= crate::gear::ModelView::get(&mut self.keys.mouse, &model, area, room, 0.0, -2.2 + turn.yaw, 0.62 + turn.pitch, None, chosen, &mut self.keys.mouse_glide, dt);
         if moving {
             ui.ctx().request_repaint();
         }
