@@ -64,6 +64,11 @@ fn para_h(ui: &Ui, text: &str, w: f32) -> f32 {
 
 /// A row that can be clicked: its hover and press state, focus ring and
 /// name for screen readers.
+/// Rows that are plain actions (no chosen state): Stop, and "more".
+fn id_kind(id: Id) -> &'static str {
+    if id == Id::unique("stop") || id == Id::unique("side-more") { "plain" } else { "row" }
+}
+
 fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: bool, enabled: bool) -> (egui::Response, f32) {
     let r = ui.interact(widgets::hit_rect(rect), id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
     let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.1, motion::out_cubic);
@@ -85,7 +90,10 @@ fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: b
     if r.hovered() && enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    widgets::a11y(&r, role, name, Some(chosen));
+    // Plain buttons and links have no chosen state (else they read as
+    // toggle buttons); tabs and computer rows do.
+    let state = (role != Role::Link && !matches!(id_kind(id), "plain")).then_some(chosen);
+    widgets::a11y(&r, role, name, state);
     (r, hover)
 }
 
@@ -396,7 +404,7 @@ impl App {
             let label = if busy { "Stopping…" } else { "Stop" };
             let bw = text_width(ui, label, regular(T_META)) + 16.0;
             let b = Rect::from_min_size(pos2(row.right() - bw, row.top()), vec2(bw, 28.0));
-            let (resp, hover) = row_button(ui, b, Id::unique("stop"), "Stop the sharing service, not just broadcast", Role::Button, false, !busy);
+            let (resp, hover) = row_button(ui, b, Id::unique("stop"), "Stop oneMK: turn off sharing on this computer", Role::Button, false, !busy);
             ui.painter().text(b.center(), Align2::CENTER_CENTER, label, regular(T_META), mix(INK3, INK, hover));
             if resp.clicked() {
                 self.busy.push(Job::Stop);
