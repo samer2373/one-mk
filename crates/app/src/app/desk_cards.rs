@@ -163,7 +163,7 @@ impl App {
         };
         let p = ui.painter().clone();
         // Title row: whether it is there, its name, what it is and where.
-        let cy = c.top() + 12.0;
+        let mut cy = c.top() + 12.0;
         if peer.online {
             p.circle_filled(pos2(c.left() + 4.0, cy), 3.5, OK);
         } else {
@@ -172,20 +172,26 @@ impl App {
         let side = self.side_shown(&peer.id, peer.side);
         let seg_w = if c.width() > 560.0 { 248.0 } else { 204.0 };
         let col_w = 200.0f32.min(c.width() * 0.4);
-        let name = fit(&p, &peer.name, &semibold(T_TITLE), col_w - 16.0);
-        p.text(pos2(c.left() + 16.0, cy), Align2::LEFT_CENTER, &name, semibold(T_TITLE), INK);
-        if name != peer.name {
-            ui.interact(Rect::from_min_size(c.min, vec2(col_w, 24.0)), Id::unique(("peer-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
-        }
+        let long_name = text_width(ui, &peer.name, semibold(T_TITLE)) > col_w - 16.0;
+        let header_height = if long_name {
+            let galley = p.layout(peer.name.clone(), semibold(T_TITLE), INK, c.width() - 16.0);
+            let height = galley.size().y;
+            p.galley(c.min + vec2(16.0, 2.0), galley, INK);
+            cy += height + 12.0;
+            height + 12.0
+        } else {
+            p.text(pos2(c.left() + 16.0, cy), Align2::LEFT_CENTER, &peer.name, semibold(T_TITLE), INK);
+            0.0
+        };
         let words = format!("{} · {}", os_name(peer.os), if peer.online { on_your(side) } else { "offline" });
         p.text(pos2(c.left(), cy + 22.0), Align2::LEFT_CENTER, fit(&p, &words, &regular(T_BODY), col_w), regular(T_BODY), INK3);
         // Where it sits: a control, so it can be set without dragging.
         let mut x = c.right();
         let (rm, rw) = {
-            let w = text_width(ui, "Remove…", regular(T_BODY)) + 18.0;
+            let w = text_width(ui, "Remove", regular(T_BODY)) + 18.0;
             (Rect::from_min_size(pos2(x - w + 9.0, cy - 14.0), vec2(w, 28.0)), w)
         };
-        let (resp, _) = ghost(ui, rm.min, 28.0, Id::unique(("remove", &peer.id)), None, "Remove…", &format!("Remove {} (asks first)", peer.name), !self.sheet_open());
+        let (resp, _) = ghost(ui, rm.min, 28.0, Id::unique(("remove", &peer.id)), None, "Remove", &format!("Remove {} (asks first)", peer.name), !self.sheet_open());
         if resp.clicked() {
             self.removing = Some((peer.id.clone(), peer.name.clone(), now));
         }
@@ -211,7 +217,7 @@ impl App {
         }
 
         // Left: the number now, what it means; actions at the bottom.
-        let body = Rect::from_min_max(pos2(c.left(), c.top() + 52.0), c.max);
+        let body = Rect::from_min_max(pos2(c.left(), c.top() + 52.0 + header_height), c.max);
         let summary = self.summary_of(&peer.id);
         let graphed = peer.online && summary.is_some_and(|summary| summary.count >= 8) && self.rtts.of(&peer.id).is_some();
         let q = summary.and_then(|s| s.quality());

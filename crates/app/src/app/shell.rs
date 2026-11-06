@@ -11,7 +11,7 @@ use super::*;
 fn show_broadcast_status(width: f32) -> bool { width >= 100.0 }
 
 fn rail_section(ui: &Ui, rect: Rect) {
-    ui.painter().text(rect.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, "PCs", regular(T_META), INK2);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "PCs", regular(T_META), INK2);
     a11y_text(ui, Id::unique("rail-computers"), rect, Role::Label, "PCs", None);
 }
 use crate::chrome;
@@ -114,11 +114,11 @@ fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: b
     if chosen {
         // Chosen: a lighter fill and a visible edge, a step above hover.
         let fill = mix(SIDE_CHOSEN, Color32::from_rgb(0x24, 0x28, 0x30), 0.5);
-        p.rect(rect, CornerRadius::same(8), if down { widgets::pressed(fill, 1.0) } else { fill }, Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
+        p.rect(rect, CornerRadius::same(8), if down { Color32::from_rgb(0x4B, 0x54, 0x61) } else { fill }, Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
     } else if down {
         // Pressed: a deeper well than the hover, never the chosen look.
         // rest < hover < pressed < chosen (which adds its edge).
-        p.rect_filled(rect, CornerRadius::same(8), SIDE_CHOSEN);
+        p.rect_filled(rect, CornerRadius::same(8), Color32::from_rgb(0x4B, 0x54, 0x61));
     } else if hover > 0.01 {
         // Hover is a hint, clearly weaker than the chosen page: half way
         // from the sidebar to the hover tone, no edge.

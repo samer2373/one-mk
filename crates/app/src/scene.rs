@@ -1548,7 +1548,7 @@ impl Scene {
         let wall = is_wall(d.kind, &d.screens);
         // This monitor's glass on the screen; `at` is in it.
         let glass = if wall { panels(&d.screens, pl, GLASS).nth(m).unwrap_or([0.0, 0.0, 1.0, 1.0]) } else { [0.0, 0.0, 1.0, 1.0] };
-        let named = !wall || m == main_panel(&d.screens);
+        let named = self.devices.iter().map(|device| device.screens.len().max(1)).sum::<usize>() >= 5 || !wall || m == main_panel(&d.screens);
         let on_pl = |u: f32, w: f32| cam.pt(pl.at(u, w));
         let at = |u: f32, w: f32| on_pl(lerp(glass[0], glass[2], u), lerp(glass[1], glass[3], w));
         let rect = |u0: f32, w0: f32, u1: f32, w1: f32| [at(u0, w0), at(u1, w0), at(u1, w1), at(u0, w1)];

@@ -43,6 +43,16 @@ mod gesture_tests {
             assert!(gesture_args(button, direction, output, &Scope::All).is_err());
         }
     }
+
+    #[test]
+    fn narrow_keyboard_uses_a_single_axis_navigator_and_two_cards() {
+        for width in [600.0, 660.0] {
+            assert_eq!(keyboard_columns(width), 2);
+            assert_eq!(keyboard_navigator_height(width, 260.0), 36.0);
+            assert!((width - GAP) / 2.0 >= 280.0);
+        }
+        assert_eq!(keyboard_navigator_height(900.0, 260.0), 260.0);
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -144,9 +154,9 @@ fn card_begin(ui: &Ui, top: Pos2, w: f32, title: &str) -> Card {
     let r = Rect::from_min_size(top, vec2(w, 200.0));
     let p = ui.painter();
     // The title above the group, as every settings group has it.
-    p.text(r.left_top() + vec2(14.0, 13.0), Align2::LEFT_CENTER, title, semibold(T_BODY), INK2);
+    p.text(r.left_top() + vec2(18.0, 17.0), Align2::LEFT_CENTER, title, semibold(T_TITLE), INK);
     a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(r.min, vec2(w, 30.0)), Role::Heading, title, None);
-    Card { bg, top, w, inner: Rect::from_min_max(r.min + vec2(18.0, 48.0), pos2(r.right() - 18.0, f32::INFINITY)) }
+    Card { bg, top, w, inner: Rect::from_min_max(r.min + vec2(18.0, 42.0), pos2(r.right() - 18.0, f32::INFINITY)) }
 }
 
 impl Card {
@@ -188,15 +198,14 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     let press = tween(ui.ctx(), id.with("press"), f32::from(enabled && r.is_pointer_button_down_on()), 0.08, motion::out_cubic);
     // Set: the chosen-segment capsule's tone, semibold words and a Volt
     // tick; not set: a quiet fill and regular words.
-    let fill = if on { mix(THUMB, Color32::from_rgb(0x60, 0x6A, 0x76), hover) } else { mix(BUTTON, BUTTON_LIT, hover) };
+    let fill = if on { mix(Color32::from_rgb(0x28, 0x36, 0x1C), Color32::from_rgb(0x35, 0x46, 0x25), hover) } else { mix(PANEL, BUTTON_LIT, hover) };
     let surface = widgets::pressed_lift(fill, press);
     let ink = if !enabled { INK2 } else if on { INK } else { mix(INK2, INK, hover) };
     let ink = if press > 0.0 { widgets::pressed_ink(surface, ink) } else { ink };
     p.rect_filled(rect, radius, surface);
     let font = if on { semibold(T_META + 1.0) } else { regular(T_META + 1.0) };
     let text = fit(p, label, &font, rect.width() - 28.0 - if on { 16.0 } else { 0.0 });
-    let tw = p.layout_no_wrap(text.clone(), font.clone(), INK).size().x;
-    let mut x = rect.center().x - (tw + if on { 16.0 } else { 0.0 }) / 2.0;
+    let mut x = rect.left() + 12.0;
     if on {
         widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, if press > 0.0 { widgets::pressed_ink(surface, ACCENT) } else { ACCENT }, 1.0);
         x += 16.0;
@@ -216,6 +225,10 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
 fn chip_width(ui: &Ui, label: &str) -> f32 {
     text_width(ui, label, semibold(T_META + 1.0)) + 46.0
 }
+
+fn keyboard_columns(width: f32) -> usize { if width >= 480.0 { 2 } else { 1 } }
+
+fn keyboard_navigator_height(width: f32, board_height: f32) -> f32 { if width < 700.0 { 36.0 } else { board_height } }
 
 /// Room for the quick setups beside the keyboard.
 const SIDE_W: f32 = 270.0;
@@ -758,25 +771,28 @@ impl App {
         // The keyboard lies on the desk across the card's width: about a
         // third as tall as it is wide, seen from above and in front.
         let side = false;
+        let narrow = w < 700.0;
         let unit = (inner / kw).min(UNIT_MAX).floor();
         let _ = kh;
-        let kb_h = (kh * 36.0 + 32.0).max(if w < 700.0 { 0.0 } else { 24.0 + inner * 0.32 });
+        let kb_h = keyboard_navigator_height(w, (kh * 36.0 + 32.0).max(24.0 + inner * 0.25));
         let head_w = text_width(ui, "Quick setups", semibold(T_BODY)) + 16.0;
         let mut chips = vec![];
-        let balanced = head_w + presets.iter().map(|preset| chip_width(ui, &preset.label) + 8.0).sum::<f32>() > w;
+        let preset_labels: Vec<String> = presets.iter().map(|preset| preset.label.replace(" (for Mac keyboards)", "").replace("Arrow keys on Right ", "Arrows on ")).collect();
+        let balanced = head_w + preset_labels.iter().map(|label| chip_width(ui, label) + 8.0).sum::<f32>() > w;
         let (mut x, mut y) = (head_w, 0.0);
-        for (k, p) in presets.iter().enumerate() {
+        for (k, label) in preset_labels.iter().enumerate() {
             if balanced {
-                let width = (w - 8.0) / 2.0;
-                chips.push(Rect::from_min_size(pos2((k % 2) as f32 * (width + 8.0), 30.0 + (k / 2) as f32 * 38.0), vec2(width, 30.0)));
-                y = 68.0;
+                let column = (w - 8.0) / 2.0;
+                let width = chip_width(ui, label).min(column);
+                chips.push(Rect::from_min_size(pos2((k % 2) as f32 * (column + 8.0), 24.0 + (k / 2) as f32 * 32.0), vec2(width, 28.0)));
+                y = 54.0;
                 continue;
             }
             if side {
                 chips.push(Rect::from_min_size(pos2(w - 18.0 - SIDE_W, 54.0 + 26.0 + 38.0 * k as f32 - kb_h - 14.0), vec2(SIDE_W, 30.0)));
                 continue;
             }
-            let cw = chip_width(ui, &p.label).min(w);
+            let cw = chip_width(ui, label).min(w);
             if x > head_w && x + cw > w {
                 (x, y) = (0.0, y + 38.0);
             }
@@ -784,16 +800,18 @@ impl App {
             x += cw + 8.0;
         }
         let chips_h = if side { 2.0 } else { y + 30.0 + 16.0 };
-        let two = w >= 700.0;
-        let editor_first = !two && self.keys.selected.is_some();
+        let two = keyboard_columns(w) == 2;
+        let editor_first = narrow;
         let col_w = if two { (w - GAP) / 2.0 } else { w };
         let h = |k: &str| self.keys.heights.get(k).copied().unwrap_or(220.0);
         let lower = if two { h("left").max(h("test")) } else { h("left") + GAP + h("test") };
-        let editor_height = h("left");
         let total = kb_h + 14.0 + chips_h + lower;
         let (all, _) = ui.allocate_exact_size(vec2(w, total), Sense::hover());
         let top = all.top();
 
+        if narrow {
+            self.keyboard_navigator(ui, Rect::from_min_size(all.min, vec2(w, kb_h)));
+        } else {
         let viewport = Rect::from_min_size(all.min, vec2(w, kb_h));
         let mut board_ui = ui.new_child(egui::UiBuilder::new().max_rect(viewport));
         board_ui.set_clip_rect(ui.clip_rect().intersect(viewport));
@@ -802,14 +820,15 @@ impl App {
                 let (board_rect, _) = ui.allocate_exact_size(vec2(board_width, kb_h - 16.0), Sense::hover());
                 self.keyboard_card(ui, board_rect, unit, side, &input, &facts);
         });
+        }
 
-        let cy = top + kb_h + 14.0 + if editor_first { editor_height + GAP } else { 0.0 };
+        let cy = top + kb_h + 14.0 + if editor_first { lower + GAP } else { 0.0 };
         let head = if side { pos2(all.left() + w - 18.0 - SIDE_W, top + 54.0 + 10.0) } else { pos2(all.left(), cy + 15.0) };
         ui.painter().text(head, Align2::LEFT_CENTER, "Quick setups", semibold(T_BODY), INK);
         let busy = self.tuning_busy();
-        for (p, r) in presets.iter().zip(&chips) {
+        for ((p, r), label) in presets.iter().zip(&chips).zip(preset_labels) {
             let on = tune::preset_on(&input, p, &self.keys.scope);
-            if chip(ui, r.translate(vec2(all.left(), cy)), Id::unique(("preset", p.id)), &p.label, on, !busy).clicked() {
+            if chip(ui, r.translate(vec2(all.left(), cy)), Id::unique(("preset", p.id)), &label, on, !busy).on_hover_text(&p.label).clicked() {
                 // Each rule is checked as `one-mk keymap add` would, in turn.
                 let mut sim = input.clone();
                 let mut bad = None;
@@ -833,13 +852,13 @@ impl App {
         let ly = if editor_first { top + kb_h + 14.0 } else { cy + chips_h };
         let left = pos2(all.left(), ly);
         let lh = if self.keys.selected.is_some() { self.key_editor(ui, left, col_w, &input, &facts) } else { self.rules_card(ui, left, col_w, &input) };
-        if std::mem::take(&mut self.keys.reveal) {
+        if std::mem::take(&mut self.keys.reveal) && !narrow {
             // Its title and first choices, at least, in view.
             let height = if editor_first { lh.min(ui.clip_rect().height() - 12.0) } else { lh.min(130.0) };
             ui.scroll_to_rect(Rect::from_min_size(left, vec2(col_w, height)), Some(egui::Align::Min));
         }
         let test_at = if two { pos2(all.left() + col_w + GAP, ly) } else if editor_first { pos2(all.left(), cy + chips_h) } else { pos2(all.left(), ly + lh + GAP) };
-        let th = self.test_card(ui, test_at, col_w, now);
+        let th = self.test_card(ui, test_at, col_w, if two { lh } else { 0.0 }, now);
         for (k, v) in [("left", lh), ("test", th)] {
             if (self.keys.heights.get(k).copied().unwrap_or(0.0) - v).abs() > 0.5 {
                 self.keys.heights.insert(k, v);
@@ -848,19 +867,39 @@ impl App {
         }
     }
 
+    fn keyboard_navigator(&mut self, ui: &mut Ui, rect: Rect) {
+        let name = self.keys.selected.map_or_else(|| "Choose a key".to_owned(), |code| tune::key_label(u32::from(code)));
+        let response = button(ui, Rect::from_min_size(rect.min, vec2(220.0, 30.0)), Id::unique("keyboard-navigator"), &name, Look::Quiet, true, Some("Choose a key to change"));
+        let arrow = rect.min + vec2(204.0, 15.0);
+        ui.painter().add(egui::Shape::line(vec![arrow + vec2(-4.0, -2.0), arrow + vec2(0.0, 2.0), arrow + vec2(4.0, -2.0)], Stroke::new(1.5, INK2)));
+        let mut selected = None;
+        egui::Popup::menu(&response).width(320.0).show(|ui| {
+            ui.spacing_mut().interact_size.y = 24.0;
+            egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                for cap in tune::keyboard(true, mac()) {
+                    if ui.selectable_label(self.keys.selected == Some(cap.code), tune::key_label(u32::from(cap.code))).clicked() {
+                        selected = Some(cap.code);
+                        ui.close();
+                    }
+                }
+            });
+        });
+        if let Some(code) = selected { self.select_key(code, None); self.keys.reveal = false; }
+    }
+
     fn keyboard_toolbar(&mut self, ui: &mut Ui, r: Rect) {
         let p = ui.painter().clone();
         let label = if self.keys.keypad { "Compact" } else { "Keypad" };
         let bw = button_width(ui, label) - 8.0;
         let b = Rect::from_min_size(pos2(r.right() - bw, r.top() + 4.0), vec2(bw, 28.0));
-        let intro = self.keys.selected.map_or_else(|| "Select a key · scroll for more".to_owned(), |key| format!("Selected: {}", tune::key_label(u32::from(key))));
+        let intro = if r.width() < 700.0 { "Choose a key to change" } else { "Click a key to change it" };
         let iw = b.left() - r.left() - 30.0 - if self.keys.selected.is_some() { 122.0 } else { 0.0 };
-        p.text(pos2(r.left(), b.center().y), Align2::LEFT_CENTER, fit(&p, &intro, &regular(T_BODY), iw), regular(T_BODY), INK2);
-        a11y_text(ui, Id::unique("keys-intro"), Rect::from_min_size(r.min, vec2(iw, 36.0)), Role::Label, &intro, None);
+        p.text(pos2(r.left(), b.center().y), Align2::LEFT_CENTER, fit(&p, intro, &regular(T_BODY), iw), regular(T_BODY), INK2);
+        a11y_text(ui, Id::unique("keys-intro"), Rect::from_min_size(r.min, vec2(iw, 36.0)), Role::Label, intro, None);
         if button(ui, b, Id::unique("keys-more"), label, Look::Quiet, true, Some(if self.keys.keypad { "Hide the keypad" } else { "Show the keypad too" })).clicked() {
             self.keys.keypad = !self.keys.keypad;
         }
-        if self.keys.selected.is_some() {
+        if self.keys.selected.is_some() && r.width() >= 700.0 {
             let detail = Rect::from_min_size(pos2(b.left() - 122.0, r.top() + 4.0), vec2(114.0, 28.0));
             if button(ui, detail, Id::unique("keyboard-detail"), if self.keys.board_detail { "Whole board" } else { "Key detail" }, Look::Quiet, true, None).clicked() {
                 self.keys.board_detail = !self.keys.board_detail;
@@ -992,7 +1031,7 @@ impl App {
         }
         let held_i: Vec<usize> = caps.iter().enumerate().filter(|(_, c)| held.contains(&c.code)).map(|(i, _)| i).collect();
         let painter = ui.painter_at(area);
-        board.paint(&painter, &held_i, under, chosen, &|size, to| if to { mono_medium(size) } else { regular(size) });
+        board.paint(&painter, &held_i, under, chosen, &|size, _| regular(size));
         if let Some(i) = focused.filter(|_| widgets::keyboard_focus(ui.ctx())) {
             painter.rect_stroke(board.bounds(i).expand(3.0), CornerRadius::same(6), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
         }
@@ -1036,7 +1075,7 @@ impl App {
             let row = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 34.0));
             let (text, ok) = match tune::sentence(input, r) {
                 Ok(s) => (s, true),
-                Err(e) => (format!("{} ({e})", tune::as_written(r)), false),
+                Err(e) => (tune::plain_problem(&e), false),
             };
             let scope_tag = match &r.scope {
                 Scope::All => String::new(),
@@ -1067,7 +1106,9 @@ impl App {
             let hover_r = Rect::from_min_max(row.min, pos2(edit.left() - 8.0, row.bottom()));
             let full = if tag.is_empty() { text.clone() } else { format!("{text} ({tag})") };
             let resp = ui.interact(hover_r, Id::unique(("rule-text", i)), Sense::hover());
-            if shown != text {
+            if !ok {
+                resp.on_hover_text(format!("{}\n{full}", tune::as_written(r)));
+            } else if shown != text {
                 resp.on_hover_text(&full);
             }
             a11y_text(ui, Id::unique(("rule", i)), row, Role::ListItem, &full, None);
@@ -1138,7 +1179,7 @@ impl App {
             .find(|(s, _)| s.from == keynames::Trigger::key(code) && s.layer.as_deref() == self.keys.layer.as_deref().map(str::to_ascii_lowercase).as_deref())
             .map(|(_, at)| at);
         let now_text = match (&own, shown) {
-            (Some(r), _) => tune::sentence(input, r).map(|s| s.split_once(" → ").map_or(s.clone(), |(_, t)| t.to_owned())).unwrap_or_else(|e| e),
+            (Some(r), _) => tune::sentence(input, r).map(|s| s.split_once(" → ").map_or(s.clone(), |(_, t)| t.to_owned())).unwrap_or_else(|e| tune::plain_problem(&e)),
             (None, Some(Ok(i))) => {
                 let r = &input.keys[i];
                 let s = tune::sentence(input, r).unwrap_or_default();
@@ -1398,7 +1439,7 @@ impl App {
 
     /// "Test it": keys typed here go through the rules as a visit would
     /// send them; nothing is sent and no action runs.
-    fn test_card(&mut self, ui: &mut Ui, at: Pos2, w: f32, now: f64) -> f32 {
+    fn test_card(&mut self, ui: &mut Ui, at: Pos2, w: f32, minimum_height: f32, now: f64) -> f32 {
         let card = card_begin(ui, at, w, "Test it");
         let c = card.inner;
         let has = self.keys.tester.as_ref().is_some_and(|(t, ..)| !t.pressed.chips.is_empty() || t.note.is_some());
@@ -1417,7 +1458,7 @@ impl App {
         };
         y += para(ui, pos2(c.left(), y), c.width(), &intro, regular(T_BODY), INK2) + 10.0;
         let id = Id::unique(TEST_ID);
-        let r = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 78.0));
+        let r = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), (minimum_height - (y - at.y) - 94.0).max(78.0)));
         let resp = ui.interact(r, id, widgets::sense(ui, Sense::click()));
         if resp.clicked() {
             ui.memory_mut(|m| m.request_focus(id));

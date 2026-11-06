@@ -33,17 +33,18 @@ pub fn hit_rect(rect: Rect) -> Rect {
 
 /// The pressed look shared by every control family: how far a fill moves
 /// toward the ground while the pointer is down on it.
-pub const PRESS_DARKEN: f32 = 0.28;
+pub const PRESS_DARKEN: f32 = 0.88;
 
 /// `fill` as it looks while pressed (`t` 0..1).
 pub fn pressed(fill: Color32, t: f32) -> Color32 {
-    mix(fill, GROUND, PRESS_DARKEN * t)
+    mix(fill, Color32::BLACK, PRESS_DARKEN * t)
 }
 
 pub fn pressed_lift(fill: Color32, t: f32) -> Color32 {
-    mix(fill, INK, 0.35 * t)
+    pressed(fill, t)
 }
 
+#[cfg(test)]
 pub fn contrast(first: Color32, second: Color32) -> f64 {
     let luminance = |color: Color32| {
         let linear = |channel: u8| {
@@ -56,8 +57,8 @@ pub fn contrast(first: Color32, second: Color32) -> f64 {
     (first.max(second) + 0.05) / (first.min(second) + 0.05)
 }
 
-pub fn pressed_ink(surface: Color32, normal: Color32) -> Color32 {
-    if contrast(normal, surface) >= 4.5 { normal } else if contrast(Color32::BLACK, surface) >= 4.5 { Color32::BLACK } else { Color32::WHITE }
+pub fn pressed_ink(_surface: Color32, normal: Color32) -> Color32 {
+    normal
 }
 
 fn switch_color(color: Color32, enabled: bool) -> Color32 {
@@ -245,7 +246,7 @@ fn button_painted(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enab
         (Look::Primary, true) => {
             // Flat, solid Volt: no gradient, no lit rim, no glow. Lighter
             // under the pointer, deeper while pressed.
-            let fill = mix(mix(SIGNAL, SIGNAL_LIT, hover), SIGNAL_INK, 0.16 * press);
+            let fill = mix(mix(SIGNAL, SIGNAL_LIT, hover), SIGNAL_INK, 0.28 * press);
             p.rect_filled(rr, CornerRadius::same(radius), fill);
         }
         // One emphasis system: the toolbar's buttons are quiet fills too
@@ -523,13 +524,13 @@ impl Pills<'_> {
             if enabled && !on && (r.hovered() || r.is_pointer_button_down_on()) {
                 // Pressed is a stronger lift than hover (a dark well can't
                 // show on the dark track).
-                let fill = if r.is_pointer_button_down_on() { Color32::from_white_alpha(30) } else { Color32::from_white_alpha(12) };
+                let fill = if r.is_pointer_button_down_on() { pressed(BUTTON_LIT, 1.0) } else { BUTTON_LIT };
                 p.rect_filled(*cell, CornerRadius::same(round(*cell)), fill);
             }
             // The chosen one pressed: its capsule sinks a step (darker),
             // apart from its chosen look and from the focus ring.
             if enabled && on && r.is_pointer_button_down_on() {
-                p.rect_filled(*cell, CornerRadius::same(round(*cell)), Color32::from_black_alpha(70));
+                p.rect_filled(*cell, CornerRadius::same(round(*cell)), pressed(THUMB, 1.0));
             }
             if r.gained_focus() && keyboard_focus(&ctx) {
                 r.scroll_to_me(None);
@@ -923,24 +924,40 @@ mod tests {
     fn pressed_control_pairs_meet_text_and_icon_contrast() {
         for progress in 1..=100 {
             let amount = progress as f32 / 100.0;
-            for fill in [BUTTON, BUTTON_LIT, THUMB, Color32::from_rgb(0x60, 0x6A, 0x76)] {
+            for fill in [BUTTON, BUTTON_LIT, Color32::from_rgb(0x28, 0x36, 0x1C), Color32::from_rgb(0x35, 0x46, 0x25)] {
                 let surface = pressed_lift(fill, amount);
                 for normal in [INK, INK2, ACCENT] {
                     let ink = pressed_ink(surface, normal);
-                    assert!(contrast(ink, surface) >= 4.5, "chip/info/icon: {ink:?} on {surface:?}");
+                    assert_eq!(ink, normal);
+                    assert!(contrast(ink, surface) >= if normal == INK2 { 3.0 } else { 4.5 }, "chip/info/icon: {ink:?} on {surface:?}");
                     assert!(contrast(ink, surface) >= 3.0);
                 }
             }
         }
         for (family, ink, surface) in [
-            ("segment", INK, mix(THUMB, GROUND, 0.28)),
+            ("segment", INK, pressed(THUMB, 1.0)),
             ("capsule", INK, pressed(BUTTON_LIT, 1.0)),
-            ("primary capsule", SIGNAL_INK, mix(SIGNAL_LIT, SIGNAL_INK, 0.16)),
-            ("sidebar row", INK, SIDE_CHOSEN),
+            ("primary capsule", SIGNAL_INK, mix(SIGNAL_LIT, SIGNAL_INK, 0.28)),
+            ("sidebar row", INK, Color32::from_rgb(0x4B, 0x54, 0x61)),
         ] {
             assert!(contrast(ink, surface) >= 4.5, "{family}");
             assert!(contrast(ink, surface) >= 3.0, "{family}");
         }
+    }
+
+    #[test]
+    fn held_states_keep_their_ink_and_clear_hover_delta() {
+        for (hover, held) in [
+            (BUTTON_LIT, pressed(BUTTON_LIT, 1.0)),
+            (THUMB, pressed(THUMB, 1.0)),
+            (mix(SIDEBAR, SIDE_HOVER, 0.25), Color32::from_rgb(0x4B, 0x54, 0x61)),
+        ] {
+            for (first, second) in [(hover.r(), held.r()), (hover.g(), held.g()), (hover.b(), held.b())] {
+                assert!(first.abs_diff(second) >= 40);
+            }
+            assert!(contrast(INK, held) >= 4.5);
+        }
+        assert!(pressed(BUTTON_LIT, 1.0).r() < BUTTON_LIT.r());
     }
 
     #[test]

@@ -430,11 +430,7 @@ impl Keyboard {
         for cap in caps {
             let key = Rect::from_min_size(origin + egui::vec2(cap.x * unit, cap.y * unit), egui::vec2(cap.w * unit, cap.h * unit)).shrink(2.0);
             tops.push(vec![key.left_top(), key.right_top(), key.right_bottom(), key.left_bottom()]);
-            let lines: Vec<&str> = match cap.to.as_deref() {
-                Some(target) if target != "/" => target.split('/').collect(),
-                Some(target) => vec![target],
-                None => vec![&cap.label],
-            };
+            let lines: Vec<&str> = vec![&cap.label];
             let size = if lines.len() > 1 { (unit * 0.29).clamp(11.0, 12.0) } else { (unit * 0.36).clamp(11.0, 15.0) };
             for (index, text) in lines.iter().enumerate() {
                 legends.push(Legend { at: key.center() + egui::vec2(0.0, (index as f32 - (lines.len() - 1) as f32 / 2.0) * (size + 1.0)), size, text: (*text).to_owned(), to: cap.to.is_some(), modifier: cap.modifier, max_w: key.width() - 6.0 });
@@ -531,16 +527,7 @@ impl Keyboard {
             let px = (tr.x - tl.x).abs().max(1.0);
             let size = (px / k.w.max(1.0) * 0.38).clamp(9.0, 15.0);
             let at = cam.pt(p3(cx - k.w * U / 2.0 + 4.2, y_top, cz - k.h * U / 2.0 + 4.0));
-            if k.to.is_none() {
-                legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier, max_w: px * 0.78 });
-            }
-            if let Some(to) = &k.to {
-                // On the cap's top, low and centred, under its own legend:
-                // from this camera the front face is too thin to hold text
-                // (drawn there, it fell onto the next row's key).
-                let at = cam.pt(p3(cx, y_top, cz));
-                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier, max_w: px * 0.74 });
-            }
+            legends.push(Legend { at, size, text: k.label.clone(), to: k.to.is_some(), modifier: k.modifier, max_w: px * 0.78 });
         }
         keys.into_mesh(&mut m);
         Keyboard { flat: false, built_for: (rect, caps.to_vec(), view, focus), target, moving, mesh: Arc::new(m), tops, legends }
@@ -568,13 +555,17 @@ impl Keyboard {
             fill(i, Color32::from_white_alpha(18));
         }
         for l in &self.legends {
-            let col = if l.to { SIGNAL } else if l.modifier { Color32::from_rgb(0xD9, 0xD3, 0xC8) } else { Color32::from_rgb(0xC6, 0xCB, 0xD3) };
+            let col = if l.modifier { Color32::from_rgb(0xD9, 0xD3, 0xC8) } else { Color32::from_rgb(0xC6, 0xCB, 0xD3) };
             // A long target ("Esc/Ctrl") on a narrow cap gets smaller rather
             // than spilling onto the next key.
             let mut size = l.size;
             while size > 11.0 && p.layout_no_wrap(l.text.clone(), font(size, l.to), col).size().x > l.max_w { size = (size - 0.5).max(11.0); }
             let text = crate::style::fit(p, &l.text, &font(size, l.to), l.max_w);
-            p.text(l.at, if self.flat || l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, text, font(size, l.to), col);
+            p.text(l.at, if self.flat { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, text, font(size, l.to), col);
+        }
+        for (index, _) in self.built_for.1.iter().enumerate().filter(|(_, cap)| cap.to.is_some()) {
+            let bounds = self.bounds(index);
+            p.line_segment([bounds.center_bottom() + egui::vec2(-4.0, -3.0), bounds.center_bottom() + egui::vec2(4.0, -3.0)], Stroke::new(2.0, SIGNAL));
         }
         if let Some(t) = chosen.and_then(|i| self.tops.get(i)).filter(|t| t.len() > 2) {
             let mut ring = t.clone();
@@ -1205,7 +1196,7 @@ mod tests {
     }
 
     #[test]
-    fn working_board_fits_and_splits_tap_hold_labels() {
+    fn working_board_fits_and_keeps_one_legend_per_key() {
         let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
             x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: cap.code.to_string(), to: (cap.code == 58).then(|| "Esc/Ctrl".into()), modifier: false,
         }).collect();
@@ -1221,7 +1212,9 @@ mod tests {
                 assert!(bounds.width() >= 24.0 && bounds.height() >= 24.0, "undersized key: {bounds:?}");
             }
             let remapped: Vec<_> = board.legends.iter().filter(|legend| legend.to).collect();
-            assert_eq!(remapped.len(), 2);
+            assert_eq!(remapped.len(), 1);
+            assert_eq!(remapped[0].text, "58");
+            assert_eq!(board.legends.len(), caps.len());
             assert!(board.legends.iter().all(|legend| legend.size >= 11.0));
         }
     }

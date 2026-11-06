@@ -242,7 +242,7 @@ impl App {
         let mut toggle_open = None;
         let open = self.profile_open.clone();
         let just_opened = std::mem::take(&mut self.profile_scroll);
-        egui::ScrollArea::vertical().id_salt("profiles").auto_shrink([false, false]).show(&mut child, |ui| {
+        egui::ScrollArea::vertical().id_salt("profiles").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).auto_shrink([false, false]).show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let label = if !network.ssids.is_empty() {
                 format!("Current network: {}", network.ssids.join(", "))

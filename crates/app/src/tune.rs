@@ -1690,6 +1690,23 @@ pub fn scroll_shown(input: &Input, f: &Facts, device: Option<Device>) -> ScrollS
 /// A problem from `one-mk keymap check` in the window's words:
 /// `input.keymap.rule #3: ...` becomes `Key rule 3: ...`.
 pub fn plain_problem(p: &str) -> String {
+    if let Some((prefix, _)) = p.split_once(" is not a key name")
+        && let Some(name) = prefix.rsplit('"').nth(1)
+    {
+        let folded = fold(name);
+        let suggestion = keyboard(true, false).iter().map(|cap| key_label(u32::from(cap.code))).find(|label| {
+            let candidate = fold(label);
+            candidate.char_indices().any(|(index, character)| {
+                let mut shortened = candidate.clone();
+                shortened.replace_range(index..index + character.len_utf8(), "");
+                shortened == folded
+            })
+        });
+        return match suggestion {
+            Some(label) => format!("'{name}' isn't a key. Did you mean {label}?"),
+            None => format!("'{name}' isn't a key. Choose a key from the list."),
+        };
+    }
     let mut out = p.to_owned();
     for (table, word) in [("input.keymap.rule #", "Key rule "), ("input.button #", "Button rule "), ("input.pointer #", "Pointer setting "), ("input.scroll #", "Scroll setting ")] {
         out = out.replace(table, word);
@@ -2159,7 +2176,7 @@ os = "mac"
 
     #[test]
     fn problems_read_without_table_names() {
-        assert_eq!(plain_problem("input.keymap.rule #3: from: \"capslok\" is not a key name"), "Key rule 3: from: \"capslok\" is not a key name");
+        assert_eq!(plain_problem("input.keymap.rule #3: from: \"capslok\" is not a key name"), "'capslok' isn't a key. Did you mean Caps Lock?");
         assert_eq!(plain_problem("input.button #1: button 9"), "Button rule 1: button 9");
         assert_eq!(plain_problem("rules for \"x\" never apply"), "Rules for \"x\" never apply");
     }

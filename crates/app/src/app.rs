@@ -372,6 +372,23 @@ fn slots(span: (f32, f32), peers: &[(String, Side, f32)]) -> HashMap<String, (sc
     out
 }
 
+fn separate_crowded_slots(places: &mut HashMap<String, (scene::V3, f32)>, widths: &[(String, f32)], mine: f32) {
+    let mut ordered = widths.to_vec();
+    ordered.sort_by(|first, second| places[&first.0].0.x.total_cmp(&places[&second.0].0.x).then(first.0.cmp(&second.0)));
+    for left in [true, false] {
+        let mut edge = mine;
+        let mut group: Vec<_> = ordered.iter().filter(|(id, _)| (places[id].0.x < 0.0) == left).cloned().collect();
+        if left { group.reverse(); }
+        for (id, half) in group {
+            let (position, scale) = places.get_mut(&id).expect("paired slot");
+            let half = half * *scale;
+            let distance = position.x.abs().max(edge + 32.0 + half);
+            position.x = if left { -distance } else { distance };
+            edge = distance + half;
+        }
+    }
+}
+
 // ---------- the panel's painted rows ----------
 
 /// Status by shape, not colour: a filled dot when connected, a ring when
@@ -907,6 +924,7 @@ impl App {
         me.screens = status.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
         me.kind = if me.screens.len() > 1 { Kind::Monitor } else { me_kind() };
         let me_half = scene::half_width(me.kind, &me.screens);
+        let monitor_count = me.screens.len().max(1) + peers.iter().map(|peer| peer.screens.len().max(1)).sum::<usize>();
         // A computer with an offset stands there, at our scale; the rest
         // stand in a row on each side, clear of it.
         let mine = (!me.screens.is_empty()).then(|| Desktop::new(me.screens.clone()));
@@ -943,6 +961,8 @@ impl App {
         let mounted: HashSet<String> = placed.keys().cloned().collect();
         let mut places = slots(span, &layout);
         places.extend(placed);
+        let widths: Vec<_> = peers.iter().map(|peer| (peer.id.clone(), scene::half_width(kind_of(peer.os, &peer.screens), &peer.screens))).collect();
+        if monitor_count >= 5 { separate_crowded_slots(&mut places, &widths, me_half); }
         let me = &mut self.scene.devices[0];
         if let Some(s) = &status {
             me.name = s.name.clone();
@@ -1401,10 +1421,10 @@ impl App {
         // The full name of the computer under the pointer (a narrow screen
         // can't always hold all of it).
         if self.drag.is_none()
-            && let Some(d) = under.filter(|i| self.scene.cut_names.borrow().contains(i)).and_then(|i| self.scene.devices.get(i))
+            && let Some(d) = under.or(self.scene.focused).filter(|i| self.scene.cut_names.borrow().contains(i)).and_then(|i| self.scene.devices.get(i))
         {
             let text = format!("{} · {}", d.name, d.subtitle);
-            resp.clone().on_hover_text_at_pointer(text);
+            if self.scene.focused.is_some() { resp.clone().show_tooltip_text(text); } else { resp.clone().on_hover_text_at_pointer(text); }
         }
         let slot = self.scene.slot_rect(rect);
         self.scene.slot_hover = self.drag.is_none() && slot.zip(pointer).is_some_and(|(r, p)| r.contains(p));
@@ -1667,7 +1687,7 @@ impl App {
         for (cell, c) in &cells {
             let mut card = Rect::from_min_max(c.min - vec2(PAD - M / 2.0, PAD), c.max + vec2(PAD - M / 2.0, PAD));
             // A short cell's card ends a padding under what it holds.
-            if let Some(h) = cell_key(cell).and_then(|k| self.cell_h.get(k)) {
+            if let Some(h) = cell_key(cell).and_then(|k| self.cell_h.get(k)).filter(|_| self.tab != Tab::Layout) {
                 card.max.y = card.max.y.min(c.top() + h + PAD + 2.0);
             }
             if card.left() < rect.left() + M {
@@ -2850,6 +2870,21 @@ mod debug {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crowded_slots_leave_room_for_every_computer() {
+        let peers = vec![("left".into(), Side::Left, 29.0), ("top".into(), Side::Top, 29.0), ("right".into(), Side::Right, 29.0), ("bottom".into(), Side::Bottom, 29.0)];
+        let mut places = slots((-29.0, 29.0), &peers);
+        let widths: Vec<_> = peers.iter().map(|(name, _, half)| (name.clone(), *half)).collect();
+        separate_crowded_slots(&mut places, &widths, 29.0);
+        let mut spans = vec![(-29.0, 29.0)];
+        for (name, half) in &widths {
+            let (position, scale) = places[name];
+            spans.push((position.x - half * scale, position.x + half * scale));
+        }
+        spans.sort_by(|first, second| first.0.total_cmp(&second.0));
+        assert!(spans.windows(2).all(|pair| pair[1].0 - pair[0].1 >= 31.9));
+    }
 
     #[test]
     fn sides_become_places() {
