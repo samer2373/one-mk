@@ -430,7 +430,11 @@ impl Keyboard {
         for cap in caps {
             let key = Rect::from_min_size(origin + egui::vec2(cap.x * unit, cap.y * unit), egui::vec2(cap.w * unit, cap.h * unit)).shrink(2.0);
             tops.push(vec![key.left_top(), key.right_top(), key.right_bottom(), key.left_bottom()]);
-            let lines: Vec<&str> = cap.to.as_deref().unwrap_or(&cap.label).split('/').collect();
+            let lines: Vec<&str> = match cap.to.as_deref() {
+                Some(target) if target != "/" => target.split('/').collect(),
+                Some(target) => vec![target],
+                None => vec![&cap.label],
+            };
             let size = if lines.len() > 1 { (unit * 0.29).clamp(11.0, 12.0) } else { (unit * 0.36).clamp(11.0, 15.0) };
             for (index, text) in lines.iter().enumerate() {
                 legends.push(Legend { at: key.center() + egui::vec2(0.0, (index as f32 - (lines.len() - 1) as f32 / 2.0) * (size + 1.0)), size, text: (*text).to_owned(), to: cap.to.is_some(), modifier: cap.modifier, max_w: key.width() - 6.0 });
@@ -1220,6 +1224,19 @@ mod tests {
             assert_eq!(remapped.len(), 2);
             assert!(board.legends.iter().all(|legend| legend.size >= 11.0));
         }
+    }
+
+    #[test]
+    fn slash_legends_are_not_tap_hold_separators() {
+        let caps = vec![
+            Cap { x: 0.0, y: 0.0, w: 1.0, h: 1.0, label: crate::tune::cap_label(53), to: None, modifier: false },
+            Cap { x: 1.0, y: 0.0, w: 1.0, h: 1.0, label: crate::tune::cap_label(98), to: Some("/".into()), modifier: false },
+        ];
+        let mut board = None;
+        Keyboard::working(&mut board, Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 60.0)), &caps);
+        let legends = &board.unwrap().legends;
+        assert_eq!(legends.len(), 2);
+        assert!(legends.iter().all(|legend| legend.text == "/"));
     }
 
     #[test]

@@ -7,6 +7,13 @@
 //! everything works (a status line that opens Health).
 
 use super::*;
+
+fn show_broadcast_status(width: f32) -> bool { width >= 100.0 }
+
+fn rail_section(ui: &Ui, rect: Rect) {
+    ui.painter().text(rect.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, "PCs", regular(T_META), INK2);
+    a11y_text(ui, Id::unique("rail-computers"), rect, Role::Label, "PCs", None);
+}
 use crate::chrome;
 use crate::icons::{self, Icon};
 use unicode_segmentation::UnicodeSegmentation;
@@ -491,9 +498,7 @@ impl App {
         y += 8.0;
         if let Some(status) = self.running().cloned() {
             let expander = Rect::from_center_size(pos2(cx, y + 14.0), vec2(side.width() - 12.0, 28.0));
-            let response = button(ui, expander, Id::unique("rail-computers"), "PCs", Look::Quiet, true, Some("Select a computer: show full names and connection states"));
-            let selected = computers_menu(&response, &status);
-            if let Some(id) = selected { self.set_tab(Tab::Desk); self.select(id); }
+            rail_section(ui, expander);
             y += 32.0;
             let pointer = self.pointer_on();
             let sel = self.selected_id().filter(|_| self.tab.desk());
@@ -583,16 +588,11 @@ impl App {
     }
 
     fn broadcast_status(&self, ui: &Ui, rect: Rect) {
+        if !show_broadcast_status(rect.width()) { return; }
         let hint = self.broadcast_stop_hint();
         let shortcut = hint.strip_prefix("Press ").and_then(|text| text.split_once(" to stop").map(|(key, _)| key)).unwrap_or(&hint);
-        let rect = if rect.width() < 100.0 { Rect::from_min_max(rect.min - vec2(0.0, 12.0), rect.max) } else { rect };
         ui.painter().text(rect.center_top() + vec2(0.0, 7.0), Align2::CENTER_TOP, "Keyboard stop", regular(12.0), INK2);
-        if rect.width() < 100.0 && let Some((first, rest)) = shortcut.split_once("+Shift") {
-            ui.painter().text(rect.center_top() + vec2(0.0, 22.0), Align2::CENTER_TOP, format!("{first}+"), regular(12.0), INK2);
-            ui.painter().text(rect.center_bottom() - vec2(0.0, 2.0), Align2::CENTER_BOTTOM, format!("Shift{rest}"), regular(12.0), INK2);
-        } else {
-            ui.painter().text(rect.center_bottom() - vec2(0.0, 2.0), Align2::CENTER_BOTTOM, shortcut, regular(12.0), INK2);
-        }
+        ui.painter().text(rect.center_bottom() - vec2(0.0, 2.0), Align2::CENTER_BOTTOM, shortcut, regular(12.0), INK2);
         a11y_text(ui, Id::unique("broadcast-stop-status"), rect, Role::Label, &format!("Keyboard stop. {hint}"), None);
     }
 
@@ -619,6 +619,17 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narrow_broadcast_rail_leaves_the_chord_to_the_banner() {
+        assert!(!show_broadcast_status(84.0));
+        assert!(!show_broadcast_status(96.0));
+        assert!(show_broadcast_status(200.0));
+        let context = egui::Context::default();
+        let mut output = context.run_ui(Default::default(), |ui| rail_section(ui, Rect::from_min_size(Pos2::ZERO, vec2(84.0, 28.0))));
+        assert!(output.shapes.iter().all(|shape| matches!(shape.shape, egui::Shape::Text(_) | egui::Shape::Noop)));
+        output.textures_delta.clear();
+    }
 
     #[test]
     fn narrow_rail_reserves_an_explicit_overflow_target() {

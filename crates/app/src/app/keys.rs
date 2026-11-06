@@ -189,16 +189,19 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     // Set: the chosen-segment capsule's tone, semibold words and a Volt
     // tick; not set: a quiet fill and regular words.
     let fill = if on { mix(THUMB, Color32::from_rgb(0x60, 0x6A, 0x76), hover) } else { mix(BUTTON, BUTTON_LIT, hover) };
-    p.rect_filled(rect, radius, widgets::pressed_lift(fill, press));
+    let surface = widgets::pressed_lift(fill, press);
+    let ink = if !enabled { INK2 } else if on { INK } else { mix(INK2, INK, hover) };
+    let ink = if press > 0.0 { widgets::pressed_ink(surface, ink) } else { ink };
+    p.rect_filled(rect, radius, surface);
     let font = if on { semibold(T_META + 1.0) } else { regular(T_META + 1.0) };
     let text = fit(p, label, &font, rect.width() - 28.0 - if on { 16.0 } else { 0.0 });
     let tw = p.layout_no_wrap(text.clone(), font.clone(), INK).size().x;
     let mut x = rect.center().x - (tw + if on { 16.0 } else { 0.0 }) / 2.0;
     if on {
-        widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, ACCENT, 1.0);
+        widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, if press > 0.0 { widgets::pressed_ink(surface, ACCENT) } else { ACCENT }, 1.0);
         x += 16.0;
     }
-    p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, text, font, if !enabled { INK2 } else if on { INK } else { mix(INK2, INK, hover) });
+    p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, text, font, ink);
     widgets::focus_ring(ui, &r, rect, radius.nw);
     if r.hovered() && enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

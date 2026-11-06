@@ -44,6 +44,26 @@ pub fn pressed_lift(fill: Color32, t: f32) -> Color32 {
     mix(fill, INK, 0.35 * t)
 }
 
+pub fn contrast(first: Color32, second: Color32) -> f64 {
+    let luminance = |color: Color32| {
+        let linear = |channel: u8| {
+            let value = f64::from(channel) / 255.0;
+            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+    };
+    let (first, second) = (luminance(first), luminance(second));
+    (first.max(second) + 0.05) / (first.min(second) + 0.05)
+}
+
+pub fn pressed_ink(surface: Color32, normal: Color32) -> Color32 {
+    if contrast(normal, surface) >= 4.5 { normal } else if contrast(Color32::BLACK, surface) >= 4.5 { Color32::BLACK } else { Color32::WHITE }
+}
+
+fn switch_color(color: Color32, enabled: bool) -> Color32 {
+    if enabled { color } else { mix(color, PANEL, 0.6) }
+}
+
 /// Tells assistive technology what a painted control is.
 /// Development aid (`ONE_MK_APP_TARGETS=file`): every named control and
 /// where it is, written out each frame, so tests can click them by name.
@@ -199,7 +219,7 @@ pub fn content_button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, 
     let response = button_painted(ui, rect, id, &shown, look, enabled, Some(a11y_label.unwrap_or(label)));
     if enabled && response.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), pressed_lift(BUTTON_LIT, 1.0));
-        ui.painter().text(rect.center(), Align2::CENTER_CENTER, shown, semibold(T_BODY), INK);
+        ui.painter().text(rect.center(), Align2::CENTER_CENTER, shown, semibold(T_BODY), pressed_ink(pressed_lift(BUTTON_LIT, 1.0), INK));
         focus_ring(ui, &response, rect, (rect.height() / 2.0) as u8);
     }
     response
@@ -257,7 +277,8 @@ pub fn icon_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, enabled: bool, i
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(7), if down { pressed_lift(BUTTON_LIT, 1.0) } else { mix(Color32::TRANSPARENT, BUTTON_LIT, hover) });
     focus_ring(ui, &r, rect, 7);
-    icon(p, rect, if enabled { mix(INK2, INK, hover) } else { mix(INK2, PANEL, 0.4) });
+    let ink = if enabled { mix(INK2, INK, hover) } else { mix(INK2, PANEL, 0.4) };
+    icon(p, rect, if down { pressed_ink(pressed_lift(BUTTON_LIT, 1.0), ink) } else { ink });
     if r.hovered() && enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -325,6 +346,7 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
     let p = ui.painter();
     let ink = mix(INK2, INK, hover);
     let well = if r.is_pointer_button_down_on() { pressed_lift(BUTTON_LIT, 1.0) } else { mix(Color32::TRANSPARENT, BUTTON, hover) };
+    let ink = if r.is_pointer_button_down_on() { pressed_ink(well, ink) } else { ink };
     p.circle_filled(ic, 11.0, well);
     p.circle_stroke(ic, 8.0, Stroke::new(1.0, ink));
     p.text(ic, Align2::CENTER_CENTER, "i", semibold(T_META), ink);
@@ -388,6 +410,7 @@ pub fn label_help_inline(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str,
 /// A labelled switch across `row`, with the caption and explanation filed
 /// under `key` in `help.rs`; the response is clicked when flipped.
 pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: bool, enabled: bool) -> Response {
+    let enabled = enabled && ui.is_enabled();
     let r = ui.interact(hit_rect(row), id, if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
     let ctx = ui.ctx().clone();
     let press = tween(&ctx, id.with("press"), f32::from(enabled && r.is_pointer_button_down_on()), motion::fade(0.06), motion::out_cubic);
@@ -403,9 +426,9 @@ pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: b
     let on_col = if enabled { mix(ACCENT, ACCENT_LIT, hover) } else { INK3 };
     let base = mix(off, on_col, fill);
     let pressed_track = if on { mix(base, GROUND, 0.45) } else { mix(base, Color32::WHITE, 0.30) };
-    p.rect_filled(track, CornerRadius::same(11), mix(base, pressed_track, press));
+    p.rect_filled(track, CornerRadius::same(11), switch_color(mix(base, pressed_track, press), enabled));
     // Off, the track's edge is what shows the control: 3:1 on the group.
-    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, mix(SWITCH_EDGE, Color32::TRANSPARENT, fill)), StrokeKind::Inside);
+    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, switch_color(mix(SWITCH_EDGE, Color32::TRANSPARENT, fill), enabled)), StrokeKind::Inside);
     let knob = pos2(track.left() + 11.0 + 16.0 * knob_t, track.center().y);
     // Pressed, the knob stretches toward where it will go (as the
     // system's switches do): a look of its own, apart from hover.
@@ -413,7 +436,7 @@ pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: b
     let toward = if on { -1.0 } else { 1.0 };
     let kr = Rect::from_center_size(knob + vec2(toward * stretch / 2.0, 0.0), vec2(18.0 + stretch, 18.0));
     p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(kr, CornerRadius::same(9)));
-    p.rect_filled(kr, CornerRadius::same(9), if enabled { Color32::WHITE } else { INK2 });
+    p.rect_filled(kr, CornerRadius::same(9), switch_color(Color32::WHITE, enabled));
     focus_ring(ui, &r, track, 11);
     if r.gained_focus() && keyboard_focus(&ctx) {
         r.scroll_to_me(None);
@@ -887,6 +910,46 @@ mod tests {
     }
 
     #[test]
+    fn pressed_control_pairs_meet_text_and_icon_contrast() {
+        for progress in 1..=100 {
+            let amount = progress as f32 / 100.0;
+            for fill in [BUTTON, BUTTON_LIT, THUMB, Color32::from_rgb(0x60, 0x6A, 0x76)] {
+                let surface = pressed_lift(fill, amount);
+                for normal in [INK, INK2, ACCENT] {
+                    let ink = pressed_ink(surface, normal);
+                    assert!(contrast(ink, surface) >= 4.5, "chip/info/icon: {ink:?} on {surface:?}");
+                    assert!(contrast(ink, surface) >= 3.0);
+                }
+            }
+        }
+        for (family, ink, surface) in [
+            ("segment", INK, mix(THUMB, GROUND, 0.28)),
+            ("capsule", INK, pressed(BUTTON_LIT, 1.0)),
+            ("primary capsule", SIGNAL_INK, mix(SIGNAL_LIT, SIGNAL_INK, 0.16)),
+            ("sidebar row", INK, SIDE_CHOSEN),
+        ] {
+            assert!(contrast(ink, surface) >= 4.5, "{family}");
+            assert!(contrast(ink, surface) >= 3.0, "{family}");
+        }
+    }
+
+    #[test]
+    fn disabled_switch_dims_track_edge_and_knob() {
+        for color in [SWITCH_OFF, SWITCH_EDGE, Color32::WHITE] {
+            assert_eq!(switch_color(color, true), color);
+            assert!(contrast(switch_color(color, false), PANEL) < contrast(color, PANEL));
+        }
+        let context = egui::Context::default();
+        let mut enabled = true;
+        let mut output = context.run_ui(Default::default(), |ui| {
+            ui.disable();
+            enabled = switch_help(ui, Rect::from_min_size(Pos2::ZERO, vec2(300.0, 32.0)), Id::unique("disabled-switch"), "Also on this computer", "also-on-this-computer", false, true).enabled();
+        });
+        assert!(!enabled);
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn keyboard_focus_paints_a_two_point_ring() {
         let ctx = egui::Context::default();
         let id = Id::unique("focus-test");
@@ -908,12 +971,14 @@ mod tests {
         let ctx = egui::Context::default();
         crate::style::install(&ctx);
         let mut output = ctx.run_ui(Default::default(), |ui| {
-            for code in [102, 104, 109] {
-                let key = crate::tune::keyboard(false, false).into_iter().find(|key| key.code == code).unwrap();
-                let label = crate::tune::cap_label(code);
+            for key in crate::tune::keyboard(false, false) {
+                let label = crate::tune::cap_label(key.code);
+                if label.chars().count() < 4 { continue; }
                 let available = key.w * 36.0 - 10.0;
                 assert_eq!(fit(ui.painter(), &label, &regular(11.0), available), label);
             }
+            assert_eq!(crate::tune::cap_label(96), "Ent");
+            assert_eq!(crate::tune::key_label(96), "Keypad Enter");
         });
         output.textures_delta.clear();
     }
