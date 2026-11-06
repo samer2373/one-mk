@@ -263,7 +263,12 @@ impl App {
                 self.measure(&peer.id);
             }
         }
-        self.peer_actions(ui, pos2(body.left(), body.bottom() - 32.0), &status, &peer);
+        // With a graph the actions sit at the card's foot; without one (a
+        // few readings, offline, none) right under the words, and the card
+        // ends there.
+        let graphed = peer.online && summary.is_some_and(|s| s.count >= 8) && self.rtts.of(&peer.id).is_some();
+        let actions_y = if graphed { body.bottom() - 32.0 } else { (body.top() + 84.0).min(body.bottom() - 32.0) };
+        self.peer_actions(ui, pos2(body.left(), actions_y), &status, &peer);
 
         // The graph and the number, as words for screen readers.
         a11y_text(ui, Id::unique(("peer-latency", &peer.id)), body, Role::Label, &self.latency_words(&peer), None);

@@ -185,9 +185,11 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     // Solid capsules like the window's other quiet buttons; one that is
     // set is lighter and carries a Volt tick. The words sit centred either way.
     let press = tween(ui.ctx(), id.with("press"), f32::from(enabled && r.is_pointer_button_down_on()), 0.08, motion::out_cubic);
-    let fill = if on { mix(BUTTON_LIT, Color32::from_white_alpha(46), hover) } else { mix(BUTTON, BUTTON_LIT, hover) };
+    // Set: the chosen-segment capsule's tone, semibold words and a Volt
+    // tick; not set: a quiet fill and regular words.
+    let fill = if on { mix(THUMB, Color32::from_rgb(0x60, 0x6A, 0x76), hover) } else { mix(BUTTON, BUTTON_LIT, hover) };
     p.rect_filled(rect, radius, widgets::pressed(fill, press));
-    let font = regular(T_META + 1.0);
+    let font = if on { semibold(T_META + 1.0) } else { regular(T_META + 1.0) };
     let text = fit(p, label, &font, rect.width() - 28.0 - if on { 16.0 } else { 0.0 });
     let tw = p.layout_no_wrap(text.clone(), font.clone(), INK).size().x;
     let mut x = rect.center().x - (tw + if on { 16.0 } else { 0.0 }) / 2.0;

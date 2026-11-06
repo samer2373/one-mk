@@ -1773,8 +1773,6 @@ impl App {
         if let Some(k) = pills.show(ui, self.arrowed) {
             chosen = k;
         }
-        let active = pills.cells[chosen];
-        ui.painter().hline((active.left() + 12.0)..=(active.right() - 12.0), active.bottom() - 2.0, Stroke::new(2.0, INK));
         ui.ctx().data_mut(|d| d.insert_temp(key, chosen));
         let body = Rect::from_min_max(pos2(inner.left(), track.bottom() + 16.0), inner.max);
         let cell = match chosen {
@@ -2306,9 +2304,9 @@ fn cell_key(c: &Cell) -> Option<&'static str> {
     match c {
         Cell::Controls => Some("controls"),
         Cell::Head(..) => Some("head"),
-        Cell::Arrange(_) => Some("arrange"),
-        Cell::LineUp(_) => Some("line-up"),
+        // Layout's three cards share one height (a row of equals).
         Cell::Inspector(None) => Some("me"),
+        Cell::Inspector(Some(_)) => Some("peer"),
         _ => None,
     }
 }
