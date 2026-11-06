@@ -211,7 +211,7 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
 }
 
 fn chip_width(ui: &Ui, label: &str) -> f32 {
-    text_width(ui, label, regular(T_META + 1.0)) + 46.0
+    text_width(ui, label, semibold(T_META + 1.0)) + 46.0
 }
 
 /// Room for the quick setups beside the keyboard.
@@ -832,7 +832,7 @@ impl App {
         let label = if self.keys.keypad { "Fewer keys" } else { "More keys" };
         let bw = button_width(ui, label) - 8.0;
         let b = Rect::from_min_size(pos2(r.right() - 18.0 - bw, r.top() + 14.0), vec2(bw, 28.0));
-        let intro = "Click a key, then choose what it types on the other computers.";
+        let intro = "Select a key to change what it types.";
         let iw = b.left() - r.left() - 30.0 - if self.keys.selected.is_some() { 122.0 } else { 0.0 };
         p.text(pos2(r.left() + 18.0, b.center().y), Align2::LEFT_CENTER, fit(&p, intro, &regular(T_BODY), iw), regular(T_BODY), INK2);
         a11y_text(ui, Id::unique("keys-intro"), Rect::from_min_size(r.min, vec2(iw, 40.0)), Role::Label, intro, None);
@@ -953,7 +953,7 @@ impl App {
             let selected = self.keys.selected == Some(c.code) && self.keys.layer.is_none();
             widgets::a11y(&kr, Role::Button, &format!("{does}. Arrows move between keys, Enter changes it"), Some(selected));
             // A changed key says what it does when the pointer is on it.
-            if under == Some(i) && target.contains_key(&c.code) {
+            if under == Some(i) {
                 kr.on_hover_text(&does);
             }
         }
@@ -1462,7 +1462,10 @@ impl App {
         let h = |k: &str| self.keys.heights.get(k).copied().unwrap_or(300.0);
         let body_height = if two { h("buttons").max(h("pointer") + GAP + h("scroll")) } else { h("buttons") + h("pointer") + h("scroll") + 2.0 * GAP };
         let total = body_height + GAP + h("mouse-modes");
-        let stage_h = (w * 0.20).clamp(144.0, 190.0);
+        let shown = tune::buttons_shown(&input, &facts);
+        let label_height = |button| if w >= 720.0 && shown.iter().any(|(key, _, changed)| *key == button && *changed) { 62.0 } else { 46.0 };
+        let callouts = [vec![1, 2, 3], vec![4, 5]].iter().map(|side| side.iter().map(|button| label_height(*button)).sum::<f32>() + (side.len() - 1) as f32 * 8.0 + 24.0).fold(0.0, f32::max);
+        let stage_h = (w * 0.20).clamp(184.0, 190.0).max(callouts);
         let (all, _) = ui.allocate_exact_size(vec2(w, total + stage_h + GAP), Sense::hover());
         self.mouse_stage(ui, Rect::from_min_size(all.min, vec2(w, stage_h)), &input, &facts);
         let all = Rect::from_min_max(all.min + vec2(0.0, stage_h + GAP), all.max);
@@ -1657,7 +1660,7 @@ impl App {
                 .filter(|(_, a)| (a.x < centre) == left)
                 .collect();
             keys.sort_by(|a, b| a.1.y.total_cmp(&b.1.y));
-            let hgt = |n: u32| if shown.iter().any(|(k, _, ch)| *k == n && *ch) { 62.0 } else { 46.0 };
+            let hgt = |n: u32| if !narrow && shown.iter().any(|(k, _, ch)| *k == n && *ch) { 62.0 } else { 46.0 };
             let mut prev = r.top() + 8.0;
             for (j, (n, a)) in keys.iter().enumerate() {
                 let rest: f32 = keys[j + 1..].iter().map(|(k, _)| hgt(*k) + 8.0).sum();
@@ -1712,10 +1715,13 @@ impl App {
             let (vx, chev_x) = if *left { (tx - 18.0, tx - 12.0) } else { (tx, tx + tw + 4.0) };
             painter.text(pos2(vx, lr.top() + 32.0), align, &text, regular(T_TITLE), col);
             crate::icons::draw(&painter, crate::icons::Icon::Chevron, Rect::from_min_size(pos2(chev_x, lr.top() + 25.0), vec2(14.0, 14.0)), if changed || sel { SIGNAL } else { INK3 });
-            if changed {
+            if changed && !narrow {
                 painter.text(pos2(tx, lr.top() + 50.0), align, format!("Was {}", tune::button_default(*n).to_lowercase()), regular(T_META), INK2);
             }
             widgets::a11y(&lresp, Role::Button, &format!("{name}: {does}. Change it"), Some(sel));
+            if lresp.hovered() {
+                lresp.clone().on_hover_text(format!("{name}: {does}"));
+            }
             if lresp.clicked() && !busy {
                 pick = Some(*n);
             }
