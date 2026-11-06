@@ -266,3 +266,14 @@ hooks work. Before is main; after is this branch.
 - **No text-only enlargement:** the app has no text-only size setting, so
   there is no capture of one. Zoom scales the whole interface (`s100`–`s200`
   shots). That is a real gap, not a design choice.
+- **Runtime, paired before (main) and after:** optimized build, debug hooks
+  on, desk with 3 computers, full log in
+  `/home/samer/omk-council/claude/round4-perf.txt`.
+  - Visible at rest: 0.20 / 0.20 % before, 0.23 / 0.13 % after.
+  - Minimised: 0.00 / 0.07 % (after only).
+  - Help explainer open: 5.1 % before, 0.00–0.07 % after.
+  - Moving frames, 3 runs each: the UI thread's own work per frame (update,
+    layout and shapes, no GPU or vsync) went from p50 0.52 / p95 0.63 ms to
+    p50 0.15 / p95 0.22 ms. CPU per frame across all threads went from
+    0.97 to 0.53 ms. Frame pacing p95 is 7.1 ms in both, set by vsync.
+    Most of the saving is the room's light meshes, now gone.
