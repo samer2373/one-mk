@@ -219,9 +219,14 @@ impl App {
         let mut list = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), save_y - 6.0));
         // Whole rows only: the list ends on a row's edge (and scrolls for
         // the rest), never through the middle of one.
-        if network.explanation().is_none() && self.profile_open.is_none() {
-            let rows = ((list.height() - 24.0) / 30.0).floor().max(1.0);
-            list.max.y = list.top() + 24.0 + rows * 30.0;
+        if network.explanation().is_none() {
+            // The open profile (first) is taller: its row, then whole rows.
+            let first = match &self.profile_open {
+                Some(n) => 30.0 + 36.0 + if self.prefs.auto.contains_key(n) { 22.0 } else { 0.0 },
+                None => 30.0,
+            };
+            let rows = ((list.height() - 24.0 - first) / 30.0).floor().max(0.0);
+            list.max.y = list.top() + 24.0 + first + rows * 30.0;
         }
         let mut child = ui.new_child(UiBuilder::new().max_rect(list.expand2(vec2(4.0, 0.0))));
         child.set_clip_rect(list.expand2(vec2(6.0, 0.0)));
