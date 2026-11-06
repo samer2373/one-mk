@@ -59,7 +59,10 @@ impl App {
     /// latency card, on the Desk tab once a computer is paired.
     pub(super) fn panel_h(&self) -> f32 {
         if self.tab == Tab::Files {
-            return (self.ctx.content_rect().height() * 0.56).clamp(250.0, 460.0);
+            // The page scrolls, so the desk above keeps enough room for its
+            // monitors to stay readable drop targets in a small window.
+            let share = if self.ctx.content_rect().width() < 1040.0 { 0.42 } else { 0.56 };
+            return (self.ctx.content_rect().height() * share).clamp(210.0, 460.0);
         }
         // A narrow window stacks Layout's cards: give them half the height.
         if self.tab == Tab::Layout && self.ctx.content_rect().width() < 1040.0 {
