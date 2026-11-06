@@ -511,7 +511,10 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
         r.scroll_to_me(None);
     }
     let label = label.to_owned();
-    ui.ctx().accesskit_node_builder(id, |n| n.set_label(label));
+    ui.ctx().accesskit_node_builder(id, |n| {
+        n.set_label(label);
+        n.set_value(text.clone());
+    });
     r
 }
 
