@@ -21,6 +21,25 @@ pub fn button_width(ui: &Ui, label: &str) -> f32 {
     text_width(ui, label, semibold(T_BODY)) + 28.0
 }
 
+/// The smallest a pointer target may be, in points (WCAG 2.5.8 and the
+/// council's floor): a control may look smaller, its hit area doesn't.
+pub const MIN_TARGET: f32 = 24.0;
+
+/// Where a control takes the pointer: its own rectangle, grown about its
+/// centre to at least `MIN_TARGET` square.
+pub fn hit_rect(rect: Rect) -> Rect {
+    Rect::from_center_size(rect.center(), rect.size().max(vec2(MIN_TARGET, MIN_TARGET)))
+}
+
+/// The pressed look shared by every control family: how far a fill moves
+/// toward the ground while the pointer is down on it.
+pub const PRESS_DARKEN: f32 = 0.28;
+
+/// `fill` as it looks while pressed (`t` 0..1).
+pub fn pressed(fill: Color32, t: f32) -> Color32 {
+    mix(fill, GROUND, PRESS_DARKEN * t)
+}
+
 /// Tells assistive technology what a painted control is.
 /// Development aid (`ONE_MK_APP_TARGETS=file`): every named control and
 /// where it is, written out each frame, so tests can click them by name.
@@ -128,13 +147,13 @@ pub enum Look {
 /// A button that presses in a little. `a11y` names it for screen readers
 /// when the visible label alone would be vague.
 pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled: bool, a11y_label: Option<&str>) -> Response {
-    let r = ui.interact(rect, id, if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
+    let r = ui.interact(hit_rect(rect), id, if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
     let ctx = ui.ctx().clone();
     let down = enabled && r.is_pointer_button_down_on();
-    let press = tween(&ctx, id.with("press"), f32::from(down), if down { 0.08 } else { 0.16 }, motion::out_cubic);
-    let hover = tween(&ctx, id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
+    let press = tween(&ctx, id.with("press"), f32::from(down), motion::fade(if down { 0.06 } else { 0.14 }), motion::out_cubic);
+    let hover = tween(&ctx, id.with("hover"), f32::from(enabled && r.hovered()), 0.1, motion::out_cubic);
     // Only the shape scales: glyphs re-rasterised at a new size shimmer.
-    let rr = Rect::from_center_size(rect.center(), rect.size() * (1.0 - 0.03 * press));
+    let rr = Rect::from_center_size(rect.center(), rect.size() * (1.0 - motion::space(0.02) * press));
     // Capsules, as the system's own glass buttons are.
     let radius = (rr.height() / 2.0).round().min(255.0) as u8;
     let fg = match (look, enabled) {
@@ -145,11 +164,10 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
     let p = ui.painter().clone();
     match (look, enabled) {
         (Look::Primary, true) => {
-            // A solid Volt capsule, lit a touch from above; a short neutral
-            // shadow seats it (never a coloured glow).
-            p.add(egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(70) }.as_shape(rr, CornerRadius::same(radius)));
-            p.add(rounded_gradient(rr, rr.height() / 2.0, mix(SIGNAL_LIT, Color32::WHITE, 0.12 * hover + 0.04), mix(SIGNAL, SIGNAL_LIT, hover)));
-            p.add(lit_edge(rr.shrink(0.5), rr.height() / 2.0 - 0.5));
+            // Flat, solid Volt: no gradient, no lit rim, no glow. Lighter
+            // under the pointer, deeper while pressed.
+            let fill = mix(mix(SIGNAL, SIGNAL_LIT, hover), SIGNAL_INK, 0.16 * press);
+            p.rect_filled(rr, CornerRadius::same(radius), fill);
         }
         (Look::Glass, true) => {
             for s in glass_shapes_as(&ctx, id.with("glass").value(), rr, rr.height() / 2.0, CONTROL_GLASS) {
@@ -158,9 +176,12 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
             if hover > 0.0 {
                 p.rect_filled(rr, CornerRadius::same(radius), Color32::from_white_alpha((14.0 * hover) as u8));
             }
+            if press > 0.0 {
+                p.rect_filled(rr, CornerRadius::same(radius), Color32::from_black_alpha((90.0 * press) as u8));
+            }
         }
         (Look::Quiet, true) => {
-            p.rect(rr, CornerRadius::same(radius), mix(BUTTON, BUTTON_LIT, hover), Stroke::new(1.0, CONTROL_EDGE), StrokeKind::Inside);
+            p.rect(rr, CornerRadius::same(radius), pressed(mix(BUTTON, BUTTON_LIT, hover), press), Stroke::new(1.0, CONTROL_EDGE), StrokeKind::Inside);
         }
         (_, false) => {
             p.rect(rr, CornerRadius::same(radius), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
@@ -177,10 +198,11 @@ pub fn button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enabled:
 
 /// A small square button with a drawn icon; its name shows on hover.
 pub fn icon_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, enabled: bool, icon: impl FnOnce(&Painter, Rect, Color32)) -> Response {
-    let r = ui.interact(rect, id, if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
-    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
+    let r = ui.interact(hit_rect(rect), id, if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
+    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.1, motion::out_cubic);
+    let down = enabled && r.is_pointer_button_down_on();
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(7), mix(Color32::TRANSPARENT, BUTTON_LIT, hover));
+    p.rect_filled(rect, CornerRadius::same(7), if down { pressed(BUTTON_LIT, 1.0) } else { mix(Color32::TRANSPARENT, BUTTON_LIT, hover) });
     focus_ring(ui, &r, rect, 7);
     icon(p, rect, if enabled { mix(INK2, INK, hover) } else { mix(INK2, PANEL, 0.4) });
     if r.hovered() && enabled {
@@ -244,11 +266,13 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
         p.text(row.left_center(), Align2::LEFT_CENTER, &shown, font, col);
     }
     let ic = pos2(row.right() - right - 11.0, row.center().y);
-    let ir = Rect::from_center_size(ic, vec2(22.0, 22.0));
+    let ir = Rect::from_center_size(ic, vec2(MIN_TARGET, MIN_TARGET));
     let r = ui.interact(ir, id.with("info"), sense(ui, Sense::click()));
-    let hover = tween(ui.ctx(), id.with("info-hover"), f32::from(r.hovered()), 0.12, motion::out_cubic);
+    let hover = tween(ui.ctx(), id.with("info-hover"), f32::from(r.hovered()), 0.1, motion::out_cubic);
     let p = ui.painter();
     let ink = mix(INK2, INK, hover);
+    let well = if r.is_pointer_button_down_on() { pressed(BUTTON_LIT, 1.0) } else { mix(Color32::TRANSPARENT, BUTTON, hover) };
+    p.circle_filled(ic, 11.0, well);
     p.circle_stroke(ic, 8.0, Stroke::new(1.0, ink));
     p.text(ic, Align2::CENTER_CENTER, "i", semibold(T_META), ink);
     focus_ring(ui, &r, ir, 11);
@@ -297,8 +321,9 @@ pub fn label_help_inline(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str,
 /// A labelled switch across `row`, with the caption and explanation filed
 /// under `key` in `help.rs`; the response is clicked when flipped.
 pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: bool, enabled: bool) -> Response {
-    let r = ui.interact(row, id, if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
+    let r = ui.interact(hit_rect(row), id, if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
     let ctx = ui.ctx().clone();
+    let press = tween(&ctx, id.with("press"), f32::from(enabled && r.is_pointer_button_down_on()), motion::fade(0.06), motion::out_cubic);
     let knob_t = tween(&ctx, id.with("knob"), f32::from(on), motion::space(0.26), motion::back_out);
     let fill = tween(&ctx, id.with("track"), f32::from(on), motion::fade(0.2), motion::linear);
     let hover = tween(&ctx, id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
@@ -307,10 +332,11 @@ pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: b
     let track = Rect::from_min_size(pos2(row.right() - 38.0, row.center().y - 11.0), vec2(38.0, 22.0));
     // Off: a recessed capsule. On: filled with the accent, as the system's
     // switches are; the knob is a lit white bead that slides across.
-    let off = mix(Color32::from_white_alpha(34), Color32::from_white_alpha(46), hover);
+    let off = mix(SWITCH_OFF, SWITCH_OFF_LIT, hover);
     let on_col = if enabled { mix(ACCENT, ACCENT_LIT, hover) } else { INK3 };
-    p.rect_filled(track, CornerRadius::same(11), mix(off, on_col, fill));
-    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, mix(Color32::from_white_alpha(22), Color32::from_white_alpha(30), fill)), StrokeKind::Inside);
+    p.rect_filled(track, CornerRadius::same(11), pressed(mix(off, on_col, fill), press));
+    // Off, the track's edge is what shows the control: 3:1 on the group.
+    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, mix(SWITCH_EDGE, Color32::TRANSPARENT, fill)), StrokeKind::Inside);
     let knob = pos2(track.left() + 11.0 + 16.0 * knob_t, track.center().y);
     p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(Rect::from_center_size(knob, vec2(18.0, 18.0)), CornerRadius::same(9)));
     p.circle_filled(knob, 9.0, if enabled { Color32::WHITE } else { INK2 });
@@ -358,7 +384,7 @@ impl Pills<'_> {
         let p = ui.painter().clone();
         // A recessed track, and a lighter capsule that slides to the choice.
         let round = |r: Rect| (r.height() / 2.0).round().min(255.0) as u8;
-        p.rect_filled(self.track, CornerRadius::same(round(self.track)), TRACK);
+        p.rect(self.track, CornerRadius::same(round(self.track)), TRACK, Stroke::new(1.0, TRACK_LINE), StrokeKind::Inside);
         let to = self.cells[self.chosen.unwrap_or(0).min(self.cells.len() - 1)];
         let secs = motion::space(0.22);
         let x = tween(&ctx, self.id.with("x"), to.left(), secs, motion::out_quart);
@@ -378,8 +404,14 @@ impl Pills<'_> {
         let mut now_focused = None;
         for (k, cell) in self.cells.iter().enumerate() {
             let enabled = self.enabled[k];
-            let r = ui.interact(*cell, self.id.with(k), if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
+            let r = ui.interact(hit_rect(*cell), self.id.with(k), if enabled { sense(ui, Sense::click()) } else { Sense::hover() });
             let on = Some(k) == self.chosen;
+            // Under the pointer, a faint lift; pressed, a deeper well. The
+            // chosen one's capsule (above) is the selection, apart from both.
+            if enabled && !on && (r.hovered() || r.is_pointer_button_down_on()) {
+                let fill = if r.is_pointer_button_down_on() { Color32::from_black_alpha(90) } else { Color32::from_white_alpha(12) };
+                p.rect_filled(*cell, CornerRadius::same(round(*cell)), fill);
+            }
             // Arrowing onto a choice chooses it, as radio groups do.
             if r.has_focus() {
                 now_focused = Some(k);
@@ -398,7 +430,7 @@ impl Pills<'_> {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             #[cfg(debug_assertions)]
-            targets::note(&self.names[k], *cell);
+            targets::note(&self.names[k], r.rect);
             let (name, enabled) = (self.names[k].clone(), r.enabled());
             let role = self.role;
             r.widget_info(move || WidgetInfo::selected(role, enabled, on, &name));
@@ -421,7 +453,8 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
     // when the field has the keyboard.
     let fr = CornerRadius::same(((rect.height() / 2.0).min(10.0)) as u8);
     p.rect_filled(rect, fr, if enabled { Color32::from_black_alpha(70) } else { Color32::from_black_alpha(40) });
-    let edge = if focused { ACCENT } else if hover { Color32::from_white_alpha(40) } else { Color32::from_white_alpha(18) };
+    // The field's edge shows where to type: 3:1 against the group.
+    let edge = if focused { ACCENT } else if hover { FIELD_EDGE_LIT } else { FIELD_EDGE };
     p.rect_stroke(rect, fr, Stroke::new(if focused { 1.5 } else { 1.0 }, edge), StrokeKind::Inside);
     let edit = egui::TextEdit::singleline(text)
         .id(id)
@@ -775,6 +808,31 @@ mod tests {
             assert!((r.width() - plain).abs() < 0.5, "every character a full cell: {} vs {plain}", r.width());
         });
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn every_hit_area_is_at_least_24_points_and_keeps_its_centre() {
+        for size in [vec2(16.0, 16.0), vec2(22.0, 22.0), vec2(60.0, 22.0), vec2(38.0, 22.0), vec2(120.0, 32.0)] {
+            let visual = Rect::from_min_size(pos2(20.0, 30.0), size);
+            let hit = hit_rect(visual);
+            assert_eq!(hit.center(), visual.center());
+            assert!(hit.width() >= MIN_TARGET && hit.height() >= MIN_TARGET, "{size:?}");
+            assert!(hit.contains_rect(visual));
+        }
+        // A segment cell of a 26-point track inset by 2: 22 tall, hit 24.
+        let track = Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 26.0));
+        assert!(hit_rect(Pills::even(track, 4, 2.0)[0]).height() >= MIN_TARGET);
+    }
+
+    /// Pressed differs from rest and from hover, for the fills that have one.
+    #[test]
+    fn pressed_is_its_own_look() {
+        for fill in [BUTTON, BUTTON_LIT, SIDE_HOVER, SIDE_CHOSEN] {
+            let down = pressed(fill, 1.0);
+            assert_ne!(down, fill);
+            assert!(down.r() <= fill.r() && down.g() <= fill.g(), "pressed goes deeper, not lighter");
+        }
+        assert_eq!(pressed(BUTTON, 0.0), BUTTON);
     }
 
     #[test]

@@ -416,7 +416,7 @@ impl App {
             let credit_at = pos2(all.left() + 4.0, all.bottom() - 16.0);
             let shown = fit(ui.painter(), credit, &regular(T_META), all.width() - 8.0);
             ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), INK3);
-            let link = ui.interact(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0)), Id::unique("credit-mouse"), Sense::click());
+            let link = ui.interact(widgets::hit_rect(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0))), Id::unique("credit-mouse"), Sense::click());
             if link.on_hover_text("Open the model's page").clicked() {
                 ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
             }

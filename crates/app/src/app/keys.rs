@@ -178,7 +178,7 @@ fn flow(ui: &Ui, left: f32, top: f32, width: f32, labels: &[&str]) -> (Vec<Rect>
 
 /// A chip that is on or off: a quick setup.
 fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -> egui::Response {
-    let r = ui.interact(rect, id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
+    let r = ui.interact(widgets::hit_rect(rect), id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
     let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
     let p = ui.painter();
     let radius = CornerRadius::same((rect.height() / 2.0) as u8);
@@ -186,7 +186,7 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     // set is lighter and carries a Volt tick. The words sit centred either way.
     let press = tween(ui.ctx(), id.with("press"), f32::from(enabled && r.is_pointer_button_down_on()), 0.08, motion::out_cubic);
     let fill = if on { mix(BUTTON_LIT, Color32::from_white_alpha(46), hover) } else { mix(BUTTON, BUTTON_LIT, hover) };
-    p.rect(rect, radius, mix(fill, Color32::from_white_alpha(10), press), Stroke::new(1.0, if on { Color32::from_white_alpha(40) } else { CONTROL_EDGE }), StrokeKind::Inside);
+    p.rect(rect, radius, widgets::pressed(fill, press), Stroke::new(1.0, if on { Color32::from_white_alpha(40) } else { CONTROL_EDGE }), StrokeKind::Inside);
     let font = regular(T_META + 1.0);
     let text = fit(p, label, &font, rect.width() - 28.0 - if on { 16.0 } else { 0.0 });
     let tw = p.layout_no_wrap(text.clone(), font.clone(), INK).size().x;
@@ -218,7 +218,7 @@ const SIDE_W: f32 = 270.0;
 /// focused. Returns the new position and whether to apply it now (let go,
 /// or a step with the keyboard).
 fn slider(ui: &mut Ui, rect: Rect, id: Id, t: f32, name: &str, value: f64) -> (Option<f32>, bool) {
-    let r = ui.interact(rect, id, widgets::sense(ui, Sense::click_and_drag()));
+    let r = ui.interact(widgets::hit_rect(rect), id, widgets::sense(ui, Sense::click_and_drag()));
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 18.0, 4.0));
     let mut out = None;
     let mut apply = false;
@@ -246,7 +246,8 @@ fn slider(ui: &mut Ui, rect: Rect, id: Id, t: f32, name: &str, value: f64) -> (O
     // The middle is "as it is" (1×).
     p.line_segment([pos2(track.center().x, track.top() - 5.0), pos2(track.center().x, track.top() - 2.0)], Stroke::new(1.0, KEY_EDGE));
     let knob = pos2(x, track.center().y);
-    p.circle_filled(knob, 8.0, INK);
+    // Held, the knob dims a step: pressed, apart from hover and focus.
+    p.circle_filled(knob, 8.0, if r.is_pointer_button_down_on() || r.dragged() { INK2 } else if r.hovered() { Color32::WHITE } else { INK });
     if r.has_focus() && widgets::keyboard_focus(ui.ctx()) {
         p.circle_stroke(knob, 11.0, Stroke::new(2.0, SIGNAL));
     }
@@ -1140,6 +1141,11 @@ impl App {
                 let dr = Rect::from_min_size(pos2(c.left() - 4.0, y), vec2(c.width().min(260.0), 26.0));
                 let resp = ui.interact(dr, Id::unique("key-more"), widgets::sense(ui, Sense::click()));
                 let p = ui.painter();
+                if resp.is_pointer_button_down_on() {
+                    p.rect_filled(dr, CornerRadius::same(6), widgets::pressed(BUTTON, 1.0));
+                } else if resp.hovered() {
+                    p.rect_filled(dr, CornerRadius::same(6), BUTTON.gamma_multiply(0.6));
+                }
                 let m = pos2(dr.left() + 10.0, dr.center().y);
                 let pts = if open { vec![m + vec2(-4.0, -2.0), m + vec2(0.0, 2.0), m + vec2(4.0, -2.0)] } else { vec![m + vec2(-2.0, -4.0), m + vec2(2.0, 0.0), m + vec2(-2.0, 4.0)] };
                 p.add(egui::Shape::line(pts, Stroke::new(1.5, INK2)));
@@ -1361,7 +1367,7 @@ impl App {
         let focused = resp.has_focus();
         let _ = self.tester();
         let p = ui.painter().clone();
-        p.rect(r, CornerRadius::same(9), Color32::from_black_alpha(70), Stroke::new(1.0, if focused || resp.hovered() { Color32::from_white_alpha(40) } else { Color32::from_white_alpha(18) }), StrokeKind::Inside);
+        p.rect(r, CornerRadius::same(9), Color32::from_black_alpha(70), Stroke::new(1.0, if focused || resp.hovered() { FIELD_EDGE_LIT } else { FIELD_EDGE }), StrokeKind::Inside);
         if focused {
             p.rect_stroke(r.expand(2.0), CornerRadius::same(11), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
         }

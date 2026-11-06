@@ -130,10 +130,11 @@ impl App {
             ui.painter().text(row.left_center(), Align2::LEFT_CENTER, fit(ui.painter(), label, &regular(T_BODY), room), regular(T_BODY), INK);
             let id = Id::unique(("shortcut-change", index));
             let resp = ui.interact(kr, id, widgets::sense(ui, Sense::click()));
-            let hover = tween(ui.ctx(), id.with("hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
+            let hover = tween(ui.ctx(), id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
             let p = ui.painter();
-            p.rect_filled(kr, CornerRadius::same(8), mix(Color32::from_black_alpha(70), Color32::from_black_alpha(40), hover));
-            let edge = if listening { Stroke::new(1.5, ACCENT) } else { Stroke::new(1.0, mix(Color32::from_white_alpha(20), Color32::from_white_alpha(44), hover)) };
+            let well = if resp.is_pointer_button_down_on() { Color32::from_black_alpha(130) } else { mix(Color32::from_black_alpha(70), Color32::from_black_alpha(40), hover) };
+            p.rect_filled(kr, CornerRadius::same(8), well);
+            let edge = if listening { Stroke::new(1.5, ACCENT) } else { Stroke::new(1.0, mix(FIELD_EDGE, FIELD_EDGE_LIT, hover)) };
             p.rect_stroke(kr, CornerRadius::same(8), edge, StrokeKind::Inside);
             widgets::mono_text(p, kr.center(), Align2::CENTER_CENTER, &shown, T_META, if listening { INK2 } else { INK }, kw - 16.0);
             widgets::focus_ring(ui, &resp, kr, 8);
@@ -279,9 +280,9 @@ pub(super) fn chooser(ui: &mut Ui, r: Rect, id: Id, shown: &str, name: &str, opt
     egui::Popup::menu(&resp).width(220.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
         for (value, title) in options {
             let (row, item) = ui.allocate_exact_size(vec2(220.0, 28.0), Sense::click());
-            let hover = tween(ui.ctx(), item.id.with("hover"), f32::from(item.hovered()), 0.12, motion::out_cubic);
+            let hover = tween(ui.ctx(), item.id.with("hover"), f32::from(item.hovered()), 0.1, motion::out_cubic);
             let p = ui.painter().clone();
-            p.rect_filled(row, CornerRadius::same(6), mix(Color32::TRANSPARENT, PILL, hover));
+            p.rect_filled(row, CornerRadius::same(6), if item.is_pointer_button_down_on() { widgets::pressed(BUTTON, 1.0) } else { mix(Color32::TRANSPARENT, BUTTON, hover) });
             widgets::focus_ring(ui, &item, row, 6);
             let on = value == current;
             if on {

@@ -18,11 +18,13 @@ fn ghost(ui: &mut Ui, at: Pos2, h: f32, id: Id, icon: Option<Icon>, label: &str,
     let font = regular(T_BODY);
     let w = if label.is_empty() { h } else { text_width(ui, label, font.clone()) + if icon.is_some() { 34.0 } else { 18.0 } };
     let r = Rect::from_min_size(at, vec2(w, h));
-    let resp = ui.interact(r, id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
-    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && resp.hovered()), 0.12, motion::out_cubic);
+    let resp = ui.interact(widgets::hit_rect(r), id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
+    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && resp.hovered()), 0.1, motion::out_cubic);
     let p = ui.painter();
-    if hover > 0.01 {
-        p.rect_filled(r, CornerRadius::same(8), ON_GLASS.gamma_multiply(hover));
+    if enabled && resp.is_pointer_button_down_on() {
+        p.rect_filled(r, CornerRadius::same(8), widgets::pressed(BUTTON, 1.0));
+    } else if hover > 0.01 {
+        p.rect_filled(r, CornerRadius::same(8), BUTTON.gamma_multiply(hover));
     }
     let col = if enabled { mix(INK2, INK, hover) } else { INK3 };
     let mut x = r.left() + if label.is_empty() { (w - 16.0) / 2.0 } else { 9.0 };

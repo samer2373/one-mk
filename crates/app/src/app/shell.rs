@@ -65,11 +65,15 @@ fn para_h(ui: &Ui, text: &str, w: f32) -> f32 {
 /// A row that can be clicked: its hover and press state, focus ring and
 /// name for screen readers.
 fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: bool, enabled: bool) -> (egui::Response, f32) {
-    let r = ui.interact(rect, id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
-    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
+    let r = ui.interact(widgets::hit_rect(rect), id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
+    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.1, motion::out_cubic);
+    let down = enabled && r.is_pointer_button_down_on();
     let p = ui.painter();
     if chosen {
-        p.rect(rect, CornerRadius::same(8), SIDE_CHOSEN, Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
+        p.rect(rect, CornerRadius::same(8), if down { widgets::pressed(SIDE_CHOSEN, 1.0) } else { SIDE_CHOSEN }, Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
+    } else if down {
+        // Pressed: a deeper well than the hover, never the chosen look.
+        p.rect_filled(rect, CornerRadius::same(8), widgets::pressed(SIDE_HOVER, 1.0));
     } else if hover > 0.01 {
         p.rect_filled(rect, CornerRadius::same(8), SIDE_HOVER.gamma_multiply(hover));
     }
@@ -139,8 +143,9 @@ impl App {
         // The way to everything: the command palette.
         let sr = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));
         let resp = ui.interact(sr, Id::unique("search"), widgets::sense(ui, Sense::click()));
-        let hover = tween(ui.ctx(), Id::unique("search-hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
-        ui.painter().rect(sr, CornerRadius::same(8), mix(SEARCH_FILL, SIDE_HOVER, hover), Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
+        let hover = tween(ui.ctx(), Id::unique("search-hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
+        let fill = if resp.is_pointer_button_down_on() { widgets::pressed(SIDE_HOVER, 1.0) } else { mix(SEARCH_FILL, SIDE_HOVER, hover) };
+        ui.painter().rect(sr, CornerRadius::same(8), fill, Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
         icons::search(ui.painter(), pos2(sr.left() + 16.0, sr.center().y), INK3);
         ui.painter().text(pos2(sr.left() + 30.0, sr.center().y), Align2::LEFT_CENTER, "Search", regular(T_BODY), INK3);
         let kc = format!("{}K", cmd());
