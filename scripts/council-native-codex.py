@@ -85,7 +85,9 @@ class Desktop:
                         self.x11.XFree(children)
             for window in windows:
                 if self.property(window, "_NET_WM_PID") == [pid]:
-                    return window
+                    mapped = subprocess.run(["xwininfo", "-id", str(window)], capture_output=True, text=True, check=False)
+                    if "Map State: IsViewable" in mapped.stdout:
+                        return window
             time.sleep(0.1)
         raise RuntimeError(f"No owned window for PID {pid}")
 

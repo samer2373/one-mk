@@ -114,6 +114,10 @@ impl App {
             || self.health_checks().is_some_and(|checks| checks.iter().any(|check| matches!(check.verdict, crate::view::Verdict::Fail | crate::view::Verdict::Warn)))
     }
 
+    fn health_tone(&self) -> Color32 {
+        if self.running().is_some_and(|status| status.input_lines().iter().any(|line| line.severity == one_mk_ctl::status::Severity::Problem)) || self.health_checks().is_some_and(|checks| checks.iter().any(|check| check.verdict == crate::view::Verdict::Fail)) { ERROR } else { WARN }
+    }
+
     /// The top-bar action, done.
     pub(super) fn do_action(&mut self, job: Option<Job>, now: f64) {
         match job {
@@ -389,7 +393,7 @@ impl App {
         let (dot, text) = match self.status.as_ref() {
             None => (INK3, "Looking for oneMK…".to_owned()),
             Some(None) => (INK3, "Sharing is off".to_owned()),
-            Some(Some(_)) if trouble => (WARN, "On · check Health".to_owned()),
+            Some(Some(_)) if trouble => (self.health_tone(), "On · check Health".to_owned()),
             // Only "all good" when a computer is actually connected.
             Some(Some(s)) if s.peers.is_empty() => (INK3, "On · not paired".to_owned()),
             Some(Some(s)) if !s.peers.iter().any(|p| p.online) => (INK3, "On · none connected".to_owned()),
@@ -442,7 +446,7 @@ impl App {
             let col = if !enabled { mix(INK3, GLASS_SOLID, 0.45) } else if on { INK } else { mix(INK3, INK, hover) };
             icons::draw(ui.painter(), icon, Rect::from_center_size(r.center(), vec2(18.0, 18.0)), col);
             if tab == Tab::Health && trouble {
-                ui.painter().circle_filled(r.right_top() + vec2(-8.0, 8.0), 3.0, ERROR);
+                ui.painter().circle_filled(r.right_top() + vec2(-8.0, 8.0), 3.0, self.health_tone());
             }
             if resp.on_hover_text(name).clicked() {
                 self.set_tab(tab);

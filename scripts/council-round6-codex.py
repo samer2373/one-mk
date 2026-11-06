@@ -43,7 +43,7 @@ def dump(pid):
     for node in nodes(application(pid)):
         row = {"name": node.get_name(), "role": node.get_role_name(), "interfaces": list(node.get_interfaces()), "states": [state.value_nick for state in node.get_state_set().get_states()]}
         if "Text" in row["interfaces"]:
-            row["text"] = node.get_text_iface().get_text(0, -1)
+            row["text"] = Atspi.Text.get_text(node.get_text_iface(), 0, -1)
         rows.append(row)
     return rows
 
@@ -102,6 +102,7 @@ with tempfile.TemporaryDirectory(prefix="codex-r6-native-") as directory:
             if not difference:
                 raise AssertionError(f"No visible held press: {family}")
             report["families"][family] = {"target": name, "bounds": [bounds.x, bounds.y, bounds.width, bounds.height], "hover_vs_pressed_difference": difference}
+            (args.output / "atspi-and-states.json").write_text(json.dumps(report, indent=2) + "\n")
         finally:
             press(False)
             native.cleanup(process, home)
@@ -131,6 +132,7 @@ with tempfile.TemporaryDirectory(prefix="codex-r6-native-") as directory:
                 assert "the desktop allowed it" not in names
             move(2, 2)
             desktop.capture(window, args.output / f"atspi-{page}.png")
+            (args.output / "atspi-and-states.json").write_text(json.dumps(report, indent=2) + "\n")
         finally:
             native.cleanup(process, home)
     process = subprocess.Popen([str(args.binary.resolve()), "--home", str(home)], env=dict(environment, ONE_MK_APP_SIZE="760x540"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

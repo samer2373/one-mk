@@ -219,15 +219,22 @@ impl App {
         let mut list = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), save_y - 6.0));
         // Whole rows only: the list ends on a row's edge (and scrolls for
         // the rest), never through the middle of one.
-        if network.explanation().is_none() {
-            // The open profile (first) is taller: its row, then whole rows.
-            let first = match &self.profile_open {
-                Some(n) => 30.0 + 36.0 + if self.prefs.auto.contains_key(n) { 22.0 } else { 0.0 },
-                None => 30.0,
-            };
-            let rows = ((list.height() - 24.0 - first) / 30.0).floor().max(0.0);
-            list.max.y = list.top() + 24.0 + first + rows * 30.0;
+        let network_label = if !network.ssids.is_empty() { format!("Current network: {}", network.ssids.join(", ")) } else if network.permission == one_mk_ctl::wifi::Permission::Allowed && !network.unavailable { "Not connected to Wi-Fi".to_owned() } else { "Current network: unavailable".to_owned() };
+        let measure_width = c.width() - 24.0;
+        let measured = |text: &str| ui.painter().layout(text.to_owned(), regular(T_META), INK2, measure_width).size().y;
+        let mut used = measured(&network_label) + 8.0;
+        if let Some(explanation) = network.explanation() {
+            used += measured(explanation) + 6.0 + if network.permission_button().is_some() { 34.0 } else { 0.0 };
         }
+        let mut ordered = names.clone();
+        if let Some(open) = &self.profile_open { ordered.sort_by_key(|name| name != open); }
+        for name in &ordered {
+            let auto = self.prefs.auto.get(name).map_or(0.0, |text| measured(&format!("Comes on by itself on {text}")) + 8.0);
+            let height = 30.0 + auto + if self.profile_open.as_ref() == Some(name) { 36.0 } else { 0.0 };
+            if used + height > list.height() { break; }
+            used += height;
+        }
+        if !names.is_empty() { list.max.y = list.top() + used.min(list.height()); }
         let mut child = ui.new_child(UiBuilder::new().max_rect(list.expand2(vec2(4.0, 0.0))));
         child.set_clip_rect(list.expand2(vec2(6.0, 0.0)));
         let mut act: Option<(&'static str, String)> = None;
