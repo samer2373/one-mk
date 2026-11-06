@@ -272,7 +272,7 @@ impl App {
             let (headline, tone) = if running && checks.is_none() {
                 ("Checking this computer…".to_owned(), INK2)
             } else if needs.is_empty() && checks.is_some() {
-                ("Everything is working".to_owned(), OK)
+                ("Checks pass".to_owned(), OK)
             } else if needs.is_empty() {
                 ("Not checked yet".to_owned(), INK2)
             } else {
@@ -298,7 +298,8 @@ impl App {
                 Some((Ok(_), at)) => {
                     let ago = (now - at).max(0.0);
                     let when = if ago < 60.0 { "just now".to_owned() } else if ago < 3600.0 { format!("{} min ago", (ago / 60.0) as u32) } else { format!("{} h ago", (ago / 3600.0) as u32) };
-                    format!("{} checks pass · checked {when}", works.iter().filter(|i| i.k != usize::MAX).count())
+                    let passed = works.iter().filter(|item| item.k != usize::MAX).count();
+                    format!("{passed} {} · checked {when}", if passed == 1 { "check passes" } else { "checks pass" })
                 }
                 None => String::new(),
             };
