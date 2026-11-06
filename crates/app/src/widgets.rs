@@ -56,6 +56,19 @@ pub mod targets {
         }
     }
 
+    static NAMES: Mutex<Option<std::collections::HashMap<egui::Id, String>>> = Mutex::new(None);
+
+    /// The name a control (by id) was given; survives scrolling.
+    pub fn note_id(id: egui::Id, label: &str) {
+        if std::env::var_os("ONE_MK_APP_TARGETS").is_some() {
+            NAMES.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(id, label.to_owned());
+        }
+    }
+
+    pub fn name_of(id: egui::Id) -> Option<String> {
+        NAMES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|m| m.get(&id).cloned())
+    }
+
     /// The name noted last frame for the control at `r`, if any.
     pub fn name_at(r: egui::Rect) -> Option<String> {
         let now = LAST.lock().unwrap_or_else(|e| e.into_inner());
@@ -78,6 +91,8 @@ pub mod targets {
 pub fn a11y(r: &Response, role: Role, label: &str, selected: Option<bool>) {
     #[cfg(any(debug_assertions, feature = "design-evidence"))]
     targets::note(label, r.rect);
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
+    targets::note_id(r.id, label);
     // Tabbed onto, a control is brought into view (a list that scrolls).
     if r.gained_focus() && keyboard_focus(&r.ctx) {
         r.scroll_to_me(None);
@@ -374,6 +389,8 @@ pub fn switch_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, on: b
     }
     #[cfg(any(debug_assertions, feature = "design-evidence"))]
     targets::note(label, r.rect);
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
+    targets::note_id(r.id, label);
     let (label, enabled) = (label.to_owned(), r.enabled());
     let cut = shown != label;
     r.widget_info({
@@ -467,6 +484,8 @@ impl Pills<'_> {
             }
             #[cfg(any(debug_assertions, feature = "design-evidence"))]
             targets::note(&self.names[k], r.rect);
+            #[cfg(any(debug_assertions, feature = "design-evidence"))]
+            targets::note_id(r.id, &self.names[k]);
             let (name, enabled) = (self.names[k].clone(), r.enabled());
             let role = self.role;
             r.widget_info(move || WidgetInfo::selected(role, enabled, on, &name));
@@ -507,6 +526,8 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
     }
     #[cfg(any(debug_assertions, feature = "design-evidence"))]
     targets::note(label, r.rect);
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
+    targets::note_id(r.id, label);
     if r.gained_focus() && keyboard_focus(ui.ctx()) {
         r.scroll_to_me(None);
     }

@@ -536,6 +536,16 @@ impl App {
         if self.tab == Tab::Desk && several && !self.prefs_hint_dismissed() && !self.sheet_open() {
             let text = "Drag a computer to where it sits on your desk";
             let w = text_width(ui, text, regular(T_BODY)) + 48.0;
+            // Shown once: for 12 seconds the first time, then never again.
+            let key = Id::unique("drag-hint-since");
+            let since = ui.ctx().data_mut(|d| *d.get_temp_mut_or_insert_with(key, || self.now));
+            let shown_for = self.now - since;
+            if shown_for > 12.0 {
+                let _ = std::fs::write(self.link.dir.join(".window-hinted"), b"");
+                self.dragged_once = true;
+                return;
+            }
+            ui.ctx().request_repaint_after_secs((12.05 - shown_for) as f32);
             if desk.width() > 860.0 {
                 let r = Rect::from_min_size(pos2(desk.right() - w, desk.bottom() - 36.0), vec2(w, 36.0));
                 widgets::glass_panel(ui, "drag-hint", r, 12);

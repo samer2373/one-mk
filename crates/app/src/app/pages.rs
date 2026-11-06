@@ -485,7 +485,8 @@ impl App {
         let s = self.running();
         let peers = s.map_or(0, |status| status.peers.len());
         let heights = [
-            48.0 + 5.0 * EDGE_ROW + 14.0,
+            // The fifth row (Use shared rules) only for one edge's rules.
+            48.0 + 34.0 + 4.0 * EDGE_ROW + if ui.ctx().data(|d| d.get_temp::<String>(Id::unique("edge-scope"))).unwrap_or_default().is_empty() { 0.0 } else { 36.0 } + 2.0,
             48.0 + 3.0 * HELP_ROW - 6.0 + 14.0,
             48.0 + HELP_ROW - 6.0 + 14.0,
             48.0 + 62.0 + super::settings_controls::SHORTCUT_ROW * self.prefs.hotkeys.len() as f32 + 10.0 + if s.is_some_and(|status| status.hotkeys != "on" && crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },

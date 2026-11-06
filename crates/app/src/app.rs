@@ -452,7 +452,8 @@ impl App {
         widgets::set_glass(&cc.egui_ctx, glass.clone());
         Ok(Self {
             glass,
-            dragged_once: link.dir.join(".window-dragged").exists(),
+            // Dragged once, or the hint already shown in full once: no hint.
+            dragged_once: link.dir.join(".window-dragged").exists() || link.dir.join(".window-hinted").exists(),
             backdrop_was: 0,
             scene_moving: false,
             status_seen: 0,
@@ -1271,7 +1272,8 @@ impl App {
             let r = ui.interact(b, Id::unique(("device", &id)), widgets::sense(ui, Sense::focusable_noninteractive()));
             let chosen = sel.as_deref() == Some(id.as_str());
             let place = if i == 0 { "this computer".to_owned() } else { self.side_of(&id).map_or(String::new(), |s| on_your(s).to_owned()) };
-            let label = format!("{}, {}, {place}", d.name, d.subtitle);
+            // Said once: "samer-Victus, this computer", "MacBook Air, macOS, on your left".
+            let label = if i == 0 { format!("{}, this computer", d.name) } else { format!("{}, {}, {place}", d.name, d.subtitle) };
             #[cfg(any(debug_assertions, feature = "design-evidence"))]
             widgets::targets::note(&label, r.rect);
             r.widget_info(move || egui::WidgetInfo::selected(Role::Button, true, chosen, &label));
@@ -2773,7 +2775,7 @@ mod debug {
         // What the last press reached (focus settles over the frames between).
         if done > 0 {
             let focused = ctx.memory(|m| m.focused()).and_then(|f| ctx.read_response(f));
-            let name = focused.as_ref().and_then(|r| widgets::targets::name_at(r.rect)).unwrap_or_else(|| format!("(nothing named at {:?})", focused.map(|r| r.rect)));
+            let name = ctx.memory(|m| m.focused()).and_then(widgets::targets::name_of).or_else(|| focused.as_ref().and_then(|r| widgets::targets::name_at(r.rect))).unwrap_or_else(|| format!("(nothing named at {:?})", focused.map(|r| r.rect)));
             eprintln!("tab {done}: {name}");
         }
         if done == n {
