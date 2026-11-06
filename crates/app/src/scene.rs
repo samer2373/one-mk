@@ -1222,6 +1222,11 @@ impl Scene {
             }
         }
         self.faces = faces;
+        // Keyboard focus: one tight ring round the whole computer, screen,
+        // stand and base, 4 points out, never round a neighbour.
+        if let Some(b) = self.focused.and_then(|i| self.bounds(i)) {
+            painter.rect_stroke(b.expand(4.0), egui::CornerRadius::same(10), Stroke::new(2.0, SIGNAL), egui::StrokeKind::Outside);
+        }
         self.ribbon(painter, &cam, &geo);
         if self.empty_slot {
             self.slot(painter, &cam);
@@ -1229,9 +1234,8 @@ impl Scene {
     }
 
     /// The line round a screen: where files can go (Volt), which one is
-    /// selected or hovered (white), where the keyboard is (the focus ring).
+    /// selected or hovered (white). Keyboard focus is drawn round the whole computer in `paint`.
     fn screen_outline(&self, painter: &Painter, f: &Face, d: &Device, preview: f32) {
-        let i = f.owner;
         let target = d.online && !d.me && !d.leaving && d.w < 0.01;
         if self.drop_targets && target {
             painter.add(Shape::closed_line(grown(&f.pts, 2.5), Stroke::new(1.5, fade(SIGNAL, 0.9 * d.a))));
@@ -1248,9 +1252,6 @@ impl Scene {
             painter.add(Shape::closed_line(grown(&f.pts, lerp(6.0, 2.5, sel)), st));
         } else if hover > 0.01 {
             painter.add(Shape::closed_line(grown(&f.pts, 2.5), Stroke::new(1.0, Color32::from_white_alpha((60.0 * hover) as u8))));
-        }
-        if self.focused == Some(i) {
-            painter.add(Shape::closed_line(grown(&f.pts, 6.0), Stroke::new(2.0, SIGNAL)));
         }
     }
 

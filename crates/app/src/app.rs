@@ -2342,6 +2342,15 @@ impl eframe::App for App {
             let files_narrow = self.tab == Tab::Files && scene.width() < 780.0;
             compact = (frame.height() < need || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout | Tab::Files);
         }
+        // The sidebar and the toolbar are made before the desk, so Tab meets
+        // them first (search, pages, the toolbar left to right, then the
+        // computers, then the card); they are painted on a layer above it.
+        {
+            let over = egui::LayerId::new(egui::Order::Middle, Id::unique("chrome-layer"));
+            let mut top = ui.new_child(UiBuilder::new().layer_id(over).max_rect(full).id_salt("chrome"));
+            self.sidebar(&mut top, &f, now);
+            self.desk_actions(&mut top, head.translate(vec2(0.0, shell::HEAD_H)));
+        }
         if self.tab.desk() {
             if compact {
                 self.desk_chips(ui, frame);
@@ -2355,7 +2364,6 @@ impl eframe::App for App {
             self.backdrop_was = sig;
             self.glass.changed();
         }
-        self.sidebar(ui, &f, now);
         if self.tab.desk() {
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
             self.desk_overlay(ui, scene, hovering);
@@ -2382,8 +2390,6 @@ impl eframe::App for App {
         }
         let (title, sub) = self.page_title();
         self.page_head(ui, head, &title, &sub);
-        // Below the title band (the window is moved from the band).
-        self.desk_actions(ui, head.translate(vec2(0.0, shell::HEAD_H)));
         if with_cards {
             self.panel(ui, cards, now);
         }

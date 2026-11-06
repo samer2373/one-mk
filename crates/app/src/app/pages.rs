@@ -495,6 +495,8 @@ impl App {
         scroll.show(&mut child, |ui| {
             let (all, _) = ui.allocate_exact_size(vec2(area.width(), total + 44.0), Sense::hover());
             let r = |k: usize| Rect::from_min_size(pos2(all.left() + at[k].0 as f32 * (col_w + gap), all.top() + at[k].1), vec2(col_w, heights[k]));
+            // Updates first: first on the page, first in Tab order.
+            self.updates_card(ui, r(8));
             self.edges_card(ui, r(0));
             self.power_card(ui, r(1));
             let c = card(ui, r(2), "Games");
@@ -507,7 +509,6 @@ impl App {
             self.typing_card(ui, r(6));
             let c = card(ui, r(7), "Pointer and layout");
             self.extra_controls(ui, c);
-            self.updates_card(ui, r(8));
             // Credits for what the window draws and isn't ours: last on the
             // page, and last in Tab order.
             let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for oneMK.";

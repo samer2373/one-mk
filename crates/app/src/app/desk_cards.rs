@@ -356,29 +356,58 @@ impl App {
         if self.tab != Tab::Desk || self.running().is_none_or(|s| s.peers.is_empty()) {
             return;
         }
-        let mut x = head.right();
+        // Laid out from the right edge, then made left to right, so Tab
+        // reaches them in reading order: broadcast, Timer, Lock.
         let y = head.center().y - 17.0;
         let narrow = head.width() < 780.0;
-        let label = if narrow { "Lock all" } else { "Lock every screen" };
-        let w = text_width(ui, label, semibold(T_BODY)) + 46.0;
-        x -= w;
-        let busy = self.busy.contains(&Job::LockAll);
-        let r = Rect::from_min_size(pos2(x, y), vec2(w, 34.0));
-        if button(ui, r, Id::unique("lock-all"), "", Look::Glass, !busy, Some("Lock this computer and every connected one")).clicked() {
-            self.busy.push(Job::LockAll);
-            self.link.lock_all();
-        }
-        icons::draw(ui.painter(), Icon::Lock, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
-        ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, label, semibold(T_BODY), INK);
         let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
         let on = self.broadcasting();
-        if online || on {
-            // When typing on every computer stops by itself: a clock, beside
-            // the switch it belongs to.
-            // An icon and a word: what it is, at a glance.
+        let lock_label = if narrow { "Lock all" } else { "Lock every screen" };
+        let lock_w = text_width(ui, lock_label, semibold(T_BODY)) + 46.0;
+        let lock_r = Rect::from_min_size(pos2(head.right() - lock_w, y), vec2(lock_w, 34.0));
+        let mut x = lock_r.left();
+        let timer_r = (online || on).then(|| {
             let tw = text_width(ui, "Timer", semibold(T_BODY)) + 46.0;
             x -= tw + 8.0;
-            let rect = Rect::from_min_size(pos2(x, y), vec2(tw, 34.0));
+            Rect::from_min_size(pos2(x, y), vec2(tw, 34.0))
+        });
+        let bc_label = "Type on every computer";
+        let bc_r = (online || on).then(|| {
+            let w = if narrow { 34.0 } else { text_width(ui, bc_label, semibold(T_BODY)) + 34.0 + 58.0 };
+            x -= w + 8.0;
+            Rect::from_min_size(pos2(x, y), vec2(w, 34.0))
+        });
+        if let Some(r) = bc_r {
+            let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
+            let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
+            if narrow {
+                // Narrow: the same action as an icon, lit while it is on.
+                let name = if on { format!("Typing on every computer.{key}") } else { "Type on every computer: everything you type, click and scroll here goes to every connected computer at once".to_owned() };
+                let resp = button(ui, r, Id::unique("broadcast"), "", Look::Glass, !busy && !on, Some(&name));
+                if on {
+                    ui.painter().rect_stroke(r, CornerRadius::same(17), Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
+                }
+                icons::draw(ui.painter(), Icon::Broadcast, Rect::from_center_size(r.center(), vec2(16.0, 16.0)), if on { SIGNAL } else { INK2 });
+                if resp.on_hover_text(&name).clicked() {
+                    self.ask_broadcast(!on);
+                }
+            } else {
+                let resp = button(ui, r, Id::unique("broadcast"), "", Look::Glass, !busy && !on, Some("Broadcast: type, click and scroll on every connected computer at once"));
+                icons::draw(ui.painter(), Icon::Broadcast, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
+                ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, bc_label, semibold(T_BODY), INK);
+                // A small switch, drawn as the window's other switches are.
+                let track = Rect::from_min_size(pos2(r.right() - 46.0, r.center().y - 9.0), vec2(32.0, 18.0));
+                let knob_t = tween(ui.ctx(), Id::unique("broadcast-knob"), f32::from(on), motion::space(0.2), motion::out_cubic);
+                ui.painter().rect_filled(track, CornerRadius::same(9), mix(SWITCH_OFF, ACCENT, knob_t));
+                ui.painter().rect_stroke(track, CornerRadius::same(9), Stroke::new(1.0, mix(SWITCH_EDGE, Color32::TRANSPARENT, knob_t)), StrokeKind::Inside);
+                ui.painter().circle_filled(pos2(track.left() + 9.0 + 14.0 * knob_t, track.center().y), 7.0, Color32::WHITE);
+                if resp.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}")).clicked() {
+                    self.ask_broadcast(!on);
+                }
+            }
+        }
+        if let Some(rect) = timer_r {
+            // When typing on every computer stops by itself: an icon and a word.
             let name = "Timer: when typing on every computer stops by itself";
             let response = button(ui, rect, Id::unique("broadcast-options"), "", Look::Glass, !on, Some(name));
             icons::draw(ui.painter(), Icon::Clock, Rect::from_min_size(pos2(rect.left() + 12.0, rect.center().y - 8.0), vec2(16.0, 16.0)), if on { INK3 } else { INK2 });
@@ -390,42 +419,13 @@ impl App {
                 ui.label("Use zero to keep broadcasting until you stop it.");
             });
         }
-        if (online || on) && narrow {
-            // Narrow: the same action as an icon, lit while it is on.
-            x -= 34.0 + 8.0;
-            let r = Rect::from_min_size(pos2(x, y), vec2(34.0, 34.0));
-            let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
-            let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
-            let name = if on { format!("Typing on every computer.{key}") } else { "Type on every computer: everything you type, click and scroll here goes to every connected computer at once".to_owned() };
-            let resp = button(ui, r, Id::unique("broadcast"), "", Look::Glass, !busy && !on, Some(&name));
-            if on {
-                ui.painter().rect_stroke(r, CornerRadius::same(17), Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
-            }
-            icons::draw(ui.painter(), Icon::Broadcast, Rect::from_center_size(r.center(), vec2(16.0, 16.0)), if on { SIGNAL } else { INK2 });
-            if resp.on_hover_text(&name).clicked() {
-                self.ask_broadcast(!on);
-            }
+        let busy = self.busy.contains(&Job::LockAll);
+        if button(ui, lock_r, Id::unique("lock-all"), "", Look::Glass, !busy, Some("Lock this computer and every connected one")).clicked() {
+            self.busy.push(Job::LockAll);
+            self.link.lock_all();
         }
-        if (online || on) && !narrow {
-            let label = "Type on every computer";
-            let w = text_width(ui, label, semibold(T_BODY)) + 34.0 + 58.0;
-            x -= w + 8.0;
-            let r = Rect::from_min_size(pos2(x, y), vec2(w, 34.0));
-            let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
-            let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
-            let resp = button(ui, r, Id::unique("broadcast"), "", Look::Glass, !busy && !on, Some("Broadcast: type, click and scroll on every connected computer at once"));
-            icons::draw(ui.painter(), Icon::Broadcast, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
-            ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, label, semibold(T_BODY), INK);
-            // A small switch, drawn as the window's other switches are.
-            let track = Rect::from_min_size(pos2(r.right() - 46.0, r.center().y - 9.0), vec2(32.0, 18.0));
-            let knob_t = tween(ui.ctx(), Id::unique("broadcast-knob"), f32::from(on), motion::space(0.2), motion::out_cubic);
-            ui.painter().rect_filled(track, CornerRadius::same(9), mix(Color32::from_white_alpha(34), ACCENT, knob_t));
-            ui.painter().rect_stroke(track, CornerRadius::same(9), Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
-            ui.painter().circle_filled(pos2(track.left() + 9.0 + 14.0 * knob_t, track.center().y), 7.0, Color32::WHITE);
-            if resp.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}")).clicked() {
-                self.ask_broadcast(!on);
-            }
-        }
+        icons::draw(ui.painter(), Icon::Lock, Rect::from_min_size(pos2(lock_r.left() + 12.0, lock_r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
+        ui.painter().text(pos2(lock_r.left() + 34.0, lock_r.center().y), Align2::LEFT_CENTER, lock_label, semibold(T_BODY), INK);
     }
 
     /// Over the desk: the transfer that is running, and the hint that
