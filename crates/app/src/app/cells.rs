@@ -185,15 +185,18 @@ impl App {
         // This computer's own switches; what acts on every computer at
         // once sits in the page's title row.
         let p = ui.painter().clone();
-        p.text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, "This computer", semibold(T_TITLE), INK);
-        {
+        // Beside this computer's own card (chosen, or nothing paired yet),
+        // the name is already there: say what these are instead.
+        let beside_me = self.running().is_some_and(|s| s.peers.is_empty()) || self.selected_id().as_deref() == Some("me");
+        p.text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, if beside_me { "Options here" } else { "This computer" }, semibold(T_TITLE), INK);
+        if !beside_me {
             // Off, the name isn't known yet: what it runs, at least, so the
             // card keeps its shape.
             let sub = self.running().map_or_else(|| os_name(me_os()).to_owned(), |s| format!("{} · {}", s.name, os_name(me_os())));
             p.text(pos2(c.left(), c.top() + 32.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), c.width()), regular(T_BODY), INK3);
         }
         let row_h = 40.0;
-        let top = c.top() + 50.0;
+        let top = c.top() + if beside_me { 30.0 } else { 50.0 };
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
         let on = self.autostart.unwrap_or(false);
         let busy = self.busy.iter().any(|j| matches!(j, Job::Autostart(_)));

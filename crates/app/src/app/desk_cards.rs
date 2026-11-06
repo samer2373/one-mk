@@ -324,6 +324,20 @@ impl App {
     /// No other computer chosen: this one, and the way back to it.
     fn me_card(&mut self, ui: &mut Ui, c: Rect, status: &Status) {
         let p = ui.painter().clone();
+        // Nothing paired: this card is the first step, with the one action.
+        if status.peers.is_empty() {
+            let th = para(ui, c.left_top(), c.width(), "Pair your first computer", semibold(T_TITLE), INK);
+            let text = "Open oneMK on the other computer too, then choose Pair a computer here. Both need to be on the same network; a six-digit code on both screens confirms it.";
+            let sh = para(ui, c.left_top() + vec2(0.0, th + 6.0), c.width().min(520.0), text, regular(T_BODY), INK2);
+            let bw = button_width(ui, "Pair a computer") + 8.0;
+            let b = Rect::from_min_size(pos2(c.left(), c.top() + th + 6.0 + sh + 16.0), vec2(bw, 36.0));
+            if button(ui, b, Id::unique("pair-in-card"), "Pair a computer", Look::Primary, !self.sheet_open(), None).clicked() {
+                let now = self.now;
+                self.start_pairing(now);
+            }
+            a11y_text(ui, Id::unique("first-step"), Rect::from_min_size(c.min, vec2(c.width(), th + sh + 6.0)), Role::Status, &format!("Pair your first computer. {text}"), None);
+            return;
+        }
         let cy = c.top() + 12.0;
         icons::pointer(&p, pos2(c.left(), cy - 7.0), 14.0, SIGNAL);
         let nw = text_width(ui, &status.name, semibold(T_TITLE));

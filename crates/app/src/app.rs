@@ -1548,7 +1548,8 @@ impl App {
         // On the desk, Start and Take back are offered where the eye is (in
         // the card, in the banner) in Volt: here they step back to quiet,
         // so one Volt action shows at a time.
-        let look = if look == Look::Primary && self.tab == Tab::Desk && matches!(job, Some(Job::Start | Job::TakeBack)) { Look::Quiet } else { look };
+        let first_pair = job.is_none() && self.running().is_some_and(|s| s.peers.is_empty());
+        let look = if look == Look::Primary && self.tab == Tab::Desk && (matches!(job, Some(Job::Start | Job::TakeBack)) || first_pair) { Look::Quiet } else { look };
         (label.to_owned(), look, enabled, job)
     }
 
