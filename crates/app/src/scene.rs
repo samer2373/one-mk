@@ -133,6 +133,9 @@ impl Camera {
     }
 }
 
+/// How far every part of the desk keeps from the sides of its area.
+const MARGIN: f32 = 12.0;
+
 // ---------- devices ----------
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1103,7 +1106,7 @@ impl Scene {
         self.camera(rect).pt(self.devices[i].geometry().screen.at(0.5, 0.5))
     }
 
-    fn camera(&self, rect: Rect) -> Camera {
+    pub(crate) fn camera(&self, rect: Rect) -> Camera {
         let rect = self.fit.unwrap_or(rect);
         let k = self.intro_t0.map_or(0.0, |t0| motion::progress(self.now, t0, motion::space(0.6), motion::out_expo));
         let raise = self.raise.value(self.now);
@@ -1113,20 +1116,33 @@ impl Scene {
         {
             let sheet_top = self.sheet_top.filter(|_| raise > 0.0).unwrap_or(rect.bottom());
             let (lo, hi) = (rect.top() + self.top_clear + 8.0, sheet_top - 30.0);
-            let ys: Vec<f32> = self
+            // Every corner of every part (screens, stands, bases, the pairing
+            // slot) as seen: the desk is fitted to all of them, 12 points
+            // clear of the sides and of what floats above and below.
+            let slot = self.empty_slot.then(|| self.slot_device());
+            let bounds = self
                 .devices
                 .iter()
                 .filter(|d| !d.leaving)
+                .chain(slot.iter())
                 .flat_map(|d| d.geometry().boxes)
-                .flat_map(|b| [(b.a.0, b.b.0, b.c.0), (b.a.1, b.b.1, b.c.1), (b.a.0, b.b.1, b.c.0), (b.a.1, b.b.0, b.c.1)].map(|(a, bb, c)| cam.pt(b.fr.at(a, bb, c)).y))
-                .collect();
-            let (top, bottom) = ys.iter().fold((f32::MAX, f32::MIN), |(t, b), y| (t.min(*y), b.max(*y)));
-            if top < bottom && hi > lo {
-                let s = ((hi - lo) / (bottom - top)).min(1.0);
-                let (c, mid) = (cam.centre.y, (top + bottom) / 2.0);
+                .flat_map(|b| [b.a.0, b.a.1].into_iter().flat_map(move |x| [b.b.0, b.b.1].into_iter().flat_map(move |y| [b.c.0, b.c.1].map(|z| b.fr.at(x, y, z)))))
+                .map(|p| cam.pt(p))
+                .fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_max(p, p)));
+            let (left, right) = (rect.left() + MARGIN, rect.right() - MARGIN);
+            if bounds.is_positive() && hi > lo {
+                let s = ((hi - lo) / bounds.height()).min((right - left) / bounds.width()).min(1.0);
+                let (c, mid) = (cam.centre.y, bounds.center().y);
                 // After scaling about the centre, the middle sits at c + s*(mid - c).
                 let dy = (lo + hi) / 2.0 - (c + s * (mid - c));
                 cam.adjust(s, dy);
+                // Sideways: moved only as far as keeps every part inside.
+                let (l, r) = (cam.centre.x + s * (bounds.left() - cam.centre.x), cam.centre.x + s * (bounds.right() - cam.centre.x));
+                if l < left {
+                    cam.centre.x += left - l;
+                } else if r > right {
+                    cam.centre.x -= r - right;
+                }
             }
         }
         cam
@@ -1150,7 +1166,17 @@ impl Scene {
                 panel += usize::from(b.screen.is_some());
             }
         }
-        faces.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+        // Far computers first, and each computer's own faces far to near.
+        // Sorting all faces together let a thin side face of one monitor
+        // cut through the screen of one in front of it (a seam of dashes,
+        // seen while dragging one past another).
+        let mut owner_depth = vec![(0.0f32, 0u32); self.devices.len()];
+        for f in &faces {
+            owner_depth[f.owner].0 += f.depth;
+            owner_depth[f.owner].1 += 1;
+        }
+        let od = |i: usize| owner_depth[i].0 / owner_depth[i].1.max(1) as f32;
+        faces.sort_by(|a, b| od(b.owner).total_cmp(&od(a.owner)).then(b.depth.total_cmp(&a.depth)));
         let preview = self.drop_preview.value(now);
         for f in &faces {
             let d = &self.devices[f.owner];
@@ -1746,6 +1772,33 @@ mod tests {
                         for vertical in [bounds.b.0, bounds.b.1] {
                             let point = camera.pt(bounds.fr.at(horizontal, vertical, bounds.c.0));
                             assert!(point.y >= scene.top_clear && point.y <= height, "{height}: {point:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every corner of every monitor, stand and base stays inside the desk's
+    /// area, 12 points clear, however far apart the computers are and
+    /// however narrow the window.
+    #[test]
+    fn every_part_fits_inside_the_desk_area() {
+        for (spread, width) in [(0.0, 980.0), (-250.0, 620.0), (-420.0, 420.0), (300.0, 520.0)] {
+            let mut scene = two();
+            scene.devices[1].pos = v(spread, 0.0, 0.0);
+            scene.devices[1].target = scene.devices[1].pos;
+            settle(&mut scene, 0.0);
+            let area = Rect::from_min_size(pos2(232.0, 0.0), egui::vec2(width, 340.0));
+            let camera = scene.camera(area);
+            for device in &scene.devices {
+                for b in device.geometry().boxes {
+                    for x in [b.a.0, b.a.1] {
+                        for y in [b.b.0, b.b.1] {
+                            for z in [b.c.0, b.c.1] {
+                                let p = camera.pt(b.fr.at(x, y, z));
+                                assert!(area.shrink(MARGIN - 0.5).contains(p), "spread {spread}, width {width}: {p:?}");
+                            }
                         }
                     }
                 }
