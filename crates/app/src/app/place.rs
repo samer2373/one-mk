@@ -192,24 +192,29 @@ impl App {
             None => 0.0,
         };
         title_row(ui, c, "Profiles", room);
-        let save_y = c.bottom() - 28.0;
-        // Saving the layout as it is now, under a name.
-        let bw = button_width(ui, "Save") - 4.0;
-        let fr = Rect::from_min_size(pos2(c.left(), save_y), vec2(c.width() - bw - 8.0, 28.0));
-        let name = self.drafts.get("profile-new").cloned().unwrap_or_default();
-        let mut text = name.clone();
-        let fid = Id::unique(("field", "profile-new"));
-        let r = widgets::field(ui, fr, fid, &mut text, "Name this layout", "Name for a new profile of this layout", true, false);
-        self.drafts.insert("profile-new".into(), text.clone());
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-        let b = Rect::from_min_size(pos2(c.right() - bw, save_y), vec2(bw, 28.0));
-        // Nothing paired: there is no layout to save yet.
-        let can = !text.trim().is_empty() && !status.peers.is_empty();
-        if (button(ui, b, Id::unique("profile-save"), "Save", Look::Quiet, can, Some("Save this layout as a profile")).clicked() || enter) && can {
-            let n = text.trim().to_owned();
-            self.drafts.remove("profile-new");
-            self.busy.push(Job::Profile { verb: "save", name: n.clone() });
-            self.link.profile("save", &n);
+        // With a profile's options open, the card is about that profile:
+        // saving a new one steps aside, so its options are never cut.
+        let saving = self.profile_open.is_none();
+        let save_y = if saving { c.bottom() - 28.0 } else { c.bottom() + 6.0 };
+        if saving {
+            // Saving the layout as it is now, under a name.
+            let bw = button_width(ui, "Save") - 4.0;
+            let fr = Rect::from_min_size(pos2(c.left(), save_y), vec2(c.width() - bw - 8.0, 28.0));
+            let name = self.drafts.get("profile-new").cloned().unwrap_or_default();
+            let mut text = name.clone();
+            let fid = Id::unique(("field", "profile-new"));
+            let r = widgets::field(ui, fr, fid, &mut text, "Name this layout", "Name for a new profile of this layout", true, false);
+            self.drafts.insert("profile-new".into(), text.clone());
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            let b = Rect::from_min_size(pos2(c.right() - bw, save_y), vec2(bw, 28.0));
+            // Nothing paired: there is no layout to save yet.
+            let can = !text.trim().is_empty() && !status.peers.is_empty();
+            if (button(ui, b, Id::unique("profile-save"), "Save", Look::Quiet, can, Some("Save this layout as a profile")).clicked() || enter) && can {
+                let n = text.trim().to_owned();
+                self.drafts.remove("profile-new");
+                self.busy.push(Job::Profile { verb: "save", name: n.clone() });
+                self.link.profile("save", &n);
+            }
         }
         let mut list = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), save_y - 6.0));
         // Whole rows only: the list ends on a row's edge (and scrolls for
@@ -258,6 +263,11 @@ impl App {
                     "Save where every computer is now, to switch back in one click."
                 };
                 para(ui, ui.cursor().min + vec2(4.0, 2.0), ui.available_width() - 8.0, text, regular(T_META), INK2);
+            }
+            // The open profile first, so its options sit in view.
+            let mut names = names.clone();
+            if let Some(o) = &open {
+                names.sort_by_key(|n| n != o);
             }
             for n in &names {
                 let expanded = open.as_ref() == Some(n);
