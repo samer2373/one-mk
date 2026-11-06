@@ -37,6 +37,7 @@ enum Fix {
     OpenPermissionSettings,
     OpenFirewallSettings,
     Update,
+    Recheck,
 }
 
 fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
@@ -76,6 +77,12 @@ fn pending_kind(line: &str) -> Option<bool> {
     }
 }
 
+/// Whether a row's written fix shows: always, unless the window's own
+/// button does that very thing (Start, Pair, Allow...).
+fn shows_fix_text(here: &Option<(&'static str, Fix)>) -> bool {
+    matches!(here, None | Some((_, Fix::Recheck | Fix::OpenPermissionGuide)))
+}
+
 /// One line of Health: a check, or something the daemon says right now
 /// (no title then). `k` is the check's place, for its buttons.
 struct Item {
@@ -98,7 +105,7 @@ fn text_height(ui: &Ui, text: &str, width: f32) -> f32 {
 fn item_height(ui: &Ui, i: &Item, width: f32) -> f32 {
     let title = if i.title.is_empty() { 0.0 } else { 24.0 };
     let fix = match (&i.here, &i.fix) {
-        (None, Some(f)) => text_height(ui, f, width) + 6.0,
+        (here, Some(f)) if shows_fix_text(here) => text_height(ui, f, width) + 6.0,
         _ => 0.0,
     };
     (12.0 + title + text_height(ui, &i.detail, width) + fix + 14.0).max(if i.here.is_some() || i.fix.is_some() { 56.0 } else { 44.0 })
@@ -177,10 +184,19 @@ impl App {
         let mut needs: Vec<Item> = live.iter().filter(|(c, _)| *c == ERROR).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Fail, here: None, k: usize::MAX }).collect();
         // A line that waits on the person (a permission dialog to answer)
         // or on oneMK (still setting up) is pending: never a tick.
-        let ask = if cfg!(target_os = "macos") { Some(("Allow sharing", Fix::OpenPermissionGuide)) } else { None };
+        // On a Mac the guide walks through the permission; elsewhere the
+        // dialog is the desktop's own, so the action is to check again.
+        let ask = if cfg!(target_os = "macos") { Some(("Open guide", Fix::OpenPermissionGuide)) } else { Some(("Recheck", Fix::Recheck)) };
         let mut works: Vec<Item> = vec![];
+        // The daemon's shortcut line says what the "Keyboard shortcuts"
+        // check says: one row, not two.
+        let has_hotkeys_check = checks.as_ref().is_some_and(|c| c.iter().any(|c| c.id == "hotkeys"));
+        let hotkeys_line = self.running().and_then(|s| s.hotkeys_line());
         for (c, l) in live.iter().filter(|(c, _)| *c != ERROR) {
             let _ = c;
+            if has_hotkeys_check && hotkeys_line.as_deref() == Some(l.as_str()) {
+                continue;
+            }
             match pending_kind(l) {
                 Some(asks) => needs.push(Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Skip, here: if asks { ask } else { None }, k: usize::MAX }),
                 None => works.push(Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Pass, here: None, k: usize::MAX }),
@@ -188,7 +204,15 @@ impl App {
         }
         if let Some(checks) = &checks {
             for (k, c) in checks.iter().enumerate() {
-                let item = Item { title: c.title.clone(), detail: c.detail.clone(), fix: c.fix.clone(), verdict: c.verdict, here: self.window_fix(c), k };
+                // Every row that isn't a pass carries an action: the
+                // window's own fix, a command to copy, or Recheck.
+                let here = self.window_fix(c).or_else(|| match (&c.fix, c.verdict) {
+                    (_, Verdict::Pass) => None,
+                    (Some(f), _) if view::fix_command(f).1 => None,
+                    _ if matches!(c.id.as_str(), "input" | "permissions" | "accessibility") && cfg!(target_os = "macos") => Some(("Open guide", Fix::OpenPermissionGuide)),
+                    _ => Some(("Recheck", Fix::Recheck)),
+                });
+                let item = Item { title: c.title.clone(), detail: c.detail.clone(), fix: c.fix.clone(), verdict: c.verdict, here, k };
                 if c.verdict == Verdict::Pass { works.push(item) } else { needs.push(item) }
             }
         }
@@ -226,12 +250,19 @@ impl App {
                 ("Everything is working".to_owned(), OK)
             } else if needs.is_empty() {
                 ("Not checked yet".to_owned(), INK2)
-            } else if steps_only {
-                (if needs.len() == 1 { "One step left".to_owned() } else { format!("{} steps left", needs.len()) }, INK)
-            } else if needs.len() == 1 {
-                ("One thing needs you".to_owned(), if fails > 0 { ERROR } else { INK })
             } else {
-                (format!("{} things need you", needs.len()), if fails > 0 { ERROR } else { INK })
+                // The count names the groups below it: problems under Needs
+                // you, the rest under Pending.
+                let pending = needs.iter().filter(|i| i.verdict == Verdict::Skip).count();
+                let problems = needs.len() - pending;
+                let p_words = if pending == 1 { "1 pending".to_owned() } else { format!("{pending} pending") };
+                match (problems, steps_only) {
+                    (_, true) => (if pending == 1 { "1 thing pending".to_owned() } else { format!("{pending} things pending") }, INK),
+                    (1, _) if pending == 0 => ("1 thing needs you".to_owned(), if fails > 0 { ERROR } else { INK }),
+                    (n, _) if pending == 0 => (format!("{n} things need you"), if fails > 0 { ERROR } else { INK }),
+                    (1, _) => (format!("1 thing needs you · {p_words}"), if fails > 0 { ERROR } else { INK }),
+                    (n, _) => (format!("{n} things need you · {p_words}"), if fails > 0 { ERROR } else { INK }),
+                }
             };
             let sub = match &self.doctor {
                 Some((Err(e), _)) => format!("The checks didn't run: {e}"),
@@ -304,10 +335,7 @@ impl App {
                         ty += 24.0;
                     }
                     ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, regular(T_BODY), if i.title.is_empty() { INK } else { INK2 });
-                    let fix_text = match &i.here {
-                        Some(_) => None,
-                        None => i.fix.clone(),
-                    };
+                    let fix_text = i.fix.clone().filter(|_| shows_fix_text(&i.here));
                     if let Some(f) = &fix_text {
                         widgets::para_code(ui, pos2(tx, ty + 6.0), text_w, f, regular(T_BODY), INK);
                     }
@@ -392,6 +420,7 @@ impl App {
                 self.link.start();
             }
             Some(Fix::Pair) => self.start_pairing(now),
+            Some(Fix::Recheck) => self.recheck(),
             Some(Fix::OpenPermissionGuide) => {
                 let lines = self.running().map(|status| status.input.clone()).unwrap_or_default();
                 self.guide.start(&crate::guide::Permission::ALL, Box::new(crate::guide::StatusPermissions { lines }), now);

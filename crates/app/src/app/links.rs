@@ -37,7 +37,9 @@ fn sparkline(p: &Painter, r: Rect, ring: &Ring, now: f64, q: Option<Quality>) {
         }
     }
     if let Some([x, y]) = t.lines.last().and_then(|l| l.last()) {
-        p.circle_filled(r.min + vec2(*x, *y), 2.5, if q.is_some() && col == INK2 { INK } else { col });
+        // The newest reading: cyan while it answers well (live, connected),
+        // amber when it doesn't.
+        p.circle_filled(r.min + vec2(*x, *y), 2.5, if col == INK2 { OK } else { col });
     }
     // Lost packets: a thin amber line top to bottom ending in a ring, so
     // it reads apart from a slow reading and not only by colour.

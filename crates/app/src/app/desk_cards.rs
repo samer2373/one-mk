@@ -127,7 +127,8 @@ fn chart(p: &Painter, r: Rect, ring: &Ring, now: f64, summary: Option<rtt::Summa
     if let Some([x, y]) = t.lines.last().and_then(|l| l.last()) {
         let at = plot.min + vec2(*x, *y);
         p.circle_filled(at, 4.5, GROUND);
-        p.circle_filled(at, 3.5, SIGNAL);
+        // Live and connected: cyan (Volt is never a status).
+        p.circle_filled(at, 3.5, OK);
     }
     // Lost packets: a short amber tick from the top, with a ring, so they
     // read apart from a slow reading and not only by colour.

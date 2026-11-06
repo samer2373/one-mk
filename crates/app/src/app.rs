@@ -377,7 +377,7 @@ fn chip(ui: &Ui, c: Rect, label: &str, dot: Option<bool>) -> f32 {
     let at = pos2(c.right() - tw - 9.0, mid);
     match dot {
         Some(true) => {
-            p.circle_filled(at, 3.0, INK);
+            p.circle_filled(at, 3.0, OK);
         }
         Some(false) => {
             p.circle_stroke(at, 2.6, Stroke::new(1.5, OFF));
