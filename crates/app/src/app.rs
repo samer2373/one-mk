@@ -2695,11 +2695,12 @@ mod debug {
             let on = !app.broadcasting();
             app.ask_broadcast(on);
         }
-        if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
+        if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 {
             ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
             if let Some(id) = app.selected_id() {
                 let target = Id::unique(("position", &id)).with(1usize);
                 ctx.memory_mut(|m| m.request_focus(target));
+                ctx.request_repaint();
             }
         }
         if ready && let Some(name) = var("ONE_MK_APP_PROFILE") && once(&ctx, "profile") {

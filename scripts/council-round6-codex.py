@@ -80,9 +80,10 @@ with tempfile.TemporaryDirectory(prefix="codex-r6-native-") as directory:
     doctor.write_text(json.dumps({"ok": False, "checks": [{"id": "pairing", "title": "Paired computers", "status": "skip", "detail": "not paired", "fix": "Pair a computer"}, {"id": "input", "title": "Permissions", "status": "warn", "detail": "The desktop has not allowed input sharing.", "fix": "Allow oneMK in the desktop sharing dialog."}]}))
     environment = dict(os.environ, WINIT_UNIX_BACKEND="x11", ONE_MK_APP_NO_SETUP="1", ONE_MK_APP_STATUS=str(status), ONE_MK_APP_SIZE="1200x780", ONE_MK_APP_ZOOM="1")
     environment.pop("WAYLAND_DISPLAY", None)
-    cases = [("switch", "files", "Notify when files arrive"), ("segment", "keys", "Mouse: buttons, pointer and scrolling"), ("chip", "keys", "Caps Lock as Esc/Ctrl"), ("capsule", "files", "Show desk"), ("icon", "files", "About Keep clipboard history"), ("sidebar", "desk", "Health")]
+    cases = [("switch", "files", "Notify when files arrive"), ("segment", "keys", "Mouse: buttons, pointer and scrolling"), ("chip", "keys", "Caps Lock as Esc/Ctrl"), ("capsule", "files", "Show desk"), ("icon", "files", "About Keep clipboard history"), ("icon-button", "keys", "Done with Caps Lock"), ("recipient", "files", "Send files to Studio PC. Choose files or drop here"), ("sidebar", "desk", "Health")]
     for family, page, name in cases:
-        process = subprocess.Popen([str(args.binary.resolve()), "--home", str(home)], env=dict(environment, ONE_MK_APP_TAB=page), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        extra = {"ONE_MK_APP_KEY": "capslock"} if family == "icon-button" else {}
+        process = subprocess.Popen([str(args.binary.resolve()), "--home", str(home)], env=dict(environment, ONE_MK_APP_TAB=page, **extra), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             window = desktop.window(process.pid)
             desktop.focus(window)
@@ -97,11 +98,21 @@ with tempfile.TemporaryDirectory(prefix="codex-r6-native-") as directory:
             press(True)
             held = args.output / f"state-{family}-pressed.png"
             desktop.capture(window, held)
+            move(2, 2)
             press(False)
             difference = ImageChops.difference(Image.open(hover), Image.open(held)).getbbox()
             if not difference:
                 raise AssertionError(f"No visible held press: {family}")
-            report["families"][family] = {"target": name, "bounds": [bounds.x, bounds.y, bounds.width, bounds.height], "hover_vs_pressed_difference": difference}
+            crop = (bounds.x, bounds.y, bounds.x + bounds.width, bounds.y + bounds.height)
+            geometry = subprocess.check_output(["xwininfo", "-id", str(window)], text=True)
+            left = int(next(line.split(":", 1)[1] for line in geometry.splitlines() if "Absolute upper-left X:" in line))
+            top = int(next(line.split(":", 1)[1] for line in geometry.splitlines() if "Absolute upper-left Y:" in line))
+            crop = (crop[0] - left, crop[1] - top, crop[2] - left, crop[3] - top)
+            delta = ImageChops.difference(Image.open(hover).convert("RGB").crop(crop), Image.open(held).convert("RGB").crop(crop))
+            maximum = max(high for low, high in delta.getextrema())
+            if family in ["chip", "icon", "icon-button", "recipient"]:
+                assert maximum >= 32, (family, maximum)
+            report["families"][family] = {"target": name, "bounds": [bounds.x, bounds.y, bounds.width, bounds.height], "hover_vs_pressed_difference": difference, "target_max_rgb_delta": maximum}
             (args.output / "atspi-and-states.json").write_text(json.dumps(report, indent=2) + "\n")
         finally:
             press(False)
@@ -141,9 +152,28 @@ with tempfile.TemporaryDirectory(prefix="codex-r6-native-") as directory:
         window = desktop.window(process.pid)
         desktop.focus(window)
         time.sleep(3)
-        assert find(process.pid, "Select a computer: show full names and connection states").get_action_iface().do_action(0)
+        assert find(process.pid, "More computers: show all names and connection states").get_action_iface().do_action(0)
+        time.sleep(0.3)
+        report["screens"]["rail-overflow"] = dump(process.pid)
         move(2, 2)
         desktop.capture(window, args.output / "rail-full-names.png")
+    finally:
+        native.cleanup(process, home)
+    broadcast = home / "broadcast.status"
+    broadcast.write_text(status.read_text() + "broadcast\tStudio PC\n")
+    process = subprocess.Popen([str(args.binary.resolve()), "--home", str(home)], env=dict(environment, ONE_MK_APP_STATUS=str(broadcast), ONE_MK_APP_TAB="keys"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        window = desktop.window(process.pid)
+        desktop.focus(window)
+        time.sleep(3)
+        rows = dump(process.pid)
+        control = next(row for row in rows if row["name"] == "Also on this computer")
+        assert "enabled" not in control["states"] and "sensitive" not in control["states"], control
+        label = next(row for row in rows if row["name"].startswith("Keyboard stop."))
+        assert label["role"] == "label", label
+        report["screens"]["broadcast-disabled"] = rows
+        move(2, 2)
+        desktop.capture(window, args.output / "broadcast-disabled.png")
     finally:
         native.cleanup(process, home)
 (args.output / "atspi-and-states.json").write_text(json.dumps(report, indent=2) + "\n")

@@ -84,7 +84,8 @@ class Desktop:
                     if children:
                         self.x11.XFree(children)
             for window in windows:
-                if self.property(window, "_NET_WM_PID") == [pid]:
+                properties = subprocess.run(["xprop", "-id", str(window), "_NET_WM_PID"], capture_output=True, text=True)
+                if properties.stdout.strip().endswith("= " + str(pid)):
                     mapped = subprocess.run(["xwininfo", "-id", str(window)], capture_output=True, text=True, check=False)
                     if "Map State: IsViewable" in mapped.stdout:
                         return window

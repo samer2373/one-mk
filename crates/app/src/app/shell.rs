@@ -9,6 +9,36 @@
 use super::*;
 use crate::chrome;
 use crate::icons::{self, Icon};
+use unicode_segmentation::UnicodeSegmentation;
+
+fn rail_name(ui: &Ui, name: &str, width: f32) -> String {
+    let font = regular(T_META);
+    if text_width(ui, name, font.clone()) <= width { return name.to_owned(); }
+    let mut shown = String::new();
+    for grapheme in name.graphemes(true) {
+        if text_width(ui, &format!("{shown}{grapheme}…"), font.clone()) > width { break; }
+        shown.push_str(grapheme);
+    }
+    format!("{shown}…")
+}
+
+fn rail_visible(total: usize, slots: usize) -> usize {
+    if total > slots { slots.saturating_sub(1) } else { total }
+}
+
+fn computers_menu(response: &egui::Response, status: &Status) -> Option<String> {
+    let mut selected = None;
+    egui::Popup::menu(response).width(300.0).show(|ui| {
+        for (id, name, online) in std::iter::once(("me", status.name.as_str(), true)).chain(status.peers.iter().map(|peer| (peer.id.as_str(), peer.name.as_str(), peer.online))) {
+            let label = format!("{name}\n{}", if id == "me" { "This computer" } else if online { "Connected" } else { "Offline" });
+            if ui.add(egui::Button::new(egui::RichText::new(label).font(regular(T_BODY))).wrap()).clicked() {
+                selected = Some(id.to_owned());
+                ui.close();
+            }
+        }
+    });
+    selected
+}
 
 pub(super) const SIDE_W: f32 = 232.0;
 pub(super) const RAIL_W: f32 = 96.0;
@@ -384,7 +414,9 @@ impl App {
         };
         let first_pair = self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty());
         let banner_take_back = self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack));
-        if !first_pair && !banner_take_back && button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
+        if self.broadcasting() {
+            self.broadcast_status(ui, a);
+        } else if !first_pair && !banner_take_back && button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
             self.do_action(job, now);
         }
         y += 36.0 + 10.0;
@@ -460,16 +492,7 @@ impl App {
         if let Some(status) = self.running().cloned() {
             let expander = Rect::from_center_size(pos2(cx, y + 14.0), vec2(side.width() - 12.0, 28.0));
             let response = button(ui, expander, Id::unique("rail-computers"), "PCs", Look::Quiet, true, Some("Select a computer: show full names and connection states"));
-            let mut selected = None;
-            egui::Popup::menu(&response).width(300.0).show(|ui| {
-                for (id, name, online) in std::iter::once(("me", status.name.as_str(), true)).chain(status.peers.iter().map(|peer| (peer.id.as_str(), peer.name.as_str(), peer.online))) {
-                    let label = format!("{name}\n{}", if id == "me" { "This computer" } else if online { "Connected" } else { "Offline" });
-                    if ui.add(egui::Button::new(egui::RichText::new(label).font(regular(T_BODY))).wrap()).clicked() {
-                        selected = Some(id.to_owned());
-                        ui.close();
-                    }
-                }
-            });
+            let selected = computers_menu(&response, &status);
             if let Some(id) = selected { self.set_tab(Tab::Desk); self.select(id); }
             y += 32.0;
             let pointer = self.pointer_on();
@@ -478,14 +501,14 @@ impl App {
             rows.extend(status.peers.iter().map(|p| (p.id.clone(), p.name.clone(), p.online)));
             let extra = 36.0 * (f32::from(self.running().is_some()) + f32::from(self.update_available.is_some()));
             let bottom = side.bottom() - 12.0 - 40.0 - 8.0 - extra;
-            for (index, (id, name, online)) in rows.into_iter().enumerate() {
-                if y + 32.0 > bottom {
-                    break;
-                }
+            let slots = ((bottom - y) / 32.0).floor().max(1.0) as usize;
+            let visible = rail_visible(rows.len(), slots);
+            let hidden = rows.len() - visible;
+            for (id, name, online) in rows.into_iter().take(visible) {
                 // A short name, not initials: as much of it as fits.
                 let r = Rect::from_center_size(pos2(cx, y + 15.0), vec2(side.width() - 12.0, 30.0));
                 let (resp, _) = row_button(ui, r, Id::unique(("pc", id.as_str())), &name, Role::Button, sel.as_deref() == Some(id.as_str()), true);
-                let shown = if id == "me" { "This PC".to_owned() } else { format!("PC {index}") };
+                let shown = rail_name(ui, &name, r.width() - 23.0);
                 let p = ui.painter();
                 let mark = pos2(r.left() + 9.0, r.center().y);
                 if pointer.as_deref() == Some(id.as_str()) {
@@ -501,6 +524,11 @@ impl App {
                     self.select(id.clone());
                 }
                 y += 32.0;
+            }
+            if hidden > 0 {
+                let rect = Rect::from_min_size(pos2(side.left() + 6.0, y), vec2(side.width() - 12.0, 30.0));
+                let response = button(ui, rect, Id::unique("rail-overflow"), &format!("+{hidden}"), Look::Quiet, true, Some("More computers: show all names and connection states"));
+                if let Some(id) = computers_menu(&response, &status) { self.set_tab(Tab::Desk); self.select(id); }
             }
         }
         // Over the action: Update when there is one, and Stop.
@@ -537,6 +565,7 @@ impl App {
         if self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty()) { return; }
         if self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack)) { return; }
         let shown = !self.sheet_open() && self.status.is_some();
+        if self.broadcasting() { self.broadcast_status(ui, a); return; }
         let r = button(ui, a, Id::unique("action"), "", look, enabled && shown, Some(&label));
         let col = if look == Look::Primary && enabled { SIGNAL_INK } else { INK };
         let icon = match job {
@@ -547,14 +576,24 @@ impl App {
             _ if label.starts_with("Pair") => Icon::Plus,
             _ => Icon::Chevron,
         };
-        if self.broadcasting() {
-            ui.painter().text(a.center(), Align2::CENTER_CENTER, "Keyboard stop", regular(11.0), col);
-        } else {
-            icons::draw(ui.painter(), icon, Rect::from_center_size(a.center(), vec2(18.0, 18.0)), col);
-        }
+        icons::draw(ui.painter(), icon, Rect::from_center_size(a.center(), vec2(18.0, 18.0)), col);
         if r.on_hover_text(&label).clicked() {
             self.do_action(job, now);
         }
+    }
+
+    fn broadcast_status(&self, ui: &Ui, rect: Rect) {
+        let hint = self.broadcast_stop_hint();
+        let shortcut = hint.strip_prefix("Press ").and_then(|text| text.split_once(" to stop").map(|(key, _)| key)).unwrap_or(&hint);
+        let rect = if rect.width() < 100.0 { Rect::from_min_max(rect.min - vec2(0.0, 12.0), rect.max) } else { rect };
+        ui.painter().text(rect.center_top() + vec2(0.0, 7.0), Align2::CENTER_TOP, "Keyboard stop", regular(12.0), INK2);
+        if rect.width() < 100.0 && let Some((first, rest)) = shortcut.split_once("+Shift") {
+            ui.painter().text(rect.center_top() + vec2(0.0, 22.0), Align2::CENTER_TOP, format!("{first}+"), regular(12.0), INK2);
+            ui.painter().text(rect.center_bottom() - vec2(0.0, 2.0), Align2::CENTER_BOTTOM, format!("Shift{rest}"), regular(12.0), INK2);
+        } else {
+            ui.painter().text(rect.center_bottom() - vec2(0.0, 2.0), Align2::CENTER_BOTTOM, shortcut, regular(12.0), INK2);
+        }
+        a11y_text(ui, Id::unique("broadcast-stop-status"), rect, Role::Label, &format!("Keyboard stop. {hint}"), None);
     }
 
     /// A page's title row: the title, a quieter word after it, and the
@@ -574,5 +613,35 @@ impl App {
         }
         a11y_text(ui, Id::unique(("page", title)), r, Role::Heading, &format!("{title} {sub}"), None);
         r
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrow_rail_reserves_an_explicit_overflow_target() {
+        for slots in 1..=6 {
+            let visible = rail_visible(6, slots);
+            let hidden = 6 - visible;
+            assert_eq!(visible + hidden, 6);
+            assert!(visible + usize::from(hidden > 0) <= slots);
+        }
+    }
+
+    #[test]
+    fn short_names_preserve_complete_graphemes() {
+        let context = egui::Context::default();
+        crate::style::install(&context);
+        let mut output = context.run_ui(Default::default(), |ui| {
+            for name in ["Samer's workstation", "Мастерская", "工作站", "e\u{301}cole 👩‍💻 studio"] {
+                let shown = rail_name(ui, name, 61.0);
+                assert!(text_width(ui, &shown, regular(T_META)) <= 61.0);
+                let prefix = shown.strip_suffix('…').unwrap_or(&shown);
+                assert!(name.grapheme_indices(true).any(|(end, _)| &name[..end] == prefix) || name == prefix);
+            }
+        });
+        output.textures_delta.clear();
     }
 }

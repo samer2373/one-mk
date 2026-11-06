@@ -189,7 +189,7 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool) -
     // Set: the chosen-segment capsule's tone, semibold words and a Volt
     // tick; not set: a quiet fill and regular words.
     let fill = if on { mix(THUMB, Color32::from_rgb(0x60, 0x6A, 0x76), hover) } else { mix(BUTTON, BUTTON_LIT, hover) };
-    p.rect_filled(rect, radius, widgets::pressed(fill, press));
+    p.rect_filled(rect, radius, widgets::pressed_lift(fill, press));
     let font = if on { semibold(T_META + 1.0) } else { regular(T_META + 1.0) };
     let text = fit(p, label, &font, rect.width() - 28.0 - if on { 16.0 } else { 0.0 });
     let tw = p.layout_no_wrap(text.clone(), font.clone(), INK).size().x;
@@ -832,7 +832,8 @@ impl App {
         let lh = if self.keys.selected.is_some() { self.key_editor(ui, left, col_w, &input, &facts) } else { self.rules_card(ui, left, col_w, &input) };
         if std::mem::take(&mut self.keys.reveal) {
             // Its title and first choices, at least, in view.
-            ui.scroll_to_rect(Rect::from_min_size(left, vec2(col_w, lh.min(130.0))), None);
+            let height = if editor_first { lh.min(ui.clip_rect().height() - 12.0) } else { lh.min(130.0) };
+            ui.scroll_to_rect(Rect::from_min_size(left, vec2(col_w, height)), Some(egui::Align::Min));
         }
         let test_at = if two { pos2(all.left() + col_w + GAP, ly) } else if editor_first { pos2(all.left(), cy + chips_h) } else { pos2(all.left(), ly + lh + GAP) };
         let th = self.test_card(ui, test_at, col_w, now);
@@ -978,6 +979,9 @@ impl App {
             };
             let selected = self.keys.selected == Some(c.code) && self.keys.layer.is_none();
             widgets::a11y(&kr, Role::Button, &format!("{does}. Arrows move between keys, Enter changes it"), Some(selected));
+            if kr.has_focus() && widgets::keyboard_focus(ui.ctx()) {
+                egui::Tooltip::for_widget(&kr).show(|ui| { ui.label(&does); });
+            }
             // A changed key says what it does when the pointer is on it.
             if under == Some(i) {
                 kr.on_hover_text(&does);

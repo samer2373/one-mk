@@ -92,7 +92,7 @@ impl App {
                 if x > inner.left() && x + chip_width > inner.right() { x = inner.left(); y += 44.0; }
                 let chip = Rect::from_min_size(pos2(x, y), vec2(*chip_width, 36.0));
                 let label = format!("{}  {}{}", if peer.online { "↗" } else { "○" }, peer.name, if peer.online { "" } else { " · Offline" });
-                let response = button(ui, chip, Id::unique(("files-recipient", &peer.id)), &label, Look::Quiet, peer.online && self.files_ui.picker.is_none(), Some(&format!("Send files to {}. Choose files, or drop files on this recipient.", peer.name)));
+                let response = widgets::content_button(ui, chip, Id::unique(("files-recipient", &peer.id)), &label, Look::Quiet, peer.online && self.files_ui.picker.is_none(), Some(&format!("Send files to {}. Choose files, or drop files on this recipient.", peer.name)));
                 widgets::a11y(&response, Role::Button, &format!("Send files to {}{}", peer.name, if peer.online { ". Choose files or drop here" } else { ", offline" }), None);
                 if response.clicked() {
                     let (sender, receiver) = std::sync::mpsc::channel();

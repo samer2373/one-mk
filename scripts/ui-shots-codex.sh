@@ -272,6 +272,8 @@ for args in "keymap add --tap=esc --hold=lctrl -- capslock" "keymap add -- ralt 
 done
 "$B" --home "$W/k" keymap add -- f13 "switch next" >/dev/null
 cp "$W/k/settings.toml" "$W/kx/"
+cp "$W/a/devices.toml" "$W/kx/devices.toml"
+sed -i "0,/^name = .*/s//name = \"$LONG\"/" "$W/kx/devices.toml"
 cat >>"$W/kx/settings.toml" <<TOML
 
 [[input.keymap.rule]]

@@ -2,8 +2,11 @@ use super::*;
 
 impl App {
     pub(super) fn clipboard_history_cell(&mut self, ui: &mut Ui, rect: Rect) {
-        title_row(ui, rect, "History", 125.0);
-        let refresh = Rect::from_min_size(pos2(rect.right() - 124.0, rect.top() - 4.0), vec2(72.0, 28.0));
+        let clear_label = if self.clipboard_clear_confirm { "Sure?" } else { "Clear" };
+        let clear_width = button_width(ui, "Clear").max(button_width(ui, "Sure?"));
+        let refresh_width = button_width(ui, "Refresh");
+        title_row(ui, rect, "History", clear_width + refresh_width + 8.0);
+        let refresh = Rect::from_min_size(pos2(rect.right() - clear_width - refresh_width - 4.0, rect.top() - 4.0), vec2(refresh_width, 28.0));
         if button(ui, refresh, Id::unique("history-refresh"), "Refresh", Look::Quiet, self.prefs.history_enabled && self.running().is_some(), Some("Refresh clipboard history")).clicked() {
             self.clipboard_reveal = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
@@ -11,9 +14,8 @@ impl App {
             self.clipboard_history = None;
             self.link.history();
         }
-        let clear = Rect::from_min_size(pos2(rect.right() - 48.0, rect.top() - 4.0), vec2(48.0, 28.0));
+        let clear = Rect::from_min_size(pos2(rect.right() - clear_width, rect.top() - 4.0), vec2(clear_width, 28.0));
         let online = self.running().is_some();
-        let clear_label = if self.clipboard_clear_confirm { "Sure?" } else { "Clear" };
         if button(ui, clear, Id::unique("history-clear"), clear_label, Look::Quiet, online && self.prefs.history_enabled, Some("Clear deletes all memory and saved history. Click again to confirm; Refresh cancels.")).clicked() {
             if self.clipboard_clear_confirm { self.link.history_change(None); }
             self.clipboard_clear_confirm = !self.clipboard_clear_confirm;

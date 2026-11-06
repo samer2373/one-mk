@@ -267,7 +267,7 @@ impl App {
         // With a graph the actions sit at the card's foot; without one (a
         // few readings, offline, none) right under the words, and the card
         // ends there.
-        let actions_y = if graphed { body.bottom() - 32.0 } else { body.top() + if summary.is_some() { 48.0 } else { 64.0 } };
+        let actions_y = if graphed { body.bottom() - 32.0 } else { body.top() + if summary.is_some() { 48.0 } else if !status.broadcast.is_empty() { 32.0 } else { 64.0 } };
         self.peer_actions(ui, pos2(body.left(), actions_y), &status, &peer);
 
         // The graph and the number, as words for screen readers.
