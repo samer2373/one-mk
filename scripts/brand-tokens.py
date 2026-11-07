@@ -56,8 +56,12 @@ def parse(text):
     return out
 
 
-def colour(val):
-    """(r, g, b, alpha 0-1) as straight (not premultiplied) colour."""
+def colour(val, aliases=None, resolving=()):
+    """(r, g, b, alpha 0-1), resolving references to named colour constants."""
+    if aliases is not None and val in aliases:
+        if val in resolving:
+            raise ValueError("cyclic colour alias: " + " -> ".join((*resolving, val)))
+        return colour(aliases[val], aliases, (*resolving, val))
     m = re.fullmatch(r"Color32::from_rgb\((.+)\)", val)
     if m:
         r, g, b = (int(x.strip(), 0) for x in m.group(1).split(","))
@@ -104,10 +108,11 @@ def key(name):
 
 def build():
     consts = parse(open(STYLE, encoding="utf-8").read())
+    aliases = {name: val for name, ty, val, _ in consts if ty == "Color32"}
     colours, radius, space, size, leading = {}, {}, {}, {}, None
     for name, ty, val, doc in consts:
         if ty == "Color32":
-            colours[key(name)] = (colour(val), doc)
+            colours[key(name)] = (colour(val, aliases), doc)
         elif name.startswith("R_") and ty == "u8":
             radius[key(name[2:])] = (int(val), doc)
         elif name == "M":
@@ -134,7 +139,7 @@ def build():
 
     data = {
         "$description": "oneMK design tokens, written by scripts/brand-tokens.py from crates/app/src/style.rs "
-                        "(the source of truth; do not edit by hand). Dark UI is primary. Amber is the only signal "
+                        "(the source of truth; do not edit by hand). Dark UI is primary. Volt is the only signal "
                         "colour: use it for the pointer, live state and the one primary action, never for decoration. "
                         "Translucent colours are straight (not premultiplied) rgba.",
         "color": {k: {"value": css(c), "description": d} if d else {"value": css(c)} for k, (c, d) in colours.items()},
@@ -167,7 +172,7 @@ def build():
 
     rows = ["| token | value | contrast |", "|---|---|---|"]
     for k, (c, _) in colours.items():
-        label = "**signal** (amber)" if k == "signal" else k
+        label = "**signal** (Volt)" if k == "signal" else k
         extra = "; **%.1f:1 on white**" % contrast(c, (255, 255, 255)) if k == "signal" else ""
         rows.append("| %s | `%s` | %s%s |" % (label, css(c), note(k, c), extra))
     table = "\n".join(rows)

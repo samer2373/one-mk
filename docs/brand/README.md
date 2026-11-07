@@ -68,7 +68,8 @@ Never scale the master below 32 px; use the drawing for the physical pixel size:
 
 ## Colour
 
-The brand palette, with the UI tokens proposed for the window. These are not yet in `crates/app/src/style.rs`:
+The brand palette below defines the logo and accent colours. The window uses Volt and cyan with
+its own surface shades; its exact current tokens are generated from `crates/app/src/style.rs` below:
 
 | token | value | use | contrast |
 |---|---|---|---|
@@ -90,8 +91,7 @@ Rules:
 - On Volt, use the black one-colour mark and `accent-ink` text.
 - The ok/connected colour is never Volt.
 
-The table below is written from the window's style by `scripts/brand-tokens.py`. It still shows the previous amber
-until `style.rs` takes the palette above.
+The table below is written from the window's current style by `scripts/brand-tokens.py`.
 
 <!-- tokens:start (scripts/brand-tokens.py writes this table) -->
 | token | value | contrast |
@@ -109,7 +109,7 @@ until `style.rs` takes the palette above.
 | palette-top | `rgba(22, 25, 31, 0.804)` | 80% over what is under it |
 | palette | `rgba(17, 19, 25, 0.843)` | 84% over what is under it |
 | search-fill | `#13161C` | 1.1:1 on ground |
-| shortcut-ink | `#525A66` | 2.8:1 on ground |
+| shortcut-ink | `#7D8692` | 5.3:1 on ground |
 | room-tint | `rgba(16, 19, 24, 0.878)` | 88% over what is under it |
 | glass-top | `rgba(54, 56, 61, 0.443)` | 44% over what is under it |
 | glass | `rgba(31, 33, 38, 0.42)` | 42% over what is under it |
@@ -121,16 +121,21 @@ until `style.rs` takes the palette above.
 | control | `rgba(108, 113, 123, 0.204)` | 20% over what is under it |
 | control-solid-top | `#2A2E35` | 1.4:1 on ground |
 | control-solid | `#22262C` | 1.3:1 on ground |
-| group | `rgba(255, 255, 255, 0.047)` | 5% over what is under it |
+| group | `#15191F` | 1.1:1 on ground |
 | group-edge | `rgba(255, 255, 255, 0.067)` | 7% over what is under it |
-| track | `rgba(0, 0, 0, 0.22)` | 22% over what is under it |
-| thumb | `rgba(255, 255, 255, 0.188)` | 19% over what is under it |
+| track | `#0D1014` | 1.0:1 on ground |
+| thumb | `#59636F` | 3.2:1 on ground |
+| track-line | `#616A76` | 3.5:1 on ground |
+| field-edge | `#616A76` | 3.5:1 on ground |
+| field-edge-lit | `#7D8692` | 5.3:1 on ground |
+| switch-edge | `#616A76` | 3.5:1 on ground |
+| switch-off | `#2A3038` | 1.5:1 on ground |
+| switch-off-lit | `#343B44` | 1.7:1 on ground |
 | control-edge | `rgba(255, 255, 255, 0.078)` | 8% over what is under it |
 | glass-hairline | `rgba(255, 255, 255, 0.047)` | 5% over what is under it |
 | glass-rim | `rgba(255, 255, 255, 0.102)` | 10% over what is under it |
 | glass-edge | `rgba(255, 255, 255, 0.22)` | 22% over what is under it |
 | popover | `#1A1E25` | ink on it 14.5:1 |
-| on-glass | `rgba(255, 255, 255, 0.071)` | 7% over what is under it |
 | on-glass-lit | `rgba(255, 255, 255, 0.118)` | 12% over what is under it |
 | panel | `#13171C` | ink on it 15.6:1 |
 | raised | `rgba(255, 255, 255, 0.051)` | 5% over what is under it |
@@ -139,7 +144,7 @@ until `style.rs` takes the palette above.
 | ink2 | `#9DA6B1` | 7.9:1 on ground |
 | ink3 | `#8F98A4` | 6.7:1 on ground |
 | ink-hover | `#C4CAD2` | 11.8:1 on ground |
-| **signal** (amber) | `#C6F432` | 15.2:1 on ground; **1.3:1 on white** |
+| **signal** (Volt) | `#C6F432` | 15.2:1 on ground; **1.3:1 on white** |
 | accent | `#C6F432` | 15.2:1 on ground |
 | accent-lit | `#D7FF5E` | 17.0:1 on ground |
 | signal-lit | `#D7FF5E` | 17.0:1 on ground |
@@ -148,8 +153,8 @@ until `style.rs` takes the palette above.
 | warn | `#FFB547` | 11.1:1 on ground |
 | lamp | `#FFB547` | 11.1:1 on ground |
 | ok | `#3CCFE6` | 10.4:1 on ground |
-| button | `rgba(255, 255, 255, 0.086)` | 9% over what is under it |
-| button-lit | `rgba(255, 255, 255, 0.133)` | 13% over what is under it |
+| button | `#282E36` | 1.4:1 on ground |
+| button-lit | `#363E49` | 1.8:1 on ground |
 | pill | `rgba(255, 255, 255, 0.125)` | 13% over what is under it |
 | track-off | `#4A525E` | 2.5:1 on ground |
 | track-edge | `#707A86` | 4.5:1 on ground |
