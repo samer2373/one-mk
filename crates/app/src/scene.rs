@@ -7,7 +7,7 @@
 use crate::motion::{self, Tween};
 use crate::style::{GROUND, INK, INK_HOVER, INK2, SIGNAL, fit, mono_medium, regular, semibold};
 use crate::widgets::mix;
-use egui::{Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
+use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 use one_mk_proto::{Edge, Rect as Monitor, Side};
 use std::ops::{Add, Mul, Sub};
 
@@ -80,6 +80,19 @@ fn fade(c: Color32, a: f32) -> Color32 {
     c.gamma_multiply(a.clamp(0.0, 1.0))
 }
 
+fn split_screen_name<'a>(painter: &Painter, name: &'a str, font: &egui::FontId, room: f32) -> Option<(&'a str, &'a str)> {
+    name.char_indices().filter(|(_, ch)| ch.is_whitespace()).filter_map(|(index, _)| {
+        let first = name[..index].trim();
+        let second = name[index..].trim();
+        if first.is_empty() || second.is_empty() {
+            return None;
+        }
+        let measure = |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), INK).size().x;
+        let width = measure(first).max(measure(second));
+        (width <= room).then_some((first, second, width))
+    }).min_by(|left, right| left.2.total_cmp(&right.2)).map(|(first, second, _)| (first, second))
+}
+
 /// How far into its reveal digit `i` of a pairing code is, 0..1. The
 /// sheet and the screen on the desk share it, so the two can be read
 /// together in the same rhythm.
@@ -132,6 +145,9 @@ impl Camera {
         self.centre.y += dy;
     }
 }
+
+/// How far every part of the desk keeps from the sides of its area.
+const MARGIN: f32 = 12.0;
 
 // ---------- devices ----------
 
@@ -798,6 +814,47 @@ fn grown(pts: &[Pos2; 4], by: f32) -> Vec<Pos2> {
     pts.iter().map(|p| *p + (*p - c).normalized() * by).collect()
 }
 
+/// The outline round `pts` (their convex hull), pushed out `by` points
+/// with rounded corners: a ring that hugs one computer's silhouette.
+#[cfg(test)]
+fn hull_grown(pts: &[Pos2], by: f32) -> Vec<Pos2> {
+    let mut p: Vec<Pos2> = pts.to_vec();
+    p.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    p.dedup_by(|a, b| a.distance(*b) < 0.01);
+    if p.len() < 3 {
+        return p;
+    }
+    let cross = |o: Pos2, a: Pos2, b: Pos2| (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    let mut hull: Vec<Pos2> = vec![];
+    for pass in 0..2 {
+        let start = hull.len();
+        let iter: Box<dyn Iterator<Item = &Pos2>> = if pass == 0 { Box::new(p.iter()) } else { Box::new(p.iter().rev()) };
+        for &q in iter {
+            while hull.len() >= start + 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], q) <= 0.0 {
+                hull.pop();
+            }
+            hull.push(q);
+        }
+        hull.pop();
+    }
+    // Offset each corner by an arc between its two edges' normals.
+    let n = hull.len();
+    let mut out = vec![];
+    for k in 0..n {
+        let (prev, cur, next) = (hull[(k + n - 1) % n], hull[k], hull[(k + 1) % n]);
+        let n0 = { let d = (cur - prev).normalized(); vec2(d.y, -d.x) };
+        let n1 = { let d = (next - cur).normalized(); vec2(d.y, -d.x) };
+        let (a0, mut a1) = (n0.y.atan2(n0.x), n1.y.atan2(n1.x));
+        while a1 < a0 { a1 += std::f32::consts::TAU; }
+        let steps = (((a1 - a0) / 0.35).ceil() as usize).clamp(1, 12);
+        for j in 0..=steps {
+            let a = a0 + (a1 - a0) * j as f32 / steps as f32;
+            out.push(cur + vec2(a.cos(), a.sin()) * by);
+        }
+    }
+    out
+}
+
 fn bez(p0: V3, p1: V3, p2: V3, p3: V3, t: f32) -> V3 {
     let s = 1.0 - t;
     p0 * (s * s * s) + p1 * (3.0 * s * s * t) + p2 * (3.0 * s * t * t) + p3 * (t * t * t)
@@ -889,6 +946,8 @@ pub struct Scene {
     pub sheet_top: Option<f32>,
     /// Nothing may go above this (the top bar).
     pub top_clear: f32,
+    /// Computers whose name was shortened on their screen this frame.
+    pub cut_names: std::cell::RefCell<std::collections::HashSet<usize>>,
     /// Where the computers are framed, when the desk is drawn bigger than
     /// that (behind the window's glass panels).
     pub fit: Option<Rect>,
@@ -931,6 +990,7 @@ impl Default for Scene {
             raise: Tween::new(0.0),
             sheet_top: None,
             top_clear: 0.0,
+            cut_names: Default::default(),
             fit: None,
             faces: vec![],
             view_k: 0.6,
@@ -1103,7 +1163,7 @@ impl Scene {
         self.camera(rect).pt(self.devices[i].geometry().screen.at(0.5, 0.5))
     }
 
-    fn camera(&self, rect: Rect) -> Camera {
+    pub(crate) fn camera(&self, rect: Rect) -> Camera {
         let rect = self.fit.unwrap_or(rect);
         let k = self.intro_t0.map_or(0.0, |t0| motion::progress(self.now, t0, motion::space(0.6), motion::out_expo));
         let raise = self.raise.value(self.now);
@@ -1113,20 +1173,35 @@ impl Scene {
         {
             let sheet_top = self.sheet_top.filter(|_| raise > 0.0).unwrap_or(rect.bottom());
             let (lo, hi) = (rect.top() + self.top_clear + 8.0, sheet_top - 30.0);
-            let ys: Vec<f32> = self
+            // Every corner of every part (screens, stands, bases, the pairing
+            // slot) as seen: the desk is fitted to all of them, 12 points
+            // clear of the sides and of what floats above and below.
+            let slot = self.empty_slot.then(|| self.slot_device());
+            let bounds = self
                 .devices
                 .iter()
                 .filter(|d| !d.leaving)
+                .chain(slot.iter())
                 .flat_map(|d| d.geometry().boxes)
-                .flat_map(|b| [(b.a.0, b.b.0, b.c.0), (b.a.1, b.b.1, b.c.1), (b.a.0, b.b.1, b.c.0), (b.a.1, b.b.0, b.c.1)].map(|(a, bb, c)| cam.pt(b.fr.at(a, bb, c)).y))
-                .collect();
-            let (top, bottom) = ys.iter().fold((f32::MAX, f32::MIN), |(t, b), y| (t.min(*y), b.max(*y)));
-            if top < bottom && hi > lo {
-                let s = ((hi - lo) / (bottom - top)).min(1.0);
-                let (c, mid) = (cam.centre.y, (top + bottom) / 2.0);
+                .flat_map(|b| [b.a.0, b.a.1].into_iter().flat_map(move |x| [b.b.0, b.b.1].into_iter().flat_map(move |y| [b.c.0, b.c.1].map(|z| b.fr.at(x, y, z)))))
+                .map(|p| cam.pt(p))
+                .fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_max(p, p)));
+            let (left, right) = (rect.left() + MARGIN, rect.right() - MARGIN);
+            if bounds.is_positive() && hi > lo {
+                let visible = self.devices.iter().filter(|device| !device.leaving).count();
+                let max_scale = if visible >= 5 { 1.25 } else { 1.0 };
+                let s = ((hi - lo) / bounds.height()).min((right - left) / bounds.width()).min(max_scale);
+                let (c, mid) = (cam.centre.y, bounds.center().y);
                 // After scaling about the centre, the middle sits at c + s*(mid - c).
                 let dy = (lo + hi) / 2.0 - (c + s * (mid - c));
                 cam.adjust(s, dy);
+                // Sideways: moved only as far as keeps every part inside.
+                let (l, r) = (cam.centre.x + s * (bounds.left() - cam.centre.x), cam.centre.x + s * (bounds.right() - cam.centre.x));
+                if l < left {
+                    cam.centre.x += left - l;
+                } else if r > right {
+                    cam.centre.x -= r - right;
+                }
             }
         }
         cam
@@ -1134,6 +1209,7 @@ impl Scene {
 
     pub fn paint(&mut self, painter: &Painter, rect: Rect) {
         let now = self.now;
+        self.cut_names.borrow_mut().clear();
         let cam = self.camera(rect);
         self.view_k = rect.width() * 0.5 / cam.foc;
         let geo: Vec<Geo> = self.devices.iter().map(Device::geometry).collect();
@@ -1150,7 +1226,17 @@ impl Scene {
                 panel += usize::from(b.screen.is_some());
             }
         }
-        faces.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+        // Far computers first, and each computer's own faces far to near.
+        // Sorting all faces together let a thin side face of one monitor
+        // cut through the screen of one in front of it (a seam of dashes,
+        // seen while dragging one past another).
+        let mut owner_depth = vec![(0.0f32, 0u32); self.devices.len()];
+        for f in &faces {
+            owner_depth[f.owner].0 += f.depth;
+            owner_depth[f.owner].1 += 1;
+        }
+        let od = |i: usize| owner_depth[i].0 / owner_depth[i].1.max(1) as f32;
+        faces.sort_by(|a, b| od(b.owner).total_cmp(&od(a.owner)).then(b.depth.total_cmp(&a.depth)));
         let preview = self.drop_preview.value(now);
         for f in &faces {
             let d = &self.devices[f.owner];
@@ -1193,6 +1279,8 @@ impl Scene {
             }
         }
         self.faces = faces;
+        // Keyboard focus: one tight ring round the whole computer, screen,
+        // stand and base, 4 points out, never round a neighbour.
         self.ribbon(painter, &cam, &geo);
         if self.empty_slot {
             self.slot(painter, &cam);
@@ -1200,9 +1288,12 @@ impl Scene {
     }
 
     /// The line round a screen: where files can go (Volt), which one is
-    /// selected or hovered (white), where the keyboard is (the focus ring).
+    /// selected or hovered (white). Keyboard focus is drawn round the whole computer in `paint`.
     fn screen_outline(&self, painter: &Painter, f: &Face, d: &Device, preview: f32) {
-        let i = f.owner;
+        if self.focused == Some(f.owner) {
+            painter.add(Shape::closed_line(grown(&f.pts, 3.0), Stroke::new(2.0, SIGNAL)));
+            return;
+        }
         let target = d.online && !d.me && !d.leaving && d.w < 0.01;
         if self.drop_targets && target {
             painter.add(Shape::closed_line(grown(&f.pts, 2.5), Stroke::new(1.5, fade(SIGNAL, 0.9 * d.a))));
@@ -1219,9 +1310,6 @@ impl Scene {
             painter.add(Shape::closed_line(grown(&f.pts, lerp(6.0, 2.5, sel)), st));
         } else if hover > 0.01 {
             painter.add(Shape::closed_line(grown(&f.pts, 2.5), Stroke::new(1.0, Color32::from_white_alpha((60.0 * hover) as u8))));
-        }
-        if self.focused == Some(i) {
-            painter.add(Shape::closed_line(grown(&f.pts, 6.0), Stroke::new(2.0, SIGNAL)));
         }
     }
 
@@ -1277,19 +1365,9 @@ impl Scene {
         // desk's far edge melts into it, as the desk is the lit wood laid
         // over it at the light's strength (the same as mixing towards the
         // room's colour on a solid window, and see-through on a clear one).
-        // Each lit screen washes the wall behind it in its own colour, the
-        // way a monitor's glow does in a dim room: the glass over the desk
-        // has that colour to bend.
-        for (d, g) in self.devices.iter().zip(geo) {
-            if !d.online || d.a < 0.01 {
-                continue;
-            }
-            let (l, r) = (cam.pt(g.screen.at(0.0, 0.5)), cam.pt(g.screen.at(1.0, 0.5)));
-            let c = cam.pt(g.screen.at(0.5, 0.35));
-            let [cr, cg, cb] = hex(d.wall[0]);
-            let col = rgba([cr.saturating_add(60), cg.saturating_add(60), cb.saturating_add(60)], 1.0, 0.20 * d.a);
-            crate::chrome::light(painter, c, (r - l).length() * 1.15 + 90.0, col);
-        }
+        // No coloured wash on the room: the screens' colour stays on the
+        // screens, with only a small neutral pool of light under each one.
+        let _ = geo;
         // The desk is lit around the computers and falls off into the room:
         // no edges, nothing to suggest a box the computers sit in.
         let (cx, cz) = (self.focus_x, -4.0);
@@ -1310,7 +1388,8 @@ impl Scene {
             (1.0 - d).clamp(0.0, 1.0).powf(1.4)
         };
         // A dark walnut desk, lit only by its screens.
-        let lit = Color32::from_rgb(0x3B, 0x30, 0x27);
+        // A dark, neutral desk (no walnut warmth), lit only by the screens.
+        let lit = Color32::from_rgb(0x24, 0x2A, 0x2D);
         let shade = |k: f32| lit.gamma_multiply(k.clamp(0.0, 1.0));
         const NX: usize = 24;
         const NZ: usize = 10;
@@ -1364,11 +1443,13 @@ impl Scene {
             let wall = is_wall(d.kind, &d.screens);
             let [fx, fz, rx, _] = g.foot;
             if d.online {
+                // The screen's light where it falls, close by and nearly
+                // neutral (a tenth of its colour), not a tinted haze.
                 let c = hex(d.wall[0]);
                 let pw = if wall { rx.max(36.0) } else { 36.0 };
-                let glow = [c[0].saturating_add(70), c[1].saturating_add(60), c[2].saturating_add(50)];
-                pool(painter, cam, v(fx, 0.0, fz + 14.0), pw * 1.5, 34.0, rgba(glow, 1.0, 0.22 * a));
-                pool(painter, cam, v(fx, 0.0, fz + 10.0), pw, 18.0, rgba(glow, 1.0, 0.22 * a));
+                let grey = |k: u8| ((u16::from(k) + 3 * 150) / 4) as u8;
+                let glow = [grey(c[0]), grey(c[1]), grey(c[2])];
+                pool(painter, cam, v(fx, 0.0, fz + 10.0), pw, 18.0, rgba(glow, 1.0, 0.07 * a));
             }
             let up = (d.at.y - d.target.y.max(0.0)).clamp(0.0, 6.0) / 6.0;
             let shadow = |[fx, fz, rx, rz]: [f32; 4]| {
@@ -1426,7 +1507,8 @@ impl Scene {
         let pts: Vec<Pos2> = (0..=N).map(|i| cam.pt(bez(p0, p1, p2, p3, lerp(tail, head, i as f32 / N as f32)))).collect();
         // A strip that widens and brightens toward the head, with a one
         // point feather on each side so its edges stay smooth.
-        let (tail_col, head_col) = if f.cargo == Cargo::Parcel { ([255, 181, 71], [255, 214, 140]) } else { ([255, 181, 71], [255, 227, 176]) };
+        // Volt: something crossing between computers, lighter at its head.
+        let (tail_col, head_col) = if f.cargo == Cargo::Parcel { ([198, 244, 50], [215, 255, 94]) } else { ([198, 244, 50], [232, 255, 170]) };
         let mut m = Mesh::default();
         for i in 0..=N {
             let k = i as f32 / N as f32;
@@ -1452,19 +1534,19 @@ impl Scene {
         painter.add(Shape::mesh(m));
         if head < 1.0 {
             let hp = cam.pt(bez(p0, p1, p2, p3, head));
-            let rim = Stroke::new(1.0, Color32::from_rgb(0xFF, 0xF8, 0xEC));
+            let rim = Stroke::new(1.0, Color32::from_rgb(0xF6, 0xFF, 0xE0));
             if f.cargo == Cargo::Parcel {
                 let r = 4.5;
                 painter.add(Shape::convex_polygon(vec![hp + vec2(0.0, -r), hp + vec2(r, 0.0), hp + vec2(0.0, r), hp + vec2(-r, 0.0)], SIGNAL, rim));
             } else {
-                painter.circle(hp, 3.5, Color32::from_rgb(0xFF, 0xE3, 0xB0), rim);
+                painter.circle(hp, 3.5, Color32::from_rgb(0xE8, 0xFF, 0xAA), rim);
             }
         }
         if let Some(label) = self.latency_label.as_ref().filter(|_| f.cargo == Cargo::Probe) {
             let u = f.u(self.now);
             let a = (((u - 0.25) * f.secs) / 0.12).clamp(0.0, 1.0).min(((1.0 - u) / 0.2).clamp(0.0, 1.0));
             let apex = cam.pt(bez(p0, p1, p2, p3, 0.5));
-            painter.text(apex - vec2(0.0, 14.0), egui::Align2::CENTER_BOTTOM, label, FontId::monospace(12.0), fade(INK, a));
+            painter.text(apex - vec2(0.0, 14.0), egui::Align2::CENTER_BOTTOM, label, regular(12.0), fade(INK, a));
         }
     }
 
@@ -1482,7 +1564,7 @@ impl Scene {
         let wall = is_wall(d.kind, &d.screens);
         // This monitor's glass on the screen; `at` is in it.
         let glass = if wall { panels(&d.screens, pl, GLASS).nth(m).unwrap_or([0.0, 0.0, 1.0, 1.0]) } else { [0.0, 0.0, 1.0, 1.0] };
-        let named = !wall || m == main_panel(&d.screens);
+        let named = self.devices.iter().map(|device| device.screens.len().max(1)).sum::<usize>() >= 5 || !wall || m == main_panel(&d.screens);
         let on_pl = |u: f32, w: f32| cam.pt(pl.at(u, w));
         let at = |u: f32, w: f32| on_pl(lerp(glass[0], glass[2], u), lerp(glass[1], glass[3], w));
         let rect = |u0: f32, w0: f32, u1: f32, w1: f32| [at(u0, w0), at(u1, w0), at(u1, w1), at(u0, w1)];
@@ -1563,9 +1645,14 @@ impl Scene {
         };
         // A monitor of a wall is narrow for the whole wall's name: use its
         // glass, and a point smaller type if need be.
-        let name_font = semibold((h * 0.11).clamp(if wall { 11.0 } else { 12.0 }, 22.0));
-        let sub_font = regular((h * 0.07).clamp(11.0, 14.0));
-        let room = width * if wall { 0.96 } else { 0.86 };
+        let room = width * if wall { 0.96 } else { 0.9 };
+        // The name a point or two smaller before it is ever shortened.
+        let mut name_size = (h * 0.11).clamp(if wall { 11.0 } else { 12.0 }, 22.0);
+        while name_size > 10.0 && painter.layout_no_wrap(d.name.clone(), semibold(name_size), INK).size().x > room {
+            name_size -= 0.5;
+        }
+        let name_font = semibold(name_size);
+        let sub_font = regular((h * 0.07).clamp(11.0, 14.0).min(name_size));
         if named {
             // A soft dark bloom behind the words, as the system draws under
             // desktop labels: they stay readable on any wallpaper.
@@ -1573,12 +1660,27 @@ impl Scene {
                 let c = at(0.5, 0.5);
                 crate::chrome::light(painter, c, (room * 0.42).min(h * 0.6), Color32::from_black_alpha((90.0 * a) as u8));
             }
-            painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, fit(painter, &d.name, &name_font, room), name_font, name_col);
+            let shown = fit(painter, &d.name, &name_font, room);
+            let wrapped = if shown != d.name && h >= 36.0 && let Some((first, second)) = split_screen_name(painter, &d.name, &name_font, room) {
+                painter.text(at(0.5, 0.5) - vec2(0.0, name_size), egui::Align2::CENTER_CENTER, first, name_font.clone(), name_col);
+                painter.text(at(0.5, 0.5), egui::Align2::CENTER_CENTER, second, name_font, name_col);
+                true
+            } else {
+                if shown != d.name {
+                    self.cut_names.borrow_mut().insert(i);
+                }
+                painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, shown, name_font, name_col);
+                false
+            };
+            let subtitle_at = if wrapped { at(0.5, 0.5) + vec2(0.0, name_size / 2.0) } else { at(0.5, 0.53) };
             let k = d.sub_was.as_ref().map_or(1.0, |(_, t0)| motion::progress(now, *t0, motion::fade(0.18), motion::out_cubic));
-            if let Some((was, _)) = &d.sub_was {
-                painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, was, &sub_font, room), sub_font.clone(), sub_col.gamma_multiply(1.0 - k));
+            if (!wrapped || h >= 48.0) && let Some((was, _)) = &d.sub_was {
+                painter.text(subtitle_at, egui::Align2::CENTER_TOP, fit(painter, was, &sub_font, room), sub_font.clone(), sub_col.gamma_multiply(1.0 - k));
             }
-            painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, &d.subtitle, &sub_font, room), sub_font, sub_col.gamma_multiply(k));
+            let subtitle = if self.selected == Some(i) { "Selected".to_owned() } else { d.subtitle.clone() };
+            if !wrapped || h >= 48.0 {
+                painter.text(subtitle_at, egui::Align2::CENTER_TOP, fit(painter, &subtitle, &sub_font, room), sub_font, sub_col.gamma_multiply(k));
+            }
         }
         if !d.online || ghost {
             return;
@@ -1729,6 +1831,67 @@ mod tests {
     }
 
     #[test]
+    fn truncated_name_tracking_is_refreshed_each_frame() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 430.0));
+        let mut scene = two();
+        settle(&mut scene, 0.0);
+        scene.cut_names.borrow_mut().insert(99);
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            scene.paint(&painter, rect);
+        });
+        output.textures_delta.clear();
+        assert!(!scene.cut_names.borrow().contains(&99));
+    }
+
+    #[test]
+    fn screen_names_wrap_only_when_both_lines_fit() {
+        let ctx = egui::Context::default();
+        crate::style::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.painter();
+            let font = semibold(12.0);
+            let width = |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), INK).size().x;
+            let room = width("Мастерская").max(width("MacBook")) + 1.0;
+            assert_eq!(split_screen_name(painter, "MacBook Pro", &font, room), Some(("MacBook", "Pro")));
+            assert_eq!(split_screen_name(painter, "Мастерская ПК", &font, room), Some(("Мастерская", "ПК")));
+            assert_eq!(split_screen_name(painter, "MacBook Pro", &font, 1.0), None);
+            assert_eq!(split_screen_name(painter, "MacBook", &font, room), None);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn truncated_wall_name_survives_a_later_wider_panel() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 430.0));
+        let mut scene = two();
+        scene.devices[0].name = "Desk".into();
+        scene.devices[0].screens = vec![
+            Monitor::new(-400, 0, 400, 1080),
+            Monitor::new(0, 0, 1920, 1080),
+            Monitor::new(1920, 0, 1920, 1080),
+            Monitor::new(3840, 0, 1920, 1080),
+        ];
+        settle(&mut scene, 0.0);
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            let camera = scene.camera(rect);
+            let geometry: Vec<_> = scene.devices.iter().map(Device::geometry).collect();
+            scene.screen(&painter, &camera, 0, 0, &geometry);
+            assert!(scene.cut_names.borrow().contains(&0), "narrow panel must truncate the name");
+            scene.cut_names.borrow_mut().clear();
+            scene.screen(&painter, &camera, 0, 1, &geometry);
+            assert!(!scene.cut_names.borrow().contains(&0), "wide panel must fit the name");
+            scene.screen(&painter, &camera, 0, 0, &geometry);
+            scene.screen(&painter, &camera, 0, 1, &geometry);
+            assert!(scene.cut_names.borrow().contains(&0), "wide panel must not erase the narrow panel's truncation");
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn top_computer_fits_default_and_compact_scenes() {
         let mut scene = two();
         scene.devices[1].pos = v(0.0, 70.0, -26.0);
@@ -1749,6 +1912,79 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Every corner of every monitor, stand and base stays inside the desk's
+    /// area, 12 points clear, however far apart the computers are and
+    /// however narrow the window.
+    #[test]
+    fn every_part_fits_inside_the_desk_area() {
+        for (spread, width) in [(0.0, 980.0), (-250.0, 620.0), (-420.0, 420.0), (300.0, 520.0)] {
+            let mut scene = two();
+            scene.devices[1].pos = v(spread, 0.0, 0.0);
+            scene.devices[1].target = scene.devices[1].pos;
+            settle(&mut scene, 0.0);
+            let area = Rect::from_min_size(pos2(232.0, 0.0), egui::vec2(width, 340.0));
+            let camera = scene.camera(area);
+            for device in &scene.devices {
+                for b in device.geometry().boxes {
+                    for x in [b.a.0, b.a.1] {
+                        for y in [b.b.0, b.b.1] {
+                            for z in [b.c.0, b.c.1] {
+                                let p = camera.pt(b.fr.at(x, y, z));
+                                assert!(area.shrink(MARGIN - 0.5).contains(p), "spread {spread}, width {width}: {p:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn crowded_scene_enlarges_without_clipping_devices() {
+        let mut scene = two();
+        for index in 0..4 {
+            let mut device = Device::new(&format!("peer-{index}"), "computer", Kind::Monitor, false, [0x1D2D3C, 0x0D151E]);
+            device.pos.x = (index as f32 + 1.0) * SPACING;
+            device.target = device.pos;
+            scene.devices.push(device);
+        }
+        settle(&mut scene, 0.0);
+        let mut enlarged = false;
+        for width in [560.0, 900.0, 1400.0] {
+            let area = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(width, 340.0));
+            let camera = scene.camera(area);
+            let progress = scene.intro_t0.map_or(0.0, |start| motion::progress(scene.now, start, motion::space(0.6), motion::out_expo));
+            let baseline = Camera::new(scene.yaw + lerp(-0.12, 0.0, progress), scene.pitch, scene.dist * lerp(1.12, 1.0, progress), v(scene.focus_x, 15.0, -2.0), area, scene.raise.value(scene.now));
+            enlarged |= camera.foc > baseline.foc * 1.01;
+            for device in &scene.devices {
+                for bounds in device.geometry().boxes {
+                    for x in [bounds.a.0, bounds.a.1] {
+                        for y in [bounds.b.0, bounds.b.1] {
+                            for z in [bounds.c.0, bounds.c.1] {
+                                let point = camera.pt(bounds.fr.at(x, y, z));
+                                assert!(area.shrink(MARGIN - 0.5).contains(point), "width {width}: {point:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(enlarged, "the crowded scene should use spare space when available");
+    }
+
+    #[test]
+    fn the_focus_ring_hugs_the_outline_from_outside() {
+        let sq = [pos2(0.0, 0.0), pos2(10.0, 0.0), pos2(10.0, 10.0), pos2(0.0, 10.0), pos2(5.0, 5.0)];
+        let ring = hull_grown(&sq, 4.0);
+        assert!(ring.len() > 4);
+        for p in &ring {
+            let outside = p.x < -0.1 || p.x > 10.1 || p.y < -0.1 || p.y > 10.1;
+            assert!(outside, "{p:?} is inside");
+            let d = (p.x.clamp(0.0, 10.0) - p.x).hypot(p.y.clamp(0.0, 10.0) - p.y);
+            assert!((d - 4.0).abs() < 0.05, "{p:?} is {d} away");
         }
     }
 

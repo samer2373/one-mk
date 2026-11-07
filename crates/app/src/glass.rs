@@ -320,7 +320,7 @@ impl Px {
 impl Res {
     unsafe fn new(gl: &glow::Context) -> Result<Self, String> {
         let version = ShaderVersion::get(gl);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_GL").is_some() {
             let (renderer, samples) = unsafe { (gl.get_parameter_string(glow::RENDERER), gl.get_parameter_i32(glow::SAMPLES)) };
             eprintln!("one-mk-app: glass on {renderer}, {samples} samples, {version:?}");

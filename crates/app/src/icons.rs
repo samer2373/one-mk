@@ -22,6 +22,7 @@ pub enum Icon {
     Plus,
     Power,
     Update,
+    Clock,
 }
 
 /// Draws `icon` centred in `rect`, scaled from its 16-unit grid.
@@ -125,6 +126,10 @@ pub fn draw(p: &Painter, icon: Icon, rect: Rect, col: Color32) {
             line(&[(8.0, 2.0), (8.0, 10.5)]);
             line(&[(4.5, 7.0), (8.0, 10.5), (11.5, 7.0)]);
             line(&[(2.5, 13.5), (13.5, 13.5)]);
+        }
+        Icon::Clock => {
+            ring(8.0, 8.0, 6.25);
+            line(&[(8.0, 4.5), (8.0, 8.0), (10.5, 9.5)]);
         }
         Icon::Plus => {
             line(&[(8.0, 3.0), (8.0, 13.0)]);

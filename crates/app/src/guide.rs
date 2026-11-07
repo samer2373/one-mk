@@ -884,8 +884,9 @@ fn draw_card(
             let beat =
                 if nudging { 0.5 - 0.5 * ((now - v.phase_at) * std::f64::consts::TAU / 1.1).cos() as f32 } else { 0.0 };
             let c = pos2(inner.left() + 4.0, fy);
-            p.circle_filled(c, 7.0, SIGNAL.gamma_multiply(alpha * k * 0.18 * beat));
-            p.circle_filled(c, 3.5, wink(SIGNAL));
+            // Waiting is a state, not an action: ink, never Volt.
+            p.circle_filled(c, 7.0, INK2.gamma_multiply(alpha * k * 0.16 * beat));
+            p.circle_filled(c, 3.5, wink(INK2));
             let text = if v.covered || v.settings.is_none() {
                 "Waiting for System Settings…"
             } else {
@@ -932,7 +933,7 @@ fn frame_for(pos: Pos2, size: Vec2, pl: &Placement) -> Frame2 {
 /// stand-in for screenshots and demos on any system.
 enum Windows {
     Real,
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     Fake(debug::FakeWindow),
 }
 
@@ -944,7 +945,7 @@ pub struct Overlay {
     windows: Windows,
     screens: Option<Vec<Frame>>,
     /// Draw a pretend desktop in the main window instead (screenshots).
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     stage: Option<debug::Stage>,
     next_window_poll: f64,
     next_source_poll: f64,
@@ -968,7 +969,7 @@ impl Default for Overlay {
             source: None,
             windows: Windows::Real,
             screens: None,
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, feature = "design-evidence"))]
             stage: None,
             next_window_poll: 0.0,
             next_source_poll: 0.0,
@@ -1006,7 +1007,7 @@ impl Overlay {
     /// An idle overlay; in debug builds `ONE_MK_APP_GUIDE` and friends
     /// start it with stand-ins (see `debug`).
     pub fn from_env() -> Self {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if let Some(o) = debug::from_env() {
             return o;
         }
@@ -1105,7 +1106,7 @@ impl Overlay {
                     Windows::Real => {
                         let _ = one_mk_ctl::macos_windows::open_pane(pane);
                     }
-                    #[cfg(debug_assertions)]
+                    #[cfg(any(debug_assertions, feature = "design-evidence"))]
                     Windows::Fake(f) => f.open(ctx.map_or(self.started_at, |c| c.input(|i| i.time))),
                 },
                 Effect::BringAppToFront => {
@@ -1132,7 +1133,7 @@ impl Overlay {
         if now >= self.next_window_poll {
             let w = match &mut self.windows {
                 Windows::Real => one_mk_ctl::macos_windows::settings_window(),
-                #[cfg(debug_assertions)]
+                #[cfg(any(debug_assertions, feature = "design-evidence"))]
                 Windows::Fake(f) => f.state(now),
             };
             let frame = match w {
@@ -1244,7 +1245,7 @@ impl Overlay {
             ctx.request_repaint_after_secs(((self.next_window_poll - now).max(0.0) + 0.001).min(0.25) as f32);
         }
 
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if let Some(stage) = &self.stage {
             let arrow = f.arrow.map(|(d, t)| (d, t + slide));
             if let Some(a) = stage.draw(ctx, &screens, view.settings, f.card.translate(slide), arrow, &view, life, now)
@@ -1314,7 +1315,7 @@ impl Overlay {
 /// - `ONE_MK_GUIDE_STAGE=1|dark` draws a pretend desktop with a pretend
 ///   System Settings (light or dark) in the main window, with the card on
 ///   it, instead of a floating window: for screenshots (app.rs `shot`).
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "design-evidence"))]
 mod debug {
     use super::*;
 

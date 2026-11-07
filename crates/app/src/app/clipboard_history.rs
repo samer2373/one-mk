@@ -2,8 +2,11 @@ use super::*;
 
 impl App {
     pub(super) fn clipboard_history_cell(&mut self, ui: &mut Ui, rect: Rect) {
-        title_row(ui, rect, "History", 125.0);
-        let refresh = Rect::from_min_size(pos2(rect.right() - 124.0, rect.top() - 4.0), vec2(72.0, 28.0));
+        let clear_label = if self.clipboard_clear_confirm { "Sure?" } else { "Clear" };
+        let clear_width = button_width(ui, "Clear").max(button_width(ui, "Sure?"));
+        let refresh_width = button_width(ui, "Refresh");
+        title_row(ui, rect, "History", clear_width + refresh_width + 8.0);
+        let refresh = Rect::from_min_size(pos2(rect.right() - clear_width - refresh_width - 4.0, rect.top() - 4.0), vec2(refresh_width, 28.0));
         if button(ui, refresh, Id::unique("history-refresh"), "Refresh", Look::Quiet, self.prefs.history_enabled && self.running().is_some(), Some("Refresh clipboard history")).clicked() {
             self.clipboard_reveal = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
@@ -11,10 +14,9 @@ impl App {
             self.clipboard_history = None;
             self.link.history();
         }
-        let clear = Rect::from_min_size(pos2(rect.right() - 48.0, rect.top() - 4.0), vec2(48.0, 28.0));
+        let clear = Rect::from_min_size(pos2(rect.right() - clear_width, rect.top() - 4.0), vec2(clear_width, 28.0));
         let online = self.running().is_some();
-        let clear_label = if self.clipboard_clear_confirm { "Sure?" } else { "Clear" };
-        if button(ui, clear, Id::unique("history-clear"), clear_label, Look::Quiet, online, Some("Clear deletes all memory and saved history. Click again to confirm; Refresh cancels.")).clicked() {
+        if button(ui, clear, Id::unique("history-clear"), clear_label, Look::Quiet, online && self.prefs.history_enabled, Some("Clear deletes all memory and saved history. Click again to confirm; Refresh cancels.")).clicked() {
             if self.clipboard_clear_confirm { self.link.history_change(None); }
             self.clipboard_clear_confirm = !self.clipboard_clear_confirm;
             self.clipboard_reveal = None;
@@ -26,20 +28,20 @@ impl App {
             self.clipboard_reveal = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
         }
-        let persist = Rect::from_min_size(pos2(rect.left(), rect.top() + 62.0), vec2(rect.width(), 28.0));
+        let persist = Rect::from_min_size(pos2(rect.left(), rect.top() + 66.0), vec2(rect.width(), 28.0));
         if switch_help(ui, persist, Id::unique("history-persist"), "Keep history after restart", "history-persist", self.prefs.history_persist, self.prefs.history_enabled).clicked() {
             let enabled = !self.prefs.history_persist;
             self.set_pref("saved clipboard history", &["clipboard", "history", "persist", if enabled { "on" } else { "off" }], |prefs| prefs.history_persist = enabled);
         }
         let rect = Rect::from_min_max(rect.min + vec2(0.0, 32.0), rect.max);
         let privacy = if !self.prefs.history_enabled {
-            "Off: nothing you copy is kept. Turned on, it may keep passwords their app didn't mark as secret."
+            "History off · Nothing you copy is kept. If enabled, unmarked secrets may be retained."
         } else if self.prefs.history_persist {
             "Saved unencrypted on disk. Previews are hidden until Show. Clear deletes saved items too. Unmarked secrets may be retained."
         } else {
             "Memory only; hidden until Show. Unmarked secrets may be retained."
         };
-        let mut height = para(ui, pos2(rect.left(), rect.top() + 64.0), rect.width(), privacy, regular(T_META), INK2);
+        let mut height = para(ui, pos2(rect.left(), rect.top() + 72.0), rect.width(), privacy, regular(T_META), INK2);
         let failure = history_failure(self.running());
         let text = history_message(online, self.clipboard_history.as_ref(), self.prefs.history_enabled, failure);
         // A saved-history failure next to a list: say so above it, or the
@@ -65,27 +67,42 @@ impl App {
         egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(area.height()).show(&mut child, |ui| {
             for item in items {
                 let age = now.saturating_sub(item.timestamp);
-                let age = if age < 60 { "just now".into() } else if age < 3600 { format!("{} min ago", age / 60) } else { format!("{} h ago", age / 3600) };
+                let age = if age < 60 { "just now".into() } else if age < 3600 { format!("{} min ago", age / 60) } else if age < 86400 { format!("{} h ago", age / 3600) } else { format!("{} days ago", age / 86400) };
                 let detail = format!("{} · {age}", item.detail);
-                let (row, _) = ui.allocate_exact_size(vec2(area.width(), 44.0), Sense::hover());
+                // A list row, as a system list: what was copied, and under
+                // it where from and when; click the row to copy it here.
+                let (row, _) = ui.allocate_exact_size(vec2(area.width(), 50.0), Sense::hover());
                 let revealed = self.clipboard_reveal.as_ref().filter(|(id, _)| *id == item.id).map(|(_, content)| content.as_str());
-                let copy = Rect::from_min_size(row.min, vec2(row.width() - 64.0, 28.0));
-                let preview = revealed.unwrap_or("[hidden; choose Show]");
-                let label = fit(ui.painter(), preview, &semibold(T_BODY), copy.width() - 28.0);
+                let show = Rect::from_min_size(pos2(row.right() - 64.0, row.center().y - 14.0), vec2(64.0, 28.0));
+                let copy = Rect::from_min_max(row.min + vec2(0.0, 3.0), pos2(show.left() - 8.0, row.bottom() - 3.0));
+                let preview = revealed.unwrap_or("Hidden · choose Show to see it");
                 let accessible = format!("Copy clipboard item {} here: {preview}. {detail}", item.id);
-                let response = button(ui, copy, Id::unique(("history-copy", item.id)), &label, Look::Quiet, true, Some(&accessible)).on_hover_text(&accessible);
+                let id = Id::unique(("history-copy", item.id));
+                let response = ui.interact(copy, id, widgets::sense(ui, Sense::click()));
+                let hover = tween(ui.ctx(), id.with("hover"), f32::from(response.hovered()), 0.12, motion::out_cubic);
+                let down = tween(ui.ctx(), id.with("press"), f32::from(response.is_pointer_button_down_on()), 0.08, motion::out_cubic);
+                let p = ui.painter();
+                p.rect_filled(copy, CornerRadius::same(8), mix(mix(Color32::TRANSPARENT, BUTTON, hover), BUTTON_LIT, down));
+                let tx = copy.left() + 10.0;
+                let tw = copy.width() - 20.0;
+                p.text(pos2(tx, copy.top() + 15.0), Align2::LEFT_CENTER, fit(p, preview, &regular(T_BODY), tw), regular(T_BODY), if revealed.is_some() { INK } else { INK2 });
+                p.text(pos2(tx, copy.top() + 32.0), Align2::LEFT_CENTER, fit(p, &detail, &regular(T_META), tw), regular(T_META), INK3);
+                widgets::focus_ring(ui, &response, copy, 8);
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                widgets::a11y(&response, Role::Button, &accessible, None);
+                let response = response.on_hover_text("Copy this here");
                 if response.clicked() {
                     response.request_focus();
                     self.link.history_change(Some(item.id));
                 }
-                let show = Rect::from_min_size(pos2(row.right() - 60.0, row.top()), vec2(60.0, 28.0));
                 if button(ui, show, Id::unique(("history-show", item.id)), if revealed.is_some() { "Hide" } else { "Show" }, Look::Quiet, true, Some("Reveal or hide this item's preview on screen")).clicked() {
                     self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
                     if revealed.is_some() { self.clipboard_reveal = None; }
                     else { self.link.history_reveal(item.id, self.clipboard_reveal_epoch); }
                 }
-                let shown = fit(ui.painter(), &detail, &regular(T_META), row.width());
-                ui.painter().text(pos2(row.left(), row.top() + 35.0), Align2::LEFT_CENTER, shown, regular(T_META), INK2);
+                ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
             }
         });
     }

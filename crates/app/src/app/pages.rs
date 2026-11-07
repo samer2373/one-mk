@@ -37,27 +37,56 @@ enum Fix {
     OpenPermissionSettings,
     OpenFirewallSettings,
     Update,
+    /// The steps for the desktop's own permission dialog (not macOS).
+    DesktopGuide,
 }
 
 fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
+    // One family: a 14-point round badge each, told apart by its mark (and
+    // by the word beside the title), never by colour alone.
+    let r = 7.0;
+    let colour = match v { Verdict::Pass => OK, Verdict::Skip => INK2, Verdict::Warn => WARN, Verdict::Fail => ERROR };
     match v {
-        Verdict::Pass => widgets::draw_check(p, c, 12.0, INK2, 1.0),
-        // A step still to take: an open ring in the accent.
+        Verdict::Pass => widgets::draw_check(p, c, 12.0, colour, 1.0),
         Verdict::Skip => {
-            p.circle_stroke(c, 5.5, Stroke::new(1.5, ACCENT));
+            p.circle_stroke(c, r, Stroke::new(1.5, colour));
+            p.line_segment([c, c + vec2(0.0, -4.0)], Stroke::new(1.5, colour));
+            p.line_segment([c, c + vec2(3.0, 1.0)], Stroke::new(1.5, colour));
         }
-        Verdict::Warn => {
-            // A triangle with a bar and a dot: not a ring, which reads as an
-            // empty radio button.
-            let (top, l, r) = (c + vec2(0.0, -6.5), c + vec2(-7.0, 5.5), c + vec2(7.0, 5.5));
-            p.add(egui::Shape::closed_line(vec![top, r, l], Stroke::new(1.5, INK)));
-            p.line_segment([c + vec2(0.0, -2.0), c + vec2(0.0, 1.5)], Stroke::new(1.5, INK));
-            p.circle_filled(c + vec2(0.0, 3.6), 0.9, INK);
-        }
-        Verdict::Fail => {
-            p.circle_filled(c, 6.0, ERROR);
+        Verdict::Warn | Verdict::Fail => {
+            p.add(egui::Shape::closed_line(vec![c + vec2(0.0, -r), c + vec2(r, r), c + vec2(-r, r)], Stroke::new(1.5, colour)));
+            p.text(c + vec2(0.0, 2.0), Align2::CENTER_CENTER, "!", semibold(11.0), colour);
         }
     }
+}
+
+/// The word that goes with a badge.
+fn verdict_word(v: Verdict) -> &'static str {
+    match v {
+        Verdict::Pass => "passed",
+        Verdict::Skip => "waiting",
+        Verdict::Warn => "warning",
+        Verdict::Fail => "problem",
+    }
+}
+
+/// Whether a line the daemon says now is still pending, and if so whether
+/// it waits on the person (`true`: a permission to answer) or on oneMK.
+fn pending_kind(line: &str) -> Option<bool> {
+    let l = line.to_lowercase();
+    if ["waiting for your approval", "is asking", "choose allow", "allow one-mk", "not allowed"].iter().any(|w| l.contains(w)) {
+        Some(true)
+    } else if ["being set up", "starting", "setting up"].iter().any(|w| l.contains(w)) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// Whether a row's written fix shows: always, unless the window's own
+/// button does that very thing (Start, Pair, Allow...).
+fn shows_fix_text(here: &Option<(&'static str, Fix)>) -> bool {
+    matches!(here, None | Some((_, Fix::OpenPermissionGuide | Fix::DesktopGuide)))
 }
 
 /// One line of Health: a check, or something the daemon says right now
@@ -78,11 +107,26 @@ fn text_height(ui: &Ui, text: &str, width: f32) -> f32 {
     ui.painter().layout_job(job).size().y
 }
 
+fn current_check(mut check: Check, status: Option<&Status>) -> Option<Check> {
+    if let Some(status) = status {
+        if check.id == "pairing" && !status.peers.is_empty() {
+            check.verdict = Verdict::Pass;
+            check.detail = if status.peers.len() == 1 { "1 paired computer is saved.".to_owned() } else { format!("{} paired computers are saved.", status.peers.len()) };
+            check.fix = None;
+            check.action = None;
+        }
+        if matches!(check.id.as_str(), "input" | "permissions" | "accessibility") && status.input_lines().iter().any(|line| pending_kind(&line.detail).is_some()) {
+            return None;
+        }
+    }
+    Some(check)
+}
+
 /// A "Needs you" row's height: title, what is wrong, what to do.
 fn item_height(ui: &Ui, i: &Item, width: f32) -> f32 {
     let title = if i.title.is_empty() { 0.0 } else { 24.0 };
     let fix = match (&i.here, &i.fix) {
-        (None, Some(f)) => text_height(ui, f, width) + 6.0,
+        (here, Some(f)) if shows_fix_text(here) => text_height(ui, f, width) + 6.0,
         _ => 0.0,
     };
     (12.0 + title + text_height(ui, &i.detail, width) + fix + 14.0).max(if i.here.is_some() || i.fix.is_some() { 56.0 } else { 44.0 })
@@ -133,9 +177,6 @@ impl App {
         let mut out: Vec<(Color32, String)> = s.input_lines().into_iter().map(|line| (
             if line.severity == one_mk_ctl::status::Severity::Problem { ERROR } else { INK2 }, line.detail,
         )).collect();
-        if out.is_empty() {
-            out.push((INK2, "Mouse and keyboard sharing works: the desktop allowed it.".into()));
-        }
         if let Some(h) = s.hotkeys_line() {
             out.push((INK2, h));
         }
@@ -146,12 +187,21 @@ impl App {
     /// needs the person (each with the button that fixes it, when the
     /// window can), how each paired computer answers, and what works. A
     /// check about something this computer doesn't use isn't shown.
+    pub(super) fn health_checks(&self) -> Option<Vec<Check>> {
+        let (report, _) = self.doctor.as_ref()?;
+        let checks = report.as_ref().ok()?;
+        Some(checks.iter().filter_map(|check| {
+            let check = current_check(check.clone(), self.running())?;
+            (check.verdict != Verdict::Skip || self.window_fix(&check).is_some()).then_some(check)
+        }).collect())
+    }
+
     pub(super) fn health(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
         let running = self.busy.contains(&Job::Doctor);
         let checks: Option<Vec<Check>> = match &self.doctor {
             // A neutral check shows only when there is something to do
             // about it (not paired yet: Pair); the others say nothing new.
-            Some((Ok(c), _)) => Some(c.iter().filter(|c| c.verdict != Verdict::Skip || self.window_fix(c).is_some()).cloned().collect()),
+            Some((Ok(_), _)) => self.health_checks(),
             _ => None,
         };
         // What needs the person: the daemon's own problems first (they are
@@ -159,12 +209,46 @@ impl App {
         // Off, the checks say so themselves (with Start).
         let live = if self.running().is_some() { self.live_lines() } else { vec![] };
         let mut needs: Vec<Item> = live.iter().filter(|(c, _)| *c == ERROR).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Fail, here: None, k: usize::MAX }).collect();
-        let mut works: Vec<Item> = live.iter().filter(|(c, _)| *c != ERROR).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Pass, here: None, k: usize::MAX }).collect();
+        // A line that waits on the person (a permission dialog to answer)
+        // or on oneMK (still setting up) is pending: never a tick.
+        // On a Mac the guide walks through the permission; elsewhere the
+        // dialog is the desktop's own, so the action is to check again.
+        let ask = if cfg!(target_os = "macos") { Some(("Open guide", Fix::OpenPermissionGuide)) } else { Some(("Open guide", Fix::DesktopGuide)) };
+        let mut works: Vec<Item> = vec![];
+        // The daemon's shortcut line says what the "Keyboard shortcuts"
+        // check says: one row, not two.
+        let has_hotkeys_check = checks.as_ref().is_some_and(|c| c.iter().any(|c| c.id == "hotkeys"));
+        let hotkeys_line = self.running().and_then(|s| s.hotkeys_line());
+        for (c, l) in live.iter().filter(|(c, _)| *c != ERROR) {
+            let _ = c;
+            if has_hotkeys_check && hotkeys_line.as_deref() == Some(l.as_str()) {
+                continue;
+            }
+            match pending_kind(l) {
+                Some(asks) => needs.push(Item { title: if asks { "Pending permission".into() } else { "Setting up".into() }, detail: l.clone(), fix: None, verdict: Verdict::Skip, here: if asks { ask } else { None }, k: usize::MAX }),
+                None => works.push(Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Pass, here: None, k: usize::MAX }),
+            }
+        }
         if let Some(checks) = &checks {
             for (k, c) in checks.iter().enumerate() {
-                let item = Item { title: c.title.clone(), detail: c.detail.clone(), fix: c.fix.clone(), verdict: c.verdict, here: self.window_fix(c), k };
+                // Every row that isn't a pass carries an action: the
+                // window's own fix, a command to copy, or Recheck.
+                let here = self.window_fix(c).or_else(|| match (&c.fix, c.verdict) {
+                    (_, Verdict::Pass) => None,
+                    (Some(f), _) if view::fix_command(f).1 => None,
+                    _ if matches!(c.id.as_str(), "input" | "permissions" | "accessibility") => Some(("Open guide", if cfg!(target_os = "macos") { Fix::OpenPermissionGuide } else { Fix::DesktopGuide })),
+                    // Nothing the window can do here: the fix is in words,
+                    // and Recheck (once, at the top) checks again.
+                    _ => None,
+                });
+                let item = Item { title: c.title.clone(), detail: c.detail.clone(), fix: c.fix.clone(), verdict: c.verdict, here, k };
                 if c.verdict == Verdict::Pass { works.push(item) } else { needs.push(item) }
             }
+        }
+        // A permission the desktop is asking for now is the same thing as
+        // doctor's "not allowed yet": one row (Pending), not two.
+        if needs.iter().any(|i| i.title == "Pending permission") {
+            needs.retain(|i| !(i.title == "Permissions" && i.verdict != Verdict::Fail));
         }
         // Worst first; steps still to take (neutral) last.
         needs.sort_by_key(|i| match i.verdict {
@@ -173,8 +257,9 @@ impl App {
             _ => 2,
         });
 
-        let w = (rect.width() - 48.0).min(820.0);
-        let x = rect.center().x - w / 2.0;
+        let w = (rect.width() - 48.0).min(960.0);
+        // Inset as Settings is: the column starts under the page title.
+        let x = rect.left() + 24.0;
         let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 8.0), rect.max - vec2(0.0, 8.0));
         let mut child = ui.new_child(UiBuilder::new().max_rect(area));
         child.set_clip_rect(area);
@@ -197,22 +282,34 @@ impl App {
             let (headline, tone) = if running && checks.is_none() {
                 ("Checking this computer…".to_owned(), INK2)
             } else if needs.is_empty() && checks.is_some() {
-                ("Everything is working".to_owned(), OK)
+                ("Checks pass".to_owned(), OK)
             } else if needs.is_empty() {
                 ("Not checked yet".to_owned(), INK2)
-            } else if steps_only {
-                (if needs.len() == 1 { "One step left".to_owned() } else { format!("{} steps left", needs.len()) }, ACCENT)
-            } else if needs.len() == 1 {
-                ("One thing needs you".to_owned(), if fails > 0 { ERROR } else { INK })
             } else {
-                (format!("{} things need you", needs.len()), if fails > 0 { ERROR } else { INK })
+                // The count names the groups below it: problems under Needs
+                // you, the rest under Pending.
+                let pending = needs.iter().filter(|i| i.verdict == Verdict::Skip).count();
+                let problems = needs.len() - pending;
+                let asks = needs.iter().any(|i| i.verdict == Verdict::Skip && matches!(i.here, Some((_, Fix::OpenPermissionGuide | Fix::DesktopGuide))));
+                let p_words = match (pending, asks) {
+                    (1, true) => "1 awaiting permission".to_owned(),
+                    (n, true) => format!("{n} awaiting you"),
+                    (n, false) => format!("{n} pending"),
+                };
+                let tone = if fails > 0 { ERROR } else { WARN };
+                match (problems, steps_only) {
+                    (_, true) => (p_words, INK),
+                    (n, _) if pending == 0 => (format!("{n} {} attention", if n == 1 { "needs" } else { "need" }), tone),
+                    (n, _) => (format!("{n} {} attention · {p_words}", if n == 1 { "needs" } else { "need" }), tone),
+                }
             };
             let sub = match &self.doctor {
                 Some((Err(e), _)) => format!("The checks didn't run: {e}"),
                 Some((Ok(_), at)) => {
                     let ago = (now - at).max(0.0);
-                    let when = if ago < 60.0 { "just now".to_owned() } else if ago < 3600.0 { format!("{} min ago", (ago / 60.0) as u32) } else { format!("{} h ago", (ago / 3600.0) as u32) };
-                    format!("{} checks pass · checked {when}", works.iter().filter(|i| i.k != usize::MAX).count())
+                    let when = if ago < 60.0 { "just now".to_owned() } else if ago < 3600.0 { format!("{} min ago", (ago / 60.0) as u32) } else if ago < 86400.0 { format!("{} h ago", (ago / 3600.0) as u32) } else { format!("{} days ago", (ago / 86400.0) as u32) };
+                    let passed = works.iter().filter(|item| item.k != usize::MAX).count();
+                    format!("{passed} {} · checked {when}", if passed == 1 { "check passes" } else { "checks pass" })
                 }
                 None => String::new(),
             };
@@ -226,14 +323,8 @@ impl App {
                 let turn = if motion::reduced() { 0.0 } else { (now * 5.0) as f32 };
                 widgets::draw_refresh(&p, Rect::from_center_size(medal, vec2(18.0, 18.0)), INK2, turn);
                 ui.ctx().request_repaint_after_secs(1.0 / 30.0);
-            } else if tone == OK {
-                widgets::draw_check(&p, medal, 18.0, OK, 1.0);
-            } else if needs.is_empty() {
-                p.circle_filled(medal, 3.0, INK2);
-            } else if steps_only {
-                p.text(medal, Align2::CENTER_CENTER, needs.len().to_string(), semibold(T_TITLE + 1.0), tone);
             } else {
-                p.text(medal, Align2::CENTER_CENTER, "!", semibold(T_TITLE + 3.0), tone);
+                verdict_icon(&p, medal, if steps_only || checks.is_none() { Verdict::Skip } else if needs.is_empty() { Verdict::Pass } else if fails > 0 { Verdict::Fail } else { Verdict::Warn });
             }
             let bw = button_width(ui, "Recheck");
             let tx = hero.left() + 84.0;
@@ -250,7 +341,10 @@ impl App {
             a11y_text(ui, Id::unique("health-summary"), hero, Role::Status, &format!("{headline}. {sub}"), Some(Live::Polite));
             ui.add_space(14.0);
 
-            // What needs the person.
+            // What needs the person (problems), then what is pending (a step
+            // to take, or something still on its way): two groups.
+            let (pending, problems): (Vec<&Item>, Vec<&Item>) = needs.iter().partition(|i| i.verdict == Verdict::Skip);
+            for (group_title, needs) in [("Needs you", problems), ("Pending", pending)] {
             if !needs.is_empty() {
                 let inner = w - 36.0 - 26.0;
                 let bw = needs.iter().map(|i| match (&i.here, &i.fix) {
@@ -262,7 +356,7 @@ impl App {
                 let heights: Vec<f32> = needs.iter().map(|i| item_height(ui, i, text_w)).collect();
                 let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
                 let r = col(ui, h);
-                card(ui, r, if steps_only { "Next" } else { "Needs you" });
+                card(ui, r, group_title);
                 let mut y = r.top() + 48.0;
                 for (n, (i, ih)) in needs.iter().zip(&heights).enumerate() {
                     let row = Rect::from_min_size(pos2(r.left() + 18.0, y), vec2(w - 36.0, *ih));
@@ -271,20 +365,35 @@ impl App {
                     let tx = row.left() + 26.0;
                     let mut ty = row.top() + 12.0;
                     if !i.title.is_empty() {
+                        let tw = text_width(ui, &i.title, semibold(T_BODY));
                         p.text(pos2(tx, ty + 10.0), Align2::LEFT_CENTER, &i.title, semibold(T_BODY), INK);
+                        p.text(pos2(tx + tw + 8.0, ty + 10.5), Align2::LEFT_CENTER, verdict_word(i.verdict), regular(T_META), INK3);
                         ty += 24.0;
                     }
-                    ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, regular(T_BODY), if i.title.is_empty() { INK } else { INK2 });
-                    let fix_text = match &i.here {
-                        Some(_) => None,
-                        None => i.fix.clone(),
-                    };
+                    // What is wrong in ink; what to do, quieter, under it.
+                    ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, regular(T_BODY), INK);
+                    let fix_text = i.fix.clone().filter(|_| shows_fix_text(&i.here));
                     if let Some(f) = &fix_text {
-                        widgets::para_code(ui, pos2(tx, ty + 6.0), text_w, f, regular(T_BODY), INK);
+                        widgets::para_code(ui, pos2(tx, ty + 6.0), text_w, f, regular(T_BODY), INK2);
                     }
                     let br = Rect::from_min_size(pos2(row.right() - bw, row.top() + 6.0), vec2(bw, 32.0));
                     if let Some((label, job)) = &i.here {
-                        if button(ui, br, Id::unique(("fix-here", i.k)), label, Look::Quiet, !running, None).clicked() {
+                        let resp = button(ui, br, Id::unique(("fix-here", i.k)), label, Look::Quiet, !running, None);
+                        if matches!(job, Fix::DesktopGuide) {
+                            // The desktop's own dialog: the steps, beside the button.
+                            egui::Popup::menu(&resp).width(320.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
+                                ui.set_max_width(320.0);
+                                let steps = [
+                                    "1. Look for your desktop's sharing window (“Remote desktop” or “Input capture”). It can be behind other windows; check the taskbar.",
+                                    "2. Choose Allow (or Share). oneMK only asks for the mouse and keyboard.",
+                                    "3. Back here, choose Recheck. Dismissed it? Stop and start oneMK to be asked again.",
+                                ];
+                                for t in steps {
+                                    ui.add(egui::Label::new(egui::RichText::new(t).font(regular(T_BODY)).color(INK_HOVER)).wrap());
+                                    ui.add_space(4.0);
+                                }
+                            });
+                        } else if resp.clicked() {
                             fix_now = Some(*job);
                         }
                     } else if let Some(f) = &i.fix {
@@ -296,14 +405,17 @@ impl App {
                             }
                         }
                     }
-                    let label = format!("{}{}. {}", i.title, if i.title.is_empty() { "" } else { ": needs you" }, i.detail);
-                    a11y_text(ui, Id::unique(("need", n)), row, Role::ListItem, &label, None);
+                    let state = if group_title == "Pending" { "is waiting" } else { "needs attention" };
+                    let fix = i.fix.as_deref().filter(|_| shows_fix_text(&i.here)).map_or(String::new(), |f| format!(" {}", f.replace('`', "")));
+                    let label = if i.title.is_empty() { format!("{}{fix}", i.detail) } else { format!("{} {state}. {}{fix}", i.title, i.detail) };
+                    a11y_text(ui, Id::unique(("need", group_title, n)), row, Role::ListItem, &label, None);
                     if n + 1 < needs.len() {
                         ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
                     }
                     y += ih;
                 }
                 ui.add_space(14.0);
+            }
             }
 
             // How each paired computer answers.
@@ -329,19 +441,19 @@ impl App {
                 }).collect();
                 let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
                 let r = col(ui, h);
-                card(ui, r, "Working");
+                card(ui, r, "Passed");
                 let mut y = r.top() + 44.0;
                 for (n, (i, ih)) in works.iter().zip(&heights).enumerate() {
                     let p = ui.painter().clone();
                     let tx = r.left() + 18.0 + 26.0;
-                    widgets::draw_check(&p, pos2(r.left() + 26.0, y + 20.0), 12.0, OK, 1.0);
+                    verdict_icon(&p, pos2(r.left() + 26.0, y + 20.0), Verdict::Pass);
                     if i.title.is_empty() {
                         widgets::para_code(ui, pos2(tx, y + 10.0), text_w, &i.detail, regular(T_BODY), INK);
                     } else {
                         p.text(pos2(tx, y + 20.0), Align2::LEFT_CENTER, line(i), regular(T_BODY), INK);
                         widgets::para_code(ui, pos2(tx, y + 32.0), text_w, &i.detail, regular(T_META), INK3);
                     }
-                    a11y_text(ui, Id::unique(("works", n)), Rect::from_min_size(pos2(r.left(), y), vec2(w, *ih)), Role::ListItem, &format!("{}: works. {}", line(i), i.detail), None);
+                    a11y_text(ui, Id::unique(("works", n)), Rect::from_min_size(pos2(r.left(), y), vec2(w, *ih)), Role::ListItem, &if i.title.is_empty() { i.detail.clone() } else { format!("{} passed. {}", line(i), i.detail) }, None);
                     y += ih;
                 }
                 ui.add_space(8.0);
@@ -381,15 +493,16 @@ impl App {
         let s = self.running();
         let peers = s.map_or(0, |status| status.peers.len());
         let heights = [
-            48.0 + 5.0 * EDGE_ROW + 14.0,
+            // The fifth row (Use shared rules) only for one edge's rules.
+            48.0 + 34.0 + 4.0 * EDGE_ROW + if ui.ctx().data(|d| d.get_temp::<String>(Id::unique("edge-scope"))).unwrap_or_default().is_empty() { 0.0 } else { 36.0 } + 2.0,
             48.0 + 3.0 * HELP_ROW - 6.0 + 14.0,
             48.0 + HELP_ROW - 6.0 + 14.0,
-            48.0 + 62.0 + 56.0 * self.prefs.hotkeys.len() as f32 + if s.is_some_and(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
-            48.0 + 22.0 + (SWAP_ROW * peers as f32).max(40.0) + 14.0,
+            48.0 + 62.0 + super::settings_controls::SHORTCUT_ROW * self.prefs.hotkeys.len() as f32 + 10.0 + if s.is_some_and(|status| status.hotkeys != "on" && crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
+            48.0 + 22.0 + (super::swap_row_h(col_w - 36.0) * peers as f32).max(40.0) + 14.0,
             48.0 + 4.0 * super::settings_controls::HOOK_H + 60.0,
             48.0 + 96.0 + 14.0,
             48.0 + 260.0 + 14.0,
-            self.updates_card_h(),
+            self.updates_card_h(ui, col_w),
         ];
         // Two columns: crossing, power, games, pointer and layout, and
         // updates on the left; keys and commands on the right. One column
@@ -407,20 +520,13 @@ impl App {
         let mut child = ui.new_child(UiBuilder::new().max_rect(area.expand2(vec2(6.0, 0.0))));
         child.set_clip_rect(area.expand2(vec2(8.0, 4.0)));
         let scroll = egui::ScrollArea::vertical().id_salt("advanced").auto_shrink([false, false]);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
         scroll.show(&mut child, |ui| {
             let (all, _) = ui.allocate_exact_size(vec2(area.width(), total + 44.0), Sense::hover());
-            // Credits for what the window draws and isn't ours.
-            let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for oneMK.";
-            let credit_at = pos2(all.left() + 4.0, all.bottom() - 16.0);
-            let shown = fit(ui.painter(), credit, &regular(T_META), all.width() - 8.0);
-            ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), INK3);
-            let link = ui.interact(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0)), Id::unique("credit-mouse"), Sense::click());
-            if link.on_hover_text("Open the model's page").clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
-            }
             let r = |k: usize| Rect::from_min_size(pos2(all.left() + at[k].0 as f32 * (col_w + gap), all.top() + at[k].1), vec2(col_w, heights[k]));
+            // Updates first: first on the page, first in Tab order.
+            self.updates_card(ui, r(8));
             self.edges_card(ui, r(0));
             self.power_card(ui, r(1));
             let c = card(ui, r(2), "Games");
@@ -433,7 +539,22 @@ impl App {
             self.typing_card(ui, r(6));
             let c = card(ui, r(7), "Pointer and layout");
             self.extra_controls(ui, c);
-            self.updates_card(ui, r(8));
+            // Credits for what the window draws and isn't ours: last on the
+            // page, and last in Tab order.
+            let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for oneMK.";
+            let credit_at = pos2(all.left() + 4.0, all.bottom() - 16.0);
+            let shown = fit(ui.painter(), credit, &regular(T_META), all.width() - 8.0);
+            let link = ui.interact(widgets::hit_rect(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0))), Id::unique("credit-mouse"), Sense::click());
+            let lr = link.rect;
+            ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), if link.hovered() { INK } else { INK3 });
+            if link.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            widgets::focus_ring(ui, &link, lr, 6);
+            widgets::a11y(&link, Role::Link, "Credit: open the 3D mouse model's page", None);
+            if link.on_hover_text("Open the model's page").clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
+            }
         });
     }
 
@@ -525,7 +646,7 @@ impl App {
             let v = if p.sleep_sync { "off" } else { "on" };
             self.set_pref("sleep sync", &["power", "--sleep-sync", v], |p| p.sleep_sync = !p.sleep_sync);
         }
-        if switch_help(ui, row(2), Id::unique("lock-sync"), "Lock all when this one locks", "lock-sync", p.lock_sync, true).clicked() {
+        if switch_help(ui, row(2), Id::unique("lock-sync"), "Lock every screen with this one", "lock-sync", p.lock_sync, true).clicked() {
             let v = if p.lock_sync { "off" } else { "on" };
             self.set_pref("lock sync", &["lock-sync", v], |p| p.lock_sync = !p.lock_sync);
         }
@@ -543,5 +664,30 @@ impl App {
     fn hooks_card(&mut self, ui: &mut Ui, r: Rect) {
         let c = card(ui, r, "Run commands");
         self.hook_controls(ui, c);
+    }
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+
+    fn check(id: &str) -> Check {
+        Check { id: id.into(), title: id.into(), detail: "Not paired; permission not granted".into(), verdict: Verdict::Warn, fix: Some("Pair".into()), action: Some("Pair".into()) }
+    }
+
+    #[test]
+    fn live_peers_supersede_a_stale_not_paired_check() {
+        let status = Status::decode("ok\nname\tDesk\nid\tabcd-ef01\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\n").unwrap();
+        let result = current_check(check("pairing"), Some(&status)).unwrap();
+        assert_eq!(result.verdict, Verdict::Pass);
+        assert_eq!(result.detail, "1 paired computer is saved.");
+        assert!(result.fix.is_none() && result.action.is_none());
+    }
+
+    #[test]
+    fn a_live_permission_request_has_one_authoritative_row() {
+        let status = Status::decode("ok\nname\tDesk\nid\tabcd-ef01\ninput\tWaiting for your approval: allow one-mk in the desktop's dialog.\n").unwrap();
+        assert!(current_check(check("input"), Some(&status)).is_none());
+        assert!(current_check(check("firewall"), Some(&status)).is_some());
     }
 }

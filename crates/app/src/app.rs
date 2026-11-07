@@ -36,9 +36,17 @@ use std::sync::mpsc::Receiver;
 
 const TOP_H: f32 = 56.0;
 const PANEL_H: f32 = 196.0;
+/// Below this height (plus 22 pt for each other computer) the desk shows
+/// its computers as named chips: monitors any smaller can't carry names.
+const COMPACT_BELOW: f32 = 128.0;
 /// Inner padding of the panel's cells.
 const PAD: f32 = 20.0;
 const GHOST: &str = "\u{0}pairing";
+
+fn truncated_name_target(focused: Option<usize>, hovered: Option<usize>, truncated: &std::collections::HashSet<usize>) -> Option<(usize, bool)> {
+    focused.filter(|index| truncated.contains(index)).map(|index| (index, true))
+        .or_else(|| hovered.filter(|index| truncated.contains(index)).map(|index| (index, false)))
+}
 /// Wallpapers for paired computers: low chroma, about equal lightness.
 /// Each computer's wallpaper on the desk: a light colour and a deep one,
 /// as desktop pictures are (dusk violet, lagoon, ember, ocean); deep
@@ -83,6 +91,12 @@ const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"),
 const SWAPS: [(&str, &str); 3] = [("auto", "Auto"), ("on", "Always swap"), ("off", "Never swap")];
 /// One computer's row in the Ctrl and Cmd card.
 const SWAP_ROW: f32 = 36.0;
+
+/// A Ctrl and Cmd row `inner_w` wide: one line when the full choices fit
+/// beside the name, else the name above and the choices across the row.
+pub(crate) fn swap_row_h(inner_w: f32) -> f32 {
+    if inner_w * 0.6 >= 264.0 { SWAP_ROW } else { 66.0 }
+}
 
 enum Drag {
     /// `place` is set when both computers' monitors are known: then the
@@ -156,6 +170,8 @@ struct Toast {
     error: bool,
     at: f64,
     life: f32,
+    /// What failed, when doing it again is safe: "Try again" does that.
+    retry: Option<Job>,
 }
 
 /// What a cell of the panel shows. When it changes, the old one fades
@@ -164,12 +180,8 @@ struct Toast {
 enum Cell {
     Head(String, String),
     Inspector(Option<String>),
-    Clipboard,
-    ClipboardHistory,
     /// This computer's switches.
     Controls,
-    FilesHead(String, String),
-    FilesSettings,
     Arrange(Option<String>),
     LineUp(Option<String>),
     Profiles,
@@ -195,6 +207,7 @@ pub struct App {
     update_ui: updates::UpdateUi,
     palette: palette::Palette,
     wallpaper_ui: wallpaper::WallpaperUi,
+    files_ui: cells::FilesUi,
     link: Link,
     rx: Receiver<Event>,
     /// `None` until the first look at the daemon.
@@ -237,6 +250,11 @@ pub struct App {
     apart: HashSet<String>,
     /// The banner over the desk as drawn this frame (see `refresh_notice`).
     notice: desk_cards::NoticeHold,
+    /// Where the toast goes in the desk's band this frame (None: off the desk).
+    toast_slot: Option<Rect>,
+    /// How tall each short cell's contents were last drawn (cards are
+    /// sized to them, not stretched to the tallest).
+    cell_h: HashMap<&'static str, f32>,
     pending_swap: HashMap<String, String>,
     /// A computer that should hop (not slide) to its new place.
     hop: Option<String>,
@@ -359,6 +377,25 @@ fn slots(span: (f32, f32), peers: &[(String, Side, f32)]) -> HashMap<String, (sc
     out
 }
 
+fn separate_crowded_slots(places: &mut HashMap<String, (scene::V3, f32)>, widths: &[(String, f32)], mine: f32, mounted: &HashSet<String>) {
+    // Exact placements describe touching screen edges. Moving those for
+    // presentation makes a dropped computer spring away from its neighbour.
+    let mut ordered: Vec<_> = widths.iter().filter(|(id, _)| !mounted.contains(id)).cloned().collect();
+    ordered.sort_by(|first, second| places[&first.0].0.x.total_cmp(&places[&second.0].0.x).then(first.0.cmp(&second.0)));
+    for left in [true, false] {
+        let mut edge = mine;
+        let mut group: Vec<_> = ordered.iter().filter(|(id, _)| (places[id].0.x < 0.0) == left).cloned().collect();
+        if left { group.reverse(); }
+        for (id, half) in group {
+            let (position, scale) = places.get_mut(&id).expect("paired slot");
+            let half = half * *scale;
+            let distance = position.x.abs().max(edge + 32.0 + half);
+            position.x = if left { -distance } else { distance };
+            edge = distance + half;
+        }
+    }
+}
+
 // ---------- the panel's painted rows ----------
 
 /// Status by shape, not colour: a filled dot when connected, a ring when
@@ -371,7 +408,7 @@ fn chip(ui: &Ui, c: Rect, label: &str, dot: Option<bool>) -> f32 {
     let at = pos2(c.right() - tw - 9.0, mid);
     match dot {
         Some(true) => {
-            p.circle_filled(at, 3.0, INK);
+            p.circle_filled(at, 3.0, OK);
         }
         Some(false) => {
             p.circle_stroke(at, 2.6, Stroke::new(1.5, OFF));
@@ -419,7 +456,7 @@ impl App {
         scene.cursor_on = "me".into();
         #[allow(unused_mut)]
         let mut tab = Tab::Desk;
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         match std::env::var("ONE_MK_APP_TAB").as_deref() {
             Ok("files") => tab = Tab::Files,
             Ok("wallpaper") => tab = Tab::Wallpaper,
@@ -430,7 +467,7 @@ impl App {
             Ok("keys") => tab = Tab::Keys,
             _ => {}
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if let Some(z) = std::env::var("ONE_MK_APP_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()) {
             cc.egui_ctx.set_zoom_factor(z);
         }
@@ -439,7 +476,8 @@ impl App {
         widgets::set_glass(&cc.egui_ctx, glass.clone());
         Ok(Self {
             glass,
-            dragged_once: link.dir.join(".window-dragged").exists(),
+            // Dragged once, or the hint already shown in full once: no hint.
+            dragged_once: link.dir.join(".window-dragged").exists() || link.dir.join(".window-hinted").exists(),
             backdrop_was: 0,
             scene_moving: false,
             status_seen: 0,
@@ -456,6 +494,7 @@ impl App {
             update_ui: updates::UpdateUi::default(),
             palette: palette::Palette::default(),
             wallpaper_ui: wallpaper::WallpaperUi::default(),
+            files_ui: cells::FilesUi::default(),
             scene,
             tab,
             drag: None,
@@ -477,6 +516,8 @@ impl App {
             answered: None,
             apart: HashSet::new(),
             notice: desk_cards::NoticeHold::default(),
+            toast_slot: None,
+            cell_h: HashMap::new(),
             pending_swap: HashMap::new(),
             hop: None,
             just_paired: None,
@@ -516,14 +557,55 @@ impl App {
     }
 
     fn toast(&mut self, text: impl Into<String>, now: f64) {
-        self.toast = Some(Toast { text: text.into(), detail: None, error: false, at: now, life: 3.5 });
+        self.toast = Some(Toast { text: text.into(), detail: None, error: false, at: now, life: 3.5, retry: None });
     }
 
     /// An error says what went wrong and what to do; the raw reason goes
     /// underneath. It stays until dismissed, or for ten seconds.
     fn toast_error(&mut self, text: impl Into<String>, detail: Option<String>, now: f64) {
         let detail = detail.map(|d| crate::view::window_issue(d.trim())).filter(|d| !d.is_empty());
-        self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0 });
+        self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0, retry: None });
+    }
+
+    /// Whether `job` can simply be run again from an error toast.
+    fn retryable(job: &Job) -> bool {
+        matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Open)
+    }
+
+    /// Runs a failed job again, as the control that asked for it did.
+    fn retry(&mut self, job: Job) {
+        match job.clone() {
+            Job::Layout { id, side, .. } => self.choose_side(&id, side, true),
+            Job::Swap { id, name, swap } => {
+                self.pending_swap.insert(id.clone(), swap.clone());
+                self.busy.push(job);
+                self.link.set_swap(&id, &name, &swap);
+                self.sync_scene();
+            }
+            Job::TakeBack => {
+                self.busy.push(job);
+                self.link.take_back();
+            }
+            Job::Start => {
+                self.busy.push(job);
+                self.link.start();
+            }
+            Job::Autostart(on) => {
+                self.busy.push(job);
+                self.autostart = Some(on);
+                self.link.set_autostart(on);
+            }
+            Job::Set { what, args } => {
+                self.busy.push(job);
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                self.link.set(&what, &args);
+            }
+            Job::Open => {
+                self.busy.push(job);
+                self.link.open_downloads();
+            }
+            _ => {}
+        }
     }
 
     fn handle_events(&mut self, now: f64) {
@@ -644,6 +726,17 @@ impl App {
             return;
         };
         let e = Some(e);
+        let again = Self::retryable(&what).then(|| what.clone());
+        self.finished_error(what, e, now);
+        if let (Some(t), Some(job)) = (self.toast.as_mut(), again)
+            && t.error
+            && t.at == now
+        {
+            t.retry = Some(job);
+        }
+    }
+
+    fn finished_error(&mut self, what: Job, e: Option<String>, now: f64) {
         match what {
             Job::Update => { self.update_output = e; self.update_ui.failed = true; }
             Job::UpdateCheck => self.toast_error("Couldn't check for updates.", e, now),
@@ -780,9 +873,9 @@ impl App {
             self.sync_scene();
         }
         // The success sheet holds a moment, then goes.
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let hold = if std::env::var_os("ONE_MK_APP_CONFIRM").is_some() { 60.0 } else { 1.15 };
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, feature = "design-evidence")))]
         let hold = 1.15;
         if self.pairing.as_ref().is_some_and(|p| matches!(p.step, Step::Paired { .. }) && now - p.since > hold) {
             self.pairing = None;
@@ -838,6 +931,7 @@ impl App {
         me.screens = status.as_ref().map(|s| s.screens.clone()).unwrap_or_default();
         me.kind = if me.screens.len() > 1 { Kind::Monitor } else { me_kind() };
         let me_half = scene::half_width(me.kind, &me.screens);
+        let monitor_count = me.screens.len().max(1) + peers.iter().map(|peer| peer.screens.len().max(1)).sum::<usize>();
         // A computer with an offset stands there, at our scale; the rest
         // stand in a row on each side, clear of it.
         let mine = (!me.screens.is_empty()).then(|| Desktop::new(me.screens.clone()));
@@ -874,6 +968,8 @@ impl App {
         let mounted: HashSet<String> = placed.keys().cloned().collect();
         let mut places = slots(span, &layout);
         places.extend(placed);
+        let widths: Vec<_> = peers.iter().map(|peer| (peer.id.clone(), scene::half_width(kind_of(peer.os, &peer.screens), &peer.screens))).collect();
+        if monitor_count >= 5 { separate_crowded_slots(&mut places, &widths, me_half, &mounted); }
         let me = &mut self.scene.devices[0];
         if let Some(s) = &status {
             me.name = s.name.clone();
@@ -1028,11 +1124,23 @@ pub fn lockup_texture(ctx: &egui::Context) -> egui::TextureHandle {
     ctx.load_texture("lockup", egui::ColorImage::from_rgba_unmultiplied(size, px), egui::TextureOptions::LINEAR)
 }
 
-/// The lockup, top left, `height` points tall.
+/// Where the ink sits in the lockup picture (its clear space around it),
+/// as fractions of its height: left edge, and the centre of the ink.
+const LOCKUP_INK_LEFT: f32 = 65.0 / 52.0;
+const LOCKUP_INK_MID: f32 = 21.5 / 52.0;
+
+/// The lockup with the left edge of its ink at `left_center`, the ink
+/// centred on it vertically, and the picture `height` points tall.
 pub fn draw_lockup(p: &Painter, tex: &egui::TextureHandle, left_center: Pos2, height: f32) {
     let [w, h] = tex.size();
-    let rect = Rect::from_min_size(left_center - vec2(0.0, height / 2.0), vec2(height * w as f32 / h as f32, height));
+    let min = left_center - vec2(LOCKUP_INK_LEFT * height, LOCKUP_INK_MID * height);
+    let rect = Rect::from_min_size(min, vec2(height * w as f32 / h as f32, height));
     p.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+}
+
+/// How wide the lockup's ink is at `height`.
+pub fn lockup_ink_w(height: f32) -> f32 {
+    (213.0 - 65.0) / 52.0 * height
 }
 
 impl App {
@@ -1191,7 +1299,10 @@ impl App {
             let r = ui.interact(b, Id::unique(("device", &id)), widgets::sense(ui, Sense::focusable_noninteractive()));
             let chosen = sel.as_deref() == Some(id.as_str());
             let place = if i == 0 { "this computer".to_owned() } else { self.side_of(&id).map_or(String::new(), |s| on_your(s).to_owned()) };
-            let label = format!("{}, {}, {place}", d.name, d.subtitle);
+            // Said once: "samer-Victus, this computer", "MacBook Air, macOS, on your left".
+            let label = if i == 0 { format!("{}, this computer", d.name) } else { format!("{}, {}, {place}", d.name, d.subtitle) };
+            #[cfg(any(debug_assertions, feature = "design-evidence"))]
+            widgets::targets::note(&label, r.rect);
             r.widget_info(move || egui::WidgetInfo::selected(Role::Button, true, chosen, &label));
             if r.has_focus() {
                 focused = Some(i);
@@ -1314,6 +1425,15 @@ impl App {
             None if self.scene.hover.is_some() => ui.ctx().set_cursor_icon(egui::CursorIcon::Grab),
             None => {}
         }
+        // The full name of the computer under the pointer (a narrow screen
+        // can't always hold all of it).
+        if self.drag.is_none()
+            && let Some((index, focused)) = truncated_name_target(self.scene.focused, under, &self.scene.cut_names.borrow())
+            && let Some(d) = self.scene.devices.get(index)
+        {
+            let text = format!("{} · {}", d.name, d.subtitle);
+            if focused { resp.clone().show_tooltip_text(text); } else { resp.clone().on_hover_text_at_pointer(text); }
+        }
         let slot = self.scene.slot_rect(rect);
         self.scene.slot_hover = self.drag.is_none() && slot.zip(pointer).is_some_and(|(r, p)| r.contains(p));
         if self.scene.slot_hover {
@@ -1350,7 +1470,7 @@ impl App {
             Some(id) => self.scene.index(id),
             None => None,
         };
-        self.scene.empty_slot = !self.sheet_open() && self.running().is_some_and(|s| s.peers.is_empty()) && self.just_paired.is_none();
+        self.scene.empty_slot = false;
         let moving = self.scene.step(now, dragging);
         self.scene_moving = moving;
         self.scene.fit = Some(rect);
@@ -1406,7 +1526,7 @@ impl App {
 
     /// The page's title and the quieter words after it.
     fn page_title(&self) -> (String, String) {
-        let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1).to_owned();
+        let name = if self.tab == Tab::Layout { "Arrange" } else { TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1) }.to_owned();
         let sub = match (self.tab, self.status.as_ref()) {
             (_, None) => String::new(),
             (_, Some(None)) => "oneMK is off".to_owned(),
@@ -1455,6 +1575,11 @@ impl App {
             _ if self.running().is_some_and(|s| !s.peers.is_empty()) => (if narrow { "Pair another" } else { "Pair another computer" }, Look::Quiet, true, None),
             _ => ("Pair a computer", Look::Primary, true, None),
         };
+        // On the desk, Start and Take back are offered where the eye is (in
+        // the card, in the banner) in Volt: here they step back to quiet,
+        // so one Volt action shows at a time.
+        let first_pair = job.is_none() && self.running().is_some_and(|s| s.peers.is_empty());
+        let look = if look == Look::Primary && self.tab == Tab::Desk && (matches!(job, Some(Job::Start | Job::TakeBack)) || first_pair) { Look::Quiet } else { look };
         (label.to_owned(), look, enabled, job)
     }
 
@@ -1478,15 +1603,14 @@ impl App {
             return ("oneMK isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
         };
         if !s.broadcast.is_empty() {
-            let title = match &s.broadcast[..] {
-                [one] => format!("Broadcasting to {one}"),
-                all => format!("Broadcasting to {} computers", all.len()),
-            };
+            let connected = s.peers.iter().filter(|peer| peer.online && s.broadcast.contains(&peer.name)).count();
+            let title = format!("Broadcasting · {connected} of {} connected", s.broadcast.len());
             // The title names one; more than three are on the desk above.
             let names = match &s.broadcast[..] {
                 [_] => "it".to_owned(),
                 [rest @ .., last] if rest.len() < 3 => format!("{} and {last}", rest.join(", ")),
-                _ => "all of them".to_owned(),
+                _ if connected == 4 => "the four connected computers".to_owned(),
+                _ => format!("the {connected} connected computers"),
             };
             return (title, format!("Everything you type, click and scroll here goes to {names}. {}", self.broadcast_stop_hint()));
         }
@@ -1534,7 +1658,6 @@ impl App {
         let w = rect.width();
         let x = match self.tab {
             Tab::Layout => [0.0, w * 0.3, w * 0.6, w],
-            Tab::Files => [0.0, w * 0.34, w * 0.63, w],
             _ => [0.0, w * 0.34, w * 0.66, w],
         };
         let cell = |a: usize, b: usize| Rect::from_min_max(pos2(rect.left() + x[a] + PAD, rect.top() + PAD), pos2(rect.left() + x[b] - PAD, rect.bottom() - PAD));
@@ -1544,6 +1667,7 @@ impl App {
             Tab::Desk if self.off() => vec![(Cell::Head(t, s), cell(0, 2)), (Cell::Controls, cell(2, 3))],
             // A small window has room for one card: the chosen computer's
             // (this computer's switches show when it is the one chosen).
+            Tab::Desk if self.running().is_some_and(|status| status.peers.is_empty()) && w < 760.0 => vec![(Cell::Inspector(None), cell(0, 2)), (Cell::Controls, cell(2, 3))],
             Tab::Desk if w < 760.0 => match self.selected_id() {
                 Some(id) if id != "me" => vec![(Cell::Inspector(Some(id)), cell(0, 3))],
                 _ => vec![(Cell::Inspector(None), cell(0, 1)), (Cell::Controls, cell(1, 3))],
@@ -1553,31 +1677,27 @@ impl App {
                 let sel = self.selected_id().filter(|id| id != "me");
                 vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
             }
-            Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper => vec![],
-            Tab::Files => {
-                let any = self.running().is_some_and(|status| status.peers.iter().any(|peer| peer.online));
-                let sub = if any {
-                    "Drag files or folders onto a connected computer on the desk. They arrive in its received files folder."
-                } else {
-                    "No computer is connected right now. Files can go to one once it's on and connected."
-                };
-                let row = |position, end| {
-                    let mut area = cell(position, end);
-                    area.max.y = rect.top() + PANEL_H - PAD;
-                    area
-                };
-                // The window's gap between the row of cards and the history below.
-                let history = Rect::from_min_max(pos2(rect.left() + PAD, rect.top() + PANEL_H + M + PAD), pos2(rect.right() - PAD, rect.bottom() - PAD));
-                vec![(Cell::FilesHead("Drop files on a computer".into(), sub.into()), row(0, 1)), (Cell::Clipboard, row(1, 2)), (Cell::FilesSettings, row(2, 3)), (Cell::ClipboardHistory, history)]
-            }
+            Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper | Tab::Files => vec![],
         }
     }
 
     fn panel(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
+        if self.tab == Tab::Files {
+            self.files_panel(ui, rect);
+            return;
+        }
+        if self.tab == Tab::Layout && rect.width() < 760.0 {
+            self.layout_stacked(ui, rect, now);
+            return;
+        }
         let cells = self.cells(rect);
         // Each cell on a glass card of its own, the window's gap between.
-        for (k, (_, c)) in cells.iter().enumerate() {
+        for (cell, c) in &cells {
             let mut card = Rect::from_min_max(c.min - vec2(PAD - M / 2.0, PAD), c.max + vec2(PAD - M / 2.0, PAD));
+            // A short cell's card ends a padding under what it holds.
+            if let Some(h) = cell_key(cell).and_then(|k| self.cell_h.get(k)).filter(|_| self.tab != Tab::Layout) {
+                card.max.y = card.max.y.min(c.top() + h + PAD + 2.0);
+            }
             if card.left() < rect.left() + M {
                 card.min.x = rect.left();
             }
@@ -1586,7 +1706,9 @@ impl App {
             }
             card.min.y = card.min.y.max(rect.top());
             card.max.y = card.max.y.min(rect.bottom());
-            widgets::glass_panel(ui, ("card", k), card, R_PANEL);
+            // Persistent content: a flat quiet group (no gradient, no
+            // shadow); only what floats is raised.
+            widgets::group(ui, card, R_PANEL);
         }
         let opening = self.scene.opening(now);
         for k in 0..self.slots.len() {
@@ -1629,7 +1751,77 @@ impl App {
             let mut child = ui.new_child(UiBuilder::new().max_rect(r2).id_salt(("cell", k)));
             child.set_clip_rect(rect);
             child.set_opacity(e * dim);
+            let layer = child.layer_id();
+            let start = ui.ctx().graphics(|g| g.get(layer).map_or(0, |l| l.all_entries().len()));
             self.draw_cell(&mut child, &c, r2, now);
+            // What it really took (its shapes' extent), for its card next frame.
+            if let Some(key) = cell_key(&c) {
+                let bottom = ui.ctx().graphics(|g| g.get(layer).map_or(r2.top(), |l| l.all_entries().skip(start).map(|e| e.shape.visual_bounding_rect()).filter(|b| b.is_finite()).fold(r2.top(), |m, b| m.max(b.bottom()))));
+                let h = (bottom - r2.top()).clamp(0.0, r2.height());
+                if (self.cell_h.get(key).copied().unwrap_or(f32::MAX) - h).abs() > 0.5 && e >= 1.0 {
+                    self.cell_h.insert(key, h);
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
+    }
+
+    /// Layout in a narrow window: its three cards behind one tab row
+    /// (Position, Exact place, Profiles), each shown full width and full
+    /// height, so every one is a click away and nothing is shortened or cut.
+    fn layout_stacked(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
+        let sel = self.selected_id().filter(|id| id != "me");
+        let key = Id::unique("layout-tab");
+        #[allow(unused_mut)]
+        let mut chosen = ui.ctx().data(|d| d.get_temp::<usize>(key)).unwrap_or(0);
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        if let Some(k) = std::env::var("ONE_MK_APP_LAYOUT_TAB").ok().and_then(|v| v.parse::<usize>().ok()) {
+            chosen = k.min(2);
+        }
+        // An open profile's options belong to Profiles: show that tab.
+        if self.profile_scroll {
+            chosen = 2;
+        }
+        let height_key = Id::unique(("layout-position-height", &sel, rect.width().to_bits()));
+        let panel_height = if chosen == 0 { ui.ctx().data(|data| data.get_temp::<f32>(height_key)).unwrap_or(232.0).min(rect.height()) } else { rect.height() };
+        let rect = Rect::from_min_size(rect.min, vec2(rect.width(), panel_height));
+        widgets::group(ui, rect, R_PANEL);
+        let inner = rect.shrink(PAD);
+        let labels = ["Position", "Exact place", "Profiles"];
+        let track = Rect::from_min_size(inner.min, vec2(inner.width().min(420.0), 30.0));
+        let pills = Pills {
+            id: Id::unique("layout-tabs"),
+            track,
+            cells: Pills::even(track, 3, 2.0),
+            labels: &labels,
+            names: labels.iter().map(|l| format!("Layout: {l}")).collect(),
+            chosen: Some(chosen),
+            enabled: vec![true; 3],
+            role: Role::Tab,
+            font: T_BODY,
+        };
+        if let Some(k) = pills.show(ui, self.arrowed) {
+            chosen = k;
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(key, chosen));
+        let body = Rect::from_min_max(pos2(inner.left(), track.bottom() + 16.0), inner.max);
+        let cell = match chosen {
+            0 => Cell::Arrange(sel),
+            1 => Cell::LineUp(sel),
+            _ => Cell::Profiles,
+        };
+        let mut child = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("layout-tab-body", chosen)));
+        child.set_clip_rect(body.expand(4.0).intersect(ui.clip_rect()));
+        let layer = child.layer_id();
+        let start = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(0, |list| list.all_entries().len()));
+        self.draw_cell(&mut child, &cell, body, now);
+        if chosen == 0 {
+            let bottom = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(body.top(), |list| list.all_entries().skip(start).map(|entry| entry.shape.visual_bounding_rect()).filter(|bounds| bounds.is_finite()).fold(body.top(), |bottom, bounds| bottom.max(bounds.bottom()))));
+            let measured = (bottom + PAD - rect.top()).max(120.0);
+            if (measured - panel_height).abs() > 0.5 {
+                ui.ctx().data_mut(|data| data.insert_temp(height_key, measured));
+                ui.ctx().request_repaint();
+            }
         }
     }
 
@@ -1640,13 +1832,20 @@ impl App {
                 let sh = para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), sub, regular(T_BODY), INK2);
                 let at = Rect::from_min_size(r.min, vec2(r.width(), th + sh + 6.0));
                 a11y_text(ui, Id::unique("headline"), at, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
+                // Off: the way to turn it on, in the card that says so.
+                if self.off() && self.status.is_some() {
+                    let busy = self.busy.contains(&Job::Start);
+                    let label = if busy { "Starting…" } else { "Start oneMK" };
+                    let bw = button_width(ui, "Start oneMK") + 8.0;
+                    let b = Rect::from_min_size(pos2(r.left(), at.bottom() + 16.0), vec2(bw, 36.0));
+                    if button(ui, b, Id::unique("start-in-card"), label, Look::Primary, !busy && !self.sheet_open(), Some("Start oneMK on this computer")).clicked() {
+                        self.busy.push(Job::Start);
+                        self.link.start();
+                    }
+                }
             }
             Cell::Inspector(sel) => self.peer_card(ui, r, sel.clone(), now),
-            Cell::Clipboard => self.clipboard_cell(ui, r),
-            Cell::ClipboardHistory => self.clipboard_history_cell(ui, r),
             Cell::Controls => self.controls(ui, r),
-            Cell::FilesHead(t, s) => self.files_head(ui, r, t, s),
-            Cell::FilesSettings => self.files_settings(ui, r),
             Cell::Arrange(sel) => self.arrange_cell(ui, r, sel.clone()),
             Cell::LineUp(sel) => self.line_up_cell(ui, r, sel.clone()),
             Cell::Profiles => self.profiles_cell(ui, r),
@@ -1664,23 +1863,30 @@ impl App {
         let arrowed = self.arrowed;
         let mut changes = vec![];
         for (k, peer) in peers.iter().enumerate() {
-            let row = Rect::from_min_size(pos2(c.left(), c.top() + SWAP_ROW * k as f32), vec2(c.width(), SWAP_ROW));
+            let rh = swap_row_h(c.width());
+            let stacked = rh > SWAP_ROW;
+            let row = Rect::from_min_size(pos2(c.left(), c.top() + rh * k as f32), vec2(c.width(), rh));
             let p = ui.painter().clone();
-            let seg_w = 264.0f32.min(row.width() * 0.6);
-            let seg = Rect::from_min_size(pos2(row.right() - seg_w, row.center().y - 13.0), vec2(seg_w, 26.0));
+            let seg_w = if stacked { row.width() } else { 264.0 };
+            let seg = if stacked {
+                Rect::from_min_size(pos2(row.left(), row.top() + 28.0), vec2(seg_w, 28.0))
+            } else {
+                Rect::from_min_size(pos2(row.right() - seg_w, row.center().y - 13.0), vec2(seg_w, 26.0))
+            };
+            let name_y = if stacked { row.top() + 12.0 } else { row.center().y };
             let os_label = os_name(peer.os);
             let ow = text_width(ui, os_label, regular(T_META));
-            let name = fit(&p, &peer.name, &regular(T_BODY), seg.left() - row.left() - ow - 20.0);
+            let name_room = if stacked { row.width() } else { seg.left() - row.left() - 12.0 };
+            let name = fit(&p, &peer.name, &regular(T_BODY), name_room - ow - 8.0);
             let nw = text_width(ui, &name, regular(T_BODY));
-            p.text(pos2(row.left(), row.center().y), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
-            p.text(pos2(row.left() + nw + 8.0, row.center().y), Align2::LEFT_CENTER, os_label, regular(T_META), INK2);
+            p.text(pos2(row.left(), name_y), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
+            p.text(pos2(row.left() + nw + 8.0, name_y), Align2::LEFT_CENTER, os_label, regular(T_META), INK2);
             if name != peer.name {
-                ui.interact(Rect::from_min_max(row.min, pos2(row.left() + nw, row.max.y)), Id::unique(("swap-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
+                ui.interact(Rect::from_min_size(pos2(row.left(), name_y - 10.0), vec2(nw, 20.0)), Id::unique(("swap-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
             }
             let current = self.pending_swap.get(&peer.id).unwrap_or(&peer.swap);
-            // Shorter words when the full ones would be cut.
-            let full = seg_w >= 240.0;
-            let labels: Vec<&str> = if full { SWAPS.iter().map(|(_, l)| *l).collect() } else { vec!["Auto", "Swap", "No swap"] };
+            // The full words always: the row makes room for them.
+            let labels: Vec<&str> = SWAPS.iter().map(|(_, l)| *l).collect();
             let pills = Pills {
                 id: Id::unique(("swap", &peer.id)),
                 track: seg,
@@ -1754,6 +1960,14 @@ impl App {
                 ("Looking for another computer".into(), sub, vec![quiet("Cancel", Act::Close)], 0)
             }
             Step::Found => ("Found a computer".into(), "Connecting to it…".into(), vec![quiet("Cancel", Act::Close)], 0),
+            // A computer named like this one: say so, so the sheet never
+            // seems to offer this computer to itself.
+            Step::Code { name, .. } if self.running().is_some_and(|s| s.name == *name) => (
+                format!("Found another computer named “{name}”"),
+                "It has the same name as this one. Check that its screen shows the same code, then confirm.".into(),
+                vec![quiet("They don't match", Act::Decline), ("Codes match, pair".into(), Look::Primary, Act::Confirm)],
+                0,
+            ),
             Step::Code { name, .. } => (
                 format!("Found “{name}”"),
                 "Check that its screen shows the same code, then confirm.".into(),
@@ -1796,6 +2010,11 @@ impl App {
             None => match &self.sheet_was {
                 Some((v, t)) if now - t < 0.16 => (v.clone(), Some(*t)),
                 _ => {
+                    // Closed: the keyboard goes back to where the sheet was
+                    // opened from (the sidebar's action).
+                    if self.sheet_was.is_some() && widgets::keyboard_focus(ui.ctx()) {
+                        ui.memory_mut(|m| m.request_focus(Id::unique("action")));
+                    }
                     self.sheet_was = None;
                     self.sheet_top = None;
                     self.sheet_key.clear();
@@ -1806,7 +2025,8 @@ impl App {
         if leaving.is_none() && self.keys_on_sheet(ui) {
             return;
         }
-        let width = 380.0f32.min(desk.width() - 40.0);
+        let widest = view.buttons.iter().map(|(label, _, _)| button_width(ui, label) + 36.0).fold(440.0f32, f32::max);
+        let width = widest.min(desk.width() - 40.0);
         let x = desk.center().x - width / 2.0 + 18.0;
         let inner = width - 36.0;
         let sub_g = {
@@ -1824,8 +2044,11 @@ impl App {
             view.focus = view.focus.saturating_sub(1);
         }
         let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
-        let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { widths.len() as f32 * 42.0 - 8.0 };
-        let title_h = 22.0;
+        let button_labels: Vec<_> = view.buttons.iter().map(|(label, _, _)| ui.painter().layout(label.clone(), regular(T_BODY), INK, inner - 28.0)).collect();
+        let button_heights: Vec<f32> = button_labels.iter().map(|label| (label.size().y + 16.0).max(34.0)).collect();
+        let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { button_heights.iter().sum::<f32>() + 8.0 * button_heights.len().saturating_sub(1) as f32 };
+        let title_g = ui.painter().layout(view.title.clone(), semibold(T_TITLE), INK, inner - if view.check.is_some() { 26.0 } else { 0.0 });
+        let title_h = title_g.size().y.max(22.0);
         let alternatives = leaving.is_none() && self.pairing.as_ref().is_some_and(|pair| matches!(pair.step, Step::Searching { .. } | Step::Hint));
         let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0 + if alternatives { 212.0 } else { 0.0 };
         let rect = Rect::from_min_size(pos2(x - 18.0, desk.bottom() - height - 20.0), vec2(width, height));
@@ -1871,14 +2094,13 @@ impl App {
                 ui.ctx().request_repaint();
             }
         }
-        let title = fit(&p, &view.title, &semibold(T_TITLE), inner - (tx - x));
-        p.text(pos2(tx, y + title_h / 2.0), Align2::LEFT_CENTER, &title, semibold(T_TITLE), INK);
+        p.galley(pos2(tx, y), title_g, INK);
         y += title_h + 4.0;
         let sub_h = sub_g.size().y;
         p.galley(pos2(x, y), sub_g, INK2);
         y += sub_h;
         a11y_text(&child, Id::unique("sheet-dialog"), rect, Role::Dialog, &format!("{}. {}", view.title, view.sub), Some(Live::Polite));
-        if let Some((code, since)) = &view.code {
+        if let Some((code, _)) = &view.code {
             // Digits rise in one by one, in the same rhythm as the other screen.
             let font = mono_medium(28.0);
             let adv = text_width(&child, "0", font.clone()) + 3.0;
@@ -1887,12 +2109,8 @@ impl App {
                 if i == 3 {
                     cx += 12.0;
                 }
-                let e = scene::digit_t(i, *since, now);
-                p.text(pos2(cx, y + 14.0 + motion::space(8.0) * (1.0 - e)), Align2::LEFT_TOP, ch, font.clone(), INK.gamma_multiply(e));
+                p.text(pos2(cx, y + 14.0), Align2::LEFT_TOP, ch, font.clone(), INK);
                 cx += adv;
-            }
-            if now - since < 1.2 {
-                ui.ctx().request_repaint();
             }
             let digits: Vec<String> = code.chars().map(String::from).collect();
             let spoken = if digits.len() == 6 { format!("{}, {}", digits[..3].join(" "), digits[3..].join(" ")) } else { digits.join(" ") };
@@ -1905,19 +2123,22 @@ impl App {
         }
         y += 18.0;
         let mut clicked = None;
-        let mut bx = rect.right() - 18.0;
-        for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate().rev() {
+        let mut bx = rect.right() - 18.0 - widths.iter().sum::<f32>() - 8.0 * widths.len().saturating_sub(1) as f32;
+        for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate() {
             let r = if row {
-                bx -= w;
                 let r = Rect::from_min_size(pos2(bx, y), vec2(*w, 34.0));
-                bx -= 8.0;
+                bx += w + 8.0;
                 r
             } else {
-                Rect::from_min_size(pos2(x, y + k as f32 * 42.0), vec2(inner, 34.0))
+                Rect::from_min_size(pos2(x, y + button_heights[..k].iter().sum::<f32>() + k as f32 * 8.0), vec2(inner, button_heights[k]))
             };
-            let shown = fit(&p, label, &semibold(T_BODY), r.width() - 28.0);
+            let shown = if row { label.as_str() } else { "" };
             let id = Id::unique(("sheet-btn", &view.key, k));
-            let resp = button(&mut child, r, id, &shown, *look, true, Some(label));
+            let resp = button(&mut child, r, id, shown, *look, true, Some(label));
+            widgets::a11y(&resp, Role::Button, label, None);
+            if !row {
+                p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if *look == Look::Primary { SIGNAL_INK } else { INK });
+            }
             if k == view.focus && self.sheet_key != view.key && o >= 0.5 {
                 resp.request_focus();
                 self.sheet_key = view.key.clone();
@@ -2005,27 +2226,53 @@ impl App {
         }
         let a_in = motion::out_expo(age / enter);
         let a = a_in.min(((t.life - age) / exit).clamp(0.0, 1.0));
-        let text_w = 520.0f32.min(desk.width() - 120.0);
-        let g = ui.painter().layout(t.text.clone(), regular(T_BODY), INK, text_w);
-        let d = t.detail.as_ref().map(|d| ui.painter().layout(d.clone(), regular(T_META), INK2, text_w));
-        let h = g.size().y + d.as_ref().map_or(0.0, |d| d.size().y + 4.0);
-        let w = g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x));
-        let size = vec2(w + 46.0, h + 20.0);
-        let y = desk.top() + TOP_H + 10.0 + size.y / 2.0 - motion::space(8.0) * (1.0 - a_in);
-        let rect = Rect::from_center_size(pos2(desk.center().x, y), size);
+        // On the desk it takes its place in the band (the desk framed
+        // below it); on other pages it floats at the top, centred.
+        let slot = self.toast_slot.filter(|_| self.tab.desk());
+        let w_max = slot.map_or(520.0f32.min(desk.width() - 120.0) + 46.0, |r| r.width());
+        let (g, d, h) = desk_cards::toast_lay(ui, t, w_max);
+        let rect = match slot {
+            Some(r) => r.translate(vec2(0.0, -motion::space(6.0) * (1.0 - a_in))),
+            None => {
+                let w = g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::toast_action_w(t) } else { 0.0 };
+                let y = desk.top() + TOP_H + 10.0 + h / 2.0 - motion::space(8.0) * (1.0 - a_in);
+                Rect::from_center_size(pos2(desk.center().x, y), vec2(w, h))
+            }
+        };
         let layer = egui::LayerId::new(egui::Order::Tooltip, Id::unique("toast"));
         let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
         child.set_opacity(a);
-        let resp = child.interact(rect, Id::unique("toast-body"), Sense::CLICK);
+        let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::toast_action_w(t), rect.bottom())) } else { rect };
+        let resp = child.interact(body, Id::unique("toast-body"), Sense::CLICK);
         let p = child.painter().clone();
         p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(12)));
         p.rect(rect, CornerRadius::same(12), POPOVER, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
         let dot = if t.error { ERROR } else { INK };
         let gh = g.size().y;
-        p.circle_filled(pos2(rect.left() + 17.0, rect.top() + 10.0 + 9.0), 3.5, dot);
-        p.galley(pos2(rect.left() + 30.0, rect.top() + 10.0), g, INK);
+        // Errors are one line, centred on the band.
+        let gy = if t.error { rect.center().y - g.size().y / 2.0 } else { rect.top() + 10.0 };
+        p.circle_filled(pos2(rect.left() + 17.0, gy + 9.0), 3.5, dot);
+        if t.error && g.elided {
+            resp.clone().on_hover_text(format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}"))));
+        }
+        p.galley(pos2(rect.left() + 30.0, gy), g, INK);
         if let Some(d) = d {
             p.galley(pos2(rect.left() + 30.0, rect.top() + 14.0 + gh), d, INK2);
+        }
+        // An error says where to look next: Health has the checks and fixes.
+        let mut open_health = false;
+        let mut try_again = false;
+        if t.error {
+            let bw = button_width(&child, "Open Health");
+            let b = Rect::from_min_size(pos2(rect.right() - 12.0 - bw, rect.center().y - 15.0), vec2(bw, 30.0));
+            // What failed, done again: the first thing to try, first in
+            // Tab order too.
+            if t.retry.is_some() {
+                let tw = button_width(&child, "Try again");
+                let tb = Rect::from_min_size(pos2(b.left() - 8.0 - tw, b.top()), vec2(tw, 30.0));
+                try_again = button(&mut child, tb, Id::unique("toast-retry"), "Try again", Look::Quiet, true, Some("Do it again")).clicked();
+            }
+            open_health = button(&mut child, b, Id::unique("toast-health"), "Open Health", Look::Quiet, true, Some("Open Health to see what went wrong")).clicked();
         }
         let (role, live) = if t.error { (Role::Alert, Live::Assertive) } else { (Role::Status, Live::Polite) };
         let label = format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}")));
@@ -2034,8 +2281,14 @@ impl App {
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
+        if open_health {
+            self.set_tab(Tab::Health);
+        }
+        if try_again && let Some(job) = self.toast.as_mut().and_then(|t| t.retry.take()) {
+            self.retry(job);
+        }
         let t = self.toast.as_mut().expect("shown above");
-        if dismiss && age < t.life - exit {
+        if (dismiss || open_health || try_again) && age < t.life - exit {
             t.life = age + exit;
         } else if resp.hovered() && age > enter && age < t.life - exit {
             // Held while the pointer is on it, so it can be read.
@@ -2068,7 +2321,7 @@ impl App {
         }
         // One key per page, as the sidebar shows them: ⌘1 Desk, ⌘2
         // Wallpaper, ⌘3 Clipboard & files, ⌘4 Keys & mouse, ⌘, Settings.
-        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Comma, Tab::Advanced)] {
+        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Num5, Tab::Health), (Key::Comma, Tab::Advanced)] {
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || tab.when_off()) {
                 self.set_tab(tab);
             }
@@ -2077,6 +2330,19 @@ impl App {
 }
 
 /// The sheet grows from 98% as it arrives.
+/// Cells whose card fits what they hold (the others fill their column).
+fn cell_key(c: &Cell) -> Option<&'static str> {
+    match c {
+        Cell::Controls => Some("controls"),
+        Cell::Head(..) => Some("head"),
+        // Layout's three cards share one height (a row of equals).
+        Cell::Inspector(None) => Some("me"),
+        Cell::Inspector(Some(_)) => Some("peer"),
+        Cell::LineUp(_) => Some("lineup"),
+        _ => None,
+    }
+}
+
 fn lerp_scale(t: f32) -> f32 {
     if motion::reduced() { 1.0 } else { 0.98 + 0.02 * t }
 }
@@ -2084,6 +2350,8 @@ fn lerp_scale(t: f32) -> f32 {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         crate::chrome::place_buttons(ui.ctx(), frame);
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        let ui_started = std::time::Instant::now();
         let now = ui.input(|i| i.time);
         self.now = now;
         if self.size.x > 0.0 {
@@ -2098,7 +2366,7 @@ impl eframe::App for App {
                 ui.ctx().request_repaint_after_secs(0.05);
             }
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::hooks(self, now);
         widgets::track_focus_mode(ui.ctx());
         self.arrowed = self.arrow_down;
@@ -2120,7 +2388,7 @@ impl eframe::App for App {
         let f = shell::frame(full);
         let content = f.content;
         let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
-        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper);
+        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper | Tab::Files);
         let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
         let desk = Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() }));
         // Files let go over a page without the desk: ask where they go.
@@ -2149,18 +2417,39 @@ impl eframe::App for App {
         // The computers are framed below a banner over the desk, and below
         // the transfer where a small window puts it at the top.
         let mut frame = scene;
-        if self.tab.desk() {
-            if self.notice.shown().is_some() {
-                frame.min.y += 92.0 + if self.desk_views_shown() { desk_cards::DESK_VIEWS_H } else { 0.0 };
-            } else if desk.width() < 780.0 && self.running().is_some_and(|s| !s.transfers.is_empty()) {
-                frame.min.y += 60.0;
-            }
-            if frame.height() < 120.0 {
-                frame = scene;
-            }
+        let mut compact = false;
+        if self.tab.desk() && self.tab != Tab::Files {
+            // A band at the desk's top holds the banner, the toast and (in a
+            // small window) the transfer; the desk is framed below it and
+            // above what floats along its bottom, never under either. The
+            // band eases open so the desk glides rather than jumps.
+            let band = tween(ui.ctx(), Id::unique("desk-band"), self.band_h(ui, scene.width()), motion::space(0.22), motion::out_cubic);
+            // The view switch and toolbar row is never drawn over: the
+            // monitors start below it (the camera adds its 12-point inset).
+            frame.min.y += band + if self.desk_views_shown() { desk_cards::DESK_VIEWS_H } else { 0.0 };
+            frame.max.y -= self.desk_foot_h(scene.width());
+            // Too little room left for monitors anyone could read: the
+            // computers as a row of named chips instead.
+            // On Clipboard & files the desk is only where files go: in a
+            // narrow window, chips (drop targets with names) always.
+            let files_narrow = self.tab == Tab::Files && scene.width() < 780.0;
+            compact = (frame.height() < COMPACT_BELOW || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout | Tab::Files);
         }
-        if self.tab.desk() {
-            self.desk(ui, frame, full, now);
+        // The sidebar and the toolbar are made before the desk, so Tab meets
+        // them first (search, pages, the toolbar left to right, then the
+        // computers, then the card); they are painted on a layer above it.
+        {
+            let over = egui::LayerId::new(egui::Order::Middle, Id::unique("chrome-layer"));
+            let mut top = ui.new_child(UiBuilder::new().layer_id(over).max_rect(full).id_salt("chrome"));
+            self.sidebar(&mut top, &f, now);
+            self.desk_actions(&mut top, head.translate(vec2(0.0, shell::HEAD_H)));
+        }
+        if self.tab.desk() && self.tab != Tab::Files {
+            if compact {
+                self.desk_chips(ui, frame);
+            } else {
+                self.desk(ui, frame, full, now);
+            }
         }
         // Behind the glass changed: blur again (else each panel keeps its blur).
         let sig = self.backdrop_sig(full);
@@ -2168,13 +2457,16 @@ impl eframe::App for App {
             self.backdrop_was = sig;
             self.glass.changed();
         }
-        self.sidebar(ui, &f, now);
-        if self.tab.desk() {
+        if self.tab.desk() && self.tab != Tab::Files {
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
             self.desk_overlay(ui, scene, hovering);
         }
         let body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
         match self.tab {
+            Tab::Files => {
+                let mut child = page(ui, body, "files");
+                self.files_panel(&mut child, body);
+            }
             Tab::Wallpaper => {
                 let mut child = page(ui, body, "wallpaper");
                 self.wallpaper_page(&mut child, body);
@@ -2195,8 +2487,6 @@ impl eframe::App for App {
         }
         let (title, sub) = self.page_title();
         self.page_head(ui, head, &title, &sub);
-        // Below the title band (the window is moved from the band).
-        self.desk_actions(ui, head.translate(vec2(0.0, shell::HEAD_H)));
         if with_cards {
             self.panel(ui, cards, now);
         }
@@ -2209,7 +2499,7 @@ impl eframe::App for App {
         self.sheet(ui, content, now);
         self.toast_view(ui, desk, now);
         self.palette(ui.ctx(), now);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         crate::chrome::paint_fake_buttons(ui.painter());
         self.guide.show(ui.ctx());
         self.update_notice(ui.ctx());
@@ -2217,10 +2507,25 @@ impl eframe::App for App {
         // round trips only then (a minimised window draws nothing).
         let hidden = ui.input(|i| i.viewport().minimized == Some(true));
         self.link.showing.frame(self.graph_wanted() && !hidden);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        if std::env::var_os("ONE_MK_APP_BENCH").is_some() {
+            // The UI thread's own work this frame (laying out and painting
+            // shapes), apart from waiting for the display.
+            let ms = ui_started.elapsed().as_secs_f64() * 1000.0;
+            ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::Mutex<Vec<f64>>>>(Id::unique("bench-ui")).lock().unwrap().push(ms));
+        }
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        debug::tab_walk(ui.ctx(), now);
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::shot(ui.ctx(), now);
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         widgets::targets::flush();
+    }
+
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        debug::tab_press(ctx, raw_input);
+        debug::point_at(ctx, raw_input);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -2263,7 +2568,7 @@ impl eframe::App for App {
 /// - `ONE_MK_APP_BROADCAST=1` turns broadcast on (or off), as the Desk's
 ///   switch does.
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "design-evidence"))]
 mod debug {
     use super::*;
     use std::io::Write;
@@ -2290,6 +2595,15 @@ mod debug {
             if once(&ctx, "update") {
                 app.update_output = out;
             }
+        }
+        if let Some(status) = var("ONE_MK_APP_UPDATE_STATUS")
+            && let Ok(status) = serde_json::from_str(&status)
+        {
+            app.update_ui.status = Some(status);
+        }
+        // ONE_MK_APP_MINIMIZE=1: minimised two seconds in (idle measurements).
+        if var("ONE_MK_APP_MINIMIZE").is_some() && now > 2.0 && once(&ctx, "minimize") {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
         // ONE_MK_APP_PALETTE=query: the command palette, open, with that typed.
         if let Some(q) = var("ONE_MK_APP_PALETTE")
@@ -2323,6 +2637,14 @@ mod debug {
                 let start = ctx.data(|d| d.get_temp::<u64>(Id::unique("bench-cpu"))).unwrap_or(0);
                 let ticks = cpu().unwrap_or(0).saturating_sub(start);
                 println!("bench cpu_ms_per_frame={:.2} (all threads)", ticks as f64 * 10.0 / n as f64);
+                let ui_times = ctx.data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::Mutex<Vec<f64>>>>(Id::unique("bench-ui")).clone());
+                let mut ui_ms = ui_times.lock().unwrap().clone();
+                if !ui_ms.is_empty() {
+                    let k = ui_ms.len().min(n);
+                    ui_ms = ui_ms.split_off(ui_ms.len() - k);
+                    ui_ms.sort_by(f64::total_cmp);
+                    println!("bench ui_thread_ms_per_frame p50={:.2} p95={:.2} max={:.2} (update + layout + shapes, not GPU or vsync)", ui_ms[k / 2], ui_ms[k * 95 / 100], ui_ms[k - 1]);
+                }
                 let gaps: Vec<f64> = t.windows(2).map(|w| (w[1] - w[0]) * 1000.0).collect();
                 let mut sorted = gaps.clone();
                 sorted.sort_by(f64::total_cmp);
@@ -2342,15 +2664,25 @@ mod debug {
         if app.status.is_some() && var("ONE_MK_APP_PAIR").is_some() && once(&ctx, "pair") {
             app.start_pairing(now);
         }
+        // ONE_MK_APP_SHEET_CLOSE=secs: the open sheet is closed then (as
+        // Cancel or Esc would), with the keyboard driving.
+        if let Some(t) = var("ONE_MK_APP_SHEET_CLOSE").and_then(|v| v.parse::<f64>().ok())
+            && now > t
+            && app.sheet_open()
+            && once(&ctx, "sheet-close")
+        {
+            ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
+            app.sheet_act(Act::Close, now);
+        }
         if ready && let Some(state) = var("ONE_MK_APP_PAIR_STATE") && once(&ctx, "pair-state") {
             let step = match state.as_str() {
-                "code" => Step::Code { name: "Studio PC".into(), code: "726480".into() },
+                "code" => Step::Code { name: var("ONE_MK_APP_PAIR_NAME").unwrap_or_else(|| "Studio PC".into()), code: "726480".into() },
                 "waiting" => Step::Waiting { name: "Studio PC".into() },
                 "paired" => Step::Paired { id: "1111-2222".into(), name: "Studio PC".into() },
                 "ended" => Step::Ended("The codes did not match. Nothing was saved.".into()),
-                _ => Step::Searching { me: "desk".into(), port: Some(45173) },
+                _ => Step::Searching { me: app.running().map_or_else(String::new, |status| status.name.clone()), port: Some(45173) },
             };
-            app.pairing = Some(PairUi { proc: None, step, since: now, opened: now, hint: state == "hint", retry: None, me: "desk".into(), port: Some(45173) });
+            app.pairing = Some(PairUi { proc: None, step, since: now, opened: now, hint: state == "hint", retry: None, me: app.running().map_or_else(String::new, |status| status.name.clone()), port: Some(45173) });
         }
         if ready && var("ONE_MK_APP_HISTORY").is_some() {
             app.prefs.history_enabled = true;
@@ -2379,17 +2711,22 @@ mod debug {
             app.pending_drop = Some(((0..n).map(|i| PathBuf::from(format!("/tmp/file{i}"))).collect(), now));
         }
         if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
-            app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was; try again.", Some("oneMK didn't answer within 3 seconds".into()), now);
+            app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was.", Some("oneMK didn't answer within 3 seconds".into()), now);
+            let peer = app.running().and_then(|s| s.peers.first().map(|p| (p.id.clone(), p.name.clone())));
+            if let (Some(t), Some((id, name))) = (app.toast.as_mut(), peer) {
+                t.retry = Some(Job::Layout { id, name, side: Side::Left });
+            }
         }
         if ready && var("ONE_MK_APP_BROADCAST").is_some() && now > 1.0 && once(&ctx, "broadcast") {
             let on = !app.broadcasting();
             app.ask_broadcast(on);
         }
-        if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 && once(&ctx, "focus") {
+        if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 {
             ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
             if let Some(id) = app.selected_id() {
                 let target = Id::unique(("position", &id)).with(1usize);
                 ctx.memory_mut(|m| m.request_focus(target));
+                ctx.request_repaint();
             }
         }
         if ready && let Some(name) = var("ONE_MK_APP_PROFILE") && once(&ctx, "profile") {
@@ -2463,6 +2800,60 @@ mod debug {
         }
     }
 
+    /// `ONE_MK_APP_TABWALK=n` (with `ONE_MK_APP_TARGETS=file`): from one
+    /// second in, presses Tab n times (a real key event, as the keyboard
+    /// would send), a step every 0.15 s, and prints what has the keyboard
+    /// after each: the Tab order, for the record.
+    pub fn tab_press(ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(n) = var("ONE_MK_APP_TABWALK").and_then(|v| v.parse::<usize>().ok()) else { return };
+        let id = Id::unique("tab-walk");
+        let now = raw.time.unwrap_or(0.0);
+        let (done, last) = ctx.data(|d| d.get_temp::<(usize, f64)>(id)).unwrap_or((0, 1.0));
+        if done > n || now < last + 0.15 {
+            return;
+        }
+        // What the last press reached (focus settles over the frames between).
+        if done > 0 {
+            let focused = ctx.memory(|m| m.focused()).and_then(|f| ctx.read_response(f));
+            let name = ctx.memory(|m| m.focused()).and_then(widgets::targets::name_of).or_else(|| focused.as_ref().and_then(|r| widgets::targets::name_at(r.rect))).unwrap_or_else(|| format!("(nothing named at {:?})", focused.map(|r| r.rect)));
+            eprintln!("tab {done}: {name}");
+        }
+        if done == n {
+            ctx.data_mut(|d| d.insert_temp(id, (done + 1, now)));
+            return;
+        }
+        raw.events.push(egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        ctx.data_mut(|d| d.insert_temp(id, (done + 1, now)));
+    }
+
+    /// `ONE_MK_APP_POINT_AT=<control name>` (with `ONE_MK_APP_TARGETS`):
+    /// from 1.5 s the pointer rests on that control (hover);
+    /// `ONE_MK_APP_PRESS=1` also holds the button down on it (pressed).
+    pub fn point_at(ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(name) = var("ONE_MK_APP_POINT_AT") else { return };
+        if raw.time.unwrap_or(0.0) < 1.5 {
+            return;
+        }
+        // Found once and kept: a frame whose target list is empty (the
+        // screenshot's own) must not let the pointer go.
+        let key = Id::unique("point-at-rect");
+        let Some(r) = widgets::targets::rect_of(&name).or_else(|| ctx.data(|d| d.get_temp::<Rect>(key))) else { return };
+        ctx.data_mut(|d| d.insert_temp(key, r));
+        let at = r.center();
+        raw.events.push(egui::Event::PointerMoved(at));
+        let id = Id::unique("point-at-pressed");
+        if var("ONE_MK_APP_PRESS").is_some() && !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) && raw.time.unwrap_or(0.0) > 1.8 {
+            raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            ctx.data_mut(|d| d.insert_temp(id, true));
+        }
+    }
+
+    pub fn tab_walk(ctx: &egui::Context, _now: f64) {
+        if var("ONE_MK_APP_TABWALK").is_some() {
+            ctx.request_repaint_after_secs(0.05);
+        }
+    }
+
     pub fn shot(ctx: &egui::Context, now: f64) {
         let Some(path) = std::env::var_os("ONE_MK_APP_SHOT") else { return };
         let after: f64 = std::env::var("ONE_MK_APP_SHOT_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0);
@@ -2485,6 +2876,53 @@ mod debug {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncated_name_prefers_focused_then_hovered_device() {
+        let truncated = [1, 2].into_iter().collect();
+        assert_eq!(truncated_name_target(Some(1), Some(2), &truncated), Some((1, true)));
+        assert_eq!(truncated_name_target(Some(0), Some(2), &truncated), Some((2, false)));
+        assert_eq!(truncated_name_target(None, Some(0), &truncated), None);
+    }
+
+    #[test]
+    fn crowded_slots_leave_room_for_every_computer() {
+        let peers = vec![("left".into(), Side::Left, 29.0), ("top".into(), Side::Top, 29.0), ("right".into(), Side::Right, 29.0), ("bottom".into(), Side::Bottom, 29.0)];
+        let mut places = slots((-29.0, 29.0), &peers);
+        let widths: Vec<_> = peers.iter().map(|(name, _, half)| (name.clone(), *half)).collect();
+        separate_crowded_slots(&mut places, &widths, 29.0, &HashSet::new());
+        let mut spans = vec![(-29.0, 29.0)];
+        for (name, half) in &widths {
+            let (position, scale) = places[name];
+            spans.push((position.x - half * scale, position.x + half * scale));
+        }
+        spans.sort_by(|first, second| first.0.total_cmp(&second.0));
+        assert!(spans.windows(2).all(|pair| pair[1].0 - pair[0].1 >= 31.9));
+    }
+
+    #[test]
+    fn arranged_multi_monitor_device_stays_where_it_was_dropped() {
+        let mut me = Device::new("me", "This computer", Kind::Monitor, true, WALLS[0]);
+        me.screens = vec![one_mk_proto::Rect::new(0, 0, 1536, 864)];
+        let mut scene = Scene::default();
+        scene.devices.push(me);
+        // Two computers with five monitors trigger the crowded-desk layout.
+        let screens = vec![
+            one_mk_proto::Rect::new(0, 0, 1920, 1080),
+            one_mk_proto::Rect::new(-2592, 98, 1512, 982),
+            one_mk_proto::Rect::new(1920, 0, 1920, 1080),
+            one_mk_proto::Rect::new(-1080, -840, 1080, 1920),
+        ];
+        let fit = scene.fit(Kind::Monitor, &screens).unwrap();
+        let expected = (fit.pos((-3840, -185)), fit.scale);
+        let mut places = HashMap::from([("peer".to_owned(), expected)]);
+        let widths = vec![("peer".to_owned(), scene::half_width(Kind::Monitor, &screens))];
+        let mounted = HashSet::from(["peer".to_owned()]);
+        for _ in 0..3 {
+            separate_crowded_slots(&mut places, &widths, 29.0, &mounted);
+            assert_eq!(places["peer"], expected, "automatic spacing must preserve an exact placement");
+        }
+    }
 
     #[test]
     fn sides_become_places() {

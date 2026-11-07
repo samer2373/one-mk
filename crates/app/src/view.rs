@@ -485,11 +485,43 @@ pub fn parse_doctor(text: &str) -> Option<Vec<Check>> {
     Some(checks)
 }
 
+/// The UDP port a doctor line names ("UDP port 24900", "24900/udp", "UDP 24900").
+fn udp_port(text: &str) -> Option<u16> {
+    let words: Vec<&str> = text.split(|c: char| !c.is_ascii_alphanumeric() && c != '/').filter(|w| !w.is_empty()).collect();
+    for (k, w) in words.iter().enumerate() {
+        if let Some(n) = w.strip_suffix("/udp").and_then(|n| n.parse().ok()) {
+            return Some(n);
+        }
+        if w.eq_ignore_ascii_case("udp") {
+            let next = words.get(k + 1).filter(|n| n.eq_ignore_ascii_case("port")).map_or(k + 1, |_| k + 2);
+            if let Some(n) = words.get(next).and_then(|n| n.parse().ok()) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
 fn legacy_check(mut check: Check) -> Option<Check> {
     let good = check.verdict == Verdict::Pass;
     let detail = check.detail.as_str();
     let (title, plain, fix) = match check.id.as_str() {
-        "updates" | "local-key-rules" | "input-tuning" | "typing" => return Some(check),
+        "typing" => {
+            // The daemon's summary ("physical (same keys; …)") as a sentence.
+            let d = detail.to_lowercase();
+            check.detail = if d.starts_with("physical") {
+                "Keys are sent by position; each computer applies its own keyboard layout.".into()
+            } else if d.starts_with("characters") {
+                "Letters are sent as you type them, whatever the other computer's keyboard layout.".into()
+            } else if d.is_empty() {
+                check.detail.clone()
+            } else {
+                let mut c = check.detail.chars();
+                c.next().map_or(String::new(), |f| f.to_uppercase().collect::<String>() + c.as_str())
+            };
+            return Some(check);
+        }
+        "updates" | "local-key-rules" | "input-tuning" => return Some(check),
         "wallpaper" if check.detail != "not shipped" => return Some(check),
         "wallpaper" | "wallpaper-import-sandbox" | "drag" => return None,
         "daemon" if detail.contains("not running") => {
@@ -512,14 +544,46 @@ fn legacy_check(mut check: Check) -> Option<Check> {
             if check.verdict != Verdict::Fail { check.verdict = Verdict::Pass; }
             ("Secure identity", "A secure identity is created automatically when sharing starts.", None)
         }
-        "port" => ("Network connection", if good { "Ready for sharing." } else { "Sharing cannot use its network connection." }, None),
+        "port" if !good => {
+            // Say which port and, when doctor knows it, which program.
+            let port = udp_port(detail);
+            let who = detail.split('"').nth(1).map(str::to_owned);
+            check.title = "Network connection".into();
+            check.detail = match (&port, &who) {
+                (Some(p), Some(w)) => format!("UDP port {p} is already used by {w}."),
+                (Some(p), None) => format!("UDP port {p} is already in use."),
+                _ => "Sharing cannot use its network connection.".into(),
+            };
+            check.fix = Some(match who {
+                Some(w) => format!("Quit {w}, then choose Recheck. Or use another port on both computers."),
+                None => "Quit the program using it, then choose Recheck. Or use another port on both computers.".into(),
+            });
+            return Some(check);
+        }
+        "port" => ("Network connection", "Ready for sharing.", None),
         "mdns" => ("Find nearby computers", if good { "Nearby computers can be found on this network." } else { "Nearby computers could not be found." }, if good { None } else { Some("Connect both computers to the same home or office network.") }),
         "input" | "portals" => {
             if check.verdict == Verdict::Skip { return None; }
             if detail.contains("Accessibility") || detail.contains("Input Monitoring") { check.action = Some("OpenPermissionGuide".into()); }
             ("Permissions", if good { "Your desktop allows sharing." } else { "Your desktop has not allowed sharing yet." }, if good { None } else { Some("Allow mouse and keyboard sharing in your desktop's permission settings.") })
         }
-        "firewall" => ("Firewall", if good { "The firewall allows sharing connections." } else { "The firewall may be blocking sharing connections." }, if good { None } else { Some("Allow incoming connections for this app in your firewall settings.") }),
+        "firewall" if !good => {
+            // The port and the firewall by name, when doctor says them.
+            let port = udp_port(detail).or_else(|| check.fix.as_deref().and_then(udp_port));
+            let which = ["ufw", "firewalld", "Windows Defender Firewall", "macOS firewall"].into_iter().find(|f| detail.contains(f) || check.fix.as_deref().is_some_and(|x| x.contains(f)));
+            check.title = "Firewall".into();
+            check.detail = match (&port, which) {
+                (Some(p), Some(f)) => format!("{f} is on and blocks UDP port {p}, so other computers can't reach this one."),
+                (Some(p), None) => format!("The firewall blocks UDP port {p}, so other computers can't reach this one."),
+                _ => "The firewall may be blocking sharing connections.".into(),
+            };
+            check.fix = Some(match port {
+                Some(p) => format!("Allow incoming UDP on port {p} for oneMK in the firewall's settings, then choose Recheck."),
+                None => "Allow incoming connections for oneMK in the firewall's settings, then choose Recheck.".into(),
+            });
+            return Some(check);
+        }
+        "firewall" => ("Firewall", "The firewall allows sharing connections.", None),
         "hotkeys" => ("Keyboard shortcuts", if good { "Keyboard shortcuts are ready." } else { "Keyboard shortcuts only work while the pointer is on another computer." }, None),
         "broadcast" => ("Share with several computers", if good { "Sharing with several computers at once is off." } else { "Your typing and clicks go to several computers at once." }, if good { None } else { Some("Press Ctrl+Alt+Shift+Esc to stop sharing with several computers.") }),
         "clipboard" => ("Clipboard sharing", "Your clipboard sharing preferences are saved.", None),
@@ -802,6 +866,19 @@ mod tests {
         assert!(!prefs.hook_options["enter"].2, "argument arrays run without a shell, even with the old shell setting on");
         assert!(prefs.hook_options["leave"].2);
         assert_eq!(Prefs::read("[hooks]\non_enter = ['program with spaces']", "").hooks[0].1, "'program with spaces'");
+    }
+
+    #[test]
+    fn firewall_and_port_rows_name_the_port() {
+        assert_eq!(udp_port("ufw is on and blocks UDP 24900."), Some(24900));
+        assert_eq!(udp_port("Allow it: `sudo ufw allow 24910/udp comment one-mk`."), Some(24910));
+        assert_eq!(udp_port("UDP port 24900 is already used by \"barrier\"."), Some(24900));
+        assert_eq!(udp_port("Blocked."), None);
+        let fw = legacy_check(Check { id: "firewall".into(), title: String::new(), detail: "ufw is on and blocks UDP 24900.".into(), fix: Some("Allow it: `sudo ufw allow 24900/udp`.".into()), verdict: Verdict::Fail, action: None }).unwrap();
+        assert!(fw.detail.contains("ufw") && fw.detail.contains("24900"), "{}", fw.detail);
+        assert!(fw.fix.as_deref().is_some_and(|f| f.starts_with("Allow") && !f.contains('`')));
+        let port = legacy_check(Check { id: "port".into(), title: String::new(), detail: "UDP port 24900 is already used by \"barrier\".".into(), fix: None, verdict: Verdict::Fail, action: None }).unwrap();
+        assert_eq!(port.detail, "UDP port 24900 is already used by barrier.");
     }
 
     #[test]

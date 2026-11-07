@@ -8,8 +8,58 @@ use super::*;
 use crate::icons::{self, Icon};
 use crate::rtt::{Quality, Ring};
 
+/// How wide the band's banner and toast are at most: the desk's width, so
+/// their right edges line up with the cards and the toolbar.
+pub(super) const BAND_W: f32 = f32::INFINITY;
+
+pub(super) struct NoticeLay {
+    pub title: std::sync::Arc<egui::Galley>,
+    pub sub: std::sync::Arc<egui::Galley>,
+    pub h: f32,
+    pub w: f32,
+    pub take_back: bool,
+}
+
+/// A toast laid out `w` wide: its message, its detail, and its height
+/// (with room for the action an error carries).
+pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Galley>, Option<std::sync::Arc<egui::Galley>>, f32) {
+    let text_w = w - 46.0 - if t.error { toast_action_w(t) } else { 0.0 };
+    // An error is one line: what failed, then (quieter) why; the whole of
+    // it on hover and for screen readers.
+    if t.error {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(&t.text, 0.0, egui::TextFormat::simple(regular(T_BODY), INK));
+        if let Some(d) = &t.detail {
+            job.append(&format!("  {d}"), 0.0, egui::TextFormat::simple(regular(T_META), INK2));
+        }
+        job.wrap = egui::text::TextWrapping { max_width: text_w, max_rows: 1, break_anywhere: false, overflow_character: Some('…') };
+        return (ui.painter().layout_job(job), None, 46.0);
+    }
+    let g = ui.painter().layout(t.text.clone(), regular(T_BODY), INK, text_w);
+    let d = t.detail.as_ref().map(|d| ui.painter().layout(d.clone(), regular(T_META), INK2, text_w));
+    let h = 10.0 + g.size().y + d.as_ref().map_or(0.0, |d| d.size().y + 4.0) + 10.0;
+    (g, d, h.max(if t.error { 52.0 } else { 0.0 }))
+}
+
+/// Room for an error toast's actions (Try again, when it can, and Open Health).
+pub(super) fn toast_action_w(t: &Toast) -> f32 {
+    if t.retry.is_some() { 236.0 } else { 130.0 }
+}
+
 /// The row the Computers / Arrange switch takes at the desk's top.
 pub(super) const DESK_VIEWS_H: f32 = 46.0;
+
+fn desk_view_rect(head: Rect) -> Rect {
+    Rect::from_min_size(pos2(head.left(), head.center().y - 15.0), vec2(if head.width() < 630.0 { 160.0 } else { 200.0 }, 30.0))
+}
+
+fn crowded_menu_rect(head: Rect, width: f32, computers: usize) -> Option<Rect> {
+    (computers >= 5).then(|| Rect::from_min_size(pos2(desk_view_rect(head).right() + 8.0, head.center().y - 17.0), vec2(width, 34.0)))
+}
+
+fn compact_desk_actions(head: Rect, menu: Option<Rect>, full_width: f32) -> bool {
+    head.width() < 780.0 || menu.is_some_and(|rect| rect.right() + 8.0 + full_width > head.right())
+}
 
 /// Text with an icon before it, as a quiet button with no fill until
 /// hovered; its width.
@@ -18,11 +68,13 @@ fn ghost(ui: &mut Ui, at: Pos2, h: f32, id: Id, icon: Option<Icon>, label: &str,
     let font = regular(T_BODY);
     let w = if label.is_empty() { h } else { text_width(ui, label, font.clone()) + if icon.is_some() { 34.0 } else { 18.0 } };
     let r = Rect::from_min_size(at, vec2(w, h));
-    let resp = ui.interact(r, id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
-    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && resp.hovered()), 0.12, motion::out_cubic);
+    let resp = ui.interact(widgets::hit_rect(r), id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
+    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && resp.hovered()), 0.1, motion::out_cubic);
     let p = ui.painter();
-    if hover > 0.01 {
-        p.rect_filled(r, CornerRadius::same(8), ON_GLASS.gamma_multiply(hover));
+    if enabled && resp.is_pointer_button_down_on() {
+        p.rect_filled(r, CornerRadius::same(8), widgets::pressed(BUTTON, 1.0));
+    } else if hover > 0.01 {
+        p.rect_filled(r, CornerRadius::same(8), BUTTON.gamma_multiply(hover));
     }
     let col = if enabled { mix(INK2, INK, hover) } else { INK3 };
     let mut x = r.left() + if label.is_empty() { (w - 16.0) / 2.0 } else { 9.0 };
@@ -101,7 +153,8 @@ fn chart(p: &Painter, r: Rect, ring: &Ring, now: f64, summary: Option<rtt::Summa
     if let Some([x, y]) = t.lines.last().and_then(|l| l.last()) {
         let at = plot.min + vec2(*x, *y);
         p.circle_filled(at, 4.5, GROUND);
-        p.circle_filled(at, 3.5, SIGNAL);
+        // Live and connected: cyan (Volt is never a status).
+        p.circle_filled(at, 3.5, OK);
     }
     // Lost packets: a short amber tick from the top, with a ring, so they
     // read apart from a slow reading and not only by colour.
@@ -122,7 +175,7 @@ impl App {
         };
         let p = ui.painter().clone();
         // Title row: whether it is there, its name, what it is and where.
-        let cy = c.top() + 12.0;
+        let mut cy = c.top() + 12.0;
         if peer.online {
             p.circle_filled(pos2(c.left() + 4.0, cy), 3.5, OK);
         } else {
@@ -131,20 +184,26 @@ impl App {
         let side = self.side_shown(&peer.id, peer.side);
         let seg_w = if c.width() > 560.0 { 248.0 } else { 204.0 };
         let col_w = 200.0f32.min(c.width() * 0.4);
-        let name = fit(&p, &peer.name, &semibold(T_TITLE), col_w - 16.0);
-        p.text(pos2(c.left() + 16.0, cy), Align2::LEFT_CENTER, &name, semibold(T_TITLE), INK);
-        if name != peer.name {
-            ui.interact(Rect::from_min_size(c.min, vec2(col_w, 24.0)), Id::unique(("peer-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
-        }
+        let long_name = text_width(ui, &peer.name, semibold(T_TITLE)) > col_w - 16.0;
+        let header_height = if long_name {
+            let galley = p.layout(peer.name.clone(), semibold(T_TITLE), INK, c.width() - 16.0);
+            let height = galley.size().y;
+            p.galley(c.min + vec2(16.0, 2.0), galley, INK);
+            cy += height + 12.0;
+            height + 12.0
+        } else {
+            p.text(pos2(c.left() + 16.0, cy), Align2::LEFT_CENTER, &peer.name, semibold(T_TITLE), INK);
+            0.0
+        };
         let words = format!("{} · {}", os_name(peer.os), if peer.online { on_your(side) } else { "offline" });
-        p.text(pos2(c.left(), cy + 22.0), Align2::LEFT_CENTER, fit(&p, &words, &regular(T_BODY), col_w), regular(T_BODY), INK3);
+        p.text(pos2(c.left(), cy + if long_name { 0.0 } else { 22.0 }), Align2::LEFT_CENTER, fit(&p, &words, &regular(T_BODY), col_w), regular(T_BODY), INK3);
         // Where it sits: a control, so it can be set without dragging.
         let mut x = c.right();
         let (rm, rw) = {
-            let w = text_width(ui, "Remove…", regular(T_BODY)) + 18.0;
+            let w = text_width(ui, "Remove", regular(T_BODY)) + 18.0;
             (Rect::from_min_size(pos2(x - w + 9.0, cy - 14.0), vec2(w, 28.0)), w)
         };
-        let (resp, _) = ghost(ui, rm.min, 28.0, Id::unique(("remove", &peer.id)), None, "Remove…", &format!("Remove {} (asks first)", peer.name), !self.sheet_open());
+        let (resp, _) = ghost(ui, rm.min, 28.0, Id::unique(("remove", &peer.id)), None, "Remove", &format!("Remove {} (asks first)", peer.name), !self.sheet_open());
         if resp.clicked() {
             self.removing = Some((peer.id.clone(), peer.name.clone(), now));
         }
@@ -170,38 +229,48 @@ impl App {
         }
 
         // Left: the number now, what it means; actions at the bottom.
-        let body = Rect::from_min_max(pos2(c.left(), c.top() + 52.0), c.max);
+        let body = Rect::from_min_max(pos2(c.left(), c.top() + 52.0 + header_height), c.max);
         let summary = self.summary_of(&peer.id);
+        let graphed = peer.online && summary.is_some_and(|summary| summary.count >= 8) && self.rtts.of(&peer.id).is_some();
         let q = summary.and_then(|s| s.quality());
         let big = mono_medium(30.0);
         if !peer.online {
-            p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, "—", big.clone(), INK3);
-            p.text(pos2(body.left(), body.top() + 46.0), Align2::LEFT_CENTER, "Not found on the network", regular(T_BODY), INK2);
-            // Two lines rather than cut short in a narrow column.
-            let mut hint = egui::text::LayoutJob::simple("Start oneMK on it, on the same Wi-Fi.".into(), regular(T_META), INK3, col_w);
-            hint.wrap.max_rows = 2;
-            p.galley(pos2(body.left(), body.top() + 58.0), p.layout_job(hint), INK3);
+            // No reading to show: what is wrong and what to do, as words.
+            p.text(pos2(body.left(), body.top() + 10.0), Align2::LEFT_CENTER, "Not found on the network", semibold(T_BODY), INK);
+            let mut hint = egui::text::LayoutJob::simple("Start oneMK on it, on the same network as this computer.".into(), regular(T_BODY), INK2, col_w);
+            hint.wrap.max_rows = 3;
+            p.galley(pos2(body.left(), body.top() + 22.0), p.layout_job(hint), INK2);
         } else if let Some(s) = summary {
             let n = rtt::ms_number(s.now_us);
             let nw = text_width(ui, &n, big.clone());
             p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, &n, big, INK);
             p.text(pos2(body.left() + nw + 4.0, body.top() + 23.0), Align2::LEFT_CENTER, "ms", regular(T_BODY), INK2);
-            let word = q.map_or("Measuring…", Quality::word);
+            // A number is already shown: say how much it rests on, not "Measuring…".
+            let word = q.map_or("Few readings so far", Quality::word);
             let ww = text_width(ui, word, regular(T_BODY));
-            p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { WARN } else { INK2 });
+            let quality_at = if graphed { pos2(body.left(), body.top() + 48.0) } else { pos2(body.left() + nw + 58.0, body.top() + 18.0) };
+            p.text(quality_at, Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { WARN } else { INK2 });
             if q.is_some() {
                 let (lo, hi) = (rtt::ms_number(s.min_us), rtt::ms(s.p95_us));
-                let usual = if hi == format!("{lo} ms") { format!(" · usually {hi}") } else { format!(" · usually {lo}–{hi}") };
-                p.text(pos2(body.left() + ww, body.top() + 48.0), Align2::LEFT_CENTER, fit(&p, &usual, &regular(T_BODY), col_w - ww), regular(T_BODY), INK3);
+                // Lost packets are named apart from slowness (stalls).
+                let usual = match s.lost {
+                    0 if hi == format!("{lo} ms") => format!(" · usually {hi}"),
+                    0 => format!(" · usually {lo}–{hi}"),
+                    1 => " · 1 packet lost".to_owned(),
+                    n => format!(" · {n} packets lost"),
+                };
+                p.text(quality_at + vec2(ww, 0.0), Align2::LEFT_CENTER, fit(&p, &usual, &regular(T_BODY), if graphed { col_w - ww } else { c.width() - nw - 58.0 - ww }), regular(T_BODY), INK3);
             }
         } else {
-            let text = if self.older_daemon(&peer.id) { "Restart oneMK to see latency" } else { "Measuring…" };
-            p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, "…", big, INK3);
-            p.text(pos2(body.left(), body.top() + 48.0), Align2::LEFT_CENTER, fit(&p, text, &regular(T_BODY), col_w), regular(T_BODY), INK2);
+            let text = if !status.broadcast.is_empty() { "Latency unavailable during broadcast" } else { "No samples yet" };
+            let _ = big;
+            para(ui, body.left_top(), c.width(), text, regular(T_BODY), INK2);
         }
         if peer.online && (self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id)) {
             let busy = self.measuring.is_some();
-            let r = Rect::from_min_size(pos2(body.left() + col_w - 28.0, body.top() + 4.0), vec2(28.0, 28.0));
+            // Beside the number it measures.
+            let num_w = summary.map_or(text_width(ui, "…", mono_medium(30.0)), |s| text_width(ui, &rtt::ms_number(s.now_us), mono_medium(30.0)) + 4.0 + text_width(ui, "ms", regular(T_BODY)));
+            let r = Rect::from_min_size(pos2(body.left() + num_w + 10.0, body.top() + 6.0), vec2(28.0, 28.0));
             let spin = if self.measuring.as_ref() == Some(&peer.id) && !motion::reduced() {
                 ui.ctx().request_repaint();
                 (now * 5.0) as f32
@@ -213,17 +282,35 @@ impl App {
                 self.measure(&peer.id);
             }
         }
-        self.peer_actions(ui, pos2(body.left(), body.bottom() - 32.0), &status, &peer);
+        // With a graph the actions sit at the card's foot; without one (a
+        // few readings, offline, none) right under the words, and the card
+        // ends there.
+        let actions_y = if graphed { body.bottom() - 32.0 } else { body.top() + if summary.is_some() { 48.0 } else if !status.broadcast.is_empty() { 32.0 } else { 64.0 } };
+        self.peer_actions(ui, pos2(body.left(), actions_y), &status, &peer);
 
+        // The graph and the number, as words for screen readers.
+        a11y_text(ui, Id::unique(("peer-latency", &peer.id)), body, Role::Label, &self.latency_words(&peer), None);
         // Right: the last two minutes.
         let graph = Rect::from_min_max(pos2(body.left() + col_w + 24.0, c.top() + 40.0), body.max);
-        p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, format!("Round trip, last {}", rtt::span_words()), regular(T_META), INK3);
         let plot = Rect::from_min_max(pos2(graph.left(), graph.top() + 18.0), graph.max);
+        if !graphed { return; }
         match self.rtts.of(&peer.id).filter(|_| peer.online) {
-            Some(ring) if summary.is_some() => chart(&p, plot, ring, self.rtt_now(), summary),
+            // A handful of readings: say so in a line rather than a big,
+            // nearly empty plot.
+            Some(_) if summary.is_some_and(|s| s.count < 8) => {
+                let n = summary.map_or(0, |s| s.count);
+                let text = format!("{n} {} so far · the graph fills in over {}", if n == 1 { "reading" } else { "readings" }, rtt::span_words());
+                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, fit(&p, &text, &regular(T_META), graph.width() - 30.0), regular(T_META), INK3);
+            }
+            Some(ring) if summary.is_some() => {
+                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, format!("Round trip, last {}", rtt::span_words()), regular(T_META), INK3);
+                chart(&p, plot, ring, self.rtt_now(), summary);
+            }
             _ => {
-                let text = if !peer.online { "Nothing to measure while it is offline" } else { "The line starts with the first replies" };
-                p.text(plot.center(), Align2::CENTER_CENTER, fit(&p, text, &regular(T_META), plot.width()), regular(T_META), INK3);
+                // No readings: no empty axes, one quiet line where the
+                // graph's title would be.
+                let text = if !peer.online { "No round trips while it is offline" } else { "The round-trip graph starts with the first replies" };
+                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, fit(&p, text, &regular(T_META), graph.width() - 30.0), regular(T_META), INK3);
             }
         }
     }
@@ -261,11 +348,28 @@ impl App {
     /// No other computer chosen: this one, and the way back to it.
     fn me_card(&mut self, ui: &mut Ui, c: Rect, status: &Status) {
         let p = ui.painter().clone();
+        // Nothing paired: this card is the first step, with the one action.
+        if status.peers.is_empty() {
+            let th = para(ui, c.left_top(), c.width(), "Pair your first computer", semibold(T_TITLE), INK);
+            let text = "Open oneMK on both computers on the same network. Compare the six-digit codes to pair securely.";
+            let sh = para(ui, c.left_top() + vec2(0.0, th + 6.0), c.width().min(520.0), text, regular(T_BODY), INK2);
+            let bw = button_width(ui, "Pair a computer") + 8.0;
+            let b = Rect::from_min_size(pos2(c.left(), c.top() + th + 6.0 + sh + 16.0), vec2(bw, 36.0));
+            if button(ui, b, Id::unique("pair-in-card"), "Pair a computer", Look::Primary, !self.sheet_open(), None).clicked() {
+                let now = self.now;
+                self.start_pairing(now);
+            }
+            a11y_text(ui, Id::unique("first-step"), Rect::from_min_size(c.min, vec2(c.width(), th + sh + 6.0)), Role::Status, &format!("Pair your first computer. {text}"), None);
+            return;
+        }
         let cy = c.top() + 12.0;
         icons::pointer(&p, pos2(c.left(), cy - 7.0), 14.0, SIGNAL);
-        let nw = text_width(ui, &status.name, semibold(T_TITLE));
-        p.text(pos2(c.left() + 16.0, cy), Align2::LEFT_CENTER, &status.name, semibold(T_TITLE), INK);
-        p.text(pos2(c.left() + 26.0 + nw, cy), Align2::LEFT_CENTER, format!("This computer · {}", os_name(me_os())), regular(T_BODY), INK3);
+        let name = fit(&p, &status.name, &semibold(T_TITLE), c.width() - 22.0);
+        p.text(pos2(c.left() + 22.0, cy), Align2::LEFT_CENTER, &name, semibold(T_TITLE), INK);
+        p.text(pos2(c.left(), cy + 22.0), Align2::LEFT_CENTER, fit(&p, &format!("This computer · {}", os_name(me_os())), &regular(T_BODY), c.width()), regular(T_BODY), INK3);
+        if name != status.name {
+            ui.interact(Rect::from_min_size(c.min, vec2(c.width(), 44.0)), Id::unique("local-card-name"), Sense::hover()).on_hover_text(&status.name);
+        }
         let online = status.peers.iter().filter(|p| p.online).count();
         let paired = match status.peers.len() {
             0 => "None yet".to_owned(),
@@ -273,6 +377,11 @@ impl App {
         };
         info_row(ui, c, c.top() + 52.0, "Paired", &paired, false, 1.0);
         info_row(ui, c, c.top() + 76.0, "ID", &status.id, true, 1.0);
+        if status.peers.is_empty() && c.height() > 150.0 {
+            // What pairing needs, so the first step is clear from here too.
+            p.hline(c.x_range(), c.top() + 100.0, Stroke::new(1.0, LINE));
+            para(ui, pos2(c.left(), c.top() + 114.0), c.width().min(460.0), "To share this keyboard and mouse, open oneMK on the other computer as well, then choose Pair a computer. Both need to be on the same network.", regular(T_BODY), INK2);
+        }
         self.quick_actions(ui, c, c.bottom() - 32.0, None);
     }
 
@@ -282,7 +391,7 @@ impl App {
         // The Desk's two views: the computers, and arranging them (Layout).
         if self.desk_views_shown() {
             let labels = ["Computers", "Arrange"];
-            let track = Rect::from_min_size(pos2(head.left(), head.center().y - 15.0), vec2(200.0, 30.0));
+            let track = desk_view_rect(head);
             let pills = Pills {
                 id: Id::unique("desk-view"),
                 track,
@@ -301,64 +410,105 @@ impl App {
         if self.tab != Tab::Desk || self.running().is_none_or(|s| s.peers.is_empty()) {
             return;
         }
-        let mut x = head.right();
+        // Laid out from the right edge, then made left to right, so Tab
+        // reaches them in reading order: broadcast, Timer, Lock.
         let y = head.center().y - 17.0;
-        let narrow = head.width() < 780.0;
-        let label = if narrow { "Lock all" } else { "Lock every screen" };
-        let w = text_width(ui, label, semibold(T_BODY)) + 46.0;
-        x -= w;
-        let busy = self.busy.contains(&Job::LockAll);
-        let r = Rect::from_min_size(pos2(x, y), vec2(w, 34.0));
-        if button(ui, r, Id::unique("lock-all"), "", Look::Glass, !busy, Some("Lock this computer and every connected one")).clicked() {
-            self.busy.push(Job::LockAll);
-            self.link.lock_all();
-        }
-        icons::draw(ui.painter(), Icon::Lock, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
-        ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, label, semibold(T_BODY), INK);
         let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
         let on = self.broadcasting();
-        if online || on {
-            x -= 64.0 + 8.0;
-            let rect = Rect::from_min_size(pos2(x, y), vec2(64.0, 34.0));
-            let response = button(ui, rect, Id::unique("broadcast-options"), "Timer", Look::Glass, !on, Some("Broadcast idle timer"));
+        let tiny = head.width() < 630.0;
+        let menu_label = if tiny { "Computers" } else { "Choose computer" };
+        let menu_width = text_width(ui, menu_label, semibold(T_BODY)) + 40.0;
+        let menu = crowded_menu_rect(head, menu_width, self.running().map_or(0, |status| status.peers.len() + 1));
+        let timer_width = if tiny { 34.0 } else { text_width(ui, "Timer", semibold(T_BODY)) + 46.0 };
+        let bc_label = "Type on every computer";
+        let broadcast_width = text_width(ui, bc_label, semibold(T_BODY)) + 34.0 + 58.0;
+        let full_width = text_width(ui, "Lock every screen", semibold(T_BODY)) + 46.0 + if online || on { timer_width + broadcast_width + 16.0 } else { 0.0 };
+        let narrow = compact_desk_actions(head, menu, full_width);
+        let lock_label = if narrow { "Lock screens" } else { "Lock every screen" };
+        let lock_w = if tiny { 34.0 } else { text_width(ui, lock_label, semibold(T_BODY)) + 46.0 };
+        let lock_r = Rect::from_min_size(pos2(head.right() - lock_w, y), vec2(lock_w, 34.0));
+        let mut x = lock_r.left();
+        let timer_r = (online || on).then(|| {
+            x -= timer_width + 8.0;
+            Rect::from_min_size(pos2(x, y), vec2(timer_width, 34.0))
+        });
+        let bc_r = (online || on).then(|| {
+            let w = if narrow { 34.0 } else { broadcast_width };
+            x -= w + 8.0;
+            Rect::from_min_size(pos2(x, y), vec2(w, 34.0))
+        });
+        if let Some(rect) = menu
+            && let Some(status) = self.running().cloned()
+        {
+            let response = button(ui, rect, Id::unique("desk-computers-menu"), "", Look::Glass, !self.sheet_open(), Some("Choose a computer: show full names and connection states"));
+            let painter = ui.painter();
+            painter.text(pos2(rect.left() + 14.0, rect.center().y), Align2::LEFT_CENTER, menu_label, semibold(T_BODY), INK);
+            let center = pos2(rect.right() - 14.0, rect.center().y);
+            painter.line_segment([center + vec2(-3.0, -1.5), center + vec2(0.0, 1.5)], Stroke::new(1.5, INK2));
+            painter.line_segment([center + vec2(0.0, 1.5), center + vec2(3.0, -1.5)], Stroke::new(1.5, INK2));
+            if let Some(id) = shell::computers_menu(&response, &status, self.selected_id().as_deref()) {
+                self.select(id);
+            }
+        }
+        if let Some(r) = bc_r {
+            let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
+            let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
+            if narrow {
+                // Narrow: the same action as an icon, lit while it is on.
+                let name = if on { format!("Typing on every computer.{key}") } else { "Type on every computer: everything you type, click and scroll here goes to every connected computer at once".to_owned() };
+                let resp = button(ui, r, Id::unique("broadcast"), "", Look::Glass, !busy && !on, Some(&name));
+                let enabled = !busy && !on;
+                resp.widget_info(|| egui::WidgetInfo::selected(Role::Switch, enabled, on, "Type on every computer"));
+                if on {
+                    ui.painter().rect_stroke(r, CornerRadius::same(17), Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
+                }
+                icons::draw(ui.painter(), Icon::Broadcast, Rect::from_center_size(r.center(), vec2(16.0, 16.0)), if on { SIGNAL } else { INK2 });
+                if resp.on_hover_text(&name).clicked() {
+                    self.ask_broadcast(!on);
+                }
+            } else {
+                let resp = button(ui, r, Id::unique("broadcast"), "", Look::Glass, !busy && !on, Some("Broadcast: type, click and scroll on every connected computer at once"));
+                // A switch, with its state, for screen readers too.
+                let enabled = !busy && !on;
+                resp.widget_info(|| egui::WidgetInfo::selected(Role::Switch, enabled, on, "Type on every computer"));
+                icons::draw(ui.painter(), Icon::Broadcast, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
+                ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, bc_label, semibold(T_BODY), INK);
+                // A small switch, drawn as the window's other switches are.
+                let track = Rect::from_min_size(pos2(r.right() - 46.0, r.center().y - 9.0), vec2(32.0, 18.0));
+                let knob_t = tween(ui.ctx(), Id::unique("broadcast-knob"), f32::from(on), motion::space(0.2), motion::out_cubic);
+                ui.painter().rect_filled(track, CornerRadius::same(9), mix(SWITCH_OFF, ACCENT, knob_t));
+                ui.painter().rect_stroke(track, CornerRadius::same(9), Stroke::new(1.0, mix(SWITCH_EDGE, Color32::TRANSPARENT, knob_t)), StrokeKind::Inside);
+                ui.painter().circle_filled(pos2(track.left() + 9.0 + 14.0 * knob_t, track.center().y), 7.0, Color32::WHITE);
+                if resp.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}")).clicked() {
+                    self.ask_broadcast(!on);
+                }
+            }
+        }
+        if let Some(rect) = timer_r {
+            // When typing on every computer stops by itself: an icon and a word.
+            let name = "Timer: when typing on every computer stops by itself";
+            let response = button(ui, rect, Id::unique("broadcast-options"), "", Look::Glass, !on, Some(name));
+            let icon = if tiny { rect.center() - vec2(8.0, 8.0) } else { pos2(rect.left() + 12.0, rect.center().y - 8.0) };
+            icons::draw(ui.painter(), Icon::Clock, Rect::from_min_size(icon, vec2(16.0, 16.0)), if on { INK3 } else { INK2 });
+            if !tiny {
+                ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, "Timer", semibold(T_BODY), if on { INK3 } else { INK });
+            }
+            let response = response.on_hover_text(name);
             egui::Popup::menu(&response).width(280.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
                 let (row, _) = ui.allocate_exact_size(vec2(280.0, 34.0), Sense::hover());
                 self.broadcast_timeout(ui, row);
                 ui.label("Use zero to keep broadcasting until you stop it.");
             });
         }
-        if (online || on) && narrow {
-            // Narrow: the same action as an icon, lit while it is on.
-            x -= 34.0 + 8.0;
-            let r = Rect::from_min_size(pos2(x, y), vec2(34.0, 34.0));
-            let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
-            let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
-            let name = if on { format!("Typing on every computer.{key}") } else { "Type on every computer: everything you type, click and scroll here goes to every connected computer at once".to_owned() };
-            let resp = button(ui, r, Id::unique("broadcast"), "", Look::Quiet, !busy && !on, Some(&name));
-            if on {
-                ui.painter().rect_stroke(r, CornerRadius::same(10), Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
-            }
-            icons::draw(ui.painter(), Icon::Broadcast, Rect::from_center_size(r.center(), vec2(16.0, 16.0)), if on { SIGNAL } else { INK2 });
-            if resp.on_hover_text(&name).clicked() {
-                self.ask_broadcast(!on);
-            }
+        let busy = self.busy.contains(&Job::LockAll);
+        if button(ui, lock_r, Id::unique("lock-all"), "", Look::Glass, !busy, Some("Lock this computer and every connected one")).clicked() {
+            self.busy.push(Job::LockAll);
+            self.link.lock_all();
         }
-        if (online || on) && !narrow {
-            let label = "Type on every computer";
-            let w = text_width(ui, label, semibold(T_BODY)) + 34.0 + 58.0;
-            x -= w + 8.0;
-            let r = Rect::from_min_size(pos2(x, y), vec2(w, 34.0));
-            let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
-            let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
-            let resp = button(ui, r, Id::unique("broadcast"), "", Look::Quiet, !busy && !on, Some("Broadcast: type, click and scroll on every connected computer at once"));
-            icons::draw(ui.painter(), Icon::Broadcast, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
-            ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, label, semibold(T_BODY), INK);
-            let track = Rect::from_min_size(pos2(r.right() - 46.0, r.center().y - 9.0), vec2(32.0, 18.0));
-            ui.painter().rect_filled(track, CornerRadius::same(9), if on { INK } else { TRACK_OFF });
-            ui.painter().circle_filled(pos2(if on { track.right() - 9.0 } else { track.left() + 9.0 }, track.center().y), 6.5, if on { GROUND } else { INK });
-            if resp.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}")).clicked() {
-                self.ask_broadcast(!on);
-            }
+        let icon = if tiny { lock_r.center() - vec2(8.0, 8.0) } else { pos2(lock_r.left() + 12.0, lock_r.center().y - 8.0) };
+        icons::draw(ui.painter(), Icon::Lock, Rect::from_min_size(icon, vec2(16.0, 16.0)), INK2);
+        if !tiny {
+            ui.painter().text(pos2(lock_r.left() + 34.0, lock_r.center().y), Align2::LEFT_CENTER, lock_label, semibold(T_BODY), INK);
         }
     }
 
@@ -379,33 +529,47 @@ impl App {
         // waiting for permission...): a banner over the desk, read out.
         // Under the Computers / Arrange switch, which sits at the desk's top.
         let mut top = desk.top() + if self.desk_views_shown() { DESK_VIEWS_H } else { 0.0 };
-        if let Some((title, sub)) = self.notice.shown().cloned() {
-            let w = 560.0f32.min(desk.width());
-            let job = |text: &str, font: egui::FontId, col: Color32| {
-                let mut j = egui::text::LayoutJob::simple(text.to_owned(), font, col, w - 46.0);
-                j.wrap.max_rows = 3;
-                ui.painter().layout_job(j)
-            };
-            let (tg, sg) = (job(&title, semibold(T_BODY), INK), job(&sub, regular(T_META), INK2));
-            let h = 14.0 + tg.size().y + 4.0 + sg.size().y + 14.0;
-            let r = Rect::from_min_size(pos2(desk.left(), top), vec2(w, h));
+        if let Some(n) = self.notice_lay(ui, desk.width()) {
+            let r = Rect::from_min_size(pos2(desk.left(), top), vec2(n.w, n.h));
             widgets::glass_panel(ui, "notice", r, 14);
-            let title_h = tg.size().y;
-            p.circle_filled(pos2(r.left() + 18.0, r.top() + 14.0 + title_h / 2.0), 4.0, SIGNAL);
-            p.galley(pos2(r.left() + 32.0, r.top() + 14.0), tg, INK);
-            p.galley(pos2(r.left() + 32.0, r.top() + 14.0 + title_h + 4.0), sg, INK2);
-            a11y_text(ui, Id::unique("headline"), r, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
+            let title_h = n.title.size().y;
+            // Volt only while something is on (typing on every computer);
+            // a plain notice (waiting, being controlled) gets a neutral dot.
+            let dot = if self.broadcasting() { SIGNAL } else { INK2 };
+            p.circle_filled(pos2(r.left() + 18.0, r.top() + 14.0 + title_h / 2.0), 4.0, dot);
+            let label = format!("{}. {}", n.title.text(), n.sub.text());
+            p.galley(pos2(r.left() + 32.0, r.top() + 14.0), n.title, INK);
+            p.galley(pos2(r.left() + 32.0, r.top() + 14.0 + title_h + 4.0), n.sub, INK2);
+            if n.take_back {
+                // Being controlled: the way back, named, where the eye already is.
+                let bw = button_width(ui, "Take back");
+                let b = Rect::from_min_size(pos2(r.right() - 14.0 - bw, r.center().y - 16.0), vec2(bw, 32.0));
+                let busy = self.busy.contains(&Job::TakeBack);
+                if button(ui, b, Id::unique("notice-take-back"), "Take back", Look::Primary, !busy && !self.sheet_open(), Some("Take back control of this computer")).clicked() {
+                    self.busy.push(Job::TakeBack);
+                    self.link.take_back();
+                }
+            }
+            a11y_text(ui, Id::unique("headline"), r, Role::Status, &label, Some(Live::Polite));
             top = r.bottom() + 8.0;
+        }
+        // The toast, when there is one, comes next in the band (drawn by
+        // `toast_view`, which keeps its timing).
+        if let Some(h) = self.toast_band_h(ui, desk.width()) {
+            self.toast_slot = Some(Rect::from_min_size(pos2(desk.left(), top), vec2(BAND_W.min(desk.width()), h)));
+            top += h + 8.0;
+        } else {
+            self.toast_slot = None;
         }
         if let Some(t) = self.running().and_then(|s| s.transfers.first()).cloned() {
             let (title, detail, frac) = crate::view::transfer_lines(&t);
             let more = self.running().map_or(0, |s| s.transfers.len() - 1);
             let detail = if more > 0 { format!("{detail} · and {more} more") } else { detail };
-            let w = 360.0f32.min(desk.width() * 0.6);
+            let w = desk.width().min(520.0);
             // In a small window the desk's front is crowded: the top instead.
             // A small window's desk front is crowded: the top instead, unless
             // a banner is there already.
-            let y = if desk.width() < 780.0 && top == desk.top() { top } else { desk.bottom() - 52.0 };
+            let y = top;
             let r = Rect::from_min_size(pos2(desk.left(), y), vec2(w, 52.0));
             widgets::glass_panel(ui, "transfer", r, 14);
             p.text(pos2(r.left() + 14.0, r.top() + 16.0), Align2::LEFT_CENTER, fit(&p, &title, &regular(T_BODY), w - 28.0), regular(T_BODY), INK);
@@ -416,14 +580,162 @@ impl App {
             a11y_text(ui, Id::unique("transfer"), r, Role::ProgressIndicator, &format!("{title}. {detail}"), Some(Live::Polite));
         }
         let several = self.running().is_some_and(|s| !s.peers.is_empty());
-        if self.tab == Tab::Desk && several && !self.prefs_hint_dismissed() {
+        if self.tab == Tab::Desk && several && !self.prefs_hint_dismissed() && !self.sheet_open() {
             let text = "Drag a computer to where it sits on your desk";
             let w = text_width(ui, text, regular(T_BODY)) + 48.0;
+            // Shown once: for 12 seconds the first time, then never again.
+            let key = Id::unique("drag-hint-since");
+            let since = ui.ctx().data_mut(|d| *d.get_temp_mut_or_insert_with(key, || self.now));
+            let shown_for = self.now - since;
+            if shown_for > 12.0 {
+                let _ = std::fs::write(self.link.dir.join(".window-hinted"), b"");
+                self.dragged_once = true;
+                return;
+            }
+            ui.ctx().request_repaint_after_secs((12.05 - shown_for) as f32);
             if desk.width() > 860.0 {
                 let r = Rect::from_min_size(pos2(desk.right() - w, desk.bottom() - 36.0), vec2(w, 36.0));
                 widgets::glass_panel(ui, "drag-hint", r, 12);
                 icons::draw(&p, Icon::Move, Rect::from_min_size(pos2(r.left() + 14.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK3);
                 p.text(pos2(r.left() + 38.0, r.center().y), Align2::LEFT_CENTER, text, regular(T_BODY), INK2);
+            }
+        }
+    }
+
+    /// The banner's text, laid out for a desk `desk_w` wide; its size, and
+    /// whether it carries Take back (this computer is being controlled).
+    pub(super) fn notice_lay(&self, ui: &Ui, desk_w: f32) -> Option<NoticeLay> {
+        let (title, sub) = self.notice.shown().cloned()?;
+        let take_back = self.running().is_some_and(|s| s.controlled_by.is_some());
+        let w = BAND_W.min(desk_w);
+        let room = w - 46.0 - if take_back { button_width(ui, "Take back") + 14.0 } else { 0.0 };
+        let job = |text: &str, font: egui::FontId, col: Color32| {
+            let mut j = egui::text::LayoutJob::simple(text.to_owned(), font, col, room);
+            j.wrap.max_rows = 3;
+            ui.painter().layout_job(j)
+        };
+        let (title, sub) = (job(&title, semibold(T_BODY), INK), job(&sub, regular(T_META), INK2));
+        let h = (14.0 + title.size().y + 4.0 + sub.size().y + 14.0).max(if take_back { 56.0 } else { 0.0 });
+        Some(NoticeLay { title, sub, h, w, take_back })
+    }
+
+    /// How tall the toast is in the desk's band, if one shows.
+    pub(super) fn toast_band_h(&self, ui: &Ui, desk_w: f32) -> Option<f32> {
+        let t = self.toast.as_ref()?;
+        Some(toast_lay(ui, t, BAND_W.min(desk_w)).2)
+    }
+
+    /// The band over the desk (banner, toast, a small window's transfer),
+    /// with its gaps: the desk is framed below it, never under it.
+    pub(super) fn band_h(&self, ui: &Ui, desk_w: f32) -> f32 {
+        // Only the Desk and Arrange views draw the band.
+        if !matches!(self.tab, Tab::Desk | Tab::Layout) {
+            return 0.0;
+        }
+        let mut h = 0.0;
+        if let Some(n) = self.notice_lay(ui, desk_w) {
+            h += n.h + 8.0;
+        }
+        if let Some(t) = self.toast_band_h(ui, desk_w) {
+            h += t + 8.0;
+        }
+        if self.running().is_some_and(|s| !s.transfers.is_empty()) {
+            h += 52.0 + 8.0;
+        }
+        h
+    }
+
+    /// Room kept free along the desk's bottom for what floats there.
+    pub(super) fn desk_foot_h(&self, desk_w: f32) -> f32 {
+        let hint = self.tab == Tab::Desk && desk_w > 860.0 && self.running().is_some_and(|s| !s.peers.is_empty()) && !self.prefs_hint_dismissed();
+        if hint { 36.0 + 8.0 } else { 0.0 }
+    }
+
+    /// The desk when there is too little room for monitors anyone could
+    /// read: each computer as a named chip (where the pointer is, whether it
+    /// is connected, where it sits); choosing one shows it in the card below.
+    pub(super) fn desk_chips(&mut self, ui: &mut Ui, r: Rect) {
+        let Some(status) = self.running().cloned() else { return };
+        let pointer = self.pointer_on();
+        let sel = self.selected_id();
+        let mut items: Vec<(String, String, String, bool)> = vec![("me".into(), status.name.clone(), "This computer".into(), true)];
+        for p in &status.peers {
+            let side = self.side_shown(&p.id, p.side);
+            items.push((p.id.clone(), p.name.clone(), if p.online { on_your(side).to_owned() } else { "offline".into() }, p.online));
+        }
+        let hovering_files = ui.input(|i| !i.raw.hovered_files.is_empty());
+        let dropped: Option<Vec<std::path::PathBuf>> = ui.input(|i| (!i.raw.dropped_files.is_empty()).then(|| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect()));
+        let drop_at = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
+        let mut drop_to: Option<(String, Vec<std::path::PathBuf>)> = None;
+        const H: f32 = 44.0;
+        let widths: Vec<f32> = items.iter().map(|(_, n, w, _)| (text_width(ui, n, semibold(T_BODY)).max(text_width(ui, w, regular(T_META))) + 50.0).clamp(120.0, 220.0)).collect();
+        // Rows that wrap, centred in the room there is.
+        let mut rows: Vec<Vec<usize>> = vec![vec![]];
+        let mut x = 0.0;
+        for (k, w) in widths.iter().enumerate() {
+            if x > 0.0 && x + w > r.width() - 24.0 {
+                rows.push(vec![]);
+                x = 0.0;
+            }
+            rows.last_mut().expect("one row").push(k);
+            x += w + 8.0;
+        }
+        let total_h = rows.len() as f32 * (H + 8.0) - 8.0;
+        // On Clipboard & files the chips sit at the top, close to the page
+        // they serve; on the desk, centred where the monitors would be.
+        let mut y = if self.tab == Tab::Files { r.top() + 12.0 } else { r.center().y - total_h / 2.0 };
+        for row in rows {
+            let rw: f32 = row.iter().map(|k| widths[*k] + 8.0).sum::<f32>() - 8.0;
+            let mut x = r.center().x - rw / 2.0;
+            for k in row {
+                let (id, name, words, online) = &items[k];
+                let cr = Rect::from_min_size(pos2(x, y), vec2(widths[k], H));
+                x += widths[k] + 8.0;
+                let rid = Id::unique(("desk-chip", id.as_str()));
+                let resp = ui.interact(cr, rid, widgets::sense(ui, Sense::click()));
+                let hover = tween(ui.ctx(), rid.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
+                let chosen = sel.as_deref() == Some(id.as_str());
+                let fill = if chosen { BUTTON_LIT } else { mix(ELEVATED, BUTTON, hover) };
+                let p = ui.painter();
+                p.rect(cr, CornerRadius::same(R_INNER), widgets::pressed(fill, f32::from(resp.is_pointer_button_down_on())), Stroke::new(if chosen { 1.5 } else { 1.0 }, if chosen { INK2 } else { ELEVATED_EDGE }), StrokeKind::Inside);
+                let mark = pos2(cr.left() + 18.0, cr.center().y);
+                if pointer.as_deref() == Some(id.as_str()) {
+                    icons::pointer(p, mark - vec2(5.0, 7.0), 13.0, SIGNAL);
+                } else if *online {
+                    p.circle_filled(mark, 3.5, OK);
+                } else {
+                    p.circle_stroke(mark, 3.0, Stroke::new(1.5, INK3));
+                }
+                // On Clipboard & files each chip is a drop target too.
+                let target = self.tab == Tab::Files && *online && id != "me";
+                let words: &str = if target && hovering_files { "Drop here" } else { words };
+                if target && hovering_files {
+                    p.rect_stroke(cr.expand(2.0), CornerRadius::same(R_INNER + 2), Stroke::new(1.5, SIGNAL), StrokeKind::Outside);
+                }
+                if target && let Some(paths) = dropped.as_ref().filter(|_| drop_at.is_some_and(|q| cr.contains(q))) {
+                    drop_to = Some((id.clone(), paths.clone()));
+                }
+                let tw = cr.width() - 46.0;
+                p.text(pos2(cr.left() + 34.0, cr.top() + 15.0), Align2::LEFT_CENTER, fit(p, name, &semibold(T_BODY), tw), semibold(T_BODY), if *online { INK } else { INK2 });
+                p.text(pos2(cr.left() + 34.0, cr.top() + 31.0), Align2::LEFT_CENTER, fit(p, words, &regular(T_META), tw), regular(T_META), INK3);
+                widgets::focus_ring(ui, &resp, cr, R_INNER);
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                widgets::a11y(&resp, Role::Button, &format!("{name}, {words}"), Some(chosen));
+                let resp = resp.on_hover_text(name);
+                if resp.clicked() {
+                    self.select(id.clone());
+                }
+            }
+            y += H + 8.0;
+        }
+        // Files let go: on a chip, to that computer; elsewhere, asked.
+        if let Some(paths) = dropped {
+            let now = self.now;
+            match drop_to.and_then(|(id, p)| self.scene.devices.iter().position(|d| d.id == id).map(|i| (i, p))) {
+                Some((i, p)) => self.send_to(i, p),
+                None => self.drop_files(paths, None, now),
             }
         }
     }
@@ -506,7 +818,41 @@ impl NoticeHold {
 
 #[cfg(test)]
 mod notice_tests {
-    use super::NoticeHold;
+    use super::{NoticeHold, compact_desk_actions, crowded_menu_rect, desk_view_rect};
+    use egui::{Rect, pos2, vec2};
+
+    #[test]
+    fn crowded_computer_menu_never_overlaps_other_actions() {
+        let head = Rect::from_min_size(pos2(100.0, 20.0), vec2(700.0, 46.0));
+        let menu = crowded_menu_rect(head, 130.0, 5).expect("crowded computer menu");
+        assert_eq!(menu.left(), desk_view_rect(head).right() + 8.0);
+        assert!(crowded_menu_rect(head, 130.0, 4).is_none());
+    }
+
+    #[test]
+    fn crowded_menu_keeps_its_place_when_actions_expand() {
+        let context = egui::Context::default();
+        crate::style::install(&context);
+        let mut output = context.run_ui(Default::default(), |ui| {
+            let label_width = |label| super::text_width(ui, label, super::semibold(super::T_BODY));
+            let menu_width = label_width("Choose computer") + 40.0;
+            let timer_width = label_width("Timer") + 46.0;
+            let broadcast_width = label_width("Type on every computer") + 92.0;
+            let full_width = label_width("Lock every screen") + 46.0 + timer_width + broadcast_width + 16.0;
+            let compact_width = label_width("Lock screens") + 46.0 + timer_width + 34.0 + 16.0;
+            for width in [600.0, 760.0, 820.0, 950.0, 1200.0, 1500.0] {
+                let frame = super::shell::frame(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 675.0)));
+                let head = Rect::from_min_size(frame.content.min, vec2(frame.content.width(), 46.0));
+                let tiny = head.width() < 630.0;
+                let menu_width = if tiny { label_width("Computers") + 40.0 } else { menu_width };
+                let menu = crowded_menu_rect(head, menu_width, 6).expect("menu at every supported width");
+                let compact = compact_desk_actions(head, Some(menu), full_width);
+                let actions_width = if tiny { 3.0 * 34.0 + 16.0 } else if compact { compact_width } else { full_width };
+                assert!(menu.right() + 8.0 <= head.right() - actions_width, "menu overlaps actions at {width}");
+            }
+        });
+        output.textures_delta.clear();
+    }
 
     fn n(t: &str) -> Option<(String, String)> {
         Some((t.into(), String::new()))

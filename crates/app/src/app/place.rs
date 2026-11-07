@@ -165,8 +165,9 @@ impl App {
         a11y_text(ui, Id::unique(("exact-place", &peer.id)), Rect::from_min_size(c.left_top() + vec2(0.0, 26.0), vec2(c.width(), h)), Role::Label, &text, Some(Live::Polite));
         if offset.is_some() {
             let label = "Anywhere along the side";
-            let b = Rect::from_min_size(pos2(c.left(), c.top() + 26.0 + h + 10.0), vec2(button_width(ui, label), 28.0));
-            if button(ui, b, Id::unique(("place-anywhere", &peer.id)), label, Look::Quiet, true, Some(&format!("Let {} take the pointer anywhere along your {} edge", peer.name, edge_word(side)))).clicked() {
+            let b = Rect::from_min_size(pos2(c.left(), c.top() + 26.0 + h + 10.0), vec2(button_width(ui, label).min(c.width()), 28.0));
+            let shown = fit(ui.painter(), label, &semibold(T_BODY), b.width() - 28.0);
+            if button(ui, b, Id::unique(("place-anywhere", &peer.id)), &shown, Look::Quiet, true, Some(&format!("Let {} take the pointer anywhere along your {} edge", peer.name, edge_word(side)))).clicked() {
                 self.choose_side(&peer.id, side, false);
             }
         }
@@ -191,26 +192,49 @@ impl App {
             None => 0.0,
         };
         title_row(ui, c, "Profiles", room);
-        let save_y = c.bottom() - 28.0;
-        // Saving the layout as it is now, under a name.
-        let bw = button_width(ui, "Save") - 4.0;
-        let fr = Rect::from_min_size(pos2(c.left(), save_y), vec2(c.width() - bw - 8.0, 28.0));
-        let name = self.drafts.get("profile-new").cloned().unwrap_or_default();
-        let mut text = name.clone();
-        let fid = Id::unique(("field", "profile-new"));
-        let r = widgets::field(ui, fr, fid, &mut text, "Name this layout", "Name for a new profile of this layout", true, false);
-        self.drafts.insert("profile-new".into(), text.clone());
-        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-        let b = Rect::from_min_size(pos2(c.right() - bw, save_y), vec2(bw, 28.0));
-        // Nothing paired: there is no layout to save yet.
-        let can = !text.trim().is_empty() && !status.peers.is_empty();
-        if (button(ui, b, Id::unique("profile-save"), "Save", Look::Quiet, can, Some("Save this layout as a profile")).clicked() || enter) && can {
-            let n = text.trim().to_owned();
-            self.drafts.remove("profile-new");
-            self.busy.push(Job::Profile { verb: "save", name: n.clone() });
-            self.link.profile("save", &n);
+        // With a profile's options open, the card is about that profile:
+        // saving a new one steps aside, so its options are never cut.
+        let saving = self.profile_open.is_none();
+        let save_y = if saving { c.bottom() - 28.0 } else { c.bottom() + 6.0 };
+        if saving {
+            // Saving the layout as it is now, under a name.
+            let bw = button_width(ui, "Save") - 4.0;
+            let fr = Rect::from_min_size(pos2(c.left(), save_y), vec2(c.width() - bw - 8.0, 28.0));
+            let name = self.drafts.get("profile-new").cloned().unwrap_or_default();
+            let mut text = name.clone();
+            let fid = Id::unique(("field", "profile-new"));
+            let r = widgets::field(ui, fr, fid, &mut text, "Name this layout", "Name for a new profile of this layout", true, false);
+            self.drafts.insert("profile-new".into(), text.clone());
+            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            let b = Rect::from_min_size(pos2(c.right() - bw, save_y), vec2(bw, 28.0));
+            // Nothing paired: there is no layout to save yet.
+            let can = !text.trim().is_empty() && !status.peers.is_empty();
+            if (button(ui, b, Id::unique("profile-save"), "Save", Look::Quiet, can, Some("Save this layout as a profile")).clicked() || enter) && can {
+                let n = text.trim().to_owned();
+                self.drafts.remove("profile-new");
+                self.busy.push(Job::Profile { verb: "save", name: n.clone() });
+                self.link.profile("save", &n);
+            }
         }
-        let list = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), save_y - 6.0));
+        let mut list = Rect::from_min_max(pos2(c.left(), c.top() + 26.0), pos2(c.right(), save_y - 6.0));
+        // Whole rows only: the list ends on a row's edge (and scrolls for
+        // the rest), never through the middle of one.
+        let network_label = if !network.ssids.is_empty() { format!("Current network: {}", network.ssids.join(", ")) } else if network.permission == one_mk_ctl::wifi::Permission::Allowed && !network.unavailable { "Not connected to Wi-Fi".to_owned() } else { "Current network: unavailable".to_owned() };
+        let measure_width = c.width() - 24.0;
+        let measured = |text: &str| ui.painter().layout(text.to_owned(), regular(T_META), INK2, measure_width).size().y;
+        let mut used = measured(&network_label) + 8.0;
+        if let Some(explanation) = network.explanation() {
+            used += measured(explanation) + 6.0 + if network.permission_button().is_some() { 34.0 } else { 0.0 };
+        }
+        let mut ordered = names.clone();
+        if let Some(open) = &self.profile_open { ordered.sort_by_key(|name| name != open); }
+        for name in &ordered {
+            let auto = self.prefs.auto.get(name).map_or(0.0, |text| measured(&format!("Comes on by itself on {text}")) + 8.0);
+            let height = 30.0 + auto + if self.profile_open.as_ref() == Some(name) { 36.0 } else { 0.0 };
+            if used + height > list.height() { break; }
+            used += height;
+        }
+        if !names.is_empty() { list.max.y = list.top() + used.min(list.height()); }
         let mut child = ui.new_child(UiBuilder::new().max_rect(list.expand2(vec2(4.0, 0.0))));
         child.set_clip_rect(list.expand2(vec2(6.0, 0.0)));
         let mut act: Option<(&'static str, String)> = None;
@@ -218,7 +242,7 @@ impl App {
         let mut toggle_open = None;
         let open = self.profile_open.clone();
         let just_opened = std::mem::take(&mut self.profile_scroll);
-        egui::ScrollArea::vertical().id_salt("profiles").auto_shrink([false, false]).show(&mut child, |ui| {
+        egui::ScrollArea::vertical().id_salt("profiles").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).auto_shrink([false, false]).show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let label = if !network.ssids.is_empty() {
                 format!("Current network: {}", network.ssids.join(", "))
@@ -227,9 +251,9 @@ impl App {
             } else {
                 "Current network: unavailable".to_owned()
             };
-            let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-            ui.painter().text(row.min + vec2(4.0, 12.0), Align2::LEFT_CENTER,
-                fit(ui.painter(), &label, &regular(T_META), row.width() - 8.0), regular(T_META), INK2);
+            let label_height = ui.painter().layout(label.clone(), regular(T_META), INK2, ui.available_width() - 8.0).size().y;
+            let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), label_height + 8.0), Sense::hover());
+            para(ui, row.min + vec2(4.0, 4.0), row.width() - 8.0, &label, regular(T_META), INK2);
             if let Some(explanation) = network.explanation() {
                 let origin = ui.cursor().min + vec2(4.0, 0.0);
                 let height = para(ui, origin, ui.available_width() - 8.0, explanation, regular(T_META), INK2);
@@ -252,9 +276,17 @@ impl App {
                 };
                 para(ui, ui.cursor().min + vec2(4.0, 2.0), ui.available_width() - 8.0, text, regular(T_META), INK2);
             }
+            // The open profile first, so its options sit in view.
+            let mut names = names.clone();
+            if let Some(o) = &open {
+                names.sort_by_key(|n| n != o);
+            }
             for n in &names {
                 let expanded = open.as_ref() == Some(n);
-                let h = if expanded { 30.0 + 36.0 } else { 30.0 };
+                let auto_text = self.prefs.auto.get(n).cloned();
+                let auto_label = auto_text.as_ref().map(|text| format!("Comes on by itself on {text}"));
+                let auto_height = auto_label.as_ref().map_or(0.0, |text| ui.painter().layout(text.clone(), regular(T_META), INK2, ui.available_width() - 8.0).size().y + 8.0);
+                let h = 30.0 + auto_height + if expanded { 36.0 } else { 0.0 };
                 let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
                 if expanded && just_opened {
                     ui.scroll_to_rect(row, None);
@@ -263,7 +295,6 @@ impl App {
                 let line = Rect::from_min_size(row.min, vec2(row.width(), 30.0));
                 let p = ui.painter().clone();
                 let in_use = current.as_ref() == Some(n);
-                let auto_text = self.prefs.auto.get(n).cloned();
                 let more = Rect::from_min_size(pos2(line.right() - 26.0, line.center().y - 13.0), vec2(26.0, 26.0));
                 let use_w = button_width(ui, "In use") - 6.0;
                 let use_r = Rect::from_min_size(pos2(more.left() - 6.0 - use_w, line.center().y - 13.0), vec2(use_w, 26.0));
@@ -274,9 +305,10 @@ impl App {
                 if shown != *n {
                     ui.interact(Rect::from_min_size(line.min, vec2(nw, 30.0)), Id::unique(("profile-name", n)), Sense::hover()).on_hover_text(n);
                 }
-                if let Some(t) = auto_text.as_ref().filter(|_| text_w - nw > 40.0) {
-                    let tag = if expanded { format!("· automatic on {t}") } else { "· automatic".to_owned() };
-                    p.text(pos2(line.left() + nw + 8.0, line.center().y), Align2::LEFT_CENTER, fit(&p, &tag, &regular(T_META), text_w - nw - 8.0), regular(T_META), INK2);
+                // Beside the name only the word; open, the network gets a
+                // line of its own (a button never sits over words).
+                if let Some(text) = auto_label.as_ref() {
+                    para(ui, pos2(line.left(), line.bottom() + 4.0), row.width(), text, regular(T_META), INK2);
                 }
                 let label = if in_use { "In use" } else { "Use" };
                 if button(ui, use_r, Id::unique(("profile-use", n)), label, Look::Quiet, !in_use, Some(&format!("Use profile {n}"))).clicked() {
@@ -288,7 +320,7 @@ impl App {
                 }
                 if expanded {
                     // One line: a Wi-Fi name to switch to it by itself, and deleting it.
-                    let y = line.bottom() + 2.0;
+                    let y = line.bottom() + 2.0 + auto_height;
                     let bw = |l: &str| button_width(ui, l) - 6.0;
                     let mut x = row.right();
                     let mut place = |w: f32| {
