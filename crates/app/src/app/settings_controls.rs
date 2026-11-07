@@ -117,19 +117,43 @@ impl App {
         let mut started = false;
         let shortcuts = self.prefs.hotkeys.clone();
         for (index, (label, chord)) in shortcuts.iter().enumerate() {
-            let row = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), 54.0));
-            ui.painter().text(row.left_top(), Align2::LEFT_TOP, label, regular(T_BODY), INK2);
+            // A row each, as the system's own shortcut lists: the name on
+            // the left, the keys in a recessed recorder on the right; click
+            // the recorder and press the new keys.
+            let row = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), SHORTCUT_ROW));
             let listening = recording == Some(index);
             let shown = if listening { "Press keys…".into() } else { crate::view::chord_label(chord, cfg!(target_os = "macos")) };
-            ui.painter().text(row.left_top() + vec2(0.0, 23.0), Align2::LEFT_TOP, &shown, regular(T_META), INK);
-            a11y_text(ui, Id::unique(("shortcut-value", index)), row, Role::Label, &format!("{label}: {shown}"), None);
-            let change = Rect::from_min_size(pos2(row.right() - 74.0, row.top() + 9.0), vec2(74.0, 28.0));
-            if button(ui, change, Id::unique(("shortcut-change", index)), if listening { "Cancel" } else { "Change" }, Look::Quiet, true, Some(&format!("Change {label}"))).clicked() {
+            let font = mono(T_META);
+            let kw = (text_width(ui, &shown, font.clone()) + 24.0).max(112.0).min(row.width() * 0.55);
+            let kr = Rect::from_min_size(pos2(row.right() - kw, row.center().y - 14.0), vec2(kw, 28.0));
+            let room = kr.left() - row.left() - 12.0;
+            ui.painter().text(row.left_center(), Align2::LEFT_CENTER, fit(ui.painter(), label, &regular(T_BODY), room), regular(T_BODY), INK);
+            let id = Id::unique(("shortcut-change", index));
+            let resp = ui.interact(kr, id, widgets::sense(ui, Sense::click()));
+            let hover = tween(ui.ctx(), id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
+            let p = ui.painter();
+            let well = if resp.is_pointer_button_down_on() { Color32::from_black_alpha(130) } else { mix(Color32::from_black_alpha(70), Color32::from_black_alpha(40), hover) };
+            p.rect_filled(kr, CornerRadius::same(8), well);
+            let edge = if listening { Stroke::new(1.5, ACCENT) } else { Stroke::new(1.0, mix(FIELD_EDGE, FIELD_EDGE_LIT, hover)) };
+            p.rect_stroke(kr, CornerRadius::same(8), edge, StrokeKind::Inside);
+            widgets::mono_text(p, kr.center(), Align2::CENTER_CENTER, &shown, T_META, if listening { INK2 } else { INK }, kw - 16.0);
+            widgets::focus_ring(ui, &resp, kr, 8);
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            widgets::a11y(&resp, Role::Button, &format!("{} {label}", if listening { "Cancel changing" } else { "Change" }), None);
+            let resp = resp.on_hover_text(if listening { "Press the new keys. Esc cancels; Backspace turns it off." } else { "Click, then press the new keys" });
+            if resp.clicked() {
                 recording = if listening { None } else { Some(index) };
                 started = !listening;
             }
-            top += 56.0;
+            if index + 1 < shortcuts.len() {
+                ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
+            }
+            a11y_text(ui, Id::unique(("shortcut-value", index)), Rect::from_min_max(row.min, pos2(kr.left() - 4.0, row.bottom())), Role::Label, &format!("{label}: {shown}"), None);
+            top += SHORTCUT_ROW;
         }
+        top += 10.0;
         if !started && let Some(index) = recording {
             let events = ui.input(|input| input.events.clone());
             if let Some(result) = recorded(&events, index == 0) {
@@ -140,7 +164,8 @@ impl App {
         ui.ctx().data_mut(|data| { if let Some(index) = recording { data.insert_temp(recorder, index); } else { data.remove::<usize>(recorder); } });
         let emergency = crate::view::chord_label("ctrl+alt+shift+esc", cfg!(target_os = "macos"));
         top += para(ui, pos2(rect.left(), top), rect.width(), &format!("Always back here: {emergency}. While changing: Esc cancels; Backspace turns it off. For computer numbers, press a number from 1 to 9."), regular(T_META), INK2) + 8.0;
-        if let Some(note) = self.running().and_then(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail)) {
+        // "Ready, change them in Settings" says nothing here, in Settings.
+        if let Some(note) = self.running().filter(|status| status.hotkeys != "on").and_then(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail)) {
             para(ui, pos2(rect.left(), top), rect.width(), &crate::view::window_issue(&note), regular(T_META), INK2);
         }
     }
@@ -242,6 +267,8 @@ impl Positive for Result<u32, String> {
 
 /// One event's height in the commands card.
 pub(super) const HOOK_H: f32 = 120.0;
+/// A keyboard shortcut's row in Settings.
+pub(super) const SHORTCUT_ROW: f32 = 44.0;
 
 /// A quiet button showing the choice, with a menu of the others.
 pub(super) fn chooser(ui: &mut Ui, r: Rect, id: Id, shown: &str, name: &str, options: &[(String, String)], current: &str) -> Option<String> {
@@ -254,9 +281,9 @@ pub(super) fn chooser(ui: &mut Ui, r: Rect, id: Id, shown: &str, name: &str, opt
     egui::Popup::menu(&resp).width(220.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
         for (value, title) in options {
             let (row, item) = ui.allocate_exact_size(vec2(220.0, 28.0), Sense::click());
-            let hover = tween(ui.ctx(), item.id.with("hover"), f32::from(item.hovered()), 0.12, motion::out_cubic);
+            let hover = tween(ui.ctx(), item.id.with("hover"), f32::from(item.hovered()), 0.1, motion::out_cubic);
             let p = ui.painter().clone();
-            p.rect_filled(row, CornerRadius::same(6), mix(Color32::TRANSPARENT, PILL, hover));
+            p.rect_filled(row, CornerRadius::same(6), if item.is_pointer_button_down_on() { widgets::pressed(BUTTON, 1.0) } else { mix(Color32::TRANSPARENT, BUTTON, hover) });
             widgets::focus_ring(ui, &item, row, 6);
             let on = value == current;
             if on {

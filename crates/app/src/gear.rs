@@ -123,6 +123,27 @@ impl Cam {
         cam
     }
 
+    fn contained(self, points: &[P3], room: Rect) -> Self {
+        let bounds = Rect::from_points(&points.iter().map(|point| self.pt(*point)).collect::<Vec<_>>());
+        let scale = (room.width() / bounds.width()).min(room.height() / bounds.height()).min(1.0);
+        let bounds = Rect::from_min_max(self.centre + (bounds.min - self.centre) * scale, self.centre + (bounds.max - self.centre) * scale);
+        let offset = egui::vec2(
+            (room.left() - bounds.left()).max(0.0) - (bounds.right() - room.right()).max(0.0),
+            (room.top() - bounds.top()).max(0.0) - (bounds.bottom() - room.bottom()).max(0.0),
+        );
+        Self { foc: self.foc * scale, centre: self.centre + offset, ..self }
+    }
+
+    fn framed_horizontally(self, points: &[P3], room: Rect) -> Self {
+        let bounds = Rect::from_points(&points.iter().map(|point| self.pt(*point)).collect::<Vec<_>>());
+        let offset = if bounds.width() >= room.width() {
+            0.0_f32.clamp(room.right() - bounds.right(), room.left() - bounds.left())
+        } else {
+            room.center().x - bounds.center().x
+        };
+        Self { centre: self.centre + egui::vec2(offset, 0.0), ..self }
+    }
+
     /// This view fitted to the points `near(g)`: a box round what is
     /// focused, grown by `g` in steps of `grow` until the view magnifies by
     /// no more than `max` of this one.
@@ -229,6 +250,7 @@ impl Orbit {
 /// warm lamp in front and to the right, and a little bounce from the desk.
 struct Lighting {
     eye: P3,
+    rim: f32,
 }
 
 const KEY_DIR: P3 = p3(-0.22, 0.86, -0.46);
@@ -267,7 +289,7 @@ impl Lighting {
             }
         }
         // A cool rim where the surface turns away: the screens behind.
-        let rim = (1.0 - n.dot(v).max(0.0)).powi(4) * 0.12 * n.y.max(0.0).sqrt();
+        let rim = (1.0 - n.dot(v).max(0.0)).powi(4) * self.rim * n.y.max(0.0).sqrt();
         for i in 0..3 {
             out[i] += rim * KEY_COL[i];
         }
@@ -389,7 +411,8 @@ const CASE: Finish = Finish { albedo: Color32::from_rgb(0x3A, 0x3E, 0x45), gloss
 const CAP: Finish = Finish { albedo: Color32::from_rgb(0x34, 0x37, 0x3D), gloss: 18.0, spec: 0.08 };
 const CAP_MOD: Finish = Finish { albedo: Color32::from_rgb(0x55, 0x52, 0x4D), gloss: 18.0, spec: 0.08 };
 const DESK_LIT: Color32 = Color32::from_rgb(0x3B, 0x30, 0x27);
-pub const SIGNAL: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
+/// The brand's Volt: a changed key's new legend, the chosen key or button.
+pub const SIGNAL: Color32 = crate::style::SIGNAL;
 
 /// A legend to print on a key: where, how big, which colour, and whether
 /// it is the key's new job (printed on its front, in Volt).
@@ -403,9 +426,49 @@ struct Legend {
     max_w: f32,
 }
 
+fn legend_font(painter: &Painter, text: &str, size: f32, minimum: f32, max_w: f32, font: &dyn Fn(f32) -> FontId) -> FontId {
+    let fits = |candidate: FontId| painter.layout_no_wrap(text.to_owned(), candidate, Color32::WHITE).size().x <= max_w;
+    let mut current = size.max(minimum);
+    loop {
+        let primary = font(current);
+        if fits(primary.clone()) {
+            return primary;
+        }
+        if current <= minimum {
+            return primary;
+        }
+        current = (current - 0.5).max(minimum);
+    }
+}
+
+fn legend_variants(text: &str) -> &[&str] {
+    match text {
+        "Bksp" => &["Backspace", "Bksp"],
+        "Sup" => &["Super", "Sup"],
+        "Mnu" => &["Menu", "Mnu"],
+        "Ent" => &["Enter", "Ent"],
+        _ => &[],
+    }
+}
+
+fn adaptive_legend(painter: &Painter, text: &str, size: f32, max_w: f32, font: &dyn Fn(f32) -> FontId) -> Option<(String, FontId)> {
+    let variants = legend_variants(text);
+    let choices = if variants.is_empty() { std::slice::from_ref(&text) } else { variants };
+    for (index, &choice) in choices.iter().enumerate() {
+        let minimum = if index + 1 < choices.len() { (size * 0.85).max(9.0) } else { 9.0 };
+        let chosen = legend_font(painter, choice, size, minimum, max_w, font);
+        if painter.layout_no_wrap(choice.to_owned(), chosen.clone(), Color32::WHITE).size().x <= max_w {
+            return Some((choice.to_owned(), chosen));
+        }
+    }
+    None
+}
+
 /// A built keyboard: the lit mesh, each key's top on screen (for clicks
 /// and highlights) and its legends.
 pub struct Keyboard {
+    flat: bool,
+    returning: bool,
     built_for: (Rect, Vec<Cap>, View, Option<usize>),
     /// Where the camera is headed, and whether it was still moving when this
     /// was built.
@@ -414,15 +477,39 @@ pub struct Keyboard {
     mesh: Arc<Mesh>,
     pub tops: Vec<Vec<Pos2>>,
     legends: Vec<Legend>,
+    #[cfg(test)]
+    case_bounds: Rect,
 }
 
 impl Keyboard {
+    #[cfg(test)]
+    pub fn working(slot: &mut Option<Keyboard>, rect: Rect, caps: &[Cap]) {
+        if slot.as_ref().is_some_and(|board| board.flat && board.built_for.0 == rect && board.built_for.1 == caps) { return; }
+        let columns = caps.iter().map(|cap| cap.x + cap.w).fold(1.0f32, f32::max);
+        let rows = caps.iter().map(|cap| cap.y + cap.h).fold(1.0f32, f32::max);
+        let unit = ((rect.width() - 16.0) / columns).min((rect.height() - 16.0) / rows);
+        let origin = rect.center() - egui::vec2(columns * unit, rows * unit) / 2.0;
+        let mut tops = Vec::with_capacity(caps.len());
+        let mut legends = Vec::new();
+        for cap in caps {
+            let key = Rect::from_min_size(origin + egui::vec2(cap.x * unit, cap.y * unit), egui::vec2(cap.w * unit, cap.h * unit)).shrink(2.0);
+            tops.push(vec![key.left_top(), key.right_top(), key.right_bottom(), key.left_bottom()]);
+            let lines: Vec<&str> = vec![&cap.label];
+            let size = if lines.len() > 1 { (unit * 0.29).clamp(11.0, 12.0) } else { (unit * 0.36).clamp(11.0, 15.0) };
+            for (index, text) in lines.iter().enumerate() {
+                legends.push(Legend { at: key.center() + egui::vec2(0.0, (index as f32 - (lines.len() - 1) as f32 / 2.0) * (size + 1.0)), size, text: (*text).to_owned(), to: cap.to.is_some(), modifier: cap.modifier, max_w: key.width() - 6.0 });
+            }
+        }
+        let target = Self::aim(rect, caps, View::default(), None);
+        *slot = Some(Keyboard { #[cfg(test)] case_bounds: rect, flat: true, returning: false, built_for: (rect, caps.to_vec(), View::default(), None), target, moving: false, mesh: Arc::new(Mesh::default()), tops, legends });
+    }
+
     /// The keyboard for `caps` filling `rect`, turned by `view`, and zoomed
     /// on the key `focus` (or the whole board when `None`): the last one when
     /// nothing changed, else built anew. The camera eases there by `glide`;
     /// true while it is still moving, so the caller keeps drawing.
     pub fn get(slot: &mut Option<Keyboard>, rect: Rect, caps: &[Cap], view: View, focus: Option<usize>, glide: &mut Glide, dt: f32) -> bool {
-        let same = slot.as_ref().filter(|k| k.built_for.0 == rect && k.built_for.1 == caps && k.built_for.2 == view && k.built_for.3 == focus);
+        let same = slot.as_ref().filter(|k| !k.flat && k.built_for.0 == rect && k.built_for.1 == caps && k.built_for.2 == view && k.built_for.3 == focus);
         let mut step = None;
         if let Some(k) = same {
             let s = glide.step(k.target, dt, false);
@@ -436,8 +523,24 @@ impl Keyboard {
             let resized = slot.as_ref().is_none_or(|k| k.built_for.0 != rect);
             (target, glide.step(target, dt, resized))
         });
-        *slot = Some(Self::build(rect, caps, view, focus, cam, target, moving));
+        // Orientation follows the orbit while scale/position ease toward it.
+        // Keep the case inside the overview even during that interpolation.
+        // A detail-to-overview glide deliberately starts enlarged. Let it
+        // finish before enforcing overview bounds, preserving the zoom out.
+        let returning = focus.is_none() && moving && slot.as_ref().is_some_and(|board| board.built_for.3.is_some() || board.returning);
+        let cam = if focus.is_none() && !returning { cam.contained(&Self::case_corners(caps), rect.shrink(3.0)) } else { cam };
+        let mut board = Self::build(rect, caps, view, focus, cam, target, moving);
+        board.returning = returning;
+        *slot = Some(board);
         moving
+    }
+
+    fn case_corners(caps: &[Cap]) -> Vec<P3> {
+        let half_w = caps.iter().map(|cap| cap.x + cap.w).fold(1.0f32, f32::max) * U / 2.0 + 9.0;
+        let half_d = caps.iter().map(|cap| cap.y + cap.h).fold(1.0f32, f32::max) * U / 2.0 + 9.0;
+        [-half_w, half_w].into_iter().flat_map(|x| {
+            [-16.0, 8.0].into_iter().flat_map(move |y| [-half_d, half_d].into_iter().map(move |z| p3(x, y, z)))
+        }).collect()
     }
 
     /// The camera for the whole board, or on the key `focus`.
@@ -445,20 +548,18 @@ impl Keyboard {
         let cols = caps.iter().map(|c| c.x + c.w).fold(1.0f32, f32::max);
         let rows = caps.iter().map(|c| c.y + c.h).fold(1.0f32, f32::max);
         let (w, d) = (cols * U, rows * U);
-        let margin = 9.0;
         let (x0, z0) = (-w / 2.0, -d / 2.0);
-        let base = Cam::new(p3(0.0, 0.0, 0.0), -0.06 + view.yaw, 0.92 + view.pitch, 760.0, 1.0, rect.center());
-        let bounds = [p3(x0 - margin, 0.0, z0 - margin), p3(-x0 + margin, 0.0, z0 - margin), p3(-x0 + margin, -16.0, -z0 + margin + 4.0), p3(x0 - margin, -16.0, -z0 + margin + 4.0), p3(0.0, 12.0, z0)];
-        let whole = base.fitted(&bounds, rect, 10.0);
-        // Zoomed: the key and about one key all round it fill the area.
+        let base = Cam::new(p3(0.0, 0.0, 0.0), -0.02 + view.yaw, 0.92 + view.pitch, 2000.0, 1.0, rect.center());
+        let bounds = Self::case_corners(caps);
+        let whole = base.fitted(&bounds, rect, 3.0);
         match focus.and_then(|i| caps.get(i)) {
             Some(k) => {
                 let (cx, cz) = (x0 + (k.x + k.w / 2.0) * U, z0 + (k.y + k.h / 2.0) * U);
                 let near = |g: f32| -> Vec<P3> {
-                    let (hx, hz) = (k.w * U / 2.0 + 1.1 * U + g, k.h * U / 2.0 + 1.1 * U + g);
+                    let (hx, hz) = (k.w * U / 2.0 + 2.2 * U + g, k.h * U / 2.0 + 1.6 * U + g);
                     [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].iter().map(|(sx, sz)| p3(cx + sx * hx, 7.0, cz + sz * hz)).collect()
                 };
-                whole.zoom_on(base, near, rect, 10.0, 0.4 * U, 4.0)
+                whole.zoom_on(base, near, rect, 24.0, 0.4 * U, 1.8).framed_horizontally(&bounds, rect.expand(16.0))
             }
             None => whole,
         }
@@ -470,7 +571,7 @@ impl Keyboard {
         let (w, d) = (cols * U, rows * U);
         let margin = 9.0;
         let (x0, z0) = (-w / 2.0, -d / 2.0);
-        let lit = Lighting { eye: cam.eye };
+        let lit = Lighting { eye: cam.eye, rim: 0.12 };
         let mut m = Mesh::default();
         desk(&mut m, &cam, p3(0.0, -16.0, 0.0), w * 0.9, d * 1.6);
         fade_to_edges(&mut m, 0, rect, 48.0);
@@ -501,28 +602,30 @@ impl Keyboard {
             let top = cap(&mut keys, &cam, &lit, finish, cx, cz, k.w * U, k.h * U, 1.0, 7.6 - row * 0.25);
             tops[i] = top.iter().map(|p| cam.pt(*p)).collect();
             let y_top = top[0].y;
-            let (tl, tr) = (cam.pt(top[top.len() * 3 / 4]), cam.pt(top[0]));
-            let px = (tr.x - tl.x).abs().max(1.0);
-            let size = (px / k.w.max(1.0) * 0.25).clamp(8.0, 14.0);
-            let at = cam.pt(p3(cx - k.w * U / 2.0 + 4.2, y_top, cz - k.h * U / 2.0 + 4.0));
-            legends.push(Legend { at, size, text: k.label.clone(), to: false, modifier: k.modifier, max_w: f32::INFINITY });
-            if let Some(to) = &k.to {
-                // On the cap's top, low and centred, under its own legend:
-                // from this camera the front face is too thin to hold text
-                // (drawn there, it fell onto the next row's key).
-                let at = cam.pt(p3(cx, y_top, cz + k.h * U * 0.2));
-                legends.push(Legend { at, size: (size * 1.05).max(10.5), text: to.clone(), to: true, modifier: k.modifier, max_w: px * 0.88 });
-            }
+            let half_depth = k.h * U / 2.0 - 3.05;
+            let front = cam.pt(p3(cx, y_top, cz - 0.6 - half_depth));
+            let back = cam.pt(p3(cx, y_top, cz - 0.6 + half_depth));
+            let size = ((back.y - front.y).abs() * 0.72).clamp(9.0, 15.0);
+            let left = cam.pt(p3(cx - k.w * U / 2.0 + 2.2, y_top, cz - 0.6));
+            let right = cam.pt(p3(cx + k.w * U / 2.0 - 2.2, y_top, cz - 0.6));
+            let at = cam.pt(p3(cx, y_top, cz - 0.6));
+            let max_w = (2.0 * (at.x - left.x).min(right.x - at.x)).max(1.0);
+            legends.push(Legend { at, size, text: k.label.clone(), to: k.to.is_some(), modifier: k.modifier, max_w });
         }
         keys.into_mesh(&mut m);
-        Keyboard { built_for: (rect, caps.to_vec(), view, focus), target, moving, mesh: Arc::new(m), tops, legends }
+        Keyboard { #[cfg(test)] case_bounds: Rect::from_points(&Self::case_corners(caps).iter().map(|point| cam.pt(*point)).collect::<Vec<_>>()), flat: false, returning: false, built_for: (rect, caps.to_vec(), view, focus), target, moving, mesh: Arc::new(m), tops, legends }
     }
 
     /// Draws the kept mesh, then what changes from frame to frame: the
     /// keys held (darker, as if pressed), the hovered key, the chosen one
-    /// in Volt, and the legends.
+    /// with a light outline, and the legends.
     pub fn paint(&self, p: &Painter, held: &[usize], hovered: Option<usize>, chosen: Option<usize>, font: &dyn Fn(f32, bool) -> FontId) {
         p.add(Shape::Mesh(self.mesh.clone()));
+        if self.flat {
+            for key in &self.tops {
+                p.rect(Rect::from_points(key), egui::CornerRadius::same(4), crate::style::BUTTON, Stroke::new(1.0, crate::style::KEY_EDGE), egui::StrokeKind::Inside);
+            }
+        }
         let fill = |i: usize, col: Color32| {
             if let Some(t) = self.tops.get(i).filter(|t| t.len() > 2) {
                 p.add(Shape::convex_polygon(t.clone(), col, Stroke::NONE));
@@ -534,29 +637,56 @@ impl Keyboard {
         if let Some(i) = hovered.filter(|i| Some(*i) != chosen) {
             fill(i, Color32::from_white_alpha(18));
         }
-        for l in &self.legends {
-            let col = if l.to { SIGNAL } else if l.modifier { Color32::from_rgb(0xD9, 0xD3, 0xC8) } else { Color32::from_rgb(0xC6, 0xCB, 0xD3) };
-            // A long target ("Esc/Ctrl") on a narrow cap gets smaller rather
-            // than spilling onto the next key.
-            let mut size = l.size;
-            while size > 7.0 && p.layout_no_wrap(l.text.clone(), font(size, l.to), col).size().x > l.max_w { size -= 0.5; }
-            p.text(l.at, if l.to { Align2::CENTER_CENTER } else { Align2::LEFT_TOP }, &l.text, font(size, l.to), col);
+        for l in self.legends.iter().filter(|legend| !legend.text.is_empty()) {
+            let col = if l.modifier { Color32::from_rgb(0xD9, 0xD3, 0xC8) } else { Color32::from_rgb(0xC6, 0xCB, 0xD3) };
+            let base_font = |size| font(size, l.to);
+            let (text, chosen_font) = if self.flat {
+                let chosen = legend_font(p, &l.text, l.size, 11.0, l.max_w, &base_font);
+                (crate::style::fit(p, &l.text, &chosen, l.max_w), chosen)
+            } else if let Some(legend) = adaptive_legend(p, &l.text, l.size, l.max_w, &crate::style::mono) {
+                legend
+            } else {
+                continue;
+            };
+            if self.flat {
+                p.text(l.at, Align2::CENTER_CENTER, text, chosen_font, col);
+            } else {
+                let galley = p.layout_no_wrap(text, chosen_font, col);
+                p.galley(l.at - galley.mesh_bounds.center().to_vec2(), galley, col);
+            }
+        }
+        for (index, _) in self.built_for.1.iter().enumerate().filter(|(_, cap)| cap.to.is_some()) {
+            if let Some(top) = self.tops.get(index).filter(|top| top.len() > 2) {
+                let mut outline = top.clone();
+                outline.push(outline[0]);
+                p.add(Shape::line(outline, Stroke::new(1.0, SIGNAL.gamma_multiply(0.55))));
+            }
+            let bounds = self.bounds(index);
+            p.line_segment([bounds.center_bottom() + egui::vec2(-4.0, -3.0), bounds.center_bottom() + egui::vec2(4.0, -3.0)], Stroke::new(2.0, SIGNAL));
         }
         if let Some(t) = chosen.and_then(|i| self.tops.get(i)).filter(|t| t.len() > 2) {
             let mut ring = t.clone();
             ring.push(ring[0]);
-            p.add(Shape::line(ring, Stroke::new(2.0, SIGNAL)));
+            p.add(Shape::line(ring, Stroke::new(2.0, crate::style::INK)));
         }
     }
 
     /// The key under `pos`, front keys first.
     pub fn hit(&self, pos: Pos2) -> Option<usize> {
-        (0..self.tops.len()).rev().find(|&i| inside(pos, &self.tops[i]))
+        (0..self.tops.len()).rev().find(|&i| inside(pos, &self.tops[i])).or_else(|| {
+            (0..self.tops.len()).filter(|&index| self.target_bounds(index).contains(pos))
+                .min_by(|&first, &second| self.bounds(first).center().distance_sq(pos).total_cmp(&self.bounds(second).center().distance_sq(pos)))
+        })
     }
 
     /// A key's outline's bounding box (for focus rings and screen readers).
     pub fn bounds(&self, i: usize) -> Rect {
         self.tops.get(i).map_or(Rect::NOTHING, |t| Rect::from_points(t))
+    }
+
+    pub fn target_bounds(&self, index: usize) -> Rect {
+        let bounds = self.bounds(index);
+        Rect::from_center_size(bounds.center(), bounds.size().max(egui::vec2(24.0, 24.0)))
     }
 }
 
@@ -578,14 +708,14 @@ pub fn inside(p: Pos2, poly: &[Pos2]) -> bool {
 fn cap(t: &mut Tris, cam: &Cam, lit: &Lighting, f: Finish, cx: f32, cz: f32, w: f32, d: f32, y0: f32, h: f32) -> Vec<P3> {
     let (hw, hd) = (w / 2.0 - 0.55, d / 2.0 - 0.55);
     let base = rring(cx, cz, hw, hd, 1.8, y0);
-    let shoulder = rring(cx, cz - 0.5, hw - 2.0, hd - 2.4, 2.4, y0 + h - 0.9);
-    let top = rring(cx, cz - 0.6, hw - 2.6, hd - 3.0, 2.2, y0 + h);
+    let shoulder = rring(cx, cz - 0.5, hw - 1.0, hd - 2.4, 2.4, y0 + h - 0.9);
+    let top = rring(cx, cz - 0.6, hw - 1.1, hd - 2.5, 2.2, y0 + h);
     let c = p3(cx, y0, cz);
     walls(t, cam, lit, f, &base, &shoulder, c);
     walls(t, cam, lit, f, &shoulder, &top, c);
     // The dish: a shallow cylinder across the key, lowest in the middle.
     let dish = 0.55;
-    let (thw, thd) = (hw - 2.6, hd - 3.0);
+    let (thw, thd) = (hw - 1.1, hd - 2.5);
     let centre = p3(cx, y0 + h - dish, cz - 0.6);
     let inner: Vec<P3> = top.iter().map(|p| {
         let q = lerp3(centre, *p, 0.55);
@@ -830,7 +960,7 @@ impl ModelView {
         let mid = (lo + hi) * 0.5;
         let (target, (cam, moving)) = step.unwrap_or_else(|| {
             let base = Cam::new(mid, cam_yaw, pitch, 420.0, 1.0, rect.center());
-            let whole = base.fitted(&pts, room, room.height() * 0.08);
+            let whole = base.fitted(&pts, room, room.height() * 0.16);
             // Zoomed: the part and a little of what is round it fill the room.
             let target = match focus.and_then(|f| m.parts.iter().find(|p| p.name == f)) {
                 Some(part) => {
@@ -845,13 +975,13 @@ impl ModelView {
                         (0..8).map(|i| p3(if i & 1 == 0 { a.x - g } else { b.x + g }, if i & 2 == 0 { a.y } else { b.y + g }, if i & 4 == 0 { a.z - g } else { b.z + g })).collect()
                     };
                     // Not so close that the mouse spills over its labels.
-                    whole.zoom_on(base, corners, room, room.height() * 0.08, 6.0, 1.5)
+                    whole.zoom_on(base, corners, room, room.height() * 0.08, 6.0, 1.5).contained(&pts, room.shrink(8.0))
                 }
                 None => whole,
             };
             (target, glide.step(target, dt, resized))
         });
-        let lit = Lighting { eye: cam.eye };
+        let lit = Lighting { eye: cam.eye, rim: 0.26 };
         let mut mesh = Mesh::default();
         desk(&mut mesh, &cam, p3(mid.x, 0.0, mid.z), (hi.x - lo.x) * 1.6, (hi.z - lo.z) * 1.0);
         fade_to_edges(&mut mesh, 0, room, 48.0);
@@ -920,6 +1050,161 @@ mod tests {
     use super::*;
 
     const MOUSE: &[u8] = include_bytes!("../assets/gear/mouse.omkm");
+
+    #[test]
+    fn adaptive_legends_prefer_full_names_then_readable_short_names() {
+        let ctx = egui::Context::default();
+        crate::style::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.painter();
+            let width = |text: &str| painter.layout_no_wrap(text.to_owned(), crate::style::regular(9.0), Color32::WHITE).size().x;
+            let wide = width("Backspace") + 1.0;
+            let short = width("Bksp") + 0.1;
+            let full = adaptive_legend(painter, "Bksp", 9.0, wide, &crate::style::regular).unwrap();
+            assert_eq!(full.0, "Backspace");
+            let compact = adaptive_legend(painter, "Bksp", 9.0, short, &crate::style::regular).unwrap();
+            assert_eq!(compact.0, "Bksp");
+            assert_eq!(compact.1.size, 9.0);
+            assert!(adaptive_legend(painter, "Bksp", 9.0, 1.0, &crate::style::regular).is_none());
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn long_legends_do_not_shrink_far_below_their_short_form() {
+        let ctx = egui::Context::default();
+        crate::style::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.painter();
+            for (short, full) in [("Bksp", "Backspace"), ("Sup", "Super"), ("Ent", "Enter")] {
+                let room = painter.layout_no_wrap(full.to_owned(), crate::style::mono(9.0), Color32::WHITE).size().x + 0.1;
+                let chosen = adaptive_legend(painter, short, 14.0, room, &crate::style::mono).unwrap();
+                assert_eq!(chosen.0, short);
+                assert!(chosen.1.size >= 11.5, "{short}: {:?}", chosen.1);
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn horizontal_framing_preserves_zoom_and_avoids_empty_edges() {
+        let room = Rect::from_min_size(Pos2::ZERO, egui::vec2(500.0, 200.0));
+        let points = [p3(-300.0, 0.0, 0.0), p3(300.0, 0.0, 0.0)];
+        for offset in [-250.0, 250.0] {
+            let camera = Cam::new(p3(0.0, 0.0, 0.0), 0.0, 0.9, 760.0, 760.0, room.center() + egui::vec2(offset, 0.0));
+            let framed = camera.framed_horizontally(&points, room);
+            let bounds = Rect::from_points(&points.iter().map(|point| framed.pt(*point)).collect::<Vec<_>>());
+            assert!(bounds.left() <= room.left() + 0.01);
+            assert!(bounds.right() >= room.right() - 0.01);
+            assert_eq!(framed.foc, camera.foc);
+            assert_eq!(framed.centre.y, camera.centre.y);
+        }
+    }
+
+    #[test]
+    fn legend_font_keeps_its_face_and_readability_floor() {
+        let ctx = egui::Context::default();
+        crate::style::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.painter();
+            let width = |font: FontId| painter.layout_no_wrap("Num".to_owned(), font, Color32::WHITE).size().x;
+            let available = width(crate::style::mono(10.0));
+            let chosen = legend_font(painter, "Num", 15.0, 9.0, available, &crate::style::mono);
+            assert_eq!(chosen, crate::style::mono(10.0));
+            assert!(width(chosen) <= available);
+            assert_eq!(legend_font(painter, "Num", 15.0, 9.0, 1.0, &crate::style::mono), crate::style::mono(9.0));
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn single_glyph_legends_use_the_projected_cap_height() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: crate::tune::cap_label(cap.code), to: None, modifier: false,
+        }).collect();
+        let ctx = egui::Context::default();
+        crate::style::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            for width in [560.0, 660.0, 900.0] {
+                let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 220.0));
+                let mut board = None;
+                Keyboard::get(&mut board, rect, &caps, View { yaw: 0.0, pitch: 0.4 }, None, &mut Glide::default(), 0.0);
+                let board = board.expect("3D board");
+                for legend in board.legends.iter().filter(|legend| legend.text.chars().count() == 1 && !legend.text.trim().is_empty()) {
+                    let (text, font) = adaptive_legend(ui.painter(), &legend.text, legend.size, legend.max_w, &crate::style::mono).expect("readable glyph");
+                    assert!(font.size >= 10.0, "{} is too small at {width}: {}", text, font.size);
+                    let galley = ui.painter().layout_no_wrap(text.clone(), font, Color32::WHITE);
+                    let bounds = Rect::from_center_size(legend.at, galley.size());
+                    let top = board.tops.iter().find(|top| inside(legend.at, top)).expect("legend's cap");
+                    for corner in [bounds.left_top(), bounds.right_top(), bounds.left_bottom(), bounds.right_bottom()] {
+                        assert!(inside(corner, top), "{text} exceeds its cap at {width}: {bounds:?} within {:?}", Rect::from_points(top));
+                    }
+                }
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn page_navigation_legends_fit_the_medium_3d_board() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: crate::tune::cap_label(cap.code), to: None, modifier: false,
+        }).collect();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(660.0, 220.0));
+        let mut board = None;
+        Keyboard::get(&mut board, rect, &caps, View { yaw: 0.0, pitch: 0.4 }, None, &mut Glide::default(), 0.0);
+        let board = board.expect("3D board");
+        let ctx = egui::Context::default();
+        crate::style::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            for text in ["PgUp", "PgDn"] {
+                let legend = board.legends.iter().find(|legend| legend.text == text).expect("page key legend");
+                let font = legend_font(ui.painter(), text, legend.size, 9.0, legend.max_w, &crate::style::mono);
+                let width = ui.painter().layout_no_wrap(text.to_owned(), font, Color32::WHITE).size().x;
+                assert!(width <= legend.max_w, "{text} must fit without an ellipsis");
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn whole_board_legends_remain_readable_without_mixed_fonts() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: crate::tune::cap_label(cap.code), to: None, modifier: false,
+        }).collect();
+        let context = egui::Context::default();
+        crate::style::install(&context);
+        let mut failures = Vec::new();
+        let mut output = context.run_ui(Default::default(), |ui| {
+            for width in [560.0, 660.0, 724.0, 900.0] {
+                let (columns, rows) = crate::tune::keyboard_size(true);
+                let inner = width - 36.0;
+                let height = (rows * (inner / columns).min(42.0) + 32.0).max(24.0 + inner * 0.36);
+                let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(width - 16.0, height - 32.0));
+                let mut board = None;
+                Keyboard::get(&mut board, rect, &caps, View { yaw: 0.0, pitch: 0.4 }, None, &mut Glide::default(), 0.0);
+                let board = board.unwrap();
+                for legend in board.legends.iter().filter(|legend| !legend.text.is_empty()) {
+                    if let Some((text, font)) = adaptive_legend(ui.painter(), &legend.text, legend.size, legend.max_w, &crate::style::mono) {
+                        assert!(font.size >= 9.0);
+                        assert_eq!(font.family, egui::FontFamily::Monospace);
+                        assert!(!text.contains('…'));
+                        let galley = ui.painter().layout_no_wrap(text.clone(), font, Color32::WHITE);
+                        let bounds = galley.mesh_bounds.translate(legend.at.to_vec2() - galley.mesh_bounds.center().to_vec2());
+                        let top = board.tops.iter().find(|top| inside(legend.at, top)).expect("legend's cap");
+                        for corner in [bounds.left_top(), bounds.right_top(), bounds.left_bottom(), bounds.right_bottom()] {
+                            assert!(inside(corner, top), "{text} exceeds its cap at {width}: {bounds:?}");
+                        }
+                    } else {
+                        let needed = ui.painter().layout_no_wrap(legend.text.clone(), crate::style::mono(9.0), Color32::WHITE).size().x;
+                        failures.push(format!("{} at {width}: {:.1}px available, {needed:.1}px needed", legend.text, legend.max_w));
+                    }
+                }
+            }
+        });
+        output.textures_delta.clear();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 
     #[test]
     fn the_built_in_mouse_has_its_five_buttons() {
@@ -1004,7 +1289,7 @@ mod tests {
             assert!(seen.len() < 200, "it never settles");
         }
         let close = *seen.last().unwrap();
-        assert!(close > whole.width() * 1.8, "{close} vs {}", whole.width());
+        assert!(close > whole.width() * 1.4, "{close} vs {}", whole.width());
         assert!(seen.windows(2).all(|w| w[1] >= w[0] - 0.01), "it only grows on the way in");
         assert!(seen.len() > 12 && seen[seen.len() / 2] > whole.width() && seen[seen.len() / 2] < close, "it takes a while, passing through the middle");
         let (_, rect) = real_board();
@@ -1015,6 +1300,20 @@ mod tests {
         assert!(first.width() > whole.width() * 1.5, "the first frame out is still close");
         while frame(&mut b, &mut g, None, 37).1 {}
         assert!((frame(&mut b, &mut g, None, 37).0.width() - whole.width()).abs() < 0.01);
+    }
+
+    #[test]
+    fn selected_edge_keys_keep_padding_in_a_short_editor_stage() {
+        let (caps, _) = real_board();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(860.0, 166.0));
+        for selected in [0, 14, 30, 60, 74] {
+            let (mut board, mut glide) = (None, Glide::default());
+            Keyboard::get(&mut board, rect, &caps, View::default(), Some(selected), &mut glide, 1.0 / 60.0);
+            let bounds = board.as_ref().unwrap().bounds(selected);
+            assert!(rect.shrink(20.0).contains_rect(bounds), "key {selected}: {bounds:?}");
+            assert!((bounds.center().y - rect.center().y).abs() < 32.0, "key {selected} is not vertically centered");
+            assert!(bounds.width() < rect.width() / 4.0, "board context must remain visible");
+        }
     }
 
     #[test]
@@ -1067,6 +1366,59 @@ mod tests {
         }
         assert!(from.distance(last) > 20.0, "the buttons are far enough apart to see a jump, {}", from.distance(last));
         assert!(biggest < from.distance(last) * 0.3, "moved {biggest} px in one frame of {}", from.distance(last));
+    }
+
+    #[test]
+    fn mouse_button_zoom_eases_in_and_returns_to_the_whole_model() {
+        let model = Model::parse(MOUSE).expect("built-in mouse");
+        let room = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(350.0, 174.0));
+        let (mut view, mut glide) = (None, Glide::default());
+        let mut frame = |focus| {
+            let moving = ModelView::get(&mut view, &model, room, room, 0.0, -2.2, 0.62, focus, focus, &mut glide, 1.0 / 60.0);
+            (glide.at[0].exp(), moving)
+        };
+        let whole = frame(None).0;
+        let mut zooms = vec![whole];
+        for index in 0..300 {
+            let (zoom, moving) = frame(Some("back"));
+            zooms.push(zoom);
+            if !moving { break; }
+            assert!(index < 299, "mouse zoom never settles");
+        }
+        let close = *zooms.last().unwrap();
+        assert!(close > whole * 1.15, "selected button must be visibly larger");
+        assert!(zooms.len() > 12);
+        assert!(zooms.windows(2).all(|pair| pair[1] >= pair[0] - 0.01));
+        let first_out = frame(None).0;
+        assert!(first_out > whole * 1.1 && first_out < close);
+        let mut last = first_out;
+        for index in 0..300 {
+            let (zoom, moving) = frame(None);
+            assert!(zoom <= last + 0.01);
+            last = zoom;
+            if !moving { break; }
+            assert!(index < 299, "mouse zoom-out never settles");
+        }
+        assert!((last - whole).abs() < 0.01);
+    }
+
+    #[test]
+    fn focused_mouse_stays_clear_of_callouts_at_every_orbit_extreme() {
+        let model = Model::parse(MOUSE).expect("built-in mouse");
+        for width in [136.0, 280.0, 350.0, 640.0] {
+            let room = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(width, 174.0));
+            for yaw in [-0.9, 0.0, 0.9] {
+                let points: Vec<P3> = model.points().map(|point| point.yaw(yaw)).collect();
+                for pitch in [0.32, 0.62, 0.92] {
+                    for part in ["left", "middle", "right", "back", "forward"] {
+                        let (mut view, mut glide) = (None, Glide::default());
+                        ModelView::get(&mut view, &model, room, room, yaw, -2.2, pitch, Some(part), Some(part), &mut glide, 1.0 / 60.0);
+                        let camera = view.as_ref().unwrap().target;
+                        assert!(points.iter().all(|point| room.shrink(7.9).contains(camera.pt(*point))), "{width} {yaw} {pitch} {part}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1130,5 +1482,138 @@ mod tests {
         let mesh = Arc::as_ptr(&b.mesh);
         Keyboard::get(&mut board, rect, &caps, View::default(), None, &mut Glide::default(), 0.0);
         assert_eq!(Arc::as_ptr(&board.as_ref().expect("kept").mesh), mesh);
+    }
+
+    #[test]
+    fn the_complete_board_fits_compact_and_wide_stages() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: cap.code.to_string(), to: None, modifier: false,
+        }).collect();
+        for (width, height) in [(640.0, 110.0), (880.0, 180.0), (1280.0, 180.0)] {
+            let rect = Rect::from_min_size(pos2(8.0, 50.0), egui::vec2(width, height));
+            let mut board = None;
+            Keyboard::get(&mut board, rect, &caps, View::default(), None, &mut Glide::default(), 0.0);
+            let board = board.expect("whole board");
+            for (index, cap) in caps.iter().enumerate() {
+                assert!(rect.shrink(2.0).contains_rect(board.bounds(index)), "key {} outside {rect:?}", cap.label);
+            }
+        }
+    }
+
+    #[test]
+    fn taller_narrow_3d_stage_preserves_key_hits_and_increases_size() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: crate::tune::cap_label(cap.code), to: None, modifier: false,
+        }).collect();
+        for width in [560.0, 660.0] {
+            let build = |height| {
+                let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(width, height));
+                let mut board = None;
+                Keyboard::get(&mut board, rect, &caps, View { yaw: 0.0, pitch: 0.4 }, None, &mut Glide::default(), 0.0);
+                (rect, board.expect("3D board"))
+            };
+            let (_, shorter) = build(150.0);
+            let (rect, taller) = build(220.0);
+            assert!(!taller.flat);
+            assert!(taller.bounds(0).width() > shorter.bounds(0).width());
+            for index in 0..caps.len() {
+                let bounds = taller.bounds(index);
+                assert!(rect.shrink(2.0).contains_rect(bounds), "key {index} outside viewport");
+                assert_eq!(taller.hit(bounds.center()), Some(index), "key {index} hit target");
+            }
+            for legend in &taller.legends {
+                assert!(taller.tops.iter().any(|top| inside(legend.at, top)), "legend {} is outside its key", legend.text);
+                assert!(legend.max_w > 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn whole_board_keys_fit_at_orbit_extremes() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: crate::tune::cap_label(cap.code), to: None, modifier: false,
+        }).collect();
+        for width in [560.0, 660.0, 900.0] {
+            let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(width, 220.0));
+            for yaw in [-0.7, 0.0, 0.7] {
+                for pitch in [0.1, 0.4, 0.7] {
+                    let mut board = None;
+                    Keyboard::get(&mut board, rect, &caps, View { yaw, pitch }, None, &mut Glide::default(), 0.0);
+                    let board = board.expect("3D board");
+                    for (index, cap) in caps.iter().enumerate() {
+                        assert!(rect.shrink(2.0).contains_rect(board.bounds(index)), "key {} outside {rect:?} at {yaw}, {pitch}", cap.label);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn keyboard_case_stays_inside_stage_during_orbit_glides() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: crate::tune::cap_label(cap.code), to: None, modifier: false,
+        }).collect();
+        for width in [544.0, 660.0, 754.0, 900.0] {
+            let rect = Rect::from_min_size(pos2(8.0, 8.0), egui::vec2(width, 248.0));
+            let mut board = None;
+            let mut glide = Glide::default();
+            for view in [View { yaw: 0.0, pitch: 0.4 }, View { yaw: -0.7, pitch: 0.7 }, View { yaw: 0.7, pitch: 0.1 }, View { yaw: 0.0, pitch: 0.4 }] {
+                for frame in 0..120 {
+                    Keyboard::get(&mut board, rect, &caps, view, None, &mut glide, 1.0 / 60.0);
+                    let bounds = board.as_ref().unwrap().case_bounds;
+                    assert!(rect.shrink(2.9).contains_rect(bounds), "case clipped at width {width}, view {view:?}, frame {frame}: {bounds:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn working_board_fits_and_keeps_one_legend_per_key() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: cap.code.to_string(), to: (cap.code == 58).then(|| "Esc/Ctrl".into()), modifier: false,
+        }).collect();
+        for (width, height) in [(860.0, 250.0), (1064.0, 340.0)] {
+            let rect = Rect::from_min_size(pos2(8.0, 50.0), egui::vec2(width, height));
+            let mut board = None;
+            Keyboard::working(&mut board, rect, &caps);
+            let board = board.unwrap();
+            for index in 0..caps.len() {
+                let bounds = board.bounds(index);
+                assert!(rect.shrink(2.0).contains_rect(bounds));
+                assert_eq!(board.hit(bounds.center()), Some(index));
+                assert!(bounds.width() >= 24.0 && bounds.height() >= 24.0, "undersized key: {bounds:?}");
+            }
+            let remapped: Vec<_> = board.legends.iter().filter(|legend| legend.to).collect();
+            assert_eq!(remapped.len(), 1);
+            assert_eq!(remapped[0].text, "58");
+            assert_eq!(board.legends.len(), caps.len());
+            assert!(board.legends.iter().all(|legend| legend.size >= 11.0));
+        }
+    }
+
+    #[test]
+    fn slash_legends_are_not_tap_hold_separators() {
+        let caps = vec![
+            Cap { x: 0.0, y: 0.0, w: 1.0, h: 1.0, label: crate::tune::cap_label(53), to: None, modifier: false },
+            Cap { x: 1.0, y: 0.0, w: 1.0, h: 1.0, label: crate::tune::cap_label(98), to: Some("/".into()), modifier: false },
+        ];
+        let mut board = None;
+        Keyboard::working(&mut board, Rect::from_min_size(Pos2::ZERO, egui::vec2(100.0, 60.0)), &caps);
+        let legends = &board.unwrap().legends;
+        assert_eq!(legends.len(), 2);
+        assert!(legends.iter().all(|legend| legend.text == "/"));
+    }
+
+    #[test]
+    fn small_key_targets_extend_beyond_the_painted_polygon() {
+        let caps = vec![Cap { x: 0.0, y: 0.0, w: 1.0, h: 1.0, label: "A".into(), to: None, modifier: false }];
+        let mut board = None;
+        Keyboard::working(&mut board, Rect::from_min_size(Pos2::ZERO, egui::vec2(36.0, 36.0)), &caps);
+        let board = board.unwrap();
+        let target = board.target_bounds(0);
+        assert!(target.width() >= 24.0 && target.height() >= 24.0);
+        let edge = target.left_center() + egui::vec2(0.5, 0.0);
+        assert!(!inside(edge, &board.tops[0]));
+        assert_eq!(board.hit(edge), Some(0));
     }
 }

@@ -727,12 +727,12 @@ pub fn key_label(code: u32) -> String {
 /// A key's name on its drawn cap: short.
 pub fn cap_label(code: u16) -> String {
     let s = match code {
-        14 => "Backspace",
+        14 => "Bksp",
         58 => "Caps",
         42 | 54 => "Shift",
         29 | 97 => "Ctrl",
         56 | 100 => if cfg!(target_os = "macos") { "Opt" } else { "Alt" },
-        125 | 126 => meta_word(),
+        125 | 126 => if cfg!(target_os = "macos") { "Cmd" } else if cfg!(windows) { "Win" } else { "Sup" },
         57 => "",
         99 => "PrSc",
         70 => "ScLk",
@@ -745,7 +745,7 @@ pub fn cap_label(code: u16) -> String {
         105 => "←",
         106 => "→",
         69 => "Num",
-        96 => "Enter",
+        96 => "Ent",
         55 => "*",
         74 => "-",
         78 => "+",
@@ -754,6 +754,7 @@ pub fn cap_label(code: u16) -> String {
         71..=73 | 75..=77 | 79..=82 => return keynames::key_name(u32::from(code)).trim_start_matches("kp").to_owned(),
         86 => "<>",
         102 => "Home",
+        127 => "Mnu",
         119 => "Brk",
         _ => {
             // Punctuation by its character: `-`, `[`, `;`.
@@ -932,7 +933,7 @@ pub struct Cap {
 
 /// The drawing's size in key units, with and without the keypad.
 pub fn keyboard_size(keypad: bool) -> (f32, f32) {
-    (if keypad { 23.0 } else { 18.5 }, 6.5)
+    (if keypad { 23.75 } else { 19.25 }, 6.5)
 }
 
 /// A compact keyboard from the evdev code space: the F row, the main block
@@ -956,7 +957,7 @@ pub fn keyboard(keypad: bool, mac: bool) -> Vec<Cap> {
     row(0.0, 2.0, &one(59..=62));
     row(0.0, 6.5, &one(63..=66));
     row(0.0, 11.0, &[(67, 1.0), (68, 1.0), (87, 1.0), (88, 1.0)]);
-    row(0.0, 15.5, &[(99, 1.0), (70, 1.0), (119, 1.0)]);
+    row(0.0, 15.5, &[(99, 1.25), (70, 1.25), (119, 1.25)]);
     let r1: Vec<(u16, f32)> = [(41, 1.0)].into_iter().chain(one(2..=13)).chain([(14, 2.0)]).collect();
     row(1.5, 0.0, &r1);
     let r2: Vec<(u16, f32)> = [(15, 1.5)].into_iter().chain(one(16..=27)).chain([(43, 1.5)]).collect();
@@ -970,18 +971,18 @@ pub fn keyboard(keypad: bool, mac: bool) -> Vec<Cap> {
     } else {
         row(5.5, 0.0, &[(29, 1.25), (125, 1.25), (56, 1.25), (57, 6.25), (100, 1.25), (126, 1.25), (127, 1.25), (97, 1.25)]);
     }
-    row(1.5, 15.5, &[(110, 1.0), (102, 1.0), (104, 1.0)]);
-    row(2.5, 15.5, &[(111, 1.0), (107, 1.0), (109, 1.0)]);
-    row(4.5, 16.5, &[(103, 1.0)]);
-    row(5.5, 15.5, &[(105, 1.0), (108, 1.0), (106, 1.0)]);
+    row(1.5, 15.5, &[(110, 1.25), (102, 1.25), (104, 1.25)]);
+    row(2.5, 15.5, &[(111, 1.25), (107, 1.25), (109, 1.25)]);
+    row(4.5, 16.75, &[(103, 1.25)]);
+    row(5.5, 15.5, &[(105, 1.25), (108, 1.25), (106, 1.25)]);
     if keypad {
-        row(1.5, 19.0, &[(69, 1.0), (98, 1.0), (55, 1.0), (74, 1.0)]);
-        row(2.5, 19.0, &[(71, 1.0), (72, 1.0), (73, 1.0)]);
-        row(3.5, 19.0, &[(75, 1.0), (76, 1.0), (77, 1.0)]);
-        row(4.5, 19.0, &[(79, 1.0), (80, 1.0), (81, 1.0)]);
-        row(5.5, 19.0, &[(82, 2.0), (83, 1.0)]);
-        caps.push(Cap { code: 78, x: 22.0, y: 2.5, w: 1.0, h: 2.0 });
-        caps.push(Cap { code: 96, x: 22.0, y: 4.5, w: 1.0, h: 2.0 });
+        row(1.5, 19.75, &[(69, 1.0), (98, 1.0), (55, 1.0), (74, 1.0)]);
+        row(2.5, 19.75, &[(71, 1.0), (72, 1.0), (73, 1.0)]);
+        row(3.5, 19.75, &[(75, 1.0), (76, 1.0), (77, 1.0)]);
+        row(4.5, 19.75, &[(79, 1.0), (80, 1.0), (81, 1.0)]);
+        row(5.5, 19.75, &[(82, 2.0), (83, 1.0)]);
+        caps.push(Cap { code: 78, x: 22.75, y: 2.5, w: 1.0, h: 2.0 });
+        caps.push(Cap { code: 96, x: 22.75, y: 4.5, w: 1.0, h: 2.0 });
     }
     caps
 }
@@ -1575,7 +1576,7 @@ pub fn button_default(n: u32) -> &'static str {
         1 => "Left click",
         2 => "Right click",
         3 => "Middle click",
-        _ => "Its own button",
+        _ => "Unchanged",
     }
 }
 
@@ -1690,6 +1691,23 @@ pub fn scroll_shown(input: &Input, f: &Facts, device: Option<Device>) -> ScrollS
 /// A problem from `one-mk keymap check` in the window's words:
 /// `input.keymap.rule #3: ...` becomes `Key rule 3: ...`.
 pub fn plain_problem(p: &str) -> String {
+    if let Some((prefix, _)) = p.split_once(" is not a key name")
+        && let Some(name) = prefix.rsplit('"').nth(1)
+    {
+        let folded = fold(name);
+        let suggestion = keyboard(true, false).iter().map(|cap| key_label(u32::from(cap.code))).find(|label| {
+            let candidate = fold(label);
+            candidate.char_indices().any(|(index, character)| {
+                let mut shortened = candidate.clone();
+                shortened.replace_range(index..index + character.len_utf8(), "");
+                shortened == folded
+            })
+        });
+        return match suggestion {
+            Some(label) => format!("'{name}' isn't a key. Did you mean {label}?"),
+            None => format!("'{name}' isn't a key. Choose a key from the list."),
+        };
+    }
     let mut out = p.to_owned();
     for (table, word) in [("input.keymap.rule #", "Key rule "), ("input.button #", "Button rule "), ("input.pointer #", "Pointer setting "), ("input.scroll #", "Scroll setting ")] {
         out = out.replace(table, word);
@@ -2018,6 +2036,9 @@ os = "mac"
         assert_eq!(code(neighbour(&caps, at(103), 0, 1)), Some(108), "Up ↓ Down");
         assert_eq!(code(neighbour(&caps, at(97), 0, 1)), None, "nothing below the bottom row");
         assert_eq!(cap_label(58), "Caps");
+        assert_eq!(cap_label(14), "Bksp");
+        assert_eq!(cap_label(125), if cfg!(target_os = "macos") { "Cmd" } else if cfg!(windows) { "Win" } else { "Sup" });
+        assert_eq!([102, 104, 109, 69, 127].map(cap_label), ["Home", "PgUp", "PgDn", "Num", "Mnu"]);
         assert_eq!([12, 13, 26, 27, 43, 39, 40, 51, 52, 53].map(cap_label), ["-", "=", "[", "]", "\\", ";", "'", ",", ".", "/"]);
         assert_eq!(cap_label(30), "A");
         assert_eq!(cap_label(76), "5");
@@ -2159,7 +2180,7 @@ os = "mac"
 
     #[test]
     fn problems_read_without_table_names() {
-        assert_eq!(plain_problem("input.keymap.rule #3: from: \"capslok\" is not a key name"), "Key rule 3: from: \"capslok\" is not a key name");
+        assert_eq!(plain_problem("input.keymap.rule #3: from: \"capslok\" is not a key name"), "'capslok' isn't a key. Did you mean Caps Lock?");
         assert_eq!(plain_problem("input.button #1: button 9"), "Button rule 1: button 9");
         assert_eq!(plain_problem("rules for \"x\" never apply"), "Rules for \"x\" never apply");
     }

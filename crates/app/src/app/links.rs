@@ -37,7 +37,9 @@ fn sparkline(p: &Painter, r: Rect, ring: &Ring, now: f64, q: Option<Quality>) {
         }
     }
     if let Some([x, y]) = t.lines.last().and_then(|l| l.last()) {
-        p.circle_filled(r.min + vec2(*x, *y), 2.5, if q.is_some() && col == INK2 { INK } else { col });
+        // The newest reading: cyan while it answers well (live, connected),
+        // amber when it doesn't.
+        p.circle_filled(r.min + vec2(*x, *y), 2.5, if col == INK2 { OK } else { col });
     }
     // Lost packets: a thin amber line top to bottom ending in a ring, so
     // it reads apart from a slow reading and not only by colour.
@@ -59,12 +61,25 @@ impl App {
     /// latency card, on the Desk tab once a computer is paired.
     pub(super) fn panel_h(&self) -> f32 {
         if self.tab == Tab::Files {
-            return 460.0_f32.min(self.ctx.content_rect().height() - 160.0);
+            // The page scrolls, so the desk above keeps enough room for its
+            // monitors to stay readable drop targets in a small window.
+            // Narrow, the desk above is a row of named chips: the page takes the room.
+            if self.ctx.content_rect().width() < 1040.0 {
+                // Chips need a row (two at most): the page takes the rest.
+                let peers = self.running().map_or(0, |s| s.peers.len());
+                let chips = if peers > 3 { 2.0 * 52.0 } else { 52.0 };
+                return (self.ctx.content_rect().height() - shell::HEAD_H - chips - 3.0 * M).max(210.0);
+            }
+            return (self.ctx.content_rect().height() * 0.56).clamp(210.0, 460.0);
+        }
+        // A narrow window stacks Layout's cards: give them half the height.
+        if self.tab == Tab::Layout && self.ctx.content_rect().width() < 1040.0 {
+            return (self.ctx.content_rect().height() * 0.46).max(PANEL_H);
         }
         let with_card = self.tab == Tab::Desk && self.running().is_some_and(|s| !s.peers.is_empty());
         let short = self.ctx.content_rect().height() < 640.0;
         match (with_card, short) {
-            (true, false) => 252.0,
+            (true, false) => 228.0,
             (true, true) => 220.0,
             (false, _) => PANEL_H,
         }
@@ -83,25 +98,18 @@ impl App {
         }
     }
 
-    /// A connected computer that the daemon reports no link for: a daemon
-    /// from before the graph, still running after an upgrade.
-    pub(super) fn older_daemon(&self, id: &str) -> bool {
-        self.rtts.of(id).is_none() && self.running().is_some_and(|s| s.link_of(id).is_none())
-    }
-
     pub(super) fn summary_of(&self, id: &str) -> Option<Summary> {
         self.rtts.of(id).and_then(|r| r.summary(self.rtt_now()))
     }
 
     /// "Latency to desk: 4 ms, smooth. Over the last 2 minutes: …".
-    fn latency_words(&self, peer: &PeerStatus) -> String {
+    pub(super) fn latency_words(&self, peer: &PeerStatus) -> String {
         if !peer.online {
             return format!("Latency to {}: offline.", peer.name);
         }
         match self.summary_of(&peer.id) {
             Some(s) => s.describe(&peer.name),
-            None if self.older_daemon(&peer.id) => format!("Latency to {}: not shown, restart oneMK to see it.", peer.name),
-            None => format!("Latency to {}: still measuring.", peer.name),
+            None => format!("Latency to {}: no samples yet.", peer.name),
         }
     }
 
@@ -143,7 +151,7 @@ impl App {
                 p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, "offline", regular(T_META), INK2);
             } else {
                 let q = summary.and_then(|s| s.quality());
-                let waiting = if self.older_daemon(&peer.id) { "Restart oneMK" } else { "Measuring…" };
+                let waiting = "No samples yet";
                 let word = q.map_or(waiting, Quality::word);
                 p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, word, regular(T_META), if q.is_some() { tone(q) } else { INK2 });
                 if let Some(s) = summary {

@@ -63,9 +63,9 @@ fn main() {
         }
     };
     #[allow(unused_mut)]
-    let mut size = [1200.0, 780.0];
+    let mut size: [f32; 2] = [1200.0, 780.0];
     // Development aid (see app.rs `shot`): ONE_MK_APP_SIZE=760x540.
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     if let Some((w, h)) = std::env::var("ONE_MK_APP_SIZE").ok().and_then(|s| {
         let (w, h) = s.split_once('x')?;
         Some((w.parse().ok()?, h.parse().ok()?))
@@ -76,7 +76,7 @@ fn main() {
     let mut multisampling = 0;
     // Development aid: ONE_MK_APP_MSAA=4 asks for a multisampled window,
     // as some drivers give anyway (the glass then copies at full size).
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     if let Some(n) = std::env::var("ONE_MK_APP_MSAA").ok().and_then(|n| n.parse().ok()) {
         multisampling = n;
     }
@@ -87,7 +87,7 @@ fn main() {
             .with_app_id("one-mk")
             .with_inner_size(size)
             .with_icon(window_icon())
-            .with_min_inner_size([820.0, 540.0])
+            .with_min_inner_size([size[0].min(820.0), size[1].min(540.0)])
             .with_transparent(guide::needs_transparent_root() || chrome::see_through()),
         ..Default::default()
     };

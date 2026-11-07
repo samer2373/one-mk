@@ -55,7 +55,7 @@ const SETTINGS: &[(&str, Tab)] = &[
     ("Crossing edges · Stay in fullscreen windows", Tab::Advanced),
     ("Power · Keep computers I control awake", Tab::Advanced),
     ("Power · Sleep displays together", Tab::Advanced),
-    ("Power · Lock all when this one locks", Tab::Advanced),
+    ("Power · Lock every screen with this one", Tab::Advanced),
     ("Games · Gaming mode", Tab::Advanced),
     ("Keyboard shortcuts", Tab::Advanced),
     ("Ctrl and Cmd · Swap them between a Mac and a PC", Tab::Advanced),
@@ -332,9 +332,17 @@ impl App {
                     if resp.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
                         self.palette.sel = *k;
                     }
+                    // Tabbed onto, a row is the chosen one (its lift and Volt
+                    // tile are the focus look), and its ring shows.
+                    if resp.gained_focus() {
+                        self.palette.sel = *k;
+                    }
+                    widgets::focus_ring(ui, &resp, row, 10);
                     let chosen = self.palette.sel == *k;
                     if chosen {
-                        ui.painter().rect(row, CornerRadius::same(10), SIGNAL.gamma_multiply(0.12), Stroke::new(1.0, SIGNAL.gamma_multiply(0.35)), StrokeKind::Inside);
+                        // The chosen row: a quiet lift, as a system list does; its icon
+                        // tile carries the Volt.
+                        ui.painter().rect(row, CornerRadius::same(10), ON_GLASS_LIT, Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
                         if down || up {
                             ui.scroll_to_rect(rr, None);
                         }
@@ -369,11 +377,13 @@ impl App {
                         if range.start < at {
                             continue;
                         }
-                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(14.0), INK));
-                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(14.0), SIGNAL));
+                        // Only the typed characters stand out: in full ink and
+                        // semibold, the rest of the title a step quieter.
+                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(14.0), INK_HOVER));
+                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(14.0), INK));
                         at = range.end;
                     }
-                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(14.0), INK));
+                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(14.0), INK_HOVER));
                     let g = ui.painter().layout_job(job);
                     ui.painter().galley(pos2(ic.right() + 12.0, row.center().y - g.size().y / 2.0), g, INK);
                     if !e.hint.is_empty() {

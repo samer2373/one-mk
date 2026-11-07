@@ -1,0 +1,21 @@
+# Council codex — Round 5, Track B
+
+- Branch: `council/codex-r5`; rebased onto Track A before handoff. Exact tip is in the handoff message and evidence provenance.
+- Worktree: `/home/samer/.t3/worktrees/one-mk/t3-d6ededa0`.
+- Shots: `/home/samer/omk-council/codex/round5/`; `before`, `iteration1`, `iteration2`, `final` retain the review trail.
+- B1 done: the oversized board pushed the safety paragraph through the viewport edge; the smaller stage and measured paragraph bounds leave the whole warning visible in 43/51 and the compact scrolled test card.
+- B2 done: the forced Files offset could outrun content; it is bounded, with the last card fully visible in 99. Stalled transfers retain bytes and identity, use amber plus “stalled”, and give a real reconnect step. Offline recipients are named and labelled Offline.
+- B3 done: a whole board is the default even with a selected key; close-up is explicitly opt-in. Labels shrink to their caps, with full descriptions on hover. The compact editor precedes presets; capture is primary and list/no-output/reset secondary.
+- B3 iteration correction: the first shorter mouse stage cropped its top plate. Reserved callout height and two-line compact plates now keep all five labels whole and bring mapping controls forward.
+- B4 done: selected computers gain a whole-device outline and a “Selected” subtitle; local labels and full-name access remain. Only labels/outlines changed in shared scene code.
+- B5 evidence: full-width Files; 760×540 editor, picker, capture and scrolled safety; whole-board 1×/2× originals and unscaled crops; retained small/HiDPI recipient sheets (19b/19c).
+- Three screenshot → critique → correction passes completed; final contacts and critical originals inspected.
+- Real AT-SPI: Files 29 nodes, Keys 148, mouse 75, Layout 26; 243 named controls. App restriction and hold-duration fields expose Text; the safety sentence is complete and showing.
+- AT gap: the custom Test-it entry and shell Search lack the AT-SPI Text interface. This is not speech-reader parity certification.
+- Motion: `evidence/final-frames` retains eight original frames and a strip each for an AT-SPI/XTest selection-camera change and an active-to-stalled fixture transition; method recorded in JSON.
+- Gates: Linux check, Windows MSVC check, Apple ARM check, all-target design-evidence clippy with `-D warnings`, 140 app tests, and diff whitespace check pass. Logs under `evidence/gates`.
+- Runtime: no unconditional repaint loop added. Track A owns the release runtime packet; its measurement is not claimed as a final merged-tip measurement here.
+- Remaining: tiny whole-board legends still need opt-in detail at compact size; long scope names truncate with full-name access; real physical stalled-transfer recovery and macOS/Windows rendering remain unverified.
+- Self-score /10 (visual, provisional): hierarchy 9.0; geometry 8.9; typography 8.5; colour 9.0; surfaces 9.0; controls 8.8; motion 8.6; accessibility 7.8; copy/recovery 9.0; runtime evidence 8.0.
+- No 9.5 pass claimed; verified score remains capped at 8 with Linux-only evidence and the AT text gap.
+- No push, PR, merge, owner-settings changes, installation, or foreign-process termination.

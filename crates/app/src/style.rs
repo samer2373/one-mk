@@ -26,8 +26,9 @@ pub const PALETTE_TOP: Color32 = Color32::from_rgba_premultiplied(18, 20, 25, 20
 pub const PALETTE: Color32 = Color32::from_rgba_premultiplied(14, 16, 21, 215);
 /// The search row at the top of the sidebar.
 pub const SEARCH_FILL: Color32 = Color32::from_rgb(0x13, 0x16, 0x1C);
-/// Shortcut keys beside each page: there when looked for, not before.
-pub const SHORTCUT_INK: Color32 = Color32::from_rgb(0x52, 0x5A, 0x66);
+/// Shortcut keys beside each page: quiet, yet 4.5:1 on the sidebar and on
+/// its chosen row.
+pub const SHORTCUT_INK: Color32 = Color32::from_rgb(0x7D, 0x86, 0x92);
 /// The room on a see-through window (macOS): a dark tint over the blurred
 /// desktop, 88% so grey text keeps 4.5:1 even over a white wallpaper.
 pub const ROOM_TINT: Color32 = Color32::from_rgba_premultiplied(14, 17, 21, 224);
@@ -52,11 +53,22 @@ pub const CONTROL_SOLID_TOP: Color32 = Color32::from_rgb(0x2A, 0x2E, 0x35);
 pub const CONTROL_SOLID: Color32 = Color32::from_rgb(0x22, 0x26, 0x2C);
 /// The content layer (settings groups, Health, the keys): a quiet fill and
 /// a hairline, no glass.
-pub const GROUP: Color32 = Color32::from_rgba_premultiplied(12, 12, 12, 12);
+/// Opaque, so what sits on it reads the same over any backdrop.
+pub const GROUP: Color32 = Color32::from_rgb(0x15, 0x19, 0x1F);
 pub const GROUP_EDGE: Color32 = Color32::from_rgba_premultiplied(17, 17, 17, 17);
 /// A segmented control's track, and the chosen segment's capsule.
-pub const TRACK: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 56);
-pub const THUMB: Color32 = Color32::from_rgba_premultiplied(48, 48, 48, 48);
+/// Opaque: the chosen capsule is 3:1 on the track and ink on it 4.5:1.
+pub const TRACK: Color32 = Color32::from_rgb(0x0D, 0x10, 0x14);
+pub const THUMB: Color32 = Color32::from_rgb(0x59, 0x63, 0x6F);
+/// The edge of what you act on (a segmented track, a field, a switch that
+/// is off): 3:1 on the group and on the raised panels.
+pub const TRACK_LINE: Color32 = Color32::from_rgb(0x61, 0x6A, 0x76);
+pub const FIELD_EDGE: Color32 = TRACK_LINE;
+pub const FIELD_EDGE_LIT: Color32 = Color32::from_rgb(0x7D, 0x86, 0x92);
+pub const SWITCH_EDGE: Color32 = TRACK_LINE;
+/// A switch that is off, and under the pointer.
+pub const SWITCH_OFF: Color32 = Color32::from_rgb(0x2A, 0x30, 0x38);
+pub const SWITCH_OFF_LIT: Color32 = Color32::from_rgb(0x34, 0x3B, 0x44);
 /// The hairline round a solid control.
 pub const CONTROL_EDGE: Color32 = Color32::from_rgba_premultiplied(20, 20, 20, 20);
 /// The edge of a glass shape where the light doesn't catch it.
@@ -69,7 +81,6 @@ pub const GLASS_EDGE: Color32 = Color32::from_rgba_premultiplied(56, 56, 56, 56)
 /// reads the same whatever is under it and while it moves.
 pub const POPOVER: Color32 = Color32::from_rgb(0x1A, 0x1E, 0x25);
 /// A control or a chosen row on glass: a little lighter than the glass.
-pub const ON_GLASS: Color32 = Color32::from_rgba_premultiplied(18, 18, 18, 18);
 pub const ON_GLASS_LIT: Color32 = Color32::from_rgba_premultiplied(30, 30, 30, 30);
 /// Corners: panels, things inside them, small controls.
 pub const R_PANEL: u8 = 20;
@@ -108,8 +119,8 @@ pub const LAMP: Color32 = Color32::from_rgb(0xFF, 0xB5, 0x47);
 /// Connected: a dot, never words alone.
 pub const OK: Color32 = Color32::from_rgb(0x3C, 0xCF, 0xE6);
 /// Quiet buttons, and the pill under the chosen tab or segment.
-pub const BUTTON: Color32 = Color32::from_rgba_premultiplied(22, 22, 22, 22);
-pub const BUTTON_LIT: Color32 = Color32::from_rgba_premultiplied(34, 34, 34, 34);
+pub const BUTTON: Color32 = Color32::from_rgb(0x28, 0x2E, 0x36);
+pub const BUTTON_LIT: Color32 = Color32::from_rgb(0x36, 0x3E, 0x49);
 pub const PILL: Color32 = Color32::from_rgba_premultiplied(32, 32, 32, 32);
 /// A switch that is off: a visible track with a 3:1 edge.
 pub const TRACK_OFF: Color32 = Color32::from_rgb(0x4A, 0x52, 0x5E);
@@ -295,6 +306,79 @@ fn system_font_for(c: char) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `fg` (premultiplied, as the tokens are) laid over opaque `bg`.
+    fn over(fg: Color32, bg: Color32) -> Color32 {
+        let a = 1.0 - f32::from(fg.a()) / 255.0;
+        let f = |x: u8, y: u8| (f32::from(x) + f32::from(y) * a).round().min(255.0) as u8;
+        Color32::from_rgb(f(fg.r(), bg.r()), f(fg.g(), bg.g()), f(fg.b(), bg.b()))
+    }
+
+    fn contrast(first: Color32, second: Color32) -> f64 {
+        let luminance = |color: Color32| {
+            let linear = |channel: u8| {
+                let value = f64::from(channel) / 255.0;
+                if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
+            };
+            0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+        };
+        let (a, b) = (luminance(first), luminance(second));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Informative text: 4.5:1 on every surface it is drawn on, measured
+    /// on the composited colour, never on a premultiplied token's channels.
+    #[test]
+    fn text_meets_four_and_a_half_to_one_where_it_is_drawn() {
+        let field = over(Color32::from_black_alpha(70), GROUP);
+        let cases = [
+            ("shortcut ink on the sidebar", SHORTCUT_INK, SIDEBAR),
+            ("shortcut ink on the chosen page", SHORTCUT_INK, SIDE_CHOSEN),
+            ("shortcut ink on a hovered page", SHORTCUT_INK, SIDE_HOVER),
+            ("ink3 on the sidebar", INK3, SIDEBAR),
+            ("ink3 on a group", INK3, GROUP),
+            ("ink3 on a raised panel", INK3, ELEVATED_TOP),
+            ("ink3 on the popover", INK3, POPOVER),
+            ("ink2 on a group", INK2, GROUP),
+            ("ink2 on a raised panel", INK2, ELEVATED_TOP),
+            ("placeholder in a field", INK3, field),
+            ("ink on a quiet button", INK, BUTTON_LIT),
+            ("ink3 (disabled words) on a quiet button", INK3, BUTTON),
+            ("ink on the chosen segment", INK, THUMB),
+            ("ink2 in the segment track", INK2, TRACK),
+            ("ink on Volt", SIGNAL_INK, SIGNAL),
+            ("ink on lit Volt", SIGNAL_INK, SIGNAL_LIT),
+            ("connected status on a raised panel", OK, ELEVATED_TOP),
+            ("error on a group", ERROR, GROUP),
+            ("warning on a group", WARN, GROUP),
+        ];
+        for (what, fg, bg) in cases {
+            let c = contrast(fg, bg);
+            assert!(c >= 4.5, "{what}: {c:.2}:1");
+        }
+    }
+
+    /// The edges that show a control (a field, a segmented track, an off
+    /// switch, the chosen segment, a drawn key): 3:1 against what they sit on.
+    #[test]
+    fn control_edges_meet_three_to_one() {
+        let field = over(Color32::from_black_alpha(70), GROUP);
+        let cases = [
+            ("field edge on the group", FIELD_EDGE, GROUP),
+            ("field edge on its fill", FIELD_EDGE, field),
+            ("track edge on the group", TRACK_LINE, GROUP),
+            ("track edge on a raised panel", TRACK_LINE, ELEVATED),
+            ("off switch edge on the group", SWITCH_EDGE, GROUP),
+            ("chosen segment on its track", THUMB, TRACK),
+            ("on switch on the group", ACCENT, GROUP),
+            ("focus ring on the group", SIGNAL, GROUP),
+            ("offline ring on a panel", OFF, PANEL),
+        ];
+        for (what, fg, bg) in cases {
+            let c = contrast(fg, bg);
+            assert!(c >= 3.0, "{what}: {c:.2}:1");
+        }
+    }
 
     #[test]
     fn long_text_is_shortened_to_fit() {

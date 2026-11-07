@@ -7,11 +7,65 @@
 //! everything works (a status line that opens Health).
 
 use super::*;
+
+fn show_broadcast_status(width: f32) -> bool { width >= 100.0 }
+
+fn rail_section(ui: &Ui, rect: Rect) {
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "PCs", regular(T_META), INK2);
+    a11y_text(ui, Id::unique("rail-computers"), rect, Role::Label, "PCs", None);
+}
 use crate::chrome;
 use crate::icons::{self, Icon};
+use unicode_segmentation::UnicodeSegmentation;
+
+fn rail_name(ui: &Ui, name: &str, width: f32) -> String {
+    let font = regular(T_META);
+    if text_width(ui, name, font.clone()) <= width { return name.to_owned(); }
+    let mut shown = String::new();
+    for grapheme in name.graphemes(true) {
+        if text_width(ui, &format!("{shown}{grapheme}…"), font.clone()) > width { break; }
+        shown.push_str(grapheme);
+    }
+    format!("{shown}…")
+}
+
+fn rail_visible(total: usize, slots: usize) -> usize {
+    if total > slots { slots.saturating_sub(1) } else { total }
+}
+
+fn computer_menu_label(name: &str, id: &str, online: bool, chosen: bool) -> String {
+    let state = if id == "me" { "This computer" } else if online { "Connected" } else { "Offline" };
+    format!("{name}\n{state}{}", if chosen { " · Selected" } else { "" })
+}
+
+pub(super) fn computers_menu(response: &egui::Response, status: &Status, current: Option<&str>) -> Option<String> {
+    let mut selected = None;
+    egui::Popup::menu(response).width(300.0).show(|ui| {
+        egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() - 100.0).max(100.0)).show(ui, |ui| {
+            for (id, name, online) in std::iter::once(("me", status.name.as_str(), true)).chain(status.peers.iter().map(|peer| (peer.id.as_str(), peer.name.as_str(), peer.online))) {
+                let chosen = current == Some(id);
+                let label = computer_menu_label(name, id, online, chosen);
+                let (title, detail) = label.split_once('\n').unwrap();
+                let mut text = egui::text::LayoutJob::default();
+                text.append(&format!("    {title}"), 0.0, egui::TextFormat { font_id: regular(T_BODY), color: INK, ..Default::default() });
+                text.append(&format!("\n    {detail}"), 0.0, egui::TextFormat { font_id: regular(T_META), color: INK2, ..Default::default() });
+                let row = egui::Button::new(text).wrap().min_size(vec2(ui.available_width(), 44.0));
+                let row = if chosen { row.fill(BUTTON_LIT) } else { row };
+                let response = ui.add(row);
+                widgets::a11y(&response, Role::Button, &label, None);
+                ui.painter().circle_filled(response.rect.left_top() + vec2(10.0, 12.0), 3.0, if online { OK } else { INK2 });
+                if response.clicked() {
+                    selected = Some(id.to_owned());
+                    ui.close();
+                }
+            }
+        });
+    });
+    selected
+}
 
 pub(super) const SIDE_W: f32 = 232.0;
-pub(super) const RAIL_W: f32 = 56.0;
+pub(super) const RAIL_W: f32 = 96.0;
 /// Narrower than this, the sidebar becomes a rail.
 pub(super) const RAIL_BELOW: f32 = 1000.0;
 /// The band across the top: the page title (and on macOS the window
@@ -39,7 +93,7 @@ pub(super) fn frame(full: Rect) -> Frame {
 /// The pages in the sidebar, each with its shortcut key (with ⌘ or Ctrl).
 /// Layout lives in Desk (its Arrange view), Health behind the status line
 /// at the bottom, Advanced is Settings.
-const NAV: [(Tab, Icon, &str); 5] = [(Tab::Desk, Icon::Desk, "1"), (Tab::Wallpaper, Icon::Wallpaper, "2"), (Tab::Files, Icon::Clipboard, "3"), (Tab::Keys, Icon::Keys, "4"), (Tab::Advanced, Icon::Advanced, ",")];
+const NAV: [(Tab, Icon, &str); 6] = [(Tab::Desk, Icon::Desk, "1"), (Tab::Wallpaper, Icon::Wallpaper, "2"), (Tab::Files, Icon::Clipboard, "3"), (Tab::Keys, Icon::Keys, "4"), (Tab::Health, Icon::Health, "5"), (Tab::Advanced, Icon::Advanced, ",")];
 
 /// The sidebar's page that `tab` belongs to.
 fn nav_of(tab: Tab) -> Tab {
@@ -64,20 +118,37 @@ fn para_h(ui: &Ui, text: &str, w: f32) -> f32 {
 
 /// A row that can be clicked: its hover and press state, focus ring and
 /// name for screen readers.
+/// Rows that are plain actions (no chosen state): Stop, and "more".
+fn id_kind(id: Id) -> &'static str {
+    if id == Id::unique("stop") || id == Id::unique("side-more") { "plain" } else { "row" }
+}
+
 fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: bool, enabled: bool) -> (egui::Response, f32) {
-    let r = ui.interact(rect, id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
-    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.12, motion::out_cubic);
+    let r = ui.interact(widgets::hit_rect(rect), id, if enabled { widgets::sense(ui, Sense::click()) } else { Sense::hover() });
+    let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.1, motion::out_cubic);
+    let down = enabled && r.is_pointer_button_down_on();
     let p = ui.painter();
     if chosen {
-        p.rect(rect, CornerRadius::same(8), SIDE_CHOSEN, Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
+        // Chosen: a lighter fill and a visible edge, a step above hover.
+        let fill = mix(SIDE_CHOSEN, Color32::from_rgb(0x24, 0x28, 0x30), 0.5);
+        p.rect(rect, CornerRadius::same(8), if down { Color32::from_rgb(0x4B, 0x54, 0x61) } else { fill }, Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
+    } else if down {
+        // Pressed: a deeper well than the hover, never the chosen look.
+        // rest < hover < pressed < chosen (which adds its edge).
+        p.rect_filled(rect, CornerRadius::same(8), Color32::from_rgb(0x4B, 0x54, 0x61));
     } else if hover > 0.01 {
-        p.rect_filled(rect, CornerRadius::same(8), SIDE_HOVER.gamma_multiply(hover));
+        // Hover is a hint, clearly weaker than the chosen page: half way
+        // from the sidebar to the hover tone, no edge.
+        p.rect_filled(rect, CornerRadius::same(8), mix(SIDEBAR, SIDE_HOVER, 0.25 * hover));
     }
     widgets::focus_ring(ui, &r, rect, 8);
     if r.hovered() && enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    widgets::a11y(&r, role, name, Some(chosen));
+    // Plain buttons and links have no chosen state (else they read as
+    // toggle buttons); tabs and computer rows do.
+    let state = (role != Role::Link && !matches!(id_kind(id), "plain")).then_some(chosen);
+    widgets::a11y(&r, role, name, state);
     (r, hover)
 }
 
@@ -94,7 +165,11 @@ impl App {
     /// Something on Health needs attention.
     fn health_trouble(&self) -> bool {
         self.running().is_some_and(|s| s.input_lines().iter().any(|line| line.severity == one_mk_ctl::status::Severity::Problem))
-            || self.doctor.as_ref().is_some_and(|(d, _)| d.as_ref().is_ok_and(|c| c.iter().any(|c| c.verdict == crate::view::Verdict::Fail)))
+            || self.health_checks().is_some_and(|checks| checks.iter().any(|check| matches!(check.verdict, crate::view::Verdict::Fail | crate::view::Verdict::Warn)))
+    }
+
+    fn health_tone(&self) -> Color32 {
+        if self.running().is_some_and(|status| status.input_lines().iter().any(|line| line.severity == one_mk_ctl::status::Severity::Problem)) || self.health_checks().is_some_and(|checks| checks.iter().any(|check| check.verdict == crate::view::Verdict::Fail)) { ERROR } else { WARN }
     }
 
     /// The top-bar action, done.
@@ -130,23 +205,29 @@ impl App {
         let w = side.width() - 20.0;
         // The top band: the window buttons on macOS, the logo at its end.
         let band = HEAD_H / 2.0;
-        let lock_w = self.lockup.size()[0] as f32 * 22.0 / self.lockup.size()[1] as f32;
-        let logo_x = if chrome::mac_frame() { side.right() - 14.0 - lock_w } else { x + 8.0 };
-        draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, band), 22.0);
+        // The mark's left edge lines up with the page icons below it.
+        let lock_h = 26.0;
+        let lock_w = lockup_ink_w(lock_h);
+        let logo_x = if chrome::mac_frame() { side.right() - 18.0 - lock_w } else { x + 10.0 };
+        draw_lockup(ui.painter(), &self.lockup, pos2(logo_x, band), lock_h);
         let mut y = HEAD_H + 6.0;
         // The way to everything: the command palette.
         let sr = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));
         let resp = ui.interact(sr, Id::unique("search"), widgets::sense(ui, Sense::click()));
-        let hover = tween(ui.ctx(), Id::unique("search-hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
-        ui.painter().rect(sr, CornerRadius::same(8), mix(SEARCH_FILL, SIDE_HOVER, hover), Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
+        let hover = tween(ui.ctx(), Id::unique("search-hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
+        let fill = if resp.is_pointer_button_down_on() { widgets::pressed(SIDE_HOVER, 1.0) } else { mix(SEARCH_FILL, SIDE_HOVER, hover) };
+        ui.painter().rect(sr, CornerRadius::same(8), fill, Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
         icons::search(ui.painter(), pos2(sr.left() + 16.0, sr.center().y), INK3);
         ui.painter().text(pos2(sr.left() + 30.0, sr.center().y), Align2::LEFT_CENTER, "Search", regular(T_BODY), INK3);
         let kc = format!("{}K", cmd());
-        let kw = text_width(ui, &kc, regular(T_META - 1.0)) + 10.0;
+        let kw = text_width(ui, &kc, regular(T_META)) + 10.0;
         let kr = Rect::from_min_size(pos2(sr.right() - 8.0 - kw, sr.center().y - 9.0), vec2(kw, 18.0));
         ui.painter().rect(kr, CornerRadius::same(5), Color32::from_white_alpha(10), Stroke::new(0.5, Color32::from_white_alpha(36)), StrokeKind::Inside);
-        ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META - 1.0), INK3);
-        widgets::a11y(&resp, Role::SearchInput, "Search actions, computers and settings", None);
+        ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META), INK3);
+        widgets::focus_ring(ui, &resp, sr, 8);
+        // A button that opens the command palette (where the typing
+        // happens, in a real text field): not a text field itself.
+        widgets::a11y(&resp, Role::Button, "Search: open the command palette", None);
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -163,7 +244,7 @@ impl App {
             let col = if !enabled { INK3.gamma_multiply(0.6) } else if on { INK } else { mix(INK2, INK, hover) };
             icons::draw(ui.painter(), icon, Rect::from_center_size(pos2(r.left() + 17.0, r.center().y), vec2(15.0, 15.0)), col);
             ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, name, regular(T_BODY), col);
-            ui.painter().text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, format!("{}{key}", cmd()), mono(T_META - 1.0), SHORTCUT_INK);
+            ui.painter().text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, format!("{}{key}", cmd()), mono(T_META), if on { INK3 } else { SHORTCUT_INK });
             if resp.clicked() {
                 self.set_tab(tab);
             }
@@ -177,14 +258,14 @@ impl App {
         {
             let pointer = self.pointer_on();
             y += 14.0;
-            ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "THIS COMPUTER", semibold(T_META - 1.5), INK3);
+            ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "This computer", semibold(T_META), INK3);
             y += 22.0;
             let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
             let here = pointer.as_deref() == Some("me");
             self.computer_row(ui, r, "me", &status.name, here, true, "", false);
             y += ROW_H + 12.0;
             if y + 22.0 + ROW_H <= list_bottom {
-                ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "PAIRED", semibold(T_META - 1.5), INK3);
+                ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "Paired", semibold(T_META), INK3);
                 ui.painter().text(pos2(x + w - 10.0, y + 8.0), Align2::RIGHT_CENTER, status.peers.len().to_string(), mono(T_META), INK3);
                 y += 22.0;
                 if status.peers.is_empty() {
@@ -196,8 +277,10 @@ impl App {
                 let shown = if n > fit { fit.saturating_sub(1) } else { n };
                 for p in status.peers.iter().take(shown) {
                     let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
+                    // The same reading the card shows (its newest), so the
+                    // two never disagree; the daemon's last link otherwise.
                     let value = match status.link_of(&p.id).filter(|_| p.online) {
-                        Some(l) => rtt::ms(l.rtt_us),
+                        Some(l) => rtt::ms(self.summary_of(&p.id).map_or(l.rtt_us, |s| s.now_us)),
                         None if p.online => String::new(),
                         None => "offline".to_owned(),
                     };
@@ -353,7 +436,11 @@ impl App {
             "Use keyboard to stop" | "Keyboard stop" => Some("Use the keyboard shortcut shown in the broadcast panel"),
             _ => None,
         };
-        if button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
+        let first_pair = self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty());
+        let banner_take_back = self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack));
+        if self.broadcasting() {
+            self.broadcast_status(ui, a);
+        } else if !first_pair && !banner_take_back && button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
             self.do_action(job, now);
         }
         y += 36.0 + 10.0;
@@ -363,8 +450,12 @@ impl App {
         let (dot, text) = match self.status.as_ref() {
             None => (INK3, "Looking for oneMK…".to_owned()),
             Some(None) => (INK3, "Sharing is off".to_owned()),
-            Some(Some(_)) if trouble => (ERROR, "Something needs you".to_owned()),
-            Some(Some(_)) => (OK, "Sharing is on · All good".to_owned()),
+            Some(Some(_)) if trouble => (self.health_tone(), "On · check Health".to_owned()),
+            // Only "all good" when a computer is actually connected.
+            Some(Some(s)) if s.peers.is_empty() => (INK3, "On · not paired".to_owned()),
+            Some(Some(s)) if !s.peers.iter().any(|p| p.online) => (INK3, "On · none connected".to_owned()),
+            Some(Some(s)) if s.peers.iter().any(|peer| !peer.online) => (WARN, "On · some offline".to_owned()),
+            Some(Some(_)) => (OK, "On · connected".to_owned()),
         };
         let stop_w = if self.running().is_some() { text_width(ui, "Stop", regular(T_META)) + 16.0 } else { 0.0 };
         let status_r = Rect::from_min_max(row.min, pos2(row.right() - stop_w - 4.0, row.bottom()));
@@ -380,7 +471,7 @@ impl App {
             let label = if busy { "Stopping…" } else { "Stop" };
             let bw = text_width(ui, label, regular(T_META)) + 16.0;
             let b = Rect::from_min_size(pos2(row.right() - bw, row.top()), vec2(bw, 28.0));
-            let (resp, hover) = row_button(ui, b, Id::unique("stop"), "Stop the sharing service, not just broadcast", Role::Button, false, !busy);
+            let (resp, hover) = row_button(ui, b, Id::unique("stop"), "Stop oneMK: turn off sharing on this computer", Role::Button, false, !busy);
             ui.painter().text(b.center(), Align2::CENTER_CENTER, label, regular(T_META), mix(INK3, INK, hover));
             if resp.clicked() {
                 self.busy.push(Job::Stop);
@@ -412,7 +503,7 @@ impl App {
             let col = if !enabled { mix(INK3, GLASS_SOLID, 0.45) } else if on { INK } else { mix(INK3, INK, hover) };
             icons::draw(ui.painter(), icon, Rect::from_center_size(r.center(), vec2(18.0, 18.0)), col);
             if tab == Tab::Health && trouble {
-                ui.painter().circle_filled(r.right_top() + vec2(-8.0, 8.0), 3.0, ERROR);
+                ui.painter().circle_filled(r.right_top() + vec2(-8.0, 8.0), 3.0, self.health_tone());
             }
             if resp.on_hover_text(name).clicked() {
                 self.set_tab(tab);
@@ -423,19 +514,23 @@ impl App {
         ui.painter().hline((cx - 12.0)..=(cx + 12.0), y, Stroke::new(1.0, Color32::from_white_alpha(18)));
         y += 8.0;
         if let Some(status) = self.running().cloned() {
+            let expander = Rect::from_center_size(pos2(cx, y + 14.0), vec2(side.width() - 12.0, 28.0));
+            rail_section(ui, expander);
+            y += 32.0;
             let pointer = self.pointer_on();
             let sel = self.selected_id().filter(|_| self.tab.desk());
             let mut rows: Vec<(String, String, bool)> = vec![("me".into(), status.name.clone(), true)];
             rows.extend(status.peers.iter().map(|p| (p.id.clone(), p.name.clone(), p.online)));
             let extra = 36.0 * (f32::from(self.running().is_some()) + f32::from(self.update_available.is_some()));
             let bottom = side.bottom() - 12.0 - 40.0 - 8.0 - extra;
-            for (id, name, online) in rows {
-                if y + 32.0 > bottom {
-                    break;
-                }
-                let r = Rect::from_center_size(pos2(cx, y + 15.0), vec2(40.0, 30.0));
+            let slots = ((bottom - y) / 32.0).floor().max(1.0) as usize;
+            let visible = rail_visible(rows.len(), slots);
+            let hidden = rows.len() - visible;
+            for (id, name, online) in rows.into_iter().take(visible) {
+                // A short name, not initials: as much of it as fits.
+                let r = Rect::from_center_size(pos2(cx, y + 15.0), vec2(side.width() - 12.0, 30.0));
                 let (resp, _) = row_button(ui, r, Id::unique(("pc", id.as_str())), &name, Role::Button, sel.as_deref() == Some(id.as_str()), true);
-                let initials: String = name.split(|c: char| c.is_whitespace() || c == '-' || c == '_').filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase();
+                let shown = rail_name(ui, &name, r.width() - 23.0);
                 let p = ui.painter();
                 let mark = pos2(r.left() + 9.0, r.center().y);
                 if pointer.as_deref() == Some(id.as_str()) {
@@ -445,12 +540,17 @@ impl App {
                 } else {
                     p.circle_stroke(mark, 2.5, Stroke::new(1.5, INK3));
                 }
-                p.text(pos2(r.left() + 19.0, r.center().y), Align2::LEFT_CENTER, initials, semibold(T_META), if online { INK2 } else { INK3 });
+                p.text(pos2(r.left() + 19.0, r.center().y), Align2::LEFT_CENTER, shown, regular(T_META), if online { INK2 } else { INK3 });
                 if resp.on_hover_text(&name).clicked() {
                     self.set_tab(Tab::Desk);
                     self.select(id.clone());
                 }
                 y += 32.0;
+            }
+            if hidden > 0 {
+                let rect = Rect::from_min_size(pos2(side.left() + 6.0, y), vec2(side.width() - 12.0, 30.0));
+                let response = button(ui, rect, Id::unique("rail-overflow"), &format!("+{hidden}"), Look::Quiet, true, Some("More computers: show all names and connection states"));
+                if let Some(id) = computers_menu(&response, &status, sel.as_deref()) { self.set_tab(Tab::Desk); self.select(id); }
             }
         }
         // Over the action: Update when there is one, and Stop.
@@ -483,8 +583,11 @@ impl App {
             }
         }
         let (label, look, enabled, job) = self.action();
-        let a = Rect::from_center_size(pos2(cx, side.bottom() - 12.0 - 20.0), vec2(40.0, 40.0));
+        let a = Rect::from_center_size(pos2(cx, side.bottom() - 12.0 - 20.0), vec2(side.width() - 12.0, 40.0));
+        if self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty()) { return; }
+        if self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack)) { return; }
         let shown = !self.sheet_open() && self.status.is_some();
+        if self.broadcasting() { self.broadcast_status(ui, a); return; }
         let r = button(ui, a, Id::unique("action"), "", look, enabled && shown, Some(&label));
         let col = if look == Look::Primary && enabled { SIGNAL_INK } else { INK };
         let icon = match job {
@@ -499,6 +602,15 @@ impl App {
         if r.on_hover_text(&label).clicked() {
             self.do_action(job, now);
         }
+    }
+
+    fn broadcast_status(&self, ui: &Ui, rect: Rect) {
+        if !show_broadcast_status(rect.width()) { return; }
+        let hint = self.broadcast_stop_hint();
+        let shortcut = hint.strip_prefix("Press ").and_then(|text| text.split_once(" to stop").map(|(key, _)| key)).unwrap_or(&hint);
+        ui.painter().text(rect.center_top() + vec2(0.0, 7.0), Align2::CENTER_TOP, "Keyboard stop", regular(12.0), INK2);
+        ui.painter().text(rect.center_bottom() - vec2(0.0, 2.0), Align2::CENTER_BOTTOM, shortcut, regular(12.0), INK2);
+        a11y_text(ui, Id::unique("broadcast-stop-status"), rect, Role::Label, &format!("Keyboard stop. {hint}"), None);
     }
 
     /// A page's title row: the title, a quieter word after it, and the
@@ -518,5 +630,53 @@ impl App {
         }
         a11y_text(ui, Id::unique(("page", title)), r, Role::Heading, &format!("{title} {sub}"), None);
         r
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn computer_menu_names_include_connection_and_selection() {
+        assert_eq!(computer_menu_label("Gaming PC", "peer", false, true), "Gaming PC\nOffline · Selected");
+        assert_eq!(computer_menu_label("Desk", "me", true, false), "Desk\nThis computer");
+        assert_eq!(computer_menu_label("工作站", "peer", true, false), "工作站\nConnected");
+    }
+
+    #[test]
+    fn narrow_broadcast_rail_leaves_the_chord_to_the_banner() {
+        assert!(!show_broadcast_status(84.0));
+        assert!(!show_broadcast_status(96.0));
+        assert!(show_broadcast_status(200.0));
+        let context = egui::Context::default();
+        let mut output = context.run_ui(Default::default(), |ui| rail_section(ui, Rect::from_min_size(Pos2::ZERO, vec2(84.0, 28.0))));
+        assert!(output.shapes.iter().all(|shape| matches!(shape.shape, egui::Shape::Text(_) | egui::Shape::Noop)));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn narrow_rail_reserves_an_explicit_overflow_target() {
+        for slots in 1..=6 {
+            let visible = rail_visible(6, slots);
+            let hidden = 6 - visible;
+            assert_eq!(visible + hidden, 6);
+            assert!(visible + usize::from(hidden > 0) <= slots);
+        }
+    }
+
+    #[test]
+    fn short_names_preserve_complete_graphemes() {
+        let context = egui::Context::default();
+        crate::style::install(&context);
+        let mut output = context.run_ui(Default::default(), |ui| {
+            for name in ["Samer's workstation", "Мастерская", "工作站", "e\u{301}cole 👩‍💻 studio"] {
+                let shown = rail_name(ui, name, 61.0);
+                assert!(text_width(ui, &shown, regular(T_META)) <= 61.0);
+                let prefix = shown.strip_suffix('…').unwrap_or(&shown);
+                assert!(name.grapheme_indices(true).any(|(end, _)| &name[..end] == prefix) || name == prefix);
+            }
+        });
+        output.textures_delta.clear();
     }
 }
