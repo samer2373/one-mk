@@ -377,8 +377,10 @@ fn slots(span: (f32, f32), peers: &[(String, Side, f32)]) -> HashMap<String, (sc
     out
 }
 
-fn separate_crowded_slots(places: &mut HashMap<String, (scene::V3, f32)>, widths: &[(String, f32)], mine: f32) {
-    let mut ordered = widths.to_vec();
+fn separate_crowded_slots(places: &mut HashMap<String, (scene::V3, f32)>, widths: &[(String, f32)], mine: f32, mounted: &HashSet<String>) {
+    // Exact placements describe touching screen edges. Moving those for
+    // presentation makes a dropped computer spring away from its neighbour.
+    let mut ordered: Vec<_> = widths.iter().filter(|(id, _)| !mounted.contains(id)).cloned().collect();
     ordered.sort_by(|first, second| places[&first.0].0.x.total_cmp(&places[&second.0].0.x).then(first.0.cmp(&second.0)));
     for left in [true, false] {
         let mut edge = mine;
@@ -967,7 +969,7 @@ impl App {
         let mut places = slots(span, &layout);
         places.extend(placed);
         let widths: Vec<_> = peers.iter().map(|peer| (peer.id.clone(), scene::half_width(kind_of(peer.os, &peer.screens), &peer.screens))).collect();
-        if monitor_count >= 5 { separate_crowded_slots(&mut places, &widths, me_half); }
+        if monitor_count >= 5 { separate_crowded_slots(&mut places, &widths, me_half, &mounted); }
         let me = &mut self.scene.devices[0];
         if let Some(s) = &status {
             me.name = s.name.clone();
@@ -2888,7 +2890,7 @@ mod tests {
         let peers = vec![("left".into(), Side::Left, 29.0), ("top".into(), Side::Top, 29.0), ("right".into(), Side::Right, 29.0), ("bottom".into(), Side::Bottom, 29.0)];
         let mut places = slots((-29.0, 29.0), &peers);
         let widths: Vec<_> = peers.iter().map(|(name, _, half)| (name.clone(), *half)).collect();
-        separate_crowded_slots(&mut places, &widths, 29.0);
+        separate_crowded_slots(&mut places, &widths, 29.0, &HashSet::new());
         let mut spans = vec![(-29.0, 29.0)];
         for (name, half) in &widths {
             let (position, scale) = places[name];
@@ -2896,6 +2898,30 @@ mod tests {
         }
         spans.sort_by(|first, second| first.0.total_cmp(&second.0));
         assert!(spans.windows(2).all(|pair| pair[1].0 - pair[0].1 >= 31.9));
+    }
+
+    #[test]
+    fn arranged_multi_monitor_device_stays_where_it_was_dropped() {
+        let mut me = Device::new("me", "This computer", Kind::Monitor, true, WALLS[0]);
+        me.screens = vec![one_mk_proto::Rect::new(0, 0, 1536, 864)];
+        let mut scene = Scene::default();
+        scene.devices.push(me);
+        // Two computers with five monitors trigger the crowded-desk layout.
+        let screens = vec![
+            one_mk_proto::Rect::new(0, 0, 1920, 1080),
+            one_mk_proto::Rect::new(-2592, 98, 1512, 982),
+            one_mk_proto::Rect::new(1920, 0, 1920, 1080),
+            one_mk_proto::Rect::new(-1080, -840, 1080, 1920),
+        ];
+        let fit = scene.fit(Kind::Monitor, &screens).unwrap();
+        let expected = (fit.pos((-3840, -185)), fit.scale);
+        let mut places = HashMap::from([("peer".to_owned(), expected)]);
+        let widths = vec![("peer".to_owned(), scene::half_width(Kind::Monitor, &screens))];
+        let mounted = HashSet::from(["peer".to_owned()]);
+        for _ in 0..3 {
+            separate_crowded_slots(&mut places, &widths, 29.0, &mounted);
+            assert_eq!(places["peer"], expected, "automatic spacing must preserve an exact placement");
+        }
     }
 
     #[test]
