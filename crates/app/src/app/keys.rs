@@ -622,6 +622,7 @@ impl App {
         self.keys.selected = Some(code);
         self.keys.focus_key = code;
         self.keys.layer = layer;
+        self.keys.board_detail = self.keys.layer.is_none();
         self.keys.app = None;
         self.keys.capture = None;
         self.keys.picker = None;
@@ -1149,11 +1150,11 @@ impl App {
             let specs = self.prefs.input.specs(&facts);
             let action = specs.iter().find(|(spec, _)| spec.layer.is_none() && !spec.from.has_mods() && spec.from.key == code).map(|(spec, _)| &spec.what);
             key_description(code, action)
-        }).unwrap_or_else(|| "Click a key · drag to turn".to_owned());
+        }).unwrap_or_else(|| "Click a key to zoom · drag to turn".to_owned());
         let iw = b.left() - r.left() - 30.0 - if self.keys.selected.is_some() && r.width() >= 420.0 { 122.0 } else { 0.0 };
         p.text(pos2(r.left(), b.center().y), Align2::LEFT_CENTER, fit(&p, &intro, &regular(T_BODY), iw), regular(T_BODY), INK2);
         let intro_rect = Rect::from_min_size(r.min, vec2(iw.max(0.0), 36.0));
-        let guidance = "Click a key to change it. Drag to turn the keyboard; double-click to reset its angle.";
+        let guidance = "Click a key to zoom in and change it. Whole board zooms back out. Drag to turn the keyboard; double-click to reset its angle.";
         ui.interact(intro_rect, Id::unique("keys-intro-help"), Sense::hover()).on_hover_text(guidance);
         a11y_text(ui, Id::unique("keys-intro"), intro_rect, Role::Label, &intro, None);
         ui.ctx().accesskit_node_builder(Id::unique("keys-intro"), |node| node.set_description(guidance));
@@ -1275,7 +1276,7 @@ impl App {
             }
             let does = key_description(c.code, target.get(&c.code));
             let selected = self.keys.selected == Some(c.code) && self.keys.layer.is_none();
-            widgets::a11y(&kr, Role::Button, &format!("{does}. Arrows move between keys, Enter changes it"), Some(selected));
+            widgets::a11y(&kr, Role::Button, &format!("{does}. Arrows move between keys, Enter zooms in to change it"), Some(selected));
             if key_accessibility_activation(ui, &kr) {
                 self.select_key(c.code, None);
                 self.keys.focus_key = c.code;
