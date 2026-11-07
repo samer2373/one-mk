@@ -130,14 +130,17 @@ mod tests {
     fn first_frame_still_reports_the_exact_png_size_and_rejects_anything_else() {
         let dir = std::env::temp_dir().join(format!("one-mk-still-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let helper = dir.join("helper.sh");
-        // Writes what its second argument names: a PNG header 7x3, or text.
-        std::fs::write(&helper, "#!/bin/sh\nif [ \"$4\" = 1 ]; then printf '\\211PNG\\r\\n\\032\\n\\000\\000\\000\\rIHDR\\000\\000\\000\\007\\000\\000\\000\\003' > \"$3\"; else echo nope > \"$3\"; fi\n").unwrap();
-        std::fs::set_permissions(&helper, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        // Use an existing executable: executing a freshly written script can
+        // race a concurrent fork that briefly inherits its writable descriptor
+        // on Linux (ETXTBSY). This test checks the helper's output file.
+        let helper = Path::new("true");
         let output = dir.join("frame.png");
-        let media = still(&helper, Path::new("video"), &output, 1).unwrap();
+        std::fs::write(&output, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x07\0\0\0\x03").unwrap();
+        let media = still(helper, Path::new("video"), &output, 1).unwrap();
         assert_eq!((media.width, media.height, media.duration_ms), (7, 3, 1));
-        assert!(still(&helper, Path::new("video"), &output, 2).is_err());
+        std::fs::write(&output, b"nope").unwrap();
+        let error = still(helper, Path::new("video"), &output, 2).unwrap_err();
+        assert!(error.to_string().contains("first-frame still is not a picture"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
