@@ -49,6 +49,18 @@ pub(super) fn toast_action_w(t: &Toast) -> f32 {
 /// The row the Computers / Arrange switch takes at the desk's top.
 pub(super) const DESK_VIEWS_H: f32 = 46.0;
 
+fn desk_view_rect(head: Rect) -> Rect {
+    Rect::from_min_size(pos2(head.left(), head.center().y - 15.0), vec2(if head.width() < 630.0 { 160.0 } else { 200.0 }, 30.0))
+}
+
+fn crowded_menu_rect(head: Rect, width: f32, computers: usize) -> Option<Rect> {
+    (computers >= 5).then(|| Rect::from_min_size(pos2(desk_view_rect(head).right() + 8.0, head.center().y - 17.0), vec2(width, 34.0)))
+}
+
+fn compact_desk_actions(head: Rect, menu: Option<Rect>, full_width: f32) -> bool {
+    head.width() < 780.0 || menu.is_some_and(|rect| rect.right() + 8.0 + full_width > head.right())
+}
+
 /// Text with an icon before it, as a quiet button with no fill until
 /// hovered; its width.
 #[allow(clippy::too_many_arguments)]
@@ -184,7 +196,7 @@ impl App {
             0.0
         };
         let words = format!("{} · {}", os_name(peer.os), if peer.online { on_your(side) } else { "offline" });
-        p.text(pos2(c.left(), cy + 22.0), Align2::LEFT_CENTER, fit(&p, &words, &regular(T_BODY), col_w), regular(T_BODY), INK3);
+        p.text(pos2(c.left(), cy + if long_name { 0.0 } else { 22.0 }), Align2::LEFT_CENTER, fit(&p, &words, &regular(T_BODY), col_w), regular(T_BODY), INK3);
         // Where it sits: a control, so it can be set without dragging.
         let mut x = c.right();
         let (rm, rw) = {
@@ -379,7 +391,7 @@ impl App {
         // The Desk's two views: the computers, and arranging them (Layout).
         if self.desk_views_shown() {
             let labels = ["Computers", "Arrange"];
-            let track = Rect::from_min_size(pos2(head.left(), head.center().y - 15.0), vec2(200.0, 30.0));
+            let track = desk_view_rect(head);
             let pills = Pills {
                 id: Id::unique("desk-view"),
                 track,
@@ -401,24 +413,43 @@ impl App {
         // Laid out from the right edge, then made left to right, so Tab
         // reaches them in reading order: broadcast, Timer, Lock.
         let y = head.center().y - 17.0;
-        let narrow = head.width() < 780.0;
         let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
         let on = self.broadcasting();
+        let tiny = head.width() < 630.0;
+        let menu_label = if tiny { "Computers" } else { "Choose computer" };
+        let menu_width = text_width(ui, menu_label, semibold(T_BODY)) + 40.0;
+        let menu = crowded_menu_rect(head, menu_width, self.running().map_or(0, |status| status.peers.len() + 1));
+        let timer_width = if tiny { 34.0 } else { text_width(ui, "Timer", semibold(T_BODY)) + 46.0 };
+        let bc_label = "Type on every computer";
+        let broadcast_width = text_width(ui, bc_label, semibold(T_BODY)) + 34.0 + 58.0;
+        let full_width = text_width(ui, "Lock every screen", semibold(T_BODY)) + 46.0 + if online || on { timer_width + broadcast_width + 16.0 } else { 0.0 };
+        let narrow = compact_desk_actions(head, menu, full_width);
         let lock_label = if narrow { "Lock screens" } else { "Lock every screen" };
-        let lock_w = text_width(ui, lock_label, semibold(T_BODY)) + 46.0;
+        let lock_w = if tiny { 34.0 } else { text_width(ui, lock_label, semibold(T_BODY)) + 46.0 };
         let lock_r = Rect::from_min_size(pos2(head.right() - lock_w, y), vec2(lock_w, 34.0));
         let mut x = lock_r.left();
         let timer_r = (online || on).then(|| {
-            let tw = text_width(ui, "Timer", semibold(T_BODY)) + 46.0;
-            x -= tw + 8.0;
-            Rect::from_min_size(pos2(x, y), vec2(tw, 34.0))
+            x -= timer_width + 8.0;
+            Rect::from_min_size(pos2(x, y), vec2(timer_width, 34.0))
         });
-        let bc_label = "Type on every computer";
         let bc_r = (online || on).then(|| {
-            let w = if narrow { 34.0 } else { text_width(ui, bc_label, semibold(T_BODY)) + 34.0 + 58.0 };
+            let w = if narrow { 34.0 } else { broadcast_width };
             x -= w + 8.0;
             Rect::from_min_size(pos2(x, y), vec2(w, 34.0))
         });
+        if let Some(rect) = menu
+            && let Some(status) = self.running().cloned()
+        {
+            let response = button(ui, rect, Id::unique("desk-computers-menu"), "", Look::Glass, !self.sheet_open(), Some("Choose a computer: show full names and connection states"));
+            let painter = ui.painter();
+            painter.text(pos2(rect.left() + 14.0, rect.center().y), Align2::LEFT_CENTER, menu_label, semibold(T_BODY), INK);
+            let center = pos2(rect.right() - 14.0, rect.center().y);
+            painter.line_segment([center + vec2(-3.0, -1.5), center + vec2(0.0, 1.5)], Stroke::new(1.5, INK2));
+            painter.line_segment([center + vec2(0.0, 1.5), center + vec2(3.0, -1.5)], Stroke::new(1.5, INK2));
+            if let Some(id) = shell::computers_menu(&response, &status, self.selected_id().as_deref()) {
+                self.select(id);
+            }
+        }
         if let Some(r) = bc_r {
             let busy = self.busy.iter().any(|j| matches!(j, Job::Broadcast(_)));
             let key = if on { format!(" {}", self.broadcast_stop_hint()) } else { String::new() };
@@ -457,8 +488,11 @@ impl App {
             // When typing on every computer stops by itself: an icon and a word.
             let name = "Timer: when typing on every computer stops by itself";
             let response = button(ui, rect, Id::unique("broadcast-options"), "", Look::Glass, !on, Some(name));
-            icons::draw(ui.painter(), Icon::Clock, Rect::from_min_size(pos2(rect.left() + 12.0, rect.center().y - 8.0), vec2(16.0, 16.0)), if on { INK3 } else { INK2 });
-            ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, "Timer", semibold(T_BODY), if on { INK3 } else { INK });
+            let icon = if tiny { rect.center() - vec2(8.0, 8.0) } else { pos2(rect.left() + 12.0, rect.center().y - 8.0) };
+            icons::draw(ui.painter(), Icon::Clock, Rect::from_min_size(icon, vec2(16.0, 16.0)), if on { INK3 } else { INK2 });
+            if !tiny {
+                ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, "Timer", semibold(T_BODY), if on { INK3 } else { INK });
+            }
             let response = response.on_hover_text(name);
             egui::Popup::menu(&response).width(280.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
                 let (row, _) = ui.allocate_exact_size(vec2(280.0, 34.0), Sense::hover());
@@ -471,8 +505,11 @@ impl App {
             self.busy.push(Job::LockAll);
             self.link.lock_all();
         }
-        icons::draw(ui.painter(), Icon::Lock, Rect::from_min_size(pos2(lock_r.left() + 12.0, lock_r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
-        ui.painter().text(pos2(lock_r.left() + 34.0, lock_r.center().y), Align2::LEFT_CENTER, lock_label, semibold(T_BODY), INK);
+        let icon = if tiny { lock_r.center() - vec2(8.0, 8.0) } else { pos2(lock_r.left() + 12.0, lock_r.center().y - 8.0) };
+        icons::draw(ui.painter(), Icon::Lock, Rect::from_min_size(icon, vec2(16.0, 16.0)), INK2);
+        if !tiny {
+            ui.painter().text(pos2(lock_r.left() + 34.0, lock_r.center().y), Align2::LEFT_CENTER, lock_label, semibold(T_BODY), INK);
+        }
     }
 
     /// Over the desk: the transfer that is running, and the hint that
@@ -781,7 +818,41 @@ impl NoticeHold {
 
 #[cfg(test)]
 mod notice_tests {
-    use super::NoticeHold;
+    use super::{NoticeHold, compact_desk_actions, crowded_menu_rect, desk_view_rect};
+    use egui::{Rect, pos2, vec2};
+
+    #[test]
+    fn crowded_computer_menu_never_overlaps_other_actions() {
+        let head = Rect::from_min_size(pos2(100.0, 20.0), vec2(700.0, 46.0));
+        let menu = crowded_menu_rect(head, 130.0, 5).expect("crowded computer menu");
+        assert_eq!(menu.left(), desk_view_rect(head).right() + 8.0);
+        assert!(crowded_menu_rect(head, 130.0, 4).is_none());
+    }
+
+    #[test]
+    fn crowded_menu_keeps_its_place_when_actions_expand() {
+        let context = egui::Context::default();
+        crate::style::install(&context);
+        let mut output = context.run_ui(Default::default(), |ui| {
+            let label_width = |label| super::text_width(ui, label, super::semibold(super::T_BODY));
+            let menu_width = label_width("Choose computer") + 40.0;
+            let timer_width = label_width("Timer") + 46.0;
+            let broadcast_width = label_width("Type on every computer") + 92.0;
+            let full_width = label_width("Lock every screen") + 46.0 + timer_width + broadcast_width + 16.0;
+            let compact_width = label_width("Lock screens") + 46.0 + timer_width + 34.0 + 16.0;
+            for width in [600.0, 760.0, 820.0, 950.0, 1200.0, 1500.0] {
+                let frame = super::shell::frame(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 675.0)));
+                let head = Rect::from_min_size(frame.content.min, vec2(frame.content.width(), 46.0));
+                let tiny = head.width() < 630.0;
+                let menu_width = if tiny { label_width("Computers") + 40.0 } else { menu_width };
+                let menu = crowded_menu_rect(head, menu_width, 6).expect("menu at every supported width");
+                let compact = compact_desk_actions(head, Some(menu), full_width);
+                let actions_width = if tiny { 3.0 * 34.0 + 16.0 } else if compact { compact_width } else { full_width };
+                assert!(menu.right() + 8.0 <= head.right() - actions_width, "menu overlaps actions at {width}");
+            }
+        });
+        output.textures_delta.clear();
+    }
 
     fn n(t: &str) -> Option<(String, String)> {
         Some((t.into(), String::new()))

@@ -727,12 +727,12 @@ pub fn key_label(code: u32) -> String {
 /// A key's name on its drawn cap: short.
 pub fn cap_label(code: u16) -> String {
     let s = match code {
-        14 => "Backspace",
+        14 => "Bksp",
         58 => "Caps",
         42 | 54 => "Shift",
         29 | 97 => "Ctrl",
         56 | 100 => if cfg!(target_os = "macos") { "Opt" } else { "Alt" },
-        125 | 126 => meta_word(),
+        125 | 126 => if cfg!(target_os = "macos") { "Cmd" } else if cfg!(windows) { "Win" } else { "Sup" },
         57 => "",
         99 => "PrSc",
         70 => "ScLk",
@@ -754,6 +754,7 @@ pub fn cap_label(code: u16) -> String {
         71..=73 | 75..=77 | 79..=82 => return keynames::key_name(u32::from(code)).trim_start_matches("kp").to_owned(),
         86 => "<>",
         102 => "Home",
+        127 => "Mnu",
         119 => "Brk",
         _ => {
             // Punctuation by its character: `-`, `[`, `;`.
@@ -1575,7 +1576,7 @@ pub fn button_default(n: u32) -> &'static str {
         1 => "Left click",
         2 => "Right click",
         3 => "Middle click",
-        _ => "Its own button",
+        _ => "Unchanged",
     }
 }
 
@@ -2035,6 +2036,9 @@ os = "mac"
         assert_eq!(code(neighbour(&caps, at(103), 0, 1)), Some(108), "Up ↓ Down");
         assert_eq!(code(neighbour(&caps, at(97), 0, 1)), None, "nothing below the bottom row");
         assert_eq!(cap_label(58), "Caps");
+        assert_eq!(cap_label(14), "Bksp");
+        assert_eq!(cap_label(125), if cfg!(target_os = "macos") { "Cmd" } else if cfg!(windows) { "Win" } else { "Sup" });
+        assert_eq!([102, 104, 109, 69, 127].map(cap_label), ["Home", "PgUp", "PgDn", "Num", "Mnu"]);
         assert_eq!([12, 13, 26, 27, 43, 39, 40, 51, 52, 53].map(cap_label), ["-", "=", "[", "]", "\\", ";", "'", ",", ".", "/"]);
         assert_eq!(cap_label(30), "A");
         assert_eq!(cap_label(76), "5");

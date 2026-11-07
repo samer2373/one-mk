@@ -80,6 +80,19 @@ fn fade(c: Color32, a: f32) -> Color32 {
     c.gamma_multiply(a.clamp(0.0, 1.0))
 }
 
+fn split_screen_name<'a>(painter: &Painter, name: &'a str, font: &egui::FontId, room: f32) -> Option<(&'a str, &'a str)> {
+    name.char_indices().filter(|(_, ch)| ch.is_whitespace()).filter_map(|(index, _)| {
+        let first = name[..index].trim();
+        let second = name[index..].trim();
+        if first.is_empty() || second.is_empty() {
+            return None;
+        }
+        let measure = |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), INK).size().x;
+        let width = measure(first).max(measure(second));
+        (width <= room).then_some((first, second, width))
+    }).min_by(|left, right| left.2.total_cmp(&right.2)).map(|(first, second, _)| (first, second))
+}
+
 /// How far into its reveal digit `i` of a pairing code is, 0..1. The
 /// sheet and the screen on the desk share it, so the two can be read
 /// together in the same rhythm.
@@ -1175,7 +1188,9 @@ impl Scene {
                 .fold(Rect::NOTHING, |r, p| r.union(Rect::from_min_max(p, p)));
             let (left, right) = (rect.left() + MARGIN, rect.right() - MARGIN);
             if bounds.is_positive() && hi > lo {
-                let s = ((hi - lo) / bounds.height()).min((right - left) / bounds.width()).min(1.0);
+                let visible = self.devices.iter().filter(|device| !device.leaving).count();
+                let max_scale = if visible >= 5 { 1.25 } else { 1.0 };
+                let s = ((hi - lo) / bounds.height()).min((right - left) / bounds.width()).min(max_scale);
                 let (c, mid) = (cam.centre.y, bounds.center().y);
                 // After scaling about the centre, the middle sits at c + s*(mid - c).
                 let dy = (lo + hi) / 2.0 - (c + s * (mid - c));
@@ -1194,6 +1209,7 @@ impl Scene {
 
     pub fn paint(&mut self, painter: &Painter, rect: Rect) {
         let now = self.now;
+        self.cut_names.borrow_mut().clear();
         let cam = self.camera(rect);
         self.view_k = rect.width() * 0.5 / cam.foc;
         let geo: Vec<Geo> = self.devices.iter().map(Device::geometry).collect();
@@ -1645,18 +1661,26 @@ impl Scene {
                 crate::chrome::light(painter, c, (room * 0.42).min(h * 0.6), Color32::from_black_alpha((90.0 * a) as u8));
             }
             let shown = fit(painter, &d.name, &name_font, room);
-            if shown != d.name {
-                self.cut_names.borrow_mut().insert(i);
+            let wrapped = if shown != d.name && h >= 36.0 && let Some((first, second)) = split_screen_name(painter, &d.name, &name_font, room) {
+                painter.text(at(0.5, 0.5) - vec2(0.0, name_size), egui::Align2::CENTER_CENTER, first, name_font.clone(), name_col);
+                painter.text(at(0.5, 0.5), egui::Align2::CENTER_CENTER, second, name_font, name_col);
+                true
             } else {
-                self.cut_names.borrow_mut().remove(&i);
-            }
-            painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, shown, name_font, name_col);
+                if shown != d.name {
+                    self.cut_names.borrow_mut().insert(i);
+                }
+                painter.text(at(0.5, 0.47), egui::Align2::CENTER_BOTTOM, shown, name_font, name_col);
+                false
+            };
+            let subtitle_at = if wrapped { at(0.5, 0.5) + vec2(0.0, name_size / 2.0) } else { at(0.5, 0.53) };
             let k = d.sub_was.as_ref().map_or(1.0, |(_, t0)| motion::progress(now, *t0, motion::fade(0.18), motion::out_cubic));
-            if let Some((was, _)) = &d.sub_was {
-                painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, was, &sub_font, room), sub_font.clone(), sub_col.gamma_multiply(1.0 - k));
+            if (!wrapped || h >= 48.0) && let Some((was, _)) = &d.sub_was {
+                painter.text(subtitle_at, egui::Align2::CENTER_TOP, fit(painter, was, &sub_font, room), sub_font.clone(), sub_col.gamma_multiply(1.0 - k));
             }
             let subtitle = if self.selected == Some(i) { "Selected".to_owned() } else { d.subtitle.clone() };
-            painter.text(at(0.5, 0.53), egui::Align2::CENTER_TOP, fit(painter, &subtitle, &sub_font, room), sub_font, sub_col.gamma_multiply(k));
+            if !wrapped || h >= 48.0 {
+                painter.text(subtitle_at, egui::Align2::CENTER_TOP, fit(painter, &subtitle, &sub_font, room), sub_font, sub_col.gamma_multiply(k));
+            }
         }
         if !d.online || ghost {
             return;
@@ -1807,6 +1831,67 @@ mod tests {
     }
 
     #[test]
+    fn truncated_name_tracking_is_refreshed_each_frame() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 430.0));
+        let mut scene = two();
+        settle(&mut scene, 0.0);
+        scene.cut_names.borrow_mut().insert(99);
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            scene.paint(&painter, rect);
+        });
+        output.textures_delta.clear();
+        assert!(!scene.cut_names.borrow().contains(&99));
+    }
+
+    #[test]
+    fn screen_names_wrap_only_when_both_lines_fit() {
+        let ctx = egui::Context::default();
+        crate::style::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.painter();
+            let font = semibold(12.0);
+            let width = |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), INK).size().x;
+            let room = width("Мастерская").max(width("MacBook")) + 1.0;
+            assert_eq!(split_screen_name(painter, "MacBook Pro", &font, room), Some(("MacBook", "Pro")));
+            assert_eq!(split_screen_name(painter, "Мастерская ПК", &font, room), Some(("Мастерская", "ПК")));
+            assert_eq!(split_screen_name(painter, "MacBook Pro", &font, 1.0), None);
+            assert_eq!(split_screen_name(painter, "MacBook", &font, room), None);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn truncated_wall_name_survives_a_later_wider_panel() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(900.0, 430.0));
+        let mut scene = two();
+        scene.devices[0].name = "Desk".into();
+        scene.devices[0].screens = vec![
+            Monitor::new(-400, 0, 400, 1080),
+            Monitor::new(0, 0, 1920, 1080),
+            Monitor::new(1920, 0, 1920, 1080),
+            Monitor::new(3840, 0, 1920, 1080),
+        ];
+        settle(&mut scene, 0.0);
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            let camera = scene.camera(rect);
+            let geometry: Vec<_> = scene.devices.iter().map(Device::geometry).collect();
+            scene.screen(&painter, &camera, 0, 0, &geometry);
+            assert!(scene.cut_names.borrow().contains(&0), "narrow panel must truncate the name");
+            scene.cut_names.borrow_mut().clear();
+            scene.screen(&painter, &camera, 0, 1, &geometry);
+            assert!(!scene.cut_names.borrow().contains(&0), "wide panel must fit the name");
+            scene.screen(&painter, &camera, 0, 0, &geometry);
+            scene.screen(&painter, &camera, 0, 1, &geometry);
+            assert!(scene.cut_names.borrow().contains(&0), "wide panel must not erase the narrow panel's truncation");
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn top_computer_fits_default_and_compact_scenes() {
         let mut scene = two();
         scene.devices[1].pos = v(0.0, 70.0, -26.0);
@@ -1855,6 +1940,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn crowded_scene_enlarges_without_clipping_devices() {
+        let mut scene = two();
+        for index in 0..4 {
+            let mut device = Device::new(&format!("peer-{index}"), "computer", Kind::Monitor, false, [0x1D2D3C, 0x0D151E]);
+            device.pos.x = (index as f32 + 1.0) * SPACING;
+            device.target = device.pos;
+            scene.devices.push(device);
+        }
+        settle(&mut scene, 0.0);
+        let mut enlarged = false;
+        for width in [560.0, 900.0, 1400.0] {
+            let area = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(width, 340.0));
+            let camera = scene.camera(area);
+            let progress = scene.intro_t0.map_or(0.0, |start| motion::progress(scene.now, start, motion::space(0.6), motion::out_expo));
+            let baseline = Camera::new(scene.yaw + lerp(-0.12, 0.0, progress), scene.pitch, scene.dist * lerp(1.12, 1.0, progress), v(scene.focus_x, 15.0, -2.0), area, scene.raise.value(scene.now));
+            enlarged |= camera.foc > baseline.foc * 1.01;
+            for device in &scene.devices {
+                for bounds in device.geometry().boxes {
+                    for x in [bounds.a.0, bounds.a.1] {
+                        for y in [bounds.b.0, bounds.b.1] {
+                            for z in [bounds.c.0, bounds.c.1] {
+                                let point = camera.pt(bounds.fr.at(x, y, z));
+                                assert!(area.shrink(MARGIN - 0.5).contains(point), "width {width}: {point:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(enlarged, "the crowded scene should use spare space when available");
     }
 
     #[test]

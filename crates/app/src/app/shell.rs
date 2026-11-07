@@ -33,16 +33,33 @@ fn rail_visible(total: usize, slots: usize) -> usize {
     if total > slots { slots.saturating_sub(1) } else { total }
 }
 
-fn computers_menu(response: &egui::Response, status: &Status) -> Option<String> {
+fn computer_menu_label(name: &str, id: &str, online: bool, chosen: bool) -> String {
+    let state = if id == "me" { "This computer" } else if online { "Connected" } else { "Offline" };
+    format!("{name}\n{state}{}", if chosen { " · Selected" } else { "" })
+}
+
+pub(super) fn computers_menu(response: &egui::Response, status: &Status, current: Option<&str>) -> Option<String> {
     let mut selected = None;
     egui::Popup::menu(response).width(300.0).show(|ui| {
-        for (id, name, online) in std::iter::once(("me", status.name.as_str(), true)).chain(status.peers.iter().map(|peer| (peer.id.as_str(), peer.name.as_str(), peer.online))) {
-            let label = format!("{name}\n{}", if id == "me" { "This computer" } else if online { "Connected" } else { "Offline" });
-            if ui.add(egui::Button::new(egui::RichText::new(label).font(regular(T_BODY))).wrap()).clicked() {
-                selected = Some(id.to_owned());
-                ui.close();
+        egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() - 100.0).max(100.0)).show(ui, |ui| {
+            for (id, name, online) in std::iter::once(("me", status.name.as_str(), true)).chain(status.peers.iter().map(|peer| (peer.id.as_str(), peer.name.as_str(), peer.online))) {
+                let chosen = current == Some(id);
+                let label = computer_menu_label(name, id, online, chosen);
+                let (title, detail) = label.split_once('\n').unwrap();
+                let mut text = egui::text::LayoutJob::default();
+                text.append(&format!("    {title}"), 0.0, egui::TextFormat { font_id: regular(T_BODY), color: INK, ..Default::default() });
+                text.append(&format!("\n    {detail}"), 0.0, egui::TextFormat { font_id: regular(T_META), color: INK2, ..Default::default() });
+                let row = egui::Button::new(text).wrap().min_size(vec2(ui.available_width(), 44.0));
+                let row = if chosen { row.fill(BUTTON_LIT) } else { row };
+                let response = ui.add(row);
+                widgets::a11y(&response, Role::Button, &label, None);
+                ui.painter().circle_filled(response.rect.left_top() + vec2(10.0, 12.0), 3.0, if online { OK } else { INK2 });
+                if response.clicked() {
+                    selected = Some(id.to_owned());
+                    ui.close();
+                }
             }
-        }
+        });
     });
     selected
 }
@@ -533,7 +550,7 @@ impl App {
             if hidden > 0 {
                 let rect = Rect::from_min_size(pos2(side.left() + 6.0, y), vec2(side.width() - 12.0, 30.0));
                 let response = button(ui, rect, Id::unique("rail-overflow"), &format!("+{hidden}"), Look::Quiet, true, Some("More computers: show all names and connection states"));
-                if let Some(id) = computers_menu(&response, &status) { self.set_tab(Tab::Desk); self.select(id); }
+                if let Some(id) = computers_menu(&response, &status, sel.as_deref()) { self.set_tab(Tab::Desk); self.select(id); }
             }
         }
         // Over the action: Update when there is one, and Stop.
@@ -619,6 +636,13 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn computer_menu_names_include_connection_and_selection() {
+        assert_eq!(computer_menu_label("Gaming PC", "peer", false, true), "Gaming PC\nOffline · Selected");
+        assert_eq!(computer_menu_label("Desk", "me", true, false), "Desk\nThis computer");
+        assert_eq!(computer_menu_label("工作站", "peer", true, false), "工作站\nConnected");
+    }
 
     #[test]
     fn narrow_broadcast_rail_leaves_the_chord_to_the_banner() {

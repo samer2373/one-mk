@@ -42,6 +42,11 @@ const COMPACT_BELOW: f32 = 128.0;
 /// Inner padding of the panel's cells.
 const PAD: f32 = 20.0;
 const GHOST: &str = "\u{0}pairing";
+
+fn truncated_name_target(focused: Option<usize>, hovered: Option<usize>, truncated: &std::collections::HashSet<usize>) -> Option<(usize, bool)> {
+    focused.filter(|index| truncated.contains(index)).map(|index| (index, true))
+        .or_else(|| hovered.filter(|index| truncated.contains(index)).map(|index| (index, false)))
+}
 /// Wallpapers for paired computers: low chroma, about equal lightness.
 /// Each computer's wallpaper on the desk: a light colour and a deep one,
 /// as desktop pictures are (dusk violet, lagoon, ember, ocean); deep
@@ -1421,10 +1426,11 @@ impl App {
         // The full name of the computer under the pointer (a narrow screen
         // can't always hold all of it).
         if self.drag.is_none()
-            && let Some(d) = under.or(self.scene.focused).filter(|i| self.scene.cut_names.borrow().contains(i)).and_then(|i| self.scene.devices.get(i))
+            && let Some((index, focused)) = truncated_name_target(self.scene.focused, under, &self.scene.cut_names.borrow())
+            && let Some(d) = self.scene.devices.get(index)
         {
             let text = format!("{} · {}", d.name, d.subtitle);
-            if self.scene.focused.is_some() { resp.clone().show_tooltip_text(text); } else { resp.clone().on_hover_text_at_pointer(text); }
+            if focused { resp.clone().show_tooltip_text(text); } else { resp.clone().on_hover_text_at_pointer(text); }
         }
         let slot = self.scene.slot_rect(rect);
         self.scene.slot_hover = self.drag.is_none() && slot.zip(pointer).is_some_and(|(r, p)| r.contains(p));
@@ -2422,12 +2428,10 @@ impl eframe::App for App {
             frame.max.y -= self.desk_foot_h(scene.width());
             // Too little room left for monitors anyone could read: the
             // computers as a row of named chips instead.
-            // More computers need more room before their names read.
-            let need = COMPACT_BELOW + 22.0 * self.scene.devices.len().saturating_sub(1).min(5) as f32;
             // On Clipboard & files the desk is only where files go: in a
             // narrow window, chips (drop targets with names) always.
             let files_narrow = self.tab == Tab::Files && scene.width() < 780.0;
-            compact = (frame.height() < need || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout | Tab::Files);
+            compact = (frame.height() < COMPACT_BELOW || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout | Tab::Files);
         }
         // The sidebar and the toolbar are made before the desk, so Tab meets
         // them first (search, pages, the toolbar left to right, then the
@@ -2870,6 +2874,14 @@ mod debug {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncated_name_prefers_focused_then_hovered_device() {
+        let truncated = [1, 2].into_iter().collect();
+        assert_eq!(truncated_name_target(Some(1), Some(2), &truncated), Some((1, true)));
+        assert_eq!(truncated_name_target(Some(0), Some(2), &truncated), Some((2, false)));
+        assert_eq!(truncated_name_target(None, Some(0), &truncated), None);
+    }
 
     #[test]
     fn crowded_slots_leave_room_for_every_computer() {
