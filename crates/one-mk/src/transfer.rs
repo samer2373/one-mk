@@ -284,15 +284,13 @@ impl Inbox {
 
     /// What unfinished partial files are kept for resuming.
     pub fn partials(&self) -> Partials {
-        let Ok(dir) = fs::read_dir(long(&self.root.join(PARTIAL_DIR))) else { return Partials::default() };
+        let Ok(staging) = Staging::open(&self.root.join(PARTIAL_DIR)) else { return Partials::default() };
         let now = SystemTime::now();
         let mut found = Partials::default();
-        for e in dir.flatten() {
-            let Ok(meta) = e.metadata() else { continue };
-            if !meta.is_file() { continue; }
+        for part in staging.partials() {
             found.count += 1;
-            found.bytes = found.bytes.saturating_add(meta.len());
-            let age = meta.modified().ok().and_then(|m| now.duration_since(m).ok()).unwrap_or_default();
+            found.bytes = found.bytes.saturating_add(part.len);
+            let age = part.modified.and_then(|m| now.duration_since(m).ok()).unwrap_or_default();
             found.oldest = found.oldest.max(age);
         }
         found
@@ -630,24 +628,169 @@ pub struct Partials {
 /// Removes partial files from the staging folder of `root`: those not
 /// modified for `max_age`, or all with `None`. A file being written right
 /// now is left alone. Returns how many were removed.
+///
+/// Only what is positively ours goes (see [`Staging`]): a symlink in place
+/// of the staging folder is not followed, and anything else someone put in
+/// the folder is kept.
 fn sweep_dir(root: &Path, max_age: Option<Duration>, active: &Mutex<HashMap<String, Slot>>) -> usize {
-    let Ok(dir) = fs::read_dir(long(&root.join(PARTIAL_DIR))) else { return 0 };
+    let Ok(staging) = Staging::open(&root.join(PARTIAL_DIR)) else { return 0 };
     let now = SystemTime::now();
     let mut removed = 0;
-    for e in dir.flatten() {
-        let Ok(meta) = e.metadata() else { continue };
-        let old = meta.is_file()
-            && max_age.is_none_or(|max_age| meta.modified().ok().and_then(|m| now.duration_since(m).ok()).is_some_and(|age| age >= max_age));
+    for part in staging.partials() {
+        let old = max_age.is_none_or(|max_age| part.modified.and_then(|m| now.duration_since(m).ok()).is_some_and(|age| age >= max_age));
         if !old {
             continue;
         }
         // Holding the lock keeps `claim` from taking this file meanwhile.
         let active = active.lock().expect("poisoned");
-        if !active.contains_key(e.file_name().to_string_lossy().as_ref()) && fs::remove_file(e.path()).is_ok() {
+        if !active.contains_key(&part.name) && staging.remove(&part.name).is_ok() {
             removed += 1;
         }
     }
     removed
+}
+
+/// Whether `name` is a partial file name as [`part_id`] makes them:
+/// `<16 hex>.<32 hex>.part`. Nothing else in the staging folder is ours.
+fn is_part_name(name: &str) -> bool {
+    let hex = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    name.strip_suffix(".part").and_then(|stem| stem.split_once('.')).is_some_and(|(device, file)| hex(device, 16) && hex(file, 32))
+}
+
+/// One of our partial files, as found in the staging folder.
+struct StagedPart {
+    name: String,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+/// The staging folder, opened without following a symlink in its place,
+/// so listing and deleting happen inside the real folder and never in
+/// whatever a link points to. It lists only regular files (not links) with
+/// a partial file's name ([`is_part_name`]) that this user owns.
+#[cfg(unix)]
+struct Staging(std::os::fd::OwnedFd);
+
+#[cfg(unix)]
+impl Staging {
+    fn open(dir: &Path) -> std::io::Result<Self> {
+        use std::os::fd::FromRawFd as _;
+        use std::os::unix::ffi::OsStrExt as _;
+        let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).map_err(|_| std::io::Error::from(ErrorKind::InvalidInput))?;
+        // SAFETY: `path` is a valid C string; the result is checked.
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: `fd` was just opened and nobody else owns it.
+        Ok(Self(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }))
+    }
+
+    fn partials(&self) -> Vec<StagedPart> {
+        use std::os::fd::AsRawFd as _;
+        let mut names = Vec::new();
+        // SAFETY: duplicating an open descriptor; the result is checked.
+        let dup = unsafe { libc::fcntl(self.0.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        if dup < 0 {
+            return Vec::new();
+        }
+        // SAFETY: `dup` is ours; on success the stream owns it and closedir closes it.
+        let dir = unsafe { libc::fdopendir(dup) };
+        if dir.is_null() {
+            // SAFETY: fdopendir failed, so `dup` is still ours to close.
+            unsafe { libc::close(dup) };
+            return Vec::new();
+        }
+        // The duplicate shares its offset with earlier listings: start over.
+        // SAFETY: `dir` is a valid stream until closedir below.
+        unsafe { libc::rewinddir(dir) };
+        loop {
+            // SAFETY: as above; each entry is read before the next readdir.
+            let entry = unsafe { libc::readdir(dir) };
+            if entry.is_null() {
+                break;
+            }
+            // SAFETY: d_name is NUL-terminated.
+            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+            if let Ok(name) = name.to_str()
+                && is_part_name(name)
+            {
+                names.push(name.to_owned());
+            }
+        }
+        // SAFETY: `dir` is valid and closed once.
+        unsafe { libc::closedir(dir) };
+        names.into_iter().filter_map(|name| self.stat(&name).map(|(len, modified)| StagedPart { name, len, modified })).collect()
+    }
+
+    /// Size and modification time of `name` if it is our own regular file.
+    fn stat(&self, name: &str) -> Option<(u64, Option<SystemTime>)> {
+        use std::os::fd::AsRawFd as _;
+        let c = std::ffi::CString::new(name).ok()?;
+        // SAFETY: an all-zero stat is a valid out buffer.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: valid descriptor, C string and buffer; the result is checked.
+        if unsafe { libc::fstatat(self.0.as_raw_fd(), c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            return None;
+        }
+        // SAFETY: geteuid has no preconditions.
+        if st.st_mode & libc::S_IFMT != libc::S_IFREG || st.st_uid != unsafe { libc::geteuid() } {
+            return None;
+        }
+        let modified = (st.st_mtime >= 0).then(|| UNIX_EPOCH + Duration::new(st.st_mtime as u64, st.st_mtime_nsec.clamp(0, 999_999_999) as u32));
+        Some((st.st_size.max(0) as u64, modified))
+    }
+
+    /// Deletes `name` inside the opened folder, if it still is one of ours.
+    fn remove(&self, name: &str) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd as _;
+        if !is_part_name(name) || self.stat(name).is_none() {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+        let c = std::ffi::CString::new(name).map_err(|_| std::io::Error::from(ErrorKind::InvalidInput))?;
+        // SAFETY: valid descriptor and C string; the result is checked.
+        if unsafe { libc::unlinkat(self.0.as_raw_fd(), c.as_ptr(), 0) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+/// Without `openat`, the folder is checked to be a real folder (not a
+/// symlink or junction) before it is listed and again before each delete,
+/// and each entry is checked to be a plain file.
+#[cfg(not(unix))]
+struct Staging(PathBuf);
+
+#[cfg(not(unix))]
+impl Staging {
+    fn open(dir: &Path) -> std::io::Result<Self> {
+        let meta = fs::symlink_metadata(long(dir))?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+        Ok(Self(dir.to_path_buf()))
+    }
+
+    fn partials(&self) -> Vec<StagedPart> {
+        let Ok(dir) = fs::read_dir(long(&self.0)) else { return Vec::new() };
+        dir.flatten()
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok().filter(|n| is_part_name(n))?;
+                let meta = fs::symlink_metadata(e.path()).ok().filter(|m| m.file_type().is_file())?;
+                Some(StagedPart { name, len: meta.len(), modified: meta.modified().ok() })
+            })
+            .collect()
+    }
+
+    fn remove(&self, name: &str) -> std::io::Result<()> {
+        Self::open(&self.0)?;
+        let path = long(&self.0.join(name));
+        if !is_part_name(name) || !fs::symlink_metadata(&path)?.file_type().is_file() {
+            return Err(ErrorKind::InvalidInput.into());
+        }
+        fs::remove_file(path)
+    }
 }
 
 /// Waits for `fut` unless the transfer is replaced by a newer one or the
@@ -758,7 +901,7 @@ fn peer_partial_bytes(staging: &Path, prefix: &str, except: &str) -> u64 {
         .filter(|e| {
             let name = e.file_name();
             let name = name.to_string_lossy();
-            name.starts_with(&start) && name != except
+            name.starts_with(&start) && name != except && is_part_name(&name)
         })
         .filter_map(|e| e.metadata().ok())
         .filter(|m| m.is_file())
@@ -1606,17 +1749,18 @@ mod tests {
         let staging = root.join(PARTIAL_DIR);
         fs::create_dir_all(&staging).unwrap();
         let inbox = Inbox::new(root.clone());
-        for n in ["stale", "active", "fresh"] {
+        let [stale, active, fresh] = ["stale", "active", "fresh"].map(|n| part_id(Fingerprint([7; 32]), n, 1, 1));
+        for n in [&stale, &active, &fresh] {
             fs::write(staging.join(n), "x").unwrap();
         }
         let old = SystemTime::now() - Duration::from_secs(8 * 24 * 3600);
-        for n in ["stale", "active"] {
+        for n in [&stale, &active] {
             File::options().write(true).open(staging.join(n)).unwrap().set_modified(old).unwrap();
         }
-        inbox.active.lock().unwrap().insert("active".into(), Slot::default());
+        inbox.active.lock().unwrap().insert(active.clone(), Slot::default());
         assert_eq!(inbox.sweep_partials(PARTIAL_MAX_AGE), 1);
-        assert!(!staging.join("stale").exists());
-        assert!(staging.join("active").exists() && staging.join("fresh").exists());
+        assert!(!staging.join(&stale).exists());
+        assert!(staging.join(&active).exists() && staging.join(&fresh).exists());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1978,17 +2122,68 @@ mod tests {
         fs::create_dir_all(&staging).unwrap();
         let inbox = Inbox::new(root.clone());
         assert_eq!(inbox.partials(), Partials::default());
-        fs::write(staging.join("one"), vec![0u8; 10]).unwrap();
-        fs::write(staging.join("two"), vec![0u8; 20]).unwrap();
-        fs::write(staging.join("busy"), vec![0u8; 5]).unwrap();
-        File::options().write(true).open(staging.join("one")).unwrap().set_modified(SystemTime::now() - Duration::from_secs(3 * 24 * 3600)).unwrap();
+        let [one, two, busy] = ["one", "two", "busy"].map(|n| part_id(Fingerprint([7; 32]), n, 1, 1));
+        fs::write(staging.join(&one), vec![0u8; 10]).unwrap();
+        fs::write(staging.join(&two), vec![0u8; 20]).unwrap();
+        fs::write(staging.join(&busy), vec![0u8; 5]).unwrap();
+        File::options().write(true).open(staging.join(&one)).unwrap().set_modified(SystemTime::now() - Duration::from_secs(3 * 24 * 3600)).unwrap();
         let found = inbox.partials();
         assert_eq!((found.count, found.bytes), (3, 35));
         assert!(found.oldest >= Duration::from_secs(3 * 24 * 3600 - 5));
-        inbox.active.lock().unwrap().insert("busy".into(), Slot::default());
+        inbox.active.lock().unwrap().insert(busy.clone(), Slot::default());
         assert_eq!(inbox.clear_partials(), 2);
-        assert!(staging.join("busy").exists() && !staging.join("one").exists() && !staging.join("two").exists());
+        assert!(staging.join(&busy).exists() && !staging.join(&one).exists() && !staging.join(&two).exists());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `partials clear` and the sweeps delete only oneMK's own partial
+    /// files: never what a symlink in place of the staging folder points
+    /// to, nor unrelated files (or links) someone put in the real folder.
+    #[cfg(unix)]
+    #[test]
+    fn clearing_partials_never_follows_a_link_or_deletes_foreign_files() {
+        let root = temp("partials-link");
+        let target = temp("partials-link-target");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        let ours = part_id(Fingerprint([7; 32]), "x", 1, 1);
+        // Files in the link's target, including one named like a partial.
+        for n in ["precious.txt", ours.as_str()] {
+            fs::write(target.join(n), "keep").unwrap();
+        }
+        let old = SystemTime::now() - PARTIAL_MAX_AGE - Duration::from_secs(60);
+        File::options().write(true).open(target.join(&ours)).unwrap().set_modified(old).unwrap();
+        std::os::unix::fs::symlink(&target, root.join(PARTIAL_DIR)).unwrap();
+        let inbox = Inbox::new(root.clone());
+        assert_eq!(inbox.partials(), Partials::default(), "a linked staging folder is not looked into");
+        assert_eq!(inbox.clear_partials(), 0);
+        assert_eq!(inbox.sweep_partials(PARTIAL_MAX_AGE), 0);
+        assert!(target.join("precious.txt").exists() && target.join(&ours).exists(), "nothing in the link's target was deleted");
+
+        // A real staging folder: only our own partials go.
+        fs::remove_file(root.join(PARTIAL_DIR)).unwrap();
+        let staging = root.join(PARTIAL_DIR);
+        fs::create_dir(&staging).unwrap();
+        fs::write(staging.join(&ours), "x").unwrap();
+        fs::write(staging.join("notes.txt"), "keep").unwrap();
+        fs::write(staging.join("abc.part"), "keep").unwrap();
+        let linked = part_id(Fingerprint([7; 32]), "y", 1, 1);
+        std::os::unix::fs::symlink(target.join("precious.txt"), staging.join(&linked)).unwrap();
+        assert_eq!(inbox.partials().count, 1);
+        assert_eq!(inbox.clear_partials(), 1);
+        assert!(!staging.join(&ours).exists());
+        assert!(staging.join("notes.txt").exists() && staging.join("abc.part").exists() && fs::symlink_metadata(staging.join(&linked)).is_ok());
+        assert!(target.join("precious.txt").exists());
+        for d in [root, target] { let _ = fs::remove_dir_all(d); }
+    }
+
+    #[test]
+    fn only_part_id_names_are_partials() {
+        assert!(is_part_name(&part_id(Fingerprint([9; 32]), "a/b.txt", 5, 6)));
+        for not in ["stale.part", "0123456789abcdef.part", "0123456789abcdef.0123456789abcdef0123456789abcdef.part.txt",
+            "0123456789ABCDEF.0123456789abcdef0123456789abcdef.part", "0123456789abcdef.0123456789abcdef0123456789abcde/.part", ""] {
+            assert!(!is_part_name(not), "{not}");
+        }
     }
 
     /// Finishing a transfer is a good moment to forget partials nobody
@@ -2000,16 +2195,17 @@ mod tests {
         let root = temp("sweepdone-dst");
         let staging = root.join(PARTIAL_DIR);
         fs::create_dir_all(&staging).unwrap();
-        fs::write(staging.join("stale.part"), "x").unwrap();
-        fs::write(staging.join("fresh.part"), "x").unwrap();
-        File::options().write(true).open(staging.join("stale.part")).unwrap().set_modified(SystemTime::now() - PARTIAL_MAX_AGE - Duration::from_secs(60)).unwrap();
+        let [stale, fresh] = ["stale", "fresh"].map(|n| part_id(Fingerprint([7; 32]), n, 1, 1));
+        fs::write(staging.join(&stale), "x").unwrap();
+        fs::write(staging.join(&fresh), "x").unwrap();
+        File::options().write(true).open(staging.join(&stale)).unwrap().set_modified(SystemTime::now() - PARTIAL_MAX_AGE - Duration::from_secs(60)).unwrap();
         fs::write(src.join("f.txt"), b"hello").unwrap();
         let inbox = Inbox::new(root.clone());
         let server = serve(&inbox, &pb);
         let results = send_files(&pa.conn, collect(&[src.join("f.txt")]).unwrap(), Arc::new(Progress::default())).await;
         assert!(matches!(&results[0].1, Outcome::Saved { .. }), "{results:?}");
-        assert!(!staging.join("stale.part").exists(), "the stale partial is gone");
-        assert!(staging.join("fresh.part").exists(), "a recent one is kept for resuming");
+        assert!(!staging.join(&stale).exists(), "the stale partial is gone");
+        assert!(staging.join(&fresh).exists(), "a recent one is kept for resuming");
         server.abort();
         let _ = fs::remove_dir_all(&src);
         let _ = fs::remove_dir_all(&root);
