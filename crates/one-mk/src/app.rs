@@ -1389,7 +1389,7 @@ impl App {
             Event::Error(msg) => tracing::error!("{msg}"),
             Event::LocalRulesOff => {
                 self.settings.input.local_rules = false;
-                if let Err(error) = crate::settings::Settings::update(&self.dir, |settings| {
+                if let Err(error) = crate::settings::Settings::update_within(&self.dir, one_mk_net::DAEMON_LOCK_WAIT, |settings| {
                     settings.input.local_rules = false;
                     Ok(())
                 }) { tracing::error!(%error, "could not save emergency local-rules disable"); }
@@ -2608,7 +2608,7 @@ impl App {
         {
             return;
         }
-        match crate::profiles::use_profile(&self.dir, &p.name) {
+        match crate::profiles::use_profile_within(&self.dir, &p.name, one_mk_net::DAEMON_LOCK_WAIT) {
             Ok((name, moved)) => {
                 println!("This network matches layout profile {name:?}; using it.");
                 if !moved.is_empty() {
@@ -2618,7 +2618,11 @@ impl App {
                     fps.into_iter().for_each(|fp| self.send_layout(fp));
                 }
             }
-            Err(e) => tracing::warn!("could not switch layout profiles: {e:#}"),
+            Err(e) => {
+                // Not in use: the next report for this network tries again.
+                self.auto_profile = None;
+                tracing::warn!("could not switch layout profiles: {e:#}");
+            }
         }
     }
 
@@ -2670,7 +2674,7 @@ impl App {
         let text = match req {
             Request::LocalRulesOff => {
                 self.settings.input.local_rules = false;
-                let result = crate::settings::Settings::update(&self.dir, |settings| { settings.input.local_rules = false; Ok(()) });
+                let result = crate::settings::Settings::update_within(&self.dir, one_mk_net::DAEMON_LOCK_WAIT, |settings| { settings.input.local_rules = false; Ok(()) });
                 #[cfg(any(windows, target_os = "macos"))]
                 self.reload_local_rules();
                 let text = match result { Ok(_) => "ok\n".to_owned(), Err(error) => format!("error {error:#}\n") };
@@ -4616,6 +4620,94 @@ mod tests {
         drop(node);
         let _ = std::fs::remove_dir_all(dir);
         duo.stop().await;
+    }
+
+    /// Holds the lock file `path` from another process (this test binary,
+    /// run again as `lock_holder`), as a `one-mk` command stopped with
+    /// Ctrl+Z while changing a file would. Let go when dropped.
+    struct LockHolder(std::process::Child);
+
+    impl LockHolder {
+        fn hold(path: &std::path::Path) -> LockHolder {
+            use std::io::BufRead;
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "app::tests::lock_holder", "--nocapture", "--test-threads=1"])
+                .env("ONE_MK_TEST_HOLD_LOCK", path)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            loop {
+                line.clear();
+                assert!(out.read_line(&mut line).unwrap() > 0, "the lock holder ended before taking the lock");
+                if line.contains("LOCK HELD") {
+                    break;
+                }
+            }
+            LockHolder(child)
+        }
+    }
+
+    impl Drop for LockHolder {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// The other half of [`LockHolder`]; does nothing in a normal run.
+    #[test]
+    fn lock_holder() {
+        let Some(path) = std::env::var_os("ONE_MK_TEST_HOLD_LOCK") else { return };
+        let _lock = one_mk_net::lock_file(std::path::Path::new(&path), Duration::ZERO).unwrap();
+        println!("LOCK HELD");
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    /// A command stopped while holding the settings lock never freezes the
+    /// daemon: turning the local rules off (the emergency path) gives up on
+    /// saving after a bounded wait and says why, and the daemon keeps
+    /// answering.
+    #[tokio::test]
+    async fn the_daemon_never_hangs_on_a_held_settings_lock() {
+        let duo = Duo::start("held-settings-lock", None).await;
+        let holder = LockHolder::hold(&duo.db.join("settings.toml.lock"));
+        let start = Instant::now();
+        let reply = tokio::time::timeout(Duration::from_secs(8), control::request(&duo.db, Request::LocalRulesOff))
+            .await
+            .expect("the daemon hung on the settings lock")
+            .unwrap()
+            .unwrap();
+        assert!(start.elapsed() < one_mk_net::DAEMON_LOCK_WAIT + Duration::from_secs(2), "{:?}", start.elapsed());
+        assert!(reply.starts_with("error") && reply.contains("another one-mk command is holding the lock"), "{reply}");
+        assert!(Duo::peer_status(&duo.db).await.online, "the daemon keeps working");
+        drop(holder);
+        assert_eq!(control::request(&duo.db, Request::LocalRulesOff).await.unwrap().unwrap(), "ok\n");
+        duo.stop().await;
+    }
+
+    /// Switching layout profiles (as the daemon does when the network
+    /// changes) gives up after a bounded wait on either lock it takes.
+    #[test]
+    fn switching_profiles_never_hangs_on_a_held_lock() {
+        let dir = temp_dir("held-profile-lock");
+        crate::profiles::Profiles::update(&dir, |all| {
+            all.list.push(crate::profiles::Profile { name: "home".into(), ..Default::default() });
+            Ok(())
+        })
+        .unwrap();
+        for lock in ["profiles.toml.lock", "devices.toml.lock"] {
+            let holder = LockHolder::hold(&dir.join(lock));
+            let start = std::time::Instant::now();
+            let err = crate::profiles::use_profile_within(&dir, "home", Duration::from_millis(200)).unwrap_err();
+            assert!(start.elapsed() < Duration::from_secs(2), "{lock}: {:?}", start.elapsed());
+            assert!(format!("{err:#}").contains("another one-mk command is holding the lock"), "{lock}: {err:#}");
+            drop(holder);
+        }
+        crate::profiles::use_profile_within(&dir, "home", Duration::from_millis(200)).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Changing the layout on one computer applies at once, with no
