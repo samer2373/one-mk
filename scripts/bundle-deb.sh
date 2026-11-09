@@ -3,6 +3,10 @@
 # for the hidden desktop entry below), from the checkout:
 #   sh scripts/bundle-deb.sh <release dir, e.g. target/release> <out.deb>
 set -eu
+# The modes in the package must not depend on who builds it: a builder with
+# umask 002 (Ubuntu's default) made group-writable files and folders.
+# Fixed explicitly again before packing, below.
+umask 022
 
 dir=$1
 out=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
@@ -26,6 +30,16 @@ install -m 644 docs/brand/app-icon/windows-linux/ico-png/onemk-256.png "$root/us
 # message, and the password asked every time.
 install -d "$root/usr/share/polkit-1/actions"
 install -m 644 packaging/linux/io.github.onemk.OneMk.update.policy "$root/usr/share/polkit-1/actions/"
+# The AppStream metainfo (software centres, `appstreamcli`), with this
+# release's notes: the same text the AppImage and the Flatpak carry.
+epoch=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || date +%s)}
+release_date=$(date -u -d "@$epoch" +%Y-%m-%d 2>/dev/null || date -u -r "$epoch" +%Y-%m-%d)
+install -d "$root/usr/share/metainfo"
+python3 -I scripts/metainfo.py "$version" "$release_date" > "$root/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml"
+if command -v appstreamcli >/dev/null; then
+    appstreamcli validate --no-net "$root/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml" >/dev/null \
+        || { echo "bundle-deb.sh: the AppStream metainfo does not validate" >&2; exit 1; }
+fi
 # Licences: oneMK's, every statically linked crate's, the Geist fonts'.
 sh scripts/copy-notices.sh "$root/usr/share/doc/one-mk"
 install -m 644 packaging/linux/copyright "$root/usr/share/doc/one-mk/copyright"
@@ -72,9 +86,18 @@ if [ "$1" = purge ]; then rm -rf /var/lib/one-mk; fi
 POSTRM
 chmod 755 "$root/DEBIAN/postrm"
 
+# Modes, whatever the builder's umask: folders 0755, programs 0755, every
+# other file 0644 (and DEBIAN's postrm 0755, as dpkg requires).
+find "$root" -type d -exec chmod 755 {} +
+find "$root" -type f -exec chmod 644 {} +
+chmod 755 "$root"/usr/bin/* "$root/DEBIAN/postrm"
+
 dpkg-deb --root-owner-group --build "$root" "$out" >/dev/null
 listing=$(dpkg-deb -c "$out")
+bad=$(echo "$listing" | awk '$1 ~ /^d/ && $1 != "drwxr-xr-x" {print; next} $1 ~ /^-/ && $1 != "-rw-r--r--" && $1 != "-rwxr-xr-x" {print}')
+[ -z "$bad" ] || { echo "bundle-deb.sh: $out has files or folders with unexpected modes:" >&2; echo "$bad" >&2; exit 1; }
 for f in usr/bin/one-mk usr/share/applications/one-mk.desktop "$app_entry" usr/bin/one-mk-wallpaper \
+    usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml \
     usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy usr/share/doc/one-mk/copyright \
     usr/share/doc/one-mk/LICENSE-MIT usr/share/doc/one-mk/LICENSE-APACHE usr/share/doc/one-mk/THIRD-PARTY-NOTICES \
     usr/share/doc/one-mk/OFL-Geist.txt \

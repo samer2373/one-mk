@@ -9,6 +9,8 @@
 # also set it is notarized and stapled, so macOS keeps its Accessibility
 # permission across updates. Without them it is ad-hoc signed.
 set -eu
+# Same modes whoever builds it (a builder's umask 002 made group-writable files).
+umask 022
 
 dir=$1
 out=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
@@ -49,6 +51,11 @@ PLIST
 # one-mk.app (updates and login items find it by that name).
 mkdir -p "$app/Contents/Resources/en.lproj"
 printf '"CFBundleDisplayName" = "oneMK";\n"CFBundleName" = "oneMK";\n' > "$app/Contents/Resources/en.lproj/InfoPlist.strings"
+
+# Folders 0755, programs 0755, every other file 0644, before the signature seals them.
+find "$app" -type d -exec chmod 755 {} +
+find "$app" -type f ! -perm -u+x -exec chmod 644 {} +
+chmod 755 "$app"/Contents/MacOS/*
 
 if [ -n "${SIGN_IDENTITY:-}" ]; then
   codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$app"

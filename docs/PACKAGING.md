@@ -80,13 +80,16 @@ crate says `version.workspace = true`. Nothing else holds a version:
 `scripts/check-packaging.sh` (also the `packaging` job of `ci.yml`, on a debug
 build) builds into a scratch folder and checks, installing nothing:
 
-- the `.deb` from `bundle-deb.sh`: the files in it, the control version,
-  `one-mk --version` from an unpacked copy, no world-writable or setuid files,
-  `desktop-file-validate`;
-- the AppDir: `AppRun --version`, the files appimagetool wants at the top,
-  `desktop-file-validate`, `appstreamcli validate --no-net`;
+- the `.deb` from `bundle-deb.sh`, built by a builder with umask 002: the files
+  in it, the control version, `one-mk --version` from an unpacked copy, no
+  world-writable or setuid files, the modes stored in the archive (files 0644,
+  programs 0755, folders 0755), the AppStream metainfo with this release's
+  notes, `desktop-file-validate`, `appstreamcli validate --no-net`;
+- the AppDir: `AppRun --version`, the files appimagetool wants at the top, its
+  modes, `desktop-file-validate`, `appstreamcli validate --no-net`;
 - the Flatpak source bundle: unpacked elsewhere, every `path:` resolves and
-  matches its `sha256`, no checkout path or placeholder left;
+  matches its `sha256`, no checkout path or placeholder left, the metainfo
+  filled in and valid;
 - the Homebrew files, filled in from stand-in `.dmg` files named like the
   release's: no placeholder left, the right checksum, the right file names
   (and `ruby -c` when Ruby is installed);
@@ -223,7 +226,12 @@ package (version exactly as in `Cargo.toml`, `amd64`) contains the daemon,
 tray, window and wallpaper helper in `/usr/bin`, the window's launcher
 `/usr/share/applications/one-mk.desktop` (written inline by the script), the
 hidden `/usr/share/applications/io.github.onemk.OneMk.desktop` and the 256 px
-icon. The hidden entry names the app id: GNOME's GlobalShortcuts portal
+icon, and the AppStream metainfo (`/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml`,
+from `packaging/linux/` by `scripts/metainfo.py`, with the release notes of
+`docs/release-notes/v<version>.md`; the AppImage and the Flatpak carry the same
+file). Whoever builds it, every file in it is 0644 (programs 0755) and every
+folder 0755: the script sets the modes itself and fails if the archive has
+others. The hidden entry names the app id: GNOME's GlobalShortcuts portal
 refuses a session to an app id with no installed desktop entry. It comes from
 `one_mk_ctl::install::packaged_files` (the script runs the `packaging-files`
 example with `cargo`, so building the `.deb` needs the checkout and cargo),
@@ -268,7 +276,7 @@ AppImage/Flatpak staging is not extended with this component in this change.
 
 `scripts/package-appimage.sh` lays out `dist/one-mk.AppDir` (the three
 programs, `packaging/linux/one-mk.desktop`, the AppStream metainfo with the
-version and the commit date filled in, the hicolor icons, the copyright file
+version, the commit date and the release notes filled in, the hicolor icons, the copyright file
 and `packaging/linux/AppRun`), runs `AppRun --version` to prove the layout
 works, and then calls `appimagetool` if it can find one (`APPIMAGETOOL=/path`,
 or on `PATH`). The output is `one-mk-<arch>-unknown-linux-gnu.AppImage`, named

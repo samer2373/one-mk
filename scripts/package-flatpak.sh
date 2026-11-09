@@ -45,7 +45,8 @@ esac
 hash_of() { sha256sum "$1" | cut -d' ' -f1; }
 icons=$ROOT/docs/brand/app-icon/windows-linux/hicolor
 cp "$ROOT/packaging/linux/one-mk.desktop" "$dir/sources/one-mk.desktop"
-cp "$ROOT/packaging/linux/io.github.onemk.OneMk.metainfo.xml" "$dir/sources/io.github.onemk.OneMk.metainfo.xml"
+# With this version and its release notes filled in (the template has placeholders).
+write_metainfo "$dir/sources/io.github.onemk.OneMk.metainfo.xml"
 cp "$icons/scalable/apps/one-mk.svg" "$dir/sources/icon.svg"
 cp "$icons/256x256/apps/one-mk.png" "$dir/sources/icon-256.png"
 
