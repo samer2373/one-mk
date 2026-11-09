@@ -587,13 +587,7 @@ fn run(cli: Cli) -> Result<()> {
     // A home of its own (`--home`, `ONE_MK_HOME`): a test, or a second
     // one-mk. Nothing it does by itself reaches outside that folder: the
     // "Send to" entries follow the default home's computers only.
-    let custom_home = cli.home.as_ref().is_some_and(|home| !is_default_home(home));
-    let dir = match cli.home {
-        // Relative, a folder can't be checked up to the root (and the daemon
-        // would see another folder after a `cd`): make it absolute now.
-        Some(d) => std::path::absolute(&d).with_context(|| format!("--home {}", d.display()))?,
-        None => default_home()?,
-    };
+    let (dir, custom_home) = select_home(cli.home.as_deref(), one_mk_ctl::default_home(), migrate_old_home)?;
 
     // One thread for networking is plenty and keeps the footprint small;
     // input capture and injection have their own threads.
@@ -712,22 +706,46 @@ fn run(cli: Cli) -> Result<()> {
     })
 }
 
-/// `home` is the folder one-mk uses when none is given.
-fn is_default_home(home: &Path) -> bool {
-    let Ok(default) = default_home() else { return false };
-    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_owned()));
-    canonical(home) == canonical(&default)
+/// The folder to use (`--home`, `ONE_MK_HOME`, or `default`: where identity
+/// and paired devices live, on Windows the local, non-roaming AppData) and
+/// whether it is a custom one. `migrate` (moving an older version's files
+/// into the default folder) runs only when the default folder is the one
+/// used: a custom home never reaches outside itself, not even to look.
+fn select_home(given: Option<&Path>, default: Result<PathBuf>, migrate: impl FnOnce(&Path)) -> Result<(PathBuf, bool)> {
+    let (dir, custom) = match given {
+        // Relative, a folder can't be checked up to the root (and the daemon
+        // would see another folder after a `cd`): make it absolute now.
+        Some(d) => {
+            let dir = std::path::absolute(d).with_context(|| format!("--home {}", d.display()))?;
+            let custom = match default {
+                Ok(default) => !same_folder(&dir, &default),
+                Err(_) => true,
+            };
+            (dir, custom)
+        }
+        None => (default?, false),
+    };
+    if !custom {
+        migrate(&dir);
+    }
+    Ok((dir, custom))
 }
 
-/// Where identity and paired devices live. On Windows this is the local
-/// (non-roaming) AppData: the identity belongs to this one computer, and a
-/// roaming profile would give every computer the same one.
-fn default_home() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "one-mk").context("no home directory")?;
-    let dir = dirs.config_local_dir().to_path_buf();
+/// Whether `a` and `b` are the same folder (both may not exist yet).
+fn same_folder(a: &Path, b: &Path) -> bool {
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_owned()));
+    canonical(a) == canonical(b)
+}
+
+/// Moves an older version's files into the default home `dir`, once: on
+/// Windows they were kept in the roaming AppData.
+fn migrate_old_home(dir: &Path) {
     #[cfg(windows)]
-    migrate_roaming(dirs.config_dir(), &dir);
-    Ok(dir)
+    if let Some(dirs) = directories::ProjectDirs::from("", "", "one-mk") {
+        migrate_roaming(dirs.config_dir(), dir);
+    }
+    #[cfg(not(windows))]
+    let _ = dir;
 }
 
 /// Earlier versions kept their settings in the roaming AppData; move them
@@ -802,6 +820,38 @@ fn forget(dir: &Path, device: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Picking the folder has no side effects unless it is the default
+    /// one: `one-mk --home C:\\scratch devices` must never move, copy or
+    /// delete the real configuration (the roaming-profile migration).
+    #[test]
+    fn only_the_default_home_is_migrated() {
+        let root = std::env::temp_dir().join(format!("one-mk-select-home-{}", std::process::id()));
+        let default = root.join("default");
+        let custom = root.join("scratch");
+        let migrated = std::cell::RefCell::new(Vec::new());
+        let note = |dir: &Path| migrated.borrow_mut().push(dir.to_owned());
+
+        let (dir, is_custom) = select_home(Some(&custom), Ok(default.clone()), note).unwrap();
+        assert_eq!((dir, is_custom), (custom.clone(), true));
+        assert!(migrated.borrow().is_empty(), "a custom home ran the migration");
+
+        // No default folder known: a given one is custom, and nothing moves.
+        let (_, is_custom) = select_home(Some(&custom), Err(anyhow::anyhow!("no home directory")), note).unwrap();
+        assert!(is_custom && migrated.borrow().is_empty());
+
+        let (dir, is_custom) = select_home(None, Ok(default.clone()), note).unwrap();
+        assert_eq!((dir, is_custom), (default.clone(), false));
+        // The default folder named explicitly is the default folder.
+        let (dir, is_custom) = select_home(Some(&default), Ok(default.clone()), note).unwrap();
+        assert_eq!((dir, is_custom), (default.clone(), false));
+        assert_eq!(*migrated.borrow(), vec![default.clone(), default]);
+
+        assert!(select_home(None, Err(anyhow::anyhow!("no home directory")), note).is_err());
+        // A relative --home becomes absolute.
+        let (dir, _) = select_home(Some(Path::new("rel-home")), Ok(root.join("d")), |_| {}).unwrap();
+        assert!(dir.is_absolute() && dir.ends_with("rel-home"));
+    }
 
     #[test]
     fn polished_help_describes_options_and_supported_scopes() {
