@@ -168,8 +168,6 @@ async fn forget_from_login_list() -> Result<()> {
     if let Some(next) = list_without(&current) { gsettings(&["set", "org.gnome.shell", "enabled-extensions", &next]).await?; }
     Ok(())
 }
-#[cfg(not(all(unix, not(target_os = "macos"))))]
-async fn forget_from_login_list() -> Result<()> { Ok(()) }
 
 fn setup_state(installed: bool, occupied: bool, renderer: bool, old: bool, expected_path: &Path, shell: Option<&ShellState>) -> GnomeSetup {
     let (stage, message, can_install, can_enable) = match shell {

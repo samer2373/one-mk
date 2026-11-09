@@ -62,6 +62,7 @@ pub fn scratch_path(tag: &str) -> PathBuf {
     let parent = root().join(format!("{}-{tag}", COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     // Private all the way down, as the old folders under a sticky `/tmp` were
     // for the tests of code that refuses a path others could change.
+    #[allow(unused_mut)] // only changed on Unix
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
