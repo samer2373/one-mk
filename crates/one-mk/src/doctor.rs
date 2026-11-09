@@ -1066,6 +1066,25 @@ pub(crate) fn json_str(s: &str) -> String {
     out
 }
 
+/// The port check's finding (`UDP port 24900 is already used by "one-mk".`)
+/// for the window: which port, and who has it, in plain words, with what to do.
+fn port_in_words(detail: &str) -> (String, String) {
+    let port = detail.split("UDP port ").nth(1).and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next()).filter(|p| !p.is_empty());
+    if detail.contains("is running but is not listening") {
+        let port = port.map_or_else(|| "its network port".to_owned(), |p| format!("network port {p}"));
+        return (format!("oneMK is running but isn't using {port}."), "Stop sharing and start it again.".into());
+    }
+    let port = port.map_or_else(|| "Its network port".to_owned(), |p| format!("Network port {p}"));
+    match detail.split('"').nth(1) {
+        Some("one-mk" | "one-mk-app" | "one-mk-tray") => (
+            format!("{port} is already used by another copy of oneMK."),
+            "Quit the other oneMK (it may run from another settings folder or for another user), then start sharing again.".into(),
+        ),
+        Some(program) => (format!("{port} is already used by {program}."), format!("Quit {program}, then start sharing again.")),
+        None => (format!("{port} is already used by another program."), "Quit the program using it (it may be another copy of oneMK), then start sharing again.".into()),
+    }
+}
+
 fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
     let mut shown = source.clone();
     let status = source.outcome.status;
@@ -1075,6 +1094,11 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
     let (title, detail, fix) = match source.id.as_str() {
         "updates" | "local-key-rules" | "input-tuning" | "typing" => return (shown, None, true),
         "wallpaper" | "wallpaper-import-sandbox" | "drag" => return (shown, None, false),
+        "port" if status == Status::Fail => {
+            let (detail, fix) = port_in_words(original);
+            (shown.title, shown.outcome.detail, shown.outcome.fix) = ("Network connection".into(), detail, Some(fix));
+            return (shown, None, true);
+        }
         "daemon" => {
             if !good { action = Some("Start"); }
             ("Sharing", if good { "Sharing is on." } else if status == Status::Skip { "Sharing is stopped." }
@@ -1919,6 +1943,27 @@ mod tests {
         assert!(other.outcome.fix.unwrap().contains("--port"));
         assert_eq!(st(&port_check(&Daemon::NotRunning, &pf(Bind::InUse, None))), Status::Fail);
         assert_eq!(st(&port_check(&running(), &pf(Bind::Error("denied".into()), None))), Status::Warn);
+    }
+
+    #[test]
+    fn the_window_names_the_port_and_who_holds_it() {
+        let shown = |holder: Option<&str>| {
+            let (check, _, visible) = window_check(&port_check(&Daemon::NotRunning, &pf(Bind::InUse, holder)));
+            assert!(visible);
+            (check.outcome.detail, check.outcome.fix.unwrap_or_default())
+        };
+        let (detail, fix) = shown(Some("one-mk"));
+        assert_eq!(detail, "Network port 24900 is already used by another copy of oneMK.");
+        assert!(fix.starts_with("Quit the other oneMK"), "{fix}");
+        let (detail, fix) = shown(Some("deskflow"));
+        assert_eq!((detail.as_str(), fix.as_str()), ("Network port 24900 is already used by deskflow.", "Quit deskflow, then start sharing again."));
+        let (detail, _) = shown(None);
+        assert_eq!(detail, "Network port 24900 is already used by another program.");
+        for (detail, fix) in [shown(Some("one-mk")), shown(Some("x")), shown(None)] {
+            assert!(!format!("{detail}{fix}").contains('`') && !fix.contains("--port"), "no terminal advice: {detail} {fix}");
+        }
+        let (check, ..) = window_check(&port_check(&running(), &pf(Bind::Free, None)));
+        assert_eq!(check.outcome.detail, "oneMK is running but isn't using network port 24900.");
     }
 
     #[test]
