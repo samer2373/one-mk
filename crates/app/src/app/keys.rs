@@ -17,6 +17,7 @@ const TEST_ID: &str = "keys-test";
 const CAPTURE_ID: &str = "keys-capture";
 const ROW: f32 = 36.0;
 const GAP: f32 = 16.0;
+use crate::gear::{KEYBOARD_TURN as BOARD_TURN, MOUSE_TURN};
 
 fn key_description(code: u16, action: Option<&What>) -> String {
     let name = tune::key_label(u32::from(code));
@@ -1217,7 +1218,7 @@ impl App {
         let dt = ui.input(|i| i.stable_dt);
         let mut moving = self.keys.board_orbit.step(dt);
         let turn = self.keys.board_orbit;
-        moving |= crate::gear::Keyboard::get(&mut self.keys.board, area, &drawn, crate::gear::View { yaw: turn.yaw, pitch: turn.pitch + 0.4 }, if self.keys.board_detail && visible_width >= 420.0 { chosen } else { None }, &mut self.keys.board_glide, dt);
+        moving |= crate::gear::Keyboard::get(&mut self.keys.board, area, &drawn, crate::gear::View::keyboard(turn.yaw, turn.pitch), if self.keys.board_detail && visible_width >= 420.0 { chosen } else { None }, &mut self.keys.board_glide, dt);
         if moving {
             ui.ctx().request_repaint();
         }
@@ -1233,7 +1234,7 @@ impl App {
         // Clicks only: focus goes to the keys themselves, not this area.
         let resp = ui.interact(area, Id::unique("board"), widgets::sense(ui, Sense::CLICK | Sense::DRAG));
         if resp.dragged() {
-            self.keys.board_orbit.pull(resp.drag_delta(), 0.7, 0.3);
+            self.keys.board_orbit.pull(resp.drag_delta(), BOARD_TURN.0, BOARD_TURN.1);
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         if resp.double_clicked() {
@@ -2005,7 +2006,7 @@ impl App {
         ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(guidance));
         let resp = resp.on_hover_text(guidance);
         if resp.dragged() {
-            self.keys.mouse_orbit.pull(resp.drag_delta(), 0.9, 0.3);
+            self.keys.mouse_orbit.pull(resp.drag_delta(), MOUSE_TURN.0, MOUSE_TURN.1);
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         if resp.double_clicked() {
