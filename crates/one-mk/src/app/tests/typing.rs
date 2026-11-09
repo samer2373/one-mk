@@ -29,6 +29,30 @@ async fn physical_emergency_chord_precedes_mapping_in_character_visit() {
     duo.stop().await;
 }
 
+/// Shift held while crossing (as `edge --modifier shift` asks) and still
+/// held: Ctrl+Alt+Esc with it brings the pointer home, though Shift was
+/// never sent to the other computer.
+#[tokio::test]
+async fn emergency_chord_counts_a_modifier_held_since_before_the_crossing() {
+    let mut duo = Duo::start("chord-held-shift", None).await;
+    duo.ha.key_from(42, true, None); // Shift, here, before crossing
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    duo.enter_b().await;
+    for code in [29, 56] {
+        duo.ha.key_from(code, true, None);
+        assert_eq!(next_non_move(&mut duo.hb).await, Inject::Key { code, down: true });
+    }
+    duo.ha.key_from(1, true, None);
+    assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { .. }), "the chord with an earlier Shift must bring the pointer home");
+    let mut releases = HashSet::new();
+    for _ in 0..2 {
+        let Inject::Key { code, down: false } = next_non_move(&mut duo.hb).await else { panic!("Esc reached the other computer") };
+        releases.insert(code);
+    }
+    assert_eq!(releases, HashSet::from([29, 56]));
+    duo.stop().await;
+}
+
 #[tokio::test]
 async fn enabled_backend_still_requires_peer_text_negotiation() {
     let mut duo = Duo::start_typing("typing-caps-required", "de", "us").await;

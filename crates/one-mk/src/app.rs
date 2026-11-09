@@ -1349,8 +1349,11 @@ impl App {
             Event::Button { button, down, device } => self.tuned_key(button, down, device),
             Event::Key { code, down, device } => {
                 self.mods.update(code, down);
+                let mods = self.mods;
                 let Some(r) = self.remote.as_mut() else { return };
-                if down && code == KEY_ESC && [CTRL, ALT, SHIFT].iter().all(|k| k.iter().any(|&c| r.held.is_held(c))) {
+                // A modifier held since before the crossing (`edge
+                // --modifier shift`) counts too: it is not in `r.held`.
+                if down && code == KEY_ESC && [CTRL, ALT, SHIFT].iter().all(|k| k.iter().any(|&c| r.held.is_held(c) || mods.keys().any(|m| m == c))) {
                     tracing::info!("emergency shortcut: bringing the pointer home");
                     self.go_home();
                     return;
