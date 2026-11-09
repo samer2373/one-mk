@@ -11,8 +11,10 @@ const PATH = '/org/onemk/WallpaperVideo1';
 
 export default class WallpaperVideo extends Extension {
     enable() {
-        if (Config.PACKAGE_VERSION !== '50.1')
-            throw new Error('oneMK video is qualified only on GNOME Shell 50.1');
+        // The whole GNOME 50 series (point releases keep these APIs); the
+        // metadata's shell-version already stops GNOME loading it elsewhere.
+        if (Config.PACKAGE_VERSION.split('.')[0] !== '50')
+            throw new Error(`oneMK video wallpapers run on GNOME 50, not GNOME Shell ${Config.PACKAGE_VERSION}`);
         this._generation = 0;
         this._client = null;
         this._windows = new Map();

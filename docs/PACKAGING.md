@@ -249,11 +249,11 @@ Installation uses embedded extension sources from the same build and the
 bundled renderer and never downloads anything. A Linux tarball
 also includes a sibling renderer and the optional component payload.
 
-On qualified **GNOME Shell 50.1**, selecting a video after explicit Enable starts
+On **GNOME 50** (any 50.x; experimental), selecting a video after explicit Enable starts
 the production helper. Enabling alone starts nothing. The extension authenticates
 the registering process and its tokenized windows, then clones their content
 behind applications without changing the native wallpaper. Off, renderer exit
-and extension disable remove the clones. Other Shell versions fail closed;
+and extension disable remove the clones. Other GNOME versions are refused with an "unsupported GNOME version" message;
 pictures remain supported without the extension. See
 [the video qualification report](reviews/GNOME-WAYLAND-VIDEO.md).
 AppImage/Flatpak staging is not extended with this component in this change.

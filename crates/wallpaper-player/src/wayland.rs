@@ -42,7 +42,7 @@ pub fn gnome_connection() -> anyhow::Result<zbus::blocking::Connection> {
     anyhow::ensure!(bus.get_name_owner(GNOME_NAME.try_into()?)? == bus.get_name_owner("org.gnome.Shell".try_into()?)?, "The wallpaper bridge does not belong to GNOME Shell");
     let proxy = zbus::blocking::Proxy::new(&connection, GNOME_NAME, GNOME_PATH, GNOME_NAME)?;
     let version: String = proxy.call("Inspect", &())?;
-    anyhow::ensure!(version == "50.1", "GNOME Shell {version} has not been qualified for video wallpaper");
+    anyhow::ensure!(crate::supported_gnome_shell(&version), "{}", crate::unsupported_gnome_shell(&version));
     Ok(connection)
 }
 

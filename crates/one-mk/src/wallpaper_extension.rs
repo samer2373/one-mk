@@ -17,16 +17,22 @@ const FILES: &[(&str, &str)] = &[
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Install the managed extension files and switch it on for your next login.
+    /// Copy oneMK's GNOME extension into your extensions folder (nothing is
+    /// downloaded) and switch it on for your next login; then log out and
+    /// back in once. Also updates an older copy oneMK installed.
     Install {
-        /// Absolute path to the separately installed renderer executable.
-        #[arg(long)] renderer: Option<PathBuf>,
+        /// Use this wallpaper helper (an absolute path) instead of the one
+        /// installed with oneMK.
+        #[arg(long, value_name = "PATH")] renderer: Option<PathBuf>,
     },
-    /// Switch the installed extension on (at your next login if GNOME has not loaded it yet); it never starts a video.
+    /// Switch the installed extension on (at your next login if GNOME has
+    /// not loaded it yet). It never starts a video by itself.
     Enable,
-    /// Remove managed extension files after disabling the extension.
+    /// Switch the extension off and remove oneMK's copy of it (a copy you
+    /// changed is left alone).
     Uninstall,
-    /// Show installation, session and qualification status.
+    /// Show whether the extension is installed, switched on and supported
+    /// by this GNOME version.
     Status,
 }
 
@@ -53,9 +59,13 @@ fn bundled_renderer() -> Result<PathBuf> {
     bundled_renderer_at(&std::env::current_exe()?).context("The bundled GNOME renderer is missing. Reinstall oneMK; nothing will be downloaded.")
 }
 
-fn qualified(version: &str) -> bool {
-    serde_json::from_str::<Value>(FILES[0].1).ok().is_some_and(|metadata|
-        metadata["one-mk-qualified-shell-versions"].as_array().is_some_and(|versions| versions.contains(&json!(version))))
+fn qualified(version: &str) -> bool { one_mk_wallpaper::supported_gnome_shell(version) }
+
+/// Whether the managed copy at `destination` differs from the extension this
+/// oneMK carries (installed by an older version): Install then updates it.
+fn outdated(destination: &Path) -> bool {
+    FILES.iter().filter(|(name, _)| !name.starts_with("LICENSE")).any(|(name, contents)|
+        std::fs::read(destination.join(name)).is_ok_and(|installed| installed != contents.as_bytes()))
 }
 
 struct ShellState { version: String, state: Option<u32>, path: Option<String>, user_extensions: bool, listed: bool }
@@ -120,11 +130,10 @@ async fn forget_from_login_list() -> Result<()> {
 #[cfg(not(all(unix, not(target_os = "macos"))))]
 async fn forget_from_login_list() -> Result<()> { Ok(()) }
 
-fn setup_state(installed: bool, occupied: bool, renderer: bool, expected_path: &Path, shell: Option<&ShellState>) -> GnomeSetup {
+fn setup_state(installed: bool, occupied: bool, renderer: bool, old: bool, expected_path: &Path, shell: Option<&ShellState>) -> GnomeSetup {
     let (stage, message, can_install, can_enable) = match shell {
         None => (GnomeStage::Unavailable, "GNOME session unavailable. Open oneMK in your GNOME Wayland session.".into(), false, false),
-        Some(shell) if !qualified(&shell.version) => (GnomeStage::Unsupported,
-            format!("GNOME Shell {} has not been qualified. This extension supports GNOME Shell 50.1 only.", shell.version), false, false),
+        Some(shell) if !qualified(&shell.version) => (GnomeStage::Unsupported, one_mk_wallpaper::unsupported_gnome_shell(&shell.version), false, false),
         _ if occupied && !installed => (GnomeStage::Unmanaged,
             "Another copy of the oneMK extension exists. It will not be overwritten. Manage it in GNOME Extensions first.".into(), false, false),
         Some(shell) if shell.state.is_some_and(|state| state != 99) && shell.path.as_deref() != expected_path.to_str() => (GnomeStage::Unmanaged,
@@ -132,6 +141,9 @@ fn setup_state(installed: bool, occupied: bool, renderer: bool, expected_path: &
         _ if !installed => (GnomeStage::NotInstalled,
             if renderer { "GNOME needs a small oneMK extension to play video behind your windows. Install copies it into your user extensions folder and switches it on for your next login; nothing is downloaded. Then log out and back in once." }
             else { "The GNOME extension is not installed and the bundled renderer is missing. Reinstall oneMK; nothing will be downloaded." }.into(), renderer, false),
+        _ if old => (GnomeStage::NotInstalled,
+            if renderer { "An older copy of oneMK's GNOME extension is installed. Choose Install GNOME extension (or run `one-mk wallpaper extension install`) to update it, then log out and back in once." }
+            else { "An older copy of oneMK's GNOME extension is installed and the bundled renderer is missing. Reinstall oneMK; nothing will be downloaded." }.into(), renderer, false),
         Some(shell) if shell.state.is_none() || shell.state == Some(99) => if shell.listed {
             (GnomeStage::LogOutRequired, "One step left: log out and back in once. GNOME loads the extension at login, and it turns itself on. Then choose a video here.".into(), false, false)
         } else {
@@ -156,7 +168,7 @@ pub async fn setup() -> Result<GnomeSetup> {
     let shell = observe_shell().await.ok();
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     let shell: Option<ShellState> = None;
-    Ok(setup_state(installed, occupied, bundled_renderer().is_ok(), &destination, shell.as_ref()))
+    Ok(setup_state(installed, occupied, bundled_renderer().is_ok(), installed && outdated(&destination), &destination, shell.as_ref()))
 }
 
 pub async fn consented_action(action: ExtensionAction) -> Result<Value> {
@@ -239,7 +251,11 @@ pub async fn command(command: &Command) -> Result<Value> {
         Command::Install { renderer } => {
             let renderer = renderer.clone().map_or_else(bundled_renderer, Ok)?;
             let target = destination.clone();
-            tokio::task::spawn_blocking(move || install(&target, &renderer)
+            tokio::task::spawn_blocking(move || {
+                // An older copy oneMK installed (and nobody changed) is replaced.
+                if regular(&target.join(MARKER)).is_ok() && outdated(&target) { uninstall(&target)?; }
+                install(&target, &renderer)
+            }
                 .with_context(|| format!("installing renderer {} into {}", renderer.display(), target.display()))).await??;
             match switch_on_for_next_login().await {
                 Ok(()) => format!("Installed in {}. One step left: log out and back in once. The extension turns itself on, and video can start after that.", destination.display()),
@@ -255,50 +271,88 @@ pub async fn command(command: &Command) -> Result<Value> {
             }
             #[cfg(all(unix, not(target_os = "macos")))]
             if setup.stage != GnomeStage::Active {
-                let connection = zbus::connection::Builder::session()?.method_timeout(std::time::Duration::from_secs(1)).build().await?;
+                let connection = session_bus()?.method_timeout(std::time::Duration::from_secs(1)).build().await?;
                 let extensions = zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await?;
                 let enabled: bool = extensions.call("EnableExtension", &(UUID,)).await?;
                 ensure!(enabled, "GNOME could not enable the extension. Log out and back in once, then try again.");
             }
             "GNOME accepted the enable request. When the extension is active, choose a video on the Wallpaper page to start playback.".into()
         }
-        Command::Uninstall => {
-            #[cfg(all(unix, not(target_os = "macos")))]
-            if let Ok((_, enabled)) = shell_state().await && enabled {
-                bail!("disable first: gnome-extensions disable {UUID}");
-            }
-            let existed = destination.try_exists().with_context(|| format!("checking extension {}", destination.display()))?;
-            uninstall(&destination).with_context(|| format!("uninstalling extension {}", destination.display()))?;
-            let _ = forget_from_login_list().await;
-            if existed { "Removed managed extension files and its entry in GNOME's login list." } else { "No managed extension is installed; nothing changed." }.into()
-        }
+        Command::Uninstall => remove().await?,
         Command::Status => return status().await,
     };
     Ok(json!({"ok": true, "message": message}))
+}
+
+/// Switches the extension off (now, if GNOME runs it, and at the next login)
+/// and removes oneMK's copy; used by `extension uninstall` and by `one-mk
+/// uninstall`. A copy oneMK did not install, or one that was changed, is
+/// left where it is and the error says so.
+pub async fn remove() -> Result<String> {
+    if !cfg!(target_os = "linux") { bail!("GNOME wallpaper extensions are Linux-only"); }
+    let destination = destination()?;
+    let existed = destination.try_exists().with_context(|| format!("checking extension {}", destination.display()))?;
+    if !existed {
+        let _ = forget_from_login_list().await;
+        return Ok("oneMK's GNOME extension is not installed; nothing changed.".into());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    disable_now().await;
+    let _ = forget_from_login_list().await;
+    uninstall(&destination).with_context(|| format!("Could not remove the GNOME extension in {}", destination.display()))?;
+    Ok("Switched off and removed oneMK's GNOME extension.".into())
+}
+
+/// The session bus this process was started in, and only that one. Without
+/// `DBUS_SESSION_BUS_ADDRESS` or `XDG_RUNTIME_DIR` zbus would fall back to
+/// `/run/user/<uid>/bus`: the desktop session of whoever owns the uid, which
+/// a process started outside that session (a test, a service, a script with
+/// a cleared environment) must never change.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn session_bus() -> Result<zbus::connection::Builder<'static>> {
+    ensure!(session_bus_named(std::env::var_os("DBUS_SESSION_BUS_ADDRESS"), std::env::var_os("XDG_RUNTIME_DIR")), "This is not running inside a desktop session");
+    Ok(zbus::connection::Builder::session()?)
+}
+
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn session_bus_named(address: Option<std::ffi::OsString>, runtime: Option<std::ffi::OsString>) -> bool {
+    address.is_some_and(|value| !value.is_empty()) || runtime.is_some_and(|value| !value.is_empty())
+}
+
+/// Asks a running GNOME Shell to switch the extension off; outside a GNOME
+/// session there is nothing running to switch off.
+#[cfg(all(unix, not(target_os = "macos")))]
+async fn disable_now() {
+    let Ok(builder) = session_bus() else { return };
+    let Ok(Ok(connection)) = tokio::time::timeout(std::time::Duration::from_secs(2), builder.method_timeout(std::time::Duration::from_secs(2)).build()).await else { return };
+    let Ok(extensions) = zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await else { return };
+    let _ = extensions.call::<_, _, bool>("DisableExtension", &(UUID,)).await;
 }
 
 pub async fn status() -> Result<Value> {
     let destination = destination()?;
     let installed = destination.join(MARKER).is_file();
     let metadata: Value = serde_json::from_str(FILES[0].1)?;
-    let mut result = json!({"installed": installed, "enabled": null, "qualified": null,
+    let mut result = json!({"installed": installed, "outdated": installed && outdated(&destination), "enabled": null, "qualified": null,
         "restart_limit_reached": null, "qualified_shell_versions": metadata["one-mk-qualified-shell-versions"],
         "path": destination, "reason": "GNOME session unavailable; runtime state unknown"});
     #[cfg(all(unix, not(target_os = "macos")))]
     if let Ok((version, enabled)) = shell_state().await {
         result["enabled"] = json!(enabled);
         result["shell_version"] = json!(version);
-        result["qualified"] = json!(metadata["one-mk-qualified-shell-versions"].as_array()
-            .is_some_and(|versions| versions.contains(&json!(version))));
+        result["qualified"] = json!(qualified(&version));
         result["reason"] = json!(if enabled { "ready for a video selected on the Wallpaper page" } else { "extension not enabled" });
     }
     result["ok"] = json!(true);
     result["setup"] = serde_json::to_value(setup().await?)?;
-    result["message"] = json!(format!("GNOME extension: installed={}; enabled={}; qualified={}; restart-limit-reached={}. {}",
-        result["installed"], result["enabled"], result["qualified"], result["restart_limit_reached"],
-        if result["restart_limit_reached"] == true { "restart limit reached; static wallpaper" }
-        else { result["reason"].as_str().unwrap_or("unknown") }));
+    // What to do next, in words, then the facts behind it.
+    result["message"] = json!(format!("{}\nInstalled: {}. Switched on: {}. Supported GNOME version: {}.",
+        result["setup"]["message"].as_str().unwrap_or("unknown"), yes_no(&result["installed"]), yes_no(&result["enabled"]), yes_no(&result["qualified"])));
     Ok(result)
+}
+
+fn yes_no(value: &Value) -> &'static str {
+    match value.as_bool() { Some(true) => "yes", Some(false) => "no", None => "unknown (not in a GNOME session)" }
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -309,7 +363,7 @@ async fn shell_state() -> Result<(String, bool)> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 async fn observe_shell() -> Result<ShellState> {
-    let connection = zbus::connection::Builder::session()?.method_timeout(std::time::Duration::from_secs(1)).build().await?;
+    let connection = session_bus()?.method_timeout(std::time::Duration::from_secs(1)).build().await?;
     let extensions = zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await?;
     let version: String = extensions.get_property("ShellVersion").await?;
     let info: std::collections::HashMap<String, zbus::zvariant::OwnedValue> = extensions.call("GetExtensionInfo", &(UUID,)).await?;
@@ -347,7 +401,7 @@ mod tests {
         let path = Path::new("/private/extensions/one-mk-wallpaper@one-mk.org");
         let mut shell = ShellState { version: "50.1".into(), state: None, path: None, user_extensions: true, listed: true };
         let check = |installed, occupied, renderer, shell: &ShellState, expected, install, enable| {
-            let setup = setup_state(installed, occupied, renderer, path, Some(shell));
+            let setup = setup_state(installed, occupied, renderer, false, path, Some(shell));
             assert_eq!((setup.stage, setup.can_install, setup.can_enable), (expected, install, enable));
             assert!(!setup.message.contains("not connected to the production service"));
             setup
@@ -379,11 +433,31 @@ mod tests {
             shell.state = Some(state);
             check(true, true, true, &shell, GnomeStage::Failed, false, false);
         }
+        // The whole GNOME 50 series is supported; other series say so plainly.
+        shell.state = Some(1);
         shell.version = "50.2".into();
-        check(true, true, true, &shell, GnomeStage::Unsupported, false, false);
-        let absent = setup_state(true, true, true, path, None);
+        check(true, true, true, &shell, GnomeStage::Active, false, false);
+        for version in ["49.4", "51.0"] {
+            shell.version = version.into();
+            let setup = check(true, true, true, &shell, GnomeStage::Unsupported, false, false);
+            assert!(setup.message.contains(&format!("GNOME Shell {version} is not supported")) && setup.message.contains("GNOME 50"), "{}", setup.message);
+        }
+        // An older copy oneMK installed: Install updates it.
+        shell.version = "50.1".into();
+        let old = setup_state(true, true, true, true, path, Some(&shell));
+        assert_eq!((old.stage, old.can_install), (GnomeStage::NotInstalled, true));
+        assert!(old.message.contains("older copy") && old.message.contains("one-mk wallpaper extension install"));
+        let absent = setup_state(true, true, true, false, path, None);
         assert_eq!(absent.stage, GnomeStage::Unavailable);
         assert!(!absent.can_enable && !absent.can_install);
+    }
+
+    #[test]
+    fn a_process_outside_a_desktop_session_never_reaches_one() {
+        assert!(!session_bus_named(None, None));
+        assert!(!session_bus_named(Some("".into()), Some("".into())));
+        assert!(session_bus_named(Some("unix:path=/run/user/1000/bus".into()), None));
+        assert!(session_bus_named(None, Some("/run/user/1000".into())));
     }
 
     #[test]
@@ -413,6 +487,27 @@ mod tests {
     }
 
     #[test]
+    fn an_older_managed_copy_is_detected_and_replaced_when_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let renderer = root.path().join("renderer");
+        std::fs::write(&renderer, "renderer").unwrap();
+        let destination = root.path().join(UUID);
+        install(&destination, &renderer).unwrap();
+        assert!(!outdated(&destination));
+        // As 0.1.28 installed it: same layout, older extension code.
+        let manifest_path = destination.join(MARKER);
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        let older = FILES[1].1.replace("split('.')[0] !== '50'", "!== '50.1'");
+        std::fs::write(destination.join("extension.js"), &older).unwrap();
+        manifest["files"]["extension.js"] = json!(blake3::hash(older.as_bytes()).to_hex().to_string());
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(outdated(&destination));
+        uninstall(&destination).unwrap();
+        install(&destination, &renderer).unwrap();
+        assert_eq!(std::fs::read_to_string(destination.join("extension.js")).unwrap(), FILES[1].1);
+    }
+
+    #[test]
     fn modified_managed_files_are_never_removed_or_replaced() {
         let root = tempfile::tempdir().unwrap();
         let renderer = root.path().join("renderer");
@@ -428,12 +523,13 @@ mod tests {
     #[test]
     fn qualification_is_exact_and_default_is_off() {
         let metadata: Value = serde_json::from_str(FILES[0].1).unwrap();
-        assert_eq!(metadata["one-mk-qualified-shell-versions"], json!(["50.1"]));
+        assert_eq!(metadata["one-mk-qualified-shell-versions"], json!(["50"]));
+        assert_eq!(metadata["shell-version"], json!(["50"]));
         let source = FILES[1].1;
         assert!(source.contains("this._client = null"));
         assert!(source.contains("window.get_pid() !== client.pid"));
         assert!(source.contains("uid !== new Gio.Credentials().get_unix_user()"));
-        assert!(source.contains("Config.PACKAGE_VERSION !== '50.1'"));
+        assert!(source.contains("Config.PACKAGE_VERSION.split('.')[0] !== '50'"));
         for forbidden in ["unsafe_mode", "FrameReady", "startRenderer(argv)", "damageTimes", "unlock-dialog"] {
             assert!(!source.contains(forbidden), "{forbidden}");
         }
