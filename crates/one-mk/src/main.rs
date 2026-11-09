@@ -177,9 +177,9 @@ enum Cmd {
     Update(update::Options),
     /// Stop the sharing service for this settings folder before restarting it.
     Stop,
-    /// Show or configure file edge-drop zones (X11).
+    /// Show or switch on file edge drops (experimental; off by default; not on Wayland).
     Drag {
-        /// Enable file edge-drop zones on supported desktops.
+        /// Switch file edge drops on: dropping a file on the screen edge facing another computer sends it there with no confirmation. Experimental: X11, Windows and macOS only, and only X11 has been tried (with scripted drags).
         #[arg(long, conflicts_with = "off")]
         on: bool,
         /// Disable file edge-drop zones.
@@ -188,6 +188,12 @@ enum Cmd {
         /// Width of the edge-drop zone, from 1 to 128 pixels.
         #[arg(long, value_name = "PX", value_parser = clap::value_parser!(u16).range(1..=128))]
         zone: Option<u16>,
+    },
+    /// Show, or with --clear delete, the unfinished received files kept so an interrupted send can resume.
+    Partials {
+        /// Delete them all now (any not being received right now). Files older than 7 days are deleted by themselves.
+        #[arg(long)]
+        clear: bool,
     },
     /// Send files or folders to a paired computer running `one-mk run`.
     Send {
@@ -217,10 +223,10 @@ enum Cmd {
         /// Share images.
         #[arg(long, value_name = "on|off")]
         image: Option<OnOff>,
-        /// Largest clipboard to send or accept, in MB (default 25).
+        /// Largest clipboard to send or accept, in MB (1 to 256, default 25).
         #[arg(long, value_name = "N")]
         max_mb: Option<u32>,
-        /// Skip what a password manager marked as sensitive (default on; not
+        /// Skip what a password manager marked as sensitive (default on; `clip-send` also refuses it unless --allow-sensitive; not
         /// detectable on every system yet, see the README).
         #[arg(long, value_name = "on|off")]
         skip_sensitive: Option<OnOff>,
@@ -233,6 +239,10 @@ enum Cmd {
         /// Name or id of the paired computer (needed if several are connected).
         #[arg(long, value_name = "DEVICE")]
         to: Option<String>,
+        /// Send the clipboard even if a password manager marked it sensitive (refused otherwise).
+        /// The other computer keeps it out of its history.
+        #[arg(long)]
+        allow_sensitive: bool,
     },
     /// Copy a paired computer's clipboard to this one now.
     ClipGet {
@@ -587,6 +597,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Update(options) => update::run(&dir, options),
             Cmd::Stop => update::stop(&dir).await,
             Cmd::Drag { on, off, zone } => drag::configure(&dir, on, off, zone).await,
+            Cmd::Partials { clear } => manage::partials(&dir, clear).await,
             Cmd::Run(_) => unreachable!("handled above"),
             Cmd::Clipboard { history, text, html, image, max_mb, skip_sensitive, allow_fetch } => {
                 if let Some(history) = history {
@@ -597,8 +608,8 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 else { clipctl::clipboard(&dir, clipctl::ClipChange { text, html, image, max_mb, skip_sensitive, allow_fetch }).await }
             }
-            Cmd::ClipSend { to } => clipctl::move_clipboard(&dir, to, true).await,
-            Cmd::ClipGet { from } => clipctl::move_clipboard(&dir, from, false).await,
+            Cmd::ClipSend { to, allow_sensitive } => clipctl::move_clipboard(&dir, to, true, allow_sensitive).await,
+            Cmd::ClipGet { from } => clipctl::move_clipboard(&dir, from, false, false).await,
             Cmd::Notify { state } => clipctl::notify(&dir, state).await,
             Cmd::Send { paths, to, connect, notify_errors } => send::run(&dir, paths, to, connect, notify_errors).await,
             Cmd::Pair { connect, machine, no_discovery } => {

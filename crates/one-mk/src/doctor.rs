@@ -1222,6 +1222,12 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.push(check("updates", "Updates", if available { Outcome::warn(detail, "update-now") }
         else if detail.starts_with("Couldn't check:") { Outcome::skip(detail) } else { Outcome::pass(detail) }));
     checks.push(check("drag", "File edge drops", Outcome::skip(one_mk_input::dropzone::availability())));
+    if daemon.status().is_some()
+        && let Ok(Some((count, bytes, age, _))) = crate::manage::partials_of(dir, false).await
+        && let Some(text) = crate::manage::partials_text(count, bytes, age)
+    {
+        checks.push(check("partials", "Unfinished received files", Outcome::skip(text)));
+    }
     checks.extend(config_checks(&config, dir));
     checks.push(port_check(&daemon, &port_facts));
     checks.push(mdns_check(&daemon, &mdns));

@@ -539,7 +539,7 @@ pub fn install(setup: &Setup) -> Result<Outcome> {
     let skipped = done.iter().map(|(_, w)| w.skipped.len()).sum();
     Ok(Outcome {
         message: format!(
-            "File manager entries added in {}:\n{}  they follow the computers you pair or forget; to remove them:  one-mk uninstall\n{}",
+            "File manager entries added in {}:\n{}  they follow the computers you pair or forget; to remove them: one-mk integrate --remove\n{}",
             dirs.join(", "),
             describe(&done),
             skipped_text(done.iter().flat_map(|(_, w)| &w.skipped))
