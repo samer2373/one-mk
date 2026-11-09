@@ -257,6 +257,10 @@ jobs:
       - name: Generate and sign update manifest
         env:
           ONE_MK_UPDATE_SIGNING_KEY: ${{ secrets.ONE_MK_UPDATE_SIGNING_KEY }}
+          # Repository variables, empty unless a bad release has to be
+          # withdrawn (scripts/make-update-manifest.sh, docs/UPDATES.md).
+          ONE_MK_REVOKED: ${{ vars.ONE_MK_REVOKED }}
+          ONE_MK_MINIMUM_SUPPORTED_VERSION: ${{ vars.ONE_MK_MINIMUM_SUPPORTED_VERSION }}
         run: |
           bash scripts/make-update-manifest.sh release-files "$GITHUB_RUN_NUMBER"
           bash scripts/sign-update-manifest.sh release-files

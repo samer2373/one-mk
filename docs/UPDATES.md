@@ -21,6 +21,12 @@ Missing production signing credentials fail publication. Never rebuild or
 overwrite a published release. The sequence is `GITHUB_RUN_NUMBER`, also
 compiled into release clients as a sequence floor; keep numbering monotonic.
 
+A bad release is withdrawn by publishing a newer one with the repository
+variable `ONE_MK_REVOKED` (space-separated versions no updater may install
+any more) and, when old installations must not update in place,
+`ONE_MK_MINIMUM_SUPPORTED_VERSION`; `scripts/make-update-manifest.sh` puts
+both into the signed manifest (empty: none revoked, minimum 0.1.0).
+
 Key rotation requires a bridge release embedding the new key in
 `ADDITIONAL_PUBLIC_KEYS` while still signing with the old key. Only then switch
 the primary key and secret. `next_key` is advisory, never automatically trusted.
