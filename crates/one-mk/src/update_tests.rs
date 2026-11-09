@@ -302,6 +302,23 @@ fn wrong_version_failed_execution_and_recovery_are_safe() -> Result<()> {
 }
 
 #[test]
+#[cfg(unix)]
+fn version_probe_writes_nothing_inside_a_mac_app() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new()?;
+    let macos = scratch.0.join("one-mk.app/Contents/MacOS");
+    fs::create_dir_all(&macos)?;
+    let target = macos.join("one-mk");
+    let listing = scratch.0.join("listing");
+    // The program lists its own folder while it runs: macOS kills an app that has a file added beside it.
+    fs::write(&target, format!("#!/bin/sh\nls -A \"$(dirname \"$0\")\" > '{}'\necho one-mk 0.1.13\n", listing.display()))?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+    version_check(&target, Some("0.1.13"))?;
+    assert_eq!(fs::read_to_string(listing)?.trim(), "one-mk");
+    Ok(())
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn hung_version_probe_terminates_its_process_group() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
