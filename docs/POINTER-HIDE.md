@@ -23,7 +23,7 @@ Without the extension nothing changes: the calls to it fail quietly.
 ## How
 
 The daemon (`crates/input/src/portal_pointer.rs`) calls the extension's
-D-Bus interface `org.onemk.Pointer1` (`Hide`, `Show`, `State`, `Inspect`) from
+D-Bus interface `org.onemk.Pointer1` (`Hide`, `HideUntilMoved`, `Show`, `State`, `Inspect`) from
 the capture loop: `Hide` while a capture is active, asked again every 5
 seconds, `Show` when it ends. The extension uses
 `Meta.CursorTracker.inhibit_cursor_visibility()`, so it can't stay hidden:
@@ -31,6 +31,10 @@ seconds, `Show` when it ends. The extension uses
 - it shows the pointer again after 15 s without a renewed `Hide`,
 - when the one that asked disconnects (the daemon crashes or stops),
 - and when the extension is disabled.
+
+`HideUntilMoved` hides it where it stands after another computer has moved
+this one's pointer and let go, until this computer's own mouse or touchpad is
+used.
 
 ## Testing
 

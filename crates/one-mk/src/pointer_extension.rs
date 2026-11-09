@@ -67,7 +67,7 @@ fn check_shell(version: Option<&str>, qualified: &[String]) -> Result<()> {
         return Ok(());
     }
     bail!(
-        "this extension is qualified for GNOME Shell {} only, and this computer has {version}: nothing was installed.          The extension is optional; without it the pointer simply stays drawn at the screen edge while the mouse is on another computer.",
+        "this extension is qualified for GNOME Shell {} only, and this computer has {version}: nothing was installed. The extension is optional; without it the pointer simply stays drawn at the screen edge while the mouse is on another computer.",
         qualified.join(", ")
     );
 }
