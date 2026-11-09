@@ -23,6 +23,15 @@ pub fn unknown_device(device: &str) -> anyhow::Error {
     anyhow::anyhow!("no paired computer called {device:?}; see `one-mk devices` for names and ids")
 }
 
+/// Why `device` named no one computer in `trust`: none has that name or
+/// id, or several do (two computers may share a name).
+pub fn not_found(trust: &TrustStore, device: &str) -> anyhow::Error {
+    match trust.matching(device).count() {
+        0 | 1 => unknown_device(device),
+        n => anyhow::anyhow!("{n} paired computers are called {device:?}; use its id instead (see `one-mk devices`)"),
+    }
+}
+
 pub async fn status(dir: &Path) -> Result<()> {
     if let Some(notice) = crate::update::notice(dir) { println!("Updates: {notice}."); }
     #[cfg(any(windows, target_os = "macos"))]
@@ -161,31 +170,30 @@ pub fn set_layout_at(
     swap: Option<Swap>,
     now: u64,
 ) -> Result<Device> {
-    let mut trust = TrustStore::load(dir)?;
-    let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
-    let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
-    let dev = trust.get_mut(&fp).expect("found above");
-    if side.is_some() || offset.is_some() {
-        let new_side = side.unwrap_or_else(|| dev.side());
-        // An offset chosen for one side means something else on another.
-        let keep = if new_side == dev.side() { dev.offset } else { None };
-        place_at(dev, new_side, offset.unwrap_or(keep), now);
-    }
-    if let Some(side) = side {
-        if dev.side() != side {
-            dev.offset = None;
+    TrustStore::update(dir, |trust| {
+        let Some(found) = trust.find(device) else { return Err(not_found(trust, device)) };
+        let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
+        let dev = trust.get_mut(&fp).expect("found above");
+        if side.is_some() || offset.is_some() {
+            let new_side = side.unwrap_or_else(|| dev.side());
+            // An offset chosen for one side means something else on another.
+            let keep = if new_side == dev.side() { dev.offset } else { None };
+            place_at(dev, new_side, offset.unwrap_or(keep), now);
         }
-        dev.side = side.to_string();
-    }
-    if let Some(offset) = offset {
-        dev.offset = offset;
-    }
-    if let Some(swap) = swap {
-        dev.swap_ctrl_cmd = swap;
-    }
-    let dev = dev.clone();
-    trust.save()?;
-    Ok(dev)
+        if let Some(side) = side {
+            if dev.side() != side {
+                dev.offset = None;
+            }
+            dev.side = side.to_string();
+        }
+        if let Some(offset) = offset {
+            dev.offset = offset;
+        }
+        if let Some(swap) = swap {
+            dev.swap_ctrl_cmd = swap;
+        }
+        Ok(dev.clone())
+    })
 }
 
 /// What to do with a layout the peer sent, given its version against ours.
@@ -249,13 +257,13 @@ pub fn place_at(dev: &mut Device, side: Side, offset: Option<(i32, i32)>, now: u
 /// place is no longer a guess: `devices.toml` may have changed since the
 /// daemon read it. Returns the device as it was before.
 pub fn learn_layout(dir: &Path, fp: &Fingerprint, side: Side) -> Result<Option<Device>> {
-    let mut trust = TrustStore::load(dir)?;
-    let Some(dev) = trust.get_mut(fp).filter(|d| d.learnable() && d.side() != side) else { return Ok(None) };
-    let before = dev.clone();
-    place_at(dev, side, None, now_ms());
-    dev.placed_by = PlacedBy::Learned;
-    trust.save()?;
-    Ok(Some(before))
+    TrustStore::update_within(dir, one_mk_net::DAEMON_LOCK_WAIT, |trust| {
+        let Some(dev) = trust.get_mut(fp).filter(|d| d.learnable() && d.side() != side) else { return Ok(None) };
+        let before = dev.clone();
+        place_at(dev, side, None, now_ms());
+        dev.placed_by = PlacedBy::Learned;
+        Ok(Some(before))
+    })
 }
 
 pub async fn layout(dir: &Path, device: &str, side: Option<Side>, offset: Option<&str>, swap: Option<Swap>) -> Result<()> {
@@ -280,8 +288,14 @@ pub async fn layout(dir: &Path, device: &str, side: Option<Side>, offset: Option
         Some(Swap::Auto) => println!("Ctrl and Cmd are swapped for keys sent to {name} only between a Mac and another computer."),
         None => {}
     }
-    if control::request(dir, Request::Reload).await?.is_some() {
+    if control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?.is_some() {
         println!("Applied right away.{}", if moved { " Its computer picks up the change too." } else { "" });
+        // Only the running one-mk knows the other computer's screens.
+        if moved && let Some(status) = control::request(dir, Request::Status).await.ok().flatten().as_deref().and_then(Status::decode) {
+            for warning in status.layout.warnings.iter().filter(|w| w.contains(&format!("layout of {name} "))) {
+                println!("Warning: {warning}.");
+            }
+        }
     } else {
         println!("one-mk is not running; this takes effect the next time it starts.");
     }
@@ -326,6 +340,25 @@ mod tests {
         (lo.0[1], hi.0[1]) = (0xff, 0);
         assert_eq!(resolve_layout(3, 3, false, &hi, &lo), Win);
         assert_eq!(resolve_layout(3, 3, false, &lo, &hi), Adopt);
+    }
+
+    /// Two computers with one name: the error says so and asks for the id.
+    #[test]
+    fn a_shared_name_asks_for_the_id() {
+        let dir = std::env::temp_dir().join(format!("one-mk-shared-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        TrustStore::update(&dir, |t| {
+            for b in [0xaa_u8, 0xbb] {
+                t.upsert(Device { name: "Victus".into(), fingerprint: Fingerprint([b; 32]).to_string(), ..Device::default() });
+            }
+            Ok(())
+        }).unwrap();
+        let err = set_layout(&dir, "victus", Some(Side::Left), None, None).unwrap_err().to_string();
+        assert!(err.starts_with("2 paired computers are called \"victus\"; use its id"), "{err}");
+        let id = Fingerprint([0xaa; 32]).short();
+        assert_eq!(set_layout(&dir, &id, Some(Side::Left), None, None).unwrap().side(), Side::Left);
+        assert!(set_layout(&dir, "nobody", Some(Side::Left), None, None).unwrap_err().to_string().starts_with("no paired computer called"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

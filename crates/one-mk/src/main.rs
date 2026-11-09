@@ -86,6 +86,11 @@ use std::process::ExitCode;
 )]
 struct Cli {
     /// Where settings and keys live (default: your config folder).
+    ///
+    /// With another folder, pairing and forgetting leave your file manager's
+    /// "Send to" entries alone; received files still go to Downloads (see
+    /// `run --downloads`), and install, integrate, pointer-extension and
+    /// wallpaper still change this desktop when you run them.
     #[arg(long, env = "ONE_MK_HOME", global = true)]
     home: Option<PathBuf>,
     /// More detail: show full errors and debug logs (-vv for trace logs).
@@ -108,7 +113,7 @@ struct RunArgs {
     /// UDP port to listen on (default: 24900).
     #[arg(long)]
     port: Option<u16>,
-    /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
+    /// Also try this address, e.g. 192.168.1.20:24900 (for networks that block discovery; repeatable).
     #[arg(long, value_name = "IP:PORT")]
     connect: Vec<SocketAddr>,
     /// Don't advertise or look for computers on the local network.
@@ -204,7 +209,7 @@ enum Cmd {
         /// Name or id of the paired computer (needed if there are several).
         #[arg(long, value_name = "DEVICE")]
         to: Option<String>,
-        /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
+        /// Also try this address, e.g. 192.168.1.20:24900 (for networks that block discovery; repeatable).
         #[arg(long, value_name = "IP:PORT")]
         connect: Vec<SocketAddr>,
         /// Also show a desktop notification if sending fails (the file manager's "Send to" entries use this).
@@ -448,6 +453,9 @@ enum Cmd {
         /// Machine-readable output for a program to read.
         #[arg(long)]
         json: bool,
+        /// Also list the checks that did not apply here.
+        #[arg(long)]
+        all: bool,
     },
     /// Measure latency and CPU cost.
     Bench {
@@ -546,12 +554,11 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            if verbose > 0 {
-                eprintln!("one-mk: {e:?}");
-            } else {
-                // One line; -v shows each cause on its own.
-                eprintln!("one-mk: {e:#}");
-            }
+            // One line; -v shows each cause on its own.
+            let text = if verbose > 0 { format!("{e:?}") } else { format!("{e:#}") };
+            // "one-mk: one-mk is not running" says it twice.
+            let prefix = if text.starts_with("one-mk ") { "" } else { "one-mk: " };
+            eprintln!("{prefix}{text}");
             ExitCode::from(e.downcast_ref::<wallpaper::Failure>().map_or(1, |failure| failure.code))
         }
     }
@@ -575,9 +582,12 @@ fn options(r: RunArgs) -> Result<app::Options> {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let custom_home = cli.home.is_some();
     let verbose = cli.verbose;
     let action = Action::of(cli.run, cli.cmd)?;
+    // A home of its own (`--home`, `ONE_MK_HOME`): a test, or a second
+    // one-mk. Nothing it does by itself reaches outside that folder: the
+    // "Send to" entries follow the default home's computers only.
+    let custom_home = cli.home.as_ref().is_some_and(|home| !is_default_home(home));
     let dir = match cli.home {
         // Relative, a folder can't be checked up to the root (and the daemon
         // would see another folder after a `cd`): make it absolute now.
@@ -630,8 +640,16 @@ fn run(cli: Cli) -> Result<()> {
                 integrate::refresh(&dir, custom_home);
                 paired
             }
-            Cmd::Invite(args) => invite::run(&dir, args).await,
-            Cmd::Join(args) => invite::join(&dir, args).await,
+            Cmd::Invite(args) => {
+                let paired = invite::run(&dir, args).await;
+                integrate::refresh(&dir, custom_home);
+                paired
+            }
+            Cmd::Join(args) => {
+                let paired = invite::join(&dir, args).await;
+                integrate::refresh(&dir, custom_home);
+                paired
+            }
             Cmd::Devices => devices(&dir, verbose > 0),
             Cmd::Status => manage::status(&dir).await,
             Cmd::Takeback => manage::takeback(&dir).await,
@@ -686,12 +704,19 @@ fn run(cli: Cli) -> Result<()> {
                 println!("fingerprint {}", id.fingerprint);
                 Ok(())
             }
-            Cmd::Doctor { json } => doctor::run(&dir, json).await,
+            Cmd::Doctor { json, all } => doctor::run(&dir, json, all).await,
             Cmd::Bench { count, rate, serve, connect, peer } => {
                 bench::run(&dir, bench::Options { count, rate: rate.max(1), serve, connect, peer }).await
             }
         }
     })
+}
+
+/// `home` is the folder one-mk uses when none is given.
+fn is_default_home(home: &Path) -> bool {
+    let Ok(default) = default_home() else { return false };
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_owned()));
+    canonical(home) == canonical(&default)
 }
 
 /// Where identity and paired devices live. On Windows this is the local
@@ -765,10 +790,11 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
 }
 
 fn forget(dir: &Path, device: &str) -> Result<()> {
-    let mut trust = TrustStore::load(dir)?;
-    let d = trust.remove(device).ok_or_else(|| manage::unknown_device(device))?;
-    wallpaper::forget(dir, &d.fingerprint)?;
-    trust.save()?;
+    let d = TrustStore::update(dir, |trust| {
+        let Some(d) = trust.remove(device) else { return Err(manage::not_found(trust, device)) };
+        wallpaper::forget(dir, &d.fingerprint)?;
+        Ok(d)
+    })?;
     println!("Forgot {}.", d.name);
     Ok(())
 }

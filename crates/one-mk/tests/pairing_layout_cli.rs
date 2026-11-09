@@ -263,3 +263,57 @@ fn incompatible_free_edges_stop_negotiating_and_request_placement() {
         assert!(!Lab::cli(home, &["status"]).contains("edges overlap"));
     }
 }
+
+/// The host refusing a joiner reads as a refusal there, not as
+/// "connection lost: closed by peer: 0"; neither saves anything.
+#[test]
+fn a_refused_join_says_so() {
+    let mut lab = Lab::new();
+    let host = lab.home("host");
+    let joiner = lab.home("joiner");
+    let address = if_addrs::get_if_addrs().unwrap().into_iter().map(|interface| interface.ip())
+        .find(|address| address.is_ipv4() && one_mk_net::invite::usable_address(*address)).expect("invitation needs a local non-loopback address");
+    let host_child = lab.spawn(&host, &["invite", "--machine", "--listen", &format!("{address}:0"), "--no-discovery", "--service-port", "9"], "pair.log");
+    let output = Lab::wait_text(&host, "pair.log", "onemk://");
+    let link = output.lines().find_map(|line| line.strip_prefix("invitation\t")).unwrap().to_owned();
+    let join_child = lab.spawn(&joiner, &["join", &link, "--yes", "--service-port", "9"], "pair.log");
+    Lab::wait_text(&host, "pair.log", "code\t");
+    drop(lab.children[host_child].stdin.take()); // no answer: refused
+    let status = wait(|| lab.children[join_child].try_wait().unwrap());
+    let said = std::fs::read_to_string(joiner.join("pair.log")).unwrap();
+    assert!(!status.success(), "{said}");
+    assert!(said.contains("did not accept this computer") && said.contains("nothing saved here") && !said.contains("closed by peer"), "{said}");
+    let _ = wait(|| lab.children[host_child].try_wait().unwrap());
+    assert!(TrustStore::load(&host).unwrap().devices().is_empty() && TrustStore::load(&joiner).unwrap().devices().is_empty());
+}
+
+/// An invitation made while one-mk runs on a port of its own tells the
+/// joiner that port, not the default one: the joiner (whose one-mk isn't
+/// running here, so nothing rewrites what it saved) dials the right place.
+#[test]
+fn invitation_without_a_service_port_offers_the_running_port() {
+    let mut lab = Lab::new();
+    let host = lab.home("host");
+    let joiner = lab.home("joiner");
+    let host_port = lab.daemon(&host);
+    assert_ne!(host_port, one_mk_proto::DEFAULT_PORT);
+    let address = if_addrs::get_if_addrs().unwrap().into_iter().map(|interface| interface.ip())
+        .find(|address| address.is_ipv4() && one_mk_net::invite::usable_address(*address)).expect("invitation needs a local non-loopback address");
+    let host_child = lab.spawn(&host, &["invite", "--machine", "--listen", &format!("{address}:0"), "--no-discovery"], "pair.log");
+    let output = Lab::wait_text(&host, "pair.log", "onemk://");
+    let link = output.lines().find_map(|line| line.strip_prefix("invitation\t")).unwrap().to_owned();
+    // Port 9 (discard): the host's one-mk finds nothing there to connect to.
+    let join_child = lab.spawn(&joiner, &["join", "--machine", "--service-port", "9"], "pair.log");
+    writeln!(lab.children[join_child].stdin.as_mut().unwrap(), "{link}").unwrap();
+    for (child, home) in [(host_child, &host), (join_child, &joiner)] {
+        Lab::wait_text(home, "pair.log", "code\t");
+        writeln!(lab.children[child].stdin.as_mut().unwrap(), "yes").unwrap();
+    }
+    lab.finished(host_child, &host, "pair.log");
+    let said = lab.finished(join_child, &joiner, "pair.log");
+    // `--machine` says where it was placed (not always "left").
+    let side = said.lines().find_map(|line| line.strip_prefix("paired\t")).and_then(|rest| rest.split('\t').nth(2)).unwrap();
+    assert_eq!(side, device(&joiner, &host).side().to_string(), "{said}");
+    let saved = device(&joiner, &host).addrs;
+    assert!(!saved.is_empty() && saved.iter().all(|a| a.ends_with(&format!(":{host_port}"))), "{saved:?} (one-mk runs on {host_port})");
+}

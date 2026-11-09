@@ -35,9 +35,10 @@ pub struct InviteArgs {
     /// Skip mDNS (the link still contains direct addresses).
     #[arg(long)]
     no_discovery: bool,
-    /// Port used later by `run` on this computer.
-    #[arg(long, default_value_t = DEFAULT_PORT, value_parser = clap::value_parser!(u16).range(1..))]
-    service_port: u16,
+    /// Port `run` uses on this computer (default: the running one-mk's,
+    /// or 24900).
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    service_port: Option<u16>,
 }
 
 #[derive(Args)]
@@ -49,9 +50,21 @@ pub struct JoinArgs {
     /// Trust the pinned host without prompting (required for non-terminal stdin).
     #[arg(long)]
     yes: bool,
-    /// Port used later by `run` on this computer.
-    #[arg(long, default_value_t = DEFAULT_PORT, value_parser = clap::value_parser!(u16).range(1..))]
-    service_port: u16,
+    /// Port `run` uses on this computer (default: the running one-mk's,
+    /// or 24900).
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    service_port: Option<u16>,
+}
+
+/// "1 minute", "5 minutes", "30 seconds".
+fn expires_in(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs} second{}", if secs == 1 { "" } else { "s" }),
+        _ => {
+            let minutes = secs.div_ceil(60);
+            format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" })
+        }
+    }
 }
 
 fn duration(text: &str) -> Result<Duration, String> {
@@ -77,7 +90,10 @@ pub fn query(dir: &Path, reply: oneshot::Sender<String>) {
     });
 }
 
-pub async fn run(dir: &Path, args: InviteArgs) -> Result<()> {
+pub async fn run(dir: &Path, mut args: InviteArgs) -> Result<()> {
+    if args.service_port.is_none() {
+        args.service_port = Some(crate::pair::service_port(dir).await?);
+    }
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let bridge = bridge_dir(dir);
     std::fs::create_dir_all(&bridge)?;
@@ -108,7 +124,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
         addrs.truncate(8);
         addrs
     };
-    let invitation = Invitation::new(identity.fingerprint, addrs, args.service_port, args.expires)?;
+    let invitation = Invitation::new(identity.fingerprint, addrs, args.service_port.unwrap_or(DEFAULT_PORT), args.expires)?;
     let state = Arc::new(InvitationState::new(&invitation));
     let mut link = invitation.link();
     let wall_expiry = invitation.expires;
@@ -122,7 +138,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
         }
     };
     println!("Invitation from {} ({})", sanitize_name(&identity.name), identity.fingerprint);
-    println!("Expires in {} minutes. One use; closing this process cancels it.", wall_expiry.saturating_sub(one_mk_net::invite::unix_now()).div_ceil(60));
+    println!("Expires in {}. One use; closing this process cancels it.", expires_in(wall_expiry.saturating_sub(one_mk_net::invite::unix_now())));
     println!("Treat this link like a password: whoever uses it first can request trust.");
     println!("{}", link.as_str());
     if args.machine { println!("invitation\t{}", link.as_str()); } else { print_qr(&link)?; }
@@ -204,7 +220,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                 };
                 let (identity, state) = (identity.clone(), state.clone());
                 let pending = pending.clone();
-                let service_port = args.service_port;
+                let service_port = args.service_port.unwrap_or(DEFAULT_PORT);
                 attempts.spawn(async move {
                     let mut slot = Some(slot);
                     let exchange = tokio::time::timeout(STEP_TIMEOUT, InviteSession::accept_with_admission(&peer, identity.fingerprint, &identity.name, service_port, &state, || {
@@ -251,10 +267,10 @@ async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, c
     let accept = accept && tokio::time::Instant::now() < end && one_mk_net::invite::unix_now() < wall_expiry;
     let ok = tokio::time::timeout(STEP_TIMEOUT, session.confirm(accept)).await.context("invitation approval transport timed out")??;
     if !ok { bail!("device refused; invitation consumed; nothing saved here"); }
-    save_marked(dir, peer, &name, port, true, saved).await?;
+    let placed = save_marked(dir, peer, &name, port, true, saved).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}).", peer.fingerprint);
-    if machine { println!("paired\t{}\t{}\tleft", peer.fingerprint, sanitize_name(&name)); }
+    if machine { println!("paired\t{}\t{}\t{}", peer.fingerprint, sanitize_name(&name), placed_word(&placed)); }
     Ok(())
 }
 
@@ -270,13 +286,17 @@ pub async fn join(dir: &Path, args: JoinArgs) -> Result<()> {
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let node = Node::bind_any(identity.clone(), 0)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    let mut result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline, args.machine).await;
+    let service_port = match args.service_port {
+        Some(port) => port,
+        None => crate::pair::service_port(dir).await?,
+    };
+    let mut result = join_inner(dir, &node, &identity, &invitation, service_port, args.yes, deadline, args.machine).await;
     for _ in 0..3 {
         if !result.as_ref().is_err_and(|error| format!("{error:#}").contains("busy")) { break; }
         let wait = Duration::from_millis(300 + u64::from(rand::random::<u16>()) % 601);
         if tokio::time::Instant::now() + wait >= deadline { break; }
         tokio::time::sleep(wait).await;
-        result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline, args.machine).await;
+        result = join_inner(dir, &node, &identity, &invitation, service_port, args.yes, deadline, args.machine).await;
     }
     node.shutdown(Duration::from_millis(200)).await;
     result
@@ -333,12 +353,32 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
         read_approval(end, None).await
     };
     std::io::stdout().flush()?;
-    ensure!(tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")??, "invitation declined; nothing saved here");
-    save(dir, &peer, &name, port, false).await?;
+    let agreed = tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")?;
+    // The host says no by closing the invitation, often before this side
+    // has answered: that is a refusal, not a network fault.
+    let agreed = agreed.map_err(|error| if closed_by_peer(&error) {
+        anyhow::anyhow!("{} did not accept this computer (it declined, or its invitation was closed); nothing saved here", sanitize_name(&name))
+    } else { error })?;
+    ensure!(accept, "you declined; nothing saved here");
+    ensure!(agreed, "{} did not accept this computer; nothing saved here", sanitize_name(&name));
+    let placed = save(dir, &peer, &name, port, false).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}). Start `one-mk run` only on computers not already running.", peer.fingerprint);
-    if machine { println!("paired\t{}\t{}\tleft", peer.fingerprint, sanitize_name(&name)); }
+    if machine { println!("paired\t{}\t{}\t{}", peer.fingerprint, sanitize_name(&name), placed_word(&placed)); }
     Ok(())
+}
+
+/// The other end closed the connection on purpose (as opposed to it
+/// timing out or the network failing).
+fn closed_by_peer(error: &anyhow::Error) -> bool {
+    use one_mk_net::quinn::{ConnectionError, ReadError, ReadExactError, WriteError};
+    let closed = |c: &ConnectionError| matches!(c, ConnectionError::ApplicationClosed(_) | ConnectionError::ConnectionClosed(_));
+    error.chain().any(|cause| {
+        cause.downcast_ref::<ConnectionError>().is_some_and(closed)
+            || cause.downcast_ref::<ReadExactError>().is_some_and(|e| matches!(e, ReadExactError::ReadError(ReadError::ConnectionLost(c)) if closed(c)))
+            || cause.downcast_ref::<ReadError>().is_some_and(|e| matches!(e, ReadError::ConnectionLost(c) if closed(c)))
+            || cause.downcast_ref::<WriteError>().is_some_and(|e| matches!(e, WriteError::ConnectionLost(c) if closed(c)))
+    }) || format!("{error:#}").contains("closed by peer")
 }
 
 async fn withdraw(discovery: &mut Option<Discovery>) {
@@ -447,23 +487,27 @@ impl SourceLimit {
     }
 }
 
-async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool) -> Result<()> {
+/// Where a computer just paired sits, for `--machine` output, as `pair`
+/// says it.
+fn placed_word(device: &one_mk_net::Device) -> String {
+    if device.placed_by == one_mk_net::PlacedBy::Pending { "unplaced".into() } else { device.side().to_string() }
+}
+
+async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool) -> Result<one_mk_net::Device> {
     save_marked(dir, peer, name, port, initiator, &AtomicBool::new(false)).await
 }
 
-async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool, saved: &AtomicBool) -> Result<()> {
+async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool, saved: &AtomicBool) -> Result<one_mk_net::Device> {
     // Reload immediately before writing, as ordinary pairing does not own
     // the daemon's in-memory trust store.
-    let mut trust = TrustStore::load(dir)?;
     let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), port);
-    let placement = crate::pairing_layout::remember(&mut trust, peer.fingerprint, name, addr, initiator);
-    trust.save()?;
+    let placement = TrustStore::update(dir, |trust| Ok(crate::pairing_layout::remember(trust, peer.fingerprint, name, addr, initiator)))?;
     saved.store(true, Ordering::SeqCst);
     let _ = crate::control::request(dir, Request::Reload).await;
     if placement.placed_by == one_mk_net::PlacedBy::Pending {
         println!("{}", crate::pairing_layout::warning(name));
     }
-    Ok(())
+    Ok(placement)
 }
 
 async fn read_stdin(limit: usize) -> Result<Zeroizing<String>> {
@@ -508,6 +552,16 @@ fn print_qr(link: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// "Expires in 1 minute", never "1 minutes"; a short one in seconds.
+    #[test]
+    fn expiry_reads_naturally() {
+        assert_eq!(super::expires_in(3), "3 seconds");
+        assert_eq!(super::expires_in(1), "1 second");
+        assert_eq!(super::expires_in(60), "1 minute");
+        assert_eq!(super::expires_in(61), "2 minutes");
+        assert_eq!(super::expires_in(600), "10 minutes");
+    }
+
     #[tokio::test]
     async fn cancellation_after_save_waits_for_commit() {
         let saved = AtomicBool::new(true);
@@ -605,7 +659,7 @@ mod tests {
         let host_dir = dir.join("host");
         let host_home = host_dir.clone();
         let host = tokio::spawn(async move {
-            run(&host_home, InviteArgs { machine: false, expires: Duration::from_secs(30), confirm: false, no_confirm: true, listen: None, no_discovery: true, service_port: 24900 }).await
+            run(&host_home, InviteArgs { machine: false, expires: Duration::from_secs(30), confirm: false, no_confirm: true, listen: None, no_discovery: true, service_port: Some(24900) }).await
         });
         let invitation = tokio::time::timeout(Duration::from_secs(5), async {
             loop {

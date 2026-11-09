@@ -1036,7 +1036,9 @@ impl App {
     /// open tab: its system, or that files can go there.
     fn subtitle_for(&self, p: &PeerStatus) -> String {
         if !p.online {
-            return "Offline".into();
+            // It forgot this computer: waiting for it would be in vain.
+            let removed = self.status.as_ref().and_then(Option::as_ref).is_some_and(|s| s.removed_us(&p.id));
+            return if removed { "Removed you" } else { "Offline" }.into();
         }
         match self.tab {
             Tab::Files => "Drop here".into(),
@@ -1625,7 +1627,7 @@ impl App {
         }
         if let Some(p) = &s.controlled_by {
             let sub = if cfg!(target_os = "linux") {
-                format!("Choose Take back, or stop sending input from {p}. Control comes back by itself after a minute without input from it.")
+                format!("Choose Take back, or stop sending input from {p}. Control comes back by itself after a while without input from it.")
             } else {
                 "Move this computer's mouse or press a key, or choose Take back.".into()
             };
@@ -1644,6 +1646,9 @@ impl App {
             1 => " 1 paired computer is offline.".into(),
             n => format!(" {n} paired computers are offline."),
         };
+        if online.is_empty() && let Some(p) = s.peers.iter().find(|p| s.removed_us(&p.id)) {
+            return (format!("{} removed this computer", p.name), "It no longer trusts this computer, so it refuses to connect. Remove it here too, or pair the two computers again.".into());
+        }
         match online[..] {
             [] if s.peers.is_empty() => ("No computers paired yet".into(), "Choose Pair a computer, then do the same on the other computer.".into()),
             [] => (

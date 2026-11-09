@@ -256,7 +256,7 @@ impl HotkeyArgs {
 /// The shortcuts and the numbering, in words.
 pub fn describe(s: &HotkeySettings, order: &[Numbered]) -> String {
     if !s.enabled {
-        return "Keyboard shortcuts are off (`one-mk hotkeys --on` turns them on).\n".into();
+        return "Keyboard shortcuts are off (`one-mk hotkeys --on` turns them on). Ctrl+Alt+Shift+Esc still brings the pointer home.\n".into();
     }
     let bindings = match s.bindings() {
         Ok(b) => b,

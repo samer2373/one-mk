@@ -144,7 +144,7 @@ impl Attempt<'_> {
     /// that crossed the network.
     async fn send(&self, files: Vec<Outgoing>, retry: bool) -> Result<(Vec<(Outgoing, Outcome)>, u64)> {
         let node = Node::bind_any(self.identity.clone(), 0)?;
-        let peer = find(&node, self.identity, self.device, self.fp, self.connect.to_vec()).await?;
+        let peer = find(&node, self.identity, self.device, self.fp, self.connect.to_vec(), "try --connect <ip:port>").await?;
         let conn = peer.conn;
 
         let total = files.iter().fold(0u64, |total, file| total.saturating_add(file.size));
@@ -203,7 +203,8 @@ fn pick<'a>(trust: &'a TrustStore, to: Option<&str>) -> Result<&'a Device> {
 /// Dials the device at its saved addresses, `--connect` addresses, and
 /// wherever mDNS finds it; the first connection with the right
 /// certificate wins.
-pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, fp: Fingerprint, connect: Vec<SocketAddr>) -> Result<Peer> {
+/// `hint`: what else to try, for the error if it can't be reached.
+pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, fp: Fingerprint, connect: Vec<SocketAddr>, hint: &str) -> Result<Peer> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Peer>();
     let mut dialed = HashSet::new();
     let mut dial = |addr: SocketAddr| {
@@ -241,7 +242,7 @@ pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, fp: 
                 }
             }
             _ = &mut deadline => bail!(
-                "could not reach {}; is `one-mk run` running there? (try --connect <ip:port>)",
+                "could not reach {}; is `one-mk run` running there? ({hint})",
                 device.name
             ),
         }

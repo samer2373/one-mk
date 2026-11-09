@@ -308,7 +308,27 @@ impl Hooks {
         for e in Event::ALL {
             if let Some(c) = self.get(e) {
                 let actual = c.argv(self.event_shell(e)).map(|words| words.iter().map(|word| quote(word)).collect::<Vec<_>>().join(" "));
-                out += &format!("  on_{}: {}\n", e.as_str(), actual.unwrap_or_else(|error| format!("INVALID: {error}")));
+                out += &format!("  on_{}: {}", e.as_str(), actual.unwrap_or_else(|error| format!("INVALID: {error}")));
+                // What `--computer`, `--event-timeout` and `--event-shell` set.
+                if let Some(o) = self.options.get(e.as_str()) {
+                    let mut only = Vec::new();
+                    if !o.computer.is_empty() {
+                        let id = o.computer.parse::<Fingerprint>().map_or_else(|_| o.computer.clone(), |fp| fp.short());
+                        only.push(format!("only for computer {id}"));
+                    }
+                    if let Some(t) = o.timeout_secs {
+                        only.push(format!("timeout {t} s"));
+                    }
+                    match o.shell {
+                        Some(true) => only.push("through the shell".into()),
+                        Some(false) => only.push("not through the shell".into()),
+                        None => {}
+                    }
+                    if !only.is_empty() {
+                        out += &format!("  ({})", only.join(", "));
+                    }
+                }
+                out += "\n";
             }
         }
         if out.is_empty() {
@@ -899,11 +919,17 @@ async fn run(label: &'static str, argv: &[String], env: &[(&'static str, String)
 /// (`--on-enter ""`) removes that hook.
 #[derive(clap::Args, Debug, Default)]
 pub struct HooksArgs {
+    /// With a command given here: run it only for this paired computer
+    /// (name or id; "" for every computer).
     #[arg(long, value_name = "COMPUTER")]
     pub computer: Option<String>,
+    /// With a command given here: seconds it may run before it is killed
+    /// (1-60), instead of --timeout.
     #[arg(long, value_name = "SECS")]
     pub event_timeout: Option<u64>,
-    #[arg(long, value_parser = crate::settings::parse_on_off, action = clap::ArgAction::Set)]
+    /// With a command given here: run it through the system shell (on) or
+    /// not (off), instead of --shell.
+    #[arg(long, value_name = "on|off", value_parser = crate::settings::parse_on_off, action = clap::ArgAction::Set)]
     pub event_shell: Option<bool>,
     /// Run when the pointer arrives on this computer.
     #[arg(long, value_name = "CMD")]
@@ -987,7 +1013,12 @@ impl HooksArgs {
         ];
         for (ev, text) in given {
             let Some(text) = text else { continue };
-            if self.computer.is_some() || self.event_timeout.is_some() || self.event_shell.is_some() {
+            if self.computer.is_none() && self.event_timeout.is_none() && self.event_shell.is_none() {
+                // A command replaced without them runs as the plain
+                // options say: an earlier one's computer, time limit or
+                // shell must not stay attached to it unseen.
+                h.options.remove(ev.as_str());
+            } else {
                 if self.event_timeout.is_some_and(|seconds| !(1..=MAX_TIMEOUT_SECS).contains(&seconds)) { bail!("The time limit must be from 1 to {MAX_TIMEOUT_SECS} seconds."); }
                 let options = h.options.entry(ev.as_str().into()).or_default();
                 if let Some(computer) = &self.computer {
@@ -1062,6 +1093,30 @@ pub async fn run_command(dir: &Path, mut args: HooksArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// `one-mk hooks` shows a command's computer, time limit and shell,
+    /// and a command replaced without them drops the old ones; the three
+    /// options have help.
+    #[test]
+    fn per_event_options_are_shown_and_cleared_with_a_new_command() {
+        use super::*;
+        let fingerprint = Fingerprint([0xab; 32]);
+        let mut hooks = Hooks::default();
+        HooksArgs { on_enter: Some("echo one".into()), computer: Some(fingerprint.to_string()), event_timeout: Some(9), event_shell: Some(false), ..Default::default() }
+            .apply(&mut hooks).unwrap();
+        let shown = hooks.describe();
+        assert!(shown.contains(&format!("on_enter: echo one  (only for computer {}, timeout 9 s, not through the shell)", fingerprint.short())), "{shown}");
+        assert!(!hooks.accepts(Event::Enter, &Fingerprint([0xcd; 32]).to_string()));
+        HooksArgs { on_enter: Some("echo two".into()), ..Default::default() }.apply(&mut hooks).unwrap();
+        assert!(!hooks.options.contains_key("enter"));
+        assert!(hooks.accepts(Event::Enter, &Fingerprint([0xcd; 32]).to_string()), "the old computer filter went with the old command");
+        assert!(hooks.describe().contains("on_enter: echo two\n") || hooks.describe().ends_with("on_enter: echo two"), "{}", hooks.describe());
+        let help = <crate::Cli as clap::CommandFactory>::command().find_subcommand_mut("hooks").unwrap().render_long_help().to_string();
+        for option in ["--computer", "--event-timeout", "--event-shell"] {
+            let line = help.lines().skip_while(|l| !l.trim_start().starts_with(option)).nth(1).unwrap_or_default();
+            assert!(!line.trim().is_empty() && !line.trim_start().starts_with("--"), "{option} has no help:\n{help}");
+        }
+    }
+
     #[test]
     fn computer_hooks_match_full_identity_and_reload_pending_targets() {
         use super::*;

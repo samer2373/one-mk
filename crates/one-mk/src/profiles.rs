@@ -195,7 +195,12 @@ impl Profiles {
         std::fs::create_dir_all(dir)?;
         let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let write = || -> Result<()> {
-            std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
+            use std::io::Write;
+            let mut file = File::options().write(true).create_new(true).open(&tmp)?;
+            file.write_all(toml::to_string_pretty(self)?.as_bytes())?;
+            // On disk before it replaces the old file: a crash leaves one or the other.
+            file.sync_all()?;
+            drop(file);
             std::fs::rename(&tmp, path(dir))?;
             Ok(())
         };
@@ -264,22 +269,21 @@ pub fn snapshot(trust: &TrustStore) -> Vec<Placed> {
 /// saved are left where they are; those no longer paired are skipped.
 /// Returns the names of the computers that moved.
 pub fn apply(dir: &Path, profile: &Profile) -> Result<Vec<String>> {
-    let mut trust = TrustStore::load(dir)?;
-    let mut moved = Vec::new();
-    for p in &profile.devices {
-        let Some(fp) = p.fingerprint.parse().ok() else { continue };
-        let Some(dev) = trust.get_mut(&fp) else { continue };
-        let side: Side = p.side.parse().unwrap_or_else(|_| dev.side());
-        let offset = p.offset.map(|(x, y)| (x.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET), y.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET)));
-        if (dev.side(), dev.offset) != (side, offset) {
-            manage::place(dev, side, offset);
-            moved.push(sanitize_name(&dev.name));
+    // Bounded: the daemon runs this too (switching by network).
+    TrustStore::update_within(dir, one_mk_net::DAEMON_LOCK_WAIT, |trust| {
+        let mut moved = Vec::new();
+        for p in &profile.devices {
+            let Some(fp) = p.fingerprint.parse().ok() else { continue };
+            let Some(dev) = trust.get_mut(&fp) else { continue };
+            let side: Side = p.side.parse().unwrap_or_else(|_| dev.side());
+            let offset = p.offset.map(|(x, y)| (x.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET), y.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET)));
+            if (dev.side(), dev.offset) != (side, offset) {
+                manage::place(dev, side, offset);
+                moved.push(sanitize_name(&dev.name));
+            }
         }
-    }
-    if !moved.is_empty() {
-        trust.save()?;
-    }
-    Ok(moved)
+        Ok(moved)
+    })
 }
 
 /// Puts profile `name` in place and records it as the active one. Returns

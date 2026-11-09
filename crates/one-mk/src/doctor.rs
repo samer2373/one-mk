@@ -873,8 +873,13 @@ pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
             let title = format!("Computer \"{name}\"");
             let online = d.status().is_some_and(|s| s.peers.iter().any(|x| x.id == p.id && x.online));
             let found = seen.iter().find(|s| s.id == p.id);
+            let removed = d.status().is_some_and(|s| s.removed_us(&p.id));
             let out = match (online, found, d.status().is_some()) {
                 (true, ..) => Outcome::pass("Connected."),
+                (false, ..) if removed => Outcome::fail(
+                    format!("\"{name}\" removed this computer from its paired computers, so it refuses to connect. The network is fine."),
+                    &format!("Remove it here too with `one-mk forget {}`, or pair the two again with `one-mk pair` on both.", p.id),
+                ),
                 (false, Some(f), true) => Outcome::warn(
                     format!("It is on the network ({}) but not connected to this computer.", f.addrs.join(", ")),
                     &format!(
@@ -907,6 +912,26 @@ pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
             Check { id, title, outcome: out }
         })
         .collect()
+}
+
+/// What the running daemon found wrong with the layout: a computer placed
+/// where none of its screens touches this one's (the pointer can't cross
+/// to it), or two computers on one edge. Nothing to say otherwise (or
+/// when one-mk isn't running: only it knows the other screens).
+pub fn layout_check(d: &Daemon) -> Option<Check> {
+    let warnings = &d.status()?.layout.warnings;
+    if warnings.is_empty() {
+        return None;
+    }
+    let detail = warnings.iter().map(|w| {
+        let w = w.trim_end_matches('.');
+        let mut chars = w.chars();
+        chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect::<String>() + ".")
+    });
+    Some(check("layout", "Layout", Outcome::warn(
+        detail.collect::<Vec<_>>().join(" "),
+        "Place it next to this computer's screens with `one-mk layout` (see above), or drag it in the window's Arrange view.",
+    )))
 }
 
 /// Private IPv4 ranges (RFC 1918): what a home or office LAN uses.
@@ -994,13 +1019,24 @@ pub fn summarize(checks: &[Check]) -> Summary {
     s
 }
 
-pub fn render_text(checks: &[Check]) -> String {
+/// The report. A check that did not apply here and asks nothing of the
+/// user (no fix) is left out unless `all`: it is noise on a first run.
+pub fn render_text(checks: &[Check], all: bool) -> String {
     let mut out = String::new();
+    let mut hidden = 0;
     for c in checks {
+        if !all && c.outcome.status == Status::Skip && c.outcome.fix.is_none() {
+            hidden += 1;
+            continue;
+        }
         out += &format!("{} {}: {}\n", c.outcome.status.tag(), c.title, c.outcome.detail);
         if let Some(fix) = &c.outcome.fix {
             out += &format!("       Fix: {fix}\n");
         }
+    }
+    if hidden > 0 {
+        out += &format!("({hidden} check{} that did not apply here {} left out; `one-mk doctor --all` shows every one.)\n",
+            if hidden == 1 { "" } else { "s" }, if hidden == 1 { "is" } else { "are" });
     }
     let s = summarize(checks);
     out += &match (s.fail, s.warn) {
@@ -1116,8 +1152,13 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
         "link" => ("Connection quality", if good { "Your connected computers respond quickly." }
             else { "The connection is slow or unreliable. Pointer movement may pause." },
             if status == Status::Warn { Some("Move closer to the Wi-Fi router or use a network cable. Pause large downloads.") } else { None }),
+        id if id.starts_with("peer:") && original.contains("removed this computer") => (source.title.as_str(),
+            "It removed this computer from its paired computers, so it refuses to connect. The network is fine.",
+            Some("Remove it here too, or pair the two computers again.")),
         id if id.starts_with("peer:") => (source.title.as_str(), if good { "Connected." } else { "Not connected right now." },
             if good { None } else { Some("Make sure sharing is on on both computers and they are on the same network.") }),
+        "layout" => ("Arrangement", "A computer is placed where the pointer can't reach it: none of its screens touches this computer's.",
+            Some("Drag it next to this computer's screens in Arrange.")),
         _ => return (shown, None, false),
     };
     shown.title = title.to_owned();
@@ -1159,9 +1200,9 @@ pub fn render_json(checks: &[Check]) -> String {
 // --------------------------------------------------------------- probes --
 
 /// `one-mk doctor`. Exits with status 1 if any check fails.
-pub async fn run(dir: &Path, json: bool) -> Result<()> {
+pub async fn run(dir: &Path, json: bool, all: bool) -> Result<()> {
     let checks = diagnose(dir).await;
-    let text = if json { render_json(&checks) } else { render_text(&checks) };
+    let text = if json { render_json(&checks) } else { render_text(&checks, all) };
     {
         use std::io::Write;
         let mut out = std::io::stdout().lock();
@@ -1289,6 +1330,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         let question = status.and_then(|s| s.suggestion.as_ref()).map(|g| one_mk_ctl::status::is_it_there(&g.name, g.side));
         checks.push(edge_push_check(&settings.edge, status.map_or("", |s| s.backend.as_str()), question));
     }
+    checks.extend(layout_check(&daemon));
     checks.push(network_check(&addrs));
     checks.push(connection_check(&daemon));
     let seen = mdns.seen.as_deref().unwrap_or_default();
@@ -2145,6 +2187,31 @@ mod tests {
         let c = peer_checks(&down, &with_addr, &[]);
         assert!(c[0].outcome.fix.as_ref().unwrap().contains("10.0.0.7:24900"));
         assert!(peer_checks(&down, &[], &[]).is_empty());
+
+        // It forgot this computer: not a network problem, whatever discovery saw.
+        let mut s = status("aaaa-aaaa", 24900, &[("bbbb-bbbb", false)]);
+        s.removed = vec!["bbbb-bbbb".into()];
+        let removed = Daemon::Running(Box::new(s));
+        for seen_it in [vec![], vec![seen("bbbb-bbbb")]] {
+            let c = peer_checks(&removed, &with_addr, &seen_it);
+            assert_eq!(st(&c[0]), Status::Fail);
+            assert!(c[0].outcome.detail.contains("removed this computer") && c[0].outcome.detail.contains("network is fine"), "{:?}", c[0].outcome);
+            assert!(c[0].outcome.fix.as_ref().unwrap().contains("one-mk forget bbbb-bbbb"));
+        }
+    }
+
+    /// A layout the pointer can't cross is a problem doctor names, not
+    /// "No problems found".
+    #[test]
+    fn a_layout_that_does_not_touch_is_reported() {
+        let mut s = status("aaaa-aaaa", 24900, &[("bbbb-bbbb", true)]);
+        assert!(layout_check(&Daemon::Running(Box::new(s.clone()))).is_none());
+        assert!(layout_check(&Daemon::NotRunning).is_none());
+        s.layout.warnings = vec!["layout of desk does not overlap yours: none of its screens touches this computer's on its right, so the pointer can't cross to it".into()];
+        let c = layout_check(&Daemon::Running(Box::new(s))).unwrap();
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.detail.starts_with("Layout of desk does not overlap yours") && c.outcome.detail.ends_with("cross to it."), "{}", c.outcome.detail);
+        assert!(!render_text(&[c], false).contains("No problems found\n"));
     }
 
     /// Advice to connect directly names the port one-mk really uses.
@@ -2201,14 +2268,21 @@ mod tests {
             check("a", "Fine", Outcome::pass("all good")),
             check("b", "Broken", Outcome::fail("it broke", "turn it on")),
         ];
-        let t = render_text(&checks);
+        let t = render_text(&checks, false);
         assert!(t.contains("[ ok ] Fine: all good"));
         assert!(t.contains("[FAIL] Broken: it broke\n       Fix: turn it on\n"));
         assert!(t.contains("1 problem found"));
-        let fine = render_text(&checks[..1]);
+        let fine = render_text(&checks[..1], false);
         assert!(fine.contains("Everything looks fine"));
-        let warn = render_text(&[check("w", "W", Outcome::warn("hm", "look"))]);
+        let warn = render_text(&[check("w", "W", Outcome::warn("hm", "look"))], false);
         assert!(warn.contains("No problems found, but 1 thing is worth a look"));
+        // Checks that did not apply and ask nothing are left out, unless all.
+        let skipped = [check("s", "Quiet", Outcome::skip("nothing set")), check("p", "Start", Outcome { fix: Some("run it".into()), ..Outcome::skip("not running") })];
+        let short = render_text(&skipped, false);
+        assert!(!short.contains("Quiet") && short.contains("[skip] Start: not running\n       Fix: run it"), "{short}");
+        assert!(short.contains("1 check that did not apply here is left out; `one-mk doctor --all`"), "{short}");
+        let long = render_text(&skipped, true);
+        assert!(long.contains("[skip] Quiet: nothing set") && !long.contains("left out"), "{long}");
     }
 
     #[test]
