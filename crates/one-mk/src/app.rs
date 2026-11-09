@@ -1893,6 +1893,12 @@ impl App {
     /// Peer `fp` (link `id`) moves its pointer onto this machine.
     fn on_enter(&mut self, fp: Fingerprint, id: usize, epoch: u16, pos: Pos) {
         let peer = &self.peers[&fp];
+        // Only a paired computer takes control, whatever let its link in.
+        if !self.trust.is_trusted(&fp) {
+            tracing::warn!(peer = %peer.name, "refused control: this computer is no longer paired");
+            peer.conn.close(3u32.into(), b"forgotten");
+            return;
+        }
         if self.owner.is_some() && !self.is_owner(fp, id) {
             tracing::info!(peer = %peer.name, "refused control: another computer controls this one");
             peer.ctl.send(Control::Busy { epoch });
@@ -2111,10 +2117,11 @@ impl App {
                 self.end_owner(false);
             }
         }
-        let (side, offset) = self.trust.get(&fp).map_or((Side::Right, None), |d| (d.side(), d.offset));
         let addr = canonical(link.conn.remote_address());
         let a = addr.to_string();
         if self.trust.get(&fp).is_some_and(|dev| dev.os != link.os || dev.addrs.first() != Some(&a)) {
+            #[cfg(test)]
+            tests::before_device_details(&self.dir);
             let os = link.os;
             self.change_trust("device details", |trust| {
                 if let Some(dev) = trust.get_mut(&fp) {
@@ -2127,7 +2134,16 @@ impl App {
                 }
                 Ok(())
             });
+            // That read `devices.toml` again (under its lock): a `forget`
+            // that landed in between leaves it out. It is not a peer yet,
+            // so `set_trust` could not close it: refuse it here.
+            if !self.trust.is_trusted(&fp) {
+                tracing::info!(peer = %fp.short(), "rejecting a device forgotten during its handshake");
+                link.conn.close(1u32.into(), b"not paired");
+                return;
+            }
         }
+        let (side, offset) = self.trust.get(&fp).map_or((Side::Right, None), |d| (d.side(), d.offset));
         // A better duplicate connection replaces the first one quietly.
         if !self.peers.contains_key(&fp) {
             println!("Connected to {} ({}).", link.name, on_your(side));
@@ -4556,6 +4572,52 @@ mod tests {
         duo.stop().await;
     }
 
+    /// A `forget` that lands between the last trust check and recording the
+    /// computer's details (which reads `devices.toml` again, under its lock)
+    /// keeps it out too: it is closed as not paired, never becomes a peer,
+    /// and the Enter and key it sends at once go nowhere.
+    #[tokio::test]
+    async fn a_computer_forgotten_while_its_details_are_saved_is_not_let_in() {
+        let mut duo = Duo::start("forget-details", None).await;
+        let dir = temp_dir("forget-details-c");
+        let id = Identity::load_or_create(&dir).unwrap();
+        let fp = id.fingerprint;
+        trust(&duo.db, &id, Side::Top);
+        let db = duo.db.clone();
+        on_device_details(&duo.db, move || {
+            // As `one-mk forget` does from another process.
+            TrustStore::update(&db, |t| { assert!(t.remove(&fp.to_string()).is_some()); Ok(()) }).unwrap();
+        });
+        let node = Node::bind(Arc::new(id), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer = node.connect(SocketAddr::from(([127, 0, 0, 1], duo.pb))).await.unwrap();
+        let (mut send, mut recv) = peer.open_stream(StreamKind::Control).await.unwrap();
+        let mut frames = Vec::new();
+        for msg in [
+            Control::Hello { version: PROTOCOL_VERSION, name: "raw".into(), screens: vec![], nonce: 0, os: 0 },
+            Control::Enter { epoch: 1, pos: Pos::new(5.0, 5.0) },
+            Control::Key { code: 30, down: true },
+        ] {
+            msg.encode_frame(&mut frames);
+        }
+        let _ = send.write_all(&frames).await;
+        let closed = tokio::time::timeout(Duration::from_secs(5), peer.conn.closed()).await.expect("B never closed it");
+        match closed {
+            quinn::ConnectionError::ApplicationClosed(c) => assert_eq!(&c.reason[..], b"not paired"),
+            other => panic!("{other:?}"),
+        }
+        let mut buf = Vec::new();
+        while let Ok(Some(msg)) = read_frame(&mut recv, &mut buf).await {
+            assert!(matches!(msg, Control::Hello { .. }), "{msg:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(injected(&mut duo.hb), vec![]);
+        let peers = status(&duo.db).await.peers;
+        assert!(peers.len() == 1 && peers[0].online, "only A, still connected: {peers:?}");
+        drop(node);
+        let _ = std::fs::remove_dir_all(dir);
+        duo.stop().await;
+    }
+
     /// Changing the layout on one computer applies at once, with no
     /// restart, and the other computer records the mirror image.
     #[tokio::test]
@@ -5758,6 +5820,25 @@ mod tests {
         }
         all.push((dir.to_owned(), Arc::default()));
         all.last().unwrap().1.clone()
+    }
+
+    type Hook = Box<dyn FnOnce() + Send>;
+    static DEVICE_DETAILS_HOOKS: std::sync::Mutex<Vec<(PathBuf, Hook)>> = std::sync::Mutex::new(Vec::new());
+
+    /// Runs `hook` once, the next time the daemon using `dir` is about to
+    /// record a connecting computer's details (after its trust check).
+    fn on_device_details(dir: &std::path::Path, hook: impl FnOnce() + Send + 'static) {
+        DEVICE_DETAILS_HOOKS.lock().unwrap().push((dir.to_owned(), Box::new(hook)));
+    }
+
+    pub(super) fn before_device_details(dir: &std::path::Path) {
+        let hook = {
+            let mut all = DEVICE_DETAILS_HOOKS.lock().unwrap();
+            all.iter().position(|(d, _)| d == dir).map(|i| all.remove(i).1)
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
     }
 
     pub(super) fn layouts_sent_by(dir: &std::path::Path) -> Arc<std::sync::atomic::AtomicUsize> {
