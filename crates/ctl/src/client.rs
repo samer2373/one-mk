@@ -67,19 +67,24 @@ pub enum Request {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HistoryAction { List, Show(u64), Copy(u64), Delete(u64), Clear }
+pub enum HistoryAction {
+    List, Show(u64), Copy(u64), Delete(u64), Clear,
+    /// Answers once every save or removal of the saved history that was
+    /// asked for so far has finished: a barrier after turning saving off.
+    Flush,
+}
 
 impl HistoryAction {
     fn line(self) -> String {
         match self {
-            Self::List => "list".into(), Self::Clear => "clear".into(),
+            Self::List => "list".into(), Self::Clear => "clear".into(), Self::Flush => "flush".into(),
             Self::Show(id) => format!("show {id}"), Self::Copy(id) => format!("copy {id}"), Self::Delete(id) => format!("delete {id}"),
         }
     }
 
     fn parse(arg: &str) -> Option<Self> {
         match arg {
-            "list" => Some(Self::List), "clear" => Some(Self::Clear),
+            "list" => Some(Self::List), "clear" => Some(Self::Clear), "flush" => Some(Self::Flush),
             _ => {
                 let (verb, number) = arg.split_once(' ')?;
                 if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) { return None; }
@@ -364,7 +369,7 @@ mod tests {
 
     #[test]
     fn history_requests_and_hostile_arguments() {
-        for action in [HistoryAction::List, HistoryAction::Show(1), HistoryAction::Copy(13), HistoryAction::Delete(u64::MAX - 1), HistoryAction::Clear] {
+        for action in [HistoryAction::List, HistoryAction::Show(1), HistoryAction::Copy(13), HistoryAction::Delete(u64::MAX - 1), HistoryAction::Clear, HistoryAction::Flush] {
             for json in [false, true] {
                 let request = Request::ClipHistory { action, json };
                 assert_eq!(Request::parse(&request.line()), Some(request));

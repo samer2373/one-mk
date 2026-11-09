@@ -23,8 +23,10 @@ one-mk clipboard --allow-fetch on|off     # default off
 - **Sending one yourself is refused by default.** `one-mk clip-send` of a
   marked copy says so and sends nothing. `one-mk clip-send --allow-sensitive`
   sends it anyway; the other computer then puts it on its clipboard but never
-  keeps it in its clipboard history, and does not pass it on. (A computer running
-  an older oneMK does not know the mark and may record it.)
+  keeps it in its clipboard history, and does not pass it on, even if its own
+  "skip sensitive" setting is off. A computer running an older oneMK, which
+  does not know the mark, is asked first and refused: nothing is sent, and the
+  message tells you to update it.
 - **Others fetching your clipboard is off** until you run
   `one-mk clipboard --allow-fetch on`.
 

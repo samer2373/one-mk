@@ -26,6 +26,42 @@ pub struct Server {
     rx: mpsc::UnboundedReceiver<Pending>,
     task: tokio::task::JoinHandle<()>,
     path: PathBuf,
+    /// Held as long as the daemon serves this folder (see [`InstanceLock`]).
+    _instance: InstanceLock,
+}
+
+/// The exclusive hold one process has on a settings folder: the daemon
+/// takes it when it starts serving, and work that must not run beside a
+/// daemon (`uninstall` putting the wallpaper back by itself) takes it
+/// instead. The OS lets it go when the holder exits, even after a crash.
+pub struct InstanceLock {
+    _held: Option<std::fs::File>,
+}
+
+impl InstanceLock {
+    const FILE: &str = ".one-mk-instance.lock";
+
+    /// Takes the hold on `dir`, or `None` while another process has it. A
+    /// folder that does not exist has no daemon and nothing to protect.
+    pub fn try_acquire(dir: &Path) -> Result<Option<Self>> {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        let file = match options.open(dir.join(Self::FILE)) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !dir.exists() => return Ok(Some(Self { _held: None })),
+            Err(e) => return Err(e).with_context(|| format!("opening {}", dir.join(Self::FILE).display())),
+        };
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self { _held: Some(file) })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => Err(e).with_context(|| format!("locking {}", dir.join(Self::FILE).display())),
+        }
+    }
 }
 
 impl Server {
@@ -34,6 +70,9 @@ impl Server {
             bail!("one-mk is already running with the settings folder {} (stop it with `one-mk stop`, or give this one its own --home)", dir.display());
         }
         check_endpoint(dir)?;
+        let instance = InstanceLock::try_acquire(dir)?.with_context(|| format!(
+            "one-mk is already running (or starting, or `one-mk uninstall` is busy) with the settings folder {}; stop it with `one-mk stop`, or give this one its own --home",
+            dir.display()))?;
         let listener = sys::bind(dir).with_context(|| format!("opening control endpoint {}", sys::path(dir).display()))?;
         let (tx, rx) = mpsc::unbounded_channel();
         let token = listener.token();
@@ -50,7 +89,7 @@ impl Server {
                 }
             }
         });
-        Ok(Self { rx, task, path: sys::path(dir) })
+        Ok(Self { rx, task, path: sys::path(dir), _instance: instance })
     }
 
     pub async fn recv(&mut self) -> Option<Pending> {
@@ -332,11 +371,13 @@ mod tests {
         }
         let task = tokio::spawn(answer(server));
         assert!(Server::start(&dir).await.is_err(), "a second daemon is refused");
+        assert!(InstanceLock::try_acquire(&dir).unwrap().is_none(), "the daemon holds its folder");
         assert_eq!(request(&dir, Request::Status).await.unwrap().as_deref(), Some("hello\n"));
         assert_eq!(request(&dir, Request::Reload).await.unwrap().as_deref(), Some("ok\n"));
         task.abort();
         let _ = task.await;
         assert_eq!(request(&dir, Request::Status).await.unwrap(), None, "socket removed with the server");
+        assert!(InstanceLock::try_acquire(&dir).unwrap().is_some(), "and its hold released");
         let _ = std::fs::remove_dir_all(dir);
     }
 

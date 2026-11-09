@@ -487,6 +487,9 @@ impl KeyRule {
         if from.key == 1 && covered & 0b111 == 0b111 {
             return Err("from: ctrl+alt+shift+esc is one-mk's emergency chord (it lets go of every key); it can't be remapped".into());
         }
+        // A key rule can name a mouse button too (`from = "button1"`): the
+        // same guard as `[[input.button]]`, in every layer.
+        keep_clicking(&from, &what, || match &self.to { Some(to) => to.describe(), None => "a tap/hold key".into() })?;
         Ok(RuleSpec { from, layer: self.layer.as_ref().map(|l| l.to_ascii_lowercase()), what })
     }
 
@@ -677,18 +680,33 @@ pub struct ButtonRule {
 impl ButtonRule {
     fn spec(&self) -> Result<RuleSpec, String> {
         let from = self.from.trigger()?;
-        let to = self.to.parse().map_err(|e| format!("to: {e}"))?;
-        // Left and right click are how the computer is used at all: making
-        // either do nothing (or hold a layer) would leave the pointer dead.
-        if matches!(from.key, 0x110 | 0x111) && !from.has_mods() && matches!(to, Output::None | Output::Layer(_)) {
-            return Err(format!(
-                "the {} button must keep clicking: it can't be mapped to {} (map it to another button or a key instead)",
-                if from.key == 0x110 { "left" } else { "right" },
-                self.to.describe()
-            ));
-        }
-        Ok(RuleSpec { from, layer: None, what: What::To(to) })
+        let what = What::To(self.to.parse().map_err(|e| format!("to: {e}"))?);
+        keep_clicking(&from, &what, || self.to.describe())?;
+        Ok(RuleSpec { from, layer: None, what })
     }
+}
+
+/// Left and right click are how the computer is used at all: making either
+/// (without modifiers) do nothing, hold a layer, or wait to tell a tap from
+/// a hold would leave the pointer dead or every click and drag broken.
+/// Shared by button rules and key rules (which can name buttons too), in
+/// every layer. `to` describes the rule's output for the message.
+fn keep_clicking(from: &Trigger, what: &What, to: impl FnOnce() -> String) -> Result<(), String> {
+    if !matches!(from.key, 0x110 | 0x111) || from.has_mods() {
+        return Ok(());
+    }
+    let dead = match what {
+        What::To(output) => matches!(output, Output::None | Output::Layer(_)),
+        What::TapHold { .. } => true,
+    };
+    if dead {
+        return Err(format!(
+            "the {} button must keep clicking: it can't be mapped to {} (map it to another button or a key instead)",
+            if from.key == 0x110 { "left" } else { "right" },
+            to()
+        ));
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------- resolving
@@ -2819,6 +2837,31 @@ acceleration = "off"
         assert_eq!(parse_mod_scroll("0.5"), Ok(ModScroll::Multiply(0.5)));
         assert!(parse_mod_scroll("x500").unwrap_err().contains("from x0.1"));
         assert!(parse_mod_scroll("sideways").unwrap_err().contains("say horizontal"));
+    }
+
+    /// A hand-written key rule naming the left or right button gets the same
+    /// guard as a button rule: never "none", a layer, or tap/hold, in any
+    /// layer. `keymap check` reports it and the rule is never applied.
+    #[test]
+    fn key_rules_cannot_kill_the_primary_buttons() {
+        for rule in [
+            "from = \"button1\"\nto = \"none\"",
+            "from = \"button2\"\nto = \"layer:nav\"",
+            "from = \"button1\"\ntap = \"a\"\nhold = \"ctrl\"",
+            "from = \"button1\"\nto = \"none\"\nlayer = \"nav\"",
+        ] {
+            let t = load(&format!("[[input.keymap.rule]]\n{rule}\n"));
+            let problems = t.check(&[]);
+            assert!(problems.iter().any(|p| p.contains("must keep clicking")), "{rule}: {problems:?}");
+            let peer = PeerFacts { name: "x", id: "", os: os::LINUX, apps: &[], device: None };
+            let (specs, warnings) = t.specs(&peer);
+            assert!(specs.is_empty() && warnings.iter().any(|w| w.contains("must keep clicking")), "{rule}: skipped, not applied");
+        }
+        // Other buttons, and the primary ones with modifiers or to something real, still work.
+        for rule in ["from = \"button4\"\nto = \"none\"", "from = \"ctrl+button1\"\nto = \"none\"", "from = \"button1\"\nto = \"button2\""] {
+            let t = load(&format!("[[input.keymap.rule]]\n{rule}\n"));
+            assert!(t.keymap.rule[0].spec().is_ok(), "{rule}");
+        }
     }
 
     #[test]

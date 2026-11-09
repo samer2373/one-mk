@@ -36,6 +36,9 @@ const FETCH_DISABLED: u32 = 0x434c4950;
 pub const FETCH_DISABLED_MESSAGE: &str = "does not allow fetching its clipboard";
 /// What `clip-send` says about a copy a password manager marked as sensitive.
 pub const SENSITIVE_REFUSED: &str = "your clipboard is marked sensitive (a password manager copied it), so it was not sent; to send it anyway run: one-mk clip-send --allow-sensitive";
+/// What `clip-send --allow-sensitive` says when the receiver could not
+/// promise to keep a sensitive copy private (`clipctl` puts its name first).
+pub const SENSITIVE_UNSUPPORTED: &str = "runs an older oneMK that would not keep this private (or does not share its clipboard); update it first, nothing was sent";
 
 /// The longest a peer may take to deliver one clipboard snapshot.
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -302,11 +305,32 @@ impl ClipSync {
         if concealed && !allow_sensitive {
             bail!("{SENSITIVE_REFUSED}");
         }
+        // The concealed bit is only a request: a receiver from before it
+        // existed would record, save and hand on the content. Ask first,
+        // and send nothing to one that doesn't promise to keep it private.
+        if concealed && !self.keeps_private(fp, addr).await? {
+            bail!("{SENSITIVE_UNSUPPORTED}");
+        }
         let ack = self.send(fp, addr, &data, true, concealed).await?;
         if matches!(ack, None | Some(ClipAck::Stored)) && !concealed {
             self.state().known.insert(fp, digest);
         }
         Ok(Moved { bytes: data.len(), what: describe(&data), ack })
+    }
+
+    /// Whether `fp` keeps a copy marked sensitive private: it answers a
+    /// [`ClipHeader::private_probe`] with [`ClipAck::Private`]. An older
+    /// receiver reads the probe as an empty snapshot and says nothing (or
+    /// something else), which is a no. Only a failure to reach it is an error.
+    async fn keeps_private(&self, fp: Fingerprint, addr: SocketAddr) -> anyhow::Result<bool> {
+        let conn = self.bulk(fp, addr).await?;
+        let (mut send, mut recv) = open_stream(&conn, StreamKind::Clipboard).await?;
+        let mut buf = Vec::new();
+        ClipHeader::private_probe().encode_frame(&mut buf);
+        send.write_all(&buf).await?;
+        send.finish()?;
+        let mut ack = [0u8; 1];
+        Ok(matches!(tokio::time::timeout(ACK_TIMEOUT, recv.read_exact(&mut ack)).await, Ok(Ok(())) if ClipAck::from_u8(ack[0]) == Some(ClipAck::Private)))
     }
 
     /// Fetches the clipboard of `fp` into ours.
@@ -371,6 +395,13 @@ impl ClipSync {
         recv: &mut quinn::RecvStream,
     ) -> anyhow::Result<Option<usize>> {
         let header = read_clip_header(recv).await?;
+        if header.is_private_probe() {
+            // We keep marked copies out of the history and never pass them on.
+            if send.write_all(&[ClipAck::Private as u8]).await.is_ok() {
+                let _ = send.finish();
+            }
+            return Ok(None);
+        }
         if header.pull {
             self.answer_pull(name, send).await?;
             return Ok(None);
@@ -605,6 +636,32 @@ mod tests {
         /// answers nothing.
         fn serve_old(&self) {
             self.serve_ack(None);
+        }
+
+        /// Like [`serve_ack`](Self::serve_ack), keeping every header it was sent.
+        fn serve_recording(&self, acknowledgement: Option<u8>) -> Arc<Mutex<Vec<ClipHeader>>> {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let node = self.node.clone();
+            let kept = seen.clone();
+            tokio::spawn(async move {
+                while let Some(Ok(peer)) = node.accept().await {
+                    let kept = kept.clone();
+                    tokio::spawn(async move {
+                        while let Ok((_, mut send, mut recv)) = peer.accept_stream().await {
+                            if let Ok(h) = read_clip_header(&mut recv).await {
+                                let _ = read_exact(&mut recv, h.total() as usize).await;
+                                kept.lock().unwrap().push(h.clone());
+                                if let Some(acknowledgement) = acknowledgement {
+                                    let _ = send.write_all(&[acknowledgement]).await;
+                                    let _ = send.finish();
+                                }
+                            }
+                            drop(send);
+                        }
+                    });
+                }
+            });
+            seen
         }
 
         fn serve_ack(&self, acknowledgement: Option<u8>) {
@@ -855,6 +912,25 @@ mod tests {
         a.settings(ClipSettings { skip_sensitive: false, ..Default::default() });
         a.clip.push(b.fp(), "b", b.addr());
         eventually("B to get it once skipping is off", || b.mem.text().as_deref() == Some("hunter2")).await;
+    }
+
+    /// A receiver from before the sensitive mark would record, save and
+    /// re-share the content: it is asked first and refused, and nothing
+    /// crosses. An older receiver that acknowledges every snapshot as stored
+    /// is refused too: only the explicit "private" answer counts.
+    #[tokio::test]
+    async fn a_sensitive_copy_is_never_sent_to_a_receiver_that_cannot_keep_it_private() {
+        for acknowledgement in [None, Some(ClipAck::Stored as u8)] {
+            let (a, old) = (Pc::new(), Pc::new());
+            let seen = old.serve_recording(acknowledgement);
+            a.mem.set(Raw { text: Some("TOPSECRET".into()), concealed: true, ..Raw::default() });
+            let e = format!("{:#}", a.clip.send_now(old.fp(), old.addr(), true).await.unwrap_err());
+            assert!(e.contains(SENSITIVE_UNSUPPORTED), "{e}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let seen = seen.lock().unwrap();
+            assert!(seen.iter().all(|h| h.items.is_empty()), "only the content-free probe reached it: {seen:?}");
+            assert!(!seen.is_empty(), "it was asked");
+        }
     }
 
     #[tokio::test]
