@@ -115,6 +115,26 @@ fn restore_picture(root: &Path) -> Result<()> {
 
 pub fn cache(dir: &Path) -> PathBuf { dir.join("wallpaper-video") }
 
+/// What was chosen can be used: a file that exists, not a folder. Said with
+/// the path, so a typo or a folder dropped by mistake reads as what it is.
+fn check_source(path: &Path) -> Result<()> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!("{} does not exist. Check the name and folder, then choose it again.", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => bail!("oneMK is not allowed to read {}. Choose a file you can open.", path.display()),
+        Err(error) => bail!("Cannot read {}: {error}", path.display()),
+    };
+    ensure!(!metadata.is_dir(), "{} is a folder. Choose a video or picture file instead.", path.display());
+    ensure!(metadata.is_file(), "{} is not a regular file. Choose a video or picture file.", path.display());
+    Ok(())
+}
+
+/// The error for a video that can't play here, saying when a still of its
+/// first frame is shown meanwhile (GNOME before its extension is set up).
+fn with_still_note(error: anyhow::Error, still: bool) -> anyhow::Error {
+    if still { anyhow::anyhow!("{error} {}", one_mk_wallpaper::GNOME_STILL_SHOWN) } else { error }
+}
+
 pub(crate) fn digest(path: &Path) -> Result<String> {
     let mut file = crate::transfer::open_regular(path, std::fs::symlink_metadata(path)?.len())?;
     let before = one_mk_wallpaper::file_identity(&file)?;
@@ -278,7 +298,7 @@ impl Runtime {
                 if let Some(percent) = line.strip_prefix("progress ").and_then(|text| text.parse::<u32>().ok()) {
                     let mut state = self.state.lock().unwrap();
                     ensure!(state.generation == generation, "Wallpaper selection changed");
-                    state.status.message = format!("Preparing video… {}%", percent.min(100));
+                    state.status.message = format!("Making a smaller copy of the video (experimental)… {}%", percent.min(100));
                 }
             }
             ensure!(child.wait().await?.success(), "The system could not prepare a smaller copy");
@@ -305,9 +325,20 @@ impl Runtime {
             let _ = std::fs::remove_dir_all(work_root.join(crate::transfer::PARTIAL_DIR));
         };
         prune();
-        let Ok(bytes) = std::fs::read(cache(dir).join("selection.json")) else { return };
-        let Ok(saved) = serde_json::from_slice::<Saved>(&bytes) else { return };
-        if saved.status.plan.as_ref().is_some_and(|plan| !plan.valid()) { return; }
+        let saved = std::fs::read(cache(dir).join("selection.json")).ok().and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok())
+            .filter(|saved| saved.status.plan.as_ref().is_none_or(Plan::valid));
+        // Nothing chosen, yet the person's own picture is still saved: oneMK
+        // stopped (a crash, a power cut, an uninstall without a daemon) before
+        // it was put back. It is put back now.
+        if saved.as_ref().is_none_or(|saved| saved.status.plan.is_none()) && cache(dir).join("pictures/previous.json").exists() {
+            let (runtime, root) = (self.clone(), cache(dir).join("pictures"));
+            std::thread::spawn(move || {
+                let _work = runtime.picture_work.lock().unwrap();
+                if runtime.state.lock().unwrap().status.plan.is_some() { return; }
+                if let Err(error) = restore_picture(&root) { tracing::warn!("Could not put your own wallpaper back: {error:#}"); }
+            });
+        }
+        let Some(saved) = saved else { return };
         let mut state = self.state.lock().unwrap();
         state.computer = computer;
         state.coordinator = saved.coordinator.and_then(|fingerprint| fingerprint.parse().ok());
@@ -316,7 +347,10 @@ impl Runtime {
         state.status = saved.status;
         state.status.computers.clear();
         let picture = state.status.plan.as_ref().filter(|plan| plan.picture).cloned();
-        if picture.is_none() && state.coordinator.is_none() && let Err(error) = Self::start(dir, &mut state) { state.status.message = error.to_string(); }
+        if picture.is_none() && state.coordinator.is_none() && let Err(error) = Self::start(dir, &mut state) {
+            let still = state.status.plan.as_ref().is_some_and(|plan| can_show_still(plan, &state.computer)) && cache(dir).join("pictures/previous.json").exists();
+            state.status.message = with_still_note(error, still).to_string();
+        }
         let generation = state.generation;
         let coordinator = state.coordinator;
         let computer = state.computer.clone();
@@ -413,6 +447,8 @@ impl Runtime {
             status.available = false;
             status.message = reason.into();
         } else { status.available = true; }
+        let sharing = status.plan.as_ref().is_some_and(|plan| plan.computers.iter().any(|computer| computer != &state.computer));
+        status.experimental = one_mk_wallpaper::experimental_note(sharing);
         status
     }
 
@@ -574,7 +610,7 @@ impl Runtime {
         prune_selection(dir, state.status.plan.as_ref().unwrap(), state.previous.as_deref())?;
         if let Err(error) = Self::start(dir, &mut state) {
             let computer = state.computer.clone();
-            let error = if still_shown { anyhow::anyhow!("{error} Until then this computer shows a still of the video.") } else { error };
+            let error = with_still_note(error, still_shown);
             state.status.computers.insert(computer, Playback::Error(error.to_string()));
             return Err(error);
         }
@@ -693,9 +729,13 @@ impl Runtime {
         }
         let mut plan = self.state.lock().unwrap().status.plan.clone();
         if let Command::Set { path } = command {
+            check_source(&path)?;
             let picture = one_mk_wallpaper::picture::is_picture(&path);
-            // Refuse unsupported video before preparation can launch a decoder.
+            // Refuse unsupported video before preparation can launch a decoder,
+            // and a picture on a desktop whose wallpaper oneMK can't set.
             if !picture { one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?; }
+            #[cfg(target_os = "linux")]
+            ensure!(!picture || one_mk_wallpaper::picture::available(), "{}", one_mk_wallpaper::picture::UNSUPPORTED_DESKTOP);
             let dir_owned = dir.to_owned();
             let title = path.file_name().context("Choose a video file")?.to_string_lossy().chars().take(64).collect::<String>();
             let mut canvas = one_mk_ctl::wallpaper::canvas(&status);
@@ -705,7 +745,7 @@ impl Runtime {
                 reserved.update(canvas.monitors);
                 canvas = reserved;
             }
-            self.state.lock().unwrap().status.message = "Preparing video… 0%".into();
+            self.state.lock().unwrap().status.message = if picture { "Preparing picture…" } else { "Preparing video…" }.into();
             let prepared = if picture { None } else { match self.prepare(dir, &path, &canvas, generation).await {
                 Ok(prepared) => prepared,
                 Err(error) => { tracing::info!("Wallpaper preparation: {error}"); preparation_notice = Some("Could not prepare a smaller copy. Using the original video."); None }
@@ -964,9 +1004,31 @@ fn send(control: &ControlWriter, wire: &Wire) {
 }
 
 #[derive(clap::Args)]
-pub struct Args { #[arg(long, global = true)] json: bool, #[command(subcommand)] command: Action }
+pub struct Args {
+    /// Print the result as JSON (only `extension` commands).
+    #[arg(long, global = true)] json: bool,
+    #[command(subcommand)] command: Action,
+}
 #[derive(clap::Subcommand)]
-enum Action { Set { file: PathBuf }, Off, Status, Pause, Play, Extension { #[command(subcommand)] command: crate::wallpaper::extension::Command } }
+enum Action {
+    /// Show a video or picture as the wallpaper across your screens and
+    /// computers (sharing across computers is experimental).
+    Set {
+        /// A video (MP4, MOV, M4V, WebM, MKV) or picture (PNG, JPEG, WebP, HEIC).
+        #[arg(value_name = "FILE")] file: PathBuf,
+    },
+    /// Turn the wallpaper off everywhere and put your own wallpaper back.
+    Off,
+    /// Say what is shown, where, and anything experimental here.
+    Status,
+    /// Pause the video on its current frame.
+    Pause,
+    /// Play a paused video again.
+    Play,
+    /// Set up oneMK's GNOME extension, which video needs on GNOME Wayland
+    /// (experimental; GNOME 50).
+    Extension { #[command(subcommand)] command: crate::wallpaper::extension::Command },
+}
 
 pub async fn command(dir: &Path, args: Args) -> Result<()> {
     if let Action::Extension { command } = args.command {
@@ -978,7 +1040,8 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
     let request = match args.command {
         Action::Status => crate::control::Request::Status,
         action => crate::control::Request::LiveWallpaper(serde_json::to_string(&match action {
-            Action::Set { file } => Command::Set { path: file.canonicalize()? }, Action::Off => Command::Off,
+            Action::Set { file } => { check_source(&file)?; Command::Set { path: file.canonicalize().with_context(|| format!("Cannot open {}", file.display()))? } }
+            Action::Off => Command::Off,
             Action::Pause => Command::Pause { paused: true }, Action::Play => Command::Pause { paused: false }, Action::Status | Action::Extension { .. } => unreachable!(),
         })?),
     };
@@ -1000,10 +1063,34 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
         }
     }
     match Status::decode(&reply) {
-        Some(status) => println!("{}", status.wallpaper.filter(|wallpaper| wallpaper.plan.is_some()).map_or_else(|| "Wallpaper is off".into(), |status| status.message)),
+        Some(status) => {
+            let wallpaper = status.wallpaper.unwrap_or_default();
+            println!("{}", if wallpaper.plan.is_some() { wallpaper.message.as_str() } else { "Wallpaper is off" });
+            if let Some(note) = wallpaper.experimental { println!("{note}"); }
+        }
         None => println!("Wallpaper updated."),
     }
     Ok(())
+}
+
+/// `one-mk uninstall`: the wallpaper goes off and the person's own picture
+/// comes back. A running oneMK does it (and tells the other computers);
+/// otherwise it is done here and the saved choice is marked off, so a later
+/// start doesn't bring it back.
+pub async fn turn_off_for_uninstall(dir: &Path) -> Result<()> {
+    let request = crate::control::Request::LiveWallpaper(serde_json::to_string(&Command::Off)?);
+    if let Ok(Some(reply)) = crate::control::request(dir, request).await {
+        ensure!(!reply.starts_with("error "), "{}", reply.trim_start_matches("error ").trim());
+        return Ok(());
+    }
+    let selection = cache(dir).join("selection.json");
+    if let Some(mut saved) = std::fs::read(&selection).ok().and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok()) && saved.status.plan.is_some() {
+        saved.status = one_mk_wallpaper::Status { message: "Wallpaper is off".into(), ..Default::default() };
+        saved.coordinator = None;
+        saved.authority_off = true;
+        save_selection(dir, &saved)?;
+    }
+    restore_picture(&cache(dir).join("pictures"))
 }
 
 #[cfg(test)]
@@ -1162,6 +1249,38 @@ mod tests {
         runtime.shutdown();
         std::thread::sleep(Duration::from_millis(20));
         assert_eq!(runtime.state.lock().unwrap().status.computers.get("host"), Some(&Playback::Ready));
+    }
+
+    #[test]
+    fn a_missing_file_or_a_folder_is_named_and_explained() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("holiday.mp4");
+        let error = check_source(&missing).unwrap_err().to_string();
+        assert!(error.contains("holiday.mp4") && error.contains("does not exist"), "{error}");
+        let error = check_source(directory.path()).unwrap_err().to_string();
+        assert!(error.contains("is a folder") && !error.contains("changed before sending"), "{error}");
+        std::fs::write(&missing, b"video").unwrap();
+        check_source(&missing).unwrap();
+    }
+
+    #[test]
+    fn a_still_shown_instead_of_a_video_is_said_with_the_one_step_fix() {
+        let error = with_still_note(anyhow::anyhow!(one_mk_wallpaper::GNOME_PLAYBACK_UNAVAILABLE), true).to_string();
+        assert!(error.contains("one-mk wallpaper extension install") && error.contains("first frame as a still picture"), "{error}");
+        assert_eq!(with_still_note(anyhow::anyhow!("plain"), false).to_string(), "plain");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uninstall_without_a_running_daemon_marks_the_choice_off() {
+        let directory = tempfile::tempdir().unwrap();
+        let saved = Saved { status: one_mk_wallpaper::Status { plan: Some(plan()), message: "Playing".into(), ..Default::default() }, coordinator: None, previous: None, authority_off: false };
+        save_selection(directory.path(), &saved).unwrap();
+        turn_off_for_uninstall(directory.path()).await.unwrap();
+        let after: Saved = serde_json::from_slice(&std::fs::read(cache(directory.path()).join("selection.json")).unwrap()).unwrap();
+        assert!(after.status.plan.is_none() && after.authority_off);
+        // Nothing chosen at all: nothing to do, and no error.
+        turn_off_for_uninstall(tempfile::tempdir().unwrap().path()).await.unwrap();
     }
 
     #[cfg(unix)]

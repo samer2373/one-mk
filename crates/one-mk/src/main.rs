@@ -273,7 +273,8 @@ enum Cmd {
     Takeback,
     /// Start one-mk automatically when you log in.
     Install,
-    /// Stop starting one-mk automatically.
+    /// Stop starting one-mk automatically, turn the wallpaper off (your own
+    /// comes back) and remove oneMK's GNOME wallpaper extension.
     Uninstall,
     /// Add "Send to <computer>" to the file manager's menu (Nautilus, Nemo,
     /// Dolphin, Explorer, Finder); it follows the computers you pair or forget.
@@ -395,7 +396,13 @@ enum Cmd {
         #[command(subcommand)]
         action: pointer_extension::Action,
     },
-    /// Play a video across the shared desktop, or turn it off.
+    /// A video or picture as the wallpaper across your screens, or turn it off.
+    ///
+    /// Stable: video on X11 desktops, pictures on GNOME. Experimental (not
+    /// yet tested on real hardware there): macOS, Windows, layer-shell
+    /// Wayland desktops (KDE, Sway, Hyprland), video on GNOME Wayland through
+    /// oneMK's GNOME extension, one wallpaper shared across several
+    /// computers, and the smaller copy made of large videos.
     Wallpaper(live_wallpaper::Args),
     /// Scrolling on the computers this one controls: direction, natural,
     /// speed, smooth or by notches, modifier keys.
@@ -612,7 +619,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Status => manage::status(&dir).await,
             Cmd::Takeback => manage::takeback(&dir).await,
             Cmd::Install => install::install(&dir, custom_home).await,
-            Cmd::Uninstall => install::uninstall(),
+            Cmd::Uninstall => install::uninstall(&dir).await,
             Cmd::Integrate { remove } => integrate::run(&dir, custom_home, remove),
             Cmd::Layout { device, side, offset, swap_ctrl_cmd } => {
                 manage::layout(&dir, &device, side, offset.as_deref(), swap_ctrl_cmd).await
@@ -774,6 +781,22 @@ mod tests {
             assert!(help.contains(required), "{help}");
             assert!(!help.contains(forbidden), "{help}");
         }
+    }
+
+    #[test]
+    fn wallpaper_help_describes_every_command_and_says_what_is_experimental() {
+        let help = |args: &[&str]| Cli::try_parse_from(std::iter::once("one-mk").chain(args.iter().copied()).chain(["--help"])).err().unwrap().to_string();
+        let top = help(&["wallpaper"]);
+        for line in ["set ", "off ", "status ", "pause ", "play ", "extension "] {
+            let row = top.lines().find(|row| row.trim_start().starts_with(line)).unwrap_or_else(|| panic!("{line}: {top}"));
+            assert!(row.trim().len() > line.len() + 8, "no description for {line}: {top}");
+        }
+        assert!(top.contains("Experimental") && top.contains("macOS") && top.contains("Windows") && top.contains("several"), "{top}");
+        assert!(help(&["wallpaper", "set"]).contains("A video (MP4"));
+        assert!(help(&["wallpaper", "off"]).contains("your own wallpaper back"));
+        assert!(help(&["uninstall"]).contains("GNOME wallpaper extension"));
+        let install = help(&["wallpaper", "extension", "install"]);
+        assert!(install.contains("log out") && install.contains("nothing is"), "{install}");
     }
 
     #[test]

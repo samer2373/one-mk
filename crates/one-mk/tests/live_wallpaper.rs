@@ -9,8 +9,9 @@ fn crafted_picture_is_refused_by_helper_and_daemon_still_answers() {
     impl Drop for Daemon { fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); } }
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("settings.toml"), "[update]\ncheck = false\n").unwrap();
+    // A GNOME desktop, but no `gsettings` on PATH: nothing real is touched.
     let mut daemon = Daemon(Command::new(env!("CARGO_BIN_EXE_one-mk"))
-        .env_clear().env("PATH", "/usr/bin:/bin").env("HOME", directory.path())
+        .env_clear().env("PATH", directory.path()).env("HOME", directory.path()).env("XDG_RUNTIME_DIR", directory.path()).env("XDG_CURRENT_DESKTOP", "GNOME")
         .args(["--home", directory.path().to_str().unwrap(), "run", "--backend", "null", "--no-discovery", "--no-clipboard", "--no-notify", "--port", "0"])
         .stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap());
     let mut ready = false;
@@ -23,7 +24,7 @@ fn crafted_picture_is_refused_by_helper_and_daemon_still_answers() {
     std::fs::write(&source, b"\xff\xd8\xff\xe0crafted JPEG").unwrap();
     let request = one_mk_ctl::wallpaper::request(&one_mk_wallpaper::Command::Set { path: source });
     let response = client::request(directory.path(), request, Duration::from_secs(20)).unwrap().unwrap();
-    assert!(response.starts_with("error ") && response.contains("picture helper failed"), "{response}; build one-mk-wallpaper-helper before running this test alone");
+    assert!(response.starts_with("error ") && response.contains("This picture cannot be opened") && !response.contains("Caused by") && !response.contains("missing from this oneMK"), "{response}; build one-mk-wallpaper-helper before running this test alone");
     assert!(daemon.0.try_wait().unwrap().is_none());
     let status = client::request(directory.path(), Request::Status, Duration::from_secs(1)).unwrap().unwrap();
     let status = one_mk_ctl::status::Status::decode(&status).unwrap();
@@ -37,7 +38,7 @@ fn wallpaper_off_has_no_idle_cpu_ticks() {
     let directory = tempfile::tempdir().unwrap();
     std::fs::write(directory.path().join("settings.toml"), "[update]\ncheck = false\n").unwrap();
     let mut daemon = Command::new(env!("CARGO_BIN_EXE_one-mk"))
-        .env_clear().env("PATH", "/usr/bin:/bin").env("HOME", directory.path())
+        .env_clear().env("PATH", "/usr/bin:/bin").env("HOME", directory.path()).env("XDG_RUNTIME_DIR", directory.path())
         .args(["--home", directory.path().to_str().unwrap(), "run", "--backend", "null", "--no-discovery", "--no-clipboard", "--no-notify", "--port", "0"])
         .stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
     let result = std::panic::catch_unwind(|| {

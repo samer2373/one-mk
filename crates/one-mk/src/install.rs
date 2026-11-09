@@ -29,8 +29,23 @@ pub async fn install(dir: &Path, custom_home: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn uninstall() -> Result<()> {
+/// Leaves nothing of oneMK's on the desktop: no login entry, no file manager
+/// entries, the person's own wallpaper back, and no GNOME extension. A step
+/// that fails is said and the others still run.
+pub async fn uninstall(dir: &Path) -> Result<()> {
     println!("{}", ctl::uninstall()?);
     crate::integrate::remove()?;
+    let mut failed = false;
+    match crate::live_wallpaper::turn_off_for_uninstall(dir).await {
+        Ok(()) => println!("oneMK's wallpaper is off; your own wallpaper is in place."),
+        Err(e) => { failed = true; eprintln!("Could not put your own wallpaper back: {e:#}. Run `one-mk wallpaper off` while oneMK runs, or set it again in your desktop's settings."); }
+    }
+    if cfg!(target_os = "linux") {
+        match crate::wallpaper::extension::remove().await {
+            Ok(message) => println!("{message}"),
+            Err(e) => { failed = true; eprintln!("{e:#}"); }
+        }
+    }
+    anyhow::ensure!(!failed, "Uninstall finished, but the steps above need attention");
     Ok(())
 }
