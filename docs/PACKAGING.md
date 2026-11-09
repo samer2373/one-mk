@@ -7,9 +7,9 @@ step of `.github/workflows/release.yml`, and what has and has not been tried.
 |---|---|---|---|---|
 | plain `.tar.gz` / `.zip` | inline in the workflow | build: "Package" | `one-mk-<target>.tar.gz` (macOS, Linux), `one-mk-x86_64-pc-windows-msvc.zip` | in use since the first release; `install.sh` downloads the Linux `.tar.gz` |
 | macOS `.app` and `.dmg` (designed installer window) | `scripts/bundle-mac.sh` + `scripts/dmg/` | build: "Mac app" | `one-mk-<target>.app.zip` and `one-mk-<target>.dmg`, for `aarch64-apple-darwin` and `x86_64-apple-darwin` | released since 0.1.1; signed and notarized when the signing secrets are set; `install.sh` uses the `.app.zip`; the designed `.dmg` window is **written, never opened on a real Mac** |
-| Windows installer | `installer/one-mk.iss` (Inno Setup) | build: "Windows installer" | `one-mk-x86_64-pc-windows-msvc-setup.exe` | released since 0.1.2; CI installs it silently and runs `one-mk id` from the install |
+| Windows installer | `installer/one-mk.iss` (Inno Setup) | build: "Windows installer" | `one-mk-x86_64-pc-windows-msvc-setup.exe` | attached to releases since 0.1.2; CI installs it silently and runs `one-mk id` from the install |
 | Debian `.deb` | `scripts/bundle-deb.sh` | build: "Linux .deb" | `one-mk-x86_64-unknown-linux-gnu.deb` | released since 0.1.1; CI installs it with `dpkg -i` and runs `one-mk id` |
-| AppImage | `scripts/package-appimage.sh` + `packaging/linux/` | build: "Linux AppImage" | `one-mk-x86_64-unknown-linux-gnu.AppImage` | AppDir built and run here and in CI; the `.AppImage` file is built in CI only, **not yet released** |
+| AppImage | `scripts/package-appimage.sh` + `packaging/linux/` | build: "Linux AppImage" | `one-mk-x86_64-unknown-linux-gnu.AppImage` | AppDir built and run here and in CI; the `.AppImage` file is built in CI only (never locally) and is attached to releases |
 | Flatpak source bundle | `scripts/package-flatpak.sh` + `packaging/flatpak/` | publish: "Homebrew and Flatpak files" | `one-mk-flatpak-sources.tar.gz` | **written, untested** (`flatpak-builder` never run) |
 | Homebrew cask and formula | `scripts/package-homebrew.sh` + `packaging/homebrew/` | publish: "Homebrew and Flatpak files" | `one-mk.rb`, `one-mk-source.rb` | **written, untested** (no Mac) |
 
@@ -48,7 +48,7 @@ job generates `update-manifest.json`, signs it with Ed25519 when
 compiled public key and includes manifest/signature in SHA256SUMS before
 uploading to the draft. A published release cannot be overwritten by a rerun.
 Unsigned publication is explicitly reported and refused by the client.
-Owner key setup, rotation and the installation safety rules are in
+Publisher key setup, rotation and the installation safety rules are in
 [UPDATES.md](UPDATES.md). `bash scripts/check-updates.sh` tests this pipeline
 with local stand-in assets and a stub `gh`; it publishes nothing.
 
@@ -261,7 +261,7 @@ the registering process and its tokenized windows, then clones their content
 behind applications without changing the native wallpaper. Off, renderer exit
 and extension disable remove the clones. Other GNOME versions are refused with an "unsupported GNOME version" message;
 pictures remain supported without the extension. See
-[the video qualification report](reviews/GNOME-WAYLAND-VIDEO.md).
+[the video qualification report](GNOME-WAYLAND-VIDEO.md).
 AppImage/Flatpak staging is not extended with this component in this change.
 
 ## AppImage

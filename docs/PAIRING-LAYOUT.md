@@ -1,4 +1,4 @@
-# Placement after pairing (QA M9)
+# Placement after pairing
 
 `one-mk pair` (including the window's `pair --machine` subprocess) and
 `invite` / `join` use the same placement selection and persistence code.
@@ -57,7 +57,7 @@ one-mk layout '<computer name or id>' right --offset 1920,1080
 ```
 
 Use coordinates matching your actual monitors, or place the computer in
-the window's Layout tab. A local or remote explicit layout edit clears the
+the window's Desk > Arrange view. A local or remote explicit layout edit clears the
 pending state and is mirrored normally. A peer with a free edge may still
 have its own provisional side while this computer awaits placement; there
 is deliberately no new wire representation for an unplaced computer.
@@ -85,12 +85,5 @@ serialization. The original numeric defaults fail the third-computer and
 full-layout checks; the original invitation defaults fail the
 third-computer check as well.
 
-Validation on Linux (2026-10-31): three consecutive clean-environment
-`cargo test --offline -j 2 --workspace` runs each passed 1,149 tests
-(14 ignored), including all five real-daemon placement regressions.
-Strict `cargo clippy --offline -j 2 --workspace --all-targets -- -D warnings`
-passed. Cross-target strict Clippy also passed for
-`x86_64-pc-windows-msvc` and `aarch64-apple-darwin`, with
-`-p one-mk-input -p one-mk-proto -p one-mk-ctl -p one-mk-app -p one-mk-tray
---all-targets`. These cross-target checks do not verify Windows/macOS
-runtime behavior.
+The regression tests run on Linux only; Windows and macOS are compile-checked, so pairing
+placement there is experimental.

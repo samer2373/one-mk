@@ -1,6 +1,6 @@
 # Signed updates
 
-## Owner setup — configured
+## Publisher setup (maintainers)
 
 The production Ed25519 key is compiled into `update_key.rs`, with
 `PRODUCTION_KEY = true`:
@@ -9,10 +9,10 @@ The production Ed25519 key is compiled into `update_key.rs`, with
 1c96a60f7411b89048a7c8e733f1abcf3b21d459f507091ccef753f3fc88bfeb
 ```
 
-The private key stays on the owner's machine under `~/.config/one-mk-release/`
+The private key stays on the maintainer's machine under `~/.config/one-mk-release/`
 and in the GitHub Actions secret `ONE_MK_UPDATE_SIGNING_KEY`. Local builds,
 tests, checks and installations never need it. Never fetch it for development,
-commit it, or paste it into chat. Keep an offline backup on the owner's side.
+commit it, or paste it into chat. Keep an offline backup.
 
 Tag pushes run `.github/workflows/release.yml`. After staging all release
 assets, the publish job signs the manifest's exact bytes, verifies against the
@@ -40,7 +40,7 @@ A compile-time guard refuses production with the RFC 8032 public test key.
 
 The default is **check and ask**: Check for updates is on, Update automatically
 is off. The notice says **oneMK VERSION is ready**, with **Update now**,
-download percentages, verification/install stages, then **Restarting…**. Advanced
+download percentages, verification/install stages, then **Restarting…**. **Settings**
 also exposes both switches. Automatic installation is opt-in and happens only
 while the window is open. Users need no terminal or configuration editor.
 

@@ -1,4 +1,8 @@
-# Edges where no computer sits: pointer wrap and layout learning (5D)
+# Edges where no computer sits: pointer wrap and layout learning
+
+Settings: `one-mk edge --wrap` and `--learn`, or **Settings** in the window. Experimental except on
+X11 (see "Backends" below). Written for users first; the sections from "One set of armed edges" on
+are notes for developers.
 
 Two features use the edges of this computer's desktop that lead to no
 other computer. Without them such an edge is simply not armed, and the
@@ -12,8 +16,8 @@ pointer stops there like at the edge of any screen.
   --learn`, default `suggest`). Pushing the pointer twice within 2 seconds
   against such an edge, while a computer whose place is only a guess is
   online, means "it is over there". `suggest` says so (a desktop
-  notification, a line in `one-mk status`, a card on the window's Layout
-  tab) and moves nothing; `auto` places it and says how to undo that.
+  notification, a line in `one-mk status`, a card on the window's
+  Desk > Arrange view) and moves nothing; `auto` places it and says how to undo that.
 
 Code: the geometry is pure, in `crates/proto/src/wrap.rs`; the push
 counting, cooldown and the choice of computer are pure, in
@@ -161,7 +165,7 @@ with two computers A and B running this build:
 2. On A, push the pointer twice within 2 s against an edge where B is not
    (left or right). Expect a notification "Is B on your …?" and the same
    line in `one-mk status`; the pointer stays where it was, and B's place
-   is unchanged. Open the window's Layout tab: the card shows the question.
+   is unchanged. Open the window's Desk > Arrange view: the card shows the question.
 3. Choose **No**: the card and the status line go. Push twice again: no
    new question for 10 minutes.
 4. `one-mk edge --learn auto`, restart one-mk on A, push twice against the

@@ -2,7 +2,7 @@
 
 oneMK can show one video or picture across all your screens, as one picture
 that continues from screen to screen in the positions you gave them in
-**Layout**, and across your paired computers.
+**Desk > Arrange**, and across your paired computers.
 
 ## Using it
 

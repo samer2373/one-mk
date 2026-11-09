@@ -2,28 +2,23 @@
 
 ## Result and scope
 
-Measured on Linux, October 30, 2026, starting from `8d190fa` (`wave5`,
-`Merge pointer wrap and layout learning (5D)`). **The reported X11-specific
-four-wake-ups-per-second bug did not reproduce at this revision.** With no
-discovery and no peers, both the null daemon and X11 daemon had **zero voluntary
-or involuntary context switches on every surviving thread over 60 seconds**.
-An idle connected peer, on either backend, produced approximately 4.3–4.7
-voluntary context switches/second on the daemon's main thread, not its X11
-thread. That is consistent with the reported process-wide rate, but does not
-prove that the earlier measurement had the same cause.
+Measured on Linux in October 2026 on a development build (debug, unoptimized). With no
+discovery and no peers, both the `null` backend daemon and the X11 backend daemon had **zero
+voluntary or involuntary context switches on every thread over 60 seconds**. An idle connected peer,
+on either backend, produced approximately 4.3-4.7 voluntary context switches per second on the
+daemon's main thread (its QUIC keep-alive and acknowledgements), not on the X11 thread. A report of
+"four wake-ups a second on X11" is therefore the cost of a connected peer, not an X11 problem.
 
-This change adds a regression test and reproducible measurement helper. **It
-does not change production waits or QUIC settings and does not claim an idle
-CPU improvement.** The second measurement below is a repeat after adding the
-regression, not an “after fixing the daemon” result. The independent mDNS
-interface poll described below remains unresolved; disabling it without an
-equivalent network-change notification would regress discovery.
+The one remaining periodic source is the mDNS library's own network-interface check (every 5 seconds,
+with discovery on). Switching it off without an equivalent network-change notification would break
+discovery after DHCP and Wi-Fi changes, so it stays; `--no-discovery` removes it. The literal
+"zero work when idle" statement is true for the measured disconnected, no-discovery service, not for
+the default discovery-enabled service or a live peer connection.
 
 ## Method and safety
 
-- Both passes use the same locally built `target/debug/one-mk`, `cargo build
-  -j 2 -p one-mk`, dev/unoptimized with debug information. No release/LTO build
-  was used. The daemon binary is unchanged between passes.
+- Both passes use the same locally built `target/debug/one-mk` (`cargo build -p one-mk`), dev
+  profile with debug information; no release or LTO build was used.
 - Each daemon has a separate throwaway identity, trust store, HOME, runtime
   directory (0700), and explicit `--home`; no process uses the real one-mk
   configuration. Child environments are constructed from scratch: PATH, HOME,
@@ -94,10 +89,10 @@ from 0 to 5 per TID/window; they are not used to decide whether code polls.
 | X11 input: `crates/input/src/x11.rs`, `X::session`; `crates/input/src/linux_rt.rs`, `Socket::readable` | `one-mk-x11` stayed at 0 in every counter window. After startup its epoll wait remained blocked; no 250 ms timeout. `has_data` uses **zero-timeout poll only after readiness**, not a periodic loop. | Already event driven. Do not replace it with a timeout or change XI2 event handling. |
 | XDND: `crates/input/src/dropzone_x11.rs`, `run` | `one-mk-drop` stayed at 0. | Existing timeout is guarded by an actual pending drag deadline. No idle timer. |
 | Focus: `crates/input/src/system/linux.rs`, `serve` / `wait` | Not started in these default idle scenarios. Code uses `poll(..., -1)` while watching and no change/debounce is pending. | On-demand probes can have a bounded request wait; the worker has a one-shot 60 s idle retirement, not a heartbeat. Focus-watch idle after an active visit is not established by this matrix. |
-| Clipboard: `crates/clipboard/src/lib.rs`, `Clipboard::system`; arboard 3.7.0 `platform/linux/x11.rs`, `serve_requests` | Lazy clipboard worker stayed at 0. Arboard's serving thread blocks in `wait_for_event`, not selection-owner polling. Clipboard reading has a 1 ms retry **only while a requested conversion is pending**. | Keep conversion timeout and selection-request service. This is not evidence about every external clipboard manager or the owner's live desktop. |
+| Clipboard: `crates/clipboard/src/lib.rs`, `Clipboard::system`; arboard 3.7.0 `platform/linux/x11.rs`, `serve_requests` | Lazy clipboard worker stayed at 0. Arboard's serving thread blocks in `wait_for_event`, not selection-owner polling. Clipboard reading has a 1 ms retry **only while a requested conversion is pending**. | Keep conversion timeout and selection-request service. This is not evidence about every external clipboard manager or a live desktop. |
 | Offline retry: `crates/one-mk/src/app.rs`, `dial_missing`; `crates/net/src/node.rs`, `connect_timeout` / `transport` | Main thread 41–44/min. Trace has bursts of progressively longer epoll deadlines separated by long waits. | Backoff is 2, 4, 8, 16, then 30 s; handshakes have a 3 s caller deadline, 2 ms initial RTT, and QUIC loss/PTO/draining timers. Not an idle housekeeping poll. Removing retry breaks reconnect with discovery off. Changing initial RTT or retry deadlines requires latency/loss tests; unchanged here. |
 | Connected QUIC: `crates/net/src/node.rs`, `transport`; Quinn driver / quinn-proto `Timer::KeepAlive`, `Timer::MaxAckDelay`, loss/idle timers | Main thread ~4.3–4.7/s on **both** backends. Trace repeatedly has approximately 1 s waits, socket-readiness returns, and approximately 25–30 ms timer waits. Attribution to keepalive/ACK handling is supported by transport settings and Quinn source; a syscall-only trace does not label an individual Rust future. | 1 s keepalive, 4 s max idle timeout. PING, ACK, delayed-ACK and driver scheduling explain why “1 ping/s” is not “1 context switch/s.” Retain existing four-second dead-peer safety and active-visit behavior. |
-| mDNS: `crates/net/src/discovery.rs`, `Discovery::start` / `browse`; mdns-sd 0.21.6 `service_daemon.rs`, `run`, `schedule_ip_check` | `mDNS_daemon` 26–56/min including LAN traffic. Quiet trace segments include an epoll **5000 ms timeout returning 0**, followed by interface enumeration. | **Real remaining periodic poll:** dependency checks interface addresses every 5 s (12/min absent coalescing). Also legitimate browse/probe/retransmit, TTL refresh and inbound multicast work. `--no-discovery` removes the entire source. Turning off `set_ip_check_interval` without replacement misses DHCP/Wi-Fi changes. A safe future fix needs kernel route/address notifications (Linux netlink and equivalent Windows/macOS APIs) wired to a supported rescan API; the dependency currently exposes no direct rescan operation. Not fixed by this change. |
+| mDNS: `crates/net/src/discovery.rs`, `Discovery::start` / `browse`; mdns-sd 0.21.6 `service_daemon.rs`, `run`, `schedule_ip_check` | `mDNS_daemon` 26–56/min including LAN traffic. Quiet trace segments include an epoll **5000 ms timeout returning 0**, followed by interface enumeration. | **Real remaining periodic poll:** dependency checks interface addresses every 5 s (12/min absent coalescing). Also legitimate browse/probe/retransmit, TTL refresh and inbound multicast work. `--no-discovery` removes the entire source. Turning off `set_ip_check_interval` without replacement misses DHCP/Wi-Fi changes. A safe future fix needs kernel route/address notifications (Linux netlink and equivalent Windows/macOS APIs) wired to a supported rescan API; the dependency currently exposes no direct rescan operation. Not fixed. |
 | Discovery forwarder: `Discovery::spawn_browser` | `one-mk-mdns` 3/min in both cohorts; blocking `events.recv()`. | Wakes on resolved announcements, not on its own timer. LAN-dependent; no strict universal budget. |
 | Power, shortcuts and portal tasks | No persistent extra thread/wake source in the clean private session. They wait for signals or return unavailable when there is no session bus. | This run does **not** exercise a real desktop portal, logind lock changes, or a live session D-Bus. No polling was found in their idle code paths. |
 | Network profiles: `crates/one-mk/src/netwatch.rs` | Disabled by default; not started without automatic profile rules. | NetworkManager signal watcher is event driven. No independent idle tick identified. |
@@ -159,28 +154,15 @@ counts but does not assert traffic-dependent rates. The connected budget is
 for exactly one peer and no visit, not arbitrary peer counts or active traffic.
 Debuggers, profilers and deliberate input do not belong in the assertion run.
 
-## Validation and limitations
+## Limits of these measurements
 
-- Linux workspace clippy and the requested Windows/macOS clippy target/package
-  sets passed, warning-free, with `-j 2` and `--all-targets`.
-- Two real X11 daemons on **separate** private Xvfb servers successfully
-  switched/returned control, transferred a 34-byte file with byte-for-byte
-  verification, and transferred 32 bytes of text via `clip-send`, verified by
-  reading the destination X selection with `xclip`. No tray/window was used.
-- The unmodified baseline workspace suite failed
-  `portal::tests::the_portal_going_away_lets_go_and_reconnects_when_it_is_back`
-  (10 s reconnect wait). The same test also failed alone, before any production
-  change. This independent failure is not repaired or hidden here.
-- The full workspace suite after adding the regression failed at that same
-  portal test; the new idle regression passed. A separate full workspace run
-  explicitly skipping only that known failure passed, including the idle
-  regression. The unfiltered workspace suite is therefore **not green**.
-- No production wait changed; no active-visit, hotkey, clipboard-follow,
-  transport-loss or reconnect behavior change is claimed. The end-to-end smoke
-  run is not a substitute for hardware loss, latency, hotkey or portal tests.
-- The original X11-specific report needs its exact revision, arguments,
-  connected/discovery state, settings and offending TID to investigate further.
-  The mDNS interface poll remains an identified follow-up, **not a completed
-  fix**. The project's literal zero-idle promise is true for the measured
-  disconnected, no-discovery daemon, not for its default discovery-enabled
-  operation or a live peer connection.
+- The counters measure voluntary scheduling transitions, not hardware interrupts. They were taken on
+  one Linux machine with a debug build; a release build, other desktops, Windows and macOS were not
+  measured.
+- A real desktop portal, logind lock changes and a live session bus were not part of the matrix
+  (no polling was found in their idle code, which waits for signals).
+- Two real X11 daemons on separate private X servers switched and returned control, transferred a file
+  with byte-for-byte verification and moved text with `clip-send`; that is a smoke test, not a
+  replacement for hardware loss, latency, hotkey or portal tests.
+- Whether a 1 second keep-alive helps Wi-Fi radios stay awake was not measured; that needs radio
+  measurements.
