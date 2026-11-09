@@ -196,7 +196,7 @@ impl Profiles {
         let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let write = || -> Result<()> {
             use std::io::Write;
-            let mut file = one_mk_ctl::private::options().write(true).create_new(true).open(&tmp)?;
+            let mut file = one_mk_ctl::private::create_new(&tmp)?;
             file.write_all(toml::to_string_pretty(self)?.as_bytes())?;
             // On disk before it replaces the old file: a crash leaves one or the other.
             file.sync_all()?;
@@ -493,10 +493,7 @@ mod tests {
     use one_mk_net::{Device, Identity};
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("one-mk-profiles-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        crate::testdir::scratch(&format!("profiles-{tag}"))
     }
 
     /// Saving flushes the folder after the rename, so the new

@@ -113,6 +113,7 @@ jobs:
         run: |
           d=target/${{ matrix.target }}/release
           name=one-mk-${{ matrix.target }}
+          umask 022
           mkdir "$name"
           sh scripts/copy-notices.sh "$name"
           if [ "${{ runner.os }}" = Windows ]; then
@@ -126,6 +127,10 @@ jobs:
               BIN_DIR="$d" sh scripts/package-wallpaper-gnome.sh "$name/gnome-wallpaper"
               cp "$d/one-mk-wall" "$name"/
             fi
+            # Folders 0755, programs 0755, every other file 0644: the archive
+            # does not depend on the runner's umask (install.sh extracts it as is).
+            find "$name" -type d -exec chmod 755 {} +
+            find "$name" -type f ! -perm -u+x -exec chmod 644 {} +
             tar czf "$name.tar.gz" "$name"
           fi
       - name: Mac app

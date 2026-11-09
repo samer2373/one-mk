@@ -46,7 +46,7 @@ fn main() {
         // One icon per settings folder: the login entry and the window both
         // start the tray, and the second copy just leaves.
         one_mk_ctl::private::create_dir_all(&ctx.dir)?;
-        let lock = one_mk_ctl::private::options().create(true).write(true).truncate(false).open(ctx.dir.join("tray.lock"))?;
+        let lock = one_mk_ctl::private::lock_file(&ctx.dir.join("tray.lock"))?;
         if lock.try_lock().is_err() {
             return Ok(());
         }

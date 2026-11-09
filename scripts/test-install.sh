@@ -78,6 +78,13 @@ if run_install "$scratch/r1" && [ "$(installed_version)" = 0.1.30 ] && [ -x "$bi
 else bad "fresh install: $(cat "$scratch/out")"; fi
 [ ! -e "$bin/LICENSE-MIT" ] && ok "only the one-mk* programs go into ~/.local/bin" || bad "non-program files installed into ~/.local/bin"
 [ -z "$(find "$bin" -name '.*.new.*' -o -name '.*.old.*')" ] && ok "no temporary files left" || bad "temporary files left in $bin"
+# The programs are 0755 whatever the person's umask (a restrictive or a group-writable one).
+for mask in 077 002; do
+    masked=$scratch/home-umask-$mask
+    (umask "$mask"; env -i HOME="$masked" PATH=/usr/bin:/bin ONE_MK_RELEASE_URL="file://$scratch/r1" dash "$scratch/install.sh" > "$scratch/out-umask" 2>&1) || true
+    [ "$(stat -c %a "$masked/.local/bin/one-mk" 2>/dev/null)" = 755 ] && [ "$(stat -c %a "$masked/.local/bin/one-mk-app" 2>/dev/null)" = 755 ] \
+        && ok "programs are installed 0755 under umask $mask" || bad "programs are not 0755 under umask $mask: $(cat "$scratch/out-umask")"
+done
 
 # Upgrade while every program runs: copying over a running program fails
 # with "Text file busy"; install.sh renames instead.

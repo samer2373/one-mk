@@ -48,7 +48,7 @@ pub fn spawn_watched(exe: &Path, args: &[String], log: Option<&Path>) -> std::io
     cmd.args(args).stdin(Stdio::null());
     // Only this account reads the log (it names computers and networks).
     let sink = || {
-        log.and_then(|p| crate::private::options().create(true).append(true).open(p).ok())
+        log.and_then(|p| crate::private::append(p).ok())
             .map_or_else(Stdio::null, Stdio::from)
     };
     cmd.stdout(sink()).stderr(sink());
@@ -92,5 +92,22 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&log).unwrap().permissions().mode() & 0o777, 0o600, "a new log is private");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod daemon_log_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// `daemon.log` holds what the service printed (names of computers and
+    /// networks): private from the first byte, whoever started it and
+    /// whatever their umask.
+    #[test]
+    fn the_daemon_log_is_created_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("daemon.log");
+        spawn_detached(Path::new("/bin/sh"), &["-c".to_owned(), "echo started".to_owned()], Some(&log)).unwrap();
+        assert_eq!(std::fs::metadata(&log).unwrap().permissions().mode() & 0o777, 0o600);
     }
 }

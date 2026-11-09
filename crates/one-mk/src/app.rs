@@ -3367,9 +3367,7 @@ mod tests {
     use one_mk_proto::PROTOCOL_VERSION;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("one-mk-test-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        d
+        crate::testdir::scratch_path(&format!("test-{tag}"))
     }
 
     /// A port nothing listens on. Tests run in parallel and the OS may hand

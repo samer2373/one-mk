@@ -373,10 +373,7 @@ mod tests {
     }
 
     fn temp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("one-mk-send-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        crate::testdir::scratch(&format!("send-{tag}"))
     }
 
     fn receiver(tag: &str) -> Receiver {

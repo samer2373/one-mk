@@ -171,7 +171,7 @@ fn load_state(home: &Path) -> Result<State> {
 
 fn lock(home: &Path) -> Result<File> {
     one_mk_ctl::private::create_dir_all(home)?;
-    let file = one_mk_ctl::private::options().read(true).write(true).create(true).truncate(false).open(home.join("update.lock"))?;
+    let file = one_mk_ctl::private::lock_file(&home.join("update.lock"))?;
     file.try_lock().context("another update check or installation is in progress; wait for it to finish and retry")?;
     clean_temporary(home, &[".one-mk-update-state-"])?;
     Ok(file)
@@ -984,7 +984,7 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
         // Remember the version gone back from, so it isn't installed again
         // by itself the next time the window opens.
         let skip = || {
-            let _ = fs::write(home.join(policy::SKIPPED), env!("CARGO_PKG_VERSION"));
+            let _ = one_mk_ctl::private::write(&home.join(policy::SKIPPED), env!("CARGO_PKG_VERSION"));
         };
         #[cfg(target_os = "macos")]
         if kind == InstallKind::MacApp {

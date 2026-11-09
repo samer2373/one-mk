@@ -1394,9 +1394,7 @@ draw_when_no_mouse = "auto"
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("one-mk-settings-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        d
+        crate::testdir::scratch_path(&format!("settings-{tag}"))
     }
 
     /// `[edge] idle_return`: ten minutes unless said, off, or a time from

@@ -25,9 +25,7 @@ for b in one-mk one-mk-tray one-mk-app one-mk-wallpaper; do
     install -m 0755 "$BIN_DIR/$b" "$appdir/usr/bin/$b"
 done
 install -Dm 0644 "$ROOT/packaging/linux/one-mk.desktop" "$appdir/usr/share/applications/one-mk.desktop"
-mkdir -p "$appdir/usr/share/metainfo"
-sed -e "s/@VERSION@/$VERSION/" -e "s/@DATE@/$(release_date)/" "$ROOT/packaging/linux/io.github.onemk.OneMk.metainfo.xml" \
-    > "$appdir/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml"
+write_metainfo "$appdir/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml"
 icons=$ROOT/docs/brand/app-icon/windows-linux/hicolor
 (cd "$icons" && find . -type f \( -name '*.png' -o -name '*.svg' \)) | while read -r f; do
     install -Dm 0644 "$icons/$f" "$appdir/usr/share/icons/hicolor/$f"

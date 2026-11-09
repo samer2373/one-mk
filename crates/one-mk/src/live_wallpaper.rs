@@ -103,6 +103,9 @@ struct Saved {
     authority_off: bool,
 }
 
+/// Why nothing plays while the screen is locked or the computer sleeps.
+const HELD_MESSAGE: &str = "Paused while this computer is locked or asleep; it resumes when you unlock it";
+
 fn helper() -> Result<PathBuf> {
     let executable = std::env::current_exe()?;
     one_mk_ctl::install::sibling(&executable, "one-mk-wallpaper").context("The video wallpaper player is missing from this oneMK installation. Reinstall oneMK to add it.")
@@ -157,14 +160,14 @@ pub(crate) fn digest(path: &Path) -> Result<String> {
 
 fn import(dir: &Path, path: &Path) -> Result<(String, PathBuf)> {
     let root = cache(dir);
-    std::fs::create_dir_all(&root)?;
+    one_mk_ctl::private::create_dir_all(&root)?;
     let hash = digest(path)?;
     let destination = cache_path(&root, &hash)?;
     if digest(&destination).ok().as_deref() != Some(hash.as_str()) {
         let temporary = root.join(format!("{}.part", crate::link::random_u64()));
         let result = (|| -> Result<()> {
             let mut source = crate::transfer::open_regular(path, std::fs::metadata(path)?.len())?;
-            let mut target = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+            let mut target = one_mk_ctl::private::create_new(&temporary)?;
             std::io::copy(&mut source, &mut target)?;
             target.sync_all()?;
             ensure!(digest(&temporary)? == hash, "The video changed while it was being copied. Choose it again.");
@@ -177,6 +180,14 @@ fn import(dir: &Path, path: &Path) -> Result<(String, PathBuf)> {
     Ok((hash, destination))
 }
 
+/// Removes a video the daemon copied in (and its poster) when it turned out
+/// to be unusable, unless it is one of the `keep` hashes still in use.
+fn discard_unused(dir: &Path, hash: &str, keep: &BTreeSet<String>) {
+    if keep.contains(hash) { return; }
+    if let Ok(path) = cache_path(&cache(dir), hash) { let _ = std::fs::remove_file(path); }
+    let _ = std::fs::remove_file(cache(dir).join(format!("{hash}.png")));
+}
+
 async fn inspect(dir: &Path, hash: &str) -> Result<Media> {
     inspect_file(&cache_path(&cache(dir), hash)?, Some(&cache(dir).join(format!("{hash}.png")))).await
 }
@@ -186,17 +197,27 @@ async fn inspect_file(path: &Path, poster: Option<&Path>) -> Result<Media> {
     probe.arg("--probe").arg(path).kill_on_drop(true);
     if let Some(poster) = poster { probe.arg(poster); }
     let output = tokio::time::timeout(Duration::from_secs(40), probe.output()).await.context("The system took too long to read this video")??;
-    ensure!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr).trim());
+    ensure!(output.status.success(), "{}", probe_failure(&String::from_utf8_lossy(&output.stderr)));
     Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+/// What the helper said when it could not read a file, as a plain sentence:
+/// it ends with Rust's `Error: ` (and, with causes, "Caused by:" lines), which
+/// is for developers, not for the person who chose a text file as a video.
+fn probe_failure(stderr: &str) -> String {
+    let text = stderr.trim();
+    let text = text.strip_prefix("Error:").map_or(text, str::trim_start);
+    let first = text.split("\n\nCaused by:").next().unwrap_or(text).trim();
+    if first.is_empty() { "The system could not read this file as a video or picture. Choose another file.".into() } else { first.to_owned() }
 }
 
 /// Saves what is chosen, so it comes back after a restart: written beside,
 /// flushed, then swapped in, so a crash leaves the old or the new one whole.
 fn save_selection(dir: &Path, saved: &Saved) -> Result<()> {
     use std::io::Write;
-    std::fs::create_dir_all(cache(dir))?;
+    one_mk_ctl::private::create_dir_all(&cache(dir))?;
     let temporary = cache(dir).join("selection.tmp");
-    let mut file = std::fs::File::create(&temporary)?;
+    let mut file = one_mk_ctl::private::write_open(&temporary)?;
     file.write_all(&serde_json::to_vec(saved)?)?;
     file.sync_all()?;
     std::fs::rename(temporary, cache(dir).join("selection.json"))?;
@@ -228,7 +249,7 @@ fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
         Ok(import(dir, &temporary)?.0)
     })();
     let _ = std::fs::remove_file(temporary);
-    if let Ok(hash) = &result { std::fs::write(index, hash)?; }
+    if let Ok(hash) = &result { one_mk_ctl::private::write(&index, hash)?; }
     result
 }
 
@@ -288,9 +309,9 @@ impl Runtime {
         let bytes = std::fs::metadata(path)?.len();
         ensure!(bytes <= one_mk_wallpaper::MAX_MEDIA_BYTES, "Choose a video smaller than 4 GB");
         let Some(target) = one_mk_wallpaper::ImportTarget::for_canvas(canvas, &media, bytes) else { return Ok(None) };
-        std::fs::create_dir_all(cache(dir))?;
+        one_mk_ctl::private::create_dir_all(&cache(dir))?;
         let prepared = Prepared(cache(dir).join(format!("prepared-{}.mp4", crate::link::random_u64())));
-        let log = std::fs::File::create(cache(dir).join("prepare.log"))?;
+        let log = one_mk_ctl::private::write_open(&cache(dir).join("prepare.log"))?;
         let mut child = tokio::process::Command::new(helper()?).arg("--prepare").arg(path).arg(&prepared.0).arg(serde_json::to_string(&target)?).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(log).kill_on_drop(true).spawn()?;
         let mut lines = tokio::io::BufReader::new(child.stdout.take().context("The video preparation did not start")?).lines();
         tokio::time::timeout(Duration::from_secs(600), async {
@@ -491,7 +512,7 @@ impl Runtime {
         if state.locked || state.asleep {
             state.stop();
             let computer = state.computer.clone();
-            let playback = Playback::Paused("Paused while this computer is locked or asleep".into());
+            let playback = Playback::Paused(HELD_MESSAGE.into());
             state.status.computers.insert(computer, playback.clone());
             if let Some(control) = &state.report_to && let Some(plan) = &state.status.plan { send(control, &Wire::Playback { hash: plan.hash.clone(), playback }); }
         }
@@ -520,8 +541,11 @@ impl Runtime {
         let held = !plan.picture && plan.paused && state.player.is_some();
         if state.locked || state.asleep || (!plan.picture && plan.paused && !held) {
             state.stop();
-            state.status.computers.insert(state.computer.clone(), Playback::Paused("Paused".into()));
-            state.status.message = "Paused".into();
+            // Say why: a wallpaper set while the screen is locked is paused
+            // by the lock, not by anyone.
+            let why = if state.locked || state.asleep { HELD_MESSAGE } else { "Paused" };
+            state.status.computers.insert(state.computer.clone(), Playback::Paused(why.into()));
+            state.status.message = why.into();
             return Ok(());
         }
         if let Some(child) = &mut state.player {
@@ -536,8 +560,8 @@ impl Runtime {
         let config = PlayerConfig { plan: plan.clone(), computer: state.computer.clone(), path: cache_path(&cache(dir), if plan.picture { plan.asset_hash.as_ref().unwrap_or(&plan.hash) } else { &plan.hash })?, clock_offset_ms: state.offset };
         let config_path = cache(dir).join("player.json");
         let _ = std::fs::remove_file(cache(dir).join("playback.txt"));
-        std::fs::write(&config_path, serde_json::to_vec(&config)?)?;
-        let log = std::fs::File::create(cache(dir).join("player.log"))?;
+        one_mk_ctl::private::write(&config_path, serde_json::to_vec(&config)?)?;
+        let log = one_mk_ctl::private::write_open(&cache(dir).join("player.log"))?;
         state.launch += 1;
         state.player = Some(std::process::Command::new(helper()?).arg(config_path).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(log).spawn()?);
         state.status.computers.insert(state.computer.clone(), Playback::Preparing);
@@ -752,10 +776,23 @@ impl Runtime {
             } };
             let path = prepared.as_ref().map_or(path, |prepared| prepared.0.clone());
             let (hash, source) = tokio::task::spawn_blocking(move || import(&dir_owned, &path)).await??;
-            let media = if picture {
+            let inspected = if picture {
                 let poster = cache(dir).join(format!("{hash}.png"));
-                tokio::task::spawn_blocking(move || one_mk_wallpaper::picture::inspect(&helper()?, &source, &poster)).await??
-            } else { inspect(dir, &hash).await? };
+                tokio::task::spawn_blocking(move || one_mk_wallpaper::picture::inspect(&helper()?, &source, &poster)).await?
+            } else { inspect(dir, &hash).await };
+            let media = match inspected {
+                Ok(media) => media,
+                Err(error) => {
+                    // A file that can't be used is not kept until the next
+                    // one that can: only what is chosen (or was just before) stays.
+                    let state = self.state.lock().unwrap();
+                    let mut keep = BTreeSet::new();
+                    keep.extend(state.status.plan.iter().flat_map(|plan| [plan.hash.clone()].into_iter().chain(plan.asset_hash.clone())));
+                    keep.extend(state.previous.clone());
+                    discard_unused(dir, &hash, &keep);
+                    return Err(error);
+                }
+            };
             let computers = std::iter::once(status.id.clone()).chain(status.peers.iter().map(|peer| peer.id.clone())).collect();
             plan = Some(Plan { hash, title, media, canvas, start_ms: now_ms() + 2000, fit: Default::default(), computers, pause_on_battery: true, paused: false, picture, asset_hash: None });
         } else {
@@ -1005,7 +1042,8 @@ fn send(control: &ControlWriter, wire: &Wire) {
 
 #[derive(clap::Args)]
 pub struct Args {
-    /// Print the result as JSON (only `extension` commands).
+    /// Print the result as JSON ({"ok": true, "message": ...}), or
+    /// {"ok": false, "error": ...} with a non-zero exit when it failed.
     #[arg(long, global = true)] json: bool,
     #[command(subcommand)] command: Action,
 }
@@ -1031,13 +1069,37 @@ enum Action {
 }
 
 pub async fn command(dir: &Path, args: Args) -> Result<()> {
-    if let Action::Extension { command } = args.command {
-        let result = crate::wallpaper::extension::command(&command).await?;
-        if args.json { println!("{result}"); }
-        else { println!("{}", result["message"].as_str().unwrap_or_default()); }
-        return Ok(());
+    let json = args.json;
+    match run(dir, args.command).await {
+        Ok(result) => {
+            if json { println!("{result}"); }
+            else {
+                println!("{}", result["message"].as_str().unwrap_or_default());
+                if let Some(note) = result["experimental"].as_str() { println!("{note}"); }
+            }
+            Ok(())
+        }
+        Err(error) => {
+            if json { println!("{}", serde_json::json!({"ok": false, "error": format!("{error:#}")})); }
+            Err(error)
+        }
     }
-    let request = match args.command {
+}
+
+/// What `one-mk wallpaper status` says when no oneMK answers: nothing plays
+/// without it, and a saved choice comes back when it starts.
+fn not_running(dir: &Path) -> String {
+    let chosen = std::fs::read(cache(dir).join("selection.json")).ok().and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok())
+        .filter(|saved| !saved.authority_off).and_then(|saved| saved.status.plan).map(|plan| plan.title);
+    let comes_back = chosen.map_or_else(String::new, |title| format!(" It brings back \"{title}\" when it starts."));
+    format!("Wallpaper is off: oneMK is not running.{comes_back} Start it with `one-mk run`, or make it start when you log in with `one-mk install`.")
+}
+
+const NOT_RUNNING: &str = "oneMK is not running. Start it with `one-mk run` (or open the oneMK window), then try again.";
+
+async fn run(dir: &Path, action: Action) -> Result<serde_json::Value> {
+    if let Action::Extension { command } = action { return crate::wallpaper::extension::command(&command).await; }
+    let request = match action {
         Action::Status => crate::control::Request::Status,
         action => crate::control::Request::LiveWallpaper(serde_json::to_string(&match action {
             Action::Set { file } => { check_source(&file)?; Command::Set { path: file.canonicalize().with_context(|| format!("Cannot open {}", file.display()))? } }
@@ -1046,7 +1108,10 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
         })?),
     };
     let asked_status = matches!(request, crate::control::Request::Status);
-    let mut reply = crate::control::request(dir, request).await?.context("Start oneMK first")?;
+    let Some(mut reply) = crate::control::request(dir, request).await? else {
+        if asked_status { return Ok(serde_json::json!({"ok": true, "running": false, "message": not_running(dir), "wallpaper": null})); }
+        bail!(NOT_RUNNING);
+    };
     if reply.starts_with("error ") { bail!("{}", reply.trim_start_matches("error ").trim()); }
     // A change answers with an acknowledgement, not the wallpaper's state:
     // what it says now comes from a status request.
@@ -1054,7 +1119,7 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
     // count would include one that can't, and `status` would then disagree.
     if !asked_status {
         for attempt in 0..12 {
-            reply = crate::control::request(dir, crate::control::Request::Status).await?.context("Start oneMK first")?;
+            reply = crate::control::request(dir, crate::control::Request::Status).await?.context(NOT_RUNNING)?;
             let heard = Status::decode(&reply).and_then(|status| status.wallpaper).is_none_or(|wallpaper| wallpaper.plan.as_ref().is_none_or(|plan|
                 plan.canvas.monitors.iter().filter(|monitor| monitor.online && plan.computers.contains(&monitor.computer))
                     .all(|monitor| wallpaper.computers.contains_key(&monitor.computer))));
@@ -1062,15 +1127,14 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
-    match Status::decode(&reply) {
+    Ok(match Status::decode(&reply) {
         Some(status) => {
             let wallpaper = status.wallpaper.unwrap_or_default();
-            println!("{}", if wallpaper.plan.is_some() { wallpaper.message.as_str() } else { "Wallpaper is off" });
-            if let Some(note) = wallpaper.experimental { println!("{note}"); }
+            let message = if wallpaper.plan.is_some() { wallpaper.message.clone() } else { "Wallpaper is off".into() };
+            serde_json::json!({"ok": true, "running": true, "message": message, "experimental": wallpaper.experimental, "wallpaper": wallpaper})
         }
-        None => println!("Wallpaper updated."),
-    }
-    Ok(())
+        None => serde_json::json!({"ok": true, "running": true, "message": "Wallpaper updated."}),
+    })
 }
 
 /// `one-mk uninstall`: the wallpaper goes off and the person's own picture
@@ -1270,6 +1334,67 @@ mod tests {
         runtime.shutdown();
         std::thread::sleep(Duration::from_millis(20));
         assert_eq!(runtime.state.lock().unwrap().status.computers.get("host"), Some(&Playback::Ready));
+    }
+
+    #[test]
+    fn a_file_the_helper_cannot_read_is_said_plainly_without_rusts_error_prefix() {
+        assert_eq!(probe_failure("Error: The system could not decode this video. Check that GStreamer has a decoder for it.\n"),
+            "The system could not decode this video. Check that GStreamer has a decoder for it.");
+        assert_eq!(probe_failure("Error: Cannot open it\n\nCaused by:\n    0: no such file\n"), "Cannot open it");
+        assert_eq!(probe_failure("already plain"), "already plain");
+        assert!(probe_failure("  \n").contains("could not read this file"));
+        assert!(!probe_failure("Error:").starts_with("Error"));
+    }
+
+    #[test]
+    fn an_unusable_file_is_not_kept_but_the_chosen_and_previous_ones_are() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cache(directory.path())).unwrap();
+        let [bad, chosen, before] = ["b", "c", "d"].map(|letter| letter.repeat(64));
+        for hash in [&bad, &chosen, &before] {
+            std::fs::write(cache_path(&cache(directory.path()), hash).unwrap(), b"x").unwrap();
+            std::fs::write(cache(directory.path()).join(format!("{hash}.png")), b"x").unwrap();
+        }
+        let keep = BTreeSet::from([chosen.clone(), before.clone()]);
+        discard_unused(directory.path(), &bad, &keep);
+        assert!(!cache_path(&cache(directory.path()), &bad).unwrap().exists() && !cache(directory.path()).join(format!("{bad}.png")).exists());
+        // Choosing the file that already plays, and failing, must not delete it.
+        discard_unused(directory.path(), &chosen, &keep);
+        discard_unused(directory.path(), &before, &keep);
+        assert!(cache_path(&cache(directory.path()), &chosen).unwrap().exists() && cache_path(&cache(directory.path()), &before).unwrap().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_wallpaper_set_while_locked_or_asleep_says_that_is_why_it_is_paused() {
+        for (locked, asleep) in [(true, false), (false, true)] {
+            let mut state = State::default();
+            state.computer = "host".into();
+            state.status.plan = Some(plan());
+            state.locked = locked; state.asleep = asleep;
+            Runtime::start(Path::new("/nonexistent-one-mk-test"), &mut state).unwrap();
+            assert!(state.status.message.contains("locked or asleep") && state.status.message.contains("unlock"), "{}", state.status.message);
+            assert_eq!(state.status.computers.get("host"), Some(&Playback::Paused(HELD_MESSAGE.into())));
+        }
+        // Paused by the person (not locked): still just "Paused".
+        let mut state = State::default();
+        state.computer = "host".into();
+        state.status.plan = Some(Plan { paused: true, ..plan() });
+        Runtime::start(Path::new("/nonexistent-one-mk-test"), &mut state).unwrap();
+        assert_eq!(state.status.message, "Paused");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn status_without_a_running_service_names_the_saved_choice() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(not_running(directory.path()).starts_with("Wallpaper is off: oneMK is not running.") && !not_running(directory.path()).contains("brings back"));
+        let saved = Saved { status: one_mk_wallpaper::Status { plan: Some(Plan { title: "beach.mp4".into(), ..plan() }), ..Default::default() }, coordinator: None, previous: None, authority_off: false };
+        save_selection(directory.path(), &saved).unwrap();
+        assert!(not_running(directory.path()).contains("brings back \"beach.mp4\" when it starts"));
+        let saved = Saved { authority_off: true, ..saved };
+        save_selection(directory.path(), &saved).unwrap();
+        assert!(!not_running(directory.path()).contains("brings back"));
     }
 
     #[test]
