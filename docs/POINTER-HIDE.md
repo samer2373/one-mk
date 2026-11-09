@@ -41,3 +41,7 @@ itself, renewing keeps it hidden, a disconnect shows it. That Shell has no
 pointer, so what is drawn is checked on a real session. The daemon side is
 covered by `the_pointer_is_hidden_only_while_captured` in `portal_tests.rs`.
 Qualified on GNOME Shell 50.1 only (`metadata.json`).
+`one-mk pointer-extension install` checks `gnome-shell --version` against the
+versions in `metadata.json` and refuses any other (and a computer without
+GNOME Shell), so it never installs an extension GNOME would reject or that was
+not tried on that version.
