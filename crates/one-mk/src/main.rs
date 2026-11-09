@@ -431,6 +431,9 @@ enum Cmd {
         /// Machine-readable output for a program to read.
         #[arg(long)]
         json: bool,
+        /// Also list the checks that did not apply here.
+        #[arg(long)]
+        all: bool,
     },
     /// Measure latency and CPU cost.
     Bench {
@@ -529,12 +532,11 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            if verbose > 0 {
-                eprintln!("one-mk: {e:?}");
-            } else {
-                // One line; -v shows each cause on its own.
-                eprintln!("one-mk: {e:#}");
-            }
+            // One line; -v shows each cause on its own.
+            let text = if verbose > 0 { format!("{e:?}") } else { format!("{e:#}") };
+            // "one-mk: one-mk is not running" says it twice.
+            let prefix = if text.starts_with("one-mk ") { "" } else { "one-mk: " };
+            eprintln!("{prefix}{text}");
             ExitCode::from(e.downcast_ref::<wallpaper::Failure>().map_or(1, |failure| failure.code))
         }
     }
@@ -677,7 +679,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!("fingerprint {}", id.fingerprint);
                 Ok(())
             }
-            Cmd::Doctor { json } => doctor::run(&dir, json).await,
+            Cmd::Doctor { json, all } => doctor::run(&dir, json, all).await,
             Cmd::Bench { count, rate, serve, connect, peer } => {
                 bench::run(&dir, bench::Options { count, rate: rate.max(1), serve, connect, peer }).await
             }

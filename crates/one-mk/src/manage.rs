@@ -232,8 +232,14 @@ pub async fn layout(dir: &Path, device: &str, side: Option<Side>, offset: Option
         Some(Swap::Auto) => println!("Ctrl and Cmd are swapped for keys sent to {name} only between a Mac and another computer."),
         None => {}
     }
-    if control::request(dir, Request::Reload).await?.is_some() {
+    if control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?.is_some() {
         println!("Applied right away.{}", if moved { " Its computer picks up the change too." } else { "" });
+        // Only the running one-mk knows the other computer's screens.
+        if moved && let Some(status) = control::request(dir, Request::Status).await.ok().flatten().as_deref().and_then(Status::decode) {
+            for warning in status.layout.warnings.iter().filter(|w| w.contains(&format!("layout of {name} "))) {
+                println!("Warning: {warning}.");
+            }
+        }
     } else {
         println!("one-mk is not running; this takes effect the next time it starts.");
     }

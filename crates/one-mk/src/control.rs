@@ -31,8 +31,9 @@ pub struct Server {
 impl Server {
     pub async fn start(dir: &Path) -> Result<Self> {
         if let Ok(Some(_)) = request(dir, Request::Status).await {
-            bail!("one-mk is already running for this user");
+            bail!("one-mk is already running with the settings folder {} (stop it with `one-mk stop`, or give this one its own --home)", dir.display());
         }
+        check_endpoint(dir)?;
         let listener = sys::bind(dir).with_context(|| format!("opening control endpoint {}", sys::path(dir).display()))?;
         let (tx, rx) = mpsc::unbounded_channel();
         let token = listener.token();
@@ -111,18 +112,69 @@ pub async fn request(dir: &Path, req: Request) -> Result<Option<String>> {
         _ => {}
     }
     let patience = req.reply_timeout();
+    check_endpoint(dir)?;
     let stream = match tokio::time::timeout(TIMEOUT, sys::connect(dir)).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused) => {
             return Ok(None);
         }
         Ok(Err(e)) => return Err(e).with_context(|| format!("connecting to control endpoint {}", sys::path(dir).display())),
-        Err(_) => bail!("one-mk did not answer"),
+        Err(_) => return Err(NotAnswering.into()),
     };
     let reply = tokio::time::timeout(patience + TIMEOUT, exchange(stream, req)).await
-        .map_err(|_| anyhow::anyhow!("one-mk did not answer"))?
+        .map_err(|_| NotAnswering)?
         .with_context(|| format!("exchanging command with control endpoint {}", sys::path(dir).display()))?;
     Ok(Some(reply))
+}
+
+/// The running one-mk took the request but did not answer in time: it is
+/// busy or stuck (stopped in a debugger, suspended). Callers that saved a
+/// change first say so (see [`NotAnswering::saved`]).
+#[derive(Debug)]
+pub struct NotAnswering;
+
+impl std::fmt::Display for NotAnswering {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the running one-mk did not answer (it may be busy or stuck; if this keeps happening, end the one-mk process and start it again)")
+    }
+}
+
+impl std::error::Error for NotAnswering {}
+
+impl NotAnswering {
+    /// The error for a change that was saved, which the running one-mk
+    /// did not confirm applying.
+    pub fn saved(error: anyhow::Error) -> anyhow::Error {
+        if error.downcast_ref::<NotAnswering>().is_some() {
+            anyhow::anyhow!("saved, but the running one-mk did not confirm it: it applies the change once it answers again, or when it next starts")
+        } else {
+            error.context("saved, but could not tell the running one-mk")
+        }
+    }
+}
+
+/// The longest control socket path Unix allows (`sun_path`, less its NUL).
+#[cfg(unix)]
+const MAX_SOCKET_PATH: usize = 107;
+
+/// Refuses a settings folder whose control socket path is too long for
+/// Unix: clearly, rather than as a connection error that looks like
+/// "not running" or makes `pair` retry for ever.
+fn check_endpoint(dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let path = sys::path(dir);
+        let len = path.as_os_str().len();
+        if len > MAX_SOCKET_PATH {
+            bail!(
+                "the path of the settings folder {} is too long: one-mk's control socket there would be {len} characters long, and Unix allows {MAX_SOCKET_PATH}; use a shorter --home (or ONE_MK_HOME)",
+                dir.display()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 pub fn validate_target(name: &str) -> Result<()> {
@@ -239,6 +291,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// A settings folder too deep for a Unix socket is a clear error for
+    /// commands and the daemon alike, never "not running"; and a change
+    /// the running one-mk didn't confirm says it was saved.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_too_long_home_is_named_and_an_unconfirmed_change_saved() {
+        let deep = std::env::temp_dir().join("d".repeat(120));
+        let err = request(&deep, Request::Status).await.unwrap_err();
+        assert!(format!("{err:#}").contains("is too long") && format!("{err:#}").contains("shorter --home"), "{err:#}");
+        assert!(Server::start(&deep).await.is_err());
+        assert!(check_endpoint(&temp_dir("short")).is_ok());
+        let saved = NotAnswering::saved(NotAnswering.into());
+        assert!(saved.to_string().starts_with("saved, but the running one-mk did not confirm it"), "{saved}");
+        assert!(!NotAnswering.to_string().starts_with("one-mk "), "main would print \"one-mk: one-mk ...\"");
     }
 
     /// Answers `status` with "hello" and `reload` with "ok".

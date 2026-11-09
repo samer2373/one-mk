@@ -263,3 +263,31 @@ fn incompatible_free_edges_stop_negotiating_and_request_placement() {
         assert!(!Lab::cli(home, &["status"]).contains("edges overlap"));
     }
 }
+
+/// An invitation made while one-mk runs on a port of its own tells the
+/// joiner that port, not the default one: the joiner (whose one-mk isn't
+/// running here, so nothing rewrites what it saved) dials the right place.
+#[test]
+fn invitation_without_a_service_port_offers_the_running_port() {
+    let mut lab = Lab::new();
+    let host = lab.home("host");
+    let joiner = lab.home("joiner");
+    let host_port = lab.daemon(&host);
+    assert_ne!(host_port, one_mk_proto::DEFAULT_PORT);
+    let address = if_addrs::get_if_addrs().unwrap().into_iter().map(|interface| interface.ip())
+        .find(|address| address.is_ipv4() && one_mk_net::invite::usable_address(*address)).expect("invitation needs a local non-loopback address");
+    let host_child = lab.spawn(&host, &["invite", "--machine", "--listen", &format!("{address}:0"), "--no-discovery"], "pair.log");
+    let output = Lab::wait_text(&host, "pair.log", "onemk://");
+    let link = output.lines().find_map(|line| line.strip_prefix("invitation\t")).unwrap().to_owned();
+    // Port 9 (discard): the host's one-mk finds nothing there to connect to.
+    let join_child = lab.spawn(&joiner, &["join", "--machine", "--service-port", "9"], "pair.log");
+    writeln!(lab.children[join_child].stdin.as_mut().unwrap(), "{link}").unwrap();
+    for (child, home) in [(host_child, &host), (join_child, &joiner)] {
+        Lab::wait_text(home, "pair.log", "code\t");
+        writeln!(lab.children[child].stdin.as_mut().unwrap(), "yes").unwrap();
+    }
+    lab.finished(host_child, &host, "pair.log");
+    lab.finished(join_child, &joiner, "pair.log");
+    let saved = device(&joiner, &host).addrs;
+    assert!(!saved.is_empty() && saved.iter().all(|a| a.ends_with(&format!(":{host_port}"))), "{saved:?} (one-mk runs on {host_port})");
+}

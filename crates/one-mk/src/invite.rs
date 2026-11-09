@@ -35,9 +35,10 @@ pub struct InviteArgs {
     /// Skip mDNS (the link still contains direct addresses).
     #[arg(long)]
     no_discovery: bool,
-    /// Port used later by `run` on this computer.
-    #[arg(long, default_value_t = DEFAULT_PORT, value_parser = clap::value_parser!(u16).range(1..))]
-    service_port: u16,
+    /// Port `run` uses on this computer (default: the running one-mk's,
+    /// or 24900).
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    service_port: Option<u16>,
 }
 
 #[derive(Args)]
@@ -49,9 +50,10 @@ pub struct JoinArgs {
     /// Trust the pinned host without prompting (required for non-terminal stdin).
     #[arg(long)]
     yes: bool,
-    /// Port used later by `run` on this computer.
-    #[arg(long, default_value_t = DEFAULT_PORT, value_parser = clap::value_parser!(u16).range(1..))]
-    service_port: u16,
+    /// Port `run` uses on this computer (default: the running one-mk's,
+    /// or 24900).
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    service_port: Option<u16>,
 }
 
 fn duration(text: &str) -> Result<Duration, String> {
@@ -77,7 +79,10 @@ pub fn query(dir: &Path, reply: oneshot::Sender<String>) {
     });
 }
 
-pub async fn run(dir: &Path, args: InviteArgs) -> Result<()> {
+pub async fn run(dir: &Path, mut args: InviteArgs) -> Result<()> {
+    if args.service_port.is_none() {
+        args.service_port = Some(crate::pair::service_port(dir).await?);
+    }
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let bridge = bridge_dir(dir);
     std::fs::create_dir_all(&bridge)?;
@@ -108,7 +113,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
         addrs.truncate(8);
         addrs
     };
-    let invitation = Invitation::new(identity.fingerprint, addrs, args.service_port, args.expires)?;
+    let invitation = Invitation::new(identity.fingerprint, addrs, args.service_port.unwrap_or(DEFAULT_PORT), args.expires)?;
     let state = Arc::new(InvitationState::new(&invitation));
     let mut link = invitation.link();
     let wall_expiry = invitation.expires;
@@ -204,7 +209,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                 };
                 let (identity, state) = (identity.clone(), state.clone());
                 let pending = pending.clone();
-                let service_port = args.service_port;
+                let service_port = args.service_port.unwrap_or(DEFAULT_PORT);
                 attempts.spawn(async move {
                     let mut slot = Some(slot);
                     let exchange = tokio::time::timeout(STEP_TIMEOUT, InviteSession::accept_with_admission(&peer, identity.fingerprint, &identity.name, service_port, &state, || {
@@ -270,13 +275,17 @@ pub async fn join(dir: &Path, args: JoinArgs) -> Result<()> {
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let node = Node::bind_any(identity.clone(), 0)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    let mut result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline, args.machine).await;
+    let service_port = match args.service_port {
+        Some(port) => port,
+        None => crate::pair::service_port(dir).await?,
+    };
+    let mut result = join_inner(dir, &node, &identity, &invitation, service_port, args.yes, deadline, args.machine).await;
     for _ in 0..3 {
         if !result.as_ref().is_err_and(|error| format!("{error:#}").contains("busy")) { break; }
         let wait = Duration::from_millis(300 + u64::from(rand::random::<u16>()) % 601);
         if tokio::time::Instant::now() + wait >= deadline { break; }
         tokio::time::sleep(wait).await;
-        result = join_inner(dir, &node, &identity, &invitation, args.service_port, args.yes, deadline, args.machine).await;
+        result = join_inner(dir, &node, &identity, &invitation, service_port, args.yes, deadline, args.machine).await;
     }
     node.shutdown(Duration::from_millis(200)).await;
     result
@@ -603,7 +612,7 @@ mod tests {
         let host_dir = dir.join("host");
         let host_home = host_dir.clone();
         let host = tokio::spawn(async move {
-            run(&host_home, InviteArgs { machine: false, expires: Duration::from_secs(30), confirm: false, no_confirm: true, listen: None, no_discovery: true, service_port: 24900 }).await
+            run(&host_home, InviteArgs { machine: false, expires: Duration::from_secs(30), confirm: false, no_confirm: true, listen: None, no_discovery: true, service_port: Some(24900) }).await
         });
         let invitation = tokio::time::timeout(Duration::from_secs(5), async {
             loop {

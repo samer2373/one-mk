@@ -55,7 +55,20 @@ impl Out {
     }
 }
 
+/// The port the other computer should reach this one's one-mk at: the
+/// running daemon's, or the default one if none runs (the address is
+/// corrected the first time the two connect).
+pub async fn service_port(dir: &Path) -> Result<u16> {
+    let running = crate::control::request(dir, crate::control::Request::Status).await?
+        .and_then(|reply| one_mk_ctl::status::Status::decode(&reply));
+    Ok(running.map_or(one_mk_proto::DEFAULT_PORT, |status| status.port))
+}
+
 pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery: bool) -> Result<()> {
+    // Asked once before anything starts: a control socket that can't be
+    // reached (a settings folder too deep for one) is an error to report,
+    // not a reason to retry pairing for ever.
+    let running = crate::control::request(dir, crate::control::Request::Status).await?.is_some();
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let mut trust = TrustStore::load(dir)?;
     let node = Node::bind_any(identity.clone(), 0)?;
@@ -75,6 +88,12 @@ pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery: b
         || format!("This computer: {} ({}), pairing port {port}", identity.name, me.short()),
         || format!("me\t{}\t{}\t{port}", identity.name, me.short()),
     );
+    if !running && !out.machine {
+        println!(
+            "one-mk isn't running here, so the other computer will look for it on port {} until they first connect.",
+            one_mk_proto::DEFAULT_PORT
+        );
+    }
     out.say(
         || match connect {
             Some(addr) => format!("Connecting to {addr}..."),
@@ -193,11 +212,7 @@ async fn session(dir: &Path, peer: Peer, identity: &Identity, trust: &mut TrustS
 
 async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
     let fingerprint = peer.fingerprint;
-    // Remember the address with the service port (not this temporary one),
-    // for networks where discovery is blocked.
-    let running = crate::control::request(dir, crate::control::Request::Status).await?
-        .and_then(|reply| one_mk_ctl::status::Status::decode(&reply));
-    let port = running.as_ref().map_or(one_mk_proto::DEFAULT_PORT, |status| status.port);
+    let port = service_port(dir).await?;
     let pairing = Pairing::start(peer, identity.fingerprint, &identity.name).await?;
     let name = pairing.peer_name.clone();
 
@@ -248,10 +263,11 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
                 return format!("\nPaired with {name}. Choose its placement before sharing through a screen edge.\nStart sharing: one-mk run (only on computers not already running)");
             }
             format!(
-                "\nPaired with {name}. Its provisional side is {side}; running computers reconcile the mirrored layout.\n\
-                 If that's wrong:  one-mk layout \"{name}\" {}\n\
-                 Start sharing:    one-mk run   (only on computers not already running)",
-                side.opposite()
+                "\nPaired with {name}. For now it is {}; once both computers run one-mk they agree on one arrangement \
+                 (see `one-mk status`).\n\
+                 To choose where it is:  one-mk layout \"{name}\" left|right|top|bottom\n\
+                 Start sharing:          one-mk run   (only on computers not already running)",
+                one_mk_ctl::status::on_your(side)
             )
         },
         || format!("paired\t{fingerprint}\t{name}\t{}", if placement.placed_by == one_mk_net::PlacedBy::Pending { "unplaced".to_owned() } else { side.to_string() }),

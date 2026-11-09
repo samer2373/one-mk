@@ -931,7 +931,7 @@ impl EdgeArgs {
 
 /// Asks a running daemon to apply the saved settings.
 pub(crate) async fn apply(dir: &Path) -> Result<()> {
-    if control::request(dir, Request::Reload).await?.is_some() {
+    if control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?.is_some() {
         println!("Applied right away.");
     } else {
         println!("one-mk is not running; this takes effect the next time it starts.");
