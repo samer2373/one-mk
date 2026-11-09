@@ -1,8 +1,10 @@
-# GNOME Wayland production video — 2026-11-03
+# Video wallpaper on GNOME Wayland (experimental)
 
-Qualified compositor: **GNOME Shell 50.1 only**. This replaces the setup-only
-checkpoint and the earlier authority-record/decoder-cgroup laboratory design.
-No other Shell version is admitted by the production extension or player probe.
+Status: **experimental**. Qualified in a private, headless GNOME Shell **50.1** session on 2026-11-03;
+the extension and the player accept any GNOME Shell 50.x (point releases are not separately tested), and
+refuse every other version with a plain "GNOME Shell X is not supported" message. Nothing here was
+run on a physical multi-monitor GNOME desktop. The user guide is [LIVE-WALLPAPER.md](LIVE-WALLPAPER.md);
+this page is the technical qualification report.
 
 ## User flow and architecture
 
@@ -122,13 +124,11 @@ and video-replacement checks also cover the exclusive GNOME renderer handover.
 | Production extension Node unit tests | 5 passed |
 | `BIN_DIR=target/debug sh scripts/check-packaging.sh` | Pass; optional Ruby syntax check skipped because Ruby is absent |
 
-The gate logs are retained in `/tmp/gnome-video-evidence/gate-*.log`.
-The final private sessions, temporary homes and worktree build target are removed
-after qualification; screenshots, clip, Plan and logs remain as evidence.
+The private sessions and temporary homes used were removed after qualification.
 
 ## Limits
 
-No changes or tests were made in the owner's real login. GDM login, lock/unlock,
+No tests were made in a real login session. GDM login, lock/unlock,
 suspend/resume, fractional scaling, mixed-DPI/rotated physical outputs, desktop
 icons supplied by other extensions and physical cross-computer synchronization
 remain unqualified by this run. Fit and clock math retain existing unit coverage;

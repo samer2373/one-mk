@@ -16,7 +16,6 @@ no access to your desktop, extensions, settings or display manager).
 | `client/`, `ext/` | Helpers and the test-only harness extension that grants Eval inside the private session. |
 | `baseline-shell.log` | Expected Shell warnings; a changed warning is a failure. |
 
-See [GNOME-WAYLAND-VIDEO.md](../../docs/GNOME-WAYLAND-VIDEO.md) and
-[GNOME-WAYLAND-PRODUCTION-SETUP.md](../../docs/GNOME-WAYLAND-PRODUCTION-SETUP.md).
+See [GNOME-WAYLAND-VIDEO.md](../../docs/GNOME-WAYLAND-VIDEO.md).
 The earlier spike write-ups and raw evidence were removed from the tree and
 remain in the repository history.
