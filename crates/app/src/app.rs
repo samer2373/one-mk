@@ -1179,8 +1179,8 @@ fn pointer_away(controlling: bool, was_focused: bool, focused: bool) -> bool {
     controlling || (was_focused && !focused)
 }
 
-/// An image embedded by scripts/brand-assets.py: width and height (u32
-/// LE), then straight RGBA.
+/// A raw image embedded in the app (the format scripts/make-icons.py
+/// writes): width and height (u32 LE), then straight RGBA.
 pub fn embedded(bytes: &[u8]) -> ([usize; 2], &[u8]) {
     let n = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().expect("header")) as usize;
     ([n(0), n(4)], &bytes[8..])

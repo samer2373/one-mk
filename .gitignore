@@ -9,4 +9,3 @@ __pycache__/
 *.pyc
 .DS_Store
 /.build/
-docs/brand/src-2026/.build/
