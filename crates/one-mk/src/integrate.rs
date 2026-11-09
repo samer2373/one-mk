@@ -48,9 +48,12 @@ fn removed(n: usize) -> String {
 }
 
 /// After a computer is paired or forgotten: keeps the entries in step, if
-/// they were ever added. Never fails the command it follows.
+/// they were ever added. Never fails the command it follows. The entries
+/// belong to the default home: with a home of its own (`--home`, a test or
+/// a second one-mk) this changes nothing, or a test would point the user's
+/// menu at its throwaway folder. `one-mk integrate` itself still does it.
 pub fn refresh(dir: &Path, custom_home: bool) {
-    if !ctl::is_enabled() {
+    if custom_home || !ctl::is_enabled() {
         return;
     }
     if let Err(e) = setup(dir, custom_home).and_then(|s| ctl::refresh(&s)) {

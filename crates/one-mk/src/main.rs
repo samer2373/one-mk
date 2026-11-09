@@ -84,7 +84,11 @@ use std::process::ExitCode;
     about = "Share one mouse and keyboard across your computers"
 )]
 struct Cli {
-    /// Where settings and keys live (default: your config folder).
+    /// Where settings and keys live (default: your config folder). With
+    /// another folder, pairing and forgetting leave your file manager's
+    /// "Send to" entries alone; received files still go to Downloads (see
+    /// `run --downloads`), and install, integrate, pointer-extension and
+    /// wallpaper still change this desktop when you run them.
     #[arg(long, env = "ONE_MK_HOME", global = true)]
     home: Option<PathBuf>,
     /// More detail: show full errors and debug logs (-vv for trace logs).
@@ -554,9 +558,12 @@ fn options(r: RunArgs) -> Result<app::Options> {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let custom_home = cli.home.is_some();
     let verbose = cli.verbose;
     let action = Action::of(cli.run, cli.cmd)?;
+    // A home of its own (`--home`, `ONE_MK_HOME`): a test, or a second
+    // one-mk. Nothing it does by itself reaches outside that folder: the
+    // "Send to" entries follow the default home's computers only.
+    let custom_home = cli.home.as_ref().is_some_and(|home| !is_default_home(home));
     let dir = match cli.home {
         Some(d) => d,
         None => default_home()?,
@@ -606,8 +613,16 @@ fn run(cli: Cli) -> Result<()> {
                 integrate::refresh(&dir, custom_home);
                 paired
             }
-            Cmd::Invite(args) => invite::run(&dir, args).await,
-            Cmd::Join(args) => invite::join(&dir, args).await,
+            Cmd::Invite(args) => {
+                let paired = invite::run(&dir, args).await;
+                integrate::refresh(&dir, custom_home);
+                paired
+            }
+            Cmd::Join(args) => {
+                let paired = invite::join(&dir, args).await;
+                integrate::refresh(&dir, custom_home);
+                paired
+            }
             Cmd::Devices => devices(&dir, verbose > 0),
             Cmd::Status => manage::status(&dir).await,
             Cmd::Takeback => manage::takeback(&dir).await,
@@ -668,6 +683,13 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
     })
+}
+
+/// `home` is the folder one-mk uses when none is given.
+fn is_default_home(home: &Path) -> bool {
+    let Ok(default) = default_home() else { return false };
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_owned()));
+    canonical(home) == canonical(&default)
 }
 
 /// Where identity and paired devices live. On Windows this is the local
