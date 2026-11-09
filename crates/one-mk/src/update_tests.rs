@@ -689,6 +689,34 @@ fn the_password_prompt_runs_the_root_step_with_only_the_folder() {
     }
 }
 
+/// The real, production-signed v0.1.28 update list, through the root step
+/// with the key compiled into this build: it verifies, then is refused only
+/// for what it is (not newer than 0.1.28; its package not staged), and one
+/// changed byte makes it untrusted. (x86_64: the release's only .deb.)
+#[cfg(all(unix, target_arch = "x86_64"))]
+#[test]
+fn the_root_step_verifies_a_real_release_with_the_compiled_in_key() -> Result<()> {
+    let manifest = include_bytes!("update_fixtures/v0.1.28-update-manifest.json");
+    let signature = include_bytes!("update_fixtures/v0.1.28-update-manifest.json.sig");
+    let fixture = RootFixture::new()?;
+    let fields = |_: &Path| -> Result<String> { bail!("not reached") };
+    let install = |_: &Path| -> Result<()> { bail!("must not install") };
+    let step = |installed| RootStep { owner: unsafe { libc::geteuid() }, installed, floor: 0, state: &fixture.state,
+        verify: &verify_embedded, fields: &fields, install: &install };
+    fixture.stage(manifest, Some(signature), b"")?;
+    fs::remove_file(fixture.staging.join(DEB_NAME))?;
+    let older = install_staged(&fixture.staging, &step("0.1.27")).expect_err("the package is not staged");
+    assert!(format!("{older:#}").contains("one-mk-x86_64-unknown-linux-gnu.deb"), "verified, then looked for the signed package: {older:#}");
+    let same = install_staged(&fixture.staging, &step("0.1.28")).expect_err("not newer");
+    assert!(format!("{same:#}").contains("not a newer version"), "{same:#}");
+    let mut changed = manifest.to_vec();
+    *changed.last_mut().context("empty manifest")? = b' ';
+    fixture.stage(&changed, Some(signature), b"")?;
+    let tampered = install_staged(&fixture.staging, &step("0.1.27")).expect_err("tampered");
+    assert!(format!("{tampered:#}").contains("not signed by the publisher"), "{tampered:#}");
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn the_root_step_reads_a_real_package_with_dpkg_deb() -> Result<()> {
