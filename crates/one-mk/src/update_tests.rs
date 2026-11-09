@@ -416,7 +416,7 @@ fn python_http_portable_end_to_end() -> Result<()> {
     assert!(verify_embedded(&bytes, signed.as_ref()).is_err());
     println!("E2E: production verification refuses the RFC 8032 test signature");
     let mut state = State::default();
-    let (manifest, release, origin) = checked(&home, &endpoint, key.public_key().as_ref(), "0.1.19", &mut state)?;
+    let (manifest, release, origin, _) = checked(&home, &endpoint, key.public_key().as_ref(), "0.1.19", &mut state)?;
     println!("E2E: TEST-ONLY explicit key verified signed 0.1.20 manifest; installed version 0.1.19");
     apply(&manifest, &release, &origin, &target, InstallKind::Portable)?;
     version_check(&target, Some("0.1.20"))?;
@@ -448,33 +448,265 @@ fn only_one_mk_at_the_signed_version_is_installed() {
     assert!(check_deb_fields("", "0.1.24").is_err());
 }
 
+
+/// A staged package update, as `apply_deb` leaves it for the root step: a
+/// signed list and the package the list names, in a private folder.
+#[cfg(unix)]
+struct RootFixture { _sandbox: tempfile::TempDir, staging: PathBuf, state: PathBuf, key: signature::Ed25519KeyPair }
+
+#[cfg(unix)]
+const DEB_NAME: &str = "one-mk-linux.deb";
+
+#[cfg(unix)]
+fn fake_deb(version: &str) -> Vec<u8> { format!("Package: one-mk\nVersion: {version}\n").into_bytes() }
+
+#[cfg(unix)]
+fn deb_manifest(package: &[u8], version: &str, sequence: u64) -> Manifest {
+    Manifest { version: version.into(), release_time: "2026-11-01T00:00:00Z".into(), sequence, minimum_supported_version: "0.1.0".into(),
+        assets: vec![policy::Asset { name: DEB_NAME.into(), size: package.len() as u64, sha256: hex(digest::digest(&digest::SHA256, package).as_ref()),
+            os: "linux".into(), arch: std::env::consts::ARCH.into(), kind: "deb".into() }], revoked: vec![], next_key: None }
+}
+
+#[cfg(unix)]
+impl RootFixture {
+    fn new() -> Result<Self> {
+        let sandbox = tempfile::tempdir()?;
+        let staging = sandbox.path().join(DEB_STAGING);
+        let state = sandbox.path().join("root-state");
+        Ok(Self { staging, state, _sandbox: sandbox, key: pair()? })
+    }
+
+    /// Stages `manifest` signed by the test key (or `signature`), with `package` beside it.
+    fn stage(&self, manifest: &[u8], signature: Option<&[u8]>, package: &[u8]) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::remove_dir_all(&self.staging);
+        fs::create_dir(&self.staging)?;
+        fs::set_permissions(&self.staging, fs::Permissions::from_mode(0o700))?;
+        let signed = self.key.sign(manifest);
+        fs::write(self.staging.join(STAGED_MANIFEST), manifest)?;
+        fs::write(self.staging.join(STAGED_SIGNATURE), signature.unwrap_or(signed.as_ref()))?;
+        fs::write(self.staging.join(DEB_NAME), package)?;
+        Ok(())
+    }
+
+    fn stage_release(&self, version: &str, sequence: u64) -> Result<Vec<u8>> {
+        let package = fake_deb(version);
+        self.stage(&serde_json::to_vec(&deb_manifest(&package, version, sequence))?, None, &package)?;
+        Ok(package)
+    }
+
+    /// Runs the root step as it runs under pkexec, with the test key and a
+    /// fake installer. Returns what the installer was given: its path and bytes.
+    fn run(&self, installed: &str, during: &dyn Fn(&Path)) -> (Result<()>, Option<(PathBuf, Vec<u8>)>) {
+        let installed_copy = std::cell::RefCell::new(None);
+        let public = self.key.public_key().as_ref().to_vec();
+        let verify = move |message: &[u8], signed: &[u8]| verify(&public, message, signed);
+        let fields = |copy: &Path| -> Result<String> { during(&self.staging); Ok(String::from_utf8_lossy(&fs::read(copy)?).into_owned()) };
+        let install = |copy: &Path| -> Result<()> { *installed_copy.borrow_mut() = Some((copy.to_owned(), fs::read(copy)?)); Ok(()) };
+        let result = install_staged(&self.staging, &RootStep {
+            owner: unsafe { libc::geteuid() }, installed, floor: 0, state: &self.state, verify: &verify, fields: &fields, install: &install,
+        });
+        (result, installed_copy.into_inner())
+    }
+}
+
+#[cfg(unix)]
+fn nothing(_: &Path) {}
+
 #[cfg(unix)]
 #[test]
-fn the_root_step_reads_only_a_private_unchanged_package_it_was_told_about() -> Result<()> {
+fn the_root_step_installs_only_its_own_verified_copy_of_a_signed_newer_package() -> Result<()> {
+    let fixture = RootFixture::new()?;
+    let package = fixture.stage_release("0.1.30", 10)?;
+    let (result, installed) = fixture.run("0.1.29", &nothing);
+    result?;
+    let (path, bytes) = installed.context("nothing was installed")?;
+    assert_eq!(bytes, package);
+    assert!(path.starts_with(&fixture.state), "installs a root-only copy, never the staged file: {}", path.display());
+    let state = load_state(&fixture.state)?;
+    assert_eq!((state.sequence, state.highest_version.as_deref()), (10, Some("0.1.30")));
+    assert!(!fs::read_dir(&fixture.state)?.flatten().any(|entry| entry.file_name().to_string_lossy().starts_with(".one-mk-update-payload-")),
+        "the private copy is removed");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn the_root_step_refuses_a_tampered_or_foreign_signed_list() -> Result<()> {
+    let fixture = RootFixture::new()?;
+    let package = fake_deb("0.1.30");
+    let manifest = serde_json::to_vec(&deb_manifest(&package, "0.1.30", 10))?;
+    // Signed, then changed: the version, then the checksum of the package.
+    let signed = fixture.key.sign(&manifest);
+    for changed in [String::from_utf8(manifest.clone())?.replace("0.1.30", "9.9.9"),
+        String::from_utf8(manifest.clone())?.replace(&hex(digest::digest(&digest::SHA256, &package).as_ref()), &"ab".repeat(32))] {
+        fixture.stage(changed.as_bytes(), Some(signed.as_ref()), &package)?;
+        let (result, installed) = fixture.run("0.1.29", &nothing);
+        assert!(result.is_err() && installed.is_none());
+    }
+    // Signed by another key.
+    let other = signature::Ed25519KeyPair::from_seed_unchecked(&[7; 32]).map_err(|_| anyhow::anyhow!("test key"))?;
+    fixture.stage(&manifest, Some(other.sign(&manifest).as_ref()), &package)?;
+    let (result, installed) = fixture.run("0.1.29", &nothing);
+    assert!(result.is_err() && installed.is_none());
+    // A truncated signature, then none at all.
+    fixture.stage(&manifest, Some(&signed.as_ref()[..63]), &package)?;
+    assert!(fixture.run("0.1.29", &nothing).1.is_none());
+    fs::remove_file(fixture.staging.join(STAGED_SIGNATURE))?;
+    assert!(fixture.run("0.1.29", &nothing).1.is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn the_root_step_refuses_a_downgrade_or_the_installed_version() -> Result<()> {
+    let fixture = RootFixture::new()?;
+    for version in ["0.1.29", "0.1.28", "0.1.0"] {
+        fixture.stage_release(version, 10)?;
+        let (result, installed) = fixture.run("0.1.29", &nothing);
+        assert!(result.is_err() && installed.is_none(), "{version} must not be installed over 0.1.29");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn the_root_step_refuses_a_package_that_is_not_the_signed_one() -> Result<()> {
+    let fixture = RootFixture::new()?;
+    let package = fake_deb("0.1.30");
+    let manifest = serde_json::to_vec(&deb_manifest(&package, "0.1.30", 10))?;
+    // Same size, other bytes (still a valid one-mk package at that version,
+    // so only the checksum can tell); longer; shorter.
+    let mut same_size = package.clone();
+    *same_size.last_mut().context("empty package")? = b' ';
+    assert!(check_deb_fields(&String::from_utf8_lossy(&same_size), "0.1.30").is_ok());
+    let mut longer = package.clone();
+    longer.push(b'\n');
+    for wrong in [same_size, longer, package[..package.len() - 1].to_vec()] {
+        fixture.stage(&manifest, None, &wrong)?;
+        let (result, installed) = fixture.run("0.1.29", &nothing);
+        assert!(result.is_err() && installed.is_none());
+    }
+    // The signed bytes, but not the one-mk package: still refused by the package's own fields.
+    let evil = b"Package: openssh-server\nVersion: 0.1.30\n".to_vec();
+    fixture.stage(&serde_json::to_vec(&deb_manifest(&evil, "0.1.30", 10))?, None, &evil)?;
+    let (result, installed) = fixture.run("0.1.29", &nothing);
+    assert!(result.is_err() && installed.is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_package_swapped_after_the_check_is_never_installed() -> Result<()> {
+    use std::os::unix::fs::symlink;
+    let fixture = RootFixture::new()?;
+    let package = fixture.stage_release("0.1.30", 10)?;
+    // While the root step works, the staged file is replaced by another one,
+    // then by a link: what is installed is still the verified copy.
+    let swap = |staging: &Path| {
+        let _ = fs::write(staging.join(DEB_NAME), b"Package: one-mk\nVersion: 0.1.30\nroot shell\n");
+        let _ = fs::remove_file(staging.join(DEB_NAME));
+        let _ = symlink("/etc/passwd", staging.join(DEB_NAME));
+    };
+    let (result, installed) = fixture.run("0.1.29", &swap);
+    result?;
+    assert_eq!(installed.context("nothing was installed")?.1, package);
+    // A link or a pipe staged in the first place is refused, without blocking.
+    fixture.stage_release("0.1.31", 11)?;
+    fs::remove_file(fixture.staging.join(DEB_NAME))?;
+    symlink(fixture.state.join("anything"), fixture.staging.join(DEB_NAME))?;
+    assert!(fixture.run("0.1.30", &nothing).1.is_none());
+    fs::remove_file(fixture.staging.join(DEB_NAME))?;
+    let name = std::ffi::CString::new(fixture.staging.join(DEB_NAME).as_os_str().as_encoded_bytes())?;
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    assert!(fixture.run("0.1.30", &nothing).1.is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn the_root_step_refuses_a_replayed_older_signed_list() -> Result<()> {
+    let fixture = RootFixture::new()?;
+    fixture.stage_release("0.1.31", 20)?;
+    fixture.run("0.1.29", &nothing).0?;
+    // The installed version went back (by hand, say): an older genuine list,
+    // even for a version newer than the installed one, is refused...
+    fixture.stage_release("0.1.30", 19)?;
+    let (result, installed) = fixture.run("0.1.29", &nothing);
+    assert!(result.is_err() && installed.is_none());
+    // ...and so is the same sequence with other contents.
+    let package = fake_deb("0.1.32");
+    fixture.stage(&serde_json::to_vec(&deb_manifest(&package, "0.1.32", 20))?, None, &package)?;
+    assert!(fixture.run("0.1.29", &nothing).1.is_none());
+    // The very list accepted before is fine again (same bytes), and so is a newer one.
+    fixture.stage_release("0.1.31", 20)?;
+    fixture.run("0.1.29", &nothing).0?;
+    fixture.stage_release("0.1.32", 21)?;
+    fixture.run("0.1.31", &nothing).0?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn the_root_step_takes_only_a_private_staging_folder_of_the_account_that_asked() -> Result<()> {
     use std::os::unix::fs::{PermissionsExt, symlink};
-    let sandbox = tempfile::tempdir()?;
-    let staging = sandbox.path().join(DEB_STAGING);
-    fs::create_dir(&staging)?;
-    fs::set_permissions(&staging, fs::Permissions::from_mode(0o700))?;
-    let package = staging.join("payload");
-    fs::write(&package, b"a package")?;
-    let owner = unsafe { libc::geteuid() };
-    let sha = hex(digest::digest(&digest::SHA256, b"a package").as_ref());
-    assert_eq!(read_staged_deb(&package, &sha, owner)?, b"a package");
-    // The wrong checksum, the wrong owner, a link, another folder name and
-    // a folder others can write to are all refused.
-    assert!(read_staged_deb(&package, &"00".repeat(32), owner).is_err());
-    assert!(read_staged_deb(&package, &sha, owner + 1).is_err());
-    let link = staging.join("link");
-    symlink(&package, &link)?;
-    assert!(read_staged_deb(&link, &sha, owner).is_err());
-    let elsewhere = sandbox.path().join("elsewhere");
-    fs::create_dir(&elsewhere)?;
-    fs::write(elsewhere.join("payload"), b"a package")?;
-    assert!(read_staged_deb(&elsewhere.join("payload"), &sha, owner).is_err());
-    fs::set_permissions(&staging, fs::Permissions::from_mode(0o770))?;
-    assert!(read_staged_deb(&package, &sha, owner).is_err());
+    let fixture = RootFixture::new()?;
+    fixture.stage_release("0.1.30", 10)?;
+    fs::set_permissions(&fixture.staging, fs::Permissions::from_mode(0o770))?;
+    assert!(fixture.run("0.1.29", &nothing).1.is_none(), "a folder others can write to");
+    fs::set_permissions(&fixture.staging, fs::Permissions::from_mode(0o700))?;
+    let public = fixture.key.public_key().as_ref().to_vec();
+    let verify = move |message: &[u8], signed: &[u8]| verify(&public, message, signed);
+    let fields = |copy: &Path| -> Result<String> { Ok(String::from_utf8_lossy(&fs::read(copy)?).into_owned()) };
+    let install = |_: &Path| -> Result<()> { bail!("must not install") };
+    let step = |owner| RootStep { owner, installed: "0.1.29", floor: 0, state: &fixture.state, verify: &verify, fields: &fields, install: &install };
+    let me = unsafe { libc::geteuid() };
+    assert!(install_staged(&fixture.staging, &step(me + 1)).is_err(), "files of another account");
+    let renamed = fixture.staging.with_file_name("elsewhere");
+    fs::rename(&fixture.staging, &renamed)?;
+    assert!(install_staged(&renamed, &step(me)).is_err(), "another folder name");
+    symlink(&renamed, &fixture.staging)?;
+    assert!(install_staged(&fixture.staging, &step(me)).is_err(), "a link to a folder");
+    assert!(install_staged(Path::new(DEB_STAGING), &step(me)).is_err(), "a relative path");
+    // A release floor (the sequence this build was released with) above the list: refused too.
+    fs::remove_file(&fixture.staging)?;
+    fs::rename(&renamed, &fixture.staging)?;
+    let floored = RootStep { floor: 11, ..step(me) };
+    assert!(install_staged(&fixture.staging, &floored).is_err());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn the_password_prompt_runs_the_root_step_with_only_the_folder() {
+    let command = root_command(Path::new("/usr/bin/one-mk"), Path::new("/home/me/.config/one-mk/update-staging"));
+    assert_eq!(command.get_program(), "pkexec");
+    let args: Vec<_> = command.get_args().collect();
+    assert_eq!(args, ["/usr/bin/one-mk", "update", "--install-deb", "/home/me/.config/one-mk/update-staging"]);
     // Run by hand, not through the password prompt, it does nothing.
-    assert!(install_deb_as_root(&package, &sha, "0.1.24").is_err());
+    if unsafe { libc::geteuid() } != 0 {
+        assert!(install_deb_as_root(Path::new("/nonexistent/update-staging")).is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_root_step_reads_a_real_package_with_dpkg_deb() -> Result<()> {
+    if !Path::new("/usr/bin/dpkg-deb").exists() { return Ok(()); }
+    let fixture = RootFixture::new()?;
+    let build = fixture.state.with_file_name("build");
+    fs::create_dir_all(build.join("DEBIAN"))?;
+    fs::write(build.join("DEBIAN/control"), "Package: one-mk\nVersion: 0.1.30\nArchitecture: all\nMaintainer: test <t@example.invalid>\nDescription: test\n")?;
+    let deb = fixture.state.with_file_name("one-mk.deb");
+    ensure!(Command::new("/usr/bin/dpkg-deb").args(["--root-owner-group", "--build"]).arg(&build).arg(&deb).stdout(Stdio::null()).status()?.success());
+    let package = fs::read(&deb)?;
+    fixture.stage(&serde_json::to_vec(&deb_manifest(&package, "0.1.30", 10))?, None, &package)?;
+    let public = fixture.key.public_key().as_ref().to_vec();
+    let verify = move |message: &[u8], signed: &[u8]| verify(&public, message, signed);
+    let installed = std::cell::RefCell::new(None);
+    let install = |copy: &Path| -> Result<()> { *installed.borrow_mut() = Some(fs::read(copy)?); Ok(()) };
+    install_staged(&fixture.staging, &RootStep { owner: unsafe { libc::geteuid() }, installed: "0.1.29", floor: 0, state: &fixture.state,
+        verify: &verify, fields: &deb_fields, install: &install })?;
+    assert_eq!(installed.borrow().as_deref(), Some(package.as_slice()));
     Ok(())
 }

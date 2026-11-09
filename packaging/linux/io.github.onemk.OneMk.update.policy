@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- The one step of a oneMK package update that runs as root: pkexec runs
+     /usr/bin/one-mk update with the install-deb option and the staging
+     folder, nothing else. That step checks the signed
+     update list against the key built into oneMK, refuses anything that is
+     not newer, and installs only its own checked copy of the package. The
+     password is asked every time (auth_admin, never kept). -->
+<policyconfig>
+  <vendor>oneMK</vendor>
+  <vendor_url>https://github.com/samer2373/one-mk</vendor_url>
+  <action id="io.github.onemk.OneMk.update">
+    <description>Install a oneMK update</description>
+    <message>Authentication is required to install the signed oneMK update</message>
+    <icon_name>one-mk</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/one-mk</annotate>
+  </action>
+</policyconfig>
