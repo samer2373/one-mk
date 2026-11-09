@@ -205,9 +205,9 @@ mod gesture_tests {
     #[test]
     fn compact_setup_surface_is_scoped_to_keyboard() {
         for hover in [0.0, 0.5, 1.0] {
-            assert_eq!(setup_fill(false, hover, false), mix(pal().surface2, pal().surface2_hover, hover));
+            assert_eq!(setup_fill(false, hover, false), mix(Color32::TRANSPARENT, pal().hover, hover));
             assert_eq!(setup_fill(true, hover, false), mix(pal().accent_soft, pal().pressed(pal().accent_soft, 0.4), hover));
-            assert_ne!(setup_fill(true, hover, true), setup_fill(true, hover, false));
+            assert_ne!(setup_fill(false, hover, true), setup_fill(false, hover, false));
         }
     }
 }
@@ -350,13 +350,14 @@ fn flow(ui: &Ui, left: f32, top: f32, width: f32, labels: &[&str]) -> (Vec<Rect>
     (out, y + 30.0)
 }
 
-/// A chip that is on or off: a quick setup.
+/// A chip that is on or off: a quick setup (the handoff's chip: on, the
+/// accent's edge on `accent_soft`; off, a `line2` edge). In the compact
+/// panel an off chip is a quiet fill.
 fn setup_fill(on: bool, hover: f32, compact: bool) -> Color32 {
     match (compact, on) {
-        (true, true) => mix(mix(pal().accent_soft, pal().accent, 0.08), mix(pal().pressed(pal().accent_soft, 0.4), pal().accent, 0.08), hover),
+        (_, true) => mix(pal().accent_soft, pal().pressed(pal().accent_soft, 0.4), hover),
         (true, false) => mix(pal().surface, pal().surface2_hover, hover),
-        (false, true) => mix(pal().accent_soft, pal().pressed(pal().accent_soft, 0.4), hover),
-        (false, false) => mix(pal().surface2, pal().surface2_hover, hover),
+        (false, false) => mix(Color32::TRANSPARENT, pal().hover, hover),
     }
 }
 
@@ -371,16 +372,16 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool, c
     // Set: the chosen-segment capsule's tone, semibold words and a Volt
     // tick; not set: a quiet fill and regular words.
     let fill = setup_fill(on, hover, compact);
-    let surface = widgets::pressed_lift(fill, press);
-    let ink = if !enabled { pal().ink2 } else if on { pal().ink } else { mix(pal().ink2, pal().ink, hover) };
-    let ink = if press > 0.0 { widgets::pressed_ink(surface, ink) } else { ink };
+    let surface = if press > 0.0 { mix(fill, pal().pressed(if on { pal().accent_soft } else { pal().surface2 }, 1.0), press) } else { fill };
+    let ink = if !enabled { pal().ink3 } else if on { pal().accent_text } else { mix(pal().ink2, pal().ink, hover) };
     p.rect_filled(rect, radius, surface);
+    p.rect_stroke(rect, radius, Stroke::new(1.0, if on { pal().accent } else { pal().line2 }), StrokeKind::Inside);
     let font = if on { semibold(T_META + 1.0) } else { regular(T_META + 1.0) };
     let text = fit(p, label, &font, rect.width() - 24.0 - if on { 16.0 } else { 0.0 });
     let text_width = p.layout_no_wrap(text.clone(), font.clone(), pal().ink).size().x;
     let mut x = rect.center().x - (text_width + if on { 16.0 } else { 0.0 }) / 2.0;
     if on {
-        widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, if press > 0.0 { widgets::pressed_ink(surface, pal().accent) } else { pal().accent }, 1.0);
+        widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, pal().accent_text, 1.0);
         x += 16.0;
     }
     p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, text, font, ink);
@@ -496,7 +497,7 @@ fn slider(ui: &mut Ui, rect: Rect, id: Id, t: f32, name: &str, value: f64) -> (O
     // Held, the knob dims a step: pressed, apart from hover and focus.
     p.circle_filled(knob, 8.0, if r.is_pointer_button_down_on() || r.dragged() { pal().ink2 } else if r.hovered() { pal().tint_ink } else { pal().ink });
     if r.has_focus() && widgets::keyboard_focus(ui.ctx()) {
-        p.circle_stroke(knob, 11.0, Stroke::new(2.0, pal().accent));
+        p.circle_stroke(knob, 11.0, Stroke::new(2.0, pal().focus));
     }
     if r.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1313,7 +1314,7 @@ impl App {
         let painter = ui.painter_at(area);
         board.paint(&painter, &held_i, under, chosen, &|size, _| regular(size));
         if let Some(i) = focused.filter(|_| widgets::keyboard_focus(ui.ctx())) {
-            painter.rect_stroke(board.bounds(i).expand(3.0), CornerRadius::same(6), Stroke::new(2.0, pal().accent), StrokeKind::Outside);
+            painter.rect_stroke(board.bounds(i).expand(3.0), CornerRadius::same(6), Stroke::new(2.0, pal().focus), StrokeKind::Outside);
         }
         self.keys.board = Some(board);
         if let Some(code) = go {
@@ -1757,7 +1758,7 @@ impl App {
         let p = ui.painter().clone();
         p.rect(r, CornerRadius::same(9), pal().bg, Stroke::new(1.0, if focused || resp.hovered() { pal().field_edge_lit } else { pal().line2 }), StrokeKind::Inside);
         if focused {
-            p.rect_stroke(r.expand(2.0), CornerRadius::same(11), Stroke::new(2.0, pal().accent), StrokeKind::Outside);
+            p.rect_stroke(r.expand(2.0), CornerRadius::same(11), Stroke::new(2.0, pal().focus), StrokeKind::Outside);
         }
         let lw = text_width(ui, "They get", regular(T_META)).max(text_width(ui, "You press", regular(T_META))) + 14.0;
         let empty = self.keys.tester.as_ref().is_none_or(|(t, ..)| t.pressed.chips.is_empty());

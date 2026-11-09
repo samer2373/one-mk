@@ -409,10 +409,7 @@ impl App {
             p.text(pos2(foot.left() + 16.0, foot.center().y), Align2::LEFT_CENTER, "oneMK", regular(T_META), pal().ink3);
             let mut x = foot.right() - 16.0;
             for (word, key) in [("Close", "esc"), ("Move", "↑↓"), ("Open", "↵")] {
-                let kw = text_width(ui, key, regular(T_META - 1.0)) + 12.0;
-                let kr = Rect::from_min_size(pos2(x - kw, foot.center().y - 10.0), vec2(kw, 20.0));
-                p.rect(kr, CornerRadius::same(5), pal().hover, Stroke::new(0.5, pal().line2), StrokeKind::Inside);
-                p.text(kr.center(), Align2::CENTER_CENTER, key, regular(T_META - 1.0), pal().ink2);
+                let kr = widgets::kbd(&p, pos2(x, foot.center().y), Align2::RIGHT_CENTER, key);
                 let ww = text_width(ui, word, regular(T_META));
                 p.text(pos2(kr.left() - 6.0, foot.center().y), Align2::RIGHT_CENTER, word, regular(T_META), pal().ink3);
                 x = kr.left() - 6.0 - ww - 14.0;

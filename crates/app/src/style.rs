@@ -177,6 +177,9 @@ palette! {
     press_amount,
     /// How strong shadows are: 1 is the dark theme's, as before.
     shadow_k,
+    /// The cards' and panels' own shadow (light: the handoff's two-layer
+    /// shadow; dark: none).
+    card_shadow,
 }
 
 /// `a` toward `b` by `t`, premultiplied, as the controls blend.
@@ -252,6 +255,7 @@ impl Palette {
             press_toward: ink,
             press_amount: 0.10,
             shadow_k: 0.35,
+            card_shadow: 1.0,
         }
     }
 
@@ -302,8 +306,9 @@ impl Palette {
             ring: rgba(0x4D6DFF, 0.18),
             tint_ink: white,
             press_toward: black,
-            press_amount: 0.88,
+            press_amount: 0.3,
             shadow_k: 1.0,
+            card_shadow: 0.0,
         }
     }
 
@@ -533,8 +538,8 @@ pub fn white(alpha: u8) -> Color32 {
 /// Corners: panels, things inside them, small controls.
 pub const R_PANEL: u8 = 20;
 pub const R_INNER: u8 = 12;
-/// A group of rows on glass (settings).
-pub const R_GROUP: u8 = 16;
+/// A card (a group of rows).
+pub const R_GROUP: u8 = 14;
 /// The gap round and between panels.
 pub const M: f32 = 12.0;
 
@@ -571,7 +576,6 @@ pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
 /// Inter 500: buttons, tabs.
-#[allow(dead_code)] // The new layout (top bar, panels) uses it.
 pub fn medium(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("medium".into()))
 }

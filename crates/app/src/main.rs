@@ -13,6 +13,8 @@
 mod app;
 mod chrome;
 mod daemon;
+#[cfg(any(debug_assertions, feature = "design-evidence"))]
+mod gallery;
 mod desktop;
 mod gear;
 mod glass;

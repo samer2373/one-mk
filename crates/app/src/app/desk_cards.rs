@@ -200,9 +200,9 @@ impl App {
         // Title row: whether it is there, its name, what it is and where.
         let mut cy = c.top() + 12.0;
         if peer.online {
-            p.circle_filled(pos2(c.left() + 4.0, cy), 3.5, pal().ok);
+            widgets::status_mark(&p, pos2(c.left() + 4.0, cy), 7.0, widgets::Mark::Ok);
         } else {
-            p.circle_stroke(pos2(c.left() + 4.0, cy), 3.0, Stroke::new(1.5, pal().ink3));
+            widgets::status_mark(&p, pos2(c.left() + 4.0, cy), 7.0, widgets::Mark::Off);
         }
         let side = self.side_shown(&peer.id, peer.side);
         let seg_w = if c.width() > 560.0 { 248.0 } else { 204.0 };
@@ -223,10 +223,11 @@ impl App {
         // Where it sits: a control, so it can be set without dragging.
         let mut x = c.right();
         let (rm, rw) = {
-            let w = text_width(ui, "Remove", regular(T_BODY)) + 18.0;
+            let w = text_width(ui, "Remove", widgets::button_font(Look::Danger)) + 18.0;
             (Rect::from_min_size(pos2(x - w + 9.0, cy - 14.0), vec2(w, 28.0)), w)
         };
-        let (resp, _) = ghost(ui, rm.min, 28.0, Id::unique(("remove", &peer.id)), None, "Remove", &format!("Remove {} (asks first)", peer.name), !self.sheet_open());
+        // Destructive: a danger-coloured text button (it asks first).
+        let resp = widgets::content_button(ui, rm, Id::unique(("remove", &peer.id)), "Remove", Look::Danger, !self.sheet_open(), Some(&format!("Remove {} (asks first)", peer.name)));
         if resp.clicked() {
             self.removing = Some((peer.id.clone(), peer.name.clone(), now));
         }
@@ -465,7 +466,7 @@ impl App {
         {
             let response = button(ui, rect, Id::unique("desk-computers-menu"), "", Look::Glass, !self.sheet_open(), Some("Choose a computer: show full names and connection states"));
             let painter = ui.painter();
-            painter.text(pos2(rect.left() + 14.0, rect.center().y), Align2::LEFT_CENTER, menu_label, semibold(T_BODY), pal().ink);
+            painter.text(pos2(rect.left() + 14.0, rect.center().y), Align2::LEFT_CENTER, menu_label, medium(T_BODY), pal().ink);
             let center = pos2(rect.right() - 14.0, rect.center().y);
             painter.line_segment([center + vec2(-3.0, -1.5), center + vec2(0.0, 1.5)], Stroke::new(1.5, pal().ink2));
             painter.line_segment([center + vec2(0.0, 1.5), center + vec2(3.0, -1.5)], Stroke::new(1.5, pal().ink2));
@@ -495,13 +496,12 @@ impl App {
                 let enabled = !busy && !on;
                 resp.widget_info(|| egui::WidgetInfo::selected(Role::Switch, enabled, on, "Type on every computer"));
                 icons::draw(ui.painter(), Icon::Broadcast, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), pal().ink2);
-                ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, bc_label, semibold(T_BODY), pal().ink);
+                ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, bc_label, medium(T_BODY), pal().ink);
                 // A small switch, drawn as the window's other switches are.
                 let track = Rect::from_min_size(pos2(r.right() - 46.0, r.center().y - 9.0), vec2(32.0, 18.0));
-                let knob_t = tween(ui.ctx(), Id::unique("broadcast-knob"), f32::from(on), motion::space(0.2), motion::out_cubic);
-                ui.painter().rect_filled(track, CornerRadius::same(9), mix(pal().switch_off, pal().accent, knob_t));
-                ui.painter().rect_stroke(track, CornerRadius::same(9), Stroke::new(1.0, mix(pal().line, Color32::TRANSPARENT, knob_t)), StrokeKind::Inside);
-                ui.painter().circle_filled(pos2(track.left() + 9.0 + 14.0 * knob_t, track.center().y), 7.0, pal().switch_knob);
+                let knob_t = tween(ui.ctx(), Id::unique("broadcast-knob"), f32::from(on), motion::space(0.26), motion::back_out);
+                let fill = tween(ui.ctx(), Id::unique("broadcast-fill"), f32::from(on), motion::fade(0.2), motion::linear);
+                widgets::paint_switch(ui.painter(), track, widgets::Switch { on, knob: knob_t, fill, undimmed: true }, widgets::State { hover: f32::from(resp.hovered()), press: 0.0, enabled: true, focus: false });
                 if resp.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}")).clicked() {
                     self.ask_broadcast(!on);
                 }
@@ -514,7 +514,7 @@ impl App {
             let icon = if tiny { rect.center() - vec2(8.0, 8.0) } else { pos2(rect.left() + 12.0, rect.center().y - 8.0) };
             icons::draw(ui.painter(), Icon::Clock, Rect::from_min_size(icon, vec2(16.0, 16.0)), if on { pal().ink3 } else { pal().ink2 });
             if !tiny {
-                ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, "Timer", semibold(T_BODY), if on { pal().ink3 } else { pal().ink });
+                ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, "Timer", medium(T_BODY), if on { pal().ink3 } else { pal().ink });
             }
             let response = response.on_hover_text(name);
             egui::Popup::menu(&response).width(280.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
@@ -531,7 +531,7 @@ impl App {
         let icon = if tiny { lock_r.center() - vec2(8.0, 8.0) } else { pos2(lock_r.left() + 12.0, lock_r.center().y - 8.0) };
         icons::draw(ui.painter(), Icon::Lock, Rect::from_min_size(icon, vec2(16.0, 16.0)), pal().ink2);
         if !tiny {
-            ui.painter().text(pos2(lock_r.left() + 34.0, lock_r.center().y), Align2::LEFT_CENTER, lock_label, semibold(T_BODY), pal().ink);
+            ui.painter().text(pos2(lock_r.left() + 34.0, lock_r.center().y), Align2::LEFT_CENTER, lock_label, medium(T_BODY), pal().ink);
         }
     }
 
@@ -725,9 +725,9 @@ impl App {
                 if pointer.as_deref() == Some(id.as_str()) {
                     icons::pointer(p, mark - vec2(5.0, 7.0), 13.0, pal().accent);
                 } else if *online {
-                    p.circle_filled(mark, 3.5, pal().ok);
+                    widgets::status_mark(p, mark, 7.0, widgets::Mark::Ok);
                 } else {
-                    p.circle_stroke(mark, 3.0, Stroke::new(1.5, pal().ink3));
+                    widgets::status_mark(p, mark, 7.0, widgets::Mark::Off);
                 }
                 // On Clipboard & files each chip is a drop target too.
                 let target = self.tab == Tab::Files && *online && id != "me";

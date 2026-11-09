@@ -138,7 +138,7 @@ impl App {
             for ((id, name, online), row) in computers.iter().zip(rows) {
                 let p = ui.painter();
                 let dot = pos2(row.left() + 4.0, row.center().y);
-                if *online { p.circle_filled(dot, 3.5, pal().ok); } else { p.circle_stroke(dot, 3.0, Stroke::new(1.5, pal().ink3)); }
+                if *online { widgets::status_mark(p, dot, 7.0, widgets::Mark::Ok); } else { widgets::status_mark(p, dot, 7.0, widgets::Mark::Off); }
                 let on = plan.is_none_or(|plan| plan.computers.contains(id));
                 let screens = canvas.monitors.iter().filter(|monitor| &monitor.computer == id).count();
                 // Why a computer can't play it is often a sentence: the row

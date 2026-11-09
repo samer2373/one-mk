@@ -53,7 +53,7 @@ pub(super) fn computers_menu(response: &egui::Response, status: &Status, current
                 let row = if chosen { row.fill(pal().surface2_hover) } else { row };
                 let response = ui.add(row);
                 widgets::a11y(&response, Role::Button, &label, None);
-                ui.painter().circle_filled(response.rect.left_top() + vec2(10.0, 12.0), 3.0, if online { pal().ok } else { pal().ink2 });
+                widgets::status_mark(ui.painter(), response.rect.left_top() + vec2(10.0, 12.0), 7.0, if online { widgets::Mark::Ok } else { widgets::Mark::Off });
                 if response.clicked() {
                     selected = Some(id.to_owned());
                     ui.close();
@@ -220,10 +220,7 @@ impl App {
         icons::search(ui.painter(), pos2(sr.left() + 16.0, sr.center().y), pal().ink3);
         ui.painter().text(pos2(sr.left() + 30.0, sr.center().y), Align2::LEFT_CENTER, "Search", regular(T_BODY), pal().ink3);
         let kc = format!("{}K", cmd());
-        let kw = text_width(ui, &kc, regular(T_META)) + 10.0;
-        let kr = Rect::from_min_size(pos2(sr.right() - 8.0 - kw, sr.center().y - 9.0), vec2(kw, 18.0));
-        ui.painter().rect(kr, CornerRadius::same(5), pal().hover, Stroke::new(0.5, pal().line2), StrokeKind::Inside);
-        ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META), pal().ink3);
+        widgets::kbd(ui.painter(), pos2(sr.right() - 4.0, sr.center().y), Align2::RIGHT_CENTER, &kc);
         widgets::focus_ring(ui, &resp, sr, 8);
         // A button that opens the command palette (where the typing
         // happens, in a real text field): not a text field itself.
@@ -317,9 +314,9 @@ impl App {
         if here {
             icons::pointer(p, mark - vec2(4.0, 7.0), 14.0, pal().accent);
         } else if online {
-            p.circle_filled(mark, 3.5, pal().ok);
+            widgets::status_mark(p, mark, 7.0, widgets::Mark::Ok);
         } else {
-            p.circle_stroke(mark, 3.0, Stroke::new(1.5, pal().ink3));
+            widgets::status_mark(p, mark, 7.0, widgets::Mark::Off);
         }
         let vw = if value.is_empty() { 0.0 } else { text_width(ui, value, if value.ends_with("ms") { mono(T_META) } else { regular(T_META) }) + 12.0 };
         let font = regular(T_BODY);
@@ -462,7 +459,7 @@ impl App {
         let status_r = Rect::from_min_max(row.min, pos2(row.right() - stop_w - 4.0, row.bottom()));
         let (resp, hover) = row_button(ui, status_r, Id::unique("health-line"), &format!("{text}. Open Health"), Role::Link, self.tab == Tab::Health, true);
         let p = ui.painter();
-        p.circle_filled(pos2(status_r.left() + 12.0, row.center().y), 3.0, dot);
+        widgets::status_mark(p, pos2(status_r.left() + 12.0, row.center().y), 7.0, widgets::Mark::of(dot));
         p.text(pos2(status_r.left() + 24.0, row.center().y), Align2::LEFT_CENTER, fit(p, &text, &regular(T_META), status_r.width() - 30.0), regular(T_META), mix(pal().ink2, pal().ink, hover));
         if resp.clicked() {
             self.set_tab(Tab::Health);
@@ -537,9 +534,9 @@ impl App {
                 if pointer.as_deref() == Some(id.as_str()) {
                     icons::pointer(p, mark - vec2(3.0, 5.0), 10.0, pal().accent);
                 } else if online {
-                    p.circle_filled(mark, 3.0, pal().ok);
+                    widgets::status_mark(p, mark, 7.0, widgets::Mark::Ok);
                 } else {
-                    p.circle_stroke(mark, 2.5, Stroke::new(1.5, pal().ink3));
+                    widgets::status_mark(p, mark, 7.0, widgets::Mark::Off);
                 }
                 p.text(pos2(r.left() + 19.0, r.center().y), Align2::LEFT_CENTER, shown, regular(T_META), if online { pal().ink2 } else { pal().ink3 });
                 if resp.on_hover_text(&name).clicked() {

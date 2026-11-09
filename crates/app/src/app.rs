@@ -437,10 +437,10 @@ fn chip(ui: &Ui, c: Rect, label: &str, dot: Option<bool>) -> f32 {
     let at = pos2(c.right() - tw - 9.0, mid);
     match dot {
         Some(true) => {
-            p.circle_filled(at, 3.0, pal().ok);
+            widgets::status_mark(p, at, 7.0, widgets::Mark::Ok);
         }
         Some(false) => {
-            p.circle_stroke(at, 2.6, Stroke::new(1.5, pal().ink3));
+            widgets::status_mark(p, at, 7.0, widgets::Mark::Off);
         }
         None => {}
     }
@@ -2363,7 +2363,7 @@ impl App {
         // An error that fits on one line is centred on the band; a longer
         // one says why on the line below, as other messages do.
         let gy = if t.error && d.is_none() { rect.center().y - g.size().y / 2.0 } else { rect.top() + 10.0 };
-        p.circle_filled(pos2(rect.left() + 17.0, gy + 9.0), 3.5, dot);
+        if t.error { widgets::status_mark(&p, pos2(rect.left() + 17.0, gy + 9.0), 7.0, widgets::Mark::Error); } else { p.circle_filled(pos2(rect.left() + 17.0, gy + 9.0), 3.5, dot); }
         if t.error && g.elided {
             resp.clone().on_hover_text(format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}"))));
         }
@@ -2649,6 +2649,10 @@ impl eframe::App for App {
             ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::Mutex<Vec<f64>>>>(Id::unique("bench-ui")).lock().unwrap().push(ms));
         }
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        if crate::gallery::wanted() {
+            crate::gallery::show(ui);
+        }
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::tab_walk(ui.ctx(), now);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::shot(ui.ctx(), now);
@@ -2713,6 +2717,8 @@ impl eframe::App for App {
 /// - `ONE_MK_APP_THEME=light|dark|system` paints with that theme whatever
 ///   Settings → Appearance says; `ONE_MK_APP_THEME_FLIP=secs` turns to the
 ///   other theme that many seconds in (the cross-fade) (style.rs `Themer`).
+/// - `ONE_MK_APP_GALLERY=1` draws every shared control in every state, in
+///   both themes, over the window (gallery.rs).
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(any(debug_assertions, feature = "design-evidence"))]
 mod debug {

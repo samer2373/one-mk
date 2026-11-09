@@ -1365,7 +1365,7 @@ impl Scene {
     /// Keyboard focus is drawn round the whole computer in `paint`.
     fn screen_outline(&self, painter: &Painter, f: &Face, d: &Device, preview: f32) {
         if self.focused == Some(f.owner) {
-            painter.add(Shape::closed_line(grown(&f.pts, 3.0), Stroke::new(2.0, pal().accent)));
+            painter.add(Shape::closed_line(grown(&f.pts, 3.0), Stroke::new(2.0, pal().focus)));
             return;
         }
         let target = d.online && !d.me && !d.leaving && d.w < 0.01;
@@ -1417,7 +1417,7 @@ impl Scene {
         let st = Stroke::new(1.2, if lit { fade(pal().accent, 0.9) } else { pal().tint(60) });
         painter.extend(Shape::dashed_line(&pts, st, 6.0, 5.0));
         if self.slot_focus {
-            painter.add(Shape::closed_line(grown(&[pts[0], pts[1], pts[2], pts[3]], 4.0), Stroke::new(2.0, pal().accent)));
+            painter.add(Shape::closed_line(grown(&[pts[0], pts[1], pts[2], pts[3]], 4.0), Stroke::new(2.0, pal().focus)));
         }
         let (h, w) = (pts[0].distance(pts[3]), pts[0].distance(pts[1]));
         let c = cam.pt(g.screen.at(0.5, 0.5));
