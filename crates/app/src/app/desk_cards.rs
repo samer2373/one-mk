@@ -23,9 +23,9 @@ pub(super) struct NoticeLay {
 /// A toast laid out `w` wide: its message, its detail, and its height
 /// (with room for the action an error carries).
 pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Galley>, Option<std::sync::Arc<egui::Galley>>, f32) {
-    let text_w = w - 46.0 - if t.error { toast_action_w(t) } else { 0.0 };
-    // An error is one line: what failed, then (quieter) why; the whole of
-    // it on hover and for screen readers.
+    let text_w = w - 46.0 - if t.error { toast_action_w(ui, t) } else { 0.0 };
+    // An error is one line when it fits: what failed, then (quieter) why.
+    // Otherwise why goes on the lines below, whole: never cut off.
     if t.error {
         let mut job = egui::text::LayoutJob::default();
         job.append(&t.text, 0.0, egui::TextFormat::simple(regular(T_BODY), INK));
@@ -33,7 +33,10 @@ pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Gal
             job.append(&format!("  {d}"), 0.0, egui::TextFormat::simple(regular(T_META), INK2));
         }
         job.wrap = egui::text::TextWrapping { max_width: text_w, max_rows: 1, break_anywhere: false, overflow_character: Some('…') };
-        return (ui.painter().layout_job(job), None, 46.0);
+        let line = ui.painter().layout_job(job);
+        if !line.elided || t.detail.is_none() {
+            return (line, None, 46.0);
+        }
     }
     let g = ui.painter().layout(t.text.clone(), regular(T_BODY), INK, text_w);
     let d = t.detail.as_ref().map(|d| ui.painter().layout(d.clone(), regular(T_META), INK2, text_w));
@@ -41,9 +44,29 @@ pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Gal
     (g, d, h.max(if t.error { 52.0 } else { 0.0 }))
 }
 
-/// Room for an error toast's actions (Try again, when it can, and Open Health).
-pub(super) fn toast_action_w(t: &Toast) -> f32 {
-    if t.retry.is_some() { 236.0 } else { 130.0 }
+/// A button on an error toast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ToastButton {
+    Retry,
+    Act,
+    Health,
+}
+
+/// An error toast's buttons, left to right: Try again (when it can), its
+/// own action, Open Health (when Health can help).
+pub(super) fn toast_actions(t: &Toast) -> Vec<(&'static str, ToastButton)> {
+    let mut out = Vec::new();
+    if t.retry.is_some() { out.push(("Try again", ToastButton::Retry)); }
+    if let Some(act) = &t.act { out.push((act.label(), ToastButton::Act)); }
+    if t.health { out.push(("Open Health", ToastButton::Health)); }
+    out
+}
+
+/// Room for an error toast's buttons, with a margin each side.
+pub(super) fn toast_action_w(ui: &Ui, t: &Toast) -> f32 {
+    let actions = toast_actions(t);
+    if actions.is_empty() { return 12.0; }
+    24.0 + actions.iter().map(|(label, _)| button_width(ui, label)).sum::<f32>() + 8.0 * (actions.len() - 1) as f32
 }
 
 /// The row the Computers / Arrange switch takes at the desk's top.
@@ -588,7 +611,7 @@ impl App {
             let since = ui.ctx().data_mut(|d| *d.get_temp_mut_or_insert_with(key, || self.now));
             let shown_for = self.now - since;
             if shown_for > 12.0 {
-                let _ = std::fs::write(self.link.dir.join(".window-hinted"), b"");
+                let _ = one_mk_ctl::private::write(&self.link.dir.join(".window-hinted"), b"");
                 self.dragged_once = true;
                 return;
             }
