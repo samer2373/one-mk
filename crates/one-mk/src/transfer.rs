@@ -2032,7 +2032,7 @@ mod tests {
         fs::write(root.join("real.txt"), b"real").unwrap();
         symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
         fs::create_dir_all(root.join("folder")).unwrap();
-        symlink(&root.join("folder"), root.join("dirlink")).unwrap();
+        symlink(root.join("folder"), root.join("dirlink")).unwrap();
         symlink(root.join("missing"), root.join("dangling")).unwrap();
 
         // A link named on the command line to a file is followed, under the link's name.
@@ -2056,7 +2056,7 @@ mod tests {
         symlink(root.join("real.txt"), tree.join("inner-link")).unwrap();
         let fifo = std::ffi::CString::new(tree.join("pipe").as_os_str().as_encoded_bytes()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
-        let (files, skipped) = collect_noted(&[tree.clone()]).unwrap();
+        let (files, skipped) = collect_noted(std::slice::from_ref(&tree)).unwrap();
         assert_eq!(files.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["tree/sub/kept.txt"]);
         assert_eq!(skipped, ["tree/empty (an empty folder)", "tree/inner-link (a symbolic link)", "tree/pipe (not a regular file)"]);
         // An empty folder alone: nothing to send, but a note to show.
