@@ -23,14 +23,14 @@ struct Lock(std::path::PathBuf);
 
 impl Lock {
     fn take(dir: &Path) -> Option<Self> {
-        let _ = std::fs::create_dir_all(dir);
+        let _ = crate::private::create_dir_all(dir);
         let path = dir.join(LOCK);
         let fresh = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < LOCK_STALE);
         if path.exists() && !fresh(&path) {
             let _ = std::fs::remove_file(&path);
         }
         // `create_new` is atomic: of two windows, exactly one gets the file.
-        std::fs::OpenOptions::new().write(true).create_new(true).open(&path).ok().map(|_| Self(path))
+        crate::private::options().write(true).create_new(true).open(&path).ok().map(|_| Self(path))
     }
 }
 
@@ -153,8 +153,8 @@ pub fn run(dir: &Path, host: &dyn Host) -> Option<Report> {
     };
     // Writing the marker is best effort: if the folder is read-only, setup
     // runs again next time, which is harmless because every step is idempotent.
-    let _ = std::fs::create_dir_all(dir);
-    let _ = std::fs::write(dir.join(MARKER), b"1\n");
+    let _ = crate::private::create_dir_all(dir);
+    let _ = crate::private::write(&dir.join(MARKER), b"1\n");
     Some(Report { login, integrations, service })
 }
 

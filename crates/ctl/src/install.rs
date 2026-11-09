@@ -201,6 +201,13 @@ fn app_entry_path(home: &Path) -> PathBuf {
     home.join(".local/share/applications").join(format!("{}.desktop", one_mk_proto::LINUX_APP_ID))
 }
 
+/// Whether [`install`] starts the service right away as well (a systemd
+/// user service or a LaunchAgent does; an autostart entry or a Windows
+/// startup entry only starts it at the next login).
+pub fn starts_service_now() -> bool {
+    if cfg!(target_os = "macos") { true } else if cfg!(target_os = "linux") { systemd_available() } else { false }
+}
+
 fn systemd_available() -> bool {
     ok("systemctl", &["--user", "show-environment"])
 }

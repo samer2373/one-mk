@@ -8,7 +8,7 @@ use crate::motion::{self, Tween};
 use crate::style::{GROUND, INK, INK_HOVER, INK2, SIGNAL, fit, mono_medium, regular, semibold};
 use crate::widgets::mix;
 use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
-use one_mk_proto::{Edge, Rect as Monitor, Side};
+use one_mk_proto::{Desktop, Edge, Rect as Monitor, Side};
 use std::ops::{Add, Mul, Sub};
 
 /// Distance between neighbouring devices on the desk, in centimetres.
@@ -323,32 +323,11 @@ impl Fit {
 /// nothing. Returns its side and offset (where its (0,0) lands in our
 /// pixels).
 pub fn drop_place(mine: &[Monitor], edges: &[Edge], peer: Monitor, at: (f64, f64), reach: f64) -> (Side, (i32, i32)) {
-    let (x0, y0, x1, y1) = mine.iter().fold((i32::MAX, i32::MAX, i32::MIN, i32::MIN), |(x0, y0, x1, y1), m| (x0.min(m.x), y0.min(m.y), x1.max(m.right()), y1.max(m.bottom())));
+    let (x0, y0, x1, y1) = span(mine);
     let x = (at.0.round() as i32).clamp(x0 - 2 * peer.w, x1 + peer.w);
     let y = (at.1.round() as i32).clamp(y0 - 2 * peer.h, y1 + peer.h);
     let r = Monitor::new(x, y, peer.w, peer.h);
-    let overlaps = |r: &Monitor| mine.iter().any(|m| m.x < r.right() && r.x < m.right() && m.y < r.bottom() && r.y < m.bottom());
-    let snapped = edges
-        .iter()
-        .filter_map(|e| {
-            let (len, start) = match e.side {
-                Side::Left | Side::Right => (r.h, r.y),
-                Side::Top | Side::Bottom => (r.w, r.x),
-            };
-            // At least a quarter of the shorter one touches.
-            let m = ((e.hi - e.lo).min(len) / 4).max(1);
-            let along = start.clamp(e.lo + m - len, e.hi - m);
-            let c = match e.side {
-                Side::Left => Monitor { x: e.at - r.w, y: along, ..r },
-                Side::Right => Monitor { x: e.at, y: along, ..r },
-                Side::Top => Monitor { x: along, y: e.at - r.h, ..r },
-                Side::Bottom => Monitor { x: along, y: e.at, ..r },
-            };
-            let cost = f64::from(c.x - r.x).hypot(f64::from(c.y - r.y));
-            (!overlaps(&c)).then_some((cost, e.side, c))
-        })
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .filter(|(cost, ..)| *cost <= reach || overlaps(&r));
+    let snapped = nearest_beside(mine, edges, r).filter(|(cost, ..)| *cost <= reach || overlaps(mine, &r));
     let (side, c) = match snapped {
         Some((_, side, c)) => (side, c),
         None => {
@@ -366,6 +345,101 @@ pub fn drop_place(mine: &[Monitor], edges: &[Edge], peer: Monitor, at: (f64, f64
         }
     };
     (side, (c.x - peer.x, c.y - peer.y))
+}
+
+/// Where a computer let go on the desk ends up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Landing {
+    /// Its screens touch ours there: the pointer crosses where they do.
+    Beside(Side, (i32, i32)),
+    /// Exactly where it was let go, touching nothing (Arrange only).
+    Apart(Side, (i32, i32)),
+    /// No offset: anywhere along that side of ours.
+    Along(Side),
+}
+
+/// Where a computer with `theirs` monitors goes when let go at `dropped`
+/// (a side and the offset of its (0,0) in our pixels) beside `mine`.
+/// Where the screens touch, there. Otherwise it snaps beside the nearest
+/// edge of ours, so the pointer can always cross; only when `keep_apart`
+/// (someone placing it deliberately, in Arrange) does it stay apart.
+pub fn landing(mine: &Desktop, theirs: &Desktop, dropped: (Side, (i32, i32)), keep_apart: bool) -> Landing {
+    let touches = |(side, offset): (Side, (i32, i32))| !one_mk_proto::touching(mine, theirs, side, offset).is_empty();
+    if touches(dropped) {
+        return Landing::Beside(dropped.0, dropped.1);
+    }
+    if keep_apart {
+        return Landing::Apart(dropped.0, dropped.1);
+    }
+    snapped(mine, theirs, dropped).map_or(Landing::Along(dropped.0), |(side, offset)| Landing::Beside(side, offset))
+}
+
+/// A computer at `place` moved beside the nearest edge of `mine`, where
+/// its screens touch ours; `None` if no edge has room.
+pub fn snapped(mine: &Desktop, theirs: &Desktop, place: (Side, (i32, i32))) -> Option<(Side, (i32, i32))> {
+    let (ox, oy) = place.1;
+    let mut best: Option<(f64, Side, (i32, i32))> = None;
+    // Each free edge of ours against each free edge of theirs that can face
+    // it: slid along as little as needed for a quarter of the shorter to touch.
+    for side in Side::ALL {
+        for e in mine.exposed_edges(side) {
+            for t in theirs.exposed_edges(side.opposite()) {
+                let m = ((e.hi - e.lo).min(t.hi - t.lo) / 4).max(1);
+                let (lo, hi) = (e.lo + m - t.hi, e.hi - m - t.lo);
+                if lo > hi {
+                    continue;
+                }
+                let offset = match side {
+                    Side::Left | Side::Right => (e.at - t.at, oy.clamp(lo, hi)),
+                    Side::Top | Side::Bottom => (ox.clamp(lo, hi), e.at - t.at),
+                };
+                let covers = theirs.screens.iter().any(|s| overlaps(&mine.screens, &Monitor { x: s.x + offset.0, y: s.y + offset.1, ..*s }));
+                if covers || one_mk_proto::touching(mine, theirs, side, offset).is_empty() {
+                    continue;
+                }
+                let cost = f64::from(offset.0 - ox).hypot(f64::from(offset.1 - oy));
+                if best.is_none_or(|(c, ..)| cost < c) {
+                    best = Some((cost, side, offset));
+                }
+            }
+        }
+    }
+    best.map(|(_, side, offset)| (side, offset))
+}
+
+/// The bounds of `mine`: left, top, right, bottom.
+fn span(mine: &[Monitor]) -> (i32, i32, i32, i32) {
+    mine.iter().fold((i32::MAX, i32::MAX, i32::MIN, i32::MIN), |(x0, y0, x1, y1), m| (x0.min(m.x), y0.min(m.y), x1.max(m.right()), y1.max(m.bottom())))
+}
+
+fn overlaps(mine: &[Monitor], r: &Monitor) -> bool {
+    mine.iter().any(|m| m.x < r.right() && r.x < m.right() && m.y < r.bottom() && r.y < m.bottom())
+}
+
+/// `r` moved the least to stand beside one of `edges` without covering a
+/// screen of ours, touching at least a quarter of the shorter of the two:
+/// how far it moved, the side and where it lands.
+fn nearest_beside(mine: &[Monitor], edges: &[Edge], r: Monitor) -> Option<(f64, Side, Monitor)> {
+    edges
+        .iter()
+        .filter_map(|e| {
+            let (len, start) = match e.side {
+                Side::Left | Side::Right => (r.h, r.y),
+                Side::Top | Side::Bottom => (r.w, r.x),
+            };
+            // At least a quarter of the shorter one touches.
+            let m = ((e.hi - e.lo).min(len) / 4).max(1);
+            let along = start.clamp(e.lo + m - len, e.hi - m);
+            let c = match e.side {
+                Side::Left => Monitor { x: e.at - r.w, y: along, ..r },
+                Side::Right => Monitor { x: e.at, y: along, ..r },
+                Side::Top => Monitor { x: along, y: e.at - r.h, ..r },
+                Side::Bottom => Monitor { x: along, y: e.at, ..r },
+            };
+            let cost = f64::from(c.x - r.x).hypot(f64::from(c.y - r.y));
+            (!overlaps(mine, &c)).then_some((cost, e.side, c))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
 }
 
 pub struct Geo {
@@ -2147,6 +2221,44 @@ mod tests {
         // A peer whose monitors don't start at (0,0): the offset is for its (0,0).
         let wide = Monitor::new(-1920, 0, 3840, 1080);
         assert_eq!(drop_place(&mine.screens, &edges, wide, (3500.0, 0.0), 300.0), (Side::Right, (3432 + 1920, 0)));
+    }
+
+    #[test]
+    fn a_drop_on_the_desk_always_lands_where_the_screens_touch() {
+        use one_mk_proto::touching;
+        let one = one_mk_proto::Desktop::new(vec![Monitor::new(0, 0, 1920, 1080)]);
+        let peer = one_mk_proto::Desktop::new(vec![Monitor::new(0, 0, 1920, 1080)]);
+        // The QA's casual drag: B on A's left, let go up and away.
+        let dropped = (Side::Left, (-3840, -963));
+        assert!(touching(&one, &peer, dropped.0, dropped.1).is_empty());
+        match landing(&one, &peer, dropped, false) {
+            Landing::Beside(side, offset) => {
+                assert_eq!(side, Side::Left);
+                assert_eq!(offset.0, -1920, "flush against the left edge");
+                assert!(!touching(&one, &peer, side, offset).is_empty());
+            }
+            other => panic!("{other:?}"),
+        }
+        // Deliberately apart in Arrange: kept, and said (by the window).
+        assert_eq!(landing(&one, &peer, dropped, true), Landing::Apart(Side::Left, (-3840, -963)));
+        // Already touching: exactly there, Arrange or not.
+        assert_eq!(landing(&one, &peer, (Side::Right, (1920, 300)), false), Landing::Beside(Side::Right, (1920, 300)));
+        assert_eq!(landing(&one, &peer, (Side::Right, (1920, 300)), true), Landing::Beside(Side::Right, (1920, 300)));
+        // Wherever it is let go, on any desk, it lands touching.
+        let mine = user_desk();
+        let tall = one_mk_proto::Desktop::new(vec![Monitor::new(0, 0, 1080, 1920), Monitor::new(1080, 400, 2560, 1440)]);
+        for theirs in [&peer, &tall] {
+            for x in (-9000..9000).step_by(700) {
+                for y in (-6000..6000).step_by(650) {
+                    for side in Side::ALL {
+                        match landing(&mine, theirs, (side, (x, y)), false) {
+                            Landing::Beside(s, o) => assert!(!touching(&mine, theirs, s, o).is_empty(), "{x},{y} {side:?} -> {s:?} {o:?}"),
+                            other => panic!("{x},{y} {side:?}: {other:?}"),
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

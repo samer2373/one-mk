@@ -170,6 +170,17 @@ impl App {
             if button(ui, b, Id::unique(("place-anywhere", &peer.id)), &shown, Look::Quiet, true, Some(&format!("Let {} take the pointer anywhere along your {} edge", peer.name, edge_word(side)))).clicked() {
                 self.choose_side(&peer.id, side, false);
             }
+            // Placed apart: one step to where the screens touch.
+            if self.apart.contains(&peer.id) {
+                let label = "Snap to an edge";
+                let below = b.right() + 8.0 + button_width(ui, label) > c.right();
+                let at = if below { pos2(c.left(), b.bottom() + 8.0) } else { pos2(b.right() + 8.0, b.top()) };
+                let s = Rect::from_min_size(at, vec2(button_width(ui, label).min(c.width()), 28.0));
+                let shown = fit(ui.painter(), label, &semibold(T_BODY), s.width() - 28.0);
+                if button(ui, s, Id::unique(("place-snap", &peer.id)), &shown, Look::Quiet, true, Some(&format!("Move {} beside the nearest edge of your screens, so the pointer can cross", peer.name))).clicked() {
+                    self.snap(&peer.id);
+                }
+            }
         }
     }
 

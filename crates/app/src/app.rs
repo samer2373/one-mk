@@ -174,6 +174,35 @@ struct Toast {
     life: f32,
     /// What failed, when doing it again is safe: "Try again" does that.
     retry: Option<Job>,
+    /// One more thing it offers to do about it.
+    act: Option<ToastAct>,
+    /// It offers "Open Health" (the checks and their fixes).
+    health: bool,
+}
+
+/// What an error toast offers besides trying again.
+#[derive(Clone, Debug, PartialEq)]
+enum ToastAct {
+    /// Opens oneMK's log: the service's own account of what went wrong.
+    ShowLog,
+    /// Moves the computer with this id beside the nearest edge of ours.
+    Snap(String),
+}
+
+impl ToastAct {
+    fn label(&self) -> &'static str {
+        match self {
+            ToastAct::ShowLog => "Show log",
+            ToastAct::Snap(_) => "Snap to an edge",
+        }
+    }
+
+    fn hint(&self) -> &'static str {
+        match self {
+            ToastAct::ShowLog => "Open oneMK's log",
+            ToastAct::Snap(_) => "Move it beside the nearest edge of your screens, so the pointer can cross",
+        }
+    }
 }
 
 /// What a cell of the panel shows. When it changes, the old one fades
@@ -254,6 +283,8 @@ pub struct App {
     notice: desk_cards::NoticeHold,
     /// Where the toast goes in the desk's band this frame (None: off the desk).
     toast_slot: Option<Rect>,
+    /// Whether the window had the focus last frame (see `pointer_away`).
+    was_focused: bool,
     /// How tall each short cell's contents were last drawn (cards are
     /// sized to them, not stretched to the tallest).
     cell_h: HashMap<&'static str, f32>,
@@ -519,6 +550,7 @@ impl App {
             apart: HashSet::new(),
             notice: desk_cards::NoticeHold::default(),
             toast_slot: None,
+            was_focused: true,
             cell_h: HashMap::new(),
             pending_swap: HashMap::new(),
             hop: None,
@@ -559,14 +591,35 @@ impl App {
     }
 
     fn toast(&mut self, text: impl Into<String>, now: f64) {
-        self.toast = Some(Toast { text: text.into(), detail: None, error: false, at: now, life: 3.5, retry: None });
+        self.toast = Some(Toast { text: text.into(), detail: None, error: false, at: now, life: 3.5, retry: None, act: None, health: false });
     }
 
     /// An error says what went wrong and what to do; the raw reason goes
     /// underneath. It stays until dismissed, or for ten seconds.
     fn toast_error(&mut self, text: impl Into<String>, detail: Option<String>, now: f64) {
         let detail = detail.map(|d| crate::view::window_issue(d.trim())).filter(|d| !d.is_empty());
-        self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0, retry: None });
+        self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0, retry: None, act: None, health: true });
+    }
+
+    /// The service didn't start: why, in plain words, with "Try again" and
+    /// its log one click away.
+    fn start_failed(&mut self, why: Option<String>, now: f64) {
+        self.toast_error("oneMK couldn't start.", why, now);
+        if let Some(t) = self.toast.as_mut() {
+            t.retry = Some(Job::Start);
+            t.act = Some(ToastAct::ShowLog);
+        }
+    }
+
+    /// A computer placed apart from ours on purpose: say what that means,
+    /// and offer to put it where the pointer can cross.
+    fn placed_apart(&mut self, id: &str, now: f64) {
+        let name = self.name_of(id);
+        self.toast_error(format!("{name} is placed apart from your screens."), Some("The pointer can't cross to it until their edges touch.".into()), now);
+        if let Some(t) = self.toast.as_mut() {
+            t.health = false;
+            t.act = Some(ToastAct::Snap(id.to_owned()));
+        }
     }
 
     /// Whether `job` can simply be run again from an error toast.
@@ -654,6 +707,8 @@ impl App {
                 Event::Links(..) => {}
                 Event::Autostart(on) => self.autostart = Some(on),
                 Event::Setup(report) => match report.problems().first() {
+                    // Not running matters most, and has its own way out.
+                    _ if report.service.failed().is_some() => self.start_failed(report.service.failed().map(str::to_owned), now),
                     Some(problem) => self.toast_error(format!("Setup didn't finish. {problem}"), None, now),
                     None if report.changed() => self.toast("oneMK is set up and starts when you log in.", now),
                     None => {}
@@ -767,7 +822,8 @@ impl App {
                 let word = if on { "on" } else { "off" };
                 self.toast_error(format!("Couldn't turn {word} start at login."), e, now);
             }
-            Job::Start => self.toast_error("oneMK didn't start.", e, now),
+            Job::Start => self.start_failed(e, now),
+            Job::ShowLog => self.toast_error("Couldn't open the log.", e, now),
             Job::Forget(name) => self.toast_error(format!("Couldn't remove {name}. Try again."), e, now),
             Job::Stop => self.toast_error("Couldn't stop oneMK. If it was started before an update, quit it once from Activity Monitor or Task Manager; after that Stop works.", e, now),
             Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
@@ -1115,6 +1171,14 @@ impl App {
     }
 }
 
+/// Whether the pointer has left the window without the window being told:
+/// it is on another computer (`controlling`: oneMK holds it there, and the
+/// window hears no leave), or the window just lost the focus to something
+/// in front of it. Moving over the window again brings hover back.
+fn pointer_away(controlling: bool, was_focused: bool, focused: bool) -> bool {
+    controlling || (was_focused && !focused)
+}
+
 /// An image embedded by scripts/brand-assets.py: width and height (u32
 /// LE), then straight RGBA.
 pub fn embedded(bytes: &[u8]) -> ([usize; 2], &[u8]) {
@@ -1205,6 +1269,25 @@ impl App {
             }
         }
         self.sync_scene();
+    }
+
+    /// Whether the computer with this id is being dragged on the desk.
+    fn dragging(&self, id: &str) -> bool {
+        matches!(&self.drag, Some(Drag::Device { i, .. }) if self.scene.devices.get(*i).is_some_and(|d| d.id == id))
+    }
+
+    /// A computer placed apart, moved beside the nearest edge of ours (or
+    /// anywhere along its side, when no edge has room); it hops there.
+    fn snap(&mut self, id: &str) {
+        let Some((side, offset)) = self.place_of(id) else { return };
+        let Some(i) = self.scene.index(id) else { return };
+        let (mine, theirs) = (&self.scene.devices[0].screens, &self.scene.devices[i].screens);
+        let known = !mine.is_empty() && !theirs.is_empty();
+        let place = offset.filter(|_| known).and_then(|o| scene::snapped(&Desktop::new(mine.clone()), &Desktop::new(theirs.clone()), (side, o)));
+        match place {
+            Some((side, o)) => self.choose_place(id, side, Some(o), true),
+            None => self.choose_side(id, side, true),
+        }
     }
 
     /// Starts placing computer `i` by dragging it from `start`, when its
@@ -1400,8 +1483,15 @@ impl App {
             if let Some(Drag::Device { i, place, .. }) = &self.drag
                 && *i < self.scene.devices.len()
             {
-                let (i, offset) = (*i, place.as_ref().map(|pl| pl.now.1));
+                let i = *i;
                 let side = self.side_at(i);
+                // Where the screens touch, or (in Arrange, let go apart on
+                // purpose) exactly there; never apart by accident.
+                let theirs = &self.scene.devices[i].screens;
+                let landing = match place.as_ref().filter(|_| !theirs.is_empty()) {
+                    Some(pl) => scene::landing(&pl.mine, &Desktop::new(theirs.clone()), (side, pl.now.1), self.tab == Tab::Arrange),
+                    None => scene::Landing::Along(side),
+                };
                 let d = &mut self.scene.devices[i];
                 d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
                 d.pop.go(1.0, now, 0.16, motion::out_cubic);
@@ -1409,11 +1499,16 @@ impl App {
                 self.drag_side = None;
                 if !self.dragged_once {
                     self.dragged_once = true;
-                    let _ = std::fs::write(self.drag_hint_file(), b"");
+                    let _ = one_mk_ctl::private::write(&self.drag_hint_file(), b"");
                 }
-                match offset {
-                    Some(o) => self.choose_place(&id, side, Some(o), false),
-                    None => self.choose_side(&id, side, false),
+                // Snapped: it glides from where it was let go to its place.
+                match landing {
+                    scene::Landing::Beside(side, o) => self.choose_place(&id, side, Some(o), false),
+                    scene::Landing::Apart(side, o) => {
+                        self.choose_place(&id, side, Some(o), false);
+                        self.placed_apart(&id, now);
+                    }
+                    scene::Landing::Along(side) => self.choose_side(&id, side, false),
                 }
             }
             self.drag = None;
@@ -1654,6 +1749,11 @@ impl App {
             [] => (
                 "Waiting for your computers".into(),
                 "Paired computers appear here when oneMK is running on them and they're on the same network.".into(),
+            ),
+            // Carried away from our screens on the Computers view: it won't stay there.
+            [p] if self.apart.contains(&p.id) && self.tab == Tab::Desk && self.dragging(&p.id) => (
+                format!("Let go to place {}", p.name),
+                format!("It moves beside the nearest edge of your screens, where the pointer crosses.{away}"),
             ),
             [p] if self.apart.contains(&p.id) => (
                 format!("{} is apart from this computer", p.name),
@@ -2248,7 +2348,7 @@ impl App {
         let rect = match slot {
             Some(r) => r.translate(vec2(0.0, -motion::space(6.0) * (1.0 - a_in))),
             None => {
-                let w = g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::toast_action_w(t) } else { 0.0 };
+                let w = g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::toast_action_w(ui, t) } else { 0.0 };
                 let y = desk.top() + TOP_H + 10.0 + h / 2.0 - motion::space(8.0) * (1.0 - a_in);
                 Rect::from_center_size(pos2(desk.center().x, y), vec2(w, h))
             }
@@ -2256,15 +2356,16 @@ impl App {
         let layer = egui::LayerId::new(egui::Order::Tooltip, Id::unique("toast"));
         let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
         child.set_opacity(a);
-        let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::toast_action_w(t), rect.bottom())) } else { rect };
+        let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::toast_action_w(ui, t), rect.bottom())) } else { rect };
         let resp = child.interact(body, Id::unique("toast-body"), Sense::CLICK);
         let p = child.painter().clone();
         p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(12)));
         p.rect(rect, CornerRadius::same(12), POPOVER, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
         let dot = if t.error { ERROR } else { INK };
         let gh = g.size().y;
-        // Errors are one line, centred on the band.
-        let gy = if t.error { rect.center().y - g.size().y / 2.0 } else { rect.top() + 10.0 };
+        // An error that fits on one line is centred on the band; a longer
+        // one says why on the line below, as other messages do.
+        let gy = if t.error && d.is_none() { rect.center().y - g.size().y / 2.0 } else { rect.top() + 10.0 };
         p.circle_filled(pos2(rect.left() + 17.0, gy + 9.0), 3.5, dot);
         if t.error && g.elided {
             resp.clone().on_hover_text(format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}"))));
@@ -2273,20 +2374,31 @@ impl App {
         if let Some(d) = d {
             p.galley(pos2(rect.left() + 30.0, rect.top() + 14.0 + gh), d, INK2);
         }
-        // An error says where to look next: Health has the checks and fixes.
+        // An error says what to do next: try again (the first thing to try,
+        // first in Tab order too), its own way out, or Health's checks.
         let mut open_health = false;
         let mut try_again = false;
+        let mut act = None;
         if t.error {
-            let bw = button_width(&child, "Open Health");
-            let b = Rect::from_min_size(pos2(rect.right() - 12.0 - bw, rect.center().y - 15.0), vec2(bw, 30.0));
-            // What failed, done again: the first thing to try, first in
-            // Tab order too.
-            if t.retry.is_some() {
-                let tw = button_width(&child, "Try again");
-                let tb = Rect::from_min_size(pos2(b.left() - 8.0 - tw, b.top()), vec2(tw, 30.0));
-                try_again = button(&mut child, tb, Id::unique("toast-retry"), "Try again", Look::Quiet, true, Some("Do it again")).clicked();
+            let actions = desk_cards::toast_actions(t);
+            let mut x = rect.right() - 12.0 - actions.iter().map(|(label, _)| button_width(&child, label)).sum::<f32>() - 8.0 * actions.len().saturating_sub(1) as f32;
+            for (label, which) in actions {
+                let bw = button_width(&child, label);
+                let b = Rect::from_min_size(pos2(x, rect.center().y - 15.0), vec2(bw, 30.0));
+                x += bw + 8.0;
+                let hint = match which {
+                    desk_cards::ToastButton::Retry => "Do it again",
+                    desk_cards::ToastButton::Act => t.act.as_ref().map_or("", ToastAct::hint),
+                    desk_cards::ToastButton::Health => "Open Health to see what went wrong",
+                };
+                if button(&mut child, b, Id::unique(("toast-action", label)), label, Look::Quiet, true, Some(hint)).clicked() {
+                    match which {
+                        desk_cards::ToastButton::Retry => try_again = true,
+                        desk_cards::ToastButton::Act => act = t.act.clone(),
+                        desk_cards::ToastButton::Health => open_health = true,
+                    }
+                }
             }
-            open_health = button(&mut child, b, Id::unique("toast-health"), "Open Health", Look::Quiet, true, Some("Open Health to see what went wrong")).clicked();
         }
         let (role, live) = if t.error { (Role::Alert, Live::Assertive) } else { (Role::Status, Live::Polite) };
         let label = format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}")));
@@ -2301,8 +2413,15 @@ impl App {
         if try_again && let Some(job) = self.toast.as_mut().and_then(|t| t.retry.take()) {
             self.retry(job);
         }
+        // The log opens beside it: the advice stays up to follow.
+        let acted = matches!(act, Some(ToastAct::Snap(_)));
+        match act {
+            Some(ToastAct::ShowLog) => self.link.show_log(),
+            Some(ToastAct::Snap(id)) => self.snap(&id),
+            None => {}
+        }
         let t = self.toast.as_mut().expect("shown above");
-        if (dismiss || open_health || try_again) && age < t.life - exit {
+        if (dismiss || open_health || try_again || acted) && age < t.life - exit {
             t.life = age + exit;
         } else if resp.hovered() && age > enter && age < t.life - exit {
             // Held while the pointer is on it, so it can be read.
@@ -2538,10 +2657,19 @@ impl eframe::App for App {
         widgets::targets::flush();
     }
 
-    #[cfg(any(debug_assertions, feature = "design-evidence"))]
-    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        debug::tab_press(ctx, raw_input);
-        debug::point_at(ctx, raw_input);
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        {
+            debug::tab_press(_ctx, raw_input);
+            debug::point_at(_ctx, raw_input);
+        }
+        // Nothing here is under a pointer that has gone elsewhere: no
+        // tooltip or highlight is left standing over the window.
+        let controlling = self.running().is_some_and(|s| s.controlling.is_some());
+        if pointer_away(controlling, self.was_focused, raw_input.focused) {
+            raw_input.events.push(egui::Event::PointerGone);
+        }
+        self.was_focused = raw_input.focused;
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -2899,6 +3027,35 @@ mod tests {
         assert_eq!(truncated_name_target(Some(1), Some(2), &truncated), Some((1, true)));
         assert_eq!(truncated_name_target(Some(0), Some(2), &truncated), Some((2, false)));
         assert_eq!(truncated_name_target(None, Some(0), &truncated), None);
+    }
+
+    #[test]
+    fn hover_ends_when_the_pointer_goes_elsewhere_unannounced() {
+        // On another computer: every frame, whatever the focus.
+        assert!(pointer_away(true, true, true));
+        assert!(pointer_away(true, false, false));
+        // Focus lost: once, at that moment; moving back over it hovers again.
+        assert!(pointer_away(false, true, false));
+        assert!(!pointer_away(false, false, false));
+        assert!(!pointer_away(false, true, true));
+        assert!(!pointer_away(false, false, true));
+        // egui drops a tooltip once the pointer is gone.
+        let tip_shown = |events: Vec<egui::Event>| {
+            let ctx = egui::Context::default();
+            let mut shown = false;
+            for frame in 0..30 {
+                let input = egui::RawInput { events: if frame == 0 { vec![egui::Event::PointerMoved(pos2(20.0, 20.0))] } else if frame == 20 { events.clone() } else { vec![] }, time: Some(f64::from(frame) * 0.1), ..Default::default() };
+                let mut out = ctx.run_ui(input, |ui| {
+                    let r = ui.interact(Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 100.0)), Id::unique("tip"), Sense::hover());
+                    shown = r.hovered();
+                    r.on_hover_text("Edges lead nowhere while this is on.");
+                });
+                out.textures_delta.clear();
+            }
+            shown
+        };
+        assert!(tip_shown(vec![]), "hovered while the pointer stays");
+        assert!(!tip_shown(vec![egui::Event::PointerGone]), "not after it is gone");
     }
 
     #[test]

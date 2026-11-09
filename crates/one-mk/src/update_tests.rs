@@ -124,6 +124,37 @@ fn doctor_uses_only_plain_cached_results() -> Result<()> {
 }
 
 #[test]
+fn failed_checks_are_said_in_plain_words() -> Result<()> {
+    // What `update --url http://…` and GitHub's anonymous rate limit say.
+    let insecure = validate_url(&Url::parse("http://example.com/latest.json")?).unwrap_err().to_string();
+    assert_eq!(insecure, "The update address must start with https://; oneMK only downloads updates over a secure connection");
+    assert_eq!(refused(403, Some("api.github.com")), "GitHub is limiting requests from your network; try again in a while");
+    assert_eq!(refused(429, Some("github.com")), "GitHub is limiting requests from your network; try again in a while");
+    assert_eq!(refused(403, Some("updates.example.com")), "The update server is limiting requests from your network; try again in a while");
+    assert!(refused(404, Some("github.com")).contains("no signed oneMK release"));
+    for code in [400, 403, 404, 429, 500, 503] {
+        let said = refused(code, Some("github.com"));
+        assert!(!said.contains("unit test") && !said.contains("check for a published"), "{said}");
+    }
+    // Saved by an older version: shown in today's words, in doctor and the window.
+    let scratch = Scratch::new()?;
+    for (old, now) in [
+        ("update URL must use HTTPS (HTTP is allowed only for 127.0.0.1 in unit tests)", insecure.as_str()),
+        ("update server returned HTTP 403; check for a published signed release and retry later", "GitHub is limiting requests from your network; try again in a while"),
+    ] {
+        let state = State { error: Some(old.into()), ..State::default() };
+        save_state(&scratch.0, &state)?;
+        assert_eq!(doctor(&scratch.0), (false, format!("Couldn't check: {now}")));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(fs::metadata(scratch.0.join(STATE))?.permissions().mode() & 0o777, 0o600, "the saved state is private");
+    }
+    Ok(())
+}
+
+#[test]
 fn local_signed_check_and_state_replay() -> Result<()> {
     let scratch = Scratch::new()?;
     let pair = pair()?;

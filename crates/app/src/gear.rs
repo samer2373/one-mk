@@ -167,6 +167,16 @@ pub struct View {
     pub pitch: f32,
 }
 
+impl View {
+    /// The keyboard as it rests: tipped toward you a little, not turned.
+    pub const KEYBOARD_REST: View = View { yaw: 0.0, pitch: 0.4 };
+
+    /// The keyboard turned `yaw` and `pitch` from where it rests.
+    pub fn keyboard(yaw: f32, pitch: f32) -> View {
+        View { yaw, pitch: Self::KEYBOARD_REST.pitch + pitch }
+    }
+}
+
 /// The camera's magnification and centre as they are shown, easing toward
 /// where they should be. Choosing another button while zoomed on one moves
 /// from where the view is now, even part-way through the last move, and
@@ -223,19 +233,41 @@ pub struct Orbit {
     pitch_v: f32,
     yaw_to: f32,
     pitch_to: f32,
+    /// How far the drag has pulled, before the limits soften it.
+    yaw_pull: f32,
+    pitch_pull: f32,
+}
+
+/// How far past a limit a drag can pull: dragging back starts to turn
+/// again after at most this much of the limit.
+const PULL_SLACK: f32 = 1.6;
+
+/// How far a drag turns the keyboard (yaw, pitch in radians, eased into
+/// rather than hit): enough to see it is a solid thing, never so far that
+/// the legends on its keys turn too small to read.
+pub const KEYBOARD_TURN: (f32, f32) = (0.21, 0.16);
+/// The mouse turns further: its side buttons are only seen from the side.
+pub const MOUSE_TURN: (f32, f32) = (1.0, 0.33);
+
+/// `pull` turned into a turn that follows it one to one near the resting
+/// view and eases into `limit` instead of stopping hard against it.
+pub fn soft_limit(pull: f32, limit: f32) -> f32 {
+    if limit <= 0.0 { 0.0 } else { limit * (pull / limit).tanh() }
 }
 
 impl Orbit {
-    /// A drag of `d` points; the turn stays within `yaw` and `pitch` radians
-    /// of the resting view.
+    /// A drag of `d` points; the turn eases to a stop short of `yaw` and
+    /// `pitch` radians from the resting view.
     pub fn pull(&mut self, d: egui::Vec2, yaw: f32, pitch: f32) {
-        self.yaw_to = (self.yaw_to - d.x * 0.008).clamp(-yaw, yaw);
-        self.pitch_to = (self.pitch_to + d.y * 0.006).clamp(-pitch, pitch);
+        self.yaw_pull = (self.yaw_pull - d.x * 0.008).clamp(-yaw * PULL_SLACK, yaw * PULL_SLACK);
+        self.pitch_pull = (self.pitch_pull + d.y * 0.006).clamp(-pitch * PULL_SLACK, pitch * PULL_SLACK);
+        self.yaw_to = soft_limit(self.yaw_pull, yaw);
+        self.pitch_to = soft_limit(self.pitch_pull, pitch);
     }
 
     /// Back to the resting view.
     pub fn reset(&mut self) {
-        (self.yaw_to, self.pitch_to) = (0.0, 0.0);
+        (self.yaw_to, self.pitch_to, self.yaw_pull, self.pitch_pull) = (0.0, 0.0, 0.0, 0.0);
     }
 
     /// Moves on by `dt` seconds; true while it is still moving.
@@ -426,6 +458,12 @@ struct Legend {
     max_w: f32,
 }
 
+/// A legend's size for a key `height` points deep on screen: within the
+/// readable range, on a half-point grid.
+fn legend_size(height: f32) -> f32 {
+    (height.clamp(9.0, 15.0) * 2.0).round() / 2.0
+}
+
 fn legend_font(painter: &Painter, text: &str, size: f32, minimum: f32, max_w: f32, font: &dyn Fn(f32) -> FontId) -> FontId {
     let fits = |candidate: FontId| painter.layout_no_wrap(text.to_owned(), candidate, Color32::WHITE).size().x <= max_w;
     let mut current = size.max(minimum);
@@ -462,6 +500,22 @@ fn adaptive_legend(painter: &Painter, text: &str, size: f32, max_w: f32, font: &
         }
     }
     None
+}
+
+/// The smallest a legend gets while the keyboard is turned: a turned board
+/// is fitted smaller, and a legend a little smaller still reads better than
+/// none (the resting view keeps them all at [`adaptive_legend`]'s 9).
+const TURNED_LEGEND_FLOOR: f32 = 8.0;
+
+/// What a legend shows on the 3D board: as [`adaptive_legend`] would, or,
+/// when the board is `turned` and that has no room, its short form a
+/// little smaller rather than nothing.
+fn board_legend(painter: &Painter, text: &str, size: f32, max_w: f32, turned: bool) -> Option<(String, FontId)> {
+    adaptive_legend(painter, text, size, max_w, &crate::style::mono).or_else(|| {
+        let short = legend_variants(text).last().copied().unwrap_or(text);
+        let font = legend_font(painter, short, size, TURNED_LEGEND_FLOOR, max_w, &crate::style::mono);
+        (turned && painter.layout_no_wrap(short.to_owned(), font.clone(), Color32::WHITE).size().x <= max_w).then(|| (short.to_owned(), font))
+    })
 }
 
 /// A built keyboard: the lit mesh, each key's top on screen (for clicks
@@ -605,7 +659,10 @@ impl Keyboard {
             let half_depth = k.h * U / 2.0 - 3.05;
             let front = cam.pt(p3(cx, y_top, cz - 0.6 - half_depth));
             let back = cam.pt(p3(cx, y_top, cz - 0.6 + half_depth));
-            let size = ((back.y - front.y).abs() * 0.72).clamp(9.0, 15.0);
+            // In half points: every size is a font the painter rasterizes
+            // once, so a turn reuses a handful instead of making new ones
+            // each frame (which stalled the first turn for most of a second).
+            let size = legend_size((back.y - front.y).abs() * 0.72);
             let left = cam.pt(p3(cx - k.w * U / 2.0 + 2.2, y_top, cz - 0.6));
             let right = cam.pt(p3(cx + k.w * U / 2.0 - 2.2, y_top, cz - 0.6));
             let at = cam.pt(p3(cx, y_top, cz - 0.6));
@@ -643,7 +700,7 @@ impl Keyboard {
             let (text, chosen_font) = if self.flat {
                 let chosen = legend_font(p, &l.text, l.size, 11.0, l.max_w, &base_font);
                 (crate::style::fit(p, &l.text, &chosen, l.max_w), chosen)
-            } else if let Some(legend) = adaptive_legend(p, &l.text, l.size, l.max_w, &crate::style::mono) {
+            } else if let Some(legend) = board_legend(p, &l.text, l.size, l.max_w, self.built_for.2 != View::KEYBOARD_REST) {
                 legend
             } else {
                 continue;
@@ -1207,6 +1264,80 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_eases_into_its_limit_and_comes_straight_back() {
+        // One to one near the resting view, never past the limit.
+        assert!((soft_limit(0.02, 0.22) - 0.02).abs() < 0.001);
+        assert!(soft_limit(0.22 * PULL_SLACK, 0.22) < 0.22 && soft_limit(-0.22 * PULL_SLACK, 0.22) > -0.22 && soft_limit(10.0, 0.22) <= 0.22);
+        let mut previous = -1.0;
+        for step in -40..=40 {
+            let turn = soft_limit(step as f32 * 0.02, 0.22);
+            assert!(turn > previous, "always further the further it is pulled");
+            previous = turn;
+        }
+        // A long drag (240 points) stops short of the limit, softly: each
+        // further point turns it less than the one before.
+        let mut orbit = Orbit::default();
+        let mut turns = Vec::new();
+        for _ in 0..24 {
+            orbit.pull(egui::vec2(-10.0, 0.0), KEYBOARD_TURN.0, KEYBOARD_TURN.1);
+            turns.push(orbit.yaw_to);
+        }
+        assert!(turns.last().is_some_and(|t| *t < KEYBOARD_TURN.0));
+        assert!(turns.windows(3).all(|w| w[2] - w[1] <= w[1] - w[0] + 1e-6), "{turns:?}");
+        // Dragging back turns it back within a short stretch, however far it was pulled.
+        let far = orbit.yaw_to;
+        for _ in 0..3 {
+            orbit.pull(egui::vec2(10.0, 0.0), KEYBOARD_TURN.0, KEYBOARD_TURN.1);
+        }
+        assert!(orbit.yaw_to < far - 0.01, "{far} -> {}", orbit.yaw_to);
+        orbit.reset();
+        orbit.pull(egui::vec2(-10.0, 0.0), KEYBOARD_TURN.0, KEYBOARD_TURN.1);
+        assert!((orbit.yaw_to - 0.08).abs() < 0.01, "a reset forgets the pull: {}", orbit.yaw_to);
+    }
+
+    #[test]
+    fn the_keyboard_turned_as_far_as_a_drag_goes_keeps_every_legend() {
+        let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
+            x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: crate::tune::cap_label(cap.code), to: None, modifier: false,
+        }).collect();
+        let context = egui::Context::default();
+        crate::style::install(&context);
+        let (yaw, pitch) = (soft_limit(KEYBOARD_TURN.0 * PULL_SLACK, KEYBOARD_TURN.0), soft_limit(KEYBOARD_TURN.1 * PULL_SLACK, KEYBOARD_TURN.1));
+        let mut lost = Vec::new();
+        let mut output = context.run_ui(Default::default(), |ui| {
+            // The keyboard card in the default window (1100 points) and a wide one.
+            for width in [780.0, 900.0] {
+                let (columns, rows) = crate::tune::keyboard_size(true);
+                let inner = width - 36.0;
+                let height = (rows * (inner / columns).min(42.0) + 32.0).max(24.0 + inner * 0.36);
+                let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(width - 16.0, height - 32.0));
+                for (yaw, pitch) in [(yaw, pitch), (yaw, 0.0), (yaw, -pitch), (-yaw, pitch), (-yaw, 0.0), (-yaw, -pitch)] {
+                    let mut board = None;
+                    Keyboard::get(&mut board, rect, &caps, View::keyboard(yaw, pitch), None, &mut Glide::default(), 0.0);
+                    let board = board.unwrap();
+                    for legend in board.legends.iter().filter(|legend| !legend.text.is_empty()) {
+                        match board_legend(ui.painter(), &legend.text, legend.size, legend.max_w, true) {
+                            Some((_, font)) => assert!(font.size >= TURNED_LEGEND_FLOOR),
+                            None => lost.push(format!("{} at {width}, turned {yaw:.2}/{pitch:.2}", legend.text)),
+                        }
+                    }
+                }
+            }
+        });
+        output.textures_delta.clear();
+        assert!(lost.is_empty(), "{}", lost.join("\n"));
+    }
+
+    #[test]
+    fn legends_come_in_a_few_sizes() {
+        // Each size is a font to rasterize: a turn must not make new ones every frame.
+        assert_eq!(legend_size(4.0), 9.0);
+        assert_eq!(legend_size(30.0), 15.0);
+        assert_eq!(legend_size(11.26), 11.5);
+        assert_eq!(legend_size(11.24), 11.0);
+    }
+
+    #[test]
     fn the_built_in_mouse_has_its_five_buttons() {
         let m = Model::parse(MOUSE).expect("the built-in mouse parses");
         for n in ["left", "right", "wheel", "back", "forward"] {
@@ -1428,7 +1559,10 @@ mod tests {
         for _ in 0..600 {
             o.step(1.0 / 60.0);
         }
-        assert!((o.yaw - 0.9).abs() < 1e-3 && (o.pitch - 0.3).abs() < 1e-3, "{} {}", o.yaw, o.pitch);
+        // Eased short of the limits, not stopped hard against them.
+        let (yaw, pitch) = (soft_limit(0.9 * PULL_SLACK, 0.9), soft_limit(0.3 * PULL_SLACK, 0.3));
+        assert!(yaw < 0.9 && yaw > 0.8 && pitch < 0.3 && pitch > 0.27);
+        assert!((o.yaw - yaw).abs() < 1e-3 && (o.pitch - pitch).abs() < 1e-3, "{} {}", o.yaw, o.pitch);
         o.reset();
         for _ in 0..600 {
             o.step(1.0 / 60.0);

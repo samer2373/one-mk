@@ -113,7 +113,7 @@ impl Ctx {
     /// Stops one-mk and tells an open window to close (it looks for this
     /// file); the tray itself leaves right after.
     fn quit(&self) -> anyhow::Result<()> {
-        let _ = std::fs::write(self.dir.join(client::QUIT_FILE), "");
+        let _ = one_mk_ctl::private::write(&self.dir.join(client::QUIT_FILE), "");
         client::request(&self.dir, Request::Stop, Duration::from_secs(5)).map(drop)
     }
 
