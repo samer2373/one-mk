@@ -39,9 +39,10 @@ Guides: [README](../README.md), [ARRANGING.md](ARRANGING.md), [INPUT.md](INPUT.m
 | [`typing`](#one-mk-typing) | Show or choose what the other computer types for your keys: the same physical keys (default), or the letters printed on them. Experimental: letters (characters, auto) only work toward Windows and Mac computers and have not been tested on real hardware |
 | [`layout`](#one-mk-layout) | Say which side of this computer a paired computer is on, and optionally exactly where (applies at once if one-mk is running), and how Ctrl/Cmd are treated |
 | [`profile`](#one-mk-profile) | Named layouts: save where every computer is, switch between them, and switch by Wi-Fi network automatically |
+| [`rename`](#one-mk-rename) | Give a paired computer a name of your own here (for example when two computers call themselves the same). Only this computer shows it; the other computer keeps its own name |
 | [`forget`](#one-mk-forget) | Unpair a computer |
 | [`switch`](#one-mk-switch) | Move the mouse and keyboard to another computer without crossing an edge: a paired computer's name or id, `here`, or `next` (round and round) |
-| [`lock-pointer`](#one-mk-lock-pointer) | Keep the pointer on this computer: edges lead nowhere while on |
+| [`lock-pointer`](#one-mk-lock-pointer) | Keep the pointer on this computer: edges lead nowhere while on. Without an argument, says whether it is locked |
 | [`broadcast`](#one-mk-broadcast) | Type on every connected computer at once: everything you type, click and scroll here goes to all of them until you stop it (also with Ctrl+Alt+B, or Ctrl+Alt+Shift+Esc). Without arguments, says whether it is on |
 | [`edge`](#one-mk-edge) | Show or change the rules for crossing edges: dead corners, a dwell time, a key to hold, not leaving a fullscreen window, and what edges with no computer do (pointer wrap, layout learning) |
 | [`gaming`](#one-mk-gaming) | Gaming mode: on another computer, send raw mouse movement (for games) instead of positions |
@@ -219,6 +220,9 @@ Usage: one-mk partials [OPTIONS]
 Options:
       --clear
           Delete them all now (any not being received right now). Files older than 7 days are deleted by themselves
+
+      --downloads <DIR>
+          Where received files go, if one-mk is not running and you started it with `run --downloads` (default: Downloads/one-mk)
 ```
 
 ## one-mk send
@@ -712,6 +716,31 @@ Options:
           Stop switching to it by itself
 ```
 
+## one-mk rename
+
+```text
+Give a paired computer a name of your own here (for example when two computers call themselves the same). Only this computer shows it; the other computer keeps its own name
+
+Usage: one-mk rename [OPTIONS] <DEVICE> [NAME]...
+
+Arguments:
+  <DEVICE>
+          Current name or id of the paired computer (see `one-mk devices`)
+
+  [NAME]...
+          The new name (spaces are fine without quotes)
+
+Options:
+      --reset
+          Go back to the name the computer gave itself
+```
+
+When two paired computers have the same name, every command shows them as `name (id)`
+and takes the id, because a name that fits two computers names neither. `one-mk rename
+ab12-cd34 "Office PC"` gives one of them a name that is yours alone (kept in
+`devices.toml`; the computer itself still calls itself what it did, and the other computer
+is not told).
+
 ## one-mk forget
 
 ```text
@@ -743,12 +772,12 @@ Options:
 ## one-mk lock-pointer
 
 ```text
-Keep the pointer on this computer: edges lead nowhere while on
+Keep the pointer on this computer: edges lead nowhere while on. Without an argument, says whether it is locked
 
-Usage: one-mk lock-pointer [OPTIONS] <on|off|toggle>
+Usage: one-mk lock-pointer [OPTIONS] [on|off|toggle]
 
 Arguments:
-  <on|off|toggle>
+  [on|off|toggle]
           Enable, disable or toggle pointer locking
           
           [possible values: on, off, toggle]

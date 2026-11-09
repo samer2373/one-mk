@@ -1915,7 +1915,7 @@ impl App {
             clip.entered(fp, &peer.name);
         }
         if self.announced.insert(fp) {
-            println!("{} is controlling this computer. {}", peer.name, takeback_hint());
+            println!("{} is controlling this computer. {}", self.name_for(fp), takeback_hint());
         }
         self.owner = Some(Owner::new(fp, id, epoch, pos));
         self.update_sides(); // no wrapping or learning while controlled
@@ -2069,7 +2069,7 @@ impl App {
             AppEvent::Removed(fp) => {
                 if self.trust.is_trusted(&fp) && !self.peers.contains_key(&fp) {
                     if !self.removed.contains_key(&fp) {
-                        let name = self.trust.get(&fp).map_or_else(String::new, |d| sanitize_name(&d.name));
+                        let name = self.name_for(fp);
                         println!("{}", one_mk_ctl::status::removed_hint(&name, &fp.short()));
                         tracing::warn!(peer = %name, "it refuses this computer: it no longer has it paired");
                     }
@@ -2195,8 +2195,10 @@ impl App {
                     self.end_owner(false);
                 }
                 // Forgotten (not trusted any more): nothing reconnects.
-                if self.trust.is_trusted(&fp) { println!("{} disconnected; reconnecting automatically.", peer.name); }
-                else { println!("{} disconnected (no longer paired).", peer.name); }
+                let shown = self.name_for(fp);
+                let shown = if shown.is_empty() { sanitize_name(&peer.name) } else { shown };
+                if self.trust.is_trusted(&fp) { println!("{shown} disconnected; reconnecting automatically."); }
+                else { println!("{shown} disconnected (no longer paired)."); }
                 self.redial_soon();
                 if let Some(clip) = &self.services.clip {
                     clip.forget(fp);
@@ -2475,7 +2477,7 @@ impl App {
             }
             (p.side, p.offset) = (side, offset);
             moved.push(*fp);
-            println!("{} is now {}.", p.name, placement(side, offset));
+            println!("{} is now {}.", self.trust.display(d), placement(side, offset));
         }
         if self.remote.as_ref().is_some_and(|r| moved.contains(&r.peer)) {
             self.go_home();
@@ -2538,7 +2540,7 @@ impl App {
             OnRemoteSleep::Sleep { sleep_here } => {
                 self.send_sleep(id, Some(fp));
                 if sleep_here {
-                    let name = self.peers.get(&fp).map_or("", |p| &p.name);
+                    let name = self.name_for(fp);
                     println!("{name}'s display went to sleep; putting this one to sleep too (sleep sync).");
                     if let Err(e) = self.sleeper.sleep_display() {
                         tracing::warn!("{e:#}");
@@ -2759,13 +2761,13 @@ impl App {
                 }
             }
             req @ (Request::Partials { .. } | Request::ClipSend(_) | Request::ClipSendSensitive(_) | Request::ClipGet(_) | Request::ClipHistory { .. } | Request::FetchClipboard | Request::Transfer { .. }) => {
-                let online = self.peers.iter().map(|(fp, p)| crate::clipctl::Online { fp: *fp, name: p.name.clone(), addr: canonical(p.conn.remote_address()) });
+                let online = self.peers.iter().map(|(fp, p)| crate::clipctl::Online { fp: *fp, name: self.name_for(*fp), addr: canonical(p.conn.remote_address()) });
                 crate::clipctl::handle(&self.dir, &self.services, online.collect(), &self.trust, req, reply);
                 return false;
             }
             Request::TakeBack => match self.owner.as_ref().map(|o| o.peer) {
                 Some(fp) => {
-                    let name = self.peers.get(&fp).map_or_else(String::new, |p| p.name.clone());
+                    let name = self.name_for(fp);
                     tracing::info!(peer = %name, "control taken back with `one-mk takeback`");
                     self.end_owner(true);
                     format!("ok\n{name}\n")
@@ -2782,12 +2784,12 @@ impl App {
     fn status(&self) -> Status {
         let id = self.node.identity();
         let profiles = Profiles::load(&self.dir).unwrap_or_default();
-        let name_of = |fp: &Fingerprint| self.peers.get(fp).map_or_else(String::new, |p| p.name.clone());
+        let name_of = |fp: &Fingerprint| self.name_for(*fp);
         let peers = self.trust.devices().iter().filter_map(|d| {
             let live = self.peers.get(&d.fingerprint()?);
             Some(PeerStatus {
                 id: d.short_id(),
-                name: sanitize_name(&d.name),
+                name: self.trust.display(d),
                 side: live.map_or_else(|| d.side(), |p| p.side),
                 os: live.map_or(d.os, |p| p.os),
                 online: live.is_some(),
@@ -2887,15 +2889,13 @@ impl App {
             }
             SwitchTo::Device(name) => {
                 let Some(fp) = self.trust.find(&name).and_then(|d| d.fingerprint()) else {
-                    return format!("error no paired computer called {:?}; see `one-mk devices`\n", sanitize_name(&name));
+                    let why = self.trust.explain_miss(&name).unwrap_or_else(|| format!("no paired computer called {name:?}"));
+                    return format!("error {}\n", why.replace(char::is_control, " "));
                 };
                 match self.peers.get(&fp) {
                     Some(p) if p.desktop.is_some() => self.switch_to(fp),
-                    Some(p) => format!("error {} has not said what its screens are\n", p.name),
-                    None => {
-                        let name = self.trust.get(&fp).map_or_else(|| sanitize_name(&name), |d| sanitize_name(&d.name));
-                        format!("error {name} is not connected\n")
-                    }
+                    Some(_) => format!("error {} has not said what its screens are\n", self.name_for(fp)),
+                    None => format!("error {} is not connected\n", self.name_for(fp)),
                 }
             }
         }
@@ -2913,14 +2913,14 @@ impl App {
             what.push("stopped broadcasting".to_owned());
         }
         if let Some(r) = self.remote.as_ref() {
-            let name = self.peers.get(&r.peer).map_or_else(String::new, |p| p.name.clone());
+            let name = self.name_for(r.peer);
             tracing::info!(peer = %name, "`one-mk switch here`: pointer is home");
             what.push(format!("left {name}"));
             let center = self.local.as_ref().map(|d| d.primary().center());
             self.go_home_at(center);
         }
         if let Some(fp) = self.owner.as_ref().map(|o| o.peer) {
-            let name = self.peers.get(&fp).map_or_else(String::new, |p| p.name.clone());
+            let name = self.name_for(fp);
             tracing::info!(peer = %name, "control taken back with `one-mk switch here`");
             what.push(format!("took control back from {name}"));
             self.end_owner(true);
@@ -2931,16 +2931,16 @@ impl App {
 
     fn switch_to(&mut self, fp: Fingerprint) -> String {
         if let Some(device) = self.trust.get(&fp).filter(|device| device.placed_by == one_mk_net::PlacedBy::Pending) {
-            return format!("error {}\n", crate::pairing_layout::warning(&device.name));
+            return format!("error {}\n", crate::pairing_layout::warning_for(&self.trust, device));
         }
-        let (name, side) = (self.peers[&fp].name.clone(), self.peers[&fp].side);
+        let (name, side) = (self.name_for(fp), self.peers[&fp].side);
         let p = &self.peers[&fp];
         if let (Some(local), Some(desktop)) = (&self.local, &p.desktop)
             && !touches(local, desktop, side, p.offset)
         {
             // Allowed (it's the only way there), and all of its edge
             // facing us leads back (see `exits`).
-            tracing::warn!("{}", no_overlap(&name, side));
+            tracing::warn!("{}", no_overlap(&name, &self.arg_for(fp), side));
         }
         if self.remote.as_ref().is_some_and(|r| r.peer == fp) {
             return format!("already\n{name}\n");
@@ -3034,7 +3034,7 @@ impl App {
                     }
                 }
                 if lock_here {
-                    let name = self.peers.get(&fp).map_or("", |p| &p.name);
+                    let name = self.name_for(fp);
                     match all {
                         true => println!("{name} asked to lock every computer (lock-all); locking this one."),
                         false => println!("{name} locked its screen; locking this one too (lock sync)."),
@@ -3108,7 +3108,7 @@ impl App {
                 screens: self.local.as_ref().map_or_else(Vec::new, |desktop| desktop.screens.clone()),
                 peers: self.trust.devices().iter().filter_map(|device| {
                     let live = self.peers.get(&device.fingerprint()?);
-                    Some(PeerStatus { id: device.short_id(), name: sanitize_name(&device.name), side: live.map_or_else(|| device.side(), |peer| peer.side),
+                    Some(PeerStatus { id: device.short_id(), name: self.trust.display(device), side: live.map_or_else(|| device.side(), |peer| peer.side),
                         os: live.map_or(device.os, |peer| peer.os), online: live.is_some(), swap: device.swap_ctrl_cmd.to_string(),
                         screens: live.and_then(|peer| peer.desktop.as_ref()).map_or_else(Vec::new, |desktop| desktop.screens.clone()) })
                 }).collect(),
@@ -3121,7 +3121,7 @@ impl App {
         }
         let mut edges: Vec<(Edge, Fingerprint)> = Vec::new();
         let mut conflicts: Vec<_> = self.trust.devices().iter().filter(|device| device.placed_by == one_mk_net::PlacedBy::Pending)
-            .map(|device| crate::pairing_layout::warning(&device.name)).collect();
+            .map(|device| crate::pairing_layout::warning_for(&self.trust, device)).collect();
         // A switch or broadcast about to start (or a broadcast on) needs
         // its edge armed (see below).
         let switching = self.switching.map(|(fp, _)| fp).or(self.broadcast_edge());
@@ -3137,7 +3137,7 @@ impl App {
                     None => whole(),
                 };
                 if mine.is_empty() {
-                    conflicts.push(no_overlap(&p.name, side));
+                    conflicts.push(no_overlap(&self.name_for(fp), &self.arg_for(fp), side));
                     // A switch about to start needs an edge there: the
                     // Linux backends push the pointer into it to start
                     // capturing.
@@ -3147,11 +3147,11 @@ impl App {
                 }
                 let overlaps = |a: &Edge| mine.iter().any(|m| m.side == a.side && m.at == a.at && m.lo < a.hi && a.lo < m.hi);
                 if let Some((_, first)) = edges.iter().find(|(e, _)| overlaps(e)) {
-                    let used = &self.peers[first].name;
+                    let used = self.name_for(*first);
                     conflicts.push(format!(
                         "{} and {} are both {} and their edges overlap, so only {} is reached there; \
-                         move the other with `one-mk layout \"{}\" <left|right|top|bottom> [--offset DX,DY]`",
-                        used, p.name, on_your(side), used, p.name
+                         move the other with `one-mk layout {} <left|right|top|bottom> [--offset DX,DY]`",
+                        used, self.name_for(fp), on_your(side), used, self.arg_for(fp)
                     ));
                     continue;
                 }
@@ -3289,11 +3289,11 @@ impl App {
 
 /// The warning for a peer on our `side` placed where none of its screens
 /// touches ours (an offset off the end of the edge, or a gap).
-fn no_overlap(name: &str, side: Side) -> String {
+fn no_overlap(name: &str, arg: &str, side: Side) -> String {
     format!(
         "layout of {name} does not overlap yours: none of its screens touches this computer's on its {side}, so \
          the pointer can't cross to it (`one-mk switch` still goes there, and all of its facing edge comes back); \
-         fix it with `one-mk layout \"{name}\" {side} --offset none`, or drag it next to a monitor in the window"
+         fix it with `one-mk layout {arg} {side} --offset none`, or drag it next to a monitor in the window"
     )
 }
 

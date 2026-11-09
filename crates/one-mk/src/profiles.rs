@@ -260,7 +260,7 @@ pub fn snapshot(trust: &TrustStore) -> Vec<Placed> {
         .iter()
         .map(|d| Placed {
             fingerprint: d.fingerprint.clone(),
-            name: d.name.clone(),
+            name: d.label().to_owned(),
             side: d.side().to_string(),
             offset: d.offset,
         })
@@ -281,10 +281,10 @@ pub fn apply(dir: &Path, profile: &Profile, wait: Duration) -> Result<Vec<String
             let offset = p.offset.map(|(x, y)| (x.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET), y.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET)));
             if (dev.side(), dev.offset) != (side, offset) {
                 manage::place(dev, side, offset);
-                moved.push(sanitize_name(&dev.name));
+                moved.push(fp);
             }
         }
-        Ok(moved)
+        Ok(moved.iter().map(|fp| trust.display_fp(fp)).collect())
     })
 }
 
@@ -387,7 +387,7 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
                 println!("No layout profiles yet. Save the current layout with `one-mk profile save <name>`.");
                 return Ok(());
             }
-            print!("{}", render(&all));
+            print!("{}", render(&all, TrustStore::load(dir).ok().as_ref()));
             Ok(())
         }
         ProfileCmd::Delete { name } => {
@@ -459,7 +459,10 @@ fn describe_rules(p: &Profile) -> String {
     parts.join(" or ")
 }
 
-fn render(all: &Profiles) -> String {
+/// `trust`: the paired computers, to show each by the name it has now (two
+/// that are called the same by their ids); a computer no longer paired
+/// shows under the name the profile saved.
+fn render(all: &Profiles, trust: Option<&TrustStore>) -> String {
     let mut out = String::new();
     for p in &all.list {
         let active = all.active.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&p.name));
@@ -469,7 +472,8 @@ fn render(all: &Profiles) -> String {
         }
         for d in &p.devices {
             let side = d.side.parse().unwrap_or(Side::Right);
-            out += &format!("  {:<24} {}\n", sanitize_name(&d.name), manage::placement(side, d.offset));
+            let name = d.fingerprint.parse().ok().and_then(|fp| trust.and_then(|t| t.get(&fp).map(|dev| t.display(dev)))).unwrap_or_else(|| sanitize_name(&d.name));
+            out += &format!("  {:<24} {}\n", name, manage::placement(side, d.offset));
         }
     }
     out
@@ -559,7 +563,7 @@ mod tests {
         assert_eq!(place_of(&dir, &desk).0, Side::Right);
         assert!(use_profile(&dir, "nowhere").is_err());
 
-        let text = render(&Profiles::load(&dir).unwrap());
+        let text = render(&Profiles::load(&dir).unwrap(), None);
         assert!(text.contains("home (in use)") && text.contains("on your left, its (0,0) at -1280,-120 of yours"), "{text}");
         run(&dir, ProfileCmd::Delete { name: "home".into() }).await.unwrap();
         let all = Profiles::load(&dir).unwrap();

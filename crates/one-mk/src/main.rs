@@ -27,10 +27,11 @@ mod history;
 fn readable_time(timestamp: u64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     let seconds = now.saturating_sub(timestamp);
-    if seconds < 60 { format!("{seconds} seconds ago") }
-    else if seconds < 3600 { format!("{} minutes ago", seconds / 60) }
-    else if seconds < 86400 { format!("{} hours ago", seconds / 3600) }
-    else { format!("{} days ago", seconds / 86400) }
+    let (count, unit) = if seconds < 60 { (seconds, "second") }
+        else if seconds < 3600 { (seconds / 60, "minute") }
+        else if seconds < 86400 { (seconds / 3600, "hour") }
+        else { (seconds / 86400, "day") };
+    format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
 }
 mod control;
 mod doctor;
@@ -200,6 +201,9 @@ enum Cmd {
         /// Delete them all now (any not being received right now). Files older than 7 days are deleted by themselves.
         #[arg(long)]
         clear: bool,
+        /// Where received files go, if one-mk is not running and you started it with `run --downloads` (default: Downloads/one-mk).
+        #[arg(long, value_name = "DIR")]
+        downloads: Option<PathBuf>,
     },
     /// Send files or folders to a paired computer running `one-mk run`.
     Send {
@@ -333,6 +337,19 @@ enum Cmd {
         #[command(subcommand)]
         cmd: profiles::ProfileCmd,
     },
+    /// Give a paired computer a name of your own here (for example when two
+    /// computers call themselves the same). Only this computer shows it; the
+    /// other computer keeps its own name.
+    Rename {
+        /// Current name or id of the paired computer (see `one-mk devices`).
+        device: String,
+        /// The new name (spaces are fine without quotes).
+        #[arg(num_args = 0.., required_unless_present = "reset")]
+        name: Vec<String>,
+        /// Go back to the name the computer gave itself.
+        #[arg(long, conflicts_with = "name")]
+        reset: bool,
+    },
     /// Unpair a computer.
     Forget {
         /// Name or id of the paired computer (see `one-mk devices`).
@@ -346,10 +363,11 @@ enum Cmd {
         to: String,
     },
     /// Keep the pointer on this computer: edges lead nowhere while on.
+    /// Without an argument, says whether it is locked.
     LockPointer {
         /// Enable, disable or toggle pointer locking.
         #[arg(value_name = "on|off|toggle", value_parser = ["on", "off", "toggle"])]
-        state: String,
+        state: Option<String>,
     },
     /// Type on every connected computer at once: everything you type, click
     /// and scroll here goes to all of them until you stop it (also with
@@ -614,7 +632,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Update(options) => update::run(&dir, options),
             Cmd::Stop => update::stop(&dir).await,
             Cmd::Drag { on, off, zone } => drag::configure(&dir, on, off, zone).await,
-            Cmd::Partials { clear } => manage::partials(&dir, clear).await,
+            Cmd::Partials { clear, downloads } => manage::partials(&dir, clear, downloads).await,
             Cmd::Run(_) => unreachable!("handled above"),
             Cmd::Clipboard { history, text, html, image, max_mb, skip_sensitive, allow_fetch } => {
                 if let Some(history) = history {
@@ -655,6 +673,15 @@ fn run(cli: Cli) -> Result<()> {
             }
             Cmd::Typing { keys, peer } => typing::run(&dir, keys, peer.as_deref()).await,
             Cmd::Profile { cmd } => profiles::run(&dir, cmd).await,
+            Cmd::Rename { device, name, reset } => {
+                let done = manage::rename(&dir, &device, &name.join(" "), reset)?;
+                println!("{done}");
+                if control::request(&dir, control::Request::Reload).await.is_ok_and(|r| r.is_some()) {
+                    println!("Applied right away.");
+                }
+                integrate::refresh(&dir, custom_home);
+                Ok(())
+            }
             Cmd::Forget { device } => {
                 forget(&dir, &device)?;
                 // A running daemon lets go of it at once: its input link
@@ -666,20 +693,21 @@ fn run(cli: Cli) -> Result<()> {
                 Ok(())
             }
             Cmd::Switch { to } => steer::switch(&dir, &to).await,
-            Cmd::LockPointer { state } => {
+            Cmd::LockPointer { state: Some(state) } => {
                 steer::lock_pointer(&dir, steer::Toggle::parse(&state).context("on, off or toggle")?).await
             }
+            Cmd::LockPointer { state: None } => steer::show_pointer_lock(&dir).await,
             Cmd::Broadcast { state, idle_off } => {
                 let state = state.map(|s| steer::Toggle::parse(&s).context("on, off or toggle")).transpose()?;
                 steer::broadcast(&dir, state, idle_off).await
             }
             Cmd::Edge(args) => settings::edge(&dir, args).await,
             Cmd::Gaming { mode: Some(mode) } => settings::gaming(&dir, mode).await,
-            Cmd::Gaming { mode: None } => { println!("Gaming mode: {}", settings::Settings::load(&dir)?.gaming); Ok(()) },
+            Cmd::Gaming { mode: None } => { println!("Gaming mode: {}", settings::Settings::view(&dir)?.gaming); Ok(()) },
             Cmd::Hotkeys(args) => hotkeys::hotkeys(&dir, args).await,
             Cmd::LockAll => steer::lock_all(&dir).await,
             Cmd::LockSync { state: Some(state) } => settings::lock_sync(&dir, state).await,
-            Cmd::LockSync { state: None } => { println!("Lock sync: {}", if settings::Settings::load(&dir)?.lock_sync { "on" } else { "off" }); Ok(()) },
+            Cmd::LockSync { state: None } => { println!("Lock sync: {}", if settings::Settings::view(&dir)?.lock_sync { "on" } else { "off" }); Ok(()) },
             Cmd::Hooks(args) => hooks::run_command(&dir, args).await,
             Cmd::Power(args) => power::run_command(&dir, args).await,
             Cmd::Keymap { cmd } => tuning::keymap(&dir, cmd).await,
@@ -777,7 +805,7 @@ fn migrate_roaming(old: &Path, new: &Path) {
     tracing::info!("moved settings from {} to {}", old.display(), new.display());
 }
 
-fn default_downloads() -> Result<PathBuf> {
+pub(crate) fn default_downloads() -> Result<PathBuf> {
     let dirs = directories::UserDirs::new().context("no home directory")?;
     let downloads = dirs.download_dir().map_or_else(|| dirs.home_dir().join("Downloads"), |d| d.to_path_buf());
     Ok(downloads.join("one-mk"))
@@ -795,7 +823,10 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
         println!("{:<24} {:<9}  SIDE", "NAME", "ID");
     }
     for d in trust.devices() {
-        let name = one_mk_proto::sanitize_name(&d.name);
+        let name = match d.alias.as_deref().filter(|a| !a.trim().is_empty()) {
+            Some(_) if d.alias.as_deref() != Some(d.name.as_str()) => format!("{} ({})", one_mk_proto::sanitize_name(d.label()), one_mk_proto::sanitize_name(&d.name)),
+            _ => one_mk_proto::sanitize_name(d.label()),
+        };
         let side = if d.placed_by == one_mk_net::PlacedBy::Pending { "placement needed".into() }
             else { d.offset.map_or_else(|| d.side.clone(), |(x, y)| format!("{} at {x},{y}", d.side)) };
         if verbose {
@@ -813,13 +844,25 @@ fn forget(dir: &Path, device: &str) -> Result<()> {
         wallpaper::forget(dir, &d.fingerprint)?;
         Ok(d)
     })?;
-    println!("Forgot {}.", d.name);
+    println!("Forgot {}.", one_mk_proto::sanitize_name(d.label()));
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "1 second ago", never "1 seconds ago".
+    #[test]
+    fn times_agree_with_their_numbers() {
+        let ago = |seconds: u64| readable_time(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - seconds);
+        assert_eq!(ago(1), "1 second ago");
+        assert_eq!(ago(30), "30 seconds ago");
+        assert_eq!(ago(60), "1 minute ago");
+        assert_eq!(ago(3 * 3600), "3 hours ago");
+        assert_eq!(ago(86_400), "1 day ago");
+        assert_eq!(ago(2 * 86_400), "2 days ago");
+    }
 
     /// Picking the folder has no side effects unless it is the default
     /// one: `one-mk --home C:\\scratch devices` must never move, copy or

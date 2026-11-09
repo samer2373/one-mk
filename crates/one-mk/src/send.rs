@@ -63,10 +63,11 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let trust = TrustStore::load(dir)?;
     let device = pick(&trust, to.as_deref())?.clone();
+    let shown = trust.display(&device);
     let fp = device.fingerprint().context("corrupt fingerprint in devices.toml")?;
 
     let start = Instant::now();
-    let tried = Attempt { dir, identity: &identity, device: &device, fp, connect: &connect };
+    let tried = Attempt { dir, identity: &identity, device: &device, shown: shown.clone(), fp, connect: &connect };
     let (first, mut sent) = tried.send(files, false).await?;
     // The receiver counts a connection until it hears it closed, and the one
     // before this may still be on its way out: ask again once.
@@ -79,6 +80,15 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
         sent = sent.saturating_add(more);
     }
 
+    // Forgotten by the other computer: every file fails the same way, so say it once, with what to do.
+    if results.iter().any(|(_, outcome)| matches!(outcome, Outcome::Failed(why) if why == transfer::NOT_PAIRED)) {
+        if std::io::IsTerminal::is_terminal(&std::io::stderr()) { eprint!("\r\x1b[2K"); }
+        bail!(
+            "{shown} removed this computer from its paired computers, so it takes nothing from it and nothing was sent (sending again will not help). \
+             Remove it here too with `one-mk forget {}`, or pair the two again with `one-mk pair` on both.",
+            device.short_id()
+        );
+    }
     let elapsed = start.elapsed().as_secs_f64();
     // The progress line is redrawn in place only in a terminal; a log or a
     // pipe gets no control codes.
@@ -104,17 +114,25 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
             }
         }
     }
-    eprintln!(
-        "Sent {} to {} in {:.1} s ({}/s)",
-        summary(saved, saved_bytes),
-        device.name,
-        elapsed,
-        bytes((sent as f64 / elapsed.max(1e-6)) as u64)
-    );
-    if failed > 0 {
-        bail!("{failed} file(s) were not sent ({first_reason})");
+    // Nothing arrived: the error below says so, and "Sent 0 files ... (1.9 MB/s)" would not be true.
+    if saved > 0 {
+        eprintln!(
+            "Sent {} to {} in {:.1} s ({}/s)",
+            summary(saved, saved_bytes),
+            shown,
+            elapsed,
+            bytes((sent as f64 / elapsed.max(1e-6)) as u64)
+        );
     }
-    Ok((saved, device.name.clone()))
+    if failed > 0 {
+        bail!("{}", not_sent(failed, &first_reason));
+    }
+    Ok((saved, shown))
+}
+
+/// "1 file was not sent (why)" / "3 files were not sent (why of the first)".
+fn not_sent(failed: usize, first_reason: &str) -> String {
+    if failed == 1 { format!("1 file was not sent ({first_reason})") } else { format!("{failed} files were not sent ({first_reason}; the others are listed above)") }
 }
 
 /// One line telling the person what was left out of a send, or `None`.
@@ -135,6 +153,8 @@ struct Attempt<'a> {
     dir: &'a Path,
     identity: &'a Arc<Identity>,
     device: &'a Device,
+    /// Its name as people see it (with its id if another is called the same).
+    shown: String,
     fp: Fingerprint,
     connect: &'a [SocketAddr],
 }
@@ -144,13 +164,13 @@ impl Attempt<'_> {
     /// that crossed the network.
     async fn send(&self, files: Vec<Outgoing>, retry: bool) -> Result<(Vec<(Outgoing, Outcome)>, u64)> {
         let node = Node::bind_any(self.identity.clone(), 0)?;
-        let peer = find(&node, self.identity, self.device, self.fp, self.connect.to_vec(), "try --connect <ip:port>").await?;
+        let peer = find(&node, self.identity, self.device, &self.shown, self.fp, self.connect.to_vec(), "try --connect <ip:port>").await?;
         let conn = peer.conn;
 
         let total = files.iter().fold(0u64, |total, file| total.saturating_add(file.size));
         let addr = conn.remote_address();
         let addr = SocketAddr::new(addr.ip().to_canonical(), addr.port());
-        let name = &self.device.name;
+        let name = &self.shown;
         if retry {
             eprintln!("Trying again ({})", summary(files.len(), total));
         } else {
@@ -188,14 +208,14 @@ impl Attempt<'_> {
 
 fn pick<'a>(trust: &'a TrustStore, to: Option<&str>) -> Result<&'a Device> {
     if let Some(q) = to {
-        return trust.find(q).with_context(|| format!("no paired computer called {q:?} (see `one-mk devices`)"));
+        return trust.find(q).ok_or_else(|| crate::manage::not_found(trust, q));
     }
     match trust.devices() {
         [] => bail!("no paired computers; run `one-mk pair` first"),
         [only] => Ok(only),
         many => {
-            let names: Vec<&str> = many.iter().map(|d| d.name.as_str()).collect();
-            bail!("several paired computers ({}); choose one with --to", names.join(", "))
+            let names: Vec<String> = many.iter().map(|d| trust.display(d)).collect();
+            bail!("several paired computers ({}); choose one with --to <name or id>", names.join(", "))
         }
     }
 }
@@ -204,7 +224,8 @@ fn pick<'a>(trust: &'a TrustStore, to: Option<&str>) -> Result<&'a Device> {
 /// wherever mDNS finds it; the first connection with the right
 /// certificate wins.
 /// `hint`: what else to try, for the error if it can't be reached.
-pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, fp: Fingerprint, connect: Vec<SocketAddr>, hint: &str) -> Result<Peer> {
+/// `shown`: its name as people see it (`TrustStore::display`).
+pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, shown: &str, fp: Fingerprint, connect: Vec<SocketAddr>, hint: &str) -> Result<Peer> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Peer>();
     let mut dialed = HashSet::new();
     let mut dial = |addr: SocketAddr| {
@@ -242,8 +263,7 @@ pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, fp: 
                 }
             }
             _ = &mut deadline => bail!(
-                "could not reach {}; is `one-mk run` running there? ({hint})",
-                device.name
+                "could not reach {shown}; is `one-mk run` running there? ({hint})"
             ),
         }
     }
@@ -445,7 +465,7 @@ mod tests {
         held.push(rx.inbox.admit(me).unwrap());
         let sent = send(&home, vec![file], None, vec![]).await;
         let why = format!("{:#}", sent.unwrap_err());
-        assert!(why.contains("1 file(s) were not sent"), "{why}");
+        assert!(why.contains("1 file was not sent"), "{why}");
     }
 
     /// The same path twice used to make two concurrent streams for one
@@ -474,6 +494,30 @@ mod tests {
         let (count, _) = send(&home, vec![src.join("shortcut.txt")], None, vec![]).await.unwrap();
         assert_eq!(count, 1);
         assert_eq!(std::fs::read_to_string(rx.root.join("shortcut.txt")).unwrap(), "real contents");
+    }
+
+    /// With two computers called the same, a name chooses neither: the
+    /// message says why and offers the ids; an id chooses one.
+    #[test]
+    fn a_name_two_computers_share_asks_for_an_id() {
+        let dir = temp("pick-twins");
+        let mut trust = TrustStore::load(&dir).unwrap();
+        for n in [1u8, 2] {
+            trust.upsert(Device { name: "Mac".into(), fingerprint: Fingerprint([n; 32]).to_string(), ..Default::default() });
+        }
+        let (a, b) = (Fingerprint([1; 32]).short(), Fingerprint([2; 32]).short());
+        let err = format!("{}", pick(&trust, Some("Mac")).unwrap_err());
+        assert!(err.contains("2 paired computers are called \"Mac\"") && err.contains(&a) && err.contains(&b), "{err}");
+        let err = format!("{}", pick(&trust, None).unwrap_err());
+        assert!(err.contains(&format!("Mac ({a})")) && err.contains(&format!("Mac ({b})")) && err.contains("--to <name or id>"), "{err}");
+        assert_eq!(pick(&trust, Some(&b)).unwrap().fingerprint, Fingerprint([2; 32]).to_string());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failures_are_counted_in_words_that_agree() {
+        assert_eq!(not_sent(1, "a.txt: disk full"), "1 file was not sent (a.txt: disk full)");
+        assert!(not_sent(3, "a.txt: disk full").starts_with("3 files were not sent (a.txt: disk full"));
     }
 
     #[test]

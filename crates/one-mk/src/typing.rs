@@ -1,5 +1,5 @@
 use crate::settings::{self, Settings};
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -83,10 +83,8 @@ pub async fn run(dir: &Path, keys: Option<Mode>, peer: Option<&str>) -> Result<(
     let mut peer_os = None;
     let peer = if let Some(query) = peer {
         let store = one_mk_net::TrustStore::load(dir)?;
-        let Some(device) = store.find(query) else {
-            bail!("no unique paired computer matches {query:?}; use its id from `one-mk devices`");
-        };
-        peer_name = Some(device.name.clone());
+        let Some(device) = store.find(query) else { return Err(crate::manage::not_found(&store, query)) };
+        peer_name = Some(store.display(device));
         peer_os = Some(device.os);
         Some(device.fingerprint.clone())
     } else {
@@ -115,19 +113,22 @@ pub async fn run(dir: &Path, keys: Option<Mode>, peer: Option<&str>) -> Result<(
         _ => {
             if let Ok(store) = one_mk_net::TrustStore::load(dir) {
                 for device in store.devices() {
-                    println!("  {}", receiver_line(&device.name, device.os, typing.requested(Some(&device.fingerprint))));
+                    println!("  {}", receiver_line(&store.display(device), device.os, typing.requested(Some(&device.fingerprint))));
                 }
             }
         }
+    }
+    // Tell a running one-mk first, so "Right now" is what it does after this change.
+    if keys.is_some() {
+        settings::apply(dir).await?;
     }
     let effective = crate::control::request(dir, crate::control::Request::Status).await.ok().flatten()
         .and_then(|text| crate::manage::Status::decode(&text)).map(|status| status.typing);
     match effective {
         Some(effective) => println!("Right now: {effective}."),
+        // `apply` has already said so after a change.
+        None if keys.is_some() => {}
         None => println!("one-mk is not running; this applies the next time it starts."),
-    }
-    if keys.is_some() {
-        settings::apply(dir).await?;
     }
     Ok(())
 }

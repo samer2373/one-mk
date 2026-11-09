@@ -284,24 +284,13 @@ impl Inbox {
 
     /// What unfinished partial files are kept for resuming.
     pub fn partials(&self) -> Partials {
-        let Ok(staging) = Staging::open(&self.root.join(PARTIAL_DIR)) else { return Partials::default() };
-        let now = SystemTime::now();
-        let mut found = Partials::default();
-        for part in staging.partials() {
-            found.count += 1;
-            found.bytes = found.bytes.saturating_add(part.len);
-            let age = part.modified.and_then(|m| now.duration_since(m).ok()).unwrap_or_default();
-            found.oldest = found.oldest.max(age);
-        }
-        found
+        partials_in(&self.root)
     }
 
     /// Deletes every unfinished partial file that is not being written right
     /// now, whatever its age. Returns how many were removed.
     pub fn clear_partials(&self) -> usize {
-        let removed = sweep_dir(&self.root, None, &self.active);
-        let _ = fs::remove_dir(long(&self.root.join(PARTIAL_DIR)));
-        removed
+        clear_partials_in(&self.root, &self.active)
     }
 
     /// Admits a new transfer connection from `fp`: at most
@@ -614,6 +603,35 @@ impl Inbox {
             }
         }
     }
+}
+
+/// What the received-files folder `root` keeps for resuming (see
+/// [`Inbox::partials`]); `one-mk partials` reads it directly while no
+/// daemon runs.
+pub fn partials_in(root: &Path) -> Partials {
+    let Ok(staging) = Staging::open(&root.join(PARTIAL_DIR)) else { return Partials::default() };
+    let now = SystemTime::now();
+    let mut found = Partials::default();
+    for part in staging.partials() {
+        found.count += 1;
+        found.bytes = found.bytes.saturating_add(part.len);
+        let age = part.modified.and_then(|m| now.duration_since(m).ok()).unwrap_or_default();
+        found.oldest = found.oldest.max(age);
+    }
+    found
+}
+
+/// Deletes every partial file under `root` that is not in `active`, whatever
+/// its age (see [`Inbox::clear_partials`]). With no daemon nothing is active.
+fn clear_partials_in(root: &Path, active: &Mutex<HashMap<String, Slot>>) -> usize {
+    let removed = sweep_dir(root, None, active);
+    let _ = fs::remove_dir(long(&root.join(PARTIAL_DIR)));
+    removed
+}
+
+/// [`clear_partials_in`] with nothing being received.
+pub fn clear_idle_partials_in(root: &Path) -> usize {
+    clear_partials_in(root, &Mutex::default())
 }
 
 /// What the staging folder holds: unfinished files kept so a send can resume.
@@ -1210,7 +1228,9 @@ pub fn collect_noted(paths: &[PathBuf]) -> Result<(Vec<Outgoing>, Skipped)> {
         } else if meta.is_file() {
             out.push(outgoing(path, name, &meta));
         } else {
-            bail!("{p:?} is a pipe, socket or device, which cannot be sent");
+            // Left out and said so, as inside a folder: one such name does
+            // not stop the rest of what was chosen.
+            skipped.push(format!("{name} (a pipe, socket or device)"));
         }
     }
     // Names the receiver would refuse after the transfer has started.
@@ -1360,11 +1380,19 @@ pub async fn send_files_kind(
     results.into_iter().map(|(_, f, o)| (f, o)).collect()
 }
 
+/// What a send says when the other computer has removed this one from its
+/// paired computers (see `send::run`, which adds what to do).
+pub const NOT_PAIRED: &str = "the other computer no longer has this computer paired";
+
 /// Why a send broke off, and that the receiver keeps what arrived so
 /// sending the same file again carries on from there.
 fn interrupted(e: &anyhow::Error) -> String {
     let why = format!("{e:#}");
-    if why.starts_with("receiver:") || why.contains("send again") {
+    // The other computer closed the connection with "not paired": it forgot
+    // this one, so sending again cannot resume anything.
+    if why.contains("closed by peer: not paired") {
+        NOT_PAIRED.into()
+    } else if why.starts_with("receiver:") || why.contains("send again") {
         why
     } else {
         format!("{why}; what arrived is kept, send again to resume")
@@ -2218,6 +2246,8 @@ mod tests {
         let said = anyhow::anyhow!("receiver: disk full on the receiving device; the partial file is kept, send again to resume");
         assert_eq!(interrupted(&said), format!("{said}"));
         assert_eq!(interrupted(&anyhow::anyhow!("receiver: too many file streams on this connection")), "receiver: too many file streams on this connection");
+        // Forgotten by the receiver: nothing was kept, so "send again to resume" would be a lie.
+        assert_eq!(interrupted(&anyhow::anyhow!("connection lost: closed by peer: not paired (code 1)")), NOT_PAIRED);
     }
 
     #[cfg(unix)]
@@ -2258,6 +2288,11 @@ mod tests {
         // An empty folder alone: nothing to send, but a note to show.
         let (files, skipped) = collect_noted(&[tree.join("empty")]).unwrap();
         assert!(files.is_empty() && skipped == ["empty (an empty folder)"], "{skipped:?}");
+        // A pipe named on the command line is left out and said so, as inside a
+        // folder: the other things chosen are still sent.
+        let (files, skipped) = collect_noted(&[tree.join("pipe"), root.join("real.txt")]).unwrap();
+        assert_eq!(files.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["real.txt"]);
+        assert_eq!(skipped, ["pipe (a pipe, socket or device)"]);
         let _ = fs::remove_dir_all(&root);
     }
 

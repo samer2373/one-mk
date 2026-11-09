@@ -17,7 +17,7 @@
 //! Names are sanitized and never contain tabs or newlines.
 
 use anyhow::{Context, Result, bail};
-use one_mk_net::{Discovery, Fingerprint, Identity, Node, Pairing, Peer, TrustStore};
+use one_mk_net::{Device, Discovery, Fingerprint, Identity, Node, Pairing, Peer, TrustStore};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::net::SocketAddr;
@@ -97,6 +97,7 @@ pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery: b
     out.say(
         || match connect {
             Some(addr) => format!("Connecting to {addr}..."),
+            None if !discovery => format!("Discovery is off, so nothing is searched for. Waiting for the other computer to connect here; on it run:  one-mk pair --connect <this computer's IP>:{port}"),
             None => "Looking for another computer... run `one-mk pair` on it too.".into(),
         },
         || "searching".into(),
@@ -219,8 +220,10 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
     // Everything the other computer chose (its name) comes first; the code
     // comes last, on its own line, so nothing printed after it can
     // disguise it.
+    let twin = trust.devices().iter().any(|d| d.label().trim().eq_ignore_ascii_case(name.trim()));
+    let twin_note = if twin { "  (A computer you already paired is called the same; once paired they are told apart by id, and `one-mk rename` gives either a name of your own.)\n" } else { "" };
     out.say(
-        || format!("  The other computer says its name is: {name}\n  Check that it shows this same code:\n\n      {}\n", pairing.sas),
+        || format!("  The other computer says its name is: {name}\n{twin_note}  Check that it shows this same code:\n\n      {}\n", pairing.sas),
         || format!("code\t{name}\t{}", pairing.sas),
     );
     let ok = match answers.ask("  Do the codes match? [y/N] ", ANSWER_TIMEOUT).await {
@@ -253,26 +256,37 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
     *trust = fresh;
     let side = placement.side();
     let _ = crate::control::request(dir, crate::control::Request::Reload).await?;
+    let (shown, arg) = trust.get(&fingerprint).map_or_else(|| (name.clone(), format!("{:?}", name)), |d| (trust.display(d), trust.arg(d)));
     if placement.placed_by == one_mk_net::PlacedBy::Pending {
-        out.say(|| crate::pairing_layout::warning(&name), || format!("placement-needed\t{fingerprint}\t{}", crate::pairing_layout::warning(&name)));
+        let warning = crate::pairing_layout::warning(&shown, &arg);
+        out.say(|| warning.clone(), || format!("placement-needed\t{fingerprint}\t{warning}"));
     }
     let side = trust.get(&fingerprint).map_or(side, |d| d.side());
+    let twin_id = trust.get(&fingerprint).filter(|d| trust.label_is_shared(d)).map(Device::short_id);
     out.say(
-        || {
-            if placement.placed_by == one_mk_net::PlacedBy::Pending {
-                return format!("\nPaired with {name}. Choose its placement before sharing through a screen edge.\nStart sharing: one-mk run (only on computers not already running)");
-            }
-            format!(
-                "\nPaired with {name}. For now it is {}; once both computers run one-mk they agree on one arrangement \
-                 (see `one-mk status`).\n\
-                 To choose where it is:  one-mk layout \"{name}\" left|right|top|bottom\n\
-                 Start sharing:          one-mk run   (only on computers not already running)",
-                one_mk_ctl::status::on_your(side)
-            )
-        },
+        || paired_text(&shown, &arg, side, placement.placed_by == one_mk_net::PlacedBy::Pending, twin_id.as_deref()),
         || format!("paired\t{fingerprint}\t{name}\t{}", if placement.placed_by == one_mk_net::PlacedBy::Pending { "unplaced".to_owned() } else { side.to_string() }),
     );
     Ok(())
+}
+
+/// What a person is told once paired. `arg` names the computer in a
+/// command (its id where its name would fit another computer too);
+/// `twin_id`: set when another paired computer is shown under the same
+/// name, to say how to tell them apart.
+fn paired_text(shown: &str, arg: &str, side: one_mk_proto::Side, pending: bool, twin_id: Option<&str>) -> String {
+    if pending {
+        return format!("\nPaired with {shown}. Choose its placement before sharing through a screen edge.\nStart sharing: one-mk run (if it is not already running on this computer)");
+    }
+    let apart = twin_id.map_or_else(String::new, |id| format!("To tell it apart:       one-mk rename {id} \"a name of your own\"\n"));
+    format!(
+        "\nPaired with {shown}. For now it is {}; once both computers run one-mk they agree on one arrangement \
+         (see `one-mk status`).\n\
+         To choose where it is:  one-mk layout {arg} left|right|top|bottom\n\
+         {apart}\
+         Start sharing:          one-mk run   (if it is not already running on this computer)",
+        one_mk_ctl::status::on_your(side)
+    )
 }
 
 fn hints(port: u16) -> String {
@@ -401,5 +415,28 @@ impl Answers {
     /// can't confirm the next one.
     fn clear(&mut self) {
         while self.rx.try_recv().is_ok() {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use one_mk_proto::Side;
+
+    /// Advice that names a computer must name it in a way that finds it:
+    /// by id when its name fits another computer too, and it says how to
+    /// tell the two apart.
+    #[test]
+    fn the_advice_after_pairing_names_the_computer_the_way_that_works() {
+        let alone = paired_text("Laptop", "Laptop", Side::Left, false, None);
+        assert!(alone.contains("one-mk layout Laptop left|right|top|bottom") && !alone.contains("rename"), "{alone}");
+        let twin = paired_text("Laptop (ab12-cd34)", "ab12-cd34", Side::Left, false, Some("ab12-cd34"));
+        assert!(twin.contains("one-mk layout ab12-cd34 left|right|top|bottom"), "{twin}");
+        assert!(twin.contains("one-mk rename ab12-cd34 \"a name of your own\""), "{twin}");
+        assert!(!twin.contains("layout \"Laptop\""), "{twin}");
+        let pending = paired_text("Laptop (ab12-cd34)", "ab12-cd34", Side::Left, true, Some("ab12-cd34"));
+        assert!(pending.contains("Choose its placement"), "{pending}");
+        // "Start sharing" is not an instruction to run it where it already runs.
+        assert!(!alone.contains("only on computers not already running"), "{alone}");
     }
 }
