@@ -252,5 +252,5 @@ It needs:
 - The logo-design skill's `render_png.py` and `presentation_board.py`, which use headless Chrome.
 - `fontTools` + `brotli` only to regenerate the wordmark outlines.
 
-`.icns` and `.ico` are packed by `kit.py`, so `iconutil` is not needed. `src/` is the previous mark (one·mk
-"Crossing"); don't run it, it would overwrite these files. Concept rounds are in `concepts/`.
+`.icns` and `.ico` are packed by `kit.py`, so `iconutil` is not needed. The previous mark's generator and the rejected
+concept rounds were removed from the tree; they remain in the repository history.

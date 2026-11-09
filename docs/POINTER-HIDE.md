@@ -35,7 +35,7 @@ seconds, `Show` when it ends. The extension uses
 ## Testing
 
 `extensions/gnome/one-mk-pointer@one-mk.org` was loaded into the headless
-isolated Shell of `docs/spikes/gnome/isolated-session.sh` (GNOME Shell 50.1)
+isolated Shell of `tools/gnome-wallpaper/isolated-session.sh` (GNOME Shell 50.1)
 and driven over D-Bus: hide and show are idempotent, the 15 s hold ends by
 itself, renewing keeps it hidden, a disconnect shows it. That Shell has no
 pointer, so what is drawn is checked on a real session. The daemon side is
