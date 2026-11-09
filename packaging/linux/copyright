@@ -1,11 +1,25 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: one-mk
-Upstream-Contact: Samer Abu-Sleem <samer2373@gmail.com>
+Upstream-Name: oneMK
+Upstream-Contact: Samer Abu-Sleem <samer2373@users.noreply.github.com>
 Source: https://github.com/samer2373/one-mk
 
 Files: *
 Copyright: 2026 Samer Abu-Sleem
 License: MIT or Apache-2.0
+
+Files: crates/app/fonts/*
+Copyright: 2024 The Geist Project Authors (https://github.com/vercel/geist-font)
+License: OFL-1.1
+ The fonts are built into one-mk-app. The full licence text is in
+ /usr/share/doc/one-mk/OFL-Geist.txt.
+
+Files: crates/app/assets/gear/*
+Copyright: Okopchi ("Logitech G502 x lightspeed",
+ https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40)
+License: CC-BY-4.0
+ Licensed under the Creative Commons Attribution 4.0 International licence,
+ https://creativecommons.org/licenses/by/4.0/. Changed for oneMK: logo and
+ feet left out, normals smoothed, shell split into its buttons, recoloured.
 
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -27,9 +41,12 @@ License: MIT
  SOFTWARE.
 
 License: Apache-2.0
- On Debian systems, the complete text of the Apache License, Version 2.0 can
- be found in /usr/share/common-licenses/Apache-2.0.
+ The complete text of the Apache License, Version 2.0 is in
+ /usr/share/doc/one-mk/LICENSE-APACHE (and, on Debian systems, in
+ /usr/share/common-licenses/Apache-2.0).
 
-Comment: The programs are statically linked with the Rust crates listed in
- Cargo.lock, each under its own (permissive) license; see the crates'
- repositories for their notices.
+Comment: The programs are statically linked with Rust crates, each under its
+ own permissive licence (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0,
+ BSL-1.0, MPL-2.0 for option-ext, and similar). Every crate, its version and
+ licence, and the licence texts and notices they ship are listed in
+ /usr/share/doc/one-mk/THIRD-PARTY-NOTICES.
